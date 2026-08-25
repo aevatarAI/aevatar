@@ -75,7 +75,9 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             .Equal("script.command", "script.query");
         completed.RecoverySnapshot.ExpectedEndpointIds.Should()
             .Equal("script.command", "script.query");
-        scopeBindingPort.Requests.Should().ContainSingle();
+        completed.RecoverySnapshot.ActivationAttemptId.Should().Be("platform-bind-1:a1");
+        scopeBindingPort.Requests.Should().ContainSingle().Which.ActivationAttemptId.Should()
+            .Be("platform-bind-1:a1");
         readinessPort.Requests.Should().BeEmpty();
     }
 
@@ -397,7 +399,8 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 ServiceId: "member-m-1",
                 ExpectedRevisionId: "rev-platform-bind-1",
                 ExpectedDeploymentId: "deployment-1",
-                ExpectedEndpointIds: ["script.command"]));
+                ExpectedEndpointIds: ["script.command"],
+                ExpectedActivationAttemptId: "platform-bind-1:a1"));
     }
 
     [Fact]
@@ -448,6 +451,142 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         timedOut.ExecutionAttempt.Should().Be(2);
         scopeBindingPort.Requests.Should().BeEmpty();
         readinessPort.Requests.Should().HaveCount(2);
+    }
+
+    [Theory]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_PREPARED_ARTIFACT_MISSING",
+        "platform service activation failed because its prepared artifact was unavailable.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.RevisionPreparationFailed,
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_REVISION_PREPARATION_FAILED",
+        "platform service activation failed because revision preparation failed.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.CapabilityViewNotReady,
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_CAPABILITY_VIEW_NOT_READY",
+        "platform service activation failed because capability readiness was not established.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.AdmissionRejected,
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_ADMISSION_REJECTED",
+        "platform service activation was rejected by admission policy.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.AdmissionEvaluationFailed,
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_ADMISSION_EVALUATION_FAILED",
+        "platform service activation admission evaluation failed.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.RuntimeActivationFailed,
+        "STUDIO_MEMBER_PLATFORM_BINDING_RUNTIME_ACTIVATION_FAILED",
+        "platform service runtime activation failed.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.ServingTargetDeliveryFailed,
+        "STUDIO_MEMBER_PLATFORM_BINDING_SERVING_TARGET_DELIVERY_FAILED",
+        "platform service activation could not deliver serving targets.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.DefaultServingRevisionDeliveryFailed,
+        "STUDIO_MEMBER_PLATFORM_BINDING_DEFAULT_SERVING_REVISION_DELIVERY_FAILED",
+        "platform service activation could not commit the default serving revision.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.DefaultServingRevisionSuperseded,
+        "STUDIO_MEMBER_PLATFORM_BINDING_DEFAULT_SERVING_REVISION_SUPERSEDED",
+        "platform service activation was superseded by a newer serving generation.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.ActivationDependencyUnavailable,
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_DEPENDENCY_UNAVAILABLE",
+        "platform service activation dependency was unavailable.")]
+    [InlineData(
+        (ServiceDeploymentActivationFailureCode)999,
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_FAILED",
+        "platform service activation failed.")]
+    public async Task ExecuteAsync_WhenActivationFailedTerminally_ShouldDispatchSanitizedFailureWithoutPolling(
+        ServiceDeploymentActivationFailureCode activationFailureCode,
+        string expectedFailureCode,
+        string expectedFailureMessage)
+    {
+        var readinessPort = new RecordingReadinessQueryPort([
+            new ScopeBindingReadinessSnapshot(
+                ScopeId: "scope-1",
+                ServiceId: "member-m-1",
+                Status: ScopeBindingReadinessStatus.ServingSetMissing,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: false,
+                EligibleServingTargetVisible: false,
+                InvokeReady: false,
+                TerminalActivationFailureCode: activationFailureCode),
+        ]);
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = CreateService(
+            scopeBindingPort,
+            dispatchPort,
+            readinessPort,
+            delayAsync: (_, _) => throw new InvalidOperationException("terminal failure must not be polled"));
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            NewReadinessExecutionRequest(NewScriptStartRequest(), NewScriptRecoverySnapshot()));
+
+        var failed = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingExecutionFailed>();
+        failed.Failure.Code.Should().Be(expectedFailureCode);
+        failed.Failure.Message.Should().Be(expectedFailureMessage);
+        failed.ExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.ReadinessInFlight);
+        failed.ExecutionAttempt.Should().Be(2);
+        scopeBindingPort.Requests.Should().BeEmpty();
+        readinessPort.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenReadySnapshotAlsoCarriesLaggingFailure_ShouldSucceed()
+    {
+        var readinessPort = new RecordingReadinessQueryPort([
+            ReadySnapshot() with
+            {
+                TerminalActivationFailureCode = ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
+            },
+        ]);
+        var dispatchPort = new RecordingDispatchPort();
+        var service = CreateService(new RecordingScopeBindingCommandPort(), dispatchPort, readinessPort);
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            NewReadinessExecutionRequest(NewScriptStartRequest(), NewScriptRecoverySnapshot()));
+
+        await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingExecutionSucceeded>();
+        dispatchPort.Dispatches.Should().NotContain(dispatch =>
+            dispatch.Envelope.Payload.Is(StudioMemberPlatformBindingExecutionFailed.Descriptor));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLegacyRecoverySnapshotHasNoActivationFence_ShouldRemainPending()
+    {
+        var now = DateTimeOffset.Parse("2026-08-14T00:00:00+00:00");
+        var snapshot = NewScriptRecoverySnapshot();
+        snapshot.ActivationAttemptId = string.Empty;
+        var readinessPort = new RecordingReadinessQueryPort([NotReadySnapshot()]);
+        var dispatchPort = new RecordingDispatchPort();
+        var service = CreateService(
+            new RecordingScopeBindingCommandPort(),
+            dispatchPort,
+            readinessPort,
+            delayAsync: (_, _) =>
+            {
+                now = now.AddSeconds(2);
+                return Task.CompletedTask;
+            },
+            utcNow: () => now,
+            options: new StudioMemberPlatformBindingOptions
+            {
+                BindingReadinessTimeout = TimeSpan.FromSeconds(1),
+            });
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            NewReadinessExecutionRequest(NewScriptStartRequest(), snapshot));
+
+        await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingReadinessObservationTimedOut>();
+        readinessPort.Requests.Should().HaveCount(2);
+        readinessPort.Requests.Should().OnlyContain(request =>
+            string.IsNullOrEmpty(request.ExpectedActivationAttemptId));
     }
 
     [Theory]
@@ -636,6 +775,8 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
 
         var failed = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingExecutionFailed>();
         failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED");
+        failed.Failure.Message.Should().Be("platform binding readiness could not be verified.");
+        failed.Failure.Message.Should().NotContain("readiness unavailable");
         failed.ExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.ReadinessInFlight);
         failed.ExecutionAttempt.Should().Be(2);
     }
@@ -879,6 +1020,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             },
             ExpectedDeploymentId = "deployment-1",
             ExpectedEndpointIds = { "script.command" },
+            ActivationAttemptId = "platform-bind-1:a1",
         };
 
     private static StudioMemberPlatformBindingRecoverySnapshot NewWorkflowRecoverySnapshot()
@@ -902,6 +1044,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 },
             },
             ExpectedDeploymentId = "deployment-1",
+            ActivationAttemptId = "platform-bind-1:a1",
         };
         snapshot.ExpectedEndpointIds.Add("chat");
         return snapshot;
@@ -927,6 +1070,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 },
             },
             ExpectedDeploymentId = "deployment-1",
+            ActivationAttemptId = "platform-bind-1:a1",
         };
         snapshot.ExpectedEndpointIds.Add("chat");
         return snapshot;
@@ -991,7 +1135,6 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 await ReleaseUpsert.Task.ConfigureAwait(false);
             if (Failure != null)
                 throw Failure;
-
             var result = request.ImplementationKind switch
             {
                 ScopeBindingImplementationKind.Workflow => BuildWorkflowResult(request, OmitWorkflowId),
@@ -1019,7 +1162,10 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                     omitWorkflowId ? string.Empty : request.Workflow?.WorkflowId ?? string.Empty,
                     "workflow-main",
                     "scope-workflow:scope-1:workflow-main"),
-                ExpectedDeploymentId: "deployment-1");
+                ExpectedDeploymentId: "deployment-1")
+            {
+                ActivationAttemptId = request.ActivationAttemptId,
+            };
         }
 
         private static ScopeBindingUpsertResult BuildScriptResult(
@@ -1041,7 +1187,10 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 {
                     EndpointIds = endpointIds!,
                 },
-                ExpectedDeploymentId: "deployment-1");
+                ExpectedDeploymentId: "deployment-1")
+            {
+                ActivationAttemptId = request.ActivationAttemptId,
+            };
         }
 
         private static ScopeBindingUpsertResult BuildGAgentResult(ScopeBindingUpsertRequest request)
@@ -1055,7 +1204,10 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 ImplementationKind: request.ImplementationKind,
                 ExpectedActorId: "gagent-service:static-runtime:deployment-1",
                 GAgent: new ScopeBindingGAgentResult("Tests.JokerGAgent"),
-                ExpectedDeploymentId: "deployment-1");
+                ExpectedDeploymentId: "deployment-1")
+            {
+                ActivationAttemptId = request.ActivationAttemptId,
+            };
         }
     }
 

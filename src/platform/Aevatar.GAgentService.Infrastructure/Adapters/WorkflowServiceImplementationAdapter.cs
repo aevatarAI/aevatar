@@ -38,6 +38,7 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
             : spec.ExpectedExecutionMode;
         var preparationSpec = request.Spec.Clone();
         preparationSpec.WorkflowSpec.ExpectedExecutionMode = expectedExecutionMode;
+        preparationSpec.WorkflowSpec.ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion;
         var capabilityAdmissionPlan = spec.CapabilityAdmissionPlan is { } persistedPlan
             ? await _capabilityAdmissionService.RevalidatePersistedAsync(
                 new PersistedWorkflowCapabilityAdmissionRequest(
@@ -60,9 +61,16 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
                     expectedExecutionMode),
                 ct);
 
-        var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(spec.WorkflowYaml, ct);
+        var parse = await _workflowDefinitionParser.ParseWorkflowYamlForPublicationAsync(spec.WorkflowYaml, ct);
         if (!parse.Succeeded)
             throw new InvalidOperationException(parse.Error);
+        foreach (var (inlineName, inlineYaml) in spec.InlineWorkflowYamls)
+        {
+            var inlineParse = await _workflowDefinitionParser
+                .ParseWorkflowYamlForPublicationAsync(inlineYaml, ct);
+            if (!inlineParse.Succeeded)
+                throw new InvalidOperationException($"Inline workflow '{inlineName}' is invalid: {inlineParse.Error}");
+        }
 
         var resolvedWorkflowName = spec.WorkflowName?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(resolvedWorkflowName))

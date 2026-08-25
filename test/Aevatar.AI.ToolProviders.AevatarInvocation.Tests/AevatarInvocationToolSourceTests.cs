@@ -11,6 +11,7 @@ using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -123,6 +124,7 @@ public sealed class AevatarInvocationToolSourceTests
             .GetProperty("properties")
             .GetProperty("workflow_id");
         workflowId.GetProperty("description").GetString().Should().Contain("Never guess");
+        doc.RootElement.GetProperty("properties").TryGetProperty("actor_id", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -726,7 +728,8 @@ public sealed class AevatarInvocationToolSourceTests
             callId: "cmd-team-alpha",
             requestId: "corr-team-alpha",
             nyxIdCredentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
-            sourceReadableAccessToken: "source-token");
+            sourceReadableAccessToken: "source-token",
+            executionOwner: AgentToolExecutionOwners.ChannelRegistration("bot-reg-1"));
         var request = BuildChatRunRequest(
             "response-team-workflow",
             "call-team-workflow-tool",
@@ -776,14 +779,22 @@ public sealed class AevatarInvocationToolSourceTests
         chatPayload.InputParts[0].Text.Should().Be("typed input");
         chatPayload.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         chatPayload.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        chatPayload.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        chatPayload.ToolContext.Credentials.NyxIdOrgToken.Should().Be("org-token");
-        chatPayload.ToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
-        chatPayload.ToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be("source-token");
-        chatPayload.ConnectorHttpAuthorization.Should().Be("Bearer access-token");
+        chatPayload.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
+        chatPayload.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
+        chatPayload.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+        chatPayload.ToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeEmpty();
+        chatPayload.ConnectorHttpAuthorization.Should().BeEmpty();
         chatPayload.CallerNyxIdCredentialKind.Should().Be(
-            AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
-        chatPayload.CallerSourceReadableNyxIdBearerToken.Should().Be("source-token");
+            AgentToolNyxIdCredentialKindPayload.Unspecified);
+        chatPayload.CallerSourceReadableNyxIdBearerToken.Should().BeEmpty();
+        chatPayload.CallerDurableCredential.Should().NotBeNull();
+        chatPayload.CallerDurableCredential.Ref.Should().Be("secrets://nyx/default-reply");
+        chatPayload.CallerDurableCredential.Purpose.Should().Be(
+            CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey);
+        chatPayload.CallerDurableCredential.OwnerScopeKey.Should().Be("registration-scope-1");
+        chatPayload.CallerDurableCredential.SubjectId.Should().Be("nyx-api-key-1");
+        chatPayload.CallerDurableCredential.SourceKind.Should().Be(
+            DurableCallerCredentialSourceKind.ChannelRegistration);
         chatPayload.LlmControl.ModelOverride.Should().Be("model-1");
         chatPayload.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
         chatPayload.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
@@ -855,7 +866,7 @@ public sealed class AevatarInvocationToolSourceTests
                       "source_kind": 3,
                       "source_message_id": "om_lark_1",
                       "source_resource_key": "file_key_1",
-                      "file_name": "invoice.pdf",
+                      "file_name": "document.pdf",
                       "media_type": "application/pdf",
                       "size_bytes": 1234
                     }
@@ -902,7 +913,7 @@ public sealed class AevatarInvocationToolSourceTests
         fileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource);
         fileRef.SourceMessageId.Should().Be("om_lark_1");
         fileRef.SourceResourceKey.Should().Be("file_key_1");
-        fileRef.FileName.Should().Be("invoice.pdf");
+        fileRef.FileName.Should().Be("document.pdf");
         fileRef.MediaType.Should().Be("application/pdf");
         fileRef.SizeBytes.Should().Be(1234);
         harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
@@ -950,7 +961,7 @@ public sealed class AevatarInvocationToolSourceTests
             {
               "team_id": "team-1",
               "endpoint_id": "chat",
-              "payload": { "prompt": "process ambient invoice" },
+              "payload": { "prompt": "process ambient document" },
               "wait": "stream"
             }
             """);
@@ -1015,7 +1026,7 @@ public sealed class AevatarInvocationToolSourceTests
             """
             {
               "member_id": "m-alpha",
-              "payload": { "prompt": "process ambient invoice" },
+              "payload": { "prompt": "process ambient document" },
               "wait": "stream"
             }
             """);
@@ -1091,7 +1102,7 @@ public sealed class AevatarInvocationToolSourceTests
                 "team_id": "team-1",
                 "endpoint_id": "chat",
                 "payload": {
-                  "prompt": "process explicit invoice",
+                  "prompt": "process explicit document",
                   "input_parts": [
                     {
                       "kind": "file",
@@ -1112,7 +1123,7 @@ public sealed class AevatarInvocationToolSourceTests
               {
                 "member_id": "m-alpha",
                 "payload": {
-                  "prompt": "process explicit invoice",
+                  "prompt": "process explicit document",
                   "input_parts": [
                     {
                       "kind": "file",
@@ -1431,7 +1442,7 @@ public sealed class AevatarInvocationToolSourceTests
                       "source_kind": 3,
                       "source_message_id": "om_static_1",
                       "source_resource_key": "file_key_static_1",
-                      "file_name": "invoice.pdf",
+                      "file_name": "document.pdf",
                       "media_type": "application/pdf",
                       "size_bytes": 1234
                     }
@@ -1457,7 +1468,7 @@ public sealed class AevatarInvocationToolSourceTests
         inputPart.FileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource);
         inputPart.FileRef.SourceMessageId.Should().Be("om_static_1");
         inputPart.FileRef.SourceResourceKey.Should().Be("file_key_static_1");
-        inputPart.FileRef.FileName.Should().Be("invoice.pdf");
+        inputPart.FileRef.FileName.Should().Be("document.pdf");
         inputPart.FileRef.MediaType.Should().Be("application/pdf");
         inputPart.FileRef.SizeBytes.Should().Be(1234);
         harness.WorkflowDispatch.Command.Should().BeNull();
@@ -1828,7 +1839,7 @@ public sealed class AevatarInvocationToolSourceTests
                       "source_kind": "chat_file_source_kind_connected_service_resource",
                       "source_message_id": "om_lark_1",
                       "source_resource_key": "file_key_1",
-                      "file_name": "invoice.pdf",
+                      "file_name": "document.pdf",
                       "media_type": "application/pdf",
                       "size_bytes": 1234
                     }
@@ -1857,7 +1868,7 @@ public sealed class AevatarInvocationToolSourceTests
         fileRef.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
         fileRef.SourceMessageId.Should().Be("om_lark_1");
         fileRef.SourceResourceKey.Should().Be("file_key_1");
-        fileRef.FileName.Should().Be("invoice.pdf");
+        fileRef.FileName.Should().Be("document.pdf");
         fileRef.MediaType.Should().Be("application/pdf");
         fileRef.SizeBytes.Should().Be(1234);
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("x-workflow", "yes");
@@ -2122,16 +2133,16 @@ public sealed class AevatarInvocationToolSourceTests
         harness.ScopeWorkflowQuery.Workflows["98a81d707d4f4294b9b06f61a9fa8ac0"] = new ScopeWorkflowSummary(
             "scope-1",
             "98a81d707d4f4294b9b06f61a9fa8ac0",
-            "Invoice PDF Workflow",
+            "Document Workflow",
             "scope-1:aevatar:workflows:98a81d707d4f4294b9b06f61a9fa8ac0",
-            "invoice_pdf_workflow",
+            "document_workflow",
             "workflow-definition-actor-98a81d707d4f4294b9b06f61a9fa8ac0",
             "revision-1",
             "deployment-1",
             "Active",
             DateTimeOffset.UtcNow);
         harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
-            .Success(new WorkflowChatRunAcceptedReceipt("workflow-run-actor", "invoice_pdf_workflow", "wf-command", "wf-correlation"));
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-run-actor", "document_workflow", "wf-command", "wf-correlation"));
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
 
         using var _ = PushContext(callId: "call-scope-workflow");
@@ -2150,7 +2161,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
         harness.WorkflowDispatch.Command.Source.ActorId.Should()
             .Be("workflow-definition-actor-98a81d707d4f4294b9b06f61a9fa8ac0");
-        harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("invoice_pdf_workflow");
+        harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("document_workflow");
     }
 
     [Fact]
@@ -2162,18 +2173,18 @@ public sealed class AevatarInvocationToolSourceTests
         using var _ = PushContext(callId: "call-scope-workflow-missing");
         var output = await tool.ExecuteAsync("""
             {
-              "workflow_id": "invoice-pdf-extraction-workflow",
+              "workflow_id": "document-file-extraction-workflow",
               "inputs": { "prompt": "process pdf" },
               "wait": "stream"
             }
             """);
 
         ErrorCode(output).Should().Be("scope_workflow_not_found");
-        ErrorMessage(output).Should().Contain("invoice-pdf-extraction-workflow");
+        ErrorMessage(output).Should().Contain("document-file-extraction-workflow");
         ErrorMessage(output).Should().Contain("scope-1");
         ErrorMessage(output).Should().Contain("service_catalog_missing");
         harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
-            .Which.Should().Be(("scope-1", "invoice-pdf-extraction-workflow"));
+            .Which.Should().Be(("scope-1", "document-file-extraction-workflow"));
         harness.WorkflowDispatch.Command.Should().BeNull();
     }
 
@@ -2187,17 +2198,17 @@ public sealed class AevatarInvocationToolSourceTests
         using var _ = PushContext(callId: "call-scope-workflow-lookup-failed");
         var output = await tool.ExecuteAsync("""
             {
-              "workflow_id": "invoice-pdf-extraction-workflow",
+              "workflow_id": "document-file-extraction-workflow",
               "inputs": { "prompt": "process pdf" },
               "wait": "stream"
             }
             """);
 
         ErrorCode(output).Should().Be("scope_workflow_lookup_failed");
-        ErrorMessage(output).Should().Contain("invoice-pdf-extraction-workflow");
+        ErrorMessage(output).Should().Contain("document-file-extraction-workflow");
         ErrorMessage(output).Should().Contain("scope-1");
         harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
-            .Which.Should().Be(("scope-1", "invoice-pdf-extraction-workflow"));
+            .Which.Should().Be(("scope-1", "document-file-extraction-workflow"));
         harness.WorkflowDispatch.Command.Should().BeNull();
     }
 
@@ -3429,7 +3440,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task aevatar_start_workflow_with_actor_id_and_wait_ack_reserves_channel_delivery()
+    public async Task StartWorkflow_LegacyActorIdCannotOverrideScopeWorkflowTarget()
     {
         var harness = new Harness();
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
@@ -3449,7 +3460,9 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
-        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor");
+        harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
+            .Which.Should().Be(("scope-1", "wf-main"));
+        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor-wf-main");
         harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.CommandIdSeed.Should().Be("call-workflow-actor");
         harness.WorkflowDispatch.Command.CorrelationIdSeed.Should().Be("request-1");
@@ -3471,7 +3484,6 @@ public sealed class AevatarInvocationToolSourceTests
         var output = await tool.ExecuteAsync("""
             {
               "workflow_id": " wf-main ",
-              "actor_id": " workflow-definition-actor ",
               "workflow_yamls": [
                 "  name: first\nsteps: []  ",
                 "   ",
@@ -3488,7 +3500,7 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.InlineYamlBundle);
-        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor");
+        harness.WorkflowDispatch.Command.Source.ActorId.Should().BeNull();
         harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.Source.WorkflowYamls.Should().Equal(
             "name: first\nsteps: []",
@@ -3599,6 +3611,158 @@ public sealed class AevatarInvocationToolSourceTests
         callerCredential.NyxIdAuthority.ExternalUserId.Should().Be("external-user-1");
         callerCredential.NyxIdAuthority.Scope.Should().Be("proxy");
         callerCredential.NyxIdAuthority.BindingId.Should().Be("binding-source-readable");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_FromChannelRegistration_ShouldUseBotAgentKeyWithoutUserBearer()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-channel-agent-key",
+            channelPlatform: "lark",
+            nyxIdCredentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
+            sourceReadableAccessToken: "short-lived-user-token",
+            executionOwner: AgentToolExecutionOwners.ChannelRegistration("bot-reg-1"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        var callerCredential = harness.WorkflowDispatch.Command!.CallerCredential;
+        callerCredential.Should().NotBeNull();
+        callerCredential!.BearerToken.Should().BeNull();
+        callerCredential.SourceReadableUserBearerToken.Should().BeNull();
+        callerCredential.NyxIdAuthority.Should().BeNull();
+        callerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
+        callerCredential.DurableCallerCredential.Should().NotBeNull();
+        callerCredential.DurableCallerCredential!.Ref.Should().Be("secrets://nyx/default-reply");
+        callerCredential.DurableCallerCredential.SourceKind.Should().Be(
+            DurableCallerCredentialSourceKind.ChannelRegistration);
+        harness.ChannelAgentKeyReadiness.Credentials.Should().ContainSingle();
+        harness.ChannelAgentKeyReadiness.Credentials[0].SubjectId.Should().Be("nyx-api-key-1");
+        harness.ChannelAgentKeyReadiness.Credentials[0].SourceKind.Should().Be(
+            DurableCallerCredentialSourceKind.ChannelRegistration);
+    }
+
+    [Theory]
+    [InlineData(
+        DurableCallerCredentialSourceKind.WebhookBinding,
+        CredentialSecretPurposes.WorkflowWebhookBindingAgentKey)]
+    [InlineData(
+        DurableCallerCredentialSourceKind.ScheduledDispatch,
+        CredentialSecretPurposes.ScheduledInvocationAgentKey)]
+    public async Task StartWorkflow_FromDurableAgentKey_ShouldPreserveVaultHandleWithoutRawKey(
+        DurableCallerCredentialSourceKind sourceKind,
+        string purpose)
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+        var descriptor = new SecretReference
+        {
+            Ref = "secrets://nyx/workflow-agent-key",
+            Purpose = purpose,
+            OwnerScopeKey = "scope-workflow-agent-key",
+            Version = 1,
+            Fingerprint = "fingerprint-workflow-agent-key",
+            CreatedAtUnixMs = 1,
+        };
+        var durable = new DurableCallerCredentialRef
+        {
+            Ref = descriptor.Ref,
+            Purpose = descriptor.Purpose,
+            OwnerScopeKey = descriptor.OwnerScopeKey,
+            SubjectId = "agent-key-workflow",
+            SourceKind = sourceKind,
+            SecretReference = descriptor,
+            ProviderCredentialId = sourceKind == DurableCallerCredentialSourceKind.WebhookBinding
+                ? "provider-key-workflow"
+                : string.Empty,
+        };
+
+        using var _ = PushContext(
+            callId: "call-workflow-durable-agent-key",
+            accessToken: "nyxid_ag_workflow_secret",
+            nyxIdCredentialKind: AgentToolNyxIdCredentialKind.AgentKey,
+            durableNyxIdCredential: durable);
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        var callerCredential = harness.WorkflowDispatch.Command!.CallerCredential;
+        callerCredential.Should().NotBeNull();
+        callerCredential!.BearerToken.Should().BeNull();
+        callerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
+        callerCredential.DurableCallerCredential.Should().NotBeNull();
+        callerCredential.DurableCallerCredential!.Ref.Should().Be(descriptor.Ref);
+        callerCredential.DurableCallerCredential.SourceKind.Should().Be(sourceKind);
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenChannelAgentKeyIsNotReady_ShouldFailClosedWithoutUserTokenFallback()
+    {
+        var harness = new Harness();
+        harness.ChannelAgentKeyReadiness.Result =
+            ChannelNyxIdAgentKeyReadinessResult.Failed("channel_agent_key_scope_update_failed");
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-channel-agent-key-not-ready",
+            accessToken: "short-lived-user-token",
+            sourceReadableAccessToken: "short-lived-source-token",
+            channelPlatform: "lark",
+            executionOwner: AgentToolExecutionOwners.ChannelRegistration("bot-reg-1"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().Be("channel_agent_key_scope_update_failed");
+        ErrorMessage(output).Should().Contain("will not fall back");
+        harness.ChannelAgentKeyReadiness.Credentials.Should().ContainSingle();
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        output.Should().NotContain("short-lived-user-token");
+        output.Should().NotContain("short-lived-source-token");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_FromChannelRegistrationWithoutAgentKey_ShouldFailClosed()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-channel-agent-key-missing",
+            channelPlatform: "lark",
+            durableReplyCredentialRef: null,
+            executionOwner: AgentToolExecutionOwners.ChannelRegistration("bot-reg-1"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().Be("channel_agent_key_unavailable");
+        harness.WorkflowDispatch.Command.Should().BeNull();
     }
 
     [Fact]
@@ -3776,15 +3940,6 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Theory]
-    [InlineData(
-        """
-        {
-          "workflow_id": "child-flow",
-          "actor_id": "definition-actor",
-          "inputs": { "prompt": "run child" }
-        }
-        """,
-        "actor_id")]
     [InlineData(
         """
         {
@@ -4413,7 +4568,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowQuery.Report = new WorkflowRunReport
         {
             RootActorId = "workflow-run-actor",
-            WorkflowName = "invoice-pdf-extraction-workflow",
+            WorkflowName = "document-file-extraction-workflow",
             CommandId = "run-1",
             CompletionStatus = WorkflowRunCompletionStatus.Completed,
             StateVersion = 17,
@@ -4940,7 +5095,9 @@ public sealed class AevatarInvocationToolSourceTests
         string? organizationAccessToken = "org-token",
         string? senderAccessToken = "sender-token",
         string? sourceReadableAccessToken = null,
-        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null) =>
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null,
+        AgentToolExecutionOwner? executionOwner = null,
+        DurableCallerCredentialRef? durableNyxIdCredential = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId),
             new AgentToolCredentials(
@@ -4967,8 +5124,10 @@ public sealed class AevatarInvocationToolSourceTests
             BuildExternalMetadata(externalMetadata)) with
         {
             InputFileRefs = inputFileRefs ?? [],
-            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(AevatarInvocationToolSourceTests)),
+            ExecutionOwner = executionOwner ??
+                             AgentToolExecutionOwners.HostService(nameof(AevatarInvocationToolSourceTests)),
             NyxIdAuthority = nyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty,
+            DurableNyxIdCredential = durableNyxIdCredential,
         });
 
     private sealed class StartingAdmissionLedger : IAgentToolAdmissionLedger
@@ -5089,6 +5248,7 @@ public sealed class AevatarInvocationToolSourceTests
         public RecordingWorkflowDispatchService WorkflowDispatch { get; } = new();
         public RecordingServiceInvocationDispatcher ServiceInvocationDispatcher { get; } = new();
         public RecordingWorkflowRunBackgroundDeliveryRegistrationPort WorkflowRunDelivery { get; } = new();
+        public RecordingChannelAgentKeyReadinessPort ChannelAgentKeyReadiness { get; } = new();
         public RecordingServiceInvocationResolutionPort ServiceInvocationResolution { get; } = new();
         public RecordingInvokeAdmissionAuthorizer AdmissionAuthorizer { get; } = new();
         public RecordingServiceRunRegistrationPort ServiceRunRegistration { get; } = new();
@@ -5134,7 +5294,8 @@ public sealed class AevatarInvocationToolSourceTests
                 WorkflowQuery,
                 withWorkflowRunDeliveryRegistrationPort ? WorkflowRunDelivery : null,
                 scopeWorkflowQueryPort: ScopeWorkflowQuery,
-                workflowStartObservationTimeout: TimeSpan.Zero);
+                workflowStartObservationTimeout: TimeSpan.Zero,
+                channelAgentKeyReadinessPort: ChannelAgentKeyReadiness);
 
         public void ConfigureServiceTarget(
             ServiceImplementationKind implementationKind,
@@ -5241,6 +5402,22 @@ public sealed class AevatarInvocationToolSourceTests
             };
             var tools = await source.DiscoverToolsAsync();
             return tools.Single(tool => tool.Name == toolName);
+        }
+    }
+
+    private sealed class RecordingChannelAgentKeyReadinessPort : IChannelNyxIdAgentKeyReadinessPort
+    {
+        public List<DurableCallerCredentialRef> Credentials { get; } = [];
+
+        public ChannelNyxIdAgentKeyReadinessResult Result { get; set; } =
+            ChannelNyxIdAgentKeyReadinessResult.Succeeded;
+
+        public Task<ChannelNyxIdAgentKeyReadinessResult> EnsureReadyAsync(
+            DurableCallerCredentialRef credential,
+            CancellationToken ct = default)
+        {
+            Credentials.Add(credential.Clone());
+            return Task.FromResult(Result);
         }
     }
 

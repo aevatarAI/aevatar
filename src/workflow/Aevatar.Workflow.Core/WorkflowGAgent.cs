@@ -28,8 +28,14 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         string? workflowId,
         string? revisionId,
         ExternalCapabilityExecutionMode expectedExecutionMode,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? toolCatalogPolicyVersion = null,
+        string? catalogPublicationContractVersion = null)
     {
+        var normalizedToolCatalogPolicyVersion = NormalizeNewToolCatalogPolicyVersion(
+            toolCatalogPolicyVersion);
+        var normalizedCatalogPublicationContractVersion = NormalizeNewCatalogPublicationContractVersion(
+            catalogPublicationContractVersion);
         EnsureExpectedExecutionMode(expectedExecutionMode);
         EnsureWorkflowNameCanBind(workflowName);
         EnsureExistingBindingCanBind(capabilityAdmissionPlan, workflowId, revisionId, expectedExecutionMode);
@@ -41,6 +47,8 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             WorkflowId = workflowId ?? string.Empty,
             RevisionId = revisionId ?? string.Empty,
             ExpectedExecutionMode = expectedExecutionMode,
+            ToolCatalogPolicyVersion = normalizedToolCatalogPolicyVersion,
+            CatalogPublicationContractVersion = normalizedCatalogPublicationContractVersion,
         };
         if (scopeId is not null)
             bindDefinitionEvent.ScopeId = scopeId.Trim();
@@ -50,12 +58,21 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
                 bindDefinitionEvent.InlineWorkflowYamls[key] = value;
         }
 
-        var compilation = EvaluateWorkflowCompilation(bindDefinitionEvent.WorkflowYaml);
+        var compilation = EvaluateWorkflowCompilation(
+            bindDefinitionEvent.WorkflowYaml,
+            bindDefinitionEvent.ToolCatalogPolicyVersion);
+        if (!compilation.Compiled &&
+            WorkflowToolCatalogPolicies.IsCurrent(bindDefinitionEvent.ToolCatalogPolicyVersion))
+        {
+            throw new InvalidOperationException(compilation.CompilationError);
+        }
+
         if (compilation.Compiled)
         {
             var dependencies = EvaluateDefinitionAuthorizationDependencies(
                 compilation.Workflow!,
-                bindDefinitionEvent.InlineWorkflowYamls);
+                bindDefinitionEvent.InlineWorkflowYamls,
+                bindDefinitionEvent.ToolCatalogPolicyVersion);
             ValidateCapabilityAdmissionPlan(
                 bindDefinitionEvent.WorkflowYaml,
                 bindDefinitionEvent.InlineWorkflowYamls,
@@ -66,6 +83,14 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
                 bindDefinitionEvent.RevisionId);
             bindDefinitionEvent.AuthorizationDependencies = dependencies;
             bindDefinitionEvent.CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone();
+        }
+
+        var canonicalNext = ApplyBindWorkflowDefinition(State, bindDefinitionEvent);
+        canonicalNext.Version = State.Version;
+        if (canonicalNext.Equals(State))
+        {
+            await RepublishCommittedStateAsync(BuildCommittedDefinitionRepublishEvent(), ct);
+            return;
         }
 
         await PersistDomainEventAsync(bindDefinitionEvent, ct);
@@ -82,7 +107,9 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             request.CapabilityAdmissionPlan,
             request.WorkflowId,
             request.RevisionId,
-            request.ExpectedExecutionMode);
+            request.ExpectedExecutionMode,
+            toolCatalogPolicyVersion: request.ToolCatalogPolicyVersion,
+            catalogPublicationContractVersion: request.CatalogPublicationContractVersion);
 
     [EventHandler]
     public Task HandleSubWorkflowDefinitionResolveRequested(SubWorkflowDefinitionResolveRequestedEvent request) =>
@@ -132,12 +159,38 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         next.WorkflowId = evt.WorkflowId ?? string.Empty;
         next.RevisionId = evt.RevisionId ?? string.Empty;
         next.ExpectedExecutionMode = evt.ExpectedExecutionMode;
+        next.ToolCatalogPolicyVersion = evt.ToolCatalogPolicyVersion ?? string.Empty;
+        next.CatalogPublicationContractVersion = evt.CatalogPublicationContractVersion ?? string.Empty;
 
-        var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
+        var compileResult = EvaluateWorkflowCompilation(
+            next.WorkflowYaml,
+            next.ToolCatalogPolicyVersion);
         next.Compiled = compileResult.Compiled;
         next.CompilationError = compileResult.CompilationError;
         next.Version = current.Version + 1;
         return next;
+    }
+
+    private BindWorkflowDefinitionEvent BuildCommittedDefinitionRepublishEvent()
+    {
+        var committedDefinitionEvent = new BindWorkflowDefinitionEvent
+        {
+            WorkflowName = State.WorkflowName,
+            WorkflowYaml = State.WorkflowYaml,
+            SourceKind = State.SourceKind,
+            WorkflowId = State.WorkflowId,
+            RevisionId = State.RevisionId,
+            ExpectedExecutionMode = State.ExpectedExecutionMode,
+            ToolCatalogPolicyVersion = State.ToolCatalogPolicyVersion,
+            CatalogPublicationContractVersion = State.CatalogPublicationContractVersion,
+            AuthorizationDependencies = State.AuthorizationDependencies?.Clone(),
+            CapabilityAdmissionPlan = State.CapabilityAdmissionPlan?.Clone(),
+        };
+        if (!string.IsNullOrWhiteSpace(State.ScopeId))
+            committedDefinitionEvent.ScopeId = State.ScopeId;
+        foreach (var (workflowNameKey, workflowYamlValue) in State.InlineWorkflowYamls)
+            committedDefinitionEvent.InlineWorkflowYamls[workflowNameKey] = workflowYamlValue;
+        return committedDefinitionEvent;
     }
 
     private void EnsureExistingBindingCanBind(
@@ -197,7 +250,8 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
 
     private WorkflowAuthorizationDependencies EvaluateDefinitionAuthorizationDependencies(
         WorkflowDefinition root,
-        IReadOnlyDictionary<string, string> inlineWorkflowYamls)
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
+        string? toolCatalogPolicyVersion)
     {
         var all = new List<WorkflowAuthorizationDependencies>
         {
@@ -205,7 +259,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         };
         foreach (var (name, yaml) in inlineWorkflowYamls.OrderBy(static item => item.Key, StringComparer.Ordinal))
         {
-            var compilation = EvaluateWorkflowCompilation(yaml);
+            var compilation = EvaluateWorkflowCompilation(yaml, toolCatalogPolicyVersion);
             if (!compilation.Compiled)
             {
                 throw new InvalidOperationException(
@@ -270,7 +324,9 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             throw new InvalidOperationException("Workflow expected execution mode is required.");
     }
 
-    private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)
+    private WorkflowCompilationResult EvaluateWorkflowCompilation(
+        string yaml,
+        string? toolCatalogPolicyVersion = null)
     {
         if (string.IsNullOrWhiteSpace(yaml))
             return WorkflowCompilationResult.Invalid("workflow yaml is empty");
@@ -283,6 +339,8 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
                 new WorkflowValidator.WorkflowValidationOptions
                 {
                     RequireKnownStepTypes = false,
+                    RequireExplicitLlmAgentToolScopes =
+                        WorkflowToolCatalogPolicies.IsCurrent(toolCatalogPolicyVersion),
                 },
                 availableWorkflowNames: null);
             if (errors.Count > 0)
@@ -295,6 +353,32 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             Logger.LogWarning(ex, "EvaluateWorkflowCompilation: parse/validation failed.");
             return WorkflowCompilationResult.Invalid(ex.Message);
         }
+    }
+
+    private static string NormalizeNewToolCatalogPolicyVersion(string? policyVersion)
+    {
+        var normalized = string.IsNullOrWhiteSpace(policyVersion)
+            ? WorkflowToolCatalogPolicies.LegacyV0
+            : policyVersion.Trim();
+        if (!WorkflowToolCatalogPolicies.IsCurrent(normalized) &&
+            !string.Equals(normalized, WorkflowToolCatalogPolicies.LegacyV0, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workflow tool catalog policy version is unsupported.");
+        }
+        return normalized;
+    }
+
+    private static string NormalizeNewCatalogPublicationContractVersion(string? contractVersion)
+    {
+        var normalized = string.IsNullOrWhiteSpace(contractVersion)
+            ? WorkflowCatalogPublicationContracts.CurrentVersion
+            : contractVersion.Trim();
+        if (!WorkflowCatalogPublicationContracts.IsCurrent(normalized) &&
+            !string.Equals(normalized, WorkflowCatalogPublicationContracts.LegacyV0, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workflow catalog publication contract version is unsupported.");
+        }
+        return normalized;
     }
 
     private void EnsureWorkflowNameCanBind(string? workflowName)
@@ -403,6 +487,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             ScopeId = State.ScopeId ?? string.Empty,
             DefinitionVersion = State.Version,
             RevisionId = State.RevisionId ?? string.Empty,
+            ToolCatalogPolicyVersion = State.ToolCatalogPolicyVersion ?? string.Empty,
         };
 
         foreach (var (workflowName, workflowYaml) in State.InlineWorkflowYamls)

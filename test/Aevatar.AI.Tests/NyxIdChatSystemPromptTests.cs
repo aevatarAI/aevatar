@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.AI.Abstractions.Prompting;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Prompting;
 using Aevatar.GAgents.NyxidChat;
@@ -60,47 +61,45 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
-    public void ComposedPrompt_ShouldRouteReviewedFinIntentsToExactScopeWorkflows()
+    public void ComposedPrompt_ShouldDiscoverAndExecuteSkillWorkflowsThroughGenericLifecycle()
     {
         var prompt = ComposedAgentPrompt();
 
-        prompt.Should().Contain("Route these reviewed FIN preview intents before generic skill discovery");
-        prompt.Should().Contain("fin-invoice-precheck-approval");
-        prompt.Should().Contain("fin_invoice_precheck_approval");
-        prompt.Should().Contain("fin-budget-variance-monitor");
-        prompt.Should().Contain("fin_budget_variance_monitor");
-        prompt.Should().Contain("A submission request matches this route only when it explicitly names or refers back");
-        prompt.Should().Contain("generic submission request");
-        prompt.Should().Contain("does not match it");
-        prompt.Should().Contain("returned `workflow.workflow_id` unchanged");
+        var searchCall = prompt.IndexOf(
+            "call `ornn_search_skills` to find a matching skill",
+            StringComparison.Ordinal);
+        var loadCall = prompt.IndexOf(
+            "then `use_skill` to load it",
+            StringComparison.Ordinal);
+        var workflowExecution = prompt.IndexOf(
+            "When the loaded skill identifies a runnable Scope Workflow",
+            StringComparison.Ordinal);
+
+        searchCall.Should().BeGreaterThanOrEqualTo(0);
+        loadCall.Should().BeGreaterThan(searchCall);
+        workflowExecution.Should().BeGreaterThan(loadCall);
+        prompt.Should().Contain("exact workflow identity from the loaded skill");
+        prompt.Should().NotContain("`scope_workflows_get`");
+        prompt.Should().Contain("Build workflow inputs only from the loaded skill's contract");
+        prompt.Should().Contain("do not encode or override those rules in this built-in overlay");
         prompt.Should().Contain("once with `wait=\"stream\"`");
         prompt.Should().Contain("`workflow_current_state.actor_id`");
         prompt.Should().Contain("`workflow_current_state.command_id`");
         prompt.Should().Contain("that `run_id` as `workflow_run_id`");
-        prompt.Should().Contain("outer `workflow_name` to equal the");
-        prompt.Should().Contain("matching canonical value (`fin_invoice_precheck_approval` or `fin_budget_variance_monitor`)");
-        prompt.Should().Contain("exactly, with `status=Completed`");
-        prompt.Should().Contain("`final_output` as complete JSON");
-        prompt.Should().Contain("`mode=\"preview\"`");
-        prompt.Should().Contain("`side_effects=false`");
-        prompt.Should().Contain("current sender's delegated account");
-        prompt.Should().Contain("test-data boundaries");
-        prompt.Should().NotContain("TxGrbUmPQa8Lkus2z9UlEuffgUc");
-        prompt.Should().NotContain("tbl6Xceu4Ogkod6o");
-        prompt.Should().Contain("always use `submit:false` and never set `submit:true`");
-        prompt.Should().NotContain("explicitly confirms submission");
+        prompt.Should().Contain("Claim completion only from the committed report");
+        prompt.Should().Contain("workflow and matching command");
+        prompt.Should().Contain("If the artifact is pending, retry the read");
+        prompt.Should().Contain("report that limitation instead of inferring the missing content");
     }
 
     [Fact]
-    public void ComposedPrompt_ShouldRequireTypedReadinessBeforeWorkflowWrites()
+    public void ComposedPrompt_ShouldNotAdvertiseWorkflowAuthoringToolsOnOrdinaryTurns()
     {
         var prompt = ComposedAgentPrompt();
 
-        prompt.Should().Contain("`list_external_workflow_capabilities`");
-        prompt.Should().Contain("`inspect_external_workflow_capability_readiness`");
-        prompt.Should().Contain("typed readiness status is `READY`");
-        prompt.Should().Contain("`user_service_id` is the NyxID capability identity");
-        prompt.Should().Contain("`service_slug_snapshot` is only a display and routing snapshot");
+        prompt.Should().NotContain("`list_external_workflow_capabilities`");
+        prompt.Should().NotContain("`inspect_external_workflow_capability_readiness`");
+        prompt.Should().NotContain("typed readiness status is `READY`");
         prompt.Should().Contain("`required_nyx_services`");
         prompt.Should().NotContain("`required_service_slugs`");
         prompt.Should().NotContain("Omit slug → discover all proxyable services");
@@ -331,9 +330,9 @@ public class NyxIdChatSystemPromptTests
             "selected skill body",
             new SelectedSkillPromptProvenance("selected-test"),
             new PromptLayerBounds(1_024, 256));
-        var enforced = new AgentProfileTurnCatalog(
+        var enforced = new AgentTurnToolCatalog(
             [], profileLayer, selectedLayer, "intent-alpha", "intent-alpha");
-        var shadow = new AgentProfileTurnCatalog(
+        var shadow = new AgentTurnToolCatalog(
             [], profileLayer, null, null, "intent-shadow");
 
         var enforcedPrompt = Decorate(agent, enforced);
@@ -346,7 +345,7 @@ public class NyxIdChatSystemPromptTests
         shadowPrompt.Should().NotContain("selected-skill-procedure");
     }
 
-    private static string Decorate(NyxIdChatGAgent agent, AgentProfileTurnCatalog catalog)
+    private static string Decorate(NyxIdChatGAgent agent, AgentTurnToolCatalog catalog)
     {
         var method = typeof(NyxIdChatGAgent).GetMethod(
             "DecorateSystemPrompt",

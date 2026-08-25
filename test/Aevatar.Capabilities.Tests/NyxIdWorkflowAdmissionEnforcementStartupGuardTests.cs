@@ -41,9 +41,7 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
         services.AddSingleton<NyxIdWorkflowAdmissionEnforcementStartupGuard>();
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>()
-            .OfType<NyxIdAgentToolSource>()
-            .Single();
+        var source = provider.GetRequiredService<NyxIdAgentToolSource>();
         var proxy = (NyxIdProxyTool)(await source.DiscoverToolsAsync())
             .Single(static tool => tool.Name == "nyxid_proxy");
         using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with

@@ -1,4 +1,3 @@
-using Aevatar.GAgents.Scheduled;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.AI.Abstractions;
@@ -11,26 +10,27 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
-using Aevatar.GAgents.Channel.Abstractions;
-using FluentAssertions;
-using NSubstitute;
-using Xunit;
-using Aevatar.GAgents.Channel.NyxIdRelay;
-using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Channel.Identity.Abstractions;
-using Aevatar.GAgents.NyxidChat;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
-using UglyToad.PdfPig.Core;
-using UglyToad.PdfPig.Fonts.Standard14Fonts;
-using UglyToad.PdfPig.Content;
-using UglyToad.PdfPig.Writer;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
+using FluentAssertions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
+using UglyToad.PdfPig.Content;
+using UglyToad.PdfPig.Core;
+using UglyToad.PdfPig.Fonts.Standard14Fonts;
+using UglyToad.PdfPig.Writer;
+using Xunit;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
 using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
@@ -667,6 +667,76 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task BuildStepPlanAsync_WithTypedLarkCallbackAttachmentWithoutRawPayload_ExposesFileRefToTools()
+    {
+        var callbackBody = """
+            {
+              "message_id": "msg-lark-typed-image-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": {
+                "type": "image",
+                "text": "/invoice-approval",
+                "attachments": [
+                  {
+                    "content_type": "image",
+                    "url": "https://open.larksuite.com/open-apis/im/v1/messages/om_typed_image_1/resources/img_typed_1?type=image",
+                    "platform_message_id": "om_typed_image_1",
+                    "image_key": "img_typed_1",
+                    "filename": "invoice.png",
+                    "mime_type": "image/png",
+                    "size_bytes": 3
+                  }
+                ]
+              }
+            }
+            """;
+        var parsed = new NyxIdRelayTransport().Parse(Encoding.UTF8.GetBytes(callbackBody));
+        parsed.Success.Should().BeTrue();
+
+        var imageBytes = new byte[] { 9, 8, 7 };
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/png", "invoice.png"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
+
+        var plan = await generator.BuildStepPlanAsync(
+            parsed.Activity!,
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: AgentToolExecutionContext.Empty,
+            priorHistory: null,
+            new ChatAttachmentInputContext([], "user-token"),
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        var fileRef = plan.ToolContext.InputFileRefs.Should().ContainSingle().Subject;
+        fileRef.FileId.Should().Be("wf-file-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        fileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput);
+        fileRef.SourceMessageId.Should().Be("om_typed_image_1");
+        fileRef.SourceResourceKey.Should().Be("img_typed_1");
+        fileRef.FileName.Should().Be("invoice.png");
+        fileRef.MediaType.Should().Be("image/png");
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            "om_typed_image_1",
+            "img_typed_1",
+            LarkMessageResourceKind.Image));
+    }
+
+    [Fact]
     public async Task BuildStepPlanAsync_WithRecentLarkPdfAttachment_PersistsFileRefWithoutExtractedText()
     {
         var pdfBytes = BuildSimplePdf("confidential extracted document text");
@@ -782,7 +852,7 @@ public sealed class ConversationReplyGeneratorTests
             Id = "msg-follow-up-provider",
             ChannelId = ChannelId.From("lark"),
             Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
-            Content = new MessageContent { Text = "/invoice-approval" },
+            Content = new MessageContent { Text = "/project-summary" },
         };
         var attachmentContext = new ChatAttachmentInputContext(
             [
@@ -1199,8 +1269,9 @@ public sealed class ConversationReplyGeneratorTests
             forceDisableTools: false,
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("NyxID Chat tool catalog contains duplicate tool names.");
+        var exception = await act.Should().ThrowAsync<AgentToolDiscoveryException>();
+        exception.Which.Failure.Code.Should().Be(AgentToolDiscoveryFailureCode.ToolNameCollision);
+        exception.Which.Failure.ToolName.Should().Be("duplicate_tool");
     }
 
     [Fact]
@@ -1306,7 +1377,7 @@ public sealed class ConversationReplyGeneratorTests
             new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
             BuiltInPromptFloorProvider,
             toolSources: [new StubToolSource(allowed, denied)]);
-        var catalog = new AgentProfileTurnCatalog(
+        var catalog = new AgentTurnToolCatalog(
             [allowed.Name],
             new ProfileRoutingPromptLayer(
                 "profile-route-sentinel",
@@ -1318,7 +1389,7 @@ public sealed class ConversationReplyGeneratorTests
                 new PromptLayerBounds(1024, 256)),
             selectedIntentId: "service_connect",
             candidateIntentId: "service_connect",
-            routeOwnedTools: [allowed]);
+            exactTools: [allowed]);
 
         var plan = await generator.BuildStepPlanAsync(
             new ChatActivity
@@ -1512,7 +1583,7 @@ public sealed class ConversationReplyGeneratorTests
     [Fact]
     public async Task GenerateReplyAsync_WithLarkPdfFileAttachment_AddsExtractedTextPart()
     {
-        var pdfBytes = BuildSimplePdf("Invoice total 42.00 USD");
+        var pdfBytes = BuildSimplePdf("Document value 42.00 USD");
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "report.pdf"));
         var fileArtifacts = new RecordingWorkflowFileArtifactPort();
@@ -1558,7 +1629,7 @@ public sealed class ConversationReplyGeneratorTests
             part.Kind == ContentPartKind.Text &&
             part.Text != null &&
             part.Text.Contains("PDF attachment 'report.pdf' extracted text", StringComparison.Ordinal) &&
-            part.Text.Contains("Invoice total 42.00 USD", StringComparison.Ordinal));
+            part.Text.Contains("Document value 42.00 USD", StringComparison.Ordinal));
         providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
             .NotContain("Attachment visibility warning");
         lark.Downloads.Should().ContainSingle().Which.Should().Be((
@@ -1575,7 +1646,7 @@ public sealed class ConversationReplyGeneratorTests
         ingress.MediaType.Should().Be("application/pdf");
         result.AppendedHistory.Should().NotContain(entry =>
             entry.ContentParts.Any(part =>
-                part.Text.Contains("Invoice total 42.00 USD", StringComparison.Ordinal)));
+                part.Text.Contains("Document value 42.00 USD", StringComparison.Ordinal)));
         result.AppendedHistory.SelectMany(entry => entry.ContentParts)
             .Should().Contain(part =>
                 part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text &&

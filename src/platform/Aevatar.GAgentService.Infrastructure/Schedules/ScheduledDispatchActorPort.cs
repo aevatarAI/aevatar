@@ -58,12 +58,13 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         string actorId,
         ScheduledDispatchConfiguration configuration,
         PreparedScheduledDispatchTarget dispatch,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
 
-        var command = CreateUpdateCommand(configuration, dispatch);
+        var command = CreateUpdateCommand(configuration, dispatch, expectedTarget);
         return await DispatchAsync(actorId, command, ct);
     }
 
@@ -83,36 +84,52 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
     public async Task<DispatchAdmission> DispatchEnableAsync(
         string actorId,
         string reason,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
-        return await DispatchAsync(actorId, new ScheduledDispatchEnableCommand { Reason = reason ?? string.Empty }, ct);
+        return await DispatchAsync(actorId, new ScheduledDispatchEnableCommand
+        {
+            Reason = reason ?? string.Empty,
+            ExpectedServiceTarget = CreateExpectedServiceTargetState(expectedTarget),
+        }, ct);
     }
 
     public async Task<DispatchAdmission> DispatchDisableAsync(
         string actorId,
         string reason,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
-        return await DispatchAsync(actorId, new ScheduledDispatchDisableCommand { Reason = reason ?? string.Empty }, ct);
+        return await DispatchAsync(actorId, new ScheduledDispatchDisableCommand
+        {
+            Reason = reason ?? string.Empty,
+            ExpectedServiceTarget = CreateExpectedServiceTargetState(expectedTarget),
+        }, ct);
     }
 
     public async Task<DispatchAdmission> DispatchDeleteAsync(
         string actorId,
         string reason,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
-        return await DispatchAsync(actorId, new ScheduledDispatchDeleteCommand { Reason = reason ?? string.Empty }, ct);
+        return await DispatchAsync(actorId, new ScheduledDispatchDeleteCommand
+        {
+            Reason = reason ?? string.Empty,
+            ExpectedServiceTarget = CreateExpectedServiceTargetState(expectedTarget),
+        }, ct);
     }
 
     public async Task<DispatchAdmission> DispatchRunNowAsync(
         string actorId,
         DateTimeOffset scheduledFireAt,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
@@ -122,6 +139,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt.ToUniversalTime()),
             Manual = true,
             IdempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(actorId, scheduledFireAt),
+            ExpectedServiceTarget = CreateExpectedServiceTargetState(expectedTarget),
         }, ct);
     }
 
@@ -432,13 +450,15 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
 
     private static ScheduledDispatchUpdateCommand CreateUpdateCommand(
         ScheduledDispatchConfiguration configuration,
-        PreparedScheduledDispatchTarget dispatch)
+        PreparedScheduledDispatchTarget dispatch,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(dispatch);
 
         var command = new ScheduledDispatchUpdateCommand();
         PopulateConfigureCommand(command, configuration, dispatch);
+        command.ExpectedServiceTarget = CreateExpectedServiceTargetState(expectedTarget);
         return command;
     }
 
@@ -577,6 +597,23 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                 CredentialRequirementTargetKind = ToStateCredentialRequirementTargetKind(credentialRequirementTargetKind),
             },
             _ => throw new ArgumentException($"Unsupported scheduled dispatch target kind '{descriptor.Kind}'.", nameof(descriptor)),
+        };
+    }
+
+    private static ScheduledDispatchExpectedServiceTargetState? CreateExpectedServiceTargetState(
+        ScheduledDispatchExpectedServiceTarget? target)
+    {
+        if (target == null)
+            return null;
+
+        return new ScheduledDispatchExpectedServiceTargetState
+        {
+            ScheduleKind = ToStateScheduleKind(target.ScheduleKind),
+            TargetKind = target.TargetKind == ScheduledDispatchTargetKind.ServiceInvocation
+                ? ScheduledDispatchTargetKindState.ServiceInvocation
+                : ScheduledDispatchTargetKindState.Envelope,
+            ServiceIdentity = target.ServiceIdentity.Clone(),
+            ServiceEndpointId = target.ServiceEndpointId,
         };
     }
 

@@ -101,7 +101,9 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = true, Output = output,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         }, TopologyAudience.Self, ct);
     }
 
@@ -114,9 +116,11 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = false,
             Output = string.Empty,
             Error = string.IsNullOrWhiteSpace(error) ? "Transform operation failed." : error,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         }, TopologyAudience.Self, ct);
 
     private static TransformOperationSpec? ResolveTransformOperation(StepRequestEvent request)

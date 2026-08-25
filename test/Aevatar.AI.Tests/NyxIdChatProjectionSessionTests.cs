@@ -52,6 +52,77 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
+    public async Task Projector_ShouldMapCommittedModelLifecycleWithExactAvailableTools()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "session-1",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionProgressedEvent
+                {
+                    SessionId = context.SessionId,
+                    Sequence = 8,
+                    ModelStarted = new RoleChatModelStartedProgress
+                    {
+                        OperationId = "model-round-0",
+                        Round = 0,
+                        Model = "model-a",
+                        Provider = "provider-a",
+                        InputSummary = "safe input",
+                        AvailableToolNames = { "github.get_issue", "nyxid.require_service" },
+                    },
+                }),
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionProgressedEvent
+                {
+                    SessionId = context.SessionId,
+                    Sequence = 9,
+                    ModelCompleted = new RoleChatModelCompletedProgress
+                    {
+                        OperationId = "model-round-0",
+                        Round = 0,
+                        Model = "model-a",
+                        Content = "done",
+                        Usage = new TokenUsagePayload
+                        {
+                            PromptTokens = 3,
+                            CompletionTokens = 2,
+                            TotalTokens = 5,
+                        },
+                        FinishReason = "stop",
+                        Success = true,
+                    },
+                }),
+            CancellationToken.None);
+
+        hub.Published.Select(entry => entry.Event.EventCase).Should().Equal(
+            AGUIEvent.EventOneofCase.ModelCallStart,
+            AGUIEvent.EventOneofCase.ModelCallEnd);
+        hub.Published.Select(entry => entry.Event.Sequence).Should().Equal(8, 9);
+        var started = hub.Published[0].Event.ModelCallStart;
+        started.OperationId.Should().Be("model-round-0");
+        started.SessionId.Should().Be(context.SessionId);
+        started.AvailableToolNames.Should().Equal("github.get_issue", "nyxid.require_service");
+        var completed = hub.Published[1].Event.ModelCallEnd;
+        completed.OperationId.Should().Be(started.OperationId);
+        completed.Usage.TotalTokens.Should().Be(5);
+        completed.Success.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Projector_ShouldNotExpandNormalCommittedCompletion()
     {
         var hub = new RecordingSessionEventHub();
@@ -1594,6 +1665,79 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
+    public async Task Projector_VerifiedActionContinuationProgressOwnedByOriginTurn_ShouldEmitForContinuationTurn()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var (context, state, continuationKey) = VerifiedActionContinuationState(
+            NyxIdChatTaskStatus.Active,
+            NyxIdChatTurnStatus.Active);
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatOperationProgressedEvent
+                {
+                    Progress = new NyxIdChatOperationProgressSignal
+                    {
+                        Key = continuationKey.Clone(),
+                        Sequence = 1,
+                        Text = new NyxIdChatTextProgress { Delta = "Checking the connected service." },
+                    },
+                    ProgressSequence = state.ProgressSequence,
+                    State = state,
+                },
+                stateVersion: 43),
+            CancellationToken.None);
+
+        var frame = hub.Published.Should().ContainSingle().Which.Event;
+        frame.Sequence.Should().Be(state.ProgressSequence);
+        frame.TextMessageContent.MessageId.Should().Be(context.SessionId);
+        frame.TextMessageContent.Delta.Should().Be("Checking the connected service.");
+    }
+
+    [Fact]
+    public async Task Projector_VerifiedActionContinuationReconcileOwnedByOriginTurn_ShouldEmitTerminalForContinuationTurn()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var (context, state, continuationKey) = VerifiedActionContinuationState(
+            NyxIdChatTaskStatus.Succeeded,
+            NyxIdChatTurnStatus.Succeeded);
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatOperationReconciledEvent
+                {
+                    Result = new NyxIdChatOperationResultSignal
+                    {
+                        Key = continuationKey.Clone(),
+                        Llm = new NyxIdChatLLMOperationResult { Content = "One matching issue." },
+                    },
+                    Task = state.ActiveTask.Clone(),
+                    Turn = state.ActiveTurn.Clone(),
+                    State = state,
+                    ProgressSequence = state.ProgressSequence,
+                },
+                stateVersion: 44),
+            CancellationToken.None);
+
+        var snapshot = hub.Published.Should().ContainSingle(entry =>
+                entry.Event.EventCase == AGUIEvent.EventOneofCase.Custom &&
+                entry.Event.Custom.Name ==
+                    NyxIdChatConversationAguiFrameBuilder.TaskSnapshotEventName)
+            .Which.Event.Custom.Payload.Unpack<NyxIdChatTaskState>();
+        snapshot.TurnId.Should().Be(context.SessionId);
+        hub.Published.Should().ContainSingle(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.RunFinished &&
+            entry.Event.RunFinished.RunId == context.SessionId &&
+            entry.Event.RunFinished.Status == RunCompletionStatus.Completed);
+    }
+
+    [Fact]
     public async Task Projector_FailureRecoveryRevision_ShouldEmitFullCurrentTaskSnapshot()
     {
         var hub = new RecordingSessionEventHub();
@@ -2282,57 +2426,6 @@ public sealed class NyxIdChatProjectionSessionTests
             .Should().BeEquivalentTo(resolution);
     }
 
-    [Fact]
-    public async Task Projector_PlanResolution_ShouldImmediatelyEmitFullTaskSnapshot()
-    {
-        var hub = new RecordingSessionEventHub();
-        var projector = new NyxIdChatSessionEventProjector(hub);
-        var context = ControllerContext();
-        var state = ControllerState(NyxIdChatTaskStatus.Active, NyxIdChatTurnStatus.Active);
-        state.ProgressSequence = 51;
-        state.ActiveTask.PlanRevision = 2;
-        state.ActiveTask.Gate = new NyxIdChatPlanGate
-        {
-            Mode = NyxIdChatPlanGateMode.Confirm,
-            Status = NyxIdChatPlanGateStatus.Satisfied,
-            RequestId = "plan-gate-alpha",
-            TaskId = "task-alpha",
-            PlanRevision = 2,
-        };
-        var resolution = new NyxIdChatPlanResolutionState
-        {
-            RequestId = "plan-gate-alpha",
-            ClientRequestId = "client-plan-alpha",
-            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
-            Confirmed = true,
-            TaskId = "task-alpha",
-            PlanRevision = 2,
-            CommittedAt = Timestamp.FromDateTimeOffset(
-                DateTimeOffset.Parse("2026-08-01T12:01:00Z")),
-        };
-
-        await projector.ProjectAsync(
-            context,
-            CommittedEnvelope(
-                context.RootActorId,
-                new NyxIdChatPlanResolutionCommittedEvent
-                {
-                    Resolution = resolution,
-                    State = state,
-                },
-                stateVersion: 51),
-            CancellationToken.None);
-
-        var snapshot = hub.Published.Select(static entry => entry.Event)
-            .Single(frame => frame.Custom?.Name ==
-                NyxIdChatConversationAguiFrameBuilder.TaskSnapshotEventName);
-        snapshot.Sequence.Should().Be(51);
-        var task = snapshot.Custom.Payload.Unpack<NyxIdChatTaskState>();
-        task.TaskId.Should().Be("task-alpha");
-        task.PlanRevision.Should().Be(2);
-        task.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
-    }
-
     private static EventEnvelope CommittedEnvelope(string actorId, IMessage evt, long stateVersion = 1) => new()
     {
         Payload = Any.Pack(new CommittedStateEventPublished
@@ -2397,7 +2490,6 @@ public sealed class NyxIdChatProjectionSessionTests
             PlanId = "plan-alpha",
             PlanRevision = 1,
             Title = "Complete the assistant task",
-            Gate = new NyxIdChatPlanGate { Mode = NyxIdChatPlanGateMode.Auto },
         };
         task.Steps.Add(step);
         return new NyxIdChatConversationGAgentState
@@ -2419,6 +2511,213 @@ public sealed class NyxIdChatProjectionSessionTests
             ActiveTask = task,
             ProgressSequence = taskStatus == NyxIdChatTaskStatus.Active ? 5 : 9,
         };
+    }
+
+    private static (
+        NyxIdChatSessionProjectionContext Context,
+        NyxIdChatConversationGAgentState State,
+        NyxIdChatOperationKey ContinuationKey) VerifiedActionContinuationState(
+            NyxIdChatTaskStatus taskStatus,
+            NyxIdChatTurnStatus turnStatus)
+    {
+        const string conversationActorId = "conversation-alpha";
+        const string originTurnId = "turn-origin-alpha";
+        const string continuationTurnId = "turn-continuation-alpha";
+        const string taskId = "task-alpha";
+        const string actionRequestId = "action-alpha";
+        const string sourceToolStepId = "step-source-tool-alpha";
+        const string postconditionStepId = "step-postcondition-alpha";
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = conversationActorId,
+            SessionId = continuationTurnId,
+            ProjectionKind = "nyxid-chat-session",
+        };
+        var continuationKey = new NyxIdChatOperationKey
+        {
+            ConversationActorId = conversationActorId,
+            TurnId = originTurnId,
+            TaskId = taskId,
+            StepId = "step-continuation-alpha",
+            OperationId = "operation-continuation-alpha",
+            OperationGeneration = 1,
+        };
+        var sourceToolStep = new NyxIdChatTaskStepState
+        {
+            StepId = sourceToolStepId,
+            Order = 1,
+            Kind = NyxIdChatStepKind.Tool,
+            Status = NyxIdChatStepStatus.Done,
+            Required = true,
+            Source = new NyxIdChatStepSource
+            {
+                Tool = new NyxIdChatToolStepSource
+                {
+                    ToolName = "nyxid_require_service",
+                    AuthorizationReadiness = new NyxIdChatAuthorizationReadinessInput
+                    {
+                        ToolName = "nyxid_require_service",
+                        Params = new NyxIdChatRequireServiceParams
+                        {
+                            ServiceSlug = "service-alpha",
+                            RequestedScopes = { "items:read" },
+                        },
+                    },
+                },
+            },
+            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = conversationActorId,
+                    TurnId = originTurnId,
+                    TaskId = taskId,
+                    StepId = sourceToolStepId,
+                    OperationId = "operation-source-tool-alpha",
+                    OperationGeneration = 1,
+                },
+                Kind = NyxIdChatStepKind.Tool,
+                Phase = NyxIdChatOperationPhase.Succeeded,
+            },
+        };
+        var postconditionStep = new NyxIdChatTaskStepState
+        {
+            StepId = postconditionStepId,
+            Order = 2,
+            Kind = NyxIdChatStepKind.Postcondition,
+            Status = NyxIdChatStepStatus.Done,
+            Required = true,
+            ActionRequestId = actionRequestId,
+            Source = new NyxIdChatStepSource
+            {
+                Postcondition = new NyxIdChatPostconditionStepSource
+                {
+                    ActionRequestId = actionRequestId,
+                    Check = "ServiceConnect",
+                },
+            },
+            ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
+            DependsOn = { sourceToolStepId },
+            Operation = new NyxIdChatOperationState
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = conversationActorId,
+                    TurnId = originTurnId,
+                    TaskId = taskId,
+                    StepId = postconditionStepId,
+                    OperationId = "operation-postcondition-alpha",
+                    OperationGeneration = 1,
+                },
+                Kind = NyxIdChatStepKind.Postcondition,
+                Phase = NyxIdChatOperationPhase.Succeeded,
+            },
+        };
+        var continuationStep = new NyxIdChatTaskStepState
+        {
+            StepId = continuationKey.StepId,
+            Order = 3,
+            Kind = NyxIdChatStepKind.Llm,
+            Status = taskStatus == NyxIdChatTaskStatus.Active
+                ? NyxIdChatStepStatus.Running
+                : NyxIdChatStepStatus.Done,
+            Required = true,
+            Source = new NyxIdChatStepSource
+            {
+                Llm = new NyxIdChatLLMStepSource
+                {
+                    ActionRequestId = actionRequestId,
+                    ResumeRequirement =
+                        NyxIdChatAuthorizationResumeRequirement.CompleteOriginalServiceRequest,
+                },
+            },
+            DependsOn = { postconditionStepId },
+            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = continuationKey.Clone(),
+                Kind = NyxIdChatStepKind.Llm,
+                Phase = taskStatus == NyxIdChatTaskStatus.Active
+                    ? NyxIdChatOperationPhase.Dispatched
+                    : NyxIdChatOperationPhase.Succeeded,
+            },
+        };
+        var task = new NyxIdChatTaskState
+        {
+            ActorId = conversationActorId,
+            TurnId = continuationTurnId,
+            TaskId = taskId,
+            PlanId = "plan-alpha",
+            PlanRevision = 2,
+            PlanRevisionHistoryStart = 1,
+            Status = taskStatus,
+            ActiveStepId = taskStatus == NyxIdChatTaskStatus.Active
+                ? continuationKey.StepId
+                : string.Empty,
+            ActiveOperationId = taskStatus == NyxIdChatTaskStatus.Active
+                ? continuationKey.OperationId
+                : string.Empty,
+        };
+        task.Steps.Add(sourceToolStep);
+        task.Steps.Add(postconditionStep);
+        task.Steps.Add(continuationStep);
+        var state = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = conversationActorId,
+            ScopeId = "scope-alpha",
+            ActiveTurn = new NyxIdChatTurnState
+            {
+                TurnId = continuationTurnId,
+                TaskId = taskId,
+                Status = turnStatus,
+            },
+            ActiveTask = task,
+            ContinuationAdmission = new NyxIdChatContinuationAdmissionState
+            {
+                Kind = NyxIdChatContinuationKind.Action,
+                RequestId = "command-continuation-alpha",
+                ClientRequestId = "client-continuation-alpha",
+                OriginTurnId = originTurnId,
+                ContinuationTurnId = continuationTurnId,
+                Status = NyxIdChatContinuationAdmissionStatus.Accepted,
+                OwnerSubject = "owner-alpha",
+            },
+            ProgressSequence = taskStatus == NyxIdChatTaskStatus.Active ? 43 : 44,
+        };
+        state.LatestTurn = state.ActiveTurn.Clone();
+        state.RecentActions.Add(new NyxIdChatActionRequestState
+        {
+            SchemaVersion = 4,
+            ConversationActorId = conversationActorId,
+            OriginTurnId = originTurnId,
+            TaskId = taskId,
+            StepId = "step-browser-action-alpha",
+            SourceToolStepId = sourceToolStepId,
+            ActionRequestId = actionRequestId,
+            Action = NyxIdAssistantActionKind.ServiceConnect,
+            Params = new NyxIdAssistantActionParams
+            {
+                CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
+                {
+                    ServiceSlug = "service-alpha",
+                },
+            },
+            PostconditionResult = new NyxIdChatActionPostconditionResult
+            {
+                ActionRequestId = actionRequestId,
+                Disposition = NyxIdChatActionDisposition.Completed,
+                Verified = true,
+                Resource = new NyxIdChatSafeResourceRef
+                {
+                    UserService = new NyxIdChatUserServiceRef
+                    {
+                        UserServiceId = "user-service-alpha",
+                    },
+                },
+            },
+        });
+        return (context, state, continuationKey);
     }
 
     private static NyxIdChatOperationReconciledEvent ControllerReconciled(

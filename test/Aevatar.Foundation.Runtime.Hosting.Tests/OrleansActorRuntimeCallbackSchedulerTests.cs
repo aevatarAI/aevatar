@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
@@ -150,6 +151,79 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
     }
 
     [Fact]
+    public async Task GenericMutationApis_ShouldRejectReservedFleetReconcileSlot()
+    {
+        var dedicatedGrain = new RecordingCallbackSchedulerGrain();
+        var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
+        var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
+        grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
+        var scheduler = new OrleansActorRuntimeDurableCallbackScheduler(grainFactory);
+        var timerRequest = new RuntimeCallbackTimerRequest
+        {
+            ActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            CallbackId = RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+            DueTime = TimeSpan.FromSeconds(1),
+            Period = TimeSpan.FromSeconds(1),
+            TriggerEnvelope = CreateEnvelope(),
+        };
+
+        await FluentActions.Awaiting(() => scheduler.ScheduleTimerAsync(timerRequest))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*runtime-reserved*");
+        await FluentActions.Awaiting(() => scheduler.CancelAsync(
+                new RuntimeCallbackLease(
+                    timerRequest.ActorId,
+                    timerRequest.CallbackId,
+                    1,
+                    RuntimeCallbackBackend.Dedicated)))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*runtime-reserved*");
+        await FluentActions.Awaiting(() => scheduler.PurgeActorAsync(timerRequest.ActorId))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*runtime-reserved*");
+        grainFactoryProxy.CallbackSchedulerGrainCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ProtectedFleetReconcileDelivery_ShouldRequireSchedulerGrainVerification()
+    {
+        var dedicatedGrain = new RecordingCallbackSchedulerGrain
+        {
+            FleetReconcileDeliveryVerified = true,
+        };
+        var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
+        var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
+        grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
+        var scheduler = new OrleansActorRuntimeDurableCallbackScheduler(grainFactory);
+        var delivered = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+            generation: 9,
+            fireIndex: 4,
+            triggerEnvelope: new EventEnvelope
+            {
+                Payload = Any.Pack(new RuntimeFleetReconcileRequested()),
+                Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                    RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                    TopologyAudience.Self),
+            },
+            RuntimeCallbackDeliveryMode.FiredSelfEvent,
+            RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
+
+        var attestation = await scheduler.VerifyAsync(delivered);
+
+        attestation.Should().NotBeNull();
+        attestation!.EnvelopeId.Should().Be(delivered.Id);
+        attestation.Generation.Should().Be(9);
+        attestation.FireIndex.Should().Be(4);
+        dedicatedGrain.VerifyFleetReconcileDeliveryCalls.Should().Be(1);
+        dedicatedGrain.LastVerifiedFleetReconcileEnvelope.Should().BeEquivalentTo(delivered);
+
+        dedicatedGrain.FleetReconcileDeliveryVerified = false;
+        (await scheduler.VerifyAsync(delivered)).Should().BeNull();
+    }
+
+    [Fact]
     public void CreateFiredEnvelope_ShouldPublishSelfContinuationWithoutOverwritingPublisher()
     {
         var fired = RuntimeCallbackEnvelopeFactory.CreateFiredEnvelope(
@@ -230,6 +304,12 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
     {
         public long NextGeneration { get; set; } = 1;
 
+        public bool FleetReconcileDeliveryVerified { get; set; }
+
+        public int VerifyFleetReconcileDeliveryCalls { get; private set; }
+
+        public EventEnvelope? LastVerifiedFleetReconcileEnvelope { get; private set; }
+
         public int ScheduleTimeoutCalls { get; private set; }
 
         public int ScheduleTimerCalls { get; private set; }
@@ -294,6 +374,13 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
         {
             PurgeCalls++;
             return Task.CompletedTask;
+        }
+
+        public Task<bool> VerifyRuntimeFleetReconcileDeliveryAsync(EventEnvelope envelope)
+        {
+            VerifyFleetReconcileDeliveryCalls++;
+            LastVerifiedFleetReconcileEnvelope = envelope.Clone();
+            return Task.FromResult(FleetReconcileDeliveryVerified);
         }
     }
 }

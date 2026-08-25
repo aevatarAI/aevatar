@@ -1359,6 +1359,74 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRoleGAgent_WhenParentReconcilesDispatchedCompletion_ShouldRedeliverCommittedOutcome()
+        {
+            const string runId = "run-parent-reconcile";
+            const string stepId = "step-parent-reconcile";
+            const string sessionId = "session-parent-reconcile";
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                new InMemoryEventStore(),
+                new RecordingWorkflowIntentLlmProvider(),
+                "workflow-role-agent-parent-reconcile",
+                callbackScheduler: new RecordingWorkflowCompletionCallbackScheduler());
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = runId,
+                StepId = stepId,
+                SessionId = sessionId,
+                Prompt = "commit and acknowledge the first delivery",
+            });
+
+            agent.State.Sessions[sessionId].WorkflowLlmCompletionDeliveryStatus.Should()
+                .Be(WorkflowLlmCompletionDeliveryStatus.Dispatched);
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed => completed.SessionId == sessionId);
+
+            await agent.HandleEventAsync(Envelope(
+                new ReconcileWorkflowLlmCompletionCommand
+                {
+                    RunId = runId,
+                    StepId = "step-other",
+                    SessionId = sessionId,
+                    ExecutionId = "execution-parent-reconcile",
+                    ObservedParentStateVersion = 1469,
+                },
+                "workflow-run-parent-reconcile",
+                TopologyAudience.Children));
+
+            publisher.PublicationsWithOptions
+                .Where(static publication =>
+                    publication.Event is WorkflowLlmInvocationCompletedEvent completed &&
+                    completed.SessionId == sessionId)
+                .Should().ContainSingle();
+
+            await agent.HandleEventAsync(Envelope(
+                new ReconcileWorkflowLlmCompletionCommand
+                {
+                    RunId = runId,
+                    StepId = stepId,
+                    SessionId = sessionId,
+                    ExecutionId = "execution-parent-reconcile",
+                    ObservedParentStateVersion = 1470,
+                },
+                "workflow-run-parent-reconcile",
+                TopologyAudience.Children));
+
+            publisher.PublicationsWithOptions
+                .Where(static publication =>
+                    publication.Event is WorkflowLlmInvocationCompletedEvent completed &&
+                    completed.SessionId == sessionId)
+                .Should().HaveCount(2)
+                .And.OnlyContain(publication =>
+                    publication.Options != null &&
+                    publication.Options.Delivery != null &&
+                    publication.Options.Delivery.OperationId ==
+                    $"workflow-llm-terminal:{runId}:{stepId}:{sessionId}:outcome:1");
+        }
+
+        [Fact]
         public async Task WorkflowRoleGAgent_WhenApprovalTimeoutCancellationBlocks_ShouldApplyHostDeadline()
         {
             const int timeoutMs = 1_000;

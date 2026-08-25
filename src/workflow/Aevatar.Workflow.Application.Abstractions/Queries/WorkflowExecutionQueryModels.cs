@@ -21,6 +21,8 @@ public sealed class WorkflowCatalogItem
     public bool IsPrimitiveExample { get; set; }
     public bool RequiresLlmProvider { get; set; }
     public List<string> Primitives { get; set; } = [];
+    public List<string> RequiredConnectors { get; set; } = [];
+    public int StepCount { get; set; }
     public long AuthorityStateVersion { get; set; }
     public DateTimeOffset ProjectionWatermark { get; set; }
     public string LastEventId { get; set; } = string.Empty;
@@ -191,6 +193,14 @@ public sealed class WorkflowRunStepTrace
     public string WorkerId { get; set; } = string.Empty;
     public string OutputPreview { get; set; } = string.Empty;
     public string Error { get; set; } = string.Empty;
+    public string FailureOutput { get; set; } = string.Empty;
+    public bool FailureOutputTruncated { get; set; }
+    public WorkflowStepFailureOutcome FailureOutcome { get; set; } = WorkflowStepFailureOutcome.Unspecified;
+    public WorkflowRecoveryFailureKind RecoveryFailureKind { get; set; } = WorkflowRecoveryFailureKind.Unspecified;
+    public WorkflowStepRetryDisposition RetryDisposition { get; set; } = WorkflowStepRetryDisposition.Unspecified;
+    public WorkflowFileItemResultSet? FileItemResults { get; set; }
+    public VoteAgreementDecision? VoteAgreementDecision { get; set; }
+    public WorkflowRunFailedStepAttempt? LatestFailedAttempt { get; set; }
     public Dictionary<string, string> RequestParameters { get; set; } = [];
     public Dictionary<string, string> CompletionAnnotations { get; set; } = [];
     public string NextStepId { get; set; } = string.Empty;
@@ -205,6 +215,42 @@ public sealed class WorkflowRunStepTrace
     public WorkflowRunToolApproval? ToolApproval { get; set; }
     public WorkflowRunUsageMetrics Usage { get; set; } = new();
     public WorkflowRunStepOutcome Outcome { get; set; } = WorkflowRunStepOutcome.Unspecified;
+    public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
+        ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
+        : null;
+}
+
+public sealed class WorkflowRunFailedStepAttempt
+{
+    public string DisplayName { get; set; } = string.Empty;
+    public string StepType { get; set; } = string.Empty;
+    public string TargetRole { get; set; } = string.Empty;
+    public DateTimeOffset? RequestedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+    public bool? Success { get; set; }
+    public string WorkerId { get; set; } = string.Empty;
+    public string OutputPreview { get; set; } = string.Empty;
+    public string Error { get; set; } = string.Empty;
+    public Dictionary<string, string> RequestParameters { get; set; } = [];
+    public Dictionary<string, string> CompletionAnnotations { get; set; } = [];
+    public string NextStepId { get; set; } = string.Empty;
+    public string BranchKey { get; set; } = string.Empty;
+    public string AssignedVariable { get; set; } = string.Empty;
+    public string AssignedValue { get; set; } = string.Empty;
+    public WorkflowRunUsageMetrics Usage { get; set; } = new();
+    public string FailureOutput { get; set; } = string.Empty;
+    public bool FailureOutputTruncated { get; set; }
+    public WorkflowStepFailureOutcome FailureOutcome { get; set; } = WorkflowStepFailureOutcome.Unspecified;
+    public WorkflowRecoveryFailureKind RecoveryFailureKind { get; set; } = WorkflowRecoveryFailureKind.Unspecified;
+    public WorkflowStepRetryDisposition RetryDisposition { get; set; } = WorkflowStepRetryDisposition.Unspecified;
+    public WorkflowFileItemResultSet? FileItemResults { get; set; }
+    public VoteAgreementDecision? VoteAgreementDecision { get; set; }
+    public string SuspensionType { get; set; } = string.Empty;
+    public string SuspensionPrompt { get; set; } = string.Empty;
+    public string SuspensionContent { get; set; } = string.Empty;
+    public int? SuspensionTimeoutSeconds { get; set; }
+    public string RequestedVariableName { get; set; } = string.Empty;
+    public WorkflowRunToolApproval? ToolApproval { get; set; }
     public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
         ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
         : null;

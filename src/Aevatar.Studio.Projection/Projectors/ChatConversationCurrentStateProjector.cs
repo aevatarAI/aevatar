@@ -72,8 +72,9 @@ public sealed class ChatConversationCurrentStateProjector
         await _writeDispatcher.UpsertAsync(document, ct);
     }
 
-    private static ChatConversationTurnDocument ToTurnDocument(ChatTurn turn) =>
-        new()
+    private static ChatConversationTurnDocument ToTurnDocument(ChatTurn turn)
+    {
+        var document = new ChatConversationTurnDocument
         {
             TurnId = turn.TurnId,
             Sequence = turn.Sequence,
@@ -84,6 +85,46 @@ public sealed class ChatConversationCurrentStateProjector
             TerminalTimeMs = turn.TerminalTime?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0,
             LlmRoute = turn.LlmRoute,
             LlmModel = turn.LlmModel,
+        };
+        document.Operations.AddRange(turn.Operations.Select(ToOperationDocument));
+        return document;
+    }
+
+    private static ChatConversationTurnOperationDocument ToOperationDocument(
+        ChatTurnOperation operation) =>
+        new()
+        {
+            OperationId = operation.OperationId,
+            Order = operation.Order,
+            Kind = ToOperationKindName(operation.Kind),
+            Title = operation.Title,
+            Status = operation.Status,
+            // Absent timing stays zero; the query side reports it as unavailable
+            // rather than substituting an observation time.
+            StartedAtMs = operation.StartedAt?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0,
+            CompletedAtMs = operation.CompletedAt?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0,
+            Model = operation.Model,
+            Provider = operation.Provider,
+            FinishReason = operation.FinishReason,
+            PromptTokens = operation.PromptTokens,
+            CompletionTokens = operation.CompletionTokens,
+            TotalTokens = operation.TotalTokens,
+            InputPreview = operation.InputPreview,
+            OutputPreview = operation.OutputPreview,
+            ArgumentsPreview = operation.ArgumentsPreview,
+            PreviewsTruncated = operation.PreviewsTruncated,
+            SafeMessage = operation.SafeMessage,
+            AvailableToolNames = { operation.AvailableToolNames },
+            ToolCatalogCaptured = operation.ToolCatalogCaptured,
+        };
+
+    private static string ToOperationKindName(ChatTurnOperationKind kind) =>
+        kind switch
+        {
+            ChatTurnOperationKind.Model => "model",
+            ChatTurnOperationKind.Tool => "tool",
+            ChatTurnOperationKind.Other => "other",
+            _ => string.Empty,
         };
 
     private static string ToTerminalStatusName(ChatTurnTerminalStatus status) =>

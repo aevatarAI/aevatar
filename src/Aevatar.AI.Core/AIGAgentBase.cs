@@ -65,6 +65,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
+    private readonly IAgentToolDiscoveryService _toolDiscoveryService;
 
     protected virtual AgentToolApprovalContinuationMode ToolApprovalContinuationMode =>
         AgentToolApprovalContinuationMode.None;
@@ -91,7 +92,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        IAgentToolDiscoveryService? toolDiscoveryService = null)
     {
         _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _llmProviderFactory = llmProviderFactory ?? NullLLMProviderFactory.Instance;
@@ -99,6 +101,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _toolSources = (toolSources ?? []).ToArray();
+        _toolDiscoveryService = toolDiscoveryService ?? AgentToolDiscoveryService.Instance;
     }
 
     // ─── 初始化 ───
@@ -207,7 +210,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     /// <summary>流式 Chat。</summary>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         CancellationToken ct = default)
     {
         EnsureRuntime();
@@ -222,7 +225,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
         string? requestId,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default)
     {
@@ -241,7 +244,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         IReadOnlyList<ContentPart> userContent,
         string? requestId,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default)
     {
@@ -255,7 +258,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         string? requestId,
         LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default)
     {
@@ -280,7 +283,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         string? requestId,
         LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default)
     {
@@ -304,7 +307,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         IReadOnlyList<ContentPart> userContent,
         string? requestId,
         AgentToolExecutionContext? toolContext,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default)
     {
@@ -416,9 +419,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     /// </summary>
     protected virtual string DecorateSystemPrompt(
         string basePrompt,
-        AgentProfileTurnCatalog? turnCatalog) => basePrompt;
+        AgentTurnToolCatalog? turnCatalog) => basePrompt;
 
-    private LLMRequest BuildRequest(AgentProfileTurnCatalog? turnCatalog) => new()
+    private LLMRequest BuildRequest(AgentTurnToolCatalog? turnCatalog) => new()
     {
         Messages = History.BuildMessages(DecorateSystemPrompt(EffectiveConfig.SystemPrompt, turnCatalog)),
         RequestId = null,
@@ -468,30 +471,33 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             return;
         }
 
-        var discoveredTools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var source in _toolSources)
+        var discovery = await _toolDiscoveryService
+            .DiscoverAsync(_toolSources, AgentToolExecutionContext.Empty, ct)
+            .ConfigureAwait(false);
+        if (!discovery.IsSuccess)
         {
-            try
+            var failure = discovery.Failure!;
+            if (failure.Code == AgentToolDiscoveryFailureCode.ToolNameCollision)
             {
-                var tools = await source.DiscoverToolsAsync(ct);
-                ct.ThrowIfCancellationRequested();
-                foreach (var tool in tools)
-                    discoveredTools[tool.Name] = tool;
+                Logger.LogWarning(
+                    "Agent tool discovery collision degraded to built-in tools. tool={ToolName} source={SourceType} conflictingSource={ConflictingSourceType}",
+                    failure.ToolName,
+                    failure.SourceType,
+                    failure.ConflictingSourceType);
+                RefreshSourceTools([]);
+                return;
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                ct.ThrowIfCancellationRequested();
-                Logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
-            }
+
+            Logger.LogError(
+                "Agent tool discovery failed closed. code={FailureCode} tool={ToolName} source={SourceType}",
+                failure.Code,
+                failure.ToolName,
+                failure.SourceType);
+            throw new AgentToolDiscoveryException(failure);
         }
 
         ct.ThrowIfCancellationRequested();
-        RefreshSourceTools(discoveredTools.Values);
+        RefreshSourceTools(discovery.Tools);
     }
 
     private void RefreshSourceTools(IEnumerable<IAgentTool> discoveredTools)

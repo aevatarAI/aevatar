@@ -6,12 +6,12 @@
     <meta name="color-scheme" content="only light" />
     <meta name="supported-color-schemes" content="light" />
     <title>Aevatar Studio</title>
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260814-m46-nyxid-api-routing" />
-    <script defer src="/workflow/studio/assets/vendor/lucide.min.js?v=20260814-m46-nyxid-api-routing"></script>
-    <script defer src="/workflow/studio/assets/vendor/marked.min.js?v=20260814-m46-nyxid-api-routing"></script>
-    <script defer src="/workflow/studio/assets/vendor/purify.min.js?v=20260814-m46-nyxid-api-routing"></script>
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260823-m62-studio-redesign" />
+    <script defer src="/workflow/studio/assets/vendor/lucide.min.js?v=20260823-m62-studio-redesign"></script>
+    <script defer src="/workflow/studio/assets/vendor/marked.min.js?v=20260823-m62-studio-redesign"></script>
+    <script defer src="/workflow/studio/assets/vendor/purify.min.js?v=20260823-m62-studio-redesign"></script>
     <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
-    <script type="module" src="/workflow/studio/assets/app.js?v=20260814-m46-nyxid-api-routing"></script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260823-m62-studio-redesign"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -158,48 +158,81 @@
           </div>
 
           <section class="request-trace-panel hidden" id="requestTracePanel" role="tabpanel" aria-labelledby="traceViewButton">
-            <header class="request-trace-header">
-              <div>
-                <span class="eyebrow">Operation ledger</span>
-                <h1>执行轨迹</h1>
-              </div>
-              <span class="request-trace-live" id="requestTraceLive"><i data-lucide="radio"></i><span>本页会话</span></span>
-            </header>
-            <div class="request-trace-workspace">
-              <aside class="request-trace-requests" aria-label="请求">
-                <div class="request-trace-requests-title">
+            <div class="trajectory-toolbar" role="toolbar" aria-label="轨迹工具栏">
+              <div class="trajectory-toolbar-actions">
+                <button class="trajectory-toggle" id="trajectoryDurationButton" type="button" aria-pressed="true" aria-label="按记录耗时排布时间轴">
+                  <svg class="trajectory-toggle-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <circle cx="8" cy="8" r="5.25"></circle>
+                    <path d="M8 4.75V8l2.25 1.5"></path>
+                  </svg>
+                  <span>Duration</span>
+                </button>
+                <button class="trajectory-action" id="trajectoryFoldRequestsButton" type="button" aria-pressed="false" aria-label="折叠全部请求">
+                  <span class="trajectory-action-icon" id="trajectoryFoldRequestsIcon" aria-hidden="true">⊟</span>
                   <span>Requests</span>
-                  <strong id="requestTraceRailCount">0</strong>
+                </button>
+                <button class="trajectory-action" id="trajectoryFoldCallsButton" type="button" aria-pressed="false" aria-label="折叠模型记录下的工具调用">
+                  <span class="trajectory-action-icon" id="trajectoryFoldCallsIcon" aria-hidden="true">⊟</span>
+                  <span>Calls</span>
+                </button>
+                <span class="trajectory-count"><span>Operations</span><strong id="traceOperationCount">0</strong></span>
+                <span class="request-trace-live" id="requestTraceLive"><i data-lucide="radio"></i><span>本页会话</span></span>
+              </div>
+              <div class="trajectory-search">
+                <i data-lucide="search"></i>
+                <input class="trajectory-search-input" id="trajectorySearchInput" type="search" aria-label="搜索轨迹记录" placeholder="搜索轨迹" />
+              </div>
+            </div>
+            <div class="trajectory-overview" id="traceOperationOverview" aria-label="Input、Model、Tools 时间总览">
+              <div class="trajectory-overview-labels" aria-hidden="true">
+                <span>Input</span>
+                <span>Model</span>
+                <span>Tools</span>
+              </div>
+              <div class="trajectory-overview-track" id="trajectoryOverviewTrack" tabindex="0" role="application"
+                   aria-label="轨迹时间轴：拖拽选择时间区间，滚轮缩放，右键清除">
+                <div class="trajectory-overview-spans" id="trajectoryOverviewSpans"></div>
+                <div class="trajectory-overview-boundaries" id="trajectoryOverviewBoundaries" aria-hidden="true"></div>
+                <div class="trajectory-overview-selection hidden" id="trajectoryOverviewSelection" aria-hidden="true"></div>
+                <div class="trajectory-overview-hairline hidden" id="trajectoryOverviewHairline" aria-hidden="true"></div>
+                <div class="trajectory-overview-empty" id="trajectoryOverviewEmpty">尚无可用时序</div>
+              </div>
+            </div>
+            <div class="trajectory-split">
+              <div class="trajectory-ledger" id="trajectoryLedger">
+                <table class="trajectory-table">
+                  <colgroup>
+                    <col class="trajectory-event-col" />
+                    <col class="trajectory-content-col" />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th class="trajectory-event-head" scope="col">Event</th>
+                      <th scope="col">Content</th>
+                    </tr>
+                  </thead>
+                  <tbody id="traceOperationList" aria-label="按时间排列的操作记录" aria-live="polite"></tbody>
+                </table>
+                <div class="trajectory-empty" id="traceOperationEmpty">
+                  <i data-lucide="list-tree"></i>
+                  <strong>尚无操作记录</strong>
+                  <span>发出请求后，Input、Model 与 Tool 记录会在这里按时间展开。</span>
                 </div>
-                <div class="request-trace-list" id="requestTraceList" role="listbox" aria-label="当前会话的请求" aria-live="polite">
-                  <div class="request-trace-empty" id="requestTraceEmpty">
-                    <i data-lucide="waypoints"></i>
-                    <strong>尚无请求</strong>
+              </div>
+              <aside class="trajectory-details hidden" id="trajectoryDetails" aria-label="操作详情">
+                <div class="trajectory-details-resize" id="trajectoryDetailsResize" role="separator"
+                     aria-orientation="vertical" aria-label="调整详情面板宽度" tabindex="0"
+                     title="拖拽调整宽度，双击复原"></div>
+                <header class="trajectory-details-header">
+                  <div class="trajectory-details-title">
+                    <span class="trajectory-kind-tag" id="trajectoryDetailsKind">OPERATION</span>
+                    <span class="trajectory-details-location" id="trajectoryDetailsLocation">—</span>
                   </div>
-                </div>
-              </aside>
-              <section class="trace-operation-ledger" aria-label="操作轨迹">
-                <header class="trace-operation-toolbar">
-                  <div>
-                    <span>Operations</span>
-                    <strong id="traceOperationCount">0</strong>
-                  </div>
-                  <span class="trace-operation-legend" aria-hidden="true">
-                    <i class="input"></i>Input
-                    <i class="model"></i>Model
-                    <i class="tools"></i>Tools
-                  </span>
+                  <button class="trajectory-details-close" id="trajectoryDetailsClose" type="button" aria-label="关闭详情">×</button>
                 </header>
-                <div class="trace-operation-overview" id="traceOperationOverview" aria-label="Input、Model、Tools Duration 概览">
-                  <div class="trace-operation-overview-empty">—</div>
-                </div>
-                <div class="trace-operation-list" id="traceOperationList" role="listbox" aria-label="按时间排列的操作记录" aria-live="polite">
-                  <div class="trace-operation-empty" id="traceOperationEmpty">
-                    <i data-lucide="list-tree"></i>
-                    <strong>尚无操作记录</strong>
-                  </div>
-                </div>
-              </section>
+                <div class="trajectory-details-tabs" id="trajectoryDetailsTabs" role="tablist" aria-label="操作详情"></div>
+                <div class="trajectory-details-body" id="trajectoryDetailsBody" role="tabpanel"></div>
+              </aside>
             </div>
           </section>
 
@@ -263,7 +296,7 @@
                 </button>
               </div>
             </form>
-            <div class="composer-status" id="composerStatus">生产环境 · 操作会影响真实数据，高风险操作需要确认</div>
+            <div class="composer-status" id="composerStatus" role="status" aria-live="polite" aria-atomic="true" aria-busy="false">生产环境 · 操作会影响真实数据，高风险操作需要确认</div>
           </div>
         </main>
 
@@ -290,26 +323,6 @@
           </div>
 
           <div class="inspector-body" id="runPanel" role="tabpanel">
-            <section class="inspector-section trace-operation-detail hidden" id="traceOperationSection">
-              <div class="trace-operation-detail-heading">
-                <span class="trace-operation-kind" id="traceOperationKindFact">Operation</span>
-                <span class="mono" id="traceOperationIdFact">—</span>
-              </div>
-              <h3 id="traceOperationTitleFact">操作详情</h3>
-              <dl class="request-trace-metrics trace-operation-metrics">
-                <div><dt>状态</dt><dd id="traceOperationStatusFact">—</dd></div>
-                <div><dt>开始</dt><dd id="traceOperationStartedFact">—</dd></div>
-                <div><dt>Duration</dt><dd id="traceOperationDurationFact">—</dd></div>
-              </dl>
-              <div class="trace-operation-payload hidden" id="traceOperationInputSection">
-                <span>Input</span>
-                <pre id="traceOperationInputFact"></pre>
-              </div>
-              <div class="trace-operation-payload hidden" id="traceOperationOutputSection">
-                <span>Output</span>
-                <pre id="traceOperationOutputFact"></pre>
-              </div>
-            </section>
             <section class="inspector-section request-trace-summary">
               <div class="section-title section-title-row">
                 <span>Request</span>

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Collections;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Callbacks;
@@ -89,7 +90,7 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
     public async Task ScheduleTimeoutAsync_WhenUsingEnvelopeRedelivery_ShouldPublishOriginalPublisher()
     {
         var streams = new RecordingStreamProvider();
-        var scheduler = new InMemoryActorRuntimeCallbackScheduler(streams);
+        using var scheduler = new InMemoryActorRuntimeCallbackScheduler(streams);
 
         await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
         {
@@ -114,6 +115,61 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         produced.Route.IsDirect().Should().BeTrue();
         produced.Route.GetTargetActorId().Should().Be("parent-run");
         produced.Runtime.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GenericMutationApis_ShouldRejectReservedFleetReconcileSlot()
+    {
+        var scheduler = new InMemoryActorRuntimeCallbackScheduler(
+            new RecordingStreamProvider());
+        var request = new RuntimeCallbackTimerRequest
+        {
+            ActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            CallbackId = RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+            DueTime = TimeSpan.FromMinutes(1),
+            Period = TimeSpan.FromMinutes(1),
+            TriggerEnvelope = CreateEnvelope(),
+        };
+
+        await FluentActions.Awaiting(() => scheduler.ScheduleTimerAsync(request))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*runtime-reserved*");
+        await FluentActions.Awaiting(() => scheduler.CancelAsync(
+                new RuntimeCallbackLease(
+                    request.ActorId,
+                    request.CallbackId,
+                    1,
+                    RuntimeCallbackBackend.InMemory)))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*runtime-reserved*");
+        await FluentActions.Awaiting(() => scheduler.PurgeActorAsync(request.ActorId))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*runtime-reserved*");
+    }
+
+    [Fact]
+    public async Task ProtectedFleetReconcileDelivery_ShouldVerifyOnlyExactPersistedEnvelope()
+    {
+        var streams = new RecordingStreamProvider();
+        using var scheduler = new InMemoryActorRuntimeCallbackScheduler(streams);
+
+        await scheduler.EnsureScheduledAsync();
+        await streams.LastStreamProduced.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        streams.LastProduced.Should().NotBeNull();
+        var delivered = streams.LastProduced!;
+        var attestation = await scheduler.VerifyAsync(delivered);
+        attestation.Should().NotBeNull();
+        attestation!.EnvelopeId.Should().Be(delivered.Id);
+
+        var forged = delivered.Clone();
+        forged.Id = "forged-delivery";
+        (await scheduler.VerifyAsync(forged)).Should().BeNull();
+        var forgedWithPersistedIdentity = delivered.Clone();
+        forgedWithPersistedIdentity.Route.PublisherActorId = "forged-publisher";
+        (await scheduler.VerifyAsync(forgedWithPersistedIdentity)).Should().BeNull();
+
+        (await scheduler.VerifyAsync(delivered.Clone())).Should().Be(attestation);
     }
 
     private static EventEnvelope CreateEnvelope() => new()

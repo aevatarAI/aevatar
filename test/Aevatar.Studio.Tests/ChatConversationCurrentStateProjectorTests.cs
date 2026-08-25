@@ -302,6 +302,94 @@ public sealed class ChatConversationCurrentStateProjectorTests
         dispatcher.Inputs[1].Deleted.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldMaterializeTurnOperationLedgerAndLeaveUnreportedTimingUnset()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new ChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-20T09:00:00Z")));
+        var turn = new ChatTurn
+        {
+            TurnId = "turn-a",
+            Sequence = 1,
+            UserText = "connect the degraded service",
+            AssistantText = "reconnected",
+            TerminalStatus = ChatTurnTerminalStatus.Completed,
+            TerminalTime = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-20T08:00:10Z")),
+        };
+        turn.Operations.Add(new ChatTurnOperation
+        {
+            OperationId = "op-model-1",
+            Order = 1,
+            Kind = ChatTurnOperationKind.Model,
+            Title = "deepseek-v4-pro",
+            Status = "done",
+            StartedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-20T08:00:00Z")),
+            CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-20T08:00:02Z")),
+            Model = "deepseek-v4-pro",
+            TotalTokens = 4397,
+            OutputPreview = "planning the reconnect",
+            PreviewsTruncated = true,
+            AvailableToolNames = { "github.get_issue", "nyxid.require_service" },
+            ToolCatalogCaptured = true,
+        });
+        turn.Operations.Add(new ChatTurnOperation
+        {
+            OperationId = "op-tool-1",
+            Order = 2,
+            Kind = ChatTurnOperationKind.Tool,
+            Title = "service.reconnect",
+            Status = "running",
+        });
+        var state = new ChatConversationState
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            ServiceKind = "nyxid.chat",
+        };
+        state.Turns.Add(turn);
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new ChatTurnAppendedEvent
+                {
+                    ScopeId = "scope-a",
+                    ConversationId = "conversation-a",
+                    Turn = turn,
+                },
+                state,
+                version: 4,
+                eventId: "evt-turn-appended",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-20T08:00:10Z")));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        var operations = document.Turns.Should().ContainSingle().Subject.Operations;
+        operations.Should().HaveCount(2);
+
+        var model = operations[0];
+        model.OperationId.Should().Be("op-model-1");
+        model.Kind.Should().Be("model");
+        model.TotalTokens.Should().Be(4397);
+        model.OutputPreview.Should().Be("planning the reconnect");
+        model.PreviewsTruncated.Should().BeTrue();
+        model.AvailableToolNames.Should().Equal("github.get_issue", "nyxid.require_service");
+        model.ToolCatalogCaptured.Should().BeTrue();
+        model.StartedAtMs.Should().Be(
+            DateTimeOffset.Parse("2026-08-20T08:00:00Z").ToUnixTimeMilliseconds());
+        model.CompletedAtMs.Should().Be(
+            DateTimeOffset.Parse("2026-08-20T08:00:02Z").ToUnixTimeMilliseconds());
+
+        var tool = operations[1];
+        tool.Kind.Should().Be("tool");
+        tool.Title.Should().Be("service.reconnect");
+        // An operation that never reported timing stays unset instead of
+        // borrowing the turn's terminal or the projection clock.
+        tool.StartedAtMs.Should().Be(0);
+        tool.CompletedAtMs.Should().Be(0);
+    }
+
     private static StudioMaterializationContext NewContext() => new()
     {
         RootActorId = RootActorId,

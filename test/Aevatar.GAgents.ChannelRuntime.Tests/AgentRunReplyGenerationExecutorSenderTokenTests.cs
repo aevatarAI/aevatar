@@ -425,7 +425,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
             CancellationToken ct,
-            AgentProfileTurnCatalog? turnCatalog = null)
+            AgentTurnToolCatalog? turnCatalog = null)
         {
             CapturedLlmControl = llmControl;
             CapturedToolContext = toolContext;

@@ -1603,7 +1603,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         using var refreshTimeoutCts = new CancellationTokenSource(
             TimeSpan.FromMilliseconds(_postCommitConfigRefreshTimeoutMs),
             ChatRequestTimeProvider);
-        await base.OnCommittedStateChangedAsync(state, refreshTimeoutCts.Token);
+        try
+        {
+            await base.OnCommittedStateChangedAsync(state, refreshTimeoutCts.Token);
+        }
+        catch (Exception ex) when (
+            refreshTimeoutCts.IsCancellationRequested &&
+            ex is not OperationCanceledException)
+        {
+            throw new OperationCanceledException(
+                "Post-commit configuration refresh exceeded its deadline.",
+                ex,
+                refreshTimeoutCts.Token);
+        }
     }
 
     protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(RoleGAgentState state)
@@ -2071,7 +2083,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             reference is null ||
             reference.SourceKind is not (
                 DurableCallerCredentialSourceKind.ScheduledDispatch or
-                DurableCallerCredentialSourceKind.WebhookBinding) ||
+                DurableCallerCredentialSourceKind.WebhookBinding or
+                DurableCallerCredentialSourceKind.ChannelRegistration) ||
             string.IsNullOrWhiteSpace(reference.Ref) ||
             string.IsNullOrWhiteSpace(reference.Purpose) ||
             string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
@@ -2095,13 +2108,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return null;
 
         var token = resolved.Secret.Trim();
-        var referenceCredentialKind = ResolveDurableCredentialKind(reference.Purpose);
+        var referenceCredentialKind = ResolveDurableCredentialKind(reference);
         var credentialKind = context.Credentials.NyxIdCredentialKind !=
                              AgentToolNyxIdCredentialKind.Unspecified
             ? context.Credentials.NyxIdCredentialKind
             : referenceCredentialKind;
         if (credentialKind != referenceCredentialKind ||
-            credentialKind == AgentToolNyxIdCredentialKind.ProxyDelegation &&
+            (credentialKind is AgentToolNyxIdCredentialKind.ProxyDelegation or
+                AgentToolNyxIdCredentialKind.AgentKey) &&
             checkpoint.RecoveryContext.RequiresSourceReadableNyxIdAccessToken)
         {
             return null;
@@ -2146,6 +2160,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                    !string.IsNullOrWhiteSpace(descriptor.Ref);
         }
 
+        if (reference.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration)
+        {
+            return string.Equals(
+                       reference.Purpose,
+                       CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                       StringComparison.Ordinal) &&
+                   reference.SecretReference is { } descriptor &&
+                   !string.IsNullOrWhiteSpace(descriptor.Ref);
+        }
+
         return reference.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch &&
                (string.Equals(
                     reference.Purpose,
@@ -2161,13 +2185,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     StringComparison.Ordinal));
     }
 
-    private static AgentToolNyxIdCredentialKind ResolveDurableCredentialKind(string purpose) =>
+    private static AgentToolNyxIdCredentialKind ResolveDurableCredentialKind(
+        DurableCallerCredentialRef reference) =>
         string.Equals(
-            purpose,
+            reference.Purpose,
             CredentialSecretPurposes.WorkflowCallerSourceReadableUserBearerToken,
             StringComparison.Ordinal)
             ? AgentToolNyxIdCredentialKind.SourceReadableUserBearer
-            : AgentToolNyxIdCredentialKind.ProxyDelegation;
+            : DurableCallerAgentKeyContract.Matches(reference)
+                ? AgentToolNyxIdCredentialKind.AgentKey
+                : AgentToolNyxIdCredentialKind.ProxyDelegation;
 
     private static bool MatchesResolvedCredentialReference(
         DurableCallerCredentialRef expected,
@@ -2623,7 +2650,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             try
             {
                 streamCt.ThrowIfCancellationRequested();
-                var turnCatalog = await MaterializeAndCommitAgentProfileTurnCatalogAsync(
+                var turnCatalog = await MaterializeAndCommitAgentTurnToolCatalogAsync(
                     request,
                     toolContext,
                     committedAuthority,
@@ -2982,9 +3009,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return ResolveCommittedTurnAuthority(request.SessionId);
         }
 
-        if (State.AgentProfile is null)
-            return null;
-
         var active = State.AgentProfileTurnAuthority;
         if (active?.ReconciliationKey is null ||
             !string.Equals(
@@ -3001,6 +3025,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return ResolveCommittedTurnAuthority(request.SessionId);
         }
 
+        if (State.AgentProfile is null)
+            return active.Clone();
+
         if (active.SelectedExactSkillRef is null)
             return active.Clone();
 
@@ -3015,23 +3042,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return ResolveCommittedTurnAuthority(request.SessionId);
     }
 
-    private async Task<AgentProfileTurnCatalog?> MaterializeAndCommitAgentProfileTurnCatalogAsync(
+    private async Task<AgentTurnToolCatalog?> MaterializeAndCommitAgentTurnToolCatalogAsync(
         ChatRequestEvent request,
         AgentToolExecutionContext toolContext,
         AgentProfileTurnAuthorityState? committedAuthority,
         CancellationToken ct)
     {
         if (committedAuthority is null)
-            return null;
+            return AgentTurnToolCatalogFactory.RestrictedEmpty();
 
-        var materialization = await MaterializeCommittedAgentProfileTurnCatalogAsync(
+        var materialization = await MaterializeCommittedAgentTurnToolCatalogAsync(
             request,
             toolContext,
             committedAuthority.Clone(),
             ct);
         ct.ThrowIfCancellationRequested();
         if (materialization is null)
-            return null;
+            return AgentTurnToolCatalogFactory.RestrictedEmpty();
 
         var reconcile = new AgentProfileTurnAuthorityCommittedEvent
         {
@@ -3043,7 +3070,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var active = State.AgentProfileTurnAuthority;
         return active is not null && HasSameReconciliationKey(active, reconcile.Authority)
             ? materialization.Catalog
-            : null;
+            : AgentTurnToolCatalogFactory.RestrictedEmpty();
     }
 
     private async Task PersistValidatedTurnAuthorityAsync(
@@ -3099,15 +3126,27 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     protected virtual Task<AgentProfileTurnAuthorityPreparation?> PrepareAgentProfileTurnAuthorityAsync(
         ChatRequestEvent request,
         AgentToolExecutionContext toolContext,
-        CancellationToken ct) =>
-        Task.FromResult<AgentProfileTurnAuthorityPreparation?>(null);
+        CancellationToken ct)
+    {
+        var authority = CreateLegacyRestrictedEmptyAuthority(request.SessionId);
+        return Task.FromResult<AgentProfileTurnAuthorityPreparation?>(
+            AgentProfileTurnAuthorityPreparation.Create(authority));
+    }
 
-    protected virtual Task<AgentProfileTurnCatalogMaterialization?> MaterializeCommittedAgentProfileTurnCatalogAsync(
+    protected virtual Task<AgentTurnToolCatalogMaterialization?> MaterializeCommittedAgentTurnToolCatalogAsync(
         ChatRequestEvent request,
         AgentToolExecutionContext toolContext,
         AgentProfileTurnAuthorityState committedAuthority,
-        CancellationToken ct) =>
-        Task.FromResult<AgentProfileTurnCatalogMaterialization?>(null);
+        CancellationToken ct)
+    {
+        var proposal = committedAuthority.Clone();
+        proposal.AuthorityKind = AgentProfileTurnAuthorityKind.RestrictedEmpty;
+        proposal.AuthorityCeilingToolNames.Clear();
+        return Task.FromResult<AgentTurnToolCatalogMaterialization?>(
+            AgentTurnToolCatalogMaterialization.Create(
+                AgentTurnToolCatalogFactory.RestrictedEmpty(),
+                proposal));
+    }
 
     protected virtual void OnPlanOrHandoffObserved(bool handoffPending)
     {
@@ -3121,7 +3160,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         ChatRequestEvent request,
         LLMControlContext llmControl,
         AgentToolExecutionContext toolContext,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         long turnStartedTimestamp,
         CancellationToken streamCt,
         IReadOnlyList<ChatMessage>? recoveryTranscript = null)

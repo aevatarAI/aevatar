@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
@@ -235,8 +236,17 @@ internal static class AgentProfileEndpoints
         activationModes = new[] { "SHADOW", "ENFORCED" },
         sideEffectClasses = new[] { "READ_ONLY", "EXTERNAL_HANDOFF", "SERVICE_CALL", "MAINTENANCE" },
         referenceOwnerKinds = new[] { "caller", "system" },
-        supportedAgentKinds = new[] { AgentProfilePolicies.NyxIdChatAgentKind },
-        allowedRouteToolSetRefs = new[] { AgentProfilePolicies.NyxIdChatRouteToolSet },
+        supportedAgentKinds = new[]
+        {
+            AgentProfilePolicies.WorkspaceChatAgentKind,
+            AgentProfilePolicies.ChannelReplyAgentKind,
+            AgentProfilePolicies.NyxIdChatAgentKind,
+        },
+        allowedRouteToolSetRefs = new[]
+        {
+            AgentProfilePolicies.WorkspaceChatRouteToolSet,
+            AgentProfilePolicies.NyxIdChatRouteToolSet,
+        },
         runtimeParameters = new
         {
             maxPlanSteps = AgentProfileValidationLimits.RequiredMaxPlanSteps,
@@ -249,7 +259,7 @@ internal static class AgentProfileEndpoints
         maximumPageSize = AgentProfileApplicationService.MaximumPageSize,
     });
 
-    private static async Task<IResult> CreateAsync(
+    internal static async Task<IResult> CreateAsync(
         HttpContext http,
         AgentProfileApplicationService service,
         AgentProfileOwner owner,
@@ -257,84 +267,235 @@ internal static class AgentProfileEndpoints
         string? bodyIdempotencyKey,
         string subject,
         Func<string, string> resourceUrl,
-        CancellationToken ct) => await ExecuteAsync(async () =>
+        CancellationToken ct,
+        bool includeActorId = true,
+        bool callerFacing = false) => await ExecuteAsync(async () =>
     {
         var normalizedSlug = Required(profileSlug, "profileSlug");
         var key = Idempotency(http, bodyIdempotencyKey);
         var receipt = await service.CreateAsync(new(owner, normalizedSlug, key, subject), ct);
-        return Accepted(receipt, resourceUrl(normalizedSlug));
-    });
+        return Accepted(receipt, resourceUrl(normalizedSlug), includeActorId);
+    }, callerFacing, ct);
 
-    private static async Task<IResult> GetDetailAsync(AgentProfileApplicationService service, AgentProfileOwner owner, string profileSlug, CancellationToken ct) => await ExecuteAsync(async () =>
+    internal static async Task<IResult> GetDetailAsync(AgentProfileApplicationService service, AgentProfileOwner owner, string profileSlug, CancellationToken ct, bool includeOwnerKind = true, bool callerFacing = false) => await ExecuteAsync(async () =>
     {
         var detail = await service.GetAsync(owner, profileSlug, ct);
-        if (detail is null) return Error(StatusCodes.Status404NotFound, "AGENT_PROFILE_NOT_FOUND", "Agent Profile was not found.");
-        return WithEtag(detail.StrongETag, Detail(detail));
-    });
+        if (detail is null)
+        {
+            return callerFacing
+                ? CallerError(StatusCodes.Status404NotFound, "AI_AGENT_NOT_FOUND", "Agent was not found.")
+                : Error(StatusCodes.Status404NotFound, "AGENT_PROFILE_NOT_FOUND", "Agent Profile was not found.");
+        }
+        return WithEtag(detail.StrongETag, Detail(detail, includeOwnerKind));
+    }, callerFacing, ct);
 
-    private static async Task<IResult> UpdateDraftAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string slug, AgentProfileDraftUpdateInput? input, string subject, string resourceUrl, CancellationToken ct) => await ExecuteAsync(async () =>
+    internal static async Task<IResult> UpdateDraftAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string slug, AgentProfileDraftUpdateInput? input, string subject, string resourceUrl, CancellationToken ct, bool includeActorId = true, bool callerFacing = false) => await ExecuteAsync(async () =>
     {
         var current = await service.GetAsync(owner, slug, ct) ?? throw new AgentProfileNotFoundException("Agent Profile was not found.");
         var receipt = await service.UpdateDraftAsync(new(owner, slug, ToDraft(input?.Draft), ExpectedVersion(http, input?.ExpectedVersion, false, current.StrongETag), Idempotency(http, input?.IdempotencyKey), subject), ct);
-        return Accepted(receipt, resourceUrl);
-    });
+        return Accepted(receipt, resourceUrl, includeActorId);
+    }, callerFacing, ct);
 
-    private static async Task<IResult> PublishAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string slug, string subject, string token, string resourceUrl, CancellationToken ct) => await ExecuteAsync(async () =>
+    internal static async Task<IResult> PublishAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string slug, string subject, string token, string resourceUrl, CancellationToken ct, bool includeActorId = true, bool callerFacing = false) => await ExecuteAsync(async () =>
     {
         var input = await OptionalBodyAsync<AgentProfilePublishInput>(http, ct);
         var current = await service.GetAsync(owner, slug, ct) ?? throw new AgentProfileNotFoundException("Agent Profile was not found.");
         var receipt = await service.PublishAsync(new(owner, slug, ExpectedVersion(http, input?.ExpectedVersion, false, current.StrongETag), Idempotency(http, input?.IdempotencyKey), subject, token), ct);
-        return Accepted(receipt, resourceUrl);
-    });
+        return Accepted(receipt, resourceUrl, includeActorId);
+    }, callerFacing, ct);
 
-    private static async Task<IResult> ValidateAsync(AgentProfileApplicationService service, AgentProfileOwner owner, string slug, string token, CancellationToken ct) => await ExecuteAsync(async () =>
+    internal static async Task<IResult> ValidateAsync(AgentProfileApplicationService service, AgentProfileOwner owner, string slug, string token, CancellationToken ct, bool callerFacing = false) => await ExecuteAsync(async () =>
     {
         var value = await service.ValidateAsync(owner, slug, token, ct);
         return Results.Ok(new { isValid = value.IsValid, draftRevision = value.DraftRevision, diagnostics = value.Diagnostics.Select(static item => new { code = item.Code, field = item.Field, message = item.Message }) });
-    });
+    }, callerFacing, ct);
 
-    private static async Task<IResult> GetBindingAsync(AgentProfileApplicationService service, AgentProfileOwner owner, string agentKind, CancellationToken ct) => await ExecuteAsync(async () =>
+    internal static async Task<IResult> GetBindingAsync(AgentProfileApplicationService service, AgentProfileOwner owner, string agentKind, CancellationToken ct, bool includeSystemRollout = true, bool includeOwnerKind = true) => await ExecuteAsync(async () =>
     {
         var binding = await service.GetBindingAsync(owner, agentKind, ct);
-        return WithEtag(binding.StrongETag, Binding(binding));
+        return WithEtag(binding.StrongETag, Binding(binding, includeSystemRollout, includeOwnerKind));
     });
 
-    private static async Task<IResult> SetBindingAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string agentKind, AgentProfileBindingInput? input, string subject, string resourceUrl, CancellationToken ct) => await ExecuteAsync(async () =>
+    internal static Task<IResult> GetBindingForCallerFacadeAsync(
+        AgentProfileApplicationService service,
+        AgentProfileOwner owner,
+        string agentKind,
+        CancellationToken ct) =>
+        ExecuteCallerBindingFacadeAsync(async () =>
+        {
+            var binding = await service.GetBindingAsync(owner, agentKind, ct).ConfigureAwait(false);
+            return WithEtag(
+                binding.StrongETag,
+                Binding(binding, includeSystemRollout: false, includeOwnerKind: false));
+        }, ct);
+
+    internal static async Task<IResult> SetBindingAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string agentKind, AgentProfileBindingInput? input, string subject, string resourceUrl, CancellationToken ct, bool includeActorId = true) => await ExecuteAsync(async () =>
     {
         var reference = input?.AgentProfile ?? throw new ArgumentException("agentProfile is required.");
         var current = await service.GetBindingAsync(owner, agentKind, ct);
         var receipt = await service.SetBindingAsync(new(owner, agentKind, new AgentProfileReference { OwnerKind = ReferenceOwner(reference.OwnerKind), ProfileSlug = Required(reference.ProfileSlug, "agentProfile.profileSlug") }, ExpectedVersion(http, input?.ExpectedVersion, true, current.StrongETag), Idempotency(http, input?.IdempotencyKey), subject, input?.Enabled ?? true, input?.CohortBasisPoints ?? AgentProfilePolicies.FullCohortBasisPoints), ct);
-        return Accepted(receipt, resourceUrl);
+        return Accepted(receipt, resourceUrl, includeActorId);
     });
 
-    private static async Task<IResult> ClearBindingAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string agentKind, string subject, string resourceUrl, CancellationToken ct) => await ExecuteAsync(async () =>
+    internal static Task<IResult> SetBindingForCallerFacadeAsync(
+        HttpContext http,
+        AgentProfileApplicationService service,
+        AgentProfileOwner owner,
+        string agentKind,
+        AgentProfileReferenceOwnerKind referenceSource,
+        string? profileSlug,
+        long? expectedVersion,
+        string? idempotencyKey,
+        string subject,
+        string resourceUrl,
+        CancellationToken ct) =>
+        ExecuteCallerBindingFacadeAsync(async () =>
+        {
+            var normalizedSlug = Required(profileSlug, "agentProfile.profileSlug");
+            var current = await service.GetBindingAsync(owner, agentKind, ct).ConfigureAwait(false);
+            var receipt = await service.SetBindingAsync(
+                new AgentProfileBindingUpdateRequest(
+                    owner,
+                    agentKind,
+                    new AgentProfileReference
+                    {
+                        OwnerKind = referenceSource,
+                        ProfileSlug = normalizedSlug,
+                    },
+                    ExpectedVersion(http, expectedVersion, true, current.StrongETag),
+                    Idempotency(http, idempotencyKey),
+                    subject),
+                ct).ConfigureAwait(false);
+            return Accepted(receipt, resourceUrl, includeActorId: false);
+        }, ct);
+
+    internal static async Task<IResult> ClearBindingAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string agentKind, string subject, string resourceUrl, CancellationToken ct, bool includeActorId = true) => await ExecuteAsync(async () =>
     {
         var input = await OptionalBodyAsync<AgentProfileBindingClearInput>(http, ct);
         var current = await service.GetBindingAsync(owner, agentKind, ct);
         var receipt = await service.ClearBindingAsync(new(owner, agentKind, ExpectedVersion(http, input?.ExpectedVersion, true, current.StrongETag), Idempotency(http, input?.IdempotencyKey), subject), ct);
-        return Accepted(receipt, resourceUrl);
+        return Accepted(receipt, resourceUrl, includeActorId);
     });
+
+    internal static Task<IResult> ClearBindingForCallerFacadeAsync(
+        HttpContext http,
+        AgentProfileApplicationService service,
+        AgentProfileOwner owner,
+        string agentKind,
+        string subject,
+        string resourceUrl,
+        CancellationToken ct) =>
+        ExecuteCallerBindingFacadeAsync(async () =>
+        {
+            var input = await OptionalBodyAsync<AgentProfileBindingClearInput>(http, ct).ConfigureAwait(false);
+            var current = await service.GetBindingAsync(owner, agentKind, ct).ConfigureAwait(false);
+            var receipt = await service.ClearBindingAsync(
+                new AgentProfileBindingClearRequest(
+                    owner,
+                    agentKind,
+                    ExpectedVersion(http, input?.ExpectedVersion, true, current.StrongETag),
+                    Idempotency(http, input?.IdempotencyKey),
+                    subject),
+                ct).ConfigureAwait(false);
+            return Accepted(receipt, resourceUrl, includeActorId: false);
+        }, ct);
 
     private static IResult List(AgentProfileListPage page, AgentProfileOwner owner, bool includeMutation = true) =>
         includeMutation
             ? Results.Ok(new { items = page.Items.Select(entry => Summary(entry, owner)), nextCursor = page.NextCursor, authorityStateVersion = page.AuthorityStateVersion, updatedAt = page.UpdatedAt, lastMutation = Mutation(page.LastMutation) })
             : Results.Ok(new { items = page.Items.Select(entry => Summary(entry, owner)), nextCursor = page.NextCursor, authorityStateVersion = page.AuthorityStateVersion, updatedAt = page.UpdatedAt });
     private static object Summary(AgentProfileCatalogEntry entry, AgentProfileOwner? owner) => new { profileId = entry.ProfileId, profileSlug = entry.ProfileSlug, displayName = entry.DisplayName, purpose = entry.Purpose, publishedRevision = entry.PublishedRevision, available = entry.Status == AgentProfileProvisioningStatus.Active, ownerKind = OwnerKind(owner), status = Short(entry.Status) };
-    private static object Detail(AgentProfileManagementDetail detail) => new { profileId = detail.Identity.ProfileId, profileSlug = detail.Identity.ProfileSlug, ownerKind = OwnerKind(detail.Identity.Owner), draft = detail.Snapshot.Draft is null ? null : Draft(detail.Snapshot.Draft), draftRevision = detail.Snapshot.DraftRevision, publishedRevision = detail.Snapshot.PublishedRevision, executionAvailable = detail.ExecutionAvailable, authorityStateVersion = detail.Snapshot.AuthorityStateVersion, etag = detail.StrongETag, updatedAt = detail.Snapshot.UpdatedAt, lastMutation = Mutation(detail.Snapshot.LastMutation) };
-    private static object Binding(AgentProfileBindingDetail detail) => new { agentKind = detail.Binding?.AgentKind, target = detail.Binding is null ? null : new { profileId = detail.Binding.Target.ProfileId, publishedRevision = detail.Binding.Target.PublishedRevision, ownerKind = OwnerKind(detail.Binding.Target.Owner) }, enabled = detail.Binding?.System?.Enabled ?? false, cohortBasisPoints = detail.Binding?.System?.CohortBasisPoints ?? 0, authorityStateVersion = detail.AuthorityStateVersion, etag = detail.StrongETag, updatedAt = detail.UpdatedAt, lastMutation = Mutation(detail.LastMutation) };
+    private static object Detail(AgentProfileManagementDetail detail, bool includeOwnerKind) =>
+        includeOwnerKind
+            ? new { profileId = detail.Identity.ProfileId, profileSlug = detail.Identity.ProfileSlug, ownerKind = OwnerKind(detail.Identity.Owner), draft = detail.Snapshot.Draft is null ? null : Draft(detail.Snapshot.Draft), draftRevision = detail.Snapshot.DraftRevision, publishedRevision = detail.Snapshot.PublishedRevision, executionAvailable = detail.ExecutionAvailable, authorityStateVersion = detail.Snapshot.AuthorityStateVersion, etag = detail.StrongETag, updatedAt = detail.Snapshot.UpdatedAt, lastMutation = Mutation(detail.Snapshot.LastMutation) }
+            : (object)new { profileId = detail.Identity.ProfileId, profileSlug = detail.Identity.ProfileSlug, draft = detail.Snapshot.Draft is null ? null : Draft(detail.Snapshot.Draft), draftRevision = detail.Snapshot.DraftRevision, publishedRevision = detail.Snapshot.PublishedRevision, executionAvailable = detail.ExecutionAvailable, authorityStateVersion = detail.Snapshot.AuthorityStateVersion, etag = detail.StrongETag, updatedAt = detail.Snapshot.UpdatedAt, lastMutation = Mutation(detail.Snapshot.LastMutation) };
+    private static object Binding(AgentProfileBindingDetail detail, bool includeSystemRollout, bool includeOwnerKind) =>
+        includeSystemRollout
+            ? new { agentKind = detail.Binding?.AgentKind, target = BindingTarget(detail, includeOwnerKind), previousReviewedTarget = BindingTarget(detail.Binding?.System?.PreviousReviewedTarget, includeOwnerKind), enabled = detail.Binding?.System?.Enabled ?? false, cohortBasisPoints = detail.Binding?.System?.CohortBasisPoints ?? 0, authorityStateVersion = detail.AuthorityStateVersion, etag = detail.StrongETag, updatedAt = detail.UpdatedAt, lastMutation = Mutation(detail.LastMutation) }
+            : (object)new { agentKind = detail.Binding?.AgentKind, target = BindingTarget(detail, includeOwnerKind), authorityStateVersion = detail.AuthorityStateVersion, etag = detail.StrongETag, updatedAt = detail.UpdatedAt, lastMutation = Mutation(detail.LastMutation) };
+    private static object? BindingTarget(AgentProfileBindingDetail detail, bool includeOwnerKind) =>
+        BindingTarget(detail.Binding?.Target, includeOwnerKind);
+    private static object? BindingTarget(AgentProfileBindingTarget? target, bool includeOwnerKind) =>
+        target is null
+            ? null
+            : includeOwnerKind
+                ? new { profileId = target.ProfileId, publishedRevision = target.PublishedRevision, ownerKind = OwnerKind(target.Owner) }
+                : (object)new { profileId = target.ProfileId, publishedRevision = target.PublishedRevision };
     private static object? Mutation(AgentProfileMutationOutcome? value) => value?.Operation is null ? null : new { operationId = value.Operation.OperationId, commandId = value.Operation.CommandId, correlationId = value.Operation.CorrelationId, status = Short(value.Status), code = value.Code, authorityStateVersion = value.AuthorityStateVersion, draftRevision = value.DraftRevision, publishedRevision = value.PublishedRevision };
     private static object Draft(AgentProfileDraft value) => new { displayName = value.DisplayName, purpose = value.Purpose, instructions = value.Instructions, runtimeProfile = Runtime(value.RuntimeProfile) };
-    private static object Runtime(AgentProfileSnapshot value) => new { agentKind = value.AgentKind, routeToolSetRef = value.RouteToolSetRef, activationMode = Short(value.ActivationMode), maximumToolPolicy = Policy(value.MaximumToolPolicy), recoveryToolPolicy = Policy(value.RecoveryToolPolicy), maxPlanSteps = value.MaxPlanSteps, handoffTtlSeconds = value.HandoffTtlSeconds, classifierTimeoutMs = value.ClassifierTimeoutMs, exactSkillFetchTimeoutMs = value.ExactSkillFetchTimeoutMs, maxSelectedSkillBytes = value.MaxSelectedSkillBytes, members = value.Members.Select(member => new { intentId = member.IntentId, routingDescription = member.RoutingDescription, skillRef = new { guid = member.SkillRef?.Guid, literalVersion = member.SkillRef?.LiteralVersion }, explicitTriggerAliases = member.ExplicitTriggerAliases, taskToolPolicy = Policy(member.TaskToolPolicy), sideEffectClass = Short(member.SideEffectClass), expectedSkillName = member.ExpectedSkillName, reviewedPublisherId = member.ReviewedPublisherId }) };
-    private static object Policy(AgentProfileToolPolicy? value) => new { toolNames = value is null ? Array.Empty<string>() : value.ToolNames.ToArray(), toolSetRefs = value is null ? Array.Empty<string>() : value.ToolSetRefs.ToArray() };
+    private static object Runtime(AgentProfileSnapshot value) => new { agentKind = value.AgentKind, routeToolSetRef = value.RouteToolSetRef, activationMode = Short(value.ActivationMode), maximumToolPolicy = Policy(value.MaximumToolPolicy), recoveryToolPolicy = Policy(value.RecoveryToolPolicy), maxPlanSteps = value.MaxPlanSteps, handoffTtlSeconds = value.HandoffTtlSeconds, classifierTimeoutMs = value.ClassifierTimeoutMs, exactSkillFetchTimeoutMs = value.ExactSkillFetchTimeoutMs, maxSelectedSkillBytes = value.MaxSelectedSkillBytes, maxOwnedToolCount = value.HasMaxOwnedToolCount ? value.MaxOwnedToolCount : (int?)null, maxSchemaBytes = value.HasMaxSchemaBytes ? value.MaxSchemaBytes : (int?)null, members = value.Members.Select(member => new { intentId = member.IntentId, routingDescription = member.RoutingDescription, skillRef = new { guid = member.SkillRef?.Guid, literalVersion = member.SkillRef?.LiteralVersion }, explicitTriggerAliases = member.ExplicitTriggerAliases, taskToolPolicy = Policy(member.TaskToolPolicy), sideEffectClass = Short(member.SideEffectClass), expectedSkillName = member.ExpectedSkillName, reviewedPublisherId = member.ReviewedPublisherId }) };
+    private static object Policy(AgentProfileToolPolicy? value) => new
+    {
+        toolNames = value is null ? Array.Empty<string>() : value.ToolNames.ToArray(),
+        toolSetRefs = value is null ? Array.Empty<string>() : value.ToolSetRefs.ToArray(),
+        connectedServiceSelectors = value is null
+            ? Array.Empty<object>()
+            : value.ConnectedServiceSelectors.Select(static selector => new
+            {
+                catalogServiceSlug = selector.CatalogServiceSlug,
+                endpointId = string.IsNullOrEmpty(selector.EndpointId) ? null : selector.EndpointId,
+                allowedRisks = selector.AllowedRisks.Select(Risk).ToArray(),
+                readiness = selector.Readiness is null
+                    ? null
+                    : new
+                    {
+                        requestedScopes = selector.Readiness.RequestedScopes.ToArray(),
+                    },
+            }).ToArray<object>(),
+    };
 
     private static AgentProfileDraft ToDraft(AgentProfileDraftInput? input)
     {
         if (input is null || input.RuntimeProfile is null) throw new ArgumentException("draft.runtimeProfile is required.");
         var runtime = input.RuntimeProfile;
-        return new AgentProfileDraft { DisplayName = Required(input.DisplayName, "draft.displayName"), Purpose = input.Purpose?.Trim() ?? string.Empty, Instructions = Required(input.Instructions, "draft.instructions"), RuntimeProfile = new AgentProfileSnapshot { AgentKind = Required(runtime.AgentKind, "draft.runtimeProfile.agentKind"), RouteToolSetRef = Required(runtime.RouteToolSetRef, "draft.runtimeProfile.routeToolSetRef"), ActivationMode = Activation(runtime.ActivationMode), MaximumToolPolicy = Policy(runtime.MaximumToolPolicy), RecoveryToolPolicy = Policy(runtime.RecoveryToolPolicy), MaxPlanSteps = runtime.MaxPlanSteps, HandoffTtlSeconds = runtime.HandoffTtlSeconds, ClassifierTimeoutMs = runtime.ClassifierTimeoutMs, ExactSkillFetchTimeoutMs = runtime.ExactSkillFetchTimeoutMs, MaxSelectedSkillBytes = runtime.MaxSelectedSkillBytes, Members = { runtime.Members?.Select(Member) ?? [] } } };
+        var runtimeProfile = new AgentProfileSnapshot
+        {
+            AgentKind = Required(runtime.AgentKind, "draft.runtimeProfile.agentKind"),
+            RouteToolSetRef = Required(runtime.RouteToolSetRef, "draft.runtimeProfile.routeToolSetRef"),
+            ActivationMode = Activation(runtime.ActivationMode),
+            MaximumToolPolicy = Policy(runtime.MaximumToolPolicy),
+            RecoveryToolPolicy = Policy(runtime.RecoveryToolPolicy),
+            MaxPlanSteps = runtime.MaxPlanSteps,
+            HandoffTtlSeconds = runtime.HandoffTtlSeconds,
+            ClassifierTimeoutMs = runtime.ClassifierTimeoutMs,
+            ExactSkillFetchTimeoutMs = runtime.ExactSkillFetchTimeoutMs,
+            MaxSelectedSkillBytes = runtime.MaxSelectedSkillBytes,
+            Members = { runtime.Members?.Select(Member) ?? [] },
+        };
+        if (runtime.MaxOwnedToolCount is { } maxOwnedToolCount)
+            runtimeProfile.MaxOwnedToolCount = maxOwnedToolCount;
+        if (runtime.MaxSchemaBytes is { } maxSchemaBytes)
+            runtimeProfile.MaxSchemaBytes = maxSchemaBytes;
+
+        return new AgentProfileDraft
+        {
+            DisplayName = Required(input.DisplayName, "draft.displayName"),
+            Purpose = input.Purpose?.Trim() ?? string.Empty,
+            Instructions = Required(input.Instructions, "draft.instructions"),
+            RuntimeProfile = runtimeProfile,
+        };
     }
     private static AgentProfileSkillMember Member(AgentProfileSkillMemberInput input) => new() { IntentId = input.IntentId?.Trim() ?? string.Empty, RoutingDescription = input.RoutingDescription?.Trim() ?? string.Empty, SkillRef = new ExactRemoteSkillRef { Guid = input.SkillRef?.Guid?.Trim() ?? string.Empty, LiteralVersion = input.SkillRef?.LiteralVersion?.Trim() ?? string.Empty }, ExplicitTriggerAliases = { input.ExplicitTriggerAliases ?? [] }, TaskToolPolicy = Policy(input.TaskToolPolicy), SideEffectClass = SideEffect(input.SideEffectClass), ExpectedSkillName = input.ExpectedSkillName?.Trim() ?? string.Empty, ReviewedPublisherId = input.ReviewedPublisherId?.Trim() ?? string.Empty };
-    private static AgentProfileToolPolicy Policy(AgentProfileToolPolicyInput? input) => new() { ToolNames = { input?.ToolNames ?? [] }, ToolSetRefs = { input?.ToolSetRefs ?? [] } };
+    private static AgentProfileToolPolicy Policy(AgentProfileToolPolicyInput? input) => new()
+    {
+        ToolNames = { input?.ToolNames ?? [] },
+        ToolSetRefs = { input?.ToolSetRefs ?? [] },
+        ConnectedServiceSelectors =
+        {
+            input?.ConnectedServiceSelectors?.Select(static selector => new AgentProfileConnectedServiceSelector
+            {
+                CatalogServiceSlug = selector.CatalogServiceSlug?.Trim() ?? string.Empty,
+                EndpointId = selector.EndpointId?.Trim() ?? string.Empty,
+                AllowedRisks = { selector.AllowedRisks?.Select(Risk) ?? [] },
+                Readiness = selector.Readiness is null
+                    ? null
+                    : new AgentProfileConnectedServiceReadiness
+                    {
+                        RequestedScopes = { selector.Readiness.RequestedScopes ?? [] },
+                    },
+            }) ?? [],
+        },
+    };
 
     private static async Task<T?> OptionalBodyAsync<T>(HttpContext http, CancellationToken ct) where T : class
     {
@@ -344,7 +505,13 @@ internal static class AgentProfileEndpoints
         catch (InvalidOperationException ex) { throw new ArgumentException("Request body must use application/json.", ex); }
     }
 
-    private static Task<IResult> ExecuteAsync(Func<Task<IResult>> action) => ExecuteCoreAsync(action);
+    private static Task<IResult> ExecuteAsync(
+        Func<Task<IResult>> action,
+        bool callerFacing = false,
+        CancellationToken ct = default) =>
+        callerFacing
+            ? ExecuteCallerProfileFacadeAsync(action, ct)
+            : ExecuteCoreAsync(action);
     private static async Task<IResult> ExecuteCoreAsync(Func<Task<IResult>> action)
     {
         try { return await action(); }
@@ -359,9 +526,135 @@ internal static class AgentProfileEndpoints
         catch (PreconditionFailedException ex) { return Error(StatusCodes.Status412PreconditionFailed, "PRECONDITION_FAILED", ex.Message); }
     }
 
-    private static IResult Accepted(AgentProfileAcceptedReceipt receipt, string resourceUrl) => Results.Accepted(resourceUrl, new { operationId = receipt.OperationId, profileId = receipt.ProfileId, commandId = receipt.CommandId, correlationId = receipt.CorrelationId, actorId = receipt.ActorId, acceptedAt = receipt.AcceptedAt, resourceUrl });
+    private static async Task<IResult> ExecuteCallerBindingFacadeAsync(
+        Func<Task<IResult>> action,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await action().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (AgentProfileNotFoundException)
+        {
+            return CallerError(StatusCodes.Status404NotFound, "AI_AGENT_NOT_FOUND", "The selected Agent was not found.");
+        }
+        catch (AgentProfileUnavailableException)
+        {
+            return CallerBindingUnavailable();
+        }
+        catch (AgentProfileIntegrityException)
+        {
+            return CallerBindingUnavailable();
+        }
+        catch (PreconditionRequiredException)
+        {
+            return CallerError(StatusCodes.Status428PreconditionRequired, "PRECONDITION_REQUIRED", "A current default Agent version is required.");
+        }
+        catch (PreconditionFailedException)
+        {
+            return CallerError(StatusCodes.Status412PreconditionFailed, "PRECONDITION_FAILED", "The default Agent changed; refresh and try again.");
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return CallerBindingInvalid();
+        }
+        catch (ArgumentException)
+        {
+            return CallerBindingInvalid();
+        }
+        catch (InvalidOperationException)
+        {
+            return CallerBindingUnavailable();
+        }
+    }
+
+    private static async Task<IResult> ExecuteCallerProfileFacadeAsync(
+        Func<Task<IResult>> action,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await action().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (AgentProfileNotFoundException)
+        {
+            return CallerError(StatusCodes.Status404NotFound, "AI_AGENT_NOT_FOUND", "Agent was not found.");
+        }
+        catch (AgentProfileUnavailableException)
+        {
+            return CallerAgentUnavailable();
+        }
+        catch (AgentProfileIntegrityException)
+        {
+            return CallerAgentUnavailable();
+        }
+        catch (AgentProfileSealingException)
+        {
+            return CallerError(
+                StatusCodes.Status422UnprocessableEntity,
+                "AI_AGENT_VALIDATION_FAILED",
+                "Agent validation failed.");
+        }
+        catch (AgentProfileInvalidCursorException)
+        {
+            return CallerAgentInvalid();
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return CallerAgentInvalid();
+        }
+        catch (ArgumentException)
+        {
+            return CallerAgentInvalid();
+        }
+        catch (PreconditionRequiredException)
+        {
+            return CallerError(
+                StatusCodes.Status428PreconditionRequired,
+                "PRECONDITION_REQUIRED",
+                "A current Agent version is required.");
+        }
+        catch (PreconditionFailedException)
+        {
+            return CallerError(
+                StatusCodes.Status412PreconditionFailed,
+                "PRECONDITION_FAILED",
+                "The Agent changed; refresh and try again.");
+        }
+        catch (InvalidOperationException)
+        {
+            return CallerAgentUnavailable();
+        }
+    }
+
+    private static IResult CallerAgentInvalid() =>
+        CallerError(StatusCodes.Status400BadRequest, "AI_AGENT_INVALID", "Agent request is invalid.");
+
+    private static IResult CallerAgentUnavailable() =>
+        CallerError(StatusCodes.Status503ServiceUnavailable, "AI_AGENT_UNAVAILABLE", "Agent is temporarily unavailable.");
+
+    private static IResult CallerBindingInvalid() =>
+        CallerError(StatusCodes.Status400BadRequest, "AI_AGENT_DEFAULT_INVALID", "Default Agent request is invalid.");
+
+    private static IResult CallerBindingUnavailable() =>
+        CallerError(StatusCodes.Status503ServiceUnavailable, "AI_AGENT_UNAVAILABLE", "The selected Agent is temporarily unavailable.");
+
+    private static IResult Accepted(AgentProfileAcceptedReceipt receipt, string resourceUrl, bool includeActorId) =>
+        includeActorId
+            ? Results.Accepted(resourceUrl, new { operationId = receipt.OperationId, profileId = receipt.ProfileId, commandId = receipt.CommandId, correlationId = receipt.CorrelationId, actorId = receipt.ActorId, acceptedAt = receipt.AcceptedAt, resourceUrl })
+            : Results.Accepted(resourceUrl, new { operationId = receipt.OperationId, profileId = receipt.ProfileId, commandId = receipt.CommandId, correlationId = receipt.CorrelationId, acceptedAt = receipt.AcceptedAt, resourceUrl });
     private static IResult WithEtag(string etag, object value) => new EtagJsonResult(etag, value);
     private static IResult Error(int status, string code, string message, object? diagnostics = null) => Results.Json(new { code, message, diagnostics }, statusCode: status);
+    private static IResult CallerError(int status, string code, string message) =>
+        Results.Json(new { code, message }, statusCode: status);
     private static int Take(int? take, int? pageSize) { var value = take ?? pageSize ?? AgentProfileApplicationService.MaximumPageSize; if (take.HasValue && pageSize.HasValue && take != pageSize) throw new ArgumentException("take and pageSize must agree when both are supplied."); return value; }
     private static AgentProfileOwner ScopeOwner(string scopeId) => AgentProfileOwners.ForScope(Required(scopeId, "scopeId"));
     private static string ScopeProfileUrl(string scopeId, string profileSlug) => $"/api/scopes/{Uri.EscapeDataString(scopeId)}/agent-profiles/{Uri.EscapeDataString(profileSlug)}";
@@ -415,6 +708,21 @@ internal static class AgentProfileEndpoints
     private static AgentProfileReferenceOwnerKind ReferenceOwner(string? value) => value?.Trim().ToLowerInvariant() switch { "caller" => AgentProfileReferenceOwnerKind.Caller, "system" => AgentProfileReferenceOwnerKind.System, _ => throw new ArgumentException("agentProfile.ownerKind must be caller or system.") };
     private static AgentProfileActivationMode Activation(string? value) => value?.Trim().ToUpperInvariant() switch { "SHADOW" => AgentProfileActivationMode.Shadow, "ENFORCED" => AgentProfileActivationMode.Enforced, _ => throw new ArgumentException("activationMode is invalid.") };
     private static AgentProfileSideEffectClass SideEffect(string? value) => value?.Trim().ToUpperInvariant() switch { "READ_ONLY" => AgentProfileSideEffectClass.ReadOnly, "EXTERNAL_HANDOFF" => AgentProfileSideEffectClass.ExternalHandoff, "SERVICE_CALL" => AgentProfileSideEffectClass.ServiceCall, "MAINTENANCE" => AgentProfileSideEffectClass.Maintenance, _ => throw new ArgumentException("sideEffectClass is invalid.") };
+    private static string Risk(AgentToolOperationRiskPayload value) => value switch
+    {
+        AgentToolOperationRiskPayload.ReadOnly => "READ_ONLY",
+        AgentToolOperationRiskPayload.Write => "WRITE",
+        AgentToolOperationRiskPayload.Destructive => "DESTRUCTIVE",
+        _ => "UNSPECIFIED",
+    };
+    private static AgentToolOperationRiskPayload Risk(string? value) => value?.Trim().ToUpperInvariant() switch
+    {
+        "READ_ONLY" => AgentToolOperationRiskPayload.ReadOnly,
+        "WRITE" => AgentToolOperationRiskPayload.Write,
+        "DESTRUCTIVE" => AgentToolOperationRiskPayload.Destructive,
+        "UNSPECIFIED" => AgentToolOperationRiskPayload.Unspecified,
+        _ => throw new ArgumentException("connectedServiceSelectors.allowedRisks is invalid."),
+    };
     private static void Audit(RouteHandlerBuilder builder, string operation, params string[] routes) => builder.WithEndpointAudit($"agent-profile.{operation}", AuditSensitivityLevel.Confidential, "agent-profile", routes.Length == 1 ? EndpointAuditTargetResolvers.FromRouteValue("agent-profile", routes[0]) : EndpointAuditTargetResolvers.FromRouteValues("agent-profile", routes));
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -432,9 +740,21 @@ internal static class AgentProfileEndpoints
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     internal sealed record AgentProfileDraftInput(string? DisplayName, string? Purpose, string? Instructions, AgentProfileRuntimeInput? RuntimeProfile);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-    internal sealed record AgentProfileRuntimeInput(string? AgentKind, string? RouteToolSetRef, string? ActivationMode, AgentProfileToolPolicyInput? MaximumToolPolicy, AgentProfileToolPolicyInput? RecoveryToolPolicy, int MaxPlanSteps, int HandoffTtlSeconds, int ClassifierTimeoutMs, int ExactSkillFetchTimeoutMs, int MaxSelectedSkillBytes, IReadOnlyList<AgentProfileSkillMemberInput>? Members);
+    internal sealed record AgentProfileRuntimeInput(string? AgentKind, string? RouteToolSetRef, string? ActivationMode, AgentProfileToolPolicyInput? MaximumToolPolicy, AgentProfileToolPolicyInput? RecoveryToolPolicy, int MaxPlanSteps, int HandoffTtlSeconds, int ClassifierTimeoutMs, int ExactSkillFetchTimeoutMs, int MaxSelectedSkillBytes, IReadOnlyList<AgentProfileSkillMemberInput>? Members, int? MaxOwnedToolCount = null, int? MaxSchemaBytes = null);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-    internal sealed record AgentProfileToolPolicyInput(IReadOnlyList<string>? ToolNames, IReadOnlyList<string>? ToolSetRefs);
+    internal sealed record AgentProfileToolPolicyInput(
+        IReadOnlyList<string>? ToolNames,
+        IReadOnlyList<string>? ToolSetRefs,
+        IReadOnlyList<AgentProfileConnectedServiceSelectorInput>? ConnectedServiceSelectors);
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    internal sealed record AgentProfileConnectedServiceSelectorInput(
+        string? CatalogServiceSlug,
+        IReadOnlyList<string>? AllowedRisks,
+        AgentProfileConnectedServiceReadinessInput? Readiness,
+        string? EndpointId = null);
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    internal sealed record AgentProfileConnectedServiceReadinessInput(
+        IReadOnlyList<string>? RequestedScopes);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     internal sealed record AgentProfileSkillMemberInput(string? IntentId, string? RoutingDescription, ExactRemoteSkillRefInput? SkillRef, IReadOnlyList<string>? ExplicitTriggerAliases, AgentProfileToolPolicyInput? TaskToolPolicy, string? SideEffectClass, string? ExpectedSkillName, string? ReviewedPublisherId);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

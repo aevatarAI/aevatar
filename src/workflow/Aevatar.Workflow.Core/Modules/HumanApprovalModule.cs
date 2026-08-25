@@ -71,7 +71,11 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             {
                 StepId = request.StepId,
                 RunId = runId,
-                Input = request.Input ?? string.Empty,
+                Input = string.IsNullOrWhiteSpace(request.InputValueId)
+                    ? request.Input ?? string.Empty
+                    : string.Empty,
+                InputValueId = request.InputValueId,
+                ExecutionId = request.ExecutionId,
                 OnReject = request.Parameters.GetValueOrDefault("on_reject", "fail"),
                 DeliveryTargetId = deliveryTargetId ?? string.Empty,
                 TimeoutDefaultDecision = timeoutDecision,
@@ -212,14 +216,19 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 pending.RunId,
                 pending.StepId,
                 resolutionSource);
-            var output = approvedContent ?? pending.Input;
+            var pendingInput = ResolvePendingInput(pending, ctx);
+            var output = approvedContent ?? pendingInput;
             var completed = new StepCompletedEvent
             {
                 StepId = pending.StepId,
                 RunId = pending.RunId,
+                ExecutionId = pending.ExecutionId,
                 Success = true,
                 Output = output,
                 BranchKey = "true",
+                OutputProvenance = approvedContent == null
+                    ? WorkflowStepOutputProvenance.ForwardedInput
+                    : WorkflowStepOutputProvenance.Produced,
             };
             await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
             await PublishResolutionAsync(
@@ -243,18 +252,23 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 onReject,
                 resolutionSource);
 
+            var pendingInput = ResolvePendingInput(pending, ctx);
             var rejectionOutput = !string.IsNullOrEmpty(feedback)
-                ? $"[Previous content]\n{pending.Input}\n\n[User feedback]\n{feedback}"
-                : pending.Input;
+                ? $"[Previous content]\n{pendingInput}\n\n[User feedback]\n{feedback}"
+                : pendingInput;
 
             var completed = new StepCompletedEvent
             {
                 StepId = pending.StepId,
                 RunId = pending.RunId,
+                ExecutionId = pending.ExecutionId,
                 Success = onReject != "fail",
                 Output = rejectionOutput,
                 Error = onReject == "fail" ? "Human approval rejected" : "",
                 BranchKey = "false",
+                OutputProvenance = onReject != "fail" && string.IsNullOrEmpty(feedback)
+                    ? WorkflowStepOutputProvenance.ForwardedInput
+                    : WorkflowStepOutputProvenance.Produced,
             };
             await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
             await PublishResolutionAsync(
@@ -439,9 +453,23 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 Success = false,
                 Error = "human_approval does not support interaction_template; use interaction_spec.",
                 ExecutionId = request.ExecutionId,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             },
             TopologyAudience.Self,
             ct);
+
+    private static string ResolvePendingInput(
+        PendingApprovalState pending,
+        IWorkflowExecutionContext ctx)
+    {
+        if (string.IsNullOrWhiteSpace(pending.InputValueId))
+            return pending.Input ?? string.Empty;
+
+        var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+            ctx,
+            WorkflowExecutionKernel.ModuleStateKey);
+        return WorkflowExecutionValueStore.GetCanonicalValue(kernelState, pending.InputValueId).Value;
+    }
 
     private static Task SaveStateAsync(
         HumanApprovalModuleState state,

@@ -41,6 +41,12 @@ public sealed class StepDefinition
     public WorkflowToolResponseProjection? ResponseProjection { get; init; }
 
     /// <summary>
+    /// Typed author policy for releasing named intermediate values after this
+    /// step commits successfully.
+    /// </summary>
+    public WorkflowStepValueLifecycle? ValueLifecycle { get; init; }
+
+    /// <summary>
     /// Typed deterministic transform operation for bounded numeric, grouping, and template transforms.
     /// </summary>
     public TransformOperationSpec? TransformOperation { get; init; }

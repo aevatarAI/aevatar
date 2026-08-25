@@ -499,6 +499,69 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChat_ShouldWriteRunErrorFrame_WhenExecutionFailsAfterStreamStarts()
+    {
+        var http = CreateHttpContext();
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                return WorkflowChatRunInteractionResult.Failure(
+                    WorkflowChatRunStartError.WorkflowBindingMismatch,
+                    WorkflowChatRunStartFailureDetail.Create(
+                        WorkflowChatRunStartError.WorkflowBindingMismatch,
+                        "Actor is bound to a different workflow."));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("aevatar.run.context");
+        body.Should().Contain("runError");
+        body.Should().Contain("WORKFLOW_BINDING_MISMATCH");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldWriteMappedRunErrorFrame_WhenStreamFailureHasNoDetail()
+    {
+        var http = CreateHttpContext();
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                return WorkflowChatRunInteractionResult.Failure(WorkflowChatRunStartError.WorkflowBindingMismatch);
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("runError");
+        body.Should().Contain("WORKFLOW_BINDING_MISMATCH");
+        body.Should().Contain("Actor is bound to a different workflow.");
+        body.Should().NotContain("RUN_START_FAILED");
+    }
+
+    [Fact]
     public async Task HandleChat_ShouldAcceptEmptyPromptForResolvedWorkflowServiceSource()
     {
         var capturedCommand = default(WorkflowChatRunRequest);

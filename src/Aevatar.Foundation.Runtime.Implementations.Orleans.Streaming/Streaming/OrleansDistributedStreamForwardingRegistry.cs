@@ -4,7 +4,9 @@ using System.Collections.Concurrent;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 
-public sealed class OrleansDistributedStreamForwardingRegistry : IStreamForwardingRegistry
+public sealed class OrleansDistributedStreamForwardingRegistry
+    : IStreamForwardingRegistry,
+      IStreamForwardingBindingAuthority
 {
     private static readonly TimeSpan DefaultRevisionCheckInterval = TimeSpan.FromMilliseconds(250);
 
@@ -68,6 +70,24 @@ public sealed class OrleansDistributedStreamForwardingRegistry : IStreamForwardi
         return clonedBindings;
     }
 
+    public async Task<StreamForwardingBinding?> GetAsync(
+        string sourceStreamId,
+        string targetStreamId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceStreamId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
+        ct.ThrowIfCancellationRequested();
+
+        var grain = _grainFactory.GetGrain<IStreamTopologyGrain>(sourceStreamId);
+        // Keep the Orleans grain RPC surface compatible with rolling peers. The authority
+        // bypasses this registry's process-local cache by reading the grain snapshot directly.
+        var entries = await grain.ListAsync().WaitAsync(ct);
+        var entry = entries.SingleOrDefault(candidate =>
+            string.Equals(candidate.TargetStreamId, targetStreamId, StringComparison.Ordinal));
+        return entry == null ? null : CloneBinding(ToBinding(entry));
+    }
+
     private DateTime ComputeNextRevisionCheckUtc(DateTime now)
     {
         if (_revisionCheckInterval <= TimeSpan.Zero)
@@ -86,6 +106,8 @@ public sealed class OrleansDistributedStreamForwardingRegistry : IStreamForwardi
             EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
             Version = binding.Version,
             LeaseId = binding.LeaseId,
+            TargetActorKind = binding.TargetActorKind,
+            ActivationGeneration = binding.ActivationGeneration,
         };
 
     private static StreamForwardingBindingEntry ToEntry(StreamForwardingBinding binding) =>
@@ -98,6 +120,8 @@ public sealed class OrleansDistributedStreamForwardingRegistry : IStreamForwardi
             EventTypeFilter = binding.EventTypeFilter.OrderBy(x => x, StringComparer.Ordinal).ToList(),
             Version = binding.Version,
             LeaseId = binding.LeaseId,
+            TargetActorKind = binding.TargetActorKind,
+            ActivationGeneration = binding.ActivationGeneration,
         };
 
     private static StreamForwardingBinding ToBinding(StreamForwardingBindingEntry entry) =>
@@ -110,6 +134,8 @@ public sealed class OrleansDistributedStreamForwardingRegistry : IStreamForwardi
             EventTypeFilter = new HashSet<string>(entry.EventTypeFilter, StringComparer.Ordinal),
             Version = entry.Version,
             LeaseId = entry.LeaseId,
+            TargetActorKind = entry.TargetActorKind,
+            ActivationGeneration = entry.ActivationGeneration,
         };
 
     private sealed record CacheEntry(

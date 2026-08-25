@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -28,9 +27,6 @@ internal static class NyxIdChatTaskPlanWireMapper
             PlanRevision = task.PlanRevision,
             PlanRevisionHistoryStart = task.PlanRevisionHistoryStart,
             Title = task.Title,
-            Gate = task.Gate?.Clone(),
-            Domain = task.Domain?.Clone(),
-            Artifact = task.Artifact?.Clone(),
         };
         plan.Steps.AddRange(task.Steps
             .OrderBy(static step => step.Order)
@@ -61,9 +57,6 @@ internal static class NyxIdChatTaskPlanWireMapper
             PlanRevision = task.PlanRevision,
             PlanRevisionHistoryStart = task.PlanRevisionHistoryStart,
             Title = task.Title ?? string.Empty,
-            Gate = FromSnapshot(task.Gate),
-            Domain = FromDomainSnapshot(task.Domain),
-            Artifact = FromArtifactSnapshot(task.Artifact),
         };
         plan.Steps.AddRange(task.Steps
             .OrderBy(static step => step.Order)
@@ -85,116 +78,6 @@ internal static class NyxIdChatTaskPlanWireMapper
             }));
         }
         return plan;
-    }
-
-    private static NyxIdChatTaskDomainState? FromDomainSnapshot(
-        NyxIdChatTaskDomainSnapshot? domain)
-    {
-        if (domain?.Reimbursement is { } reimbursement)
-        {
-            var evidence = new NyxIdChatReimbursementEvidence
-            {
-                EvidenceId = reimbursement.EvidenceId,
-                SourceInputRequestId = reimbursement.SourceInputRequestId,
-                ExpenseCategory = reimbursement.ExpenseCategory,
-                CostCenter = reimbursement.CostCenter,
-                ReimbursementCurrencyInstruction =
-                    reimbursement.ReimbursementCurrencyInstruction,
-                CommittedAt = ToTimestamp(reimbursement.CommittedAt),
-                GuardedToolName = reimbursement.GuardedToolName,
-            };
-            evidence.SourceInvoices.AddRange(reimbursement.SourceInvoices.Select(static invoice =>
-                new NyxIdChatInvoiceEvidence
-                {
-                    SourceOrdinal = invoice.SourceOrdinal,
-                    Vendor = invoice.Vendor,
-                    InvoiceNumber = invoice.InvoiceNumber,
-                    InvoiceDate = invoice.InvoiceDate,
-                    Amount = new NyxIdChatMoneyValue
-                    {
-                        CurrencyCode = invoice.Amount.CurrencyCode,
-                        MinorUnits = invoice.Amount.MinorUnits,
-                        FractionDigits = invoice.Amount.FractionDigits,
-                    },
-                }));
-            evidence.RetainedSourceOrdinals.AddRange(reimbursement.RetainedSourceOrdinals);
-            evidence.DuplicateInvoices.AddRange(reimbursement.DuplicateInvoices.Select(
-                static duplicate => new NyxIdChatInvoiceDuplicateEvidence
-                {
-                    DuplicateSourceOrdinal = duplicate.DuplicateSourceOrdinal,
-                    RetainedSourceOrdinal = duplicate.RetainedSourceOrdinal,
-                }));
-            return new NyxIdChatTaskDomainState { Reimbursement = evidence };
-        }
-
-        if (domain?.CandidateScreening is not { } candidate)
-            return null;
-        var screening = new NyxIdChatCandidateScreeningEvidence
-        {
-            EvidenceId = candidate.EvidenceId,
-            SourceInputRequestId = candidate.SourceInputRequestId,
-            CandidateName = candidate.CandidateName,
-            RoleTitle = candidate.RoleTitle,
-            TotalScore = candidate.TotalScore,
-            TrackerTable = candidate.TrackerTable,
-            TrackerTableId = candidate.TrackerTableId,
-            Stage = candidate.Stage,
-            GuardedToolName = candidate.GuardedToolName,
-            CommittedAt = ToTimestamp(candidate.CommittedAt),
-        };
-        screening.Rubric.AddRange(candidate.Rubric.Select(static criterion =>
-            new NyxIdChatCandidateRubricCriterion
-            {
-                CriterionId = criterion.CriterionId,
-                Title = criterion.Title,
-                MaximumPoints = criterion.MaximumPoints,
-            }));
-        screening.Scores.AddRange(candidate.Scores.Select(static score =>
-            new NyxIdChatCandidateCriterionScore
-            {
-                CriterionId = score.CriterionId,
-                AwardedPoints = score.AwardedPoints,
-                Evidence = score.Evidence,
-            }));
-        return new NyxIdChatTaskDomainState { CandidateScreening = screening };
-    }
-
-    private static NyxIdChatVerifiedArtifactState? FromArtifactSnapshot(
-        NyxIdChatVerifiedArtifactSnapshot? artifact)
-    {
-        if (artifact?.Reimbursement is { } reimbursement)
-        {
-            return new NyxIdChatVerifiedArtifactState
-            {
-                CheckName = artifact.CheckName,
-                VerifiedAt = ToTimestamp(artifact.VerifiedAt),
-                Reimbursement = new NyxIdChatReimbursementArtifact
-                {
-                    ProviderInstanceId = reimbursement.ProviderInstanceId,
-                    CostCenter = reimbursement.CostCenter,
-                    RetainedItemCount = reimbursement.RetainedItemCount,
-                    DuplicateItemCount = reimbursement.DuplicateItemCount,
-                },
-            };
-        }
-
-        if (artifact?.CandidateTracker is not { } candidate)
-            return null;
-        return new NyxIdChatVerifiedArtifactState
-        {
-            CheckName = artifact.CheckName,
-            VerifiedAt = ToTimestamp(artifact.VerifiedAt),
-            CandidateTracker = new NyxIdChatCandidateTrackerArtifact
-            {
-                ProviderRecordId = candidate.ProviderRecordId,
-                CandidateName = candidate.CandidateName,
-                Score = candidate.Score,
-                Threshold = candidate.Threshold,
-                TrackerTable = candidate.TrackerTable,
-                TrackerTableId = candidate.TrackerTableId,
-                Stage = candidate.Stage,
-            },
-        };
     }
 
     public static NyxIdChatTaskPlanStep FromState(NyxIdChatTaskStepState step)
@@ -498,60 +381,6 @@ internal static class NyxIdChatTaskPlanWireMapper
                 Stop = actions.Stop,
             };
 
-    private static NyxIdChatPlanGate? FromSnapshot(
-        NyxIdChatConversationPlanGateSnapshot? gate)
-    {
-        if (gate is null)
-            return null;
-
-        var result = new NyxIdChatPlanGate
-        {
-            Mode = ParsePlanGateMode(gate.Mode),
-            Reason = gate.Reason ?? string.Empty,
-            Status = ParsePlanGateStatus(gate.Status),
-            RequestId = gate.RequestId ?? string.Empty,
-            TaskId = gate.TaskId ?? string.Empty,
-            PlanRevision = gate.PlanRevision,
-            DecidedAt = ToTimestamp(gate.DecidedAt),
-            PlanId = gate.PlanId ?? string.Empty,
-        };
-        if (gate.Admissions is not null)
-            result.Admissions.AddRange(gate.Admissions.Select(FromSnapshot));
-        return result;
-    }
-
-    private static NyxIdChatPlanOperationAdmission FromSnapshot(
-        NyxIdChatConversationPlanOperationAdmissionSnapshot admission)
-    {
-        var result = new NyxIdChatPlanOperationAdmission
-        {
-            ToolCallId = admission.ToolCallId ?? string.Empty,
-            ToolName = admission.ToolName ?? string.Empty,
-            ArgumentsSha256 = ByteString.CopyFrom(admission.ArgumentsSha256 ?? []),
-            ActionRequestId = admission.ActionRequestId ?? string.Empty,
-            Action = ParseAssistantAction(admission.Action ?? string.Empty),
-            ActionParamsSha256 = ByteString.CopyFrom(admission.ActionParamsSha256 ?? []),
-        };
-        if (!string.IsNullOrWhiteSpace(admission.ConversationActorId) ||
-            !string.IsNullOrWhiteSpace(admission.TurnId) ||
-            !string.IsNullOrWhiteSpace(admission.TaskId) ||
-            !string.IsNullOrWhiteSpace(admission.StepId) ||
-            !string.IsNullOrWhiteSpace(admission.OperationId) ||
-            admission.OperationGeneration != 0)
-        {
-            result.Key = new NyxIdChatOperationKey
-            {
-                ConversationActorId = admission.ConversationActorId ?? string.Empty,
-                TurnId = admission.TurnId ?? string.Empty,
-                TaskId = admission.TaskId ?? string.Empty,
-                StepId = admission.StepId ?? string.Empty,
-                OperationId = admission.OperationId ?? string.Empty,
-                OperationGeneration = admission.OperationGeneration,
-            };
-        }
-        return result;
-    }
-
     private static NyxIdChatStepEstimate? FromSnapshot(
         NyxIdChatConversationStepEstimateSnapshot? estimate) =>
         estimate is null
@@ -647,21 +476,6 @@ internal static class NyxIdChatTaskPlanWireMapper
         _ => NyxIdChatStepKind.Unspecified,
     };
 
-    private static NyxIdChatPlanGateMode ParsePlanGateMode(string value) => value switch
-    {
-        "auto" => NyxIdChatPlanGateMode.Auto,
-        "confirm" => NyxIdChatPlanGateMode.Confirm,
-        _ => NyxIdChatPlanGateMode.Unspecified,
-    };
-
-    private static NyxIdChatPlanGateStatus ParsePlanGateStatus(string value) => value switch
-    {
-        "pending" => NyxIdChatPlanGateStatus.Pending,
-        "satisfied" => NyxIdChatPlanGateStatus.Satisfied,
-        "rejected" => NyxIdChatPlanGateStatus.Rejected,
-        _ => NyxIdChatPlanGateStatus.Unspecified,
-    };
-
     private static NyxIdChatStepAddedBy ParseStepAddedBy(string? value) => value switch
     {
         "initial" => NyxIdChatStepAddedBy.Initial,
@@ -711,6 +525,7 @@ internal static class NyxIdChatTaskPlanWireMapper
         {
             "service_connect" => NyxIdAssistantActionKind.ServiceConnect,
             "service_reauthorize" => NyxIdAssistantActionKind.ServiceReauthorize,
+            "service_access_review" => NyxIdAssistantActionKind.ServiceAccessReview,
             "provider_set_app_credentials" => NyxIdAssistantActionKind.ProviderSetAppCredentials,
             "key_create" => NyxIdAssistantActionKind.KeyCreate,
             "key_rotate" => NyxIdAssistantActionKind.KeyRotate,

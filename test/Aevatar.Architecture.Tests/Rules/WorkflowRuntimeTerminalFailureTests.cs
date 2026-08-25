@@ -56,7 +56,7 @@ public sealed class WorkflowRuntimeTerminalFailureTests
                     "DispatchStepAsync",
                     "await ctx.PublishAsync(request, TopologyAudience.Self, ct);",
                     """
-                    await RecordCompensableStepDispatchAsync(step, idempotency, ct);
+                    await RecordCompensableStepDispatchAsync(step, idempotency, state, ct);
                                 await ctx.PublishAsync(request, TopologyAudience.Self, ct);
                     """),
                 "Compensable step dispatch must be recorded only after StepRequestEvent publish succeeds"
@@ -652,15 +652,31 @@ public sealed class WorkflowRuntimeTerminalFailureTests
 
         public static bool StepRequestPublishBeforeCompensableRecord(MethodDeclarationSyntax method)
         {
-            var methodText = method.ToString();
-            var publishIndex = methodText.IndexOf("ctx.PublishAsync(request, TopologyAudience.Self, ct)", StringComparison.Ordinal);
-            var successIndex = methodText.IndexOf("requestPublishSucceeded = true", StringComparison.Ordinal);
-            var recordIndex = methodText.IndexOf("RecordCompensableStepDispatchAsync(step, idempotency, ct)", StringComparison.Ordinal);
+            var publishIndex = FirstSpanStart(
+                method.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Where(invocation =>
+                        GetInvocationName(invocation) == "PublishAsync" &&
+                        invocation.ArgumentList.Arguments.Count > 0 &&
+                        invocation.ArgumentList.Arguments[0].Expression.ToString() == "request"));
+            var successIndex = FirstSpanStart(
+                method.DescendantNodes()
+                    .OfType<AssignmentExpressionSyntax>()
+                    .Where(assignment =>
+                        assignment.Left.ToString() == "requestPublishSucceeded" &&
+                        assignment.Right.IsKind(SyntaxKind.TrueLiteralExpression)));
+            var recordIndex = FirstSpanStart(
+                method.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Where(invocation => GetInvocationName(invocation) == "RecordCompensableStepDispatchAsync"));
 
             return publishIndex >= 0 &&
                    successIndex > publishIndex &&
                    recordIndex > successIndex;
         }
+
+        private static int FirstSpanStart(IEnumerable<SyntaxNode> nodes) =>
+            nodes.Select(node => node.SpanStart).DefaultIfEmpty(-1).Min();
 
         public static bool CreatesFailedWorkflowCompletedEventUsing(SyntaxNode node, string failureMessageCall)
         {
@@ -766,8 +782,15 @@ public sealed class WorkflowRuntimeTerminalFailureTests
                 ? block.Statements[0]
                 : statement;
             return DirectStatementExpressions(directStatement)
-                .OfType<AwaitExpressionSyntax>()
-                .Select(awaitExpression => awaitExpression.Expression)
+                .Select(static expression => expression switch
+                {
+                    AwaitExpressionSyntax awaitExpression => awaitExpression.Expression,
+                    AssignmentExpressionSyntax
+                    {
+                        Right: AwaitExpressionSyntax awaitExpression,
+                    } => awaitExpression.Expression,
+                    _ => null,
+                })
                 .OfType<InvocationExpressionSyntax>()
                 .Any(invocation => GetInvocationName(invocation) == invocationName);
         }

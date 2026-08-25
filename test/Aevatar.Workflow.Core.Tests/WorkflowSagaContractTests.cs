@@ -56,6 +56,9 @@ public sealed class WorkflowSagaContractTests
     public void WorkflowExecutionMessages_ShouldExposeCompensationEventContracts()
     {
         AssertField<StepCompletedEvent>("failure_outcome", 15);
+        AssertField<StepCompletedEvent>("output_source_step_id", 22);
+        AssertField<StepCompletedEvent>("output_source_execution_id", 23);
+        AssertField<StepCompletedEvent>("output_source_value_id", 24);
         AssertRoundTrip(new StepCompletedEvent
         {
             RunId = "run-1",
@@ -63,6 +66,10 @@ public sealed class WorkflowSagaContractTests
             Success = false,
             Error = "timeout",
             FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+            OutputProvenance = WorkflowStepOutputProvenance.ReferencedStepOutput,
+            OutputSourceStepId = "source-step",
+            OutputSourceExecutionId = "source-execution",
+            OutputSourceValueId = "value-00000000000000000001",
         });
 
         AssertField<CompensableStepDispatchedEvent>("run_id", 1);
@@ -169,8 +176,10 @@ public sealed class WorkflowSagaContractTests
         AssertField<WorkflowRunState>("saga_status", 27);
         AssertField<WorkflowExecutionKernelState>("compensation_phase_deadline_lease", 17);
         AssertField<WorkflowExecutionKernelState>("compensation_phase_deadline_callback_id", 18);
+        AssertField<WorkflowExecutionKernelState>("pending_compensation_outcome", 22);
         AssertField<WorkflowRunState>("compensation_origin_failed_step_id", 32);
         AssertField<WorkflowRunState>("terminal_workflow_completion_recorded", 33);
+        AssertField<WorkflowRunState>("pending_compensation_completion", 63);
         AssertRoundTrip(new CompletedStepLedgerEntry
         {
             StepId = "create_order",

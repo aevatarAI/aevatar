@@ -34,7 +34,7 @@ public sealed class OrnnSearchSkillsToolTests
         {
           "result_type": "skill_search",
           "status": "success",
-          "matches": [{ "skill_name": "invoice-approval" }],
+          "matches": [{ "skill_name": "project-summary" }],
           "text": "Found 1 skill"
         }
         """)]
@@ -79,9 +79,9 @@ public sealed class OrnnSearchSkillsToolTests
     [InlineData("""{"result_type":"skill_search","status":"success","matches":[]}""")]
     [InlineData(
         """
-        {"result_type":"skill_search","status":"success","error":"failed","matches":[{"skill_name":"invoice-approval"}]}
+        {"result_type":"skill_search","status":"success","error":"failed","matches":[{"skill_name":"project-summary"}]}
         """)]
-    [InlineData("""{"result_type":1,"status":"success","matches":[{"skill_name":"invoice-approval"}]}""")]
+    [InlineData("""{"result_type":1,"status":"success","matches":[{"skill_name":"project-summary"}]}""")]
     [InlineData("""{"result_type":"skill_search","status":"unknown","matches":[]}""")]
     [InlineData("""{"result_type":"other","status":"success","matches":[]}""")]
     public void CreateResultReceipt_WithUnverifiedPayload_ReturnsNull(string resultJson)
@@ -222,9 +222,9 @@ public sealed class OrnnSearchSkillsToolTests
             });
             var tool = CreateTool(handler, resolver);
 
-            await tool.ExecuteAsync("""{ "query": "invoice-approval" }""");
+            await tool.ExecuteAsync("""{ "query": "project-summary" }""");
 
-            resolver.SkillNames.Should().Equal("invoice-approval");
+            resolver.SkillNames.Should().Equal("project-summary");
             handler.Requests.Should().ContainSingle()
                 .Which.Authorization!.Parameter.Should().Be("bound-skill-token");
         }
@@ -248,10 +248,10 @@ public sealed class OrnnSearchSkillsToolTests
             });
             var tool = CreateTool(handler, resolver);
 
-            var result = await tool.ExecuteAsync("""{ "query": "invoice-approval" }""");
+            var result = await tool.ExecuteAsync("""{ "query": "project-summary" }""");
 
             ExtractStatus(result).Should().Be("error");
-            resolver.SkillNames.Should().Equal("invoice-approval");
+            resolver.SkillNames.Should().Equal("project-summary");
             handler.Requests.Should().BeEmpty();
         }
         finally
@@ -356,11 +356,11 @@ public sealed class OrnnSearchSkillsToolTests
     {
         public List<string> SkillNames { get; } = [];
 
-        public Task<string?> ResolveAsync(string skillName, CancellationToken ct = default)
+        public Task<RemoteSkillAccessTokenResolution> ResolveAsync(string skillName, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             SkillNames.Add(skillName);
-            return Task.FromResult(token);
+            return Task.FromResult(RemoteSkillAccessTokenResolution.FromAccessToken(token));
         }
     }
 

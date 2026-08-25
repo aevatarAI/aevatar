@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 
@@ -15,6 +16,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     private const string ContextUnavailableCode = "NYXID_REQUIRE_SERVICE_CONTEXT_UNAVAILABLE";
     private const string ResultInvalidCode = "NYXID_REQUIRE_SERVICE_RESULT_INVALID";
     private const string InventoryInvalidCode = "NYXID_REQUIRE_SERVICE_INVENTORY_INVALID";
+    private const string ServiceAccessRequiredCode = "USER_SERVICE_ACCESS_REQUIRED";
     private const string ScopesInvalidCode = "NYXID_REQUIRE_SERVICE_SCOPES_INVALID";
     private const string ScopesRequiredCode = "NYXID_REQUIRE_SERVICE_SCOPES_REQUIRED";
     private const string CatalogIdentityInvalidMessage =
@@ -26,6 +28,10 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         "requested_scopes contains a scope that is not present in the NyxID catalog entry.";
     private const string ScopesRequiredMessage =
         "requested_scopes must select the intended capability from the NyxID catalog.";
+    private const string ServiceAccessRequiredMessage =
+        "The connected NyxID UserService is not authorized for the current caller bearer.";
+
+    private static readonly TimeSpan McpCatalogFreshnessWindow = TimeSpan.FromMinutes(5);
 
     private readonly NyxIdApiClient _client;
 
@@ -86,7 +92,11 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         var catalogVerification = await VerifyCatalogServiceAsync(access!, serviceSlug, ct);
         if (catalogVerification.Status == CatalogVerificationStatus.SourceUnavailable)
         {
-            var sourceUnavailable = await InspectRegistrationAsync(access!, serviceSlug, ct);
+            var sourceUnavailable = await InspectRegistrationAsync(
+                access!,
+                serviceSlug,
+                catalogVerification.ResourceUri,
+                ct);
             return SerializeReadiness(serviceSlug, sourceUnavailable);
         }
         if (catalogVerification.Status == CatalogVerificationStatus.Unavailable)
@@ -98,7 +108,11 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         if (requestedScopes.Any(scope => !catalogVerification.AllowedRequestedScopes.Contains(scope)))
             return ErrorResult(ScopesInvalidCode, ScopesInvalidMessage);
 
-        var readiness = await InspectRegistrationAsync(access!, serviceSlug, ct);
+        var readiness = await InspectRegistrationAsync(
+            access!,
+            serviceSlug,
+            catalogVerification.ResourceUri,
+            ct);
         return SerializeReadiness(serviceSlug, readiness);
     }
 
@@ -108,7 +122,9 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     {
         var blocker = readiness.Blocker;
         var registrationRequired =
-            readiness.Status == ExternalCapabilityReadinessStatus.ServiceRegistrationRequired &&
+            readiness.Status is
+                (ExternalCapabilityReadinessStatus.ServiceRegistrationRequired or
+                 ExternalCapabilityReadinessStatus.ServiceAccessDenied) &&
             blocker is not null &&
             !string.IsNullOrWhiteSpace(blocker.Code) &&
             !string.IsNullOrWhiteSpace(blocker.SafeMessage);
@@ -117,6 +133,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             blocked = registrationRequired,
             service_slug = serviceSlug,
             user_service_id = readiness.UserServiceId ?? string.Empty,
+            resource_uri = readiness.ResourceUri ?? string.Empty,
             readiness_status = readiness.Status.ToString(),
             reason_code = blocker?.Code ?? string.Empty,
             safe_message = blocker?.SafeMessage ?? string.Empty,
@@ -135,11 +152,16 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         foreach (var token in tokens)
         {
             var response = await _client.GetCatalogEntryAsync(token, serviceSlug, ct);
-            if (TryReadCatalogEntry(response, out var verifiedSlug, out var allowedRequestedScopes))
+            if (TryReadCatalogEntry(
+                    response,
+                    out var verifiedSlug,
+                    out var resourceUri,
+                    out var allowedRequestedScopes))
             {
                 return string.Equals(serviceSlug, verifiedSlug, StringComparison.Ordinal)
                     ? new CatalogVerification(
                         CatalogVerificationStatus.Verified,
+                        resourceUri,
                         allowedRequestedScopes)
                     : CatalogVerification.Invalid;
             }
@@ -154,6 +176,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     private async Task<ServiceRegistrationReadiness> InspectRegistrationAsync(
         RequireServiceReadAccess access,
         string serviceSlug,
+        string? resourceUri,
         CancellationToken ct)
     {
         var tokens = ResolveManagementReadTokens(access);
@@ -196,6 +219,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             return new ServiceRegistrationReadiness(
                 ExternalCapabilityReadinessStatus.SourceStale,
                 null,
+                resourceUri,
                 new ExternalCapabilityBlocker
                 {
                     Status = ExternalCapabilityReadinessStatus.SourceStale,
@@ -206,10 +230,55 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
 
         if (!inventoryConflict && matchingServices.Count == 1)
         {
+            var userServiceId = matchingServices.Values.Single().Id;
+            var accessVisibility = await InspectCurrentBearerServiceAccessAsync(
+                    access,
+                    serviceSlug,
+                    userServiceId,
+                    ct)
+                .ConfigureAwait(false);
+            if (accessVisibility == ServiceAccessVisibility.Authorized)
+            {
+                return new ServiceRegistrationReadiness(
+                    ExternalCapabilityReadinessStatus.Ready,
+                    userServiceId,
+                    resourceUri,
+                    null);
+            }
+
+            if (accessVisibility == ServiceAccessVisibility.NotAuthorized)
+            {
+                // The catalog read can be degraded while the bearer probe still
+                // proves "connected but not authorized for this session". Derive
+                // the canonical resource indicator from the pinned proxy route
+                // shape so the actionable access-review blocker survives catalog
+                // degradation instead of collapsing into an opaque inventory error.
+                var effectiveResourceUri = string.IsNullOrWhiteSpace(resourceUri)
+                    ? _client.BuildServiceProxyResourceUri(serviceSlug)
+                    : resourceUri;
+                return new ServiceRegistrationReadiness(
+                    ExternalCapabilityReadinessStatus.ServiceAccessDenied,
+                    userServiceId,
+                    effectiveResourceUri,
+                    new ExternalCapabilityBlocker
+                    {
+                        Status = ExternalCapabilityReadinessStatus.ServiceAccessDenied,
+                        Code = ServiceAccessRequiredCode,
+                        SafeMessage = ServiceAccessRequiredMessage,
+                    });
+            }
+
             return new ServiceRegistrationReadiness(
-                ExternalCapabilityReadinessStatus.Ready,
-                matchingServices.Values.Single().Id,
-                null);
+                ExternalCapabilityReadinessStatus.SourceStale,
+                null,
+                resourceUri,
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.SourceStale,
+                    Code = InventoryInvalidCode,
+                    SafeMessage =
+                        "NyxID service access readiness could not verify one exact current-bearer route.",
+                });
         }
 
         if (inventoryConflict || matchingServices.Count > 1)
@@ -217,6 +286,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             return new ServiceRegistrationReadiness(
                 ExternalCapabilityReadinessStatus.SourceStale,
                 null,
+                resourceUri,
                 new ExternalCapabilityBlocker
                 {
                     Status = ExternalCapabilityReadinessStatus.SourceStale,
@@ -229,12 +299,49 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         return new ServiceRegistrationReadiness(
             ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
             null,
+            resourceUri,
             new ExternalCapabilityBlocker
             {
                 Status = ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
                 Code = "USER_SERVICE_NOT_VISIBLE",
                 SafeMessage = "No caller-visible NyxID UserService matches the requested service.",
             });
+    }
+
+    private async Task<ServiceAccessVisibility> InspectCurrentBearerServiceAccessAsync(
+        RequireServiceReadAccess access,
+        string serviceSlug,
+        string userServiceId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(access.ExecutionBearerToken))
+            return ServiceAccessVisibility.SourceUnavailable;
+
+        var response = await _client.GetMcpConfigAsync(access.ExecutionBearerToken, ct)
+            .ConfigureAwait(false);
+        var catalog = NyxIdMcpOperationCatalog.Parse(
+            response,
+            "require-service",
+            DateTimeOffset.UtcNow,
+            McpCatalogFreshnessWindow);
+        if (catalog.AccessDenied || catalog.SourceUnavailable)
+            return ServiceAccessVisibility.SourceUnavailable;
+
+        var matches = catalog.Services
+            .Where(service => string.Equals(
+                service.UserServiceId,
+                userServiceId,
+                StringComparison.Ordinal))
+            .ToArray();
+        if (matches.Length == 0)
+            return ServiceAccessVisibility.NotAuthorized;
+        if (matches.Length != 1 ||
+            !string.Equals(matches[0].ServiceSlug, serviceSlug, StringComparison.Ordinal))
+        {
+            return ServiceAccessVisibility.Conflict;
+        }
+
+        return ServiceAccessVisibility.Authorized;
     }
 
     private static List<string> ResolveManagementReadTokens(RequireServiceReadAccess access)
@@ -262,9 +369,11 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     private static bool TryReadCatalogEntry(
         string response,
         out string serviceSlug,
+        out string? resourceUri,
         out IReadOnlySet<string> allowedRequestedScopes)
     {
         serviceSlug = string.Empty;
+        resourceUri = null;
         var scopes = new HashSet<string>(StringComparer.Ordinal);
         allowedRequestedScopes = scopes;
         try
@@ -279,6 +388,10 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             }
 
             serviceSlug = NormalizeSlug(slug.GetString()) ?? string.Empty;
+            resourceUri = root.TryGetProperty("resource_uri", out var resource) &&
+                          resource.ValueKind == JsonValueKind.String
+                ? NormalizeResourceUri(resource.GetString())
+                : null;
             if (root.TryGetProperty("scope_catalog", out var scopeCatalog) &&
                 scopeCatalog.ValueKind != JsonValueKind.Null)
             {
@@ -359,6 +472,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
                 out var status,
                 out var verifiedSlug,
                 out var userServiceId,
+                out var resourceUri,
                 out var reasonCode,
                 out var safeMessage) ||
             !string.Equals(requestedSlug, verifiedSlug, StringComparison.Ordinal))
@@ -393,10 +507,14 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             };
         }
 
-        if (status != ExternalCapabilityReadinessStatus.ServiceRegistrationRequired ||
+        if (status is not
+                (ExternalCapabilityReadinessStatus.ServiceRegistrationRequired or
+                 ExternalCapabilityReadinessStatus.ServiceAccessDenied) ||
             !blocked ||
             string.IsNullOrWhiteSpace(reasonCode) ||
-            string.IsNullOrWhiteSpace(safeMessage))
+            string.IsNullOrWhiteSpace(safeMessage) ||
+            (status == ExternalCapabilityReadinessStatus.ServiceAccessDenied &&
+             (string.IsNullOrWhiteSpace(userServiceId) || string.IsNullOrWhiteSpace(resourceUri))))
         {
             return status == ExternalCapabilityReadinessStatus.SourceStale &&
                    !blocked &&
@@ -416,7 +534,9 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             verifiedSlug,
             reasonCode,
             safeMessage,
-            requestedScopes);
+            requestedScopes,
+            userServiceId,
+            resourceUri);
 
         return new AgentToolReceipt
         {
@@ -435,7 +555,9 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         string verifiedSlug,
         string reasonCode,
         string safeMessage,
-        IReadOnlyList<string> requestedScopes)
+        IReadOnlyList<string> requestedScopes,
+        string userServiceId,
+        string resourceUri)
     {
         var blocker = new NyxIdAuthorizationRequiredEvent
         {
@@ -446,9 +568,12 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         var serviceLabel = NormalizeLabel(args.Str("service_label"));
         if (serviceLabel != null)
             blocker.ServiceLabel = serviceLabel;
-        var resourceUri = NormalizeResourceUri(args.Str("resource_uri"));
-        if (resourceUri != null)
-            blocker.ResourceUri = resourceUri;
+        var verifiedResourceUri = NormalizeResourceUri(resourceUri) ??
+                                  NormalizeResourceUri(args.Str("resource_uri"));
+        if (verifiedResourceUri != null)
+            blocker.ResourceUri = verifiedResourceUri;
+        if (!string.IsNullOrWhiteSpace(userServiceId))
+            blocker.UserServiceId = userServiceId;
         blocker.RequestedScopes.Add(requestedScopes);
         return blocker;
     }
@@ -524,6 +649,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         access = new RequireServiceReadAccess(
             scopeId,
             callerId,
+            NormalizeBearerToken(credentials?.NyxIdAccessToken),
             AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials),
             NormalizeBearerToken(AgentToolRequestContext.NyxIdOrgToken),
             credentials?.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.ProxyDelegation
@@ -578,6 +704,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         out ExternalCapabilityReadinessStatus status,
         out string serviceSlug,
         out string userServiceId,
+        out string resourceUri,
         out string reasonCode,
         out string safeMessage)
     {
@@ -585,6 +712,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         status = ExternalCapabilityReadinessStatus.Unspecified;
         serviceSlug = string.Empty;
         userServiceId = string.Empty;
+        resourceUri = string.Empty;
         reasonCode = string.Empty;
         safeMessage = string.Empty;
         try
@@ -617,6 +745,10 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             status = parsedStatus;
             serviceSlug = NormalizeSlug(slug.GetString()) ?? string.Empty;
             userServiceId = Normalize(resourceId.GetString()) ?? string.Empty;
+            resourceUri = root.TryGetProperty("resource_uri", out var resourceUriElement) &&
+                          resourceUriElement.ValueKind == JsonValueKind.String
+                ? NormalizeResourceUri(resourceUriElement.GetString()) ?? string.Empty
+                : string.Empty;
             reasonCode = Normalize(reason.GetString()) ?? string.Empty;
             safeMessage = Normalize(message.GetString()) ?? string.Empty;
             return serviceSlug.Length > 0 &&
@@ -676,20 +808,22 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     private sealed record ServiceRegistrationReadiness(
         ExternalCapabilityReadinessStatus Status,
         string? UserServiceId,
+        string? ResourceUri,
         ExternalCapabilityBlocker? Blocker);
 
     private sealed record CatalogVerification(
         CatalogVerificationStatus Status,
+        string? ResourceUri,
         IReadOnlySet<string> AllowedRequestedScopes)
     {
         public static CatalogVerification Invalid { get; } =
-            new(CatalogVerificationStatus.Invalid, EmptyScopes());
+            new(CatalogVerificationStatus.Invalid, null, EmptyScopes());
 
         public static CatalogVerification SourceUnavailable { get; } =
-            new(CatalogVerificationStatus.SourceUnavailable, EmptyScopes());
+            new(CatalogVerificationStatus.SourceUnavailable, null, EmptyScopes());
 
         public static CatalogVerification Unavailable { get; } =
-            new(CatalogVerificationStatus.Unavailable, EmptyScopes());
+            new(CatalogVerificationStatus.Unavailable, null, EmptyScopes());
 
         private static IReadOnlySet<string> EmptyScopes() =>
             new HashSet<string>(StringComparer.Ordinal);
@@ -698,6 +832,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     private sealed record RequireServiceReadAccess(
         string ScopeId,
         string CallerId,
+        string? ExecutionBearerToken,
         string? SourceReadableUserBearerToken,
         string? OrganizationBearerToken,
         string? DelegatedManagementReadBearerToken);
@@ -708,6 +843,14 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         SourceUnavailable,
         Unavailable,
         Verified,
+    }
+
+    private enum ServiceAccessVisibility
+    {
+        SourceUnavailable,
+        NotAuthorized,
+        Conflict,
+        Authorized,
     }
 
     private static string? NormalizeResourceUri(string? value)

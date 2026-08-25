@@ -411,6 +411,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
         toolContext.Should().NotBeNull();
         toolContext!.CredentialRef.Should().Be("voice-tool:issued-1");
         toolContext.ChannelPlatform.Should().Be("lark");
+        toolContext.ToolCatalogProof.Should().NotBeNull();
+        toolContext.ToolCatalogPolicyVersion.Should().Be("test-voice-policy/v1");
         issuer.ReleasedRefs.Should().BeEmpty();
     }
 
@@ -685,6 +687,34 @@ public sealed class PolicyAwareVoiceEndpointsTests
         toolContext.ConnectedServicesContextJson.Should().Be("""{"ok":true}""");
         toolContext.NyxIdRoutePreference.Should().Be("direct");
         toolContext.SenderBindingId.Should().Be("binding-1");
+        toolContext.ToolCatalogProof.Should().NotBeNull();
+        toolContext.ToolCatalogProof!.MaximumToolCount.Should().Be(6);
+        toolContext.ToolCatalogPolicyVersion.Should().Be("test-voice-policy/v1");
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenToolCatalogFails_ShouldReturn503BeforeUpgrade()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+            []));
+        var session = new RecordingVoiceRealtimeSession();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            session,
+            toolCatalog: new RecordingVoiceToolCatalog { ThrowOnDiscover = true });
+        var context = CreateVoiceContext(app, "/ws/voice?channel=lark");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        (await ReadBodyAsync(context)).Should().Be("voice_tool_catalog_unavailable");
+        wsFeature.AcceptCalls.Should().Be(0);
+        session.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -941,11 +971,12 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
         (await ReadBodyAsync(context)).Should().Be(expectedBody);
         wsFeature.AcceptCalls.Should().Be(0);
-        session.Requests.Should().ContainSingle()
-            .Which.Should().Be(new VoiceRealtimeSessionRequest(
-                "voice-agent-lark",
-                "voice_presence_openai",
-                VoiceRealtimeSessionPurpose.Attach));
+        var request = session.Requests.Should().ContainSingle().Subject;
+        request.ActorId.Should().Be("voice-agent-lark");
+        request.ModuleName.Should().Be("voice_presence_openai");
+        request.Purpose.Should().Be(VoiceRealtimeSessionPurpose.Attach);
+        request.ToolContext.Should().NotBeNull();
+        request.ToolContext!.ToolCatalogProof.Should().NotBeNull();
     }
 
     [Fact]
@@ -1163,7 +1194,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
         IProjectionSessionEventHub<VoiceRealtimeFrame>? realtimeHub = null,
         IVoiceToolCredentialIssuer? toolCredentialIssuer = null,
         IChatRoutePolicyProjectionRecoveryPort? recoveryPort = null,
-        IWebRtcVoiceTransportFactory? transportFactory = null)
+        IWebRtcVoiceTransportFactory? transportFactory = null,
+        IVoiceToolCatalog? toolCatalog = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -1181,6 +1213,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
         builder.Services.AddSingleton<IUserAgentCatalogQueryPort>(catalog);
         builder.Services.AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(session);
         builder.Services.AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort ?? new RecordingVolatileMediaStreamPort());
+        builder.Services.AddSingleton<IVoiceToolCatalog>(toolCatalog ?? new RecordingVoiceToolCatalog());
         if (transportFactory != null)
             builder.Services.AddSingleton(transportFactory);
         builder.Services.AddVoiceWebRtcTransport();
@@ -1450,6 +1483,33 @@ public sealed class PolicyAwareVoiceEndpointsTests
             ct.ThrowIfCancellationRequested();
             ReleasedRefs.Add(credentialRef);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingVoiceToolCatalog : IVoiceToolCatalog
+    {
+        public bool ThrowOnDiscover { get; init; }
+        public List<VoiceToolExecutionContext?> Contexts { get; } = [];
+
+        public Task<VoiceToolCatalogSnapshot> DiscoverAsync(
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Contexts.Add(toolContext?.Clone());
+            if (ThrowOnDiscover)
+                throw new InvalidOperationException("catalog unavailable");
+
+            return Task.FromResult(new VoiceToolCatalogSnapshot
+            {
+                PolicyVersion = "test-voice-policy/v1",
+                Proof = new VoiceAgentTurnToolCatalogProof
+                {
+                    CatalogDigest = "sha256:test-empty",
+                    MaximumToolCount = VoiceToolCatalogSnapshotValidator.MaximumToolCount,
+                    MaximumSchemaBytes = VoiceToolCatalogSnapshotValidator.MaximumSchemaBytes,
+                },
+            });
         }
     }
 

@@ -27,6 +27,8 @@ public static class InMemoryProjectionServiceCollectionExtensions
             provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
         services.AddSingleton<IProjectionDocumentReader<TReadModel, TKey>>(provider =>
             provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
+        services.AddSingleton<IProjectionDocumentMutator<TReadModel, TKey>>(provider =>
+            provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
 
         return services;
     }
@@ -34,7 +36,25 @@ public static class InMemoryProjectionServiceCollectionExtensions
     public static IServiceCollection AddInMemoryGraphProjectionStore(
         this IServiceCollection services)
     {
-        services.AddSingleton<IProjectionGraphStore, InMemoryProjectionGraphStore>();
+        services.AddSingleton<InMemoryProjectionGraphStore>();
+        services.AddSingleton<IProjectionGraphStore>(provider =>
+            provider.GetRequiredService<InMemoryProjectionGraphStore>());
+        services.AddSingleton<IVersionedProjectionGraphStore>(provider =>
+            provider.GetRequiredService<InMemoryProjectionGraphStore>());
+        services.AddSingleton(new ProjectionGraphProviderStatus("InMemory", Enabled: true));
+
+        return services;
+    }
+
+    public static IServiceCollection AddDisabledGraphProjectionStore(
+        this IServiceCollection services)
+    {
+        services.AddSingleton<DisabledProjectionGraphStore>();
+        services.AddSingleton<IProjectionGraphStore>(provider =>
+            provider.GetRequiredService<DisabledProjectionGraphStore>());
+        services.AddSingleton<IVersionedProjectionGraphStore>(provider =>
+            provider.GetRequiredService<DisabledProjectionGraphStore>());
+        services.AddSingleton(new ProjectionGraphProviderStatus("Disabled", Enabled: false));
 
         return services;
     }

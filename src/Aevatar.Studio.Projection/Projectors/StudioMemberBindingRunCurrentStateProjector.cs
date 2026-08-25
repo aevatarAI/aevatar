@@ -62,6 +62,9 @@ public sealed class StudioMemberBindingRunCurrentStateProjector
             Status = MemberImplementationKindMapper.ToWireName(state.Status),
             PlatformBindingCommandId = state.PlatformBindingCommandId,
             AttemptCount = state.AttemptCount,
+            PlatformExecutionStage = MemberImplementationKindMapper.ToWireName(state.PlatformExecutionStage),
+            PlatformExecutionAttempt = state.PlatformExecutionAttempt,
+            LastReadinessStatus = MemberImplementationKindMapper.ToWireName(state.LastPlatformReadinessStatus),
         };
 
         ApplyFailure(document, state.Failure);

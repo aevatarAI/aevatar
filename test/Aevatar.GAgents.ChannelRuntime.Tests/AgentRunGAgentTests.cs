@@ -1,5 +1,6 @@
 using System.Text;
 using System.Runtime.CompilerServices;
+using System.Reflection;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -11,6 +12,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -37,6 +39,22 @@ public sealed class AgentRunGAgentTests
         RecordingExecutors.TryGetValue(agent, out var executor)
             ? executor.DrainAsync(agent.State)
             : Task.CompletedTask;
+
+    [Fact]
+    public void ReplyGenerationFailureHandler_MustAcceptOnlySelfMessages()
+    {
+        var method = typeof(AgentRunGAgent).GetMethod(
+            nameof(AgentRunGAgent.HandleReplyGenerationFailedAsync),
+            BindingFlags.Instance | BindingFlags.Public);
+        method.Should().NotBeNull();
+
+        var attribute = method!.GetCustomAttribute<EventHandlerAttribute>();
+        attribute.Should().NotBeNull();
+        attribute!.AllowSelfHandling.Should().BeTrue(
+            "reply generation failures are published to the run actor's own inbox");
+        attribute.OnlySelfHandling.Should().BeTrue(
+            "the transient failure continuation carries runtime credentials and has no external sender");
+    }
 
     [Fact]
     public void StripInlineMediaPayloads_ShouldRemoveMediaDataBase64FromDurableStepState()
@@ -391,7 +409,14 @@ public sealed class AgentRunGAgentTests
             actorRuntime,
             executor,
             new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
-        SetState(runtime, BuildWorkflowDeliveryStepState());
+        var state = BuildWorkflowDeliveryStepState();
+        state.GenerationStep.AgentProfileSnapshot = new AgentProfileSnapshot
+        {
+            ProfileId = "profile-channel-alpha",
+            ProfileVersion = "profile-v1",
+            PublishedRevision = 1,
+        };
+        SetState(runtime, state);
 
         await runtime.HandleNextToolStepAsync(BuildWorkflowDeliveryToolResult());
 
@@ -405,6 +430,7 @@ public sealed class AgentRunGAgentTests
 
         var ready = handled.Should().ContainSingle().Subject.Payload.Unpack<LlmReplyReadyEvent>();
         ready.Outbound.Text.Should().BeEmpty();
+        ready.AgentProfile.Should().Be(state.GenerationStep.AgentProfileSnapshot);
         ready.WorkflowRunDelivery.DeliveryActorId.Should().Be("workflow-delivery-actor-1");
         ready.WorkflowRunDelivery.WorkflowCommandId.Should().Be("workflow-command-1");
     }
@@ -2386,7 +2412,7 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleStartAsync_WhenBoundToolSchemaIsRejected_RetriesWithOwnerNoTools()
+    public async Task HandleStartAsync_WhenBoundChannelHasNoCatalog_UsesRestrictedEmptyProofWithoutFallback()
     {
         var targetActor = Substitute.For<IActor>();
         targetActor.Id.Returns("conversation:c");
@@ -2439,21 +2465,66 @@ public sealed class AgentRunGAgentTests
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         runtime.State.ProducedReplyText.Should().Be("owner fallback reply");
         runtime.State.GenerationStep.Should().NotBeNull();
-        runtime.State.GenerationStep!.FinalNoToolsStep.Should().BeTrue();
-        providerFactory.Requests.Should().HaveCount(2);
-        providerFactory.Requests[0].Tools.Should().NotBeNull();
+        runtime.State.GenerationStep!.FinalNoToolsStep.Should().BeFalse();
+        providerFactory.Requests.Should().ContainSingle();
+        providerFactory.Requests[0].Tools.Should().BeNull();
+        providerFactory.Requests[0].ToolCatalogProof.Should().NotBeNull();
+        providerFactory.Requests[0].ToolCatalogProof!.ToolCount.Should().Be(0);
         providerFactory.Requests[0].ToolContext!.SenderBinding.BindingId.Should().Be("bnd-user-1");
         providerFactory.Requests[0].LlmControl!.NyxIdAccessToken.Should().Be("sender-runtime-token");
+    }
 
-        providerFactory.Requests[1].Tools.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.SenderBinding.BindingId.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Credentials.SenderNyxIdAccessToken.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.SenderNyxIdAccessToken.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("owner-token");
-        providerFactory.Requests[1].LlmControl!.ModelOverride.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Routing.ModelOverride.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Routing.NyxIdRoutePreference.Should().BeNull();
+    [Fact]
+    public async Task HandleStartAsync_WhenUnprofiledChannelUsesRelayAccessToken_KeepsRestrictedEmptyCatalog()
+    {
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("conversation:c");
+        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var providerFactory = new RejectToolsThenReplyProviderFactory();
+        var replyGenerator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            toolSources: [new CountingAgentRunToolSource(new AgentRunNoopTool())],
+            localSkillCatalog: new LocalSkillCatalog());
+        var runtime = CreateRunAgent(
+            new DispatchingActorRuntime(("conversation:c", targetActor)),
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var activity = BuildRelayActivity();
+        activity.TransportExtras ??= new TransportExtras();
+        activity.TransportExtras.NyxUserAccessToken = "relay-owner-runtime-token";
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-relay-owner-fallback",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-owner-fallback",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
+            }).ToPayload(),
+            LlmControl = new LLMControlContext(
+                null,
+                null,
+                null,
+                "owner-model",
+                "/api/v1/proxy/s/owner",
+                4,
+                null).ToPayload(),
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        providerFactory.Requests.Should().ContainSingle();
+        providerFactory.Requests[0].Tools.Should().BeNull();
+        providerFactory.Requests[0].ToolCatalogProof.Should().NotBeNull();
+        providerFactory.Requests[0].ToolCatalogProof!.ToolCount.Should().Be(0);
+        providerFactory.Requests[0].LlmControl!.NyxIdAccessToken.Should().Be("relay-owner-runtime-token");
+        runtime.State.GenerationStep!.LlmControl!.NyxIdAccessToken.Should().BeEmpty();
+        runtime.State.GenerationStep.OwnerFallbackLlmControl!.NyxIdAccessToken.Should().BeEmpty();
     }
 
     [Fact]
@@ -2605,7 +2676,7 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleStartAsync_WhenLongRunningLarkAutomation_ShouldRunInteractionPublishThenScheduleTools()
+    public async Task HandleStartAsync_WhenUnprofiledLarkModelCallsHiddenAutomationTools_ShouldRejectBeforeSideEffects()
     {
         var targetActor = Substitute.For<IActor>();
         targetActor.Id.Returns("conversation:c");
@@ -2663,7 +2734,7 @@ public sealed class AgentRunGAgentTests
             },
         });
 
-        toolOrder.Should().Equal("reply_with_interaction", "ornn_publish_skill", "scheduled_agent_creator");
+        toolOrder.Should().BeEmpty("unprofiled channel turns have a restricted-empty exact catalog");
         providerFactory.RoundToolNames.Should().Equal("reply_with_interaction", "ornn_publish_skill", "scheduled_agent_creator", "<final>");
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         runtime.State.ProducedReplyText.Should().Contain("scheduled");
@@ -2686,6 +2757,9 @@ public sealed class AgentRunGAgentTests
                 "sender-session-jwt", $"round {round} tool credentials must carry the sender token");
             roundRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().NotBeNullOrEmpty(
                 $"round {round} tool credentials must not be stripped");
+            roundRequest.Tools.Should().BeNull();
+            roundRequest.ToolCatalogProof.Should().NotBeNull();
+            roundRequest.ToolCatalogProof!.ToolCount.Should().Be(0);
         }
     }
 

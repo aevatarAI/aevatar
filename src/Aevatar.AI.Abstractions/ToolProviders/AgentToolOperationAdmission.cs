@@ -23,7 +23,8 @@ public sealed record AgentToolOperationAdmission(
     AgentToolOperationResponsePolicy ResponsePolicy,
     AgentToolOperationExecutionPolicy ExecutionPolicy,
     string CatalogDigest = "",
-    AgentToolOperationReadBack? ReadBack = null)
+    AgentToolOperationReadBack? ReadBack = null,
+    string CatalogServiceSlug = "")
 {
     public IEnumerable<AgentToolOperationParameter> PathParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Path);
@@ -120,11 +121,18 @@ public static class AgentToolOperationSelector
             AgentToolOperationIdentity.PlatformBuiltIn platform => platform.CapabilityId,
             _ => string.Empty,
         };
-        var material = string.Join('\n',
-            admission.ServiceInstanceId,
-            operationIdentity,
-            admission.CatalogDigest,
-            admission.ContractDigest);
+        var material = string.IsNullOrWhiteSpace(admission.CatalogServiceSlug)
+            ? string.Join('\n',
+                admission.ServiceInstanceId,
+                operationIdentity,
+                admission.CatalogDigest,
+                admission.ContractDigest)
+            : string.Join('\n',
+                admission.ServiceInstanceId,
+                admission.CatalogServiceSlug,
+                operationIdentity,
+                admission.CatalogDigest,
+                admission.ContractDigest);
         return "sha256:" + Convert.ToHexStringLower(
             SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }

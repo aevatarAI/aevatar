@@ -27,6 +27,8 @@ public sealed class ScheduledDispatchGAgentTests
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const string TeamCredentialExpiryCallbackId = "scheduled-dispatch-team-credential-expiry";
     private const string ManualFireIdempotencyKey = "manual-fire";
+    private const string ExpectedServiceTargetMismatchError =
+        "scheduled_dispatch_expected_service_target_mismatch";
     private const string LegacyUnmarkedEnvelopeRetiredError =
         "Scheduled dispatch envelope target is retired because it lacks trusted internal authority.";
 
@@ -319,6 +321,201 @@ public sealed class ScheduledDispatchGAgentTests
                 StringComparison.Ordinal))
             .Should()
             .Be(1);
+    }
+
+    [Theory]
+    [InlineData("update")]
+    [InlineData("enable")]
+    [InlineData("disable")]
+    public async Task ConditionalServiceTargetMutation_WhenExpectedTargetMismatches_ShouldRejectWithoutSideEffects(
+        string operation)
+    {
+        var eventStore = new TestEventStore();
+        var actorDispatch = new RecordingActorDispatchPort();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, actorDispatch, scheduler, serviceDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConditionalServiceTargetConfiguration(
+            enabled: operation != "enable"));
+        var stateBefore = agent.State.Clone();
+        var eventCountBefore = eventStore.GetEvents(ScheduleActorId).Count;
+        var timeoutCountBefore = scheduler.TimeoutRequests.Count;
+        var canceledCountBefore = scheduler.Canceled.Count;
+        var purgeCountBefore = scheduler.PurgedActors.Count;
+        var mismatchedExpectedTarget = CreateExpectedServiceTarget("service-stale");
+        var update = new ScheduledDispatchUpdateCommand
+        {
+            ScheduleId = agent.State.ScheduleId,
+            DisplayName = "Conditionally updated schedule",
+            TargetActorId = agent.State.TargetActorId,
+            TriggerEnvelope = agent.State.TriggerEnvelope!.Clone(),
+            CronExpression = "*/30 * * * *",
+            Timezone = agent.State.Timezone,
+            Enabled = false,
+            Target = agent.State.Target!.Clone(),
+            ScheduleKind = agent.State.ScheduleKind,
+            ScheduleMode = agent.State.ScheduleMode,
+            ExpectedServiceTarget = mismatchedExpectedTarget.Clone(),
+        };
+        Func<Task> act = operation switch
+        {
+            "update" => () => agent.HandleConfigureAsync(update),
+            "enable" => () => agent.HandleEnableAsync(new ScheduledDispatchEnableCommand
+            {
+                Reason = "resume",
+                ExpectedServiceTarget = mismatchedExpectedTarget.Clone(),
+            }),
+            "disable" => () => agent.HandleDisableAsync(new ScheduledDispatchDisableCommand
+            {
+                Reason = "pause",
+                ExpectedServiceTarget = mismatchedExpectedTarget.Clone(),
+            }),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(ExpectedServiceTargetMismatchError);
+
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCountBefore);
+        agent.State.Equals(stateBefore).Should().BeTrue();
+        scheduler.TimeoutRequests.Should().HaveCount(timeoutCountBefore);
+        scheduler.Canceled.Should().HaveCount(canceledCountBefore);
+        scheduler.PurgedActors.Should().HaveCount(purgeCountBefore);
+        actorDispatch.Dispatches.Should().BeEmpty();
+        serviceDispatch.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ManualWithMismatchedExpectedTarget_ShouldRejectBeforeLegacyEnvelopeRetirement()
+    {
+        var eventStore = new TestEventStore();
+        var actorDispatch = new RecordingActorDispatchPort();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(
+            eventStore,
+            actorDispatch,
+            scheduler,
+            serviceDispatch,
+            snapshotStore: new TestSnapshotStore(
+                CreateLegacyUnmarkedEnvelopeSnapshot(enabled: false),
+                version: 0));
+        await agent.ActivateAsync();
+        var stateBefore = agent.State.Clone();
+        var eventCountBefore = eventStore.GetEvents(ScheduleActorId).Count;
+        var canceledCountBefore = scheduler.Canceled.Count;
+        var purgeCountBefore = scheduler.PurgedActors.Count;
+
+        var act = () => agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)),
+            Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
+            ExpectedServiceTarget = CreateExpectedServiceTarget("service-stale"),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(ExpectedServiceTargetMismatchError);
+
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCountBefore);
+        agent.State.Equals(stateBefore).Should().BeTrue();
+        scheduler.Canceled.Should().HaveCount(canceledCountBefore);
+        scheduler.PurgedActors.Should().HaveCount(purgeCountBefore);
+        actorDispatch.Dispatches.Should().BeEmpty();
+        serviceDispatch.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleDeleteAsync_PartialReplayWithMismatchedExpectedTarget_ShouldRejectBeforeHealingOrPurge()
+    {
+        var eventStore = new TestEventStore();
+        var seed = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await seed.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            seed,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-initial",
+        };
+        await seed.HandleDeleteAsync(delete);
+        eventStore.TruncateAfterEventType(
+            ScheduleActorId,
+            TeamAutomationDeletionRequestedEvent.Descriptor.FullName);
+
+        var actorDispatch = new RecordingActorDispatchPort();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var reactivated = CreateAgent(
+            eventStore,
+            actorDispatch,
+            scheduler,
+            serviceDispatch);
+        await reactivated.ActivateAsync();
+        reactivated.State.TeamAutomationOperationKind.Should()
+            .Be(TeamAutomationOperationKindState.Delete);
+        reactivated.State.Deleted.Should().BeFalse();
+        var stateBefore = reactivated.State.Clone();
+        var eventCountBefore = eventStore.GetEvents(ScheduleActorId).Count;
+        var timeoutCountBefore = scheduler.TimeoutRequests.Count;
+        var canceledCountBefore = scheduler.Canceled.Count;
+        var purgeCountBefore = scheduler.PurgedActors.Count;
+        var replay = delete.Clone();
+        replay.ObservationRequestId = "delete-mismatched-target-replay";
+        replay.ExpectedServiceTarget = CreateExpectedServiceTarget("service-stale");
+
+        var act = () => reactivated.HandleDeleteAsync(replay);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(ExpectedServiceTargetMismatchError);
+
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCountBefore);
+        reactivated.State.Equals(stateBefore).Should().BeTrue();
+        reactivated.State.Deleted.Should().BeFalse();
+        scheduler.TimeoutRequests.Should().HaveCount(timeoutCountBefore);
+        scheduler.Canceled.Should().HaveCount(canceledCountBefore);
+        scheduler.PurgedActors.Should().HaveCount(purgeCountBefore);
+        actorDispatch.Dispatches.Should().BeEmpty();
+        serviceDispatch.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_AutomaticWithoutExpectedTarget_ShouldDispatchCurrentServiceTarget()
+    {
+        var eventStore = new TestEventStore();
+        var actorDispatch = new RecordingActorDispatchPort();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, actorDispatch, scheduler, serviceDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConditionalServiceTargetConfiguration(enabled: true));
+        var request = scheduler.TimeoutRequests.Single(x => x.CallbackId == NextFireCallbackId);
+        var command = request.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        command.ExpectedServiceTarget.Should().BeNull();
+        var scheduledFireAt = command.ScheduledFireAt.ToDateTimeOffset();
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            request,
+            generation: agent.State.NextFireLease!.Generation,
+            fireIndex: 1,
+            firedAt: scheduledFireAt));
+
+        actorDispatch.Dispatches.Should().BeEmpty();
+        serviceDispatch.Requests.Should().ContainSingle()
+            .Which.Identity.ServiceId.Should().Be("service-alpha");
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(
+            "schedule-1",
+            scheduledFireAt);
+        agent.State.FireRecords[idempotencyKey].Status.Should()
+            .Be(ScheduledDispatchFireStatusState.Dispatched);
     }
 
     [Fact]
@@ -5948,6 +6145,48 @@ public sealed class ScheduledDispatchGAgentTests
                 Auth = auth,
             },
         };
+
+    private static ScheduledDispatchCreateCommand CreateConditionalServiceTargetConfiguration(bool enabled)
+    {
+        var target = CreateWorkflowServiceInvocationTarget(CreateSenderNyxIdAuth());
+        target.ServiceInvocation!.Identity = new ServiceIdentity
+        {
+            TenantId = "tenant-alpha",
+            AppId = "app-alpha",
+            Namespace = "default",
+            ServiceId = "service-alpha",
+        };
+        var invocation = target.ServiceInvocation;
+        return CreateConfigureCommand(
+            targetActorId: ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+            cronExpression: "*/15 * * * *",
+            enabled: enabled,
+            triggerEnvelope: CreateTriggerEnvelope(
+                ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+                new ServiceInvocationRequest
+                {
+                    Identity = invocation.Identity.Clone(),
+                    EndpointId = invocation.EndpointId,
+                    Payload = invocation.Payload.Clone(),
+                }),
+            target: target,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow);
+    }
+
+    private static ScheduledDispatchExpectedServiceTargetState CreateExpectedServiceTarget(
+        string serviceId) => new()
+    {
+        ScheduleKind = ScheduledDispatchScheduleKindState.Workflow,
+        TargetKind = ScheduledDispatchTargetKindState.ServiceInvocation,
+        ServiceIdentity = new ServiceIdentity
+        {
+            TenantId = "tenant-alpha",
+            AppId = "app-alpha",
+            Namespace = "default",
+            ServiceId = serviceId,
+        },
+        ServiceEndpointId = "chat",
+    };
 
     private static ScheduledServiceInvocationAuthState CreateSenderNyxIdAuth() =>
         new()

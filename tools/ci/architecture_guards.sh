@@ -118,6 +118,7 @@ check_code_execution_nyxid_route_boundary() {
   local parser_files
 
   expected_files="$(printf '%s\n' \
+    'src/Aevatar.AI.Infrastructure.ChronoSandbox/NyxIdCodeExecutionPort.Durable.cs' \
     'src/Aevatar.AI.Infrastructure.ChronoSandbox/NyxIdCodeExecutionPort.cs' \
     'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRoutePolicyReconciler.cs' \
     'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRouteResolver.cs' \
@@ -2207,6 +2208,9 @@ python3 tools/ci/guards/nyx_relay_replay_authority_guard.py
 
 echo "Running Lark agent path contract guard..."
 bash tools/ci/lark_agent_path_contract_guard.sh
+
+echo "Running agent turn tool catalog guard..."
+bash tools/ci/agent_turn_tool_catalog_guard.sh
 
 echo "Running docs lint guard..."
 bash tools/docs/lint.sh

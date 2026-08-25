@@ -79,7 +79,8 @@ public sealed class ServiceCollectionExtensionsTests
             ValidateScopes = true
         });
 
-        provider.GetRequiredService<OrnnAgentToolSource>().Should().NotBeNull();
+        provider.GetRequiredService<OrnnAuthoringAgentToolSource>().Should().NotBeNull();
+        provider.GetRequiredService<OrnnPublishAgentToolSource>().Should().NotBeNull();
         provider.GetRequiredService<OrnnSearchAgentToolSource>().Should().NotBeNull();
     }
 
@@ -98,12 +99,13 @@ public sealed class ServiceCollectionExtensionsTests
         });
 
         provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should().Be("https://nyx.example");
-        provider.GetRequiredService<OrnnAgentToolSource>().Should().NotBeNull();
+        provider.GetRequiredService<OrnnAuthoringAgentToolSource>().Should().NotBeNull();
+        provider.GetRequiredService<OrnnPublishAgentToolSource>().Should().NotBeNull();
         provider.GetRequiredService<OrnnSearchAgentToolSource>().Should().NotBeNull();
     }
 
     [Fact]
-    public async Task OrnnToolSources_ShouldKeepSearchOnlyRouteSeparateFromFullSource()
+    public async Task OrnnToolSources_ShouldKeepRuntimeSearchSeparateFromAuthoring()
     {
         var services = new ServiceCollection();
         services.AddSingleton(new NyxIdApiClient(
@@ -114,7 +116,9 @@ public sealed class ServiceCollectionExtensionsTests
         await using var provider = services.BuildServiceProvider();
         var searchTools = await provider.GetRequiredService<OrnnSearchAgentToolSource>()
             .DiscoverToolsAsync();
-        var fullTools = await provider.GetRequiredService<OrnnAgentToolSource>()
+        var authoringTools = await provider.GetRequiredService<OrnnAuthoringAgentToolSource>()
+            .DiscoverToolsAsync();
+        var publishTools = await provider.GetRequiredService<OrnnPublishAgentToolSource>()
             .DiscoverToolsAsync();
 
         var tool = searchTools.Should().ContainSingle().Which;
@@ -123,14 +127,15 @@ public sealed class ServiceCollectionExtensionsTests
         searchTools.Should().NotContain(candidate =>
             candidate.Name == "ornn_publish_skill" ||
             candidate.Name == "ornn_update_skill");
-        fullTools.Select(static candidate => candidate.Name).Should().Equal(
-            "ornn_search_skills",
+        authoringTools.Select(static candidate => candidate.Name).Should().Equal(
             "ornn_publish_skill",
             "ornn_update_skill");
+        publishTools.Select(static candidate => candidate.Name)
+            .Should().ContainSingle().Which.Should().Be("ornn_publish_skill");
     }
 
     [Fact]
-    public async Task AddOrnnSkills_WhenCalledTwice_ShouldRemainIdempotentAndReuseConcreteToolSource()
+    public async Task AddOrnnSkills_WhenCalledTwice_ShouldRemainIdempotentWithoutAmbientSources()
     {
         var services = new ServiceCollection();
         services.AddSingleton(new NyxIdApiClient(
@@ -141,11 +146,11 @@ public sealed class ServiceCollectionExtensionsTests
         services.AddOrnnSkills();
 
         await using var provider = services.BuildServiceProvider();
-        var sources = provider.GetServices<IAgentToolSource>().ToList();
-
-        sources.Count(x => x is OrnnAgentToolSource).Should().Be(1);
-        sources.OfType<OrnnAgentToolSource>().Should().ContainSingle()
-            .Which.Should().BeSameAs(provider.GetRequiredService<OrnnAgentToolSource>());
+        provider.GetServices<IAgentToolSource>().Should().BeEmpty();
+        provider.GetServices<OrnnSearchAgentToolSource>().Should().ContainSingle()
+            .Which.Should().BeSameAs(provider.GetRequiredService<OrnnSearchAgentToolSource>());
+        provider.GetServices<OrnnAuthoringAgentToolSource>().Should().ContainSingle()
+            .Which.Should().BeSameAs(provider.GetRequiredService<OrnnAuthoringAgentToolSource>());
     }
 
     [Fact]

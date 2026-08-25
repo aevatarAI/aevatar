@@ -225,7 +225,9 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             document.SourceKind ?? string.Empty,
             document.CapabilityAdmissionPlan?.Clone(),
             document.WorkflowId ?? string.Empty,
-            document.RevisionId ?? string.Empty);
+            document.RevisionId ?? string.Empty,
+            document.ToolCatalogPolicyVersion ?? string.Empty,
+            document.CatalogPublicationContractVersion ?? string.Empty);
     }
 
     private static ExternalCapabilityExecutionMode ResolveExpectedExecutionMode(

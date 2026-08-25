@@ -298,21 +298,30 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     }
 
     [Fact]
-    public async Task InspectAsync_ShouldAdmitExplicitReadOnlyPostForInteractiveExecutionOnly()
+    public async Task InspectAsync_ShouldAdmitExplicitReadOnlyPostForDurableExecution()
     {
-        var source = CreateSource(new InventoryHandler(UserServiceKeys(Service())));
+        var catalog = new RecordingCatalogQueryPort(ReadyCatalogSnapshot());
+        var source = CreateSource(new InventoryHandler(UserServiceKeys(Service())), catalog);
 
         var result = await source.InspectAsync(
             Access(),
             Selector(NyxIdRequestMethod.Post, NyxIdOperationRisk.ReadOnly),
-            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable,
             CancellationToken.None);
 
         result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
         var policy = result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy;
         policy.Risk.Should().Be(NyxIdOperationRisk.ReadOnly);
         policy.Approval.Should().Be(NyxIdOperationApproval.None);
-        policy.AllowedExecutionModes.Should().Equal(ExternalCapabilityExecutionMode.Interactive);
+        policy.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        result.Sources.Select(static source => source.SourceKind).Should().BeEquivalentTo(new[]
+        {
+            ExternalCapabilitySourceKind.NyxIdUserServices,
+            ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
+        });
+        catalog.ReadCount.Should().Be(1);
     }
 
     [Theory]

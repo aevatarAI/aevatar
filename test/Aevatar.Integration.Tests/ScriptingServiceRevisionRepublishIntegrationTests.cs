@@ -2,7 +2,6 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
@@ -47,7 +46,6 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         services.AddScriptCapability(configuration);
         services.AddGAgentServiceCapability(configuration);
         services.Replace(ServiceDescriptor.Singleton<IScriptDefinitionSnapshotPort, InMemoryHarnessScriptDefinitionSnapshotPort>());
-        services.Replace(ServiceDescriptor.Singleton<IServiceCommandPort, InMemoryHarnessServiceCommandPort>());
 
         await using var provider = services.BuildServiceProvider();
         var scopeScriptPort = provider.GetRequiredService<IScopeScriptCommandPort>();
@@ -56,6 +54,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         var lifecycleQueryPort = provider.GetRequiredService<IServiceLifecycleQueryPort>();
         var invocationPort = provider.GetRequiredService<IServiceInvocationPort>();
         var servingQueryPort = provider.GetRequiredService<IServiceServingQueryPort>();
+        var republishCandidateReader = provider.GetRequiredService<IServiceScriptingRepublishCandidateQueryReader>();
         var definitionSnapshotReader = provider.GetRequiredService<IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string>>();
         var serviceRevisionReader = provider.GetRequiredService<IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string>>();
 
@@ -125,6 +124,12 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         before.NormalizedText.Should().Be("REPUBLISH-V1:FIRST INPUT");
 
         initialState.Revisions.Revisions.Should().ContainSingle(x => x.RevisionId == "svc-rev-1");
+        await WaitForRepublishCandidatesAsync(
+            republishCandidateReader,
+            scopeId,
+            scriptId,
+            [serviceId],
+            CancellationToken.None);
 
         var promoted = await scopeScriptPort.UpsertAsync(
             new ScopeScriptUpsertRequest(
@@ -184,7 +189,6 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         services.AddGAgentServiceCapability(configuration);
         services.AddAttachOnlyScriptEvolutionApplicationService();
         services.Replace(ServiceDescriptor.Singleton<IScriptDefinitionSnapshotPort, InMemoryHarnessScriptDefinitionSnapshotPort>());
-        services.Replace(ServiceDescriptor.Singleton<IServiceCommandPort, InMemoryHarnessServiceCommandPort>());
 
         await using var provider = services.BuildServiceProvider();
         var scopeScriptPort = provider.GetRequiredService<IScopeScriptCommandPort>();
@@ -194,6 +198,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         var invocationPort = provider.GetRequiredService<IServiceInvocationPort>();
         var evolutionService = provider.GetRequiredService<IScriptEvolutionApplicationService>();
         var servingQueryPort = provider.GetRequiredService<IServiceServingQueryPort>();
+        var republishCandidateReader = provider.GetRequiredService<IServiceScriptingRepublishCandidateQueryReader>();
         var definitionSnapshotReader = provider.GetRequiredService<IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string>>();
         var serviceRevisionReader = provider.GetRequiredService<IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string>>();
 
@@ -300,6 +305,12 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
             expectedCount: 1,
             CancellationToken.None);
         leftRevisionsAfterUnbound.Revisions.Should().ContainSingle();
+        await WaitForRepublishCandidatesAsync(
+            republishCandidateReader,
+            boundScopeId,
+            scriptId,
+            [leftServiceId, rightServiceId],
+            CancellationToken.None);
 
         var boundDecision = await evolutionService.ProposeAsync(
             new ProposeScriptEvolutionRequest(
@@ -314,7 +325,6 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
             CancellationToken.None);
         boundDecision.Accepted.Should().BeTrue();
         boundDecision.Status.Should().Be("promoted");
-
         var leftPromotedState = await WaitForServiceRevisionAsync(
             lifecycleQueryPort,
             servingQueryPort,
@@ -471,7 +481,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         CancellationToken ct)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
+        timeoutCts.CancelAfter(ObservationTimeout);
 
         var request = new ScopeScriptSaveObservationRequest(
             accepted.RevisionId,
@@ -504,7 +514,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         CancellationToken ct)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
+        timeoutCts.CancelAfter(ObservationTimeout);
 
         while (true)
         {
@@ -527,7 +537,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         CancellationToken ct)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
+        timeoutCts.CancelAfter(ObservationTimeout);
 
         while (true)
         {
@@ -537,6 +547,41 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
                 return revisions;
 
             await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+        }
+    }
+
+    private static async Task WaitForRepublishCandidatesAsync(
+        IServiceScriptingRepublishCandidateQueryReader candidateReader,
+        string scopeId,
+        string scriptId,
+        IReadOnlyCollection<string> expectedServiceIds,
+        CancellationToken ct)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
+
+        IReadOnlyList<ServiceScriptingRepublishCandidateSnapshot> lastCandidates = [];
+        try
+        {
+            while (true)
+            {
+                timeoutCts.Token.ThrowIfCancellationRequested();
+                lastCandidates = await candidateReader.QueryServingByScopeScriptAsync(scopeId, scriptId, timeoutCts.Token);
+                var candidateServiceIds = lastCandidates
+                    .Select(candidate => candidate.Identity.ServiceId)
+                    .ToHashSet(StringComparer.Ordinal);
+                if (expectedServiceIds.All(candidateServiceIds.Contains))
+                    return;
+
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"Timed out waiting for scripting republish candidates. scope_id={scopeId}, script_id={scriptId}, " +
+                $"expected_services=[{string.Join(", ", expectedServiceIds)}], " +
+                $"candidates=[{string.Join(", ", lastCandidates.Select(x => $"{x.Identity.ServiceId}:{x.CurrentServingRevisionId}:{x.Scripting.Revision}"))}]");
         }
     }
 
@@ -550,7 +595,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         CancellationToken ct)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
+        timeoutCts.CancelAfter(ObservationTimeout);
 
         ServiceCatalogSnapshot? lastService = null;
         ServiceRevisionCatalogSnapshot? lastRevisions = null;
@@ -619,224 +664,6 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         ServiceRevisionSnapshot LiveRevision,
         ServiceServingTargetSnapshot ActiveTarget);
 
-    private sealed class InMemoryHarnessServiceCommandPort : IServiceCommandPort
-    {
-        private readonly ServiceCommandApplicationService _inner;
-        private readonly IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> _revisionReader;
-        private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
-
-        public InMemoryHarnessServiceCommandPort(
-            IActorDispatchPort dispatchPort,
-            IServiceCommandTargetProvisioner targetProvisioner,
-            IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> revisionReader,
-            IScriptDefinitionSnapshotPort definitionSnapshotPort)
-        {
-            _inner = new ServiceCommandApplicationService(
-                dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort)),
-                targetProvisioner ?? throw new ArgumentNullException(nameof(targetProvisioner)));
-            _revisionReader = revisionReader ?? throw new ArgumentNullException(nameof(revisionReader));
-            _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
-        }
-
-        public Task<ServiceCommandAcceptedReceipt> CreateServiceAsync(
-            CreateServiceDefinitionCommand command,
-            CancellationToken ct = default) =>
-            _inner.CreateServiceAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> UpdateServiceAsync(
-            UpdateServiceDefinitionCommand command,
-            CancellationToken ct = default) =>
-            _inner.UpdateServiceAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(
-            CreateServiceRevisionCommand command,
-            CancellationToken ct = default) =>
-            CreateRevisionAndWaitAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> PrepareRevisionAsync(
-            PrepareServiceRevisionCommand command,
-            CancellationToken ct = default) =>
-            PrepareRevisionAndWaitAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> PublishRevisionAsync(
-            PublishServiceRevisionCommand command,
-            CancellationToken ct = default) =>
-            PublishRevisionAndWaitAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(
-            RetireServiceRevisionCommand command,
-            CancellationToken ct = default) =>
-            _inner.RetireRevisionAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(
-            SetDefaultServingRevisionCommand command,
-            CancellationToken ct = default) =>
-            _inner.SetDefaultServingRevisionAsync(command, ct);
-
-        public async Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(
-            ActivateServiceRevisionCommand command,
-            CancellationToken ct = default)
-        {
-            await WaitForPreparedRevisionProjectionAsync(command.Identity, command.RevisionId, ct);
-            return await _inner.ActivateServiceRevisionAsync(command, ct);
-        }
-
-        public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(
-            DeactivateServiceDeploymentCommand command,
-            CancellationToken ct = default) =>
-            _inner.DeactivateServiceDeploymentAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> ReplaceServiceServingTargetsAsync(
-            ReplaceServiceServingTargetsCommand command,
-            CancellationToken ct = default) =>
-            _inner.ReplaceServiceServingTargetsAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> StartServiceRolloutAsync(
-            StartServiceRolloutCommand command,
-            CancellationToken ct = default) =>
-            _inner.StartServiceRolloutAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> AdvanceServiceRolloutAsync(
-            AdvanceServiceRolloutCommand command,
-            CancellationToken ct = default) =>
-            _inner.AdvanceServiceRolloutAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(
-            PauseServiceRolloutCommand command,
-            CancellationToken ct = default) =>
-            _inner.PauseServiceRolloutAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(
-            ResumeServiceRolloutCommand command,
-            CancellationToken ct = default) =>
-            _inner.ResumeServiceRolloutAsync(command, ct);
-
-        public Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(
-            RollbackServiceRolloutCommand command,
-            CancellationToken ct = default) =>
-            _inner.RollbackServiceRolloutAsync(command, ct);
-
-        private async Task WaitForPreparedRevisionProjectionAsync(
-            ServiceIdentity identity,
-            string revisionId,
-            CancellationToken ct)
-        {
-            _ = await WaitForRevisionProjectionAsync(
-                identity,
-                revisionId,
-                static revision =>
-                    revision.PreparedArtifact != null &&
-                    !string.IsNullOrWhiteSpace(revision.PreparedArtifact.RevisionId),
-                $"prepared artifact for revision `{revisionId}`",
-                ct);
-        }
-
-        private async Task<ServiceCommandAcceptedReceipt> CreateRevisionAndWaitAsync(
-            CreateServiceRevisionCommand command,
-            CancellationToken ct)
-        {
-            var receipt = await _inner.CreateRevisionAsync(command, ct);
-            await WaitForRevisionProjectionAsync(
-                command.Spec.Identity,
-                command.Spec.RevisionId,
-                static _ => true,
-                $"created revision `{command.Spec.RevisionId}`",
-                ct);
-            return receipt;
-        }
-
-        private async Task<ServiceCommandAcceptedReceipt> PrepareRevisionAndWaitAsync(
-            PrepareServiceRevisionCommand command,
-            CancellationToken ct)
-        {
-            var created = await WaitForRevisionProjectionAsync(
-                command.Identity,
-                command.RevisionId,
-                static _ => true,
-                $"created revision `{command.RevisionId}`",
-                ct);
-            await WaitForScriptingDefinitionSnapshotAsync(created, ct);
-
-            var receipt = await _inner.PrepareRevisionAsync(command, ct);
-            await WaitForPreparedRevisionProjectionAsync(command.Identity, command.RevisionId, ct);
-            return receipt;
-        }
-
-        private async Task<ServiceCommandAcceptedReceipt> PublishRevisionAndWaitAsync(
-            PublishServiceRevisionCommand command,
-            CancellationToken ct)
-        {
-            await WaitForPreparedRevisionProjectionAsync(command.Identity, command.RevisionId, ct);
-            var receipt = await _inner.PublishRevisionAsync(command, ct);
-            await WaitForRevisionProjectionAsync(
-                command.Identity,
-                command.RevisionId,
-                static revision => string.Equals(revision.Status, ServiceRevisionStatus.Published.ToString(), StringComparison.Ordinal),
-                $"published revision `{command.RevisionId}`",
-                ct);
-            return receipt;
-        }
-
-        private async Task WaitForScriptingDefinitionSnapshotAsync(
-            ServiceRevisionEntryReadModel revision,
-            CancellationToken ct)
-        {
-            if (string.IsNullOrWhiteSpace(revision.ScriptingDefinitionActorId) ||
-                string.IsNullOrWhiteSpace(revision.ScriptingRevision))
-            {
-                return;
-            }
-
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
-
-            while (true)
-            {
-                timeoutCts.Token.ThrowIfCancellationRequested();
-                var snapshot = await _definitionSnapshotPort.TryGetAsync(
-                    revision.ScriptingDefinitionActorId,
-                    revision.ScriptingRevision,
-                    timeoutCts.Token);
-                if (snapshot != null)
-                    return;
-
-                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
-            }
-        }
-
-        private async Task<ServiceRevisionEntryReadModel> WaitForRevisionProjectionAsync(
-            ServiceIdentity identity,
-            string revisionId,
-            Func<ServiceRevisionEntryReadModel, bool> isReady,
-            string description,
-            CancellationToken ct)
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
-
-            while (true)
-            {
-                timeoutCts.Token.ThrowIfCancellationRequested();
-                var readModel = await _revisionReader.GetAsync(ServiceKeys.Build(identity), timeoutCts.Token);
-                var revision = readModel?.Revisions.FirstOrDefault(x =>
-                    string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
-                if (revision != null &&
-                    string.Equals(revision.Status, ServiceRevisionStatus.PreparationFailed.ToString(), StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"Revision `{revisionId}` failed preparation before {description} was visible. reason={revision.FailureReason}");
-                }
-
-                if (revision != null && isReady(revision))
-                {
-                    return revision;
-                }
-
-                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
-            }
-        }
-    }
-
     private sealed class InMemoryHarnessScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
     {
         private readonly IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string> _documentReader;
@@ -886,20 +713,36 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
             string requestedRevision,
             CancellationToken ct)
         {
-            var snapshot = await TryGetAsync(definitionActorId, requestedRevision, ct);
-            if (snapshot == null)
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(ObservationTimeout);
+
+            ScriptDefinitionSnapshot? lastSnapshot = null;
+            try
+            {
+                while (true)
+                {
+                    timeoutCts.Token.ThrowIfCancellationRequested();
+                    lastSnapshot = await TryGetAsync(definitionActorId, requestedRevision, timeoutCts.Token);
+                    if (lastSnapshot != null)
+                    {
+                        if ((lastSnapshot.ScriptPackage?.CsharpSources.Count ?? 0) == 0)
+                        {
+                            throw new InvalidOperationException(
+                                $"Script definition script_package is empty for actor `{definitionActorId}`.");
+                        }
+
+                        return lastSnapshot;
+                    }
+
+                    await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+                }
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 throw new InvalidOperationException(
-                    $"Script definition snapshot not found for actor `{definitionActorId}` revision `{requestedRevision}`.");
+                    $"Script definition snapshot not found for actor `{definitionActorId}` revision `{requestedRevision}`. " +
+                    $"last_revision={lastSnapshot?.Revision ?? "<null>"}");
             }
-
-            if ((snapshot.ScriptPackage?.CsharpSources.Count ?? 0) == 0)
-            {
-                throw new InvalidOperationException(
-                    $"Script definition script_package is empty for actor `{definitionActorId}`.");
-            }
-
-            return snapshot;
         }
 
         private static ScriptDefinitionSnapshot ToSnapshot(ScriptDefinitionSnapshotDocument document)

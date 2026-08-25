@@ -494,9 +494,9 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
             harness.Consumer.AddRecord(0);
             harness.Consumer.AddRecord(1);
             _ = await harness.Consumer.ReadPauseAsync();
-            var firstBatches = await harness.Receiver.GetQueueMessagesAsync(2);
-            var offsetZero = firstBatches.OfType<KafkaProviderBatchContainer>().Single(x => x.KafkaOffset == 0);
-            var offsetOne = firstBatches.OfType<KafkaProviderBatchContainer>().Single(x => x.KafkaOffset == 1);
+            var firstBatches = await ReadKafkaBatchesByOffsetAsync(harness, [0, 1]);
+            var offsetZero = firstBatches[0];
+            var offsetOne = firstBatches[1];
 
             await harness.Receiver.MessagesDeliveredAsync([offsetOne]);
             var consumeCountAfterFirstAck = harness.Consumer.ConsumeCount;
@@ -539,9 +539,7 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
             harness.Consumer.AddRecord(0);
             harness.Consumer.AddRecord(1);
             await harness.Consumer.AwaitReturnedOffsetAsync(1);
-            var batches = (await harness.Receiver.GetQueueMessagesAsync(2))
-                .OfType<KafkaProviderBatchContainer>()
-                .ToDictionary(batch => batch.KafkaOffset);
+            var batches = await ReadKafkaBatchesByOffsetAsync(harness, [0, 1]);
 
             await harness.Receiver.MessagesDeliveredAsync([batches[1]]);
             harness.Consumer.FailNextCommit(new KafkaException(
@@ -854,6 +852,24 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
             () => consumer);
 
         return new ReceiverHarness(receiver, consumer, options, topicPartition);
+    }
+
+    private static async Task<Dictionary<long, KafkaProviderBatchContainer>> ReadKafkaBatchesByOffsetAsync(
+        ReceiverHarness harness,
+        IReadOnlyCollection<long> expectedOffsets)
+    {
+        var batchesByOffset = new Dictionary<long, KafkaProviderBatchContainer>();
+        while (expectedOffsets.Any(offset => !batchesByOffset.ContainsKey(offset)))
+        {
+            var batches = await harness.Receiver.GetQueueMessagesAsync(1);
+            foreach (var batch in batches.OfType<KafkaProviderBatchContainer>())
+            {
+                if (expectedOffsets.Contains(batch.KafkaOffset))
+                    batchesByOffset[batch.KafkaOffset] = batch;
+            }
+        }
+
+        return batchesByOffset;
     }
 
     private static DeterministicKafkaReceiverConsumer CreateDeterministicConsumer(

@@ -1,12 +1,16 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Projection.QueryPorts;
+using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
@@ -485,6 +489,95 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         invocation.Identity.ServiceId.Should().Be("published-member-1");
         invocation.RevisionId.Should().Be("rev-serving-alpha");
         scheduleService.BeginOperation!.ActivationDecision.RevisionId.Should().Be("rev-serving-alpha");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenLegacyAuthorizationBaselineNormalizesAcrossAggregateAdvance_ShouldCreate()
+    {
+        var reader = new SequencedStudioMemberReader(
+            MemberAuthorizationDocument(stateVersion: 420, authorizationRevision: 0),
+            MemberAuthorizationDocument(stateVersion: 421, authorizationRevision: 1));
+        var evidence = new StableWorkflowAuthorizationEvidence();
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            evidence,
+            new ProjectionScheduledInvocationMemberQueryPort(reader),
+            evidence);
+        var clock = new FixedTimeProvider(TestNow);
+        var revalidator = new ScheduledInvocationAuthorizationRevalidator(planner, clock);
+        var scheduleService = new RecordingScheduleService();
+        var materializer = new RecordingCredentialMaterializer();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            revalidator: revalidator,
+            materializer: materializer,
+            timeProvider: clock);
+        var request = Request("scope-1", "member-1") with
+        {
+            ConfirmedPolicyVersion = ScheduledInvocationAuthorizationContractVersions.CredentialPolicy,
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-1",
+                "workflow-1",
+                "rev-1"),
+        };
+
+        var preflight = await port.PreflightForWriteAsync(request);
+        var result = await port.CreateAsync(request, preflight.Plan!.PermissionDigest);
+
+        result.Success.Should().BeTrue();
+        reader.GetCallCount.Should().Be(2);
+        preflight.Plan.SourceStamps.Single(IsStudioMemberStamp).StateVersion.Should().Be(1);
+        materializer.Plan.Should().NotBeNull();
+        materializer.Plan!.SourceStamps.Single(IsStudioMemberStamp).StateVersion.Should().Be(1);
+        materializer.Plan.PermissionDigest.Should().Be(preflight.Plan.PermissionDigest);
+        evidence.CatalogQueryCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(1);
+        materializer.MaterializeCallCount.Should().Be(1);
+        scheduleService.EnsureCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenMemberAuthorizationRevisionAdvances_ShouldFailBeforeEffects()
+    {
+        var reader = new SequencedStudioMemberReader(
+            MemberAuthorizationDocument(stateVersion: 420, authorizationRevision: 1),
+            MemberAuthorizationDocument(stateVersion: 421, authorizationRevision: 2));
+        var evidence = new StableWorkflowAuthorizationEvidence();
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            evidence,
+            new ProjectionScheduledInvocationMemberQueryPort(reader),
+            evidence);
+        var clock = new FixedTimeProvider(TestNow);
+        var scheduleService = new RecordingScheduleService();
+        var materializer = new RecordingCredentialMaterializer();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            revalidator: new ScheduledInvocationAuthorizationRevalidator(planner, clock),
+            materializer: materializer,
+            timeProvider: clock);
+        var request = Request("scope-1", "member-1") with
+        {
+            ConfirmedPolicyVersion = ScheduledInvocationAuthorizationContractVersions.CredentialPolicy,
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-1",
+                "workflow-1",
+                "rev-1"),
+        };
+        var preflight = await port.PreflightForWriteAsync(request);
+
+        var action = () => port.CreateAsync(request, preflight.Plan!.PermissionDigest);
+
+        var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>();
+        conflict.Which.Code.Should().Be("authorization_plan_changed");
+        reader.GetCallCount.Should().Be(2);
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.CandidateCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        scheduleService.Configurations.Should().BeEmpty();
     }
 
     [Fact]
@@ -2613,6 +2706,20 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         return property!.GetValue(value).Should().BeOfType<string>().Which;
     }
 
+    private static bool IsStudioMemberStamp(AuthorizationSourceStamp stamp) =>
+        stamp.SourceKind == AuthorizationSourceKind.StudioMember;
+
+    private static StudioMemberCurrentStateDocument MemberAuthorizationDocument(
+        long stateVersion,
+        long authorizationRevision) => new()
+    {
+        StateVersion = stateVersion,
+        AuthorizationRevision = authorizationRevision,
+        ImplementationWorkflowId = "workflow-1",
+        LastBoundRevisionId = "rev-1",
+        PublishedServiceId = "published-member-1",
+    };
+
     private static StudioMemberWorkflowSchedulePort NewPort(
         RecordingScheduleService schedule,
         RecordingMemberService? memberService = null,
@@ -2947,6 +3054,58 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         {
             Requests.Add(request);
             return Task.FromResult(Results.Count > 0 ? Results.Dequeue() : Result);
+        }
+    }
+
+    private sealed class SequencedStudioMemberReader(
+        params StudioMemberCurrentStateDocument?[] documents)
+        : IProjectionDocumentReader<StudioMemberCurrentStateDocument, string>
+    {
+        private readonly Queue<StudioMemberCurrentStateDocument?> _documents = new(documents);
+
+        public int GetCallCount { get; private set; }
+
+        public Task<StudioMemberCurrentStateDocument?> GetAsync(
+            string key,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            GetCallCount++;
+            return Task.FromResult(_documents.Dequeue());
+        }
+
+        public Task<ProjectionDocumentQueryResult<StudioMemberCurrentStateDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private sealed class StableWorkflowAuthorizationEvidence :
+        INyxIdAuthorizationCatalogQueryPort,
+        IScheduledInvocationWorkflowEvidenceQueryPort
+    {
+        public int CatalogQueryCount { get; private set; }
+
+        public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            CatalogQueryCount++;
+            return Task.FromResult<NyxIdAuthorizationCatalogSnapshot?>(null);
+        }
+
+        public Task<ScheduledInvocationWorkflowEvidence?> GetAsync(
+            string scopeId,
+            string publishedServiceId,
+            string workflowRevisionId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<ScheduledInvocationWorkflowEvidence?>(new(
+                StateVersion: 5,
+                ExternalCapabilities: [],
+                OwnerLLMRouteRequired: false,
+                ServiceGrantRequirement: AuthorizationGrantRequirement.NotRequired));
         }
     }
 
@@ -3504,15 +3663,15 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         }
 
         public Task<ScheduledDispatchMutationReceipt> EnableAsync(
-            string scheduleId, string reason, CancellationToken ct = default) =>
+            string scheduleId, string reason, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> DisableAsync(
-            string scheduleId, string reason, CancellationToken ct = default) =>
+            string scheduleId, string reason, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> DeleteAsync(
-            string scheduleId, string reason, CancellationToken ct = default) =>
+            string scheduleId, string reason, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchDetail?> GetAsync(
@@ -3549,7 +3708,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
-            string scheduleId, CancellationToken ct = default) =>
+            string scheduleId, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(

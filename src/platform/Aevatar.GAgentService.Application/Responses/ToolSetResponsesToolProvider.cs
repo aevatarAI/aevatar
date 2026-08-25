@@ -15,13 +15,16 @@ namespace Aevatar.GAgentService.Application.Responses;
 internal sealed class ToolSetResponsesToolProvider : IResponsesToolProvider
 {
     private readonly IReadOnlyList<IAgentToolSource> _sources;
+    private readonly IAgentToolDiscoveryService _toolDiscoveryService;
     private readonly ILogger _logger;
 
     public ToolSetResponsesToolProvider(
         IReadOnlyList<IAgentToolSource> sources,
-        ILogger logger)
+        ILogger logger,
+        IAgentToolDiscoveryService? toolDiscoveryService = null)
     {
         _sources = sources ?? throw new ArgumentNullException(nameof(sources));
+        _toolDiscoveryService = toolDiscoveryService ?? AgentToolDiscoveryService.Instance;
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -29,32 +32,20 @@ internal sealed class ToolSetResponsesToolProvider : IResponsesToolProvider
         ResponsesToolProviderContext context,
         CancellationToken ct = default)
     {
-        // Discovery runs on behalf of this request's caller, so the request's typed tool
-        // context (NyxID access token, scope, channel) must be visible to context-aware
-        // sources. IAgentToolSource.DiscoverToolsAsync has no context parameter, so publish
-        // it through the AsyncLocal the tools already read at execution time.
-        using var _ = AgentToolContextScope.Push(context.ToolContext);
-
-        var tools = new List<IAgentTool>();
-        foreach (var source in _sources)
+        var result = await _toolDiscoveryService
+            .DiscoverAsync(_sources, context.ToolContext, ct)
+            .ConfigureAwait(false);
+        if (!result.IsSuccess)
         {
-            try
-            {
-                tools.AddRange(await source.DiscoverToolsAsync(ct).ConfigureAwait(false));
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Responses route tool source discovery failed for source {SourceType}; continuing without that source.",
-                    source.GetType().Name);
-            }
+            _logger.LogError(
+                "Responses route tool discovery failed closed. code={FailureCode} tool={ToolName} source={SourceType} conflictingSource={ConflictingSourceType}",
+                result.Failure!.Code,
+                result.Failure.ToolName,
+                result.Failure.SourceType,
+                result.Failure.ConflictingSourceType);
+            throw new AgentToolDiscoveryException(result.Failure);
         }
 
-        return tools;
+        return result.Tools;
     }
 }

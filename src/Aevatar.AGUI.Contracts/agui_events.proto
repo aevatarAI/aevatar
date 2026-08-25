@@ -28,6 +28,8 @@ message AGUIEvent {
     HumanInputResponseEvent human_input_response = 14;
     CustomEvent custom = 15;
     UsageEvent usage = 16;
+    ModelCallStartEvent model_call_start = 18;
+    ModelCallEndEvent model_call_end = 19;
   }
 }
 
@@ -122,6 +124,32 @@ message UsageEvent {
   google.protobuf.StringValue model = 5;
   google.protobuf.DoubleValue cost = 6;
   google.protobuf.Int64Value latency_ms = 7;
+}
+
+// One exact provider invocation. The tool names are the server-authorized
+// catalog actually supplied to this model round, not a browser inference from
+// later tool calls.
+message ModelCallStartEvent {
+  string operation_id = 1;
+  string session_id = 2;
+  int32 round = 3;
+  string model = 4;
+  string provider = 5;
+  string input_summary = 6;
+  repeated string available_tool_names = 7;
+}
+
+message ModelCallEndEvent {
+  string operation_id = 1;
+  string session_id = 2;
+  int32 round = 3;
+  string model = 4;
+  string content = 5;
+  string reasoning_content = 6;
+  UsageEvent usage = 7;
+  string finish_reason = 8;
+  bool success = 9;
+  string error = 10;
 }
 
 message CustomEvent {

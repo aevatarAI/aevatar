@@ -46,6 +46,25 @@ public static class LLMSelectionPolicy
         }
     }
 
+    public static void ValidateRouteTarget(LLMRouteTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        switch (target.SourceIdentityCase)
+        {
+            case LLMRouteTarget.SourceIdentityOneofCase.CatalogServiceId:
+                ValidateIdentity(target.CatalogServiceId, "NyxID catalog service ID");
+                ValidateServiceSlug(target.ServiceSlugSnapshot);
+                return;
+            case LLMRouteTarget.SourceIdentityOneofCase.UserServiceId:
+                ValidateIdentity(target.UserServiceId, "NyxID user service ID");
+                ValidateServiceSlug(target.ServiceSlugSnapshot);
+                return;
+            default:
+                throw new InvalidOperationException("LLM route target kind is unsupported.");
+        }
+    }
+
     public static void ValidateCatalog(LLMModelCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
@@ -185,9 +204,18 @@ public static class LLMSelectionPolicy
         if (selection.RouteKind == LLMRouteKind.Unspecified)
             return current;
 
+        var routeTarget = selection.RouteKind == LLMRouteKind.NyxIdUserService
+            ? new LLMRouteTarget
+            {
+                UserServiceId = selection.NyxIdUserServiceId,
+                ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
+            }
+            : null;
+
         return current with
         {
             NyxIdRoutePreference = selection.RouteValue,
+            RouteTarget = routeTarget,
             ModelOverride = selection.ModelSelection.Kind == LLMModelSelectionKind.ExplicitModel
                 ? selection.ModelSelection.ModelId
                 : current.ModelOverride,
@@ -254,8 +282,7 @@ public static class LLMSelectionPolicy
 
     private static void ValidateServiceSlug(string slug)
     {
-        ValidateIdentity(slug, "NyxID service slug");
-        if (slug.IndexOfAny(['/', '\\', '?', '#']) >= 0)
+        if (!NyxIdServiceSlugPolicy.IsCanonical(slug))
             throw new InvalidOperationException("NyxID service slug is not a canonical path segment.");
     }
 

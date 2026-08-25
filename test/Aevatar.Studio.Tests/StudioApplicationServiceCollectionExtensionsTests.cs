@@ -3,6 +3,7 @@ using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -10,10 +11,12 @@ using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Hosting.WorkOrders;
+using Aevatar.Studio.Hosting.WorkflowDeliveries;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
@@ -85,6 +88,18 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         services.Should().ContainSingle(x => x.ServiceType == typeof(IUserConfigService))
             .Which.ImplementationType.Should().Be(typeof(UserConfigService));
         services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ILLMModelCatalogPolicyApplicationService) &&
+            x.ImplementationType == typeof(LLMModelCatalogPolicyApplicationService) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ILLMModelDiscoveryApplicationService) &&
+            x.ImplementationType == typeof(LLMModelDiscoveryApplicationService) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ILLMModelRouteApplicationService) &&
+            x.ImplementationType == typeof(LLMModelRouteApplicationService) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IScopeWorkflowPublishedServiceDescriptorSource) &&
             x.ImplementationType == typeof(StudioMemberScopeWorkflowDescriptorSource) &&
             x.Lifetime == ServiceLifetime.Singleton);
@@ -140,6 +155,252 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkOrderExecutionWorker));
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_ShouldRegisterDeliveryPackageCatalogStartupProbe()
+    {
+        var services = new ServiceCollection();
+
+        services.AddStudioHostingCore(new ConfigurationBuilder().Build());
+
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType == typeof(WorkflowDeliveryPackageCatalogStartupProbe));
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliverySectionIsMissing_ShouldExposeEmptyPackageCatalog()
+    {
+        var options = ResolveDeliveryOptions(new ConfigurationBuilder().Build());
+
+        options.Packages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliveryPackageIsConfigured_ShouldBindTypedDefinition()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:WorkflowName"] = "workflow-alpha",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:DisplayName"] = "Workflow Alpha",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:Acceptance:Mode"] = "AutomaticPreview",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:Acceptance:Input:0:Key"] = "dry_run",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:Acceptance:Input:0:Kind"] = "Boolean",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:Acceptance:Input:0:Value"] = "true",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        var package = options.Packages.Should().ContainSingle().Which;
+        package.WorkflowName.Should().Be("workflow-alpha");
+        package.DisplayName.Should().Be("Workflow Alpha");
+        package.Acceptance.Mode.Should().Be(WorkflowDeliveryAcceptanceMode.AutomaticPreview);
+        package.Acceptance.Input.Should().ContainSingle().Which.Kind
+            .Should().Be(WorkflowDeliveryAcceptanceInputValueKind.Boolean);
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliveryConfigurationContainsUnknownKey_ShouldFailHostStartup()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:Packagess:0:WorkflowName"] = "workflow-alpha",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddStudioHostingCore(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        var action = () => provider.GetRequiredService<IStartupValidator>().Validate();
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Packagess*");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenLegacyDeliveryConfigurationIsPresent_ShouldIgnoreRetiredSemantics()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames:0"] = "workflow-alpha",
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleBaseUrl"] = "https://api.example.com",
+                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "https://console.example.com",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.Packages.Should().BeEmpty();
+        options.ConsoleWebBaseUrl.Should().Be("https://console.example.com");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenLegacyAndTypedPackagesCoexist_ShouldUseOnlyTypedPackages()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames:0"] = "legacy-workflow",
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:WorkflowName"] = "workflow-alpha",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.Packages.Should().ContainSingle().Which.WorkflowName.Should().Be("workflow-alpha");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenLegacyAndUnknownNestedConfigurationCoexist_ShouldStillFailHostStartup()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:WorkflowNme"] = "workflow-alpha",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddStudioHostingCore(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        var action = () => provider.GetRequiredService<IStartupValidator>().Validate();
+
+        var exception = action.Should().Throw<InvalidOperationException>().Which;
+        exception.ToString().Should().Contain("WorkflowNme");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenConsoleBaseUrlIsPresent_ShouldNotTranslateItToConsoleWebBaseUrl()
+    {
+        var options = ResolveDeliveryOptions(DeliveryConfiguration(
+            "ConsoleBaseUrl",
+            "https://api.example.com"));
+
+        options.ConsoleWebBaseUrl.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenLegacyConfigurationAndInvalidConsoleWebBaseUrlCoexist_ShouldFailHostStartup()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "http://console.example.com",
+            })
+            .Build();
+
+        var action = () => ResolveDeliveryOptions(configuration);
+
+        action.Should().Throw<OptionsValidationException>()
+            .WithMessage("*ConsoleWebBaseUrl*");
+    }
+
+    [Theory]
+    [InlineData("https://aevatar-console.aevatar.ai")]
+    [InlineData("http://localhost:8000")]
+    public void AddStudioHostingCore_WhenConsoleWebBaseUrlIsAValidOrigin_ShouldKeepIt(string value)
+    {
+        var options = ResolveDeliveryOptions(DeliveryConfiguration("ConsoleWebBaseUrl", value));
+
+        options.ConsoleWebBaseUrl.Should().Be(value);
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenConsoleWebBaseUrlIsUnset_ShouldRemainEmpty()
+    {
+        var options = ResolveDeliveryOptions(new ConfigurationBuilder().Build());
+
+        options.ConsoleWebBaseUrl.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("/scopes")]
+    [InlineData("http://aevatar-console.aevatar.ai")]
+    [InlineData("https://aevatar-console.aevatar.ai?next=/scopes")]
+    public void AddStudioHostingCore_WhenConsoleWebBaseUrlIsInvalid_ShouldFailFastInsteadOfDroppingTheConsoleLink(
+        string value)
+    {
+        var action = () => ResolveDeliveryOptions(DeliveryConfiguration("ConsoleWebBaseUrl", value));
+
+        action.Should().Throw<OptionsValidationException>()
+            .WithMessage("*ConsoleWebBaseUrl*");
+    }
+
+    // Console routing does not imply package publication. Package definitions remain an
+    // explicit deployment-owned catalog.
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliverySectionCarriesOnlyConsoleWebUrl_ShouldExposeNoPackages()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "https://console.example.com",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.Packages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenConsoleWebUrlIsCombinedWithConfiguredPackage_ShouldKeepBoth()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:WorkflowName"] = "workflow-alpha",
+                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "https://console.example.com",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.Packages.Should().ContainSingle().Which.WorkflowName.Should().Be("workflow-alpha");
+        options.ConsoleWebBaseUrl.Should().Be("https://console.example.com");
+    }
+
+    [Fact]
+    public void MainnetDistributedDeliveryConfiguration_ShouldKeepEmptyCatalogWithConsoleWebUrl()
+    {
+        using var stream = File.OpenRead(Path.Combine(
+            Aevatar.Configuration.AevatarPaths.RepoRoot,
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "appsettings.Distributed.json"));
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(stream)
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.Packages.Should().BeEmpty();
+        options.ConsoleWebBaseUrl.Should().Be("https://aevatar-console.aevatar.ai");
+    }
+
+    private static IConfiguration DeliveryConfiguration(string key, string value) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:{key}"] = value,
+            })
+            .Build();
+
+    private static WorkflowDeliveryOptions ResolveDeliveryOptions(IConfiguration configuration)
+    {
+        var services = new ServiceCollection();
+        services.AddStudioHostingCore(configuration);
+        using var provider = services.BuildServiceProvider();
+        return provider.GetRequiredService<IOptions<WorkflowDeliveryOptions>>().Value;
     }
 
     private static void AddSchedulePortDependencies(IServiceCollection services)

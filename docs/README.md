@@ -46,6 +46,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Voice Presence Integration — aevatar as the /ws/voice Brain](canon/voice-presence-integration.md)
 - [Work Orders](canon/work-orders.md)
 - [Workflow 可见性模型：公共模板目录 vs scope 私有资源](canon/workflow-catalog-visibility.md)
+- [Workflow Delivery Control Plane](canon/workflow-delivery.md)
 - [Workflow Primitives 参考手册](canon/workflow-primitives.md)
 - [工作流引擎设计与实践](canon/workflow-runtime.md)
 
@@ -99,7 +100,8 @@ Immutable records of architectural choices and their rationale.
 - [Admitted Agent Tool Execution](adr/0046-admitted-agent-tool-execution.md)
 - [0047 - Kafka fixed-assignment ownership follows Orleans queue balancing](adr/0047-kafka-fixed-assignment-ownership.md)
 - [NyxID Assistant Operation-Class Boundary](adr/0048-nyxid-assistant-operation-class-boundary.md)
-- [NyxID Assistant Plan Gate and Revision](adr/0049-nyxid-assistant-plan-gate-and-revision.md)
+- [NyxID Assistant Plan Progress and Operation Authorization](adr/0049-nyxid-assistant-plan-progress-and-operation-authorization.md)
+- [Code Execution Uses Agent Key Runtime Authority](adr/0050-code-execution-agent-key-runtime-authority.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History
@@ -128,6 +130,10 @@ Point-in-time design snapshots. Not authoritative — for context only.
 - [2026-05-11-aevatar-inspector-design](history/2026-05/2026-05-11-aevatar-inspector-design.md)
 - [2026-05-14-issue-370-gagent-durable-terminal-completion-design](history/2026-05/2026-05-14-issue-370-gagent-durable-terminal-completion-design.md)
 - [2026-05-19-issue-616-binding-readiness-observation-design](history/2026-05/2026-05-19-issue-616-binding-readiness-observation-design.md)
+
+### 2026-08
+
+- [2026-08-14-studio-binding-durable-readiness-recovery-design](history/2026-08/2026-08-14-studio-binding-durable-readiness-recovery-design.md)
 
 ## Audit Scorecard
 

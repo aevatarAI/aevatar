@@ -1,4 +1,5 @@
 using Google.Protobuf;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 
 namespace Aevatar.CQRS.Projection.Stores.Abstractions;
 
@@ -25,6 +26,24 @@ public static class ProjectionWriteResultEvaluator
 
         if (incoming.StateVersion == existing.StateVersion)
         {
+            // Route-fenced read models: a strictly higher route epoch takes over the same
+            // source version (writer cutover); a lower epoch is stale. Equal epochs fall
+            // through to the strict identity and byte rules below.
+            if (existing is IProjectionRouteFencedReadModel existingFenced &&
+                incoming is IProjectionRouteFencedReadModel incomingFenced &&
+                existingFenced.RouteEpoch != incomingFenced.RouteEpoch)
+            {
+                return incomingFenced.RouteEpoch > existingFenced.RouteEpoch
+                    ? ProjectionWriteResult.Applied()
+                    : ProjectionWriteResult.Stale();
+            }
+
+            var maintenancePrecedence = EvaluateSameVersionMaintenancePrecedence(
+                existing.LastEventId,
+                incoming.LastEventId);
+            if (maintenancePrecedence.HasValue)
+                return maintenancePrecedence.Value;
+
             if (!string.Equals(existing.LastEventId, incoming.LastEventId, StringComparison.Ordinal))
                 return ProjectionWriteResult.Conflict();
 
@@ -43,5 +62,26 @@ public static class ProjectionWriteResultEvaluator
         }
 
         return ProjectionWriteResult.Applied();
+    }
+
+    /// <summary>
+    /// Orders an authoritative committed-state maintenance republish against an
+    /// ordinary projection write at the same source version. A republish may
+    /// repair a stale replica, and the repaired replica fences delayed ordinary
+    /// deliveries for that version. Equal kinds retain the strict event/byte
+    /// comparison performed by the caller.
+    /// </summary>
+    public static ProjectionWriteResult? EvaluateSameVersionMaintenancePrecedence(
+        string? existingEventId,
+        string? incomingEventId)
+    {
+        var existingIsMaintenance = CommittedStateRepublish.IsRepublishEventId(existingEventId);
+        var incomingIsMaintenance = CommittedStateRepublish.IsRepublishEventId(incomingEventId);
+        if (existingIsMaintenance == incomingIsMaintenance)
+            return null;
+
+        return incomingIsMaintenance
+            ? ProjectionWriteResult.Applied()
+            : ProjectionWriteResult.Stale();
     }
 }

@@ -49,7 +49,8 @@ public sealed class ScopeWorkflowApplicationServicesTests
             governanceCommandPort,
             governanceQueryPort,
             Options.Create(options),
-            admission);
+            admission,
+            new TestWorkflowDefinitionParser());
 
         var request = new ScopeWorkflowUpsertRequest(
             "external-user-1",
@@ -82,7 +83,6 @@ public sealed class ScopeWorkflowApplicationServicesTests
             "create_revision",
             "prepare_revision",
             "publish_revision",
-            "set_default_serving_revision",
             "activate_service_revision");
         result.DefinitionActorIdPrefix.Should().Be(expectedActorPrefix);
         commandPort.CreateServiceCommand!.Spec.Identity.Should().BeEquivalentTo(identity);
@@ -130,7 +130,8 @@ public sealed class ScopeWorkflowApplicationServicesTests
             governanceCommandPort,
             new FakeServiceGovernanceQueryPort(),
             Options.Create(new ScopeWorkflowCapabilityOptions()),
-            admission);
+            admission,
+            new TestWorkflowDefinitionParser());
 
         var act = () => service.UpsertAsync(new ScopeWorkflowUpsertRequest(
             "external-user-1",
@@ -180,6 +181,7 @@ public sealed class ScopeWorkflowApplicationServicesTests
             ExternalCapabilityExecutionMode.Durable);
 
         var service = new ScopeWorkflowQueryApplicationService(
+            queryPort,
             queryPort,
             bindingReader,
             Options.Create(options));
@@ -250,6 +252,7 @@ public sealed class ScopeWorkflowApplicationServicesTests
 
         var service = new ScopeWorkflowQueryApplicationService(
             queryPort,
+            queryPort,
             bindingReader,
             Options.Create(options));
 
@@ -267,7 +270,6 @@ public sealed class ScopeWorkflowApplicationServicesTests
         public CreateServiceRevisionCommand? CreateRevisionCommand { get; private set; }
         public PrepareServiceRevisionCommand? PrepareRevisionCommand { get; private set; }
         public PublishServiceRevisionCommand? PublishRevisionCommand { get; private set; }
-        public SetDefaultServingRevisionCommand? SetDefaultServingRevisionCommand { get; private set; }
         public ActivateServiceRevisionCommand? ActivateServiceRevisionCommand { get; private set; }
 
         public int MutationCount { get; private set; }
@@ -310,13 +312,6 @@ public sealed class ScopeWorkflowApplicationServicesTests
         public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default) =>
             Task.FromResult(Accepted());
 
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)
-        {
-            MutationCount++;
-            SetDefaultServingRevisionCommand = command;
-            return Task.FromResult(Accepted());
-        }
-
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default)
         {
             MutationCount++;
@@ -335,7 +330,35 @@ public sealed class ScopeWorkflowApplicationServicesTests
         private static ServiceCommandAcceptedReceipt Accepted() => new("target-actor", "cmd-1", "corr-1");
     }
 
-    private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
+    private sealed class TestWorkflowDefinitionParser : IWorkflowDefinitionParser
+    {
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var name = (workflowYaml ?? string.Empty)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(static line => line.StartsWith("name:", StringComparison.OrdinalIgnoreCase))?
+                ["name:".Length..]
+                .Trim();
+            return Task.FromResult(string.IsNullOrWhiteSpace(name)
+                ? WorkflowYamlParseResult.Invalid("Workflow YAML is invalid.")
+                : WorkflowYamlParseResult.Success(
+                    name,
+                    new WorkflowAuthorizationDependencies
+                    {
+                        ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+                    }));
+        }
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            Task.FromResult(WorkflowInlineYamlBundleParseResult.Invalid("Not used by this test."));
+    }
+
+    private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort, IServiceServingQueryPort
     {
         public readonly Queue<ServiceCatalogSnapshot?> GetServiceResults = new();
         public IReadOnlyList<ServiceCatalogSnapshot> ListServicesResult { get; set; } = [];
@@ -382,6 +405,50 @@ public sealed class ScopeWorkflowApplicationServicesTests
                     service.UpdatedAt)],
                 service.UpdatedAt));
         }
+
+        public async Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default)
+        {
+            var deployments = await GetServiceDeploymentsAsync(identity, ct);
+            if (deployments == null)
+                return null;
+
+            return new ServiceServingSetSnapshot(
+                deployments.ServiceKey,
+                Generation: 1,
+                ActiveRolloutId: string.Empty,
+                Targets: deployments.Deployments
+                    .Where(deployment => string.Equals(
+                        deployment.Status,
+                        ServiceDeploymentStatus.Active.ToString(),
+                        StringComparison.OrdinalIgnoreCase))
+                    .Select(deployment => new ServiceServingTargetSnapshot(
+                        deployment.DeploymentId,
+                        deployment.RevisionId,
+                        deployment.PrimaryActorId,
+                        AllocationWeight: 100,
+                        ServiceServingState.Active.ToString(),
+                        EnabledEndpointIds: []))
+                    .ToArray(),
+                UpdatedAt: deployments.UpdatedAt);
+        }
+
+        public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutSnapshot?>(null);
+
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity,
+            string commandId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
+
+        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
 
         public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);
     }

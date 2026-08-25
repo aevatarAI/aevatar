@@ -49,6 +49,17 @@ POST /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/preflig
 
 Preflight builds the current typed authorization plan without provisioning a credential. `IStudioMemberWorkflowSchedulePort` resolves the member through the Studio read model, verifies that the path `teamId` contains that member, requires a bound workflow implementation, and derives `publishedServiceId` from the member summary. A browser cannot provide or substitute `workflowId`, `publishedServiceId`, grant identities, credential expiry, or credential material through this API.
 
+The Studio member read model exposes two distinct actor-owned versions. Its
+aggregate `stateVersion` advances for every committed member transition,
+including schedule-provisioning attempts and retry bookkeeping. Its
+effective `authorizationRevision` advances only when implementation, successful
+binding, published binding, team assignment, or deletion changes the authority
+used by scheduled invocation planning. Authorization source stamps use
+`authorizationRevision`; using aggregate `stateVersion` would let a provisioning
+attempt invalidate its own preflight plan. Legacy member states with raw
+revision `0` are read as baseline revision `1`, and their first real authority
+change advances to revision `2`.
+
 Schedule lifecycle operations use the canonical owner-aware schedule API. Callers pass the typed Studio member automation owner on `/api/schedules` create/update/action requests or as owner query parameters on reads and actions:
 
 ```text

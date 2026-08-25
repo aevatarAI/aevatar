@@ -68,7 +68,6 @@ public static class ServiceCollectionExtensions
             services.AddNyxIdApiAccess(configuration);
         var assistantActionsOptions = BindAssistantActionsOptions(configuration);
         services.TryAddSingleton(assistantActionsOptions);
-        services.TryAddSingleton(BindPlanGateOptions(configuration));
         services.TryAddSingleton(BindCanaryEffectFaultOptions(configuration));
         services.TryAddSingleton<INyxIdChatCanaryEffectFaultAuthorizationPolicy,
             NyxIdChatCanaryEffectFaultAuthorizationPolicy>();
@@ -77,7 +76,10 @@ public static class ServiceCollectionExtensions
             services.TryAddSingleton<NyxIdAssistantActionRegistrySnapshot>();
             services.TryAddSingleton<INyxIdAssistantActionRegistrySource,
                 NyxIdAssistantActionRegistryHttpSource>();
-            services.TryAddSingleton<NyxIdAssistantActionRegistry>(sp =>
+            // Transient on purpose: a failed startup pins a disabled fallback
+            // that background recovery may upgrade, so consumers must observe
+            // the snapshot's current registry instead of a captured instance.
+            services.TryAddTransient<NyxIdAssistantActionRegistry>(sp =>
                 sp.GetRequiredService<NyxIdAssistantActionRegistrySnapshot>().GetRequired());
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService,
                 NyxIdAssistantActionRegistryStartupService>());
@@ -97,13 +99,21 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<StreamingAgentProfileTurnClassifier>();
         services.TryAddSingleton<IAgentProfileTurnClassifier>(sp =>
             sp.GetRequiredService<StreamingAgentProfileTurnClassifier>());
+        services.TryAddSingleton<StreamingAgentProfileConnectedOperationSelector>();
+        services.TryAddSingleton<IAgentProfileConnectedOperationSelector>(sp =>
+            sp.GetRequiredService<StreamingAgentProfileConnectedOperationSelector>());
         services.TryAddSingleton<INyxIdChatTurnIntentClassifier, NyxIdChatTurnIntentClassifier>();
-        services.TryAddSingleton(sp => new AgentProfileTurnCatalogMaterializer(
+        services.TryAddSingleton(sp => new AgentTurnToolCatalogMaterializer(
             sp.GetRequiredService<IToolSetRegistry>(),
             sp.GetRequiredService<IAgentProfileTurnClassifier>(),
             sp.GetService<IExactRemoteSkillFetcher>(),
             sp.GetRequiredService<SkillFrontmatterParser>(),
-            sp.GetService<ILogger<AgentProfileTurnCatalogMaterializer>>()));
+            sp.GetService<ILogger<AgentTurnToolCatalogMaterializer>>(),
+            toolDiscoveryService: sp.GetRequiredService<IAgentToolDiscoveryService>(),
+            connectedOperationSelector:
+                sp.GetRequiredService<IAgentProfileConnectedOperationSelector>()));
+        services.TryAddSingleton<IAgentProfileTurnToolCatalogPlanner>(sp =>
+            sp.GetRequiredService<AgentTurnToolCatalogMaterializer>());
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
@@ -114,13 +124,25 @@ public static class ServiceCollectionExtensions
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
         services.TryAddSingleton<IAgentRunToolApprovalDecisionDispatcher, AgentRunToolApprovalDecisionDispatcher>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>());
+        services.TryAddSingleton<IChannelWorkflowAuthorizedScopeResolver>(sp =>
+            new ChannelWorkflowAuthorizedScopeResolver(
+                sp.GetService<Aevatar.GAgents.Channel.Identity.Abstractions.IOwnerScopeResolver>(),
+                sp.GetService<ILogger<ChannelWorkflowAuthorizedScopeResolver>>()));
+        // The two-generic overload keeps the concrete implementation type visible to
+        // TryAddEnumerable; a Func<IServiceProvider, IChannelSlashCommandHandler> factory
+        // would be indistinguishable from every other handler registered for this service.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>(sp =>
+                new ChannelWorkflowDraftRunSlashCommandHandler(
+                    sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>(),
+                    sp.GetRequiredService<IChannelWorkflowAuthorizedScopeResolver>())));
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
         services.TryAddSingleton<ChannelWorkflowDraftRunIntentParser>();
         services.TryAddSingleton<ChannelWorkflowDraftRunAdmission>(sp =>
             new ChannelWorkflowDraftRunAdmission(
                 sp.GetRequiredService<ChannelWorkflowDraftRunIntentParser>(),
-                sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>()));
+                sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>(),
+                sp.GetRequiredService<IChannelWorkflowAuthorizedScopeResolver>()));
         services.TryAddSingleton<WorkflowDraftRunReplyRenderer>();
         services.TryAddSingleton<IChannelWorkflowDraftRunInteractionPort>(sp =>
             new ChannelWorkflowDraftRunInteractionPort(
@@ -276,7 +298,12 @@ public static class ServiceCollectionExtensions
 
     private static IEnumerable<IAgentToolSource> ResolveChannelToolSources(IServiceProvider serviceProvider)
     {
-        foreach (var source in serviceProvider.GetServices<IAgentToolSource>())
+        var workspace = serviceProvider.GetRequiredService<IToolSetRegistry>()
+            .Resolve(ToolSetNames.WorkspaceDefault);
+        var sources = workspace.IsSuccess
+            ? workspace.Sources
+            : serviceProvider.GetServices<IAgentToolSource>();
+        foreach (var source in sources)
             yield return source;
 
         var inventory = serviceProvider.GetService<ChannelNyxIdConnectedServiceInventoryToolSource>();
@@ -289,7 +316,7 @@ public static class ServiceCollectionExtensions
     {
         var result = serviceProvider
             .GetRequiredService<IToolSetRegistry>()
-            .Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
+            .Resolve(ToolSetNames.NyxIdChatDefault);
         return result.IsSuccess ? result.Sources : [];
     }
 
@@ -413,19 +440,6 @@ public static class ServiceCollectionExtensions
         return options;
     }
 
-    private static NyxIdChatPlanGateOptions BindPlanGateOptions(IConfiguration? configuration)
-    {
-        var options = new NyxIdChatPlanGateOptions();
-        configuration?.GetSection(NyxIdChatPlanGateOptions.ConfigSection).Bind(options);
-        if (options.ConfirmationThresholdSeconds <= 0)
-        {
-            throw new InvalidOperationException(
-                $"{NyxIdChatPlanGateOptions.ConfigSection}:ConfirmationThresholdSeconds must be positive.");
-        }
-
-        return options;
-    }
-
     private static NyxIdChatCanaryEffectFaultOptions BindCanaryEffectFaultOptions(
         IConfiguration? configuration)
     {
@@ -433,4 +447,5 @@ public static class ServiceCollectionExtensions
             $"{NyxIdChatCanaryEffectFaultOptions.ConfigSection}:Enabled") == true;
         return new NyxIdChatCanaryEffectFaultOptions { Enabled = enabled };
     }
+
 }

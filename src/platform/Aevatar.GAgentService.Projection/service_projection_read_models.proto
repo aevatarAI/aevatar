@@ -11,6 +11,7 @@ import "service_definition.proto";
 import "service_invocation_catalog.proto";
 import "service_deployment.proto";
 import "service_revision.proto";
+import "service_endpoint.proto";
 import "content_artifact_messages.proto";
 import "agent_profiles.proto";
 
@@ -116,6 +117,7 @@ message ServiceDeploymentReadModel {
   string status = 4;
   google.protobuf.Timestamp activated_at_utc_value = 5;
   google.protobuf.Timestamp updated_at_utc_value = 6;
+  string artifact_hash = 7;
 }
 
 message ServiceDeploymentActivationFailureReadModel {
@@ -123,6 +125,7 @@ message ServiceDeploymentActivationFailureReadModel {
   aevatar.gagentservice.ServiceDeploymentActivationFailureCode failure_code = 2;
   string failure_reason = 3;
   google.protobuf.Timestamp occurred_at_utc_value = 4;
+  string activation_attempt_id = 5;
 }
 
 // --- ServiceRevisionCatalogReadModel ---
@@ -305,6 +308,7 @@ message ServiceRunCurrentStateReadModel {
   string last_error = 23;
   string schedule_id = 24;
   repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 25;
+  string schedule_operation_id = 26;
 }
 // --- GAgentRunTerminalReadModel ---
 
@@ -509,6 +513,7 @@ message ScheduledDispatchDocument {
   string owner_llm_model = 63;
   string last_error_code = 64;
   string service_revision_id = 65;
+  aevatar.gagentservice.ServiceIdentity service_identity = 66;
 }
 
 enum TeamAutomationLifecycleStatusDocument {

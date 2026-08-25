@@ -11,8 +11,10 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Tools;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
@@ -29,21 +31,206 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class AgentRunReplyGenerationExecutorTests
 {
     [Fact]
+    public async Task BuildInitialStepState_WhenChannelProfileIsSelected_ShouldPinAndReplayExactCatalog()
+    {
+        var fixture = CreateProfiledChannelExecutor();
+
+        var state = await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest(
+                "run-1",
+                "channel-agent-run:run-1",
+                1,
+                fixture.Request.Clone()),
+            CancellationToken.None);
+
+        state.AgentProfileSnapshot.Should().NotBeNull();
+        AgentProfileSnapshotCodec.ByteEquivalent(state.AgentProfileSnapshot, fixture.Profile).Should().BeTrue();
+        state.AgentProfileTurnAuthority.Should().Be(fixture.Authority);
+        state.ToolCatalogPolicyVersion.Should().Be(AgentRunReplyGenerationExecutor.ToolCatalogPolicyVersion);
+        state.ToolCatalogProof.Should().Be(fixture.Catalog.Proof.ToPayload());
+        fixture.Generator.ReceivedCatalog.Should().BeSameAs(fixture.Catalog);
+
+        var execution = await fixture.Executor.BuildLlmStepExecutionAsync(
+            new AgentRunReplyStepExecutionRequest(
+                "run-1",
+                "channel-agent-run:run-1",
+                1,
+                state.NextStepIndex,
+                fixture.Request.Clone(),
+                state.Clone()),
+            CancellationToken.None);
+
+        var providerRequest = fixture.Provider.Requests.Should().ContainSingle().Subject;
+        providerRequest.Tools.Should().ContainSingle().Which.Should().BeSameAs(fixture.Tool);
+        execution.Continuation.LlmStepResult!.ToolCatalogCaptured.Should().BeTrue();
+        execution.Continuation.LlmStepResult.AvailableToolNames.Should().Equal(fixture.Tool.Name);
+        providerRequest.ToolCatalogProof.Should().NotBeNull();
+        providerRequest.ToolCatalogProof!.ToPayload().Should().Be(state.ToolCatalogProof);
+        await fixture.ProfilePlanner.Received(2).MaterializeCommittedAsync(
+            Arg.Any<AgentProfileSnapshot>(),
+            Arg.Any<AgentProfileTurnAuthorityState>(),
+            Arg.Any<string?>(),
+            Arg.Any<IReadOnlyList<IAgentTool>>(),
+            Arg.Any<AgentToolExecutionContext>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenPinnedChannelProofIsTampered_ShouldFailClosed()
+    {
+        var fixture = CreateProfiledChannelExecutor();
+        var state = await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest(
+                "run-1",
+                "channel-agent-run:run-1",
+                1,
+                fixture.Request.Clone()),
+            CancellationToken.None);
+        state.ToolCatalogProof.CatalogDigest = "sha256:tampered";
+
+        var act = () => fixture.Executor.BuildLlmStepExecutionAsync(
+            new AgentRunReplyStepExecutionRequest(
+                "run-1",
+                "channel-agent-run:run-1",
+                1,
+                state.NextStepIndex,
+                fixture.Request.Clone(),
+                state),
+            CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<AgentTurnToolCatalogException>();
+        exception.Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.CatalogProofMismatch);
+        fixture.Provider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WhenConversationCarriesPinnedProfile_ShouldNotResolveCurrentBinding()
+    {
+        var fixture = CreateProfiledChannelExecutor();
+        var request = fixture.Request.Clone();
+        request.AgentProfile = fixture.Profile.Clone();
+        fixture.ProfileResolver.ResolveAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<ChatRouteAgentProfileKind>(),
+                Arg.Any<ChatRouteAgentProfileRef?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<AgentProfileTurnSnapshotResolution>(
+                new InvalidOperationException("The current binding must not replace a conversation pin.")));
+
+        var state = await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest(
+                "run-1",
+                "channel-agent-run:run-1",
+                1,
+                request),
+            CancellationToken.None);
+
+        AgentProfileSnapshotCodec.ByteEquivalent(state.AgentProfileSnapshot, fixture.Profile).Should().BeTrue();
+        state.ToolCatalogProof.Should().Be(fixture.Catalog.Proof.ToPayload());
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenTurnCatalogIsMissing_ShouldUseRestrictedEmptyCatalogProof()
+    {
+        var provider = new RecordingProvider();
+        var generator = new CatalogAwareStepPlanReplyGenerator(
+            new CountingTool("legacy_discovered_tool"),
+            provider);
+        var executor = new AgentRunReplyGenerationExecutor(
+            Substitute.For<IActorDispatchPort>(),
+            generator,
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+
+        await executor.BuildLlmStepExecutionAsync(
+            BuildToolEnabledWorkItem() with { TurnCatalog = null },
+            CancellationToken.None);
+
+        generator.ReceivedCatalog.Should().NotBeNull();
+        generator.ReceivedCatalog!.FinalAllowedToolNames.Should().BeEmpty();
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().BeNull();
+        request.ToolCatalogProof.Should().NotBeNull();
+        request.ToolCatalogProof!.ToolDescriptors.Should().BeEmpty();
+        request.ToolCatalogProof.ToolCount.Should().Be(0);
+        request.ToolCatalogProof.SchemaBytes.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WithRequiredProfileReadiness_ShouldBypassProviderAndAuthorizeExactTool()
+    {
+        var provider = new RecordingProvider("must-not-be-used");
+        var tool = new CountingTool("nyxid_require_service");
+        var executor = CreateToolEnabledExecutor(tool, provider);
+        var invocation = new AgentProfileRequiredToolInvocation(
+            tool.Name,
+            "{\"service_slug\":\"api-github\",\"requested_scopes\":[\"repo\"]}");
+        var catalog = new AgentTurnToolCatalog(
+            [tool.Name],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: "github-via-nyxid",
+            candidateIntentId: "github-via-nyxid",
+            exactTools: [tool],
+            hasUnresolvedConnectedServiceSelectors: true,
+            requiredToolInvocation: invocation);
+        var workItem = BuildToolEnabledWorkItem() with { TurnCatalog = catalog };
+
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            workItem,
+            CancellationToken.None);
+
+        provider.Requests.Should().BeEmpty();
+        var call = execution.Continuation.LlmStepResult!.ToolCalls.Should().ContainSingle().Subject;
+        call.Name.Should().Be(tool.Name);
+        call.ArgumentsJson.Should().Be(invocation.ArgumentsJson);
+        execution.Continuation.LlmStepResult.AvailableToolNames.Should().BeEmpty(
+            "the server-authored required call bypassed the provider and was not loaded into a model round");
+        execution.Continuation.LlmStepResult.ToolCatalogCaptured.Should().BeFalse();
+        execution.AuthorizedToolStep.Should().NotBeNull();
+        execution.AuthorizedToolCallSafeties.Should().ContainSingle()
+            .Which.ToolName.Should().Be(tool.Name);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenMiddlewareShortCircuits_ShouldNotClaimModelLoadedTools()
+    {
+        var provider = new RecordingProvider("must-not-be-used");
+        var tool = new CountingTool("cached_lookup");
+        var executor = CreateToolEnabledExecutor(
+            tool,
+            provider,
+            [new ShortCircuitLlmMiddleware()]);
+
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            BuildToolEnabledWorkItem(),
+            CancellationToken.None);
+
+        provider.Requests.Should().BeEmpty();
+        execution.Continuation.LlmStepResult!.Content.Should().Be("middleware-answer");
+        execution.Continuation.LlmStepResult.AvailableToolNames.Should().BeEmpty(
+            "no provider model invocation started");
+        execution.Continuation.LlmStepResult.ToolCatalogCaptured.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasNoSuccessfulMutatingReceipt_ShouldPassMutationClaimConstraint()
     {
         var provider = new RecordingProvider();
-        var executor = CreateToolEnabledExecutor(new CountingTool("submit_invoice"), provider);
+        var executor = CreateToolEnabledExecutor(new CountingTool("submit_record"), provider);
         var workItem = BuildToolEnabledWorkItem(
             new AgentToolReceipt
             {
                 Status = AgentToolReceiptStatus.Error,
-                SideEffectKind = "invoice.submit",
+                SideEffectKind = "record.submit",
             });
 
         await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var request = provider.Requests.Should().ContainSingle().Subject;
-        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_invoice");
+        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_record");
         request.Messages.Should().ContainSingle(message =>
             message.Role == "system" &&
             message.Content != null &&
@@ -56,7 +243,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var provider = new RecordingProvider();
         var dispatchPort = Substitute.For<IActorDispatchPort>();
         var executor = CreateToolEnabledExecutor(
-            new CountingTool("submit_invoice"),
+            new CountingTool("submit_record"),
             provider,
             actorDispatchPort: dispatchPort,
             relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
@@ -67,7 +254,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var workItem = BuildToolEnabledWorkItem(new AgentToolReceipt
         {
             CallId = "call-submit",
-            ToolName = "submit_invoice",
+            ToolName = "submit_record",
             Status = AgentToolReceiptStatus.Error,
             Effect = AgentToolReceiptEffect.Mutating,
         });
@@ -160,22 +347,58 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildLlmStepContinuation_WhenToolCallTextIsDeferred_ShouldStillReportModelLifecycle()
+    {
+        var tool = new CountingTool("scope_workflows_get");
+        var provider = new TextThenToolCallProvider(tool.Name, "Hidden tool preamble.");
+        var executor = CreateToolEnabledExecutor(tool, provider);
+        var chunks = new List<LLMStreamChunk>();
+        var workItem = BuildToolEnabledWorkItem() with
+        {
+            ReportChunkAsync = (chunk, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                chunks.Add(chunk);
+                return Task.CompletedTask;
+            },
+        };
+
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            workItem,
+            CancellationToken.None);
+
+        chunks.Should().NotContain(chunk => chunk.DeltaContent == "Hidden tool preamble.");
+        var started = chunks.Should().ContainSingle(chunk => chunk.LLMInvocationStarted != null)
+            .Which.LLMInvocationStarted!;
+        started.Provider.Should().Be(provider.Name);
+        started.AvailableToolNames.Should().Equal(tool.Name);
+        var completed = chunks.Should().ContainSingle(chunk => chunk.LLMInvocationCompleted != null)
+            .Which.LLMInvocationCompleted!;
+        completed.OperationId.Should().Be(started.OperationId);
+        completed.Success.Should().BeTrue();
+        chunks.Select(chunk => chunk.LLMInvocationStarted != null ? "start" : "end")
+            .Should().Equal("start", "end");
+        execution.Continuation.LlmStepResult!.ToolCalls.Should().ContainSingle()
+            .Which.Name.Should().Be(tool.Name);
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasSuccessfulMutatingReceipt_ShouldKeepGroundingConstraint()
     {
         var provider = new RecordingProvider();
-        var executor = CreateToolEnabledExecutor(new CountingTool("submit_invoice"), provider);
+        var executor = CreateToolEnabledExecutor(new CountingTool("submit_record"), provider);
         var workItem = BuildToolEnabledWorkItem(
             new AgentToolReceipt
             {
                 Status = AgentToolReceiptStatus.Success,
-                SideEffectKind = "invoice.submit",
+                SideEffectKind = "record.submit",
                 Effect = AgentToolReceiptEffect.Mutating,
             });
 
         await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var request = provider.Requests.Should().ContainSingle().Subject;
-        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_invoice");
+        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_record");
         request.Messages.Should().NotContain(message =>
             message.Role == "system" &&
             message.Content != null &&
@@ -274,7 +497,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
-        var providerImagePart = provider.Requests.Should().ContainSingle().Subject
+        var providerRequest = provider.Requests.Should().ContainSingle().Subject;
+        providerRequest.ToolCatalogProof.Should().NotBeNull();
+        providerRequest.ToolCatalogProof!.ToolDescriptors.Should().BeEmpty();
+        var providerImagePart = providerRequest
             .Messages.Last(message => message.Role == "user")
             .ContentParts.Should().NotBeNull().And.Subject
             .Single(part => part.Kind == ContentPartKind.Image);
@@ -391,11 +617,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var recovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
-            CommandName: "invoice-ocr-policy-review",
-            OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-            PrimarySkillName: "invoice-ocr-policy-review",
+            CommandName: "project-summary",
+            OriginalCommand: "使用精确名称为 project-summary 的 skill",
+            PrimarySkillName: "project-summary",
             MaxOrnnSearchAttempts: 2,
-            CommandArguments: "提取发票并运行 workflow");
+            CommandArguments: "生成项目摘要并运行 workflow");
         var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
         var executor = CreateToolEnabledExecutor([useSkill, searchSkills], provider, toolContext: toolContext);
         var workItem = BuildToolEnabledWorkItem();
@@ -404,7 +630,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         {
             Id = "prior-use-skill",
             Name = "use_skill",
-            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+            ArgumentsJson = "{\"skill\":\"project-summary\"}",
         };
         workItem.StepState.Messages.Insert(0, AgentRunReplyStepMappers.ToProto(new ChatMessage
         {
@@ -419,7 +645,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         provider.Requests.Should().BeEmpty();
         var call = execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle().Which;
         call.Name.Should().Be("ornn_search_skills");
-        call.ArgumentsJson.Should().Contain("invoice-ocr-policy-review");
+        call.ArgumentsJson.Should().Contain("project-summary");
         execution.AuthorizedToolStep.Should().NotBeNull();
         execution.AuthorizedToolCallSafeties.Should().ContainSingle()
             .Which.ToolName.Should().Be("ornn_search_skills");
@@ -437,9 +663,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             SkillRecovery = new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: true,
                 RequireOrnnSearchOnBlocker: true,
-                CommandName: "invoice-ocr-policy-review",
-                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-                PrimarySkillName: "invoice-ocr-policy-review",
+                CommandName: "project-summary",
+                OriginalCommand: "使用精确名称为 project-summary 的 skill",
+                PrimarySkillName: "project-summary",
                 MaxOrnnSearchAttempts: 2),
         };
         var executor = CreateToolEnabledExecutor(
@@ -468,9 +694,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             SkillRecovery = new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: false,
                 RequireOrnnSearchOnBlocker: true,
-                CommandName: "invoice-ocr-policy-review",
-                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-                PrimarySkillName: "invoice-ocr-policy-review",
+                CommandName: "project-summary",
+                OriginalCommand: "使用精确名称为 project-summary 的 skill",
+                PrimarySkillName: "project-summary",
                 MaxOrnnSearchAttempts: 2),
         };
         var executor = CreateToolEnabledExecutor(
@@ -483,7 +709,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         {
             Id = "call-use-skill",
             Name = "use_skill",
-            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+            ArgumentsJson = "{\"skill\":\"project-summary\"}",
         };
         var useSkillMessage = AgentRunReplyStepMappers.ToProto(new ChatMessage
         {
@@ -509,7 +735,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         provider.Requests.Should().ContainSingle();
-        publishedChunks.Should().BeEmpty();
+        publishedChunks.Should().OnlyContain(chunk =>
+            chunk.LLMInvocationStarted != null || chunk.LLMInvocationCompleted != null);
+        publishedChunks.Should().ContainSingle(chunk => chunk.LLMInvocationStarted != null);
+        publishedChunks.Should().ContainSingle(chunk => chunk.LLMInvocationCompleted != null);
         execution.Continuation.LlmStepResult.AccumulatedText.Should().BeEmpty();
         execution.Continuation.LlmStepResult.Content.Should().BeEmpty();
         execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
@@ -533,9 +762,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             SkillRecovery = new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: false,
                 RequireOrnnSearchOnBlocker: true,
-                CommandName: "invoice-ocr-policy-review",
-                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-                PrimarySkillName: "invoice-ocr-policy-review",
+                CommandName: "project-summary",
+                OriginalCommand: "使用精确名称为 project-summary 的 skill",
+                PrimarySkillName: "project-summary",
                 MaxOrnnSearchAttempts: 2),
         };
         var executor = CreateToolEnabledExecutor(
@@ -548,7 +777,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         {
             Id = "call-use-skill",
             Name = "use_skill",
-            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+            ArgumentsJson = "{\"skill\":\"project-summary\"}",
         };
         var useSkillMessage = AgentRunReplyStepMappers.ToProto(new ChatMessage
         {
@@ -577,6 +806,13 @@ public sealed class AgentRunReplyGenerationExecutorTests
         publishedChunks.Should().ContainSingle(chunk => chunk.LLMInvocationStarted != null);
         publishedChunks.Should().ContainSingle(chunk => chunk.DeltaContent == "workflow completed");
         publishedChunks.Should().ContainSingle(chunk => chunk.LLMInvocationCompleted != null);
+        publishedChunks.Select(chunk =>
+                chunk.LLMInvocationStarted != null
+                    ? "start"
+                    : chunk.LLMInvocationCompleted != null
+                        ? "end"
+                        : "content")
+            .Should().Equal("start", "content", "end");
         execution.Continuation.LlmStepResult.AccumulatedText.Should().Be("workflow completed");
         execution.Continuation.LlmStepResult.Content.Should().Be("workflow completed");
         execution.Continuation.LlmStepResult.ToolCalls.Should().BeEmpty();
@@ -593,11 +829,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var recovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: false,
             RequireOrnnSearchOnBlocker: true,
-            CommandName: "invoice-ocr-policy-review",
-            OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-            PrimarySkillName: "invoice-ocr-policy-review",
+            CommandName: "project-summary",
+            OriginalCommand: "使用精确名称为 project-summary 的 skill",
+            PrimarySkillName: "project-summary",
             MaxOrnnSearchAttempts: 2,
-            CommandArguments: "提取发票并运行 workflow");
+            CommandArguments: "生成项目摘要并运行 workflow");
         var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
         var executor = CreateToolEnabledExecutor(
             [useSkill, searchSkills],
@@ -607,9 +843,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
         workItem.StepState.ToolContext = toolContext.ToPayload();
         var call = new ToolCall
         {
-            Id = "call-load-invoice-skill",
+            Id = "call-load-project-skill",
             Name = "use_skill",
-            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+            ArgumentsJson = "{\"skill\":\"project-summary\"}",
         };
         var assistant = AgentRunReplyStepMappers.ToProto(new ChatMessage
         {
@@ -619,7 +855,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var result = AgentRunReplyStepMappers.ToProto(ToolCallLoop.BuildToolResultMessage(
             call.Id,
             call.Name,
-            "# invoice-ocr-policy-review\n\nIf extraction failed, return a typed error artifact."));
+            "# project-summary\n\nIf summarization failed, return a typed error artifact."));
         workItem.StepState.Messages.Add(assistant);
         workItem.StepState.Messages.Add(result);
         workItem.StepState.PendingHistoryMessages.Add(assistant.Clone());
@@ -645,20 +881,20 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var recovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
-            CommandName: "invoice-review",
-            OriginalCommand: "查找并运行发票审核 skill",
+            CommandName: "project-review",
+            OriginalCommand: "查找并运行项目评审 skill",
             PrimarySkillName: null,
             MaxOrnnSearchAttempts: 2,
-            CommandArguments: "提取发票并运行 workflow");
+            CommandArguments: "评审项目并运行 workflow");
         var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
         var executor = CreateToolEnabledExecutor(useSkill, provider, toolContext: toolContext);
         var workItem = BuildToolEnabledWorkItem();
         workItem.StepState.ToolContext = toolContext.ToPayload();
         var call = new ToolCall
         {
-            Id = "call-search-invoice-skill",
+            Id = "call-search-project-skill",
             Name = "ornn_search_skills",
-            ArgumentsJson = "{\"query\":\"invoice\",\"scope\":\"mixed\"}",
+            ArgumentsJson = "{\"query\":\"project\",\"scope\":\"mixed\"}",
         };
         var assistant = AgentRunReplyStepMappers.ToProto(new ChatMessage
         {
@@ -669,7 +905,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             call.Id,
             call.Name,
             """
-            {"result_type":"skill_search","status":"success","matches":[{"skill_name":"invoice-ocr-policy-review","description":"Review invoices","is_private":false,"category":"finance","tags":["invoice"]}],"http_status":200,"text":"one match"}
+            {"result_type":"skill_search","status":"success","matches":[{"skill_name":"project-summary","description":"Summarize projects","is_private":false,"category":"productivity","tags":["summary"]}],"http_status":200,"text":"one match"}
             """));
         workItem.StepState.Messages.Add(assistant);
         workItem.StepState.Messages.Add(result);
@@ -680,26 +916,26 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var search = roundTripped.ToolResultView!.SkillSearch!;
         search.Status.Should().Be(ToolResultViewStatus.Success);
         search.HttpStatus.Should().Be(200);
-        search.Matches.Should().ContainSingle().Which.SkillName.Should().Be("invoice-ocr-policy-review");
+        search.Matches.Should().ContainSingle().Which.SkillName.Should().Be("project-summary");
 
         var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         provider.Requests.Should().BeEmpty();
         var planned = execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle().Which;
         planned.Name.Should().Be("use_skill");
-        planned.ArgumentsJson.Should().Contain("invoice-ocr-policy-review");
+        planned.ArgumentsJson.Should().Contain("project-summary");
         execution.AuthorizedToolStep.Should().NotBeNull();
         var presentation = execution.AuthorizedToolCallSafeties.Should()
             .ContainSingle().Which.Presentation;
         presentation.Should().NotBeNull();
         presentation!.Kind.Should().Be(ToolPresentationKind.Skill);
-        presentation.Skill.SkillName.Should().Be("invoice-ocr-policy-review");
+        presentation.Skill.SkillName.Should().Be("project-summary");
     }
 
     [Fact]
     public async Task NyxIdChatTurnExecutor_UseSkillAfterPreamble_ShouldPublishOneExactSkillStart()
     {
-        const string skillName = "invoice-ocr-policy-review";
+        const string skillName = "project-summary";
         const string preamble = "I will load the requested workflow skill.";
         var useSkill = new UseSkillTool(new LocalSkillCatalog());
         var generationExecutor = CreateToolEnabledExecutor(
@@ -728,7 +964,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 {
                     Request = new ChatRequestEvent
                     {
-                        Prompt = "load the invoice skill",
+                        Prompt = "load the project summary skill",
                         SessionId = "turn-1",
                     },
                 },
@@ -737,11 +973,41 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ReportProgressAsync,
             CancellationToken.None);
         var call = llmExecution.Result.Llm.ToolCalls.Should().ContainSingle().Which;
+        llmExecution.Result.Llm.ToolCatalogCaptured.Should().BeTrue();
         call.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
         call.Presentation.Skill.SkillName.Should().Be(skillName);
         progress.Should().NotContain(signal =>
             signal.ProgressCase == NyxIdChatOperationProgressSignal.ProgressOneofCase.Text &&
             signal.Text.Delta.Contains(preamble, StringComparison.Ordinal));
+        var modelStartedSignal = progress.Should().ContainSingle(signal =>
+                signal.ProgressCase ==
+                NyxIdChatOperationProgressSignal.ProgressOneofCase.ModelStarted)
+            .Which;
+        modelStartedSignal.ModelStarted.AvailableToolNames.Should().Equal(useSkill.Name);
+        var modelCompletedSignal = progress.Should().ContainSingle(signal =>
+                signal.ProgressCase ==
+                NyxIdChatOperationProgressSignal.ProgressOneofCase.ModelCompleted)
+            .Which;
+        modelCompletedSignal.ModelCompleted.OperationId.Should()
+            .Be(modelStartedSignal.ModelStarted.OperationId);
+        var modelStartFrame = NyxIdChatConversationAguiFrameBuilder.BuildProgressed(
+                "turn-1",
+                new NyxIdChatOperationProgressedEvent
+                {
+                    Progress = modelStartedSignal.Clone(),
+                    ProgressSequence = modelStartedSignal.Sequence,
+                })
+            .Should().ContainSingle().Which;
+        modelStartFrame.ModelCallStart.AvailableToolNames.Should().Equal(useSkill.Name);
+        var modelEndFrame = NyxIdChatConversationAguiFrameBuilder.BuildProgressed(
+                "turn-1",
+                new NyxIdChatOperationProgressedEvent
+                {
+                    Progress = modelCompletedSignal.Clone(),
+                    ProgressSequence = modelCompletedSignal.Sequence,
+                })
+            .Should().ContainSingle().Which;
+        modelEndFrame.ModelCallEnd.OperationId.Should().Be(modelStartFrame.ModelCallStart.OperationId);
 
         await executor.ExecuteAsync(
             new NyxIdChatOperationDispatchCommand
@@ -807,9 +1073,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             SkillRecovery = new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: true,
                 RequireOrnnSearchOnBlocker: true,
-                CommandName: "invoice-ocr-policy-review",
-                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-                PrimarySkillName: "invoice-ocr-policy-review",
+                CommandName: "project-summary",
+                OriginalCommand: "使用精确名称为 project-summary 的 skill",
+                PrimarySkillName: "project-summary",
                 MaxOrnnSearchAttempts: 2),
         };
         var generationExecutor = CreateToolEnabledExecutor(
@@ -827,7 +1093,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 {
                     Request = new ChatRequestEvent
                     {
-                        Prompt = "提取发票并运行 workflow",
+                        Prompt = "生成项目摘要并运行 workflow",
                         SessionId = "turn-1",
                         ToolContext = toolContext.ToPayload(),
                     },
@@ -1740,6 +2006,111 @@ public sealed class AgentRunReplyGenerationExecutorTests
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
 
+    private static ProfiledChannelExecutorFixture CreateProfiledChannelExecutor()
+    {
+        var tool = new CountingTool("workspace_profile_tool");
+        var provider = new RecordingProvider();
+        var generator = new CatalogAwareStepPlanReplyGenerator(tool, provider);
+        var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-channel-alpha",
+            ProfileVersion = "profile-v1",
+            PublishedRevision = 1,
+            AgentKind = AgentProfilePolicies.ChannelReplyAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = AgentProfilePolicies.ChannelReplyRouteToolSet,
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        });
+        var authority = new AgentProfileTurnAuthorityState
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = "run-1",
+                Attempt = 1,
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+        };
+        authority.AuthorityCeilingToolNames.Add(tool.Name);
+        var catalog = new AgentTurnToolCatalog(
+            [tool.Name],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            exactTools: [tool]);
+        var profileResolver = Substitute.For<IAgentProfileTurnSnapshotResolver>();
+        profileResolver.ResolveAsync(
+                "scope-alpha",
+                "run-1",
+                ChatRouteAgentProfileKind.ChannelReply,
+                null,
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(AgentProfileTurnSnapshotResolution.Selected(profile)));
+        var profilePlanner = Substitute.For<IAgentProfileTurnToolCatalogPlanner>();
+        profilePlanner.PrepareAsync(
+                Arg.Any<AgentProfileSnapshot>(),
+                "run-1",
+                "run",
+                Arg.Any<IReadOnlyList<IAgentTool>>(),
+                Arg.Any<AgentToolExecutionContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(AgentProfileTurnAuthorityPreparation.Create(authority)));
+        profilePlanner.MaterializeCommittedAsync(
+                Arg.Any<AgentProfileSnapshot>(),
+                Arg.Any<AgentProfileTurnAuthorityState>(),
+                Arg.Any<string?>(),
+                Arg.Any<IReadOnlyList<IAgentTool>>(),
+                Arg.Any<AgentToolExecutionContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(AgentTurnToolCatalogMaterialization.Create(catalog, authority)));
+        var executor = new AgentRunReplyGenerationExecutor(
+            Substitute.For<IActorDispatchPort>(),
+            generator,
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance,
+            profileSnapshotResolver: profileResolver,
+            profileCatalogPlanner: profilePlanner);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Caller = new AgentToolCallerContext("scope-alpha", "scope-alpha", "run-1"),
+        };
+        var request = new NeedsLlmReplyEvent
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-1",
+            TargetActorId = "conversation-actor",
+            Activity = new ChatActivity
+            {
+                Id = "activity-1",
+                Content = new MessageContent { Text = "run" },
+            },
+            ToolContext = toolContext.ToPayload(),
+            TargetRef = new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ProfileKind = ChatRouteAgentProfileKind.ChannelReply,
+                    ToolSetRef = new ChatRouteToolSetRef
+                    {
+                        Name = AgentProfilePolicies.ChannelReplyRouteToolSet,
+                    },
+                },
+            },
+        };
+        return new ProfiledChannelExecutorFixture(
+            executor,
+            request,
+            profile,
+            authority,
+            catalog,
+            tool,
+            provider,
+            generator,
+            profileResolver,
+            profilePlanner);
+    }
+
     private static AgentRunReplyStepExecutionRequest BuildFinalNoToolsWorkItem(params AgentToolReceipt[] receipts)
     {
         var request = new NeedsLlmReplyEvent
@@ -1969,6 +2340,18 @@ public sealed class AgentRunReplyGenerationExecutorTests
             throw new NotSupportedException();
     }
 
+    private sealed record ProfiledChannelExecutorFixture(
+        AgentRunReplyGenerationExecutor Executor,
+        NeedsLlmReplyEvent Request,
+        AgentProfileSnapshot Profile,
+        AgentProfileTurnAuthorityState Authority,
+        AgentTurnToolCatalog Catalog,
+        CountingTool Tool,
+        RecordingProvider Provider,
+        CatalogAwareStepPlanReplyGenerator Generator,
+        IAgentProfileTurnSnapshotResolver ProfileResolver,
+        IAgentProfileTurnToolCatalogPlanner ProfilePlanner);
+
     private sealed class RecordingProvider(string content = "final") : ILLMProvider
     {
         public string Name => "recording-provider";
@@ -2053,6 +2436,17 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 ResponseFormat = request.ResponseFormat,
             };
             return next();
+        }
+    }
+
+    private sealed class ShortCircuitLlmMiddleware : ILLMCallMiddleware
+    {
+        public Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            _ = next;
+            context.Response = new LLMResponse { Content = "middleware-answer" };
+            context.Terminate = true;
+            return Task.CompletedTask;
         }
     }
 
@@ -2338,8 +2732,64 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
             CancellationToken ct,
-            AgentProfileTurnCatalog? turnCatalog = null) =>
+            AgentTurnToolCatalog? turnCatalog = null) =>
             Task.FromResult(plan);
+
+        public Task<ConversationReplyResult> GenerateReplyAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            LLMControlContext? llmControl,
+            AgentToolExecutionContext? toolContext,
+            IStreamingReplySink? streamingSink,
+            CancellationToken ct) =>
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepExecutionAsync only.");
+
+        public Task<ConversationReplyResult> GenerateReplyAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            IStreamingReplySink? streamingSink,
+            CancellationToken ct) =>
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepExecutionAsync only.");
+    }
+
+    private sealed class CatalogAwareStepPlanReplyGenerator(
+        IAgentTool legacyDiscoveredTool,
+        ILLMProvider provider) : IAgentRunStepConversationReplyGenerator
+    {
+        public AgentTurnToolCatalog? ReceivedCatalog { get; private set; }
+
+        public Task<AgentRunReplyStepPlan> BuildStepPlanAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            LLMControlContext? llmControl,
+            AgentToolExecutionContext? toolContext,
+            IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+            ChatAttachmentInputContext? attachmentContext,
+            bool forceDisableTools,
+            CancellationToken ct,
+            AgentTurnToolCatalog? turnCatalog = null)
+        {
+            ReceivedCatalog = turnCatalog;
+            var tools = new ToolManager();
+            tools.Register(legacyDiscoveredTool);
+            var runtime = new ChatRuntime(
+                () => provider,
+                new ChatHistory(),
+                new ToolCallLoop(tools),
+                hooks: null,
+                requestBuilder: _ => new LLMRequest
+                {
+                    Messages = [],
+                    Tools = tools.GetAll(),
+                });
+            return Task.FromResult(new AgentRunReplyStepPlan(
+                runtime.CreateStepExecutor(turnCatalog),
+                new Dictionary<string, string>(),
+                llmControl ?? LLMControlContext.Empty,
+                toolContext ?? AgentToolExecutionContext.Empty,
+                InitialMessages: [],
+                MaxToolRounds: 1));
+        }
 
         public Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
@@ -2373,7 +2823,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
             CancellationToken ct,
-            AgentProfileTurnCatalog? turnCatalog = null)
+            AgentTurnToolCatalog? turnCatalog = null)
         {
             var tools = new ToolManager();
             if (!forceDisableTools &&

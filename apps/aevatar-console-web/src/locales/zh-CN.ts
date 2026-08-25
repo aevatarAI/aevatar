@@ -1016,6 +1016,11 @@ const zhCNMessages = {
   'pages.teammemberinvoke.endpoint.missing': '当前没有可调用的端点。',
   'pages.teammemberinvoke.endpoint.missing.description':
     '这个发布服务暂时没有向当前页面开放可调用端点。',
+  'pages.teammemberinvoke.endpoint.notReady': '成员端点尚未就绪。',
+  'pages.teammemberinvoke.endpoint.notReady.description':
+    '端点契约有效，但运行时尚未准备好接收调用。',
+  'pages.teammemberinvoke.endpoint.versionPending.description':
+    '已提交的服务和修订尚未在读模型中可见。',
   'pages.teammemberinvoke.fact.member': '成员',
   'pages.teammemberinvoke.fact.revision': '服务状态',
   'pages.teammemberinvoke.fact.service': '服务',
@@ -1031,6 +1036,7 @@ const zhCNMessages = {
     '查看这个已发布成员服务的运行记录。',
   'pages.teammemberinvoke.publishedRuns.publishFirst':
     '先发布这个成员，才会开始记录发布运行。',
+  'pages.teammemberinvoke.refresh': '刷新状态',
   'pages.teammemberinvoke.resolve.in.studio': '打开 Workflow Studio',
   'pages.teammemberinvoke.route.missing': '缺少成员路由',
   'pages.teammemberinvoke.route.missing.description':
@@ -1351,6 +1357,8 @@ const zhCNMessages = {
   'pages.studio.studiomemberinvokeinspector.service.target': '服务目标',
   'pages.studio.studiomemberinvokeinspector.title': '详情',
   'pages.studio.studiomemberinvokepanel.endpoint': '端点',
+  'pages.studio.studiomemberinvokepanel.endpoint.contract.changed':
+    '所选成员端点不可用，或已不再匹配该发布服务。',
   'pages.studio.studiomemberinvokepanel.inspector': '详情',
   'pages.actors.index.actor': 'Actor',
   'pages.actors.index.command.recorded': 'Command recorded',

@@ -26,4 +26,6 @@ message WorkflowActorBindingDocument {
   string workflow_id = 16;
   string revision_id = 17;
   aevatar.workflow.ExternalCapabilityExecutionMode expected_execution_mode = 18;
+  string tool_catalog_policy_version = 19;
+  string catalog_publication_contract_version = 20;
 }

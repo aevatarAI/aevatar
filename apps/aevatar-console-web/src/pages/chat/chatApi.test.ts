@@ -91,17 +91,6 @@ describe('chatApi', () => {
 
   it.each([
     {
-      type: 'plan.resolve',
-      conversationId: 'conversation-alpha',
-      taskId: 'task-alpha',
-      planId: 'plan-alpha',
-      requestId: 'gate-alpha',
-      clientRequestId: 'client-plan',
-      planRevision: 3,
-      confirmed: true,
-      expectedStateVersion: 6,
-    },
-    {
       type: 'input.resolve',
       conversationId: 'conversation-alpha',
       requestId: 'input-alpha',

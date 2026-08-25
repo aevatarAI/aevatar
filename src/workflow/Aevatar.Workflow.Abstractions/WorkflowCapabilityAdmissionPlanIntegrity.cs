@@ -770,7 +770,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
 
         var proof = admission.Capability.CodeExecution;
         if (!IsCanonicalIdentity(proof.UserServiceId) ||
-            !string.Equals(proof.ServiceSlugSnapshot, "chrono-sandbox", StringComparison.Ordinal) ||
+            !IsSupportedCodeExecutionServiceSlug(proof.ServiceSlugSnapshot) ||
             !IsCanonicalIdentity(proof.CatalogServiceId) ||
             !FixedTimeEquals(
                 proof.ContractDigest,
@@ -1139,6 +1139,10 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
     private static bool IsCanonicalIdentity(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         string.Equals(value, value.Trim(), StringComparison.Ordinal);
+
+    private static bool IsSupportedCodeExecutionServiceSlug(string? value) =>
+        string.Equals(value, "chrono-sandbox", StringComparison.Ordinal) ||
+        string.Equals(value, "chrono-sandbox-aevatar", StringComparison.Ordinal);
 
     private static string SourceKey(ExternalCapabilitySourceStamp source) =>
         string.Join(

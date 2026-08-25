@@ -4,8 +4,13 @@ using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.Runtime;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -46,6 +51,7 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
 {
     private static readonly TimeSpan RedeliveryTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan NoRedeliveryQuietPeriod = TimeSpan.FromSeconds(10);
+    private const string PhaseBTurnoverAgentKind = "tests.phase-b-forwarded-status-redelivery";
     private const string CrashWorkerEnvironmentVariable = "AEVATAR_KAFKA_ACK_CRASH_WORKER";
     private const string CrashWorkerEnvelopeIdEnvironmentVariable = "AEVATAR_KAFKA_ACK_CRASH_ENVELOPE_ID";
     private const string CrashWorkerHandlerMarkerEnvironmentVariable = "AEVATAR_KAFKA_ACK_CRASH_HANDLER_MARKER";
@@ -143,6 +149,14 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             host.Dispose();
         }
     }
+
+    [KafkaGarnetIntegrationFact]
+    public Task KafkaPersistentProvider_PhaseBTurnoverThenForwardedConflict_ShouldRedeliverUntilSuccess() =>
+        AssertPhaseBTurnoverThenForwardedStatusRejectionAsync(ProjectionWriteDisposition.Conflict);
+
+    [KafkaGarnetIntegrationFact]
+    public Task KafkaPersistentProvider_PhaseBTurnoverThenForwardedGap_ShouldRedeliverUntilSuccess() =>
+        AssertPhaseBTurnoverThenForwardedStatusRejectionAsync(ProjectionWriteDisposition.Gap);
 
     [KafkaGarnetIntegrationFact]
     public async Task KafkaPersistentProvider_WhenRetryExhaustedReturns_CommitsAndDoesNotRedeliverAfterRestart()
@@ -496,6 +510,142 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             "The Kafka ACK crash worker did not reach MessagesDeliveredAsync after handler success.");
     }
 
+    private static async Task AssertPhaseBTurnoverThenForwardedStatusRejectionAsync(
+        ProjectionWriteDisposition disposition)
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var garnetConnectionString = RequireGarnetConnectionString();
+        var topology = TestTopology.Create();
+        var sourceActorId = $"phase-b-source-{Guid.NewGuid():N}";
+        var fixture = new PhaseBTurnoverFixture();
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "0",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(
+            bootstrapServers,
+            garnetConnectionString,
+            topology,
+            phaseBTurnoverFixture: fixture);
+        try
+        {
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(topology.ActorId);
+            (await grain.InitializeAgentByKindAsync(PhaseBTurnoverAgentKind))
+                .Should().BeTrue();
+
+            var initialConstructions = fixture.Recorder.ConstructionContexts;
+            initialConstructions.Should().ContainSingle();
+            initialConstructions[0].StateSchemaVersion.Should().Be(
+                0,
+                "a denied V3 admission must leave the active actor on its durable schema-zero row");
+            fixture.Recorder.HandlerAttempts.Should().BeEmpty();
+
+            fixture.AdmissionReader.Open();
+            var forwarded = CreateForwardedObserverEnvelope(
+                sourceActorId,
+                topology.ActorId,
+                disposition);
+            await PublishEnvelopeAsync(host, topology, forwarded);
+
+            await fixture.Recorder.WaitForSchemaZeroDeactivationAsync(RedeliveryTimeout);
+            await fixture.Recorder.WaitForFirstHandlerAttemptAsync(RedeliveryTimeout);
+            ReadCommittedOffset(bootstrapServers, topology).Should().NotBe(
+                new Offset(1),
+                "turnover and an in-flight migrated handler are not provider acknowledgement");
+
+            var firstAttempt = fixture.Recorder.HandlerAttempts.Should().ContainSingle().Which;
+            firstAttempt.StateSchemaVersion.Should().Be(
+                1,
+                "the schema-zero activation must turn over before entering the handler");
+            AssertForwardedIdentity(firstAttempt.Envelope, forwarded, sourceActorId, topology.ActorId);
+
+            fixture.Recorder.AllowFirstRejection();
+            await fixture.Recorder.WaitForSecondHandlerAttemptAsync(RedeliveryTimeout);
+            ReadCommittedOffset(bootstrapServers, topology).Should().NotBe(
+                new Offset(1),
+                $"a retryable {disposition} rejection must leave the Kafka message unacknowledged");
+
+            fixture.Recorder.AllowFinalSuccess();
+            var delivered = await fixture.Recorder.WaitForSuccessAsync(RedeliveryTimeout);
+            await WaitForCommittedOffsetAsync(
+                bootstrapServers,
+                topology,
+                new Offset(1),
+                RedeliveryTimeout);
+
+            AssertForwardedIdentity(delivered, forwarded, sourceActorId, topology.ActorId);
+            var attempts = fixture.Recorder.HandlerAttempts;
+            attempts.Should().HaveCountGreaterThanOrEqualTo(2);
+            attempts.Should().OnlyContain(attempt =>
+                attempt.StateSchemaVersion == 1 && attempt.Envelope.Equals(forwarded));
+
+            var constructions = fixture.Recorder.ConstructionContexts;
+            constructions[0].StateSchemaVersion.Should().Be(0);
+            constructions.Skip(1).Should().NotBeEmpty();
+            constructions.Skip(1).Should().OnlyContain(context => context.StateSchemaVersion == 1);
+            var adoption = constructions
+                .First(context => context.StateSchemaVersion == 1)
+                .AdoptionReceipts
+                .Should()
+                .ContainSingle()
+                .Which;
+            adoption.StateSchemaVersion.Should().Be(1);
+            adoption.RequiredCapability.Should().Be(RuntimeFleetCapability.ProjectionScopeStatusTerminalV3);
+            adoption.RequiredContractId.Should().Be(
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1);
+            adoption.RequiredContractVersion.Should().Be(
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion);
+            adoption.EvidenceStatus.Should().Be(RuntimeFleetCapabilityGateStatus.Open);
+        }
+        finally
+        {
+            fixture.Recorder.AllowFirstRejection();
+            fixture.Recorder.AllowFinalSuccess();
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    private static EventEnvelope CreateForwardedObserverEnvelope(
+        string sourceActorId,
+        string targetActorId,
+        ProjectionWriteDisposition disposition)
+    {
+        var published = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(new StringValue { Value = disposition.ToString() }),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(
+                sourceActorId,
+                ObserverAudience.CommittedFacts),
+            Runtime = new EnvelopeRuntime { SourceActorId = sourceActorId },
+        };
+        return StreamForwardingRules.BuildForwardedEnvelope(
+            published,
+            sourceActorId,
+            targetActorId,
+            StreamForwardingMode.HandleThenForward);
+    }
+
+    private static void AssertForwardedIdentity(
+        EventEnvelope actual,
+        EventEnvelope expected,
+        string sourceActorId,
+        string targetActorId)
+    {
+        actual.Equals(expected).Should().BeTrue("provider redelivery must preserve the exact envelope");
+        actual.Id.Should().Be(expected.Id);
+        actual.Route.IsObserverPublication().Should().BeTrue();
+        actual.Route.PublisherActorId.Should().Be(sourceActorId);
+        actual.Runtime.SourceActorId.Should().Be(sourceActorId);
+        StreamForwardingEnvelopeState.GetSourceStreamId(actual).Should().Be(sourceActorId);
+        StreamForwardingEnvelopeState.GetTargetStreamId(actual).Should().Be(targetActorId);
+    }
+
     private static async Task PublishEnvelopeAsync(
         IHost host,
         TestTopology topology,
@@ -524,11 +674,25 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             CancellationToken.None);
     }
 
+    private static async Task PublishEnvelopeAsync(
+        IHost host,
+        TestTopology topology,
+        EventEnvelope envelope)
+    {
+        var producer = host.Services.GetRequiredService<KafkaProviderProducer>();
+        await producer.PublishAsync(
+            topology.ActorEventNamespace,
+            topology.ActorId,
+            envelope.ToByteArray(),
+            CancellationToken.None);
+    }
+
     private static async Task<IHost> StartSiloHostAsync(
         string bootstrapServers,
         string garnetConnectionString,
         TestTopology topology,
-        bool crashBeforeAcknowledgement = false)
+        bool crashBeforeAcknowledgement = false,
+        PhaseBTurnoverFixture? phaseBTurnoverFixture = null)
     {
         var host = Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
@@ -551,10 +715,22 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             })
             .ConfigureServices(services =>
             {
-                services.AddAevatarAgentKindRegistry(builder => builder
-                    .Register<AlwaysSucceedOnNextAgent>()
-                    .Register<ThrowOnceThenSucceedAgent>()
-                    .Register<AlwaysFailOnNextAgent>());
+                services.AddAevatarAgentKindRegistry(builder =>
+                {
+                    builder
+                        .Register<AlwaysSucceedOnNextAgent>()
+                        .Register<ThrowOnceThenSucceedAgent>()
+                        .Register<AlwaysFailOnNextAgent>();
+                    if (phaseBTurnoverFixture != null)
+                    {
+                        builder.Register(new AgentRegistration(
+                            PhaseBTurnoverAgentKind,
+                            typeof(PhaseBTurnoverRedeliveryAgent),
+                            typeof(EventEnvelope),
+                            StateSchemaVersion: 1,
+                            StateMigrationTypes: [typeof(PhaseBTurnoverStateV0ToV1Migration)]));
+                    }
+                });
                 services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
                 {
                     options.BootstrapServers = bootstrapServers;
@@ -562,6 +738,14 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
                     options.ConsumerGroup = topology.ConsumerGroup;
                     options.TopicPartitionCount = 4;
                 });
+                if (phaseBTurnoverFixture != null)
+                {
+                    services.AddSingleton(phaseBTurnoverFixture.Recorder);
+                    services.Replace(ServiceDescriptor.Singleton<IRuntimeFleetCapabilityAdmissionReader>(
+                        phaseBTurnoverFixture.AdmissionReader));
+                    services.Replace(ServiceDescriptor.Singleton<IRuntimeLocalMembershipIdentityReader>(
+                        new PhaseBMembershipReader()));
+                }
                 if (crashBeforeAcknowledgement)
                 {
                     services.RemoveAll<IQueueAdapterFactory>();
@@ -939,6 +1123,255 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
                 SingleWriter = false,
                 AllowSynchronousContinuations = false,
             });
+    }
+
+    private sealed class PhaseBTurnoverFixture
+    {
+        public PhaseBTurnoverRecorder Recorder { get; } = new();
+
+        public PhaseBAdmissionReader AdmissionReader { get; } = new();
+    }
+
+    private sealed class PhaseBAdmissionReader : IRuntimeFleetCapabilityAdmissionReader
+    {
+        private readonly Lock _lock = new();
+        private RuntimeFleetCapabilityAdmission? _current;
+
+        public void Open()
+        {
+            var now = DateTimeOffset.UtcNow;
+            var admission = new RuntimeFleetCapabilityAdmission
+            {
+                Capability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV3,
+                Status = RuntimeFleetCapabilityGateStatus.Open,
+                AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                AuthorityStateVersion = 9,
+                CapabilityEpoch = 3,
+                MembershipEpoch = 7,
+                DeploymentRevision = "revision-a",
+                MinimumReaderContractVersion =
+                    RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion,
+                MembershipObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddSeconds(-5)),
+                MembershipValidUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(5)),
+                ActiveMemberCount = 1,
+                ConfirmedMemberCount = 1,
+                MembershipDigest = "digest-a",
+                ContractId =
+                    RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1,
+            };
+            admission.AdmittedMembers.Add(new RuntimeFleetAdmittedMember
+            {
+                MemberId = "member-a",
+                Incarnation = "inc-a",
+            });
+
+            lock (_lock)
+            {
+                _current = admission;
+            }
+        }
+
+        public Task<RuntimeFleetCapabilityAdmission?> GetAsync(
+            RuntimeFleetCapability capability,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            lock (_lock)
+            {
+                return Task.FromResult<RuntimeFleetCapabilityAdmission?>(
+                    _current?.Capability == capability ? _current.Clone() : null);
+            }
+        }
+    }
+
+    private sealed class PhaseBMembershipReader : IRuntimeLocalMembershipIdentityReader
+    {
+        public ValueTask<RuntimeLocalMembershipIdentity?> GetCurrentAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<RuntimeLocalMembershipIdentity?>(
+                new RuntimeLocalMembershipIdentity(
+                    7,
+                    "digest-a",
+                    "revision-a",
+                    "member-a",
+                    "inc-a"));
+        }
+    }
+
+    public sealed record PhaseBHandlerAttempt(
+        int StateSchemaVersion,
+        EventEnvelope Envelope);
+
+    public sealed class PhaseBTurnoverRecorder
+    {
+        private readonly ConcurrentQueue<RuntimeActorStateSchemaContext> _constructions = new();
+        private readonly ConcurrentQueue<RuntimeActorStateSchemaContext> _activations = new();
+        private readonly ConcurrentQueue<RuntimeActorStateSchemaContext> _deactivations = new();
+        private readonly ConcurrentQueue<PhaseBHandlerAttempt> _handlerAttempts = new();
+        private readonly TaskCompletionSource<bool> _schemaZeroDeactivated =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _firstHandlerAttempted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _secondHandlerAttempted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _allowFirstRejection =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _allowFinalSuccess =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<EventEnvelope> _success =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _handlerAttemptCount;
+
+        public IReadOnlyList<RuntimeActorStateSchemaContext> ConstructionContexts =>
+            [.. _constructions];
+
+        public IReadOnlyList<RuntimeActorStateSchemaContext> ActivationContexts =>
+            [.. _activations];
+
+        public IReadOnlyList<RuntimeActorStateSchemaContext> DeactivationContexts =>
+            [.. _deactivations];
+
+        public IReadOnlyList<PhaseBHandlerAttempt> HandlerAttempts =>
+            [.. _handlerAttempts];
+
+        public void RecordConstruction(RuntimeActorStateSchemaContext? context) =>
+            _constructions.Enqueue(CloneContext(context));
+
+        public void RecordActivation(RuntimeActorStateSchemaContext? context) =>
+            _activations.Enqueue(CloneContext(context));
+
+        public void RecordDeactivation(RuntimeActorStateSchemaContext? context)
+        {
+            var snapshot = CloneContext(context);
+            _deactivations.Enqueue(snapshot);
+            if (snapshot.StateSchemaVersion == 0)
+                _schemaZeroDeactivated.TrySetResult(true);
+        }
+
+        public int RecordHandlerAttempt(RuntimeActorStateSchemaContext? context, EventEnvelope envelope)
+        {
+            var snapshot = CloneContext(context);
+            var attempt = Interlocked.Increment(ref _handlerAttemptCount);
+            _handlerAttempts.Enqueue(new PhaseBHandlerAttempt(
+                snapshot.StateSchemaVersion,
+                envelope.Clone()));
+            if (attempt == 1)
+                _firstHandlerAttempted.TrySetResult(true);
+            else if (attempt == 2)
+                _secondHandlerAttempted.TrySetResult(true);
+            return attempt;
+        }
+
+        public Task WaitForSchemaZeroDeactivationAsync(TimeSpan timeout) =>
+            _schemaZeroDeactivated.Task.WaitAsync(timeout);
+
+        public Task WaitForFirstHandlerAttemptAsync(TimeSpan timeout) =>
+            _firstHandlerAttempted.Task.WaitAsync(timeout);
+
+        public Task WaitForSecondHandlerAttemptAsync(TimeSpan timeout) =>
+            _secondHandlerAttempted.Task.WaitAsync(timeout);
+
+        public Task WaitUntilFirstRejectionAllowedAsync() => _allowFirstRejection.Task;
+
+        public Task WaitUntilFinalSuccessAllowedAsync() => _allowFinalSuccess.Task;
+
+        public void AllowFirstRejection() => _allowFirstRejection.TrySetResult(true);
+
+        public void AllowFinalSuccess() => _allowFinalSuccess.TrySetResult(true);
+
+        public void RecordSuccess(EventEnvelope envelope) => _success.TrySetResult(envelope.Clone());
+
+        public Task<EventEnvelope> WaitForSuccessAsync(TimeSpan timeout) =>
+            _success.Task.WaitAsync(timeout);
+
+        private static RuntimeActorStateSchemaContext CloneContext(
+            RuntimeActorStateSchemaContext? context) =>
+            context == null
+                ? new RuntimeActorStateSchemaContext(string.Empty, -1, [])
+                : new RuntimeActorStateSchemaContext(
+                    context.AgentKind,
+                    context.StateSchemaVersion,
+                    context.AdoptionReceipts.Select(static receipt => receipt.Clone()).ToArray());
+    }
+
+    public sealed class PhaseBTurnoverRedeliveryAgent : IAgent
+    {
+        private readonly PhaseBTurnoverRecorder _recorder;
+        private readonly IRuntimeActorStateSchemaContextReader _schemaContext;
+
+        public PhaseBTurnoverRedeliveryAgent(
+            PhaseBTurnoverRecorder recorder,
+            IRuntimeActorStateSchemaContextReader schemaContext)
+        {
+            _recorder = recorder;
+            _schemaContext = schemaContext;
+            _recorder.RecordConstruction(_schemaContext.Current);
+        }
+
+        public string Id => PhaseBTurnoverAgentKind;
+
+        public Task ActivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _recorder.RecordActivation(_schemaContext.Current);
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _recorder.RecordDeactivation(_schemaContext.Current);
+            return Task.CompletedTask;
+        }
+
+        public async Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var attempt = _recorder.RecordHandlerAttempt(_schemaContext.Current, envelope);
+            if (attempt == 1)
+            {
+                await _recorder.WaitUntilFirstRejectionAllowedAsync();
+                var disposition = System.Enum.Parse<ProjectionWriteDisposition>(
+                    envelope.Payload!.Unpack<StringValue>().Value,
+                    ignoreCase: false);
+                throw new ProjectionScopeStatusWriteRejectedException(
+                    StreamForwardingEnvelopeState.GetTargetStreamId(envelope) ?? string.Empty,
+                    new ProjectionSourceCoordinate
+                    {
+                        ActorId = StreamForwardingEnvelopeState.GetSourceStreamId(envelope),
+                        StateVersion = 17,
+                        EventId = envelope.Id,
+                    },
+                    disposition);
+            }
+
+            await _recorder.WaitUntilFinalSuccessAllowedAsync();
+            _recorder.RecordSuccess(envelope);
+        }
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(Id);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+    }
+
+    [ActorStateMigration(
+        PhaseBTurnoverAgentKind,
+        RequiredCapability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV3,
+        RequiredContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1,
+        RequiredContractVersion = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion)]
+    public sealed class PhaseBTurnoverStateV0ToV1Migration : IActorStateMigration<EventEnvelope>
+    {
+        public int FromStateVersion => 0;
+
+        public int ToStateVersion => 1;
+
+        public EventEnvelope Apply(EventEnvelope state)
+        {
+            ArgumentNullException.ThrowIfNull(state);
+            return state.Clone();
+        }
     }
 
     [GAgent("tests.always-succeed-on-next")]

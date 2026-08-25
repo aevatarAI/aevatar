@@ -48,7 +48,7 @@ public sealed class ChatRuntime
     private readonly ChatHistory _history;
     private readonly ToolCallLoop _toolLoop;
     private readonly AgentHookPipeline? _hooks;
-    private readonly Func<AgentProfileTurnCatalog?, LLMRequest> _requestBuilder;
+    private readonly Func<AgentTurnToolCatalog?, LLMRequest> _requestBuilder;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly string? _agentId;
@@ -63,7 +63,7 @@ public sealed class ChatRuntime
         ChatHistory history,
         ToolCallLoop toolLoop,
         AgentHookPipeline? hooks,
-        Func<AgentProfileTurnCatalog?, LLMRequest> requestBuilder,
+        Func<AgentTurnToolCatalog?, LLMRequest> requestBuilder,
         IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
         string? agentId = null,
@@ -88,7 +88,7 @@ public sealed class ChatRuntime
         _logger = logger ?? NullLogger.Instance;
     }
 
-    public ChatRuntimeStepExecutor CreateStepExecutor(AgentProfileTurnCatalog? turnCatalog) =>
+    public ChatRuntimeStepExecutor CreateStepExecutor(AgentTurnToolCatalog? turnCatalog) =>
         new(
             _providerFactory,
             _toolLoop,
@@ -102,7 +102,7 @@ public sealed class ChatRuntime
     /// <summary>流式 Chat，包裹 LLM Call Middleware。</summary>
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         CancellationToken ct = default) =>
         ChatStreamAsync(
             [ContentPart.TextPart(userMessage)],
@@ -115,7 +115,7 @@ public sealed class ChatRuntime
     /// <summary>流式 Chat（多模态内容）。</summary>
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         IReadOnlyList<ContentPart> userContent,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         CancellationToken ct = default) =>
         ChatStreamAsync(
             userContent,
@@ -129,7 +129,7 @@ public sealed class ChatRuntime
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
         int maxToolRounds,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         CancellationToken ct = default) =>
         ChatStreamAsync(
             [ContentPart.TextPart(userMessage)],
@@ -143,7 +143,7 @@ public sealed class ChatRuntime
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         IReadOnlyList<ContentPart> userContent,
         int maxToolRounds,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         CancellationToken ct = default) =>
         ChatStreamAsync(
             userContent,
@@ -157,7 +157,7 @@ public sealed class ChatRuntime
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
         string? requestId,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default) =>
         ChatStreamAsync([ContentPart.TextPart(userMessage)], DefaultMaxToolRounds, requestId, turnCatalog, metadata, ct);
@@ -168,7 +168,7 @@ public sealed class ChatRuntime
         string? requestId,
         LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default) =>
         ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, toolContext, llmControl, turnCatalog, ct);
@@ -180,7 +180,7 @@ public sealed class ChatRuntime
         string? requestId,
         LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default) =>
         ChatStreamCoreAsync(
@@ -199,7 +199,7 @@ public sealed class ChatRuntime
         int maxToolRounds,
         string? requestId,
         AgentToolExecutionContext? toolContext,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default) =>
         ChatStreamAsync(
@@ -217,7 +217,7 @@ public sealed class ChatRuntime
         string userMessage,
         int maxToolRounds,
         string? requestId,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -238,7 +238,7 @@ public sealed class ChatRuntime
         IReadOnlyList<ContentPart> userContent,
         int maxToolRounds,
         string? requestId,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyDictionary<string, string>? metadata = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -263,7 +263,7 @@ public sealed class ChatRuntime
         IReadOnlyDictionary<string, string>? metadata,
         AgentToolExecutionContext? toolContext,
         LLMControlContext? llmControl,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         [EnumeratorCancellation] CancellationToken ct)
     {
         await foreach (var chunk in ChatStreamCoreAsync(
@@ -288,7 +288,7 @@ public sealed class ChatRuntime
         IReadOnlyDictionary<string, string>? metadata,
         AgentToolExecutionContext? toolContext,
         LLMControlContext? llmControl,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyList<ChatMessage>? committedToolTranscript,
         [EnumeratorCancellation] CancellationToken ct)
     {
@@ -366,7 +366,7 @@ public sealed class ChatRuntime
         IReadOnlyDictionary<string, string>? metadata,
         AgentToolExecutionContext? toolContext,
         LLMControlContext? llmControl,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyList<ChatMessage>? committedToolTranscript,
         AgentRunContext runContext,
         [EnumeratorCancellation] CancellationToken runToken)
@@ -403,7 +403,7 @@ public sealed class ChatRuntime
         IReadOnlyDictionary<string, string>? metadata,
         AgentToolExecutionContext? toolContext,
         LLMControlContext? llmControl,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         IReadOnlyList<ChatMessage>? committedToolTranscript,
         AgentRunContext runContext,
         List<ChatMessage> pendingHistoryMessages,
@@ -441,7 +441,7 @@ public sealed class ChatRuntime
         var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest, () => authorizedTools);
         var executedToolOutcomes = new List<ToolOutcomeReplyFact>();
         var readOnlyFailureCounts = new Dictionary<ReadOnlyFailureKey, int>();
-        var retiredToolNames = new HashSet<string>(StringComparer.Ordinal);
+        var retiredToolNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var toolLoopSuspended = false;
         var toolLoopTerminated = false;
         var modelInvocationRound = -1;
@@ -462,7 +462,9 @@ public sealed class ChatRuntime
 
         for (var round = 0; round < effectiveMaxToolRounds; round++)
         {
-            var roundTools = FilterRetiredTurnTools(baseRequest.Tools, retiredToolNames);
+            // Keep the final catalog immutable for the entire turn. One-shot reuse state is
+            // execution state and must not mutate the model-visible schema between rounds.
+            var roundTools = baseRequest.Tools;
             authorizedTools = ToolCallLoop.CreateRequestToolManager(roundTools);
             if (hasStreamedTextContent)
             {
@@ -509,7 +511,9 @@ public sealed class ChatRuntime
                     ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round)),
                 RoutingContext = baseRequest.RoutingContext,
                 LlmControl = baseRequest.LlmControl,
+                RouteTarget = baseRequest.RouteTarget?.Clone(),
                 Tools = roundTools,
+                ToolCatalogProof = baseRequest.ToolCatalogProof,
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
                 MaxTokens = baseRequest.MaxTokens,
@@ -669,10 +673,14 @@ public sealed class ChatRuntime
                             approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                             logger: _logger);
                         using var textToolState = textToolExecutor.CreateExecutionState();
+                        var executableTextCalls = parsed.ToolCalls
+                            .Where(call => !retiredToolNames.Contains(call.Name))
+                            .ToArray();
+                        var retiredTextResults = BuildRetiredToolResults(parsed.ToolCalls, retiredToolNames);
                         var preparedTextOperations = await textToolExecutor.PrepareBatchAsync(
                             baseRequest.RequestId ?? string.Empty,
                             round,
-                            parsed.ToolCalls,
+                            executableTextCalls,
                             runToken);
                         foreach (var operation in preparedTextOperations)
                         {
@@ -710,6 +718,18 @@ public sealed class ChatRuntime
                             {
                                 toolLoopTerminated = true;
                             }
+                        }
+
+                        foreach (var result in retiredTextResults)
+                        {
+                            yield return BuildToolCallCompletedChunk(result);
+                            var toolMsg = ToolCallLoop.BuildToolResultMessage(
+                                result.CallId,
+                                result.ToolName,
+                                result.Result,
+                                receipt: null);
+                            messages.Add(toolMsg);
+                            pendingHistoryMessages.Add(toolMsg);
                         }
 
                         if (toolLoopSuspended || toolLoopTerminated)
@@ -779,10 +799,16 @@ public sealed class ChatRuntime
 
             }
 
+            var executableRoundCalls = roundResult.ToolCalls!
+                .Where(call => !retiredToolNames.Contains(call.Name))
+                .ToArray();
+            var retiredRoundResults = BuildRetiredToolResults(
+                roundResult.ToolCalls,
+                retiredToolNames);
             var preparedRoundOperations = await streamingExecutor.PrepareBatchAsync(
                 baseRequest.RequestId ?? string.Empty,
                 round,
-                roundResult.ToolCalls!,
+                executableRoundCalls,
                 runToken);
             foreach (var operation in preparedRoundOperations)
             {
@@ -830,6 +856,18 @@ public sealed class ChatRuntime
                 }
             }
 
+            foreach (var result in retiredRoundResults)
+            {
+                yield return BuildToolCallCompletedChunk(result);
+                var toolMsg = ToolCallLoop.BuildToolResultMessage(
+                    result.CallId,
+                    result.ToolName,
+                    result.Result,
+                    receipt: null);
+                messages.Add(toolMsg);
+                pendingHistoryMessages.Add(toolMsg);
+            }
+
             if (toolLoopSuspended || toolLoopTerminated)
                 break;
         }
@@ -857,7 +895,10 @@ public sealed class ChatRuntime
                     ToolCallLoop.ComposeFinalCallId(baseRequest.RequestId)),
                 RoutingContext = baseRequest.RoutingContext,
                 LlmControl = baseRequest.LlmControl,
+                RouteTarget = baseRequest.RouteTarget?.Clone(),
                 Tools = null,
+                ToolCatalogProof = AgentTurnToolCatalogProof.RestrictedEmpty(
+                    baseRequest.ToolCatalogProof?.Budget),
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
                 MaxTokens = baseRequest.MaxTokens,
@@ -951,7 +992,9 @@ public sealed class ChatRuntime
                         ToolContext = finalRequest.ToolContext,
                         RoutingContext = finalRequest.RoutingContext,
                         LlmControl = finalRequest.LlmControl,
+                        RouteTarget = finalRequest.RouteTarget?.Clone(),
                         Tools = null,
+                        ToolCatalogProof = finalRequest.ToolCatalogProof,
                         Model = finalRequest.Model,
                         Temperature = finalRequest.Temperature,
                         MaxTokens = finalRequest.MaxTokens,
@@ -1032,18 +1075,6 @@ public sealed class ChatRuntime
             mergeIntoExistingSystem);
     }
 
-    private static IReadOnlyList<IAgentTool>? FilterRetiredTurnTools(
-        IReadOnlyList<IAgentTool>? tools,
-        IReadOnlySet<string> retiredToolNames)
-    {
-        if (tools is not { Count: > 0 } || retiredToolNames.Count == 0)
-            return tools;
-
-        return tools
-            .Where(tool => !retiredToolNames.Contains(tool.Name))
-            .ToArray();
-    }
-
     private static void RetireTurnToolAfterSuccess(
         ToolManager tools,
         ToolExecutionResult result,
@@ -1056,6 +1087,18 @@ public sealed class ChatRuntime
         if (tool?.TurnReusePolicy == AgentToolTurnReusePolicy.RetireAfterSuccess)
             retiredToolNames.Add(tool.Name);
     }
+
+    private static IReadOnlyList<ToolExecutionResult> BuildRetiredToolResults(
+        IEnumerable<ToolCall> calls,
+        IReadOnlySet<string> retiredToolNames) =>
+        calls
+            .Where(call => retiredToolNames.Contains(call.Name))
+            .Select(static call => new ToolExecutionResult(
+                call.Id,
+                call.Name,
+                "{\"error\":true,\"error_code\":\"TOOL_RETIRED_FOR_TURN\",\"message\":\"This single-use tool already succeeded in the current turn.\"}",
+                IsError: true))
+            .ToArray();
 
     private ToolOutcomeReplyFact BuildToolOutcomeReplyFact(
         ToolManager tools,
@@ -1275,6 +1318,7 @@ public sealed class ChatRuntime
             if (current.LLMInvocationStarted != null)
             {
                 started = current.LLMInvocationStarted;
+                AgentTurnToolCatalogTelemetry.RecordToolRound(request.ToolCatalogProof, round);
                 yield return current;
                 continue;
             }
@@ -1290,6 +1334,9 @@ public sealed class ChatRuntime
 
         if (failure is not null)
         {
+            AgentTurnToolCatalogTelemetry.RecordOutcome(
+                request.ToolCatalogProof,
+                failure is OperationCanceledException ? "cancelled" : "failed");
             if (started is null)
             {
                 ExceptionDispatchInfo.Capture(failure).Throw();
@@ -1314,6 +1361,10 @@ public sealed class ChatRuntime
         var result = roundScope.RequireResult();
         if (started is null)
             yield break;
+
+        AgentTurnToolCatalogTelemetry.RecordOutcome(
+            request.ToolCatalogProof,
+            result.FinishReason ?? "success");
 
         yield return new LLMStreamChunk
         {
@@ -1368,6 +1419,7 @@ public sealed class ChatRuntime
         IReadOnlyList<IAgentTool> authorizedTools = [];
         var authorizedToolManager = ToolCallLoop.CreateRequestToolManager(authorizedTools);
         var authorizedToolContext = AgentToolExecutionContext.Empty;
+        var firstOutputRecorded = false;
 
         var llmBridge = new LLMCallMiddlewareBridge();
         var middlewareTask = MiddlewarePipeline.RunLLMCallAsync(
@@ -1450,7 +1502,16 @@ public sealed class ChatRuntime
                 }
 
                 if (normalizedChunk != null)
+                {
+                    if (!firstOutputRecorded && IsModelOutputChunk(normalizedChunk))
+                    {
+                        AgentTurnToolCatalogTelemetry.RecordTimeToFirstOutput(
+                            llmCallContext.Request.ToolCatalogProof,
+                            Stopwatch.GetElapsedTime(llmStartedAt));
+                        firstOutputRecorded = true;
+                    }
                     yield return normalizedChunk;
+                }
             }
 
             var finalizedToolCalls = toolCalls.BuildToolCalls();
@@ -1515,6 +1576,12 @@ public sealed class ChatRuntime
             authorizedTools,
             authorizedToolContext);
     }
+
+    private static bool IsModelOutputChunk(LLMStreamChunk chunk) =>
+        !string.IsNullOrEmpty(chunk.DeltaContent) ||
+        chunk.DeltaContentPart is not null ||
+        !string.IsNullOrEmpty(chunk.DeltaReasoningContent) ||
+        chunk.DeltaToolCall is not null;
 
     internal async Task<StreamingRoundResult> ExecuteSingleLlmStepAsync(
         ILLMProvider provider,

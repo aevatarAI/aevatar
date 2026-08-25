@@ -10,6 +10,7 @@ allowlist_file="tools/ci/test_polling_allowlist.txt"
 
 run_guard_meta_tests() {
   bash "${SCRIPT_DIR}/test_coverage_file_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_python_entrypoint_portability.sh"
   bash "${SCRIPT_DIR}/tests/test_project_reference_layer_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_architecture_guards_enforces_layer_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_projection_document_reader_list_async_guard.sh"

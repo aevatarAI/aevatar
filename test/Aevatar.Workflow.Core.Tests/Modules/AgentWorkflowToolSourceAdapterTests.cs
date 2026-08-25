@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
@@ -19,6 +21,19 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Should().ContainSingle().Subject;
 
         tool.RecoverySafety.Should().Be(WorkflowToolRecoverySafety.DurableStartOnceRedispatch);
+    }
+
+    [Fact]
+    public async Task GetToolsAsync_WhenOneAgentSourceFails_ShouldKeepHealthySourceTools()
+    {
+        var healthyTool = new CapturingAgentTool();
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new ThrowingAgentToolSource(), new SingleAgentToolSource(healthyTool)],
+            new PassThroughExecutionPort());
+
+        var tools = await adapter.GetToolsAsync(CancellationToken.None);
+
+        tools.Should().ContainSingle().Which.Name.Should().Be(healthyTool.Name);
     }
 
     [Fact]
@@ -307,7 +322,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                         FileId = "wf-file-1",
                         ArtifactId = "workflow-file://wf-file-1",
                         SourceKind = WorkflowFileSourceKind.ChatInput,
-                        FileName = "invoice.pdf",
+                        FileName = "document.pdf",
                         MediaType = "application/pdf",
                         OwnerRunId = "run-1",
                         OwnerScopeId = "scope-1",
@@ -340,7 +355,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             FileId = "wf-file-1",
             ArtifactId = "workflow-file://wf-file-1",
             SourceKind = ChatFileSourceKind.ChatInput,
-            FileName = "invoice.pdf",
+            FileName = "document.pdf",
             MediaType = "application/pdf",
             OwnerRunId = "run-1",
             OwnerScopeId = "scope-1",
@@ -426,7 +441,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         var result = await tool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
                 ArgumentsJson: """{"format":"preview"}""",
-                RunId: "run-finance-alpha",
+                RunId: "run-generic-alpha",
                 StepId: "present-preview",
                 ExecutionId: "exec-recovery-zeta",
                 CallId: "call-presentation-kappa",
@@ -440,9 +455,181 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         executionPort.Requests[0].ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.Initial);
         executionPort.Requests[1].ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.ActorRecovery);
         executionPort.Requests.Select(request => request.ExecutionContext.Request.RequestId)
-            .Should().OnlyContain(requestId => requestId == "run-finance-alpha");
+            .Should().OnlyContain(requestId => requestId == "run-generic-alpha");
         executionPort.Requests.Select(request => request.ExecutionContext.Request.CallId)
             .Should().OnlyContain(callId => callId == "call-presentation-kappa");
+    }
+
+    [Fact]
+    public async Task WorkflowDurableTool_ShouldMapPendingReconciliationToActorRecovery()
+    {
+        var agentTool = new CapturingAgentTool();
+        var agentPending = new AgentToolPendingOperation(
+            "tool:v1:operation:" + new string('a', 64),
+            "provider-operation-alpha",
+            "/executions/provider-operation-alpha",
+            "/executions/provider-operation-alpha/result",
+            "/executions/provider-operation-alpha/cancel",
+            AgentToolPendingOperationStatus.Running,
+            "\"version-3\"",
+            1_500,
+            1_900_000_000_000,
+            "chrono-sandbox",
+            "service-code-alpha",
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission);
+        var executionPort = new FixedOutcomeExecutionPort(new AgentToolExecutionOutcome(
+            AgentToolExecutionOutcomeKind.Pending,
+            string.Empty,
+            new AgentToolReceipt
+            {
+                CallId = "call-durable-alpha",
+                ToolName = agentTool.Name,
+                Status = AgentToolReceiptStatus.Unspecified,
+            },
+            IsMutation: false,
+            FailureCode: string.Empty,
+            SafeMessage: "Tool execution is pending durable provider completion.",
+            AgentToolExecutionFailureStage.None,
+            TerminalInvoked: false,
+            Retryable: false,
+            AuditCompleted: true,
+            PendingOperation: agentPending));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            executionPort);
+        var tool = (IWorkflowDurableOperationTool)(await adapter.GetToolsAsync()).Single();
+        var workflowPending = new WorkflowToolPendingOperation(
+            agentPending.OperationId,
+            agentPending.ProviderOperationId,
+            agentPending.StatusPath,
+            agentPending.ResultPath,
+            agentPending.CancelPath,
+            WorkflowToolPendingOperationStatus.Running,
+            agentPending.ETag,
+            agentPending.RetryAfterMilliseconds,
+            agentPending.ExpiresAtUnixMs,
+            agentPending.ServiceSlug,
+            agentPending.UserServiceId,
+            WorkflowToolPendingOperationRouteIdentitySource.WorkflowCapabilityAdmission);
+        var request = new WorkflowToolExecutionRequest(
+            ArgumentsJson: "{}",
+            RunId: "run-durable-alpha",
+            StepId: "step-durable-alpha",
+            ExecutionId: "execution-durable-alpha",
+            CallId: "call-durable-alpha",
+            ScopeId: "scope-durable-alpha",
+            CallerCredential: new WorkflowCallerCredential());
+
+        var result = await tool.ReconcileAsync(request, workflowPending);
+
+        result.PendingOperation.Should().Be(workflowPending);
+        result.Failure.Should().BeNull();
+        var mapped = executionPort.Requests.Should().ContainSingle().Subject;
+        mapped.ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.ActorRecovery);
+        mapped.ExecutionContext.Request.OperationId.Should().Be(agentPending.OperationId);
+        mapped.PendingOperation.Should().Be(agentPending);
+    }
+
+    [Fact]
+    public async Task WorkflowDurableTool_ShouldMapTypedCancellationIdentityAndPendingResult()
+    {
+        var agentTool = new CapturingAgentTool();
+        var operationId = "tool:v1:operation:" + new string('b', 64);
+        var agentPending = new AgentToolPendingOperation(
+            operationId,
+            "provider-operation-cancel",
+            "/executions/provider-operation-cancel",
+            "/executions/provider-operation-cancel/result",
+            "/executions/provider-operation-cancel/cancel",
+            AgentToolPendingOperationStatus.Running,
+            "\"version-4\"",
+            2_000,
+            1_900_000_000_000,
+            "chrono-sandbox",
+            "service-code-cancel",
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission);
+        var frozenIntent = new AgentToolCancellationTerminalIntent(
+            AgentToolExecutionOutcomeKind.Executed,
+            """{"success":false,"code":"code_execution_cancelled"}""",
+            new AgentToolReceipt
+            {
+                CallId = "call-cancel-alpha",
+                ToolName = agentTool.Name,
+                Status = AgentToolReceiptStatus.Error,
+                ResultJson = """{"success":false,"code":"code_execution_cancelled"}""",
+                ErrorCode = "code_execution_cancelled",
+                ErrorMessage = "cancelled",
+                SubjectKind = "nyxid.user-service",
+                SubjectId = "service-code-cancel",
+                ProviderResourceId = "provider-operation-cancel",
+                MutationStage = AgentToolReceiptMutationStage.ReadModelObserved,
+            },
+            IsMutation: true,
+            FailureCode: string.Empty,
+            SafeMessage: string.Empty,
+            AgentToolExecutionFailureStage.None,
+            TerminalInvoked: true,
+            Retryable: false,
+            new AgentToolCallSafety(false, false, false),
+            new string('a', 64));
+        var executionPort = new FixedCancellationExecutionPort(
+            AgentToolCancellationResult.Pending(agentPending, terminalIntent: frozenIntent));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            executionPort);
+        var tool = (IWorkflowDurableOperationTool)(await adapter.GetToolsAsync()).Single();
+        var workflowPending = new WorkflowToolPendingOperation(
+            operationId,
+            agentPending.ProviderOperationId,
+            agentPending.StatusPath,
+            agentPending.ResultPath,
+            agentPending.CancelPath,
+            WorkflowToolPendingOperationStatus.Running,
+            agentPending.ETag,
+            agentPending.RetryAfterMilliseconds,
+            agentPending.ExpiresAtUnixMs,
+            agentPending.ServiceSlug,
+            agentPending.UserServiceId,
+            WorkflowToolPendingOperationRouteIdentitySource.WorkflowCapabilityAdmission);
+        var executionRequest = new WorkflowToolExecutionRequest(
+            ArgumentsJson: "{}",
+            RunId: "run-cancel-alpha",
+            StepId: "step-cancel-alpha",
+            ExecutionId: "execution-cancel-alpha",
+            CallId: "call-cancel-alpha",
+            ScopeId: "scope-cancel-alpha",
+            CallerCredential: new WorkflowCallerCredential());
+
+        var result = await tool.CancelAsync(new WorkflowToolCancellationRequest(
+            executionRequest,
+            workflowPending,
+            DeadlineUnixMs: 1_234_567_890));
+
+        result.Disposition.Should().Be(WorkflowToolCancellationDisposition.Pending);
+        result.PendingOperation.Should().Be(workflowPending);
+        result.PendingTerminalIntent.Should().NotBeNull();
+        var mapped = executionPort.CancellationRequests.Should().ContainSingle().Subject;
+        mapped.ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.ActorRecovery);
+        mapped.ApprovalContinuationMode.Should().Be(AgentToolApprovalContinuationMode.ActorOwned);
+        mapped.ExecutionOwner.Should().BeEquivalentTo(AgentToolExecutionOwners.WorkflowRun("run-cancel-alpha"));
+        mapped.ExecutionContext.Request.RequestId.Should().Be("run-cancel-alpha");
+        mapped.ExecutionContext.Request.CallId.Should().Be("call-cancel-alpha");
+        mapped.ExecutionContext.Request.OperationId.Should().Be(operationId);
+        mapped.PendingOperation.Should().Be(agentPending);
+        mapped.DeadlineUnixMs.Should().Be(1_234_567_890);
+
+        await tool.CancelAsync(new WorkflowToolCancellationRequest(
+            executionRequest,
+            workflowPending,
+            DeadlineUnixMs: 1_234_567_890,
+            TerminalIntent: result.PendingTerminalIntent));
+
+        executionPort.CancellationRequests.Should().HaveCount(2);
+        var recovered = executionPort.CancellationRequests[1];
+        recovered.TerminalIntent.Should().NotBeNull();
+        recovered.TerminalIntent!.Receipt.Should().BeEquivalentTo(frozenIntent.Receipt);
+        recovered.TerminalIntent.CallSafety.Should().Be(frozenIntent.CallSafety);
+        recovered.TerminalIntent.Kind.Should().Be(frozenIntent.Kind);
     }
 
     [Fact]
@@ -456,6 +643,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 CallId = "call-write-lambda",
                 ToolName = "capture_context",
                 Status = AgentToolReceiptStatus.Error,
+                FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed,
             },
             IsMutation: true,
             FailureCode: "tool_execution_already_started",
@@ -810,6 +998,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ErrorCode = "PROVIDER_HTTP_503",
                 ErrorMessage = "The service request failed.",
                 ResultJson = safeResult,
+                FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed,
             });
         var adapter = new AgentWorkflowToolSourceAdapter(
             [new SingleAgentToolSource(agentTool)],
@@ -831,6 +1020,42 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         result.Failure.Should().NotBeNull();
         result.Failure!.ErrorCode.Should().Be("PROVIDER_HTTP_503");
         result.Failure.ErrorMessage.Should().Be("The service request failed.");
+        result.Failure.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.CalleeConfirmed);
+    }
+
+    [Fact]
+    public async Task WorkflowTool_WhenProviderOutcomeIsUncertain_ShouldPreserveTypedFailureOutcome()
+    {
+        const string safeResult =
+            """{"error":"code_execution_outcome_uncertain","message":"Outcome is uncertain."}""";
+        var agentTool = new ResultReceiptAgentTool(
+            safeResult,
+            new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "code_execution_outcome_uncertain",
+                ErrorMessage = "Outcome is uncertain.",
+                ResultJson = safeResult,
+                FailureOutcome = AgentToolFailureOutcome.OutcomeUncertain,
+            });
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            new PassThroughExecutionPort());
+        var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await workflowTool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-uncertain",
+                StepId: "step-uncertain",
+                ExecutionId: "exec-uncertain",
+                CallId: "call-uncertain",
+                ScopeId: "scope-uncertain",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.Failure.Should().NotBeNull();
+        result.Failure!.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
     }
 
     [Fact]
@@ -860,6 +1085,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         result.ResultJson.Should().Be(unknownResultJson);
         result.Failure!.ErrorCode.Should().Be("tool_outcome_unknown");
         result.Failure.ErrorMessage.Should().Be("The tool outcome could not be verified.");
+        result.Failure.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
     }
 
     private sealed class CapturingAgentTool(
@@ -1177,6 +1403,26 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         }
     }
 
+    private sealed class FixedCancellationExecutionPort(AgentToolCancellationResult result)
+        : IAgentToolExecutionPort
+    {
+        public List<AgentToolCancellationRequest> CancellationRequests { get; } = [];
+
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("Execution must not run during typed cancellation.");
+
+        public Task<AgentToolCancellationResult> CancelAsync(
+            AgentToolCancellationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            CancellationRequests.Add(request);
+            return Task.FromResult(result);
+        }
+    }
+
     private sealed class SequencedOutcomeExecutionPort(params AgentToolExecutionOutcome[] outcomes)
         : IAgentToolExecutionPort
     {
@@ -1215,6 +1461,11 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 IsDestructive = true,
                 ApprovalRequestId = approvalRequestId,
                 ResultJson = resultJson,
+                FailureOutcome = status is AgentToolReceiptStatus.Error or
+                        AgentToolReceiptStatus.Denied or
+                        AgentToolReceiptStatus.AuthorizationRequired
+                    ? AgentToolFailureOutcome.CalleeConfirmed
+                    : AgentToolFailureOutcome.Unspecified,
             },
             IsMutation: true,
             failureCode,
@@ -1230,6 +1481,16 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+        }
+    }
+
+    private sealed class ThrowingAgentToolSource : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromException<IReadOnlyList<IAgentTool>>(
+                new InvalidOperationException("source unavailable"));
         }
     }
 }

@@ -154,95 +154,8 @@ function taskPlan(
     activeStepId: steps.find((step) =>
       ['running', 'waiting', 'uncertain'].includes(String(step.status)),
     )?.stepId,
-    gate: { mode: 'auto', status: 'satisfied' },
     steps,
     ...planOverrides,
-  };
-}
-
-function reimbursementDomain() {
-  return {
-    reimbursement: {
-      evidenceId: 'reimbursement-evidence-alpha',
-      sourceInputRequestId: 'input-reimbursement-alpha',
-      expenseCategory: 'travel',
-      costCenter: 'cc-42',
-      reimbursementCurrencyInstruction: 'Submit in SGD',
-      guardedToolName: 'approval_instance_create',
-      committedAt: '2026-08-11T12:00:00Z',
-      sourceInvoices: [
-        {
-          sourceOrdinal: 1,
-          vendor: 'Northwind Air',
-          invoiceNumber: 'INV-001',
-          invoiceDate: '2026-08-01',
-          amount: {
-            currencyCode: 'SGD',
-            minorUnits: 12500,
-            fractionDigits: 2,
-          },
-        },
-        {
-          sourceOrdinal: 2,
-          vendor: 'Contoso Hotel',
-          invoiceNumber: 'INV-002',
-          invoiceDate: '2026-08-02',
-          amount: {
-            currencyCode: 'SGD',
-            minorUnits: 24000,
-            fractionDigits: 2,
-          },
-        },
-        {
-          sourceOrdinal: 3,
-          vendor: 'Northwind Air',
-          invoiceNumber: 'INV-001',
-          invoiceDate: '2026-08-01',
-          amount: {
-            currencyCode: 'SGD',
-            minorUnits: 12500,
-            fractionDigits: 2,
-          },
-        },
-      ],
-      retainedSourceOrdinals: [1, 2],
-      duplicateInvoices: [
-        { duplicateSourceOrdinal: 3, retainedSourceOrdinal: 1 },
-      ],
-    },
-  };
-}
-
-function candidateDomain(totalScore: number, candidateName: string) {
-  return {
-    candidateScreening: {
-      evidenceId: `candidate-evidence-${candidateName.toLowerCase().replaceAll(' ', '-')}`,
-      sourceInputRequestId: 'input-threshold',
-      candidateName,
-      roleTitle: 'Platform Engineer',
-      rubric: [
-        { criterionId: 'systems', title: 'Systems', maximumPoints: 60 },
-        { criterionId: 'delivery', title: 'Delivery', maximumPoints: 40 },
-      ],
-      scores: [
-        {
-          criterionId: 'systems',
-          awardedPoints: totalScore - 32,
-          evidence: 'Designed actor protocols.',
-        },
-        {
-          criterionId: 'delivery',
-          awardedPoints: 32,
-          evidence: 'Shipped production changes.',
-        },
-      ],
-      totalScore,
-      trackerTable: 'Candidate Tracker',
-      trackerTableId: 'tbl-candidates',
-      stage: 'accepted',
-      guardedToolName: 'bitable_record_create',
-      committedAt: '2026-08-11T13:00:00Z',
-    },
   };
 }
 
@@ -259,7 +172,7 @@ function numericCondition(observedValue: number, outcome: 'true' | 'false') {
         comparison: 'gte',
         outcome,
         evaluatedAt: '2026-08-11T13:01:00Z',
-        guardedToolName: 'bitable_record_create',
+        guardedToolName: 'external_record_create',
       },
     },
   };
@@ -1304,13 +1217,13 @@ describe('ChatPage canonical NyxID Assistant', () => {
     });
   });
 
-  it('UC3 unlocks only actor-authorized controls after reconciliation and retries at N+1', async () => {
+  it('unlocks only actor-authorized controls after reconciliation and retries at N+1', async () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
     const uncertain = taskStep('step-effect', {
       status: 'uncertain',
-      description: 'Submit reimbursement',
+      description: 'Submit external record',
       mayChangeExternalState: true,
       externalEffect: 'may_have_changed',
       availableActions: { stop: true },
@@ -1390,44 +1303,9 @@ describe('ChatPage canonical NyxID Assistant', () => {
             cancelledStepIds: [],
           },
         ],
-        title: 'Reimbursement retry',
-        gate: {
-          mode: 'confirm',
-          status: 'satisfied',
-          requestId: 'plan-gate-retry-3',
-          taskId: 'task-alpha',
-          planId: 'plan-alpha',
-          planRevision: 3,
-          decidedAt: '2026-08-08T00:03:00Z',
-        },
+        title: 'External record retry',
       },
     );
-    const pendingRetryPlan = {
-      ...retryPlan,
-      activeOperationId: undefined,
-      gate: {
-        mode: 'confirm',
-        status: 'pending',
-        requestId: 'plan-gate-retry-3',
-        taskId: 'task-alpha',
-        planId: 'plan-alpha',
-        planRevision: 3,
-        reason: 'This retry changes the frozen operation generation.',
-      },
-      steps: (retryPlan.steps as Record<string, unknown>[]).map((step) =>
-        step.stepId === 'step-effect'
-          ? {
-              ...step,
-              status: 'planned',
-              availableActions: undefined,
-              operation: {
-                ...(step.operation as Record<string, unknown>),
-                phase: 'requested',
-              },
-            }
-          : step,
-      ),
-    };
     const retryStartedResult = {
       kind: 'retry',
       requestId: 'retry-alpha',
@@ -1439,11 +1317,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
       operationGeneration: 2,
       outcome: 'retry_started',
     };
-    const pendingRetryState = activeTaskState(pendingRetryPlan, 22, {
-      latestStepControlResult: retryStartedResult,
-      recentStepControlResults: [retryStartedResult],
-    });
-    const retryState = activeTaskState(retryPlan, 23, {
+    const retryState = activeTaskState(retryPlan, 22, {
       latestStepControlResult: retryStartedResult,
       recentStepControlResults: [retryStartedResult],
     });
@@ -1494,7 +1368,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
                 cancelledStepIds: [],
               },
             ],
-            title: 'Reimbursement',
+            title: 'External record submission',
           }),
           20,
         ),
@@ -1517,12 +1391,11 @@ describe('ChatPage canonical NyxID Assistant', () => {
                 cancelledStepIds: [],
               },
             ],
-            title: 'Reimbursement reconciled',
+            title: 'External record reconciled',
           }),
           21,
         ),
       )
-      .mockResolvedValueOnce(pendingRetryState)
       .mockResolvedValueOnce(retryState)
       .mockRejectedValueOnce(new Error('Current state is not visible yet.'))
       .mockResolvedValueOnce(retryState)
@@ -1555,9 +1428,9 @@ describe('ChatPage canonical NyxID Assistant', () => {
 
     const uncertainView = renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
-    await screen.findByText('Reimbursement');
+    await screen.findByText('External record submission');
     expect(
-      within(taskRow('Submit reimbursement')).getByText('may_have_changed'),
+      within(taskRow('Submit external record')).getByText('may_have_changed'),
     ).toBeInTheDocument();
     expect(
       within(taskRow('Reconcile provider receipt')).getByText(
@@ -1568,10 +1441,10 @@ describe('ChatPage canonical NyxID Assistant', () => {
       within(taskRow('Reconcile provider receipt')).getByText('r2'),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: 'Retry Submit reimbursement' }),
+      screen.queryByRole('button', { name: 'Retry Submit external record' }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: 'Skip Submit reimbursement' }),
+      screen.queryByRole('button', { name: 'Skip Submit external record' }),
     ).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Stop task' }),
@@ -1580,56 +1453,30 @@ describe('ChatPage canonical NyxID Assistant', () => {
     uncertainView.unmount();
     const reconciledView = renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
-    await screen.findByText('Reimbursement reconciled');
+    await screen.findByText('External record reconciled');
     expect(
       within(taskRow('Reconcile provider receipt')).getByText('done'),
     ).toBeInTheDocument();
     expect(
-      within(taskRow('Submit reimbursement')).getByText('not_applied'),
+      within(taskRow('Submit external record')).getByText('not_applied'),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Retry Submit reimbursement' }),
+      screen.getByRole('button', { name: 'Retry Submit external record' }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Skip Submit reimbursement' }),
+      screen.getByRole('button', { name: 'Skip Submit external record' }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Stop task' }),
     ).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Retry Submit reimbursement' }),
+      screen.getByRole('button', { name: 'Retry Submit external record' }),
     );
     expect(await screen.findByText(/generation 2/)).toBeInTheDocument();
     expect(
-      within(taskRow('Submit reimbursement')).getByText('planned'),
+      within(taskRow('Submit external record')).getByText('running'),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: 'Confirm plan' }),
-    ).toBeInTheDocument();
-    expect(requestBodies()).toEqual([
-      {
-        type: 'step.retry',
-        conversationId: 'conversation-alpha',
-        turnId: 'turn-alpha',
-        taskId: 'task-alpha',
-        stepId: 'step-effect',
-        retryRequestId: expect.any(String),
-        clientRequestId: expect.any(String),
-        expectedOperationGeneration: 1,
-        expectedStateVersion: 21,
-      },
-    ]);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm plan' }));
-    await waitFor(() =>
-      expect(
-        within(taskRow('Submit reimbursement')).getByText('running'),
-      ).toBeInTheDocument(),
-    );
-    expect(
-      screen.queryByRole('button', { name: 'Confirm plan' }),
-    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('region', { name: 'NyxID approval observation' }),
     ).not.toBeInTheDocument();
@@ -1651,25 +1498,14 @@ describe('ChatPage canonical NyxID Assistant', () => {
         expectedOperationGeneration: 1,
         expectedStateVersion: 21,
       },
-      {
-        type: 'plan.resolve',
-        conversationId: 'conversation-alpha',
-        taskId: 'task-alpha',
-        planId: 'plan-alpha',
-        requestId: 'plan-gate-retry-3',
-        clientRequestId: expect.any(String),
-        planRevision: 3,
-        confirmed: true,
-        expectedStateVersion: 22,
-      },
     ]);
 
     reconciledView.unmount();
     const liveRetryView = renderWithQueryClient(<ChatPage />);
-    await sendPrompt('Observe the reimbursement retry');
+    await sendPrompt('Observe the external record retry');
     expect(await screen.findByText(/generation 2/)).toBeInTheDocument();
     expect(
-      within(taskRow('Submit reimbursement')).getByText('running'),
+      within(taskRow('Submit external record')).getByText('running'),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('region', { name: 'NyxID approval observation' }),
@@ -1688,7 +1524,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(screen.getByText('Plan revision 3')).toBeInTheDocument();
     expect(screen.getByText('retry_started')).toBeInTheDocument();
     expect(
-      within(taskRow('Submit reimbursement')).getByText('running'),
+      within(taskRow('Submit external record')).getByText('running'),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('region', { name: 'NyxID approval observation' }),
@@ -1697,8 +1533,8 @@ describe('ChatPage canonical NyxID Assistant', () => {
     retryReloadView.unmount();
     renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
-    await screen.findAllByText('Submit reimbursement');
-    const retryApproval = within(taskRow('Submit reimbursement')).getByRole(
+    await screen.findAllByText('Submit external record');
+    const retryApproval = within(taskRow('Submit external record')).getByRole(
       'region',
       { name: 'NyxID approval observation' },
     );
@@ -1706,10 +1542,10 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(retryApproval).toHaveTextContent('per_request');
     expect(retryApproval).toHaveTextContent('approval_required');
     expect(
-      screen.getByRole('button', { name: 'Retry Submit reimbursement' }),
+      screen.getByRole('button', { name: 'Retry Submit external record' }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Skip Submit reimbursement' }),
+      screen.getByRole('button', { name: 'Skip Submit external record' }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Approve' }),
@@ -1719,91 +1555,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('UC3 renders normalized invoices and the exact verified approval instance after reload', async () => {
-    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
-      serverConversation,
-    ]);
-    const terminalPlan = taskPlan(
-      [
-        taskStep('step-write', {
-          status: 'done',
-          description: 'Submit two unique reimbursement invoices',
-          source: {
-            tool: {
-              toolName: 'approval_instance_create',
-              serviceSlug: 'approval-service',
-              serviceId: 'usvc-approval-alpha',
-            },
-          },
-          mayChangeExternalState: true,
-          externalEffect: 'confirmed',
-          availableActions: undefined,
-          operation: {
-            conversationActorId: 'conversation-alpha',
-            turnId: 'turn-alpha',
-            taskId: 'task-alpha',
-            stepId: 'step-write',
-            operationId: 'operation-reimbursement-write',
-            operationGeneration: 2,
-            kind: 'tool',
-            phase: 'succeeded',
-          },
-        }),
-        taskStep('step-verify', {
-          order: 2,
-          kind: 'postcondition',
-          status: 'done',
-          description: 'Read the exact approval instance back',
-          source: { postcondition: { check: 'approval.instance.exists' } },
-          externalEffect: 'confirmed',
-          availableActions: undefined,
-          operation: null,
-        }),
-      ],
-      {
-        schemaVersion: 6,
-        status: 'succeeded',
-        title: 'Reimbursement complete',
-        domain: reimbursementDomain(),
-        artifact: {
-          checkName: 'approval.instance.exists',
-          verifiedAt: '2026-08-11T12:03:00Z',
-          reimbursement: {
-            providerInstanceId: 'approval-instance-alpha',
-            costCenter: 'cc-42',
-            retainedItemCount: 2,
-            duplicateItemCount: 1,
-          },
-        },
-      },
-    );
-    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
-      currentState({ activeTask: terminalPlan }, 48),
-    );
-
-    renderWithQueryClient(<ChatPage />);
-    await openCanonicalConversation();
-
-    const domain = await screen.findByRole('region', {
-      name: 'Committed domain evidence',
-    });
-    expect(domain).toHaveTextContent('3 source invoices');
-    expect(domain).toHaveTextContent('2 retained');
-    expect(domain).toHaveTextContent('1 duplicate');
-    expect(domain).toHaveTextContent('duplicate #3 = retained #1');
-    expect(domain).toHaveTextContent('Northwind Air');
-    expect(domain).toHaveTextContent('INV-001');
-    expect(domain).toHaveTextContent('SGD 125.00');
-    expect(screen.getByText(/generation 2/)).toBeInTheDocument();
-    const artifact = screen.getByRole('region', {
-      name: 'Verified artifact',
-    });
-    expect(artifact).toHaveTextContent('approval.instance.exists');
-    expect(artifact).toHaveTextContent('approval-instance-alpha');
-    expect(artifact).toHaveTextContent('cc-42');
-  });
-
-  it('UC4 renders a below-threshold conditional write as skipped', async () => {
+  it('renders a below-threshold conditional write as skipped', async () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
@@ -1812,7 +1564,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
         taskStep('step-threshold', {
           kind: 'input',
           status: 'done',
-          description: 'Use screening threshold 75',
+          description: 'Use metric threshold 75',
           source: { input: {} },
           externalEffect: 'not_applied',
           availableActions: undefined,
@@ -1822,7 +1574,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
           order: 2,
           kind: 'condition',
           status: 'done',
-          description: 'Candidate score 72 is below 75',
+          description: 'Observed value 72 is below 75',
           source: numericCondition(72, 'false'),
           externalEffect: 'not_applied',
           availableActions: undefined,
@@ -1831,8 +1583,8 @@ describe('ChatPage canonical NyxID Assistant', () => {
         taskStep('step-write', {
           order: 3,
           status: 'skipped',
-          description: 'Write accepted candidate',
-          source: { tool: { toolName: 'bitable_record_create' } },
+          description: 'Write matching record',
+          source: { tool: { toolName: 'external_record_create' } },
           mayChangeExternalState: true,
           externalEffect: 'not_applied',
           availableActions: undefined,
@@ -1846,8 +1598,8 @@ describe('ChatPage canonical NyxID Assistant', () => {
           order: 4,
           kind: 'postcondition',
           status: 'skipped',
-          description: 'Read candidate row back',
-          source: { postcondition: { check: 'bitable.record.exists' } },
+          description: 'Read matching record back',
+          source: { postcondition: { check: 'external_record.exists' } },
           externalEffect: 'not_applied',
           availableActions: undefined,
           operation: null,
@@ -1858,10 +1610,8 @@ describe('ChatPage canonical NyxID Assistant', () => {
         }),
       ],
       {
-        schemaVersion: 6,
         status: 'succeeded',
-        title: 'Candidate screening at 75',
-        domain: candidateDomain(72, 'Candidate Below'),
+        title: 'Conditional record write at 75',
       },
     );
     (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
@@ -1871,7 +1621,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
             turnId: 'turn-alpha',
             taskId: 'task-alpha',
             status: 'succeeded',
-            safeMessage: 'Candidate did not meet the write threshold.',
+            safeMessage: 'Observed value did not meet the write threshold.',
           },
           activeTask: belowThresholdPlan,
         },
@@ -1883,35 +1633,30 @@ describe('ChatPage canonical NyxID Assistant', () => {
     await openCanonicalConversation();
 
     expect(
-      await screen.findByText('Candidate score 72 is below 75'),
+      await screen.findByText('Observed value 72 is below 75'),
     ).toBeInTheDocument();
-    const write = within(taskRow('Write accepted candidate'));
+    const write = within(taskRow('Write matching record'));
     expect(write.getByText('skipped')).toBeInTheDocument();
     expect(write.getByText('not_applied')).toBeInTheDocument();
+    const conditionFacts = screen.getByRole('region', {
+      name: 'Committed condition facts',
+    });
+    expect(conditionFacts).toHaveTextContent('72 >= 75');
+    expect(conditionFacts).toHaveTextContent('false');
+    expect(conditionFacts).toHaveTextContent('user_override');
+    expect(conditionFacts).toHaveTextContent('external_record_create');
     expect(
-      screen.getByRole('region', { name: 'Committed condition facts' }),
-    ).toHaveTextContent('72 >= 75');
+      write.getByText('Guard step-condition requires true'),
+    ).toBeInTheDocument();
     expect(
-      screen.getByRole('region', { name: 'Committed condition facts' }),
-    ).toHaveTextContent('false');
-    expect(
-      screen.getByRole('region', { name: 'Committed domain evidence' }),
-    ).toHaveTextContent('score 72');
-    expect(
-      screen.getByRole('region', { name: 'Committed domain evidence' }),
-    ).toHaveTextContent('Candidate Below');
-    expect(
-      screen.queryByText('Verified against bitable.record.exists'),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('region', { name: 'Verified artifact' }),
+      screen.queryByText('Verified against external_record.exists'),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('region', { name: 'NyxID approval observation' }),
     ).not.toBeInTheDocument();
   });
 
-  it('UC4 preserves the 75 override across Tier-B stall, return, and verified reload', async () => {
+  it('preserves the 75 override across Tier-B stall, return, and verified reload', async () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
@@ -1920,7 +1665,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
         taskStep('step-threshold', {
           kind: 'input',
           status: 'done',
-          description: 'Use screening threshold 75',
+          description: 'Use metric threshold 75',
           source: { input: {} },
           externalEffect: 'not_applied',
           availableActions: undefined,
@@ -1930,7 +1675,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
           order: 2,
           kind: 'condition',
           status: 'done',
-          description: 'Conditional score at least 75 executed',
+          description: 'Condition at least 75 executed',
           source: numericCondition(80, 'true'),
           externalEffect: 'not_applied',
           availableActions: undefined,
@@ -1939,8 +1684,8 @@ describe('ChatPage canonical NyxID Assistant', () => {
         taskStep('step-write', {
           order: 3,
           status: 'done',
-          description: 'Write accepted candidate',
-          source: { tool: { toolName: 'bitable_record_create' } },
+          description: 'Write matching record',
+          source: { tool: { toolName: 'external_record_create' } },
           mayChangeExternalState: true,
           externalEffect: 'confirmed',
           availableActions: undefined,
@@ -1954,8 +1699,8 @@ describe('ChatPage canonical NyxID Assistant', () => {
           order: 4,
           kind: 'postcondition',
           status: 'done',
-          description: 'Read candidate row back',
-          source: { postcondition: { check: 'bitable.record.exists' } },
+          description: 'Read matching record back',
+          source: { postcondition: { check: 'external_record.exists' } },
           externalEffect: 'confirmed',
           availableActions: undefined,
           operation: null,
@@ -1966,7 +1711,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
         }),
       ],
       {
-        schemaVersion: 6,
         status: 'succeeded',
         planRevision: 2,
         planRevisions: [
@@ -1979,25 +1723,15 @@ describe('ChatPage canonical NyxID Assistant', () => {
           {
             planRevision: 2,
             revisionCause: 'scope_resolution',
-            addedStepIds: ['step-condition-true', 'step-write', 'step-verify'],
+            addedStepIds: [
+              'step-condition-true',
+              'step-write',
+              'step-verify',
+            ],
             cancelledStepIds: [],
           },
         ],
-        title: 'Candidate screening at 75',
-        domain: candidateDomain(80, 'Candidate Alpha'),
-        artifact: {
-          checkName: 'bitable.record.exists',
-          verifiedAt: '2026-08-11T13:03:00Z',
-          candidateTracker: {
-            providerRecordId: 'rec-candidate-alpha',
-            candidateName: 'Candidate Alpha',
-            score: 80,
-            threshold: 75,
-            trackerTable: 'Candidate Tracker',
-            trackerTableId: 'tbl-candidates',
-            stage: 'accepted',
-          },
-        },
+        title: 'Conditional record write at 75',
       },
     );
     const waitingPlan = taskPlan(
@@ -2032,11 +1766,9 @@ describe('ChatPage canonical NyxID Assistant', () => {
         return step;
       }),
       {
-        schemaVersion: 6,
         planRevision: 2,
         planRevisions: finalPlan.planRevisions,
-        title: 'Candidate screening at 75',
-        domain: candidateDomain(80, 'Candidate Alpha'),
+        title: 'Conditional record write at 75',
       },
     );
     const waitingState = activeTaskState(waitingPlan, 31, {
@@ -2075,11 +1807,9 @@ describe('ChatPage canonical NyxID Assistant', () => {
           : step,
       ),
       {
-        schemaVersion: 6,
         planRevision: 2,
         planRevisions: finalPlan.planRevisions,
-        title: 'Candidate screening at 75',
-        domain: candidateDomain(80, 'Candidate Alpha'),
+        title: 'Conditional record write at 75',
       },
     );
     const returnedState = activeTaskState(returnedPlan, 32, {
@@ -2122,18 +1852,18 @@ describe('ChatPage canonical NyxID Assistant', () => {
               taskStep('step-threshold', {
                 kind: 'input',
                 status: 'waiting',
-                description: 'Suggested screening threshold: 70',
+                description: 'Suggested metric threshold: 70',
                 source: { input: {} },
                 operation: null,
               }),
             ],
-            { title: 'Candidate screening at suggested 70' },
+            { title: 'Conditional record write at suggested 70' },
           ),
           30,
           {
             pendingInput: {
               requestId: 'input-threshold',
-              prompt: 'Suggested threshold is 70. Set the screening threshold.',
+              prompt: 'Suggested threshold is 70. Set the metric threshold.',
               options: [],
               allowFreeText: true,
               multiSelect: false,
@@ -2175,7 +1905,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
     await openCanonicalConversation();
     expect(
       await screen.findByText(
-        'Suggested threshold is 70. Set the screening threshold.',
+        'Suggested threshold is 70. Set the metric threshold.',
       ),
     ).toBeInTheDocument();
     const answer = screen.getByPlaceholderText(
@@ -2184,10 +1914,10 @@ describe('ChatPage canonical NyxID Assistant', () => {
     fireEvent.change(answer, { target: { value: '75' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     expect(
-      await screen.findByText('Candidate screening at 75'),
+      await screen.findByText('Conditional record write at 75'),
     ).toBeInTheDocument();
     expect(
-      within(taskRow('Write accepted candidate')).getByText('Stalled'),
+      within(taskRow('Write matching record')).getByText('Stalled'),
     ).toBeInTheDocument();
     expect(
       screen.queryByText('NyxID request observed'),
@@ -2208,12 +1938,12 @@ describe('ChatPage canonical NyxID Assistant', () => {
 
     firstView.unmount();
     const liveReturnedView = renderWithQueryClient(<ChatPage />);
-    await sendPrompt('Observe the candidate screening return');
+    await sendPrompt('Observe the conditional write return');
     expect(
-      await screen.findByText('Candidate screening at 75'),
+      await screen.findByText('Conditional record write at 75'),
     ).toBeInTheDocument();
     const liveApprovalObservation = within(
-      taskRow('Write accepted candidate'),
+      taskRow('Write matching record'),
     ).getByRole('region', { name: 'NyxID approval observation' });
     expect(liveApprovalObservation).toHaveTextContent(
       'nyxid-approval-write-alpha',
@@ -2230,17 +1960,17 @@ describe('ChatPage canonical NyxID Assistant', () => {
     const returnedView = renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
     expect(
-      await screen.findByText('Candidate screening at 75'),
+      await screen.findByText('Conditional record write at 75'),
     ).toBeInTheDocument();
     expect(
-      within(taskRow('Write accepted candidate')).getByText('failed'),
+      within(taskRow('Write matching record')).getByText('failed'),
     ).toBeInTheDocument();
     expect(screen.getByText(/generation 1/)).toBeInTheDocument();
     expect(
-      within(taskRow('Write accepted candidate')).queryByText('Stalled'),
+      within(taskRow('Write matching record')).queryByText('Stalled'),
     ).not.toBeInTheDocument();
     const approvalObservation = within(
-      taskRow('Write accepted candidate'),
+      taskRow('Write matching record'),
     ).getByRole('region', { name: 'NyxID approval observation' });
     expect(approvalObservation).toHaveTextContent('NyxID request observed');
     expect(approvalObservation).toHaveTextContent('nyxid-approval-write-alpha');
@@ -2257,47 +1987,31 @@ describe('ChatPage canonical NyxID Assistant', () => {
     renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
     expect(
-      await screen.findByText('Candidate screening at 75'),
+      await screen.findByText('Conditional record write at 75'),
     ).toBeInTheDocument();
     expect(
-      within(taskRow('Conditional score at least 75 executed')).getByText(
-        'done',
-      ),
+      within(taskRow('Condition at least 75 executed')).getByText('done'),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('region', { name: 'Committed condition facts' }),
-    ).toHaveTextContent('80 >= 75');
-    expect(
-      screen.getByRole('region', { name: 'Committed condition facts' }),
-    ).toHaveTextContent('user_override');
-    expect(
-      screen.getByText('Verified against bitable.record.exists'),
-    ).toBeInTheDocument();
-    const candidateEvidence = screen.getByRole('region', {
-      name: 'Committed domain evidence',
+    const conditionFacts = screen.getByRole('region', {
+      name: 'Committed condition facts',
     });
-    expect(candidateEvidence).toHaveTextContent('Candidate Alpha');
-    expect(candidateEvidence).toHaveTextContent('Systems: 48/60');
-    expect(candidateEvidence).toHaveTextContent('score 80');
-    const candidateArtifact = screen.getByRole('region', {
-      name: 'Verified artifact',
-    });
-    expect(candidateArtifact).toHaveTextContent('rec-candidate-alpha');
-    expect(candidateArtifact).toHaveTextContent('score 80');
-    expect(candidateArtifact).toHaveTextContent('threshold 75');
-    expect(candidateArtifact).toHaveTextContent(
-      'Candidate Tracker · tbl-candidates',
-    );
+    expect(conditionFacts).toHaveTextContent('80 >= 75');
+    expect(conditionFacts).toHaveTextContent('true');
+    expect(conditionFacts).toHaveTextContent('user_override');
+    expect(conditionFacts).toHaveTextContent('external_record_create');
+    expect(
+      screen.getByText('Verified against external_record.exists'),
+    ).toBeInTheDocument();
     expect(screen.getAllByText('Task result')).toHaveLength(1);
     const terminalApprovalObservation = within(
-      taskRow('Write accepted candidate'),
+      taskRow('Write matching record'),
     ).getByRole('region', { name: 'NyxID approval observation' });
     expect(terminalApprovalObservation).toHaveTextContent(
       'nyxid-approval-write-alpha',
     );
     expect(terminalApprovalObservation).toHaveTextContent('approval_required');
     expect(
-      within(taskRow('Write accepted candidate')).getByText('confirmed'),
+      within(taskRow('Write matching record')).getByText('confirmed'),
     ).toBeInTheDocument();
     expect(screen.queryByText('approved')).not.toBeInTheDocument();
     expect(

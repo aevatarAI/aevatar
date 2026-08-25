@@ -1,17 +1,19 @@
 # Aevatar.CQRS.Projection.Providers.InMemory
 
-通用 InMemory Provider，提供 Document 与 Graph 两类平行实现。
+通用 InMemory Provider，提供 Document 与 Graph 两类平行实现，并承载不保存任何图数据的 production-safe disabled graph provider。
 
 ## 能力
 
 - Document：`InMemoryProjectionDocumentStore<TReadModel, TKey>`
 - Graph：`InMemoryProjectionGraphStore`
+- Disabled Graph：`DisabledProjectionGraphStore`（写入 no-op，读取为空或 not found）
 - Document Query：`GetAsync(key)` 与 `QueryAsync(query)`
 
 ## DI
 
 - `AddInMemoryDocumentProjectionStore<TReadModel, TKey>(...)`
 - `AddInMemoryGraphProjectionStore()`
+- `AddDisabledGraphProjectionStore()`
 
 ## 说明
 

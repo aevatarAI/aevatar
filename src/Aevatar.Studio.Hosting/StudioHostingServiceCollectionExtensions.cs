@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.Studio.Application;
+using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -15,7 +16,9 @@ using Aevatar.Studio.Hosting.ContentArtifacts;
 using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Hosting.WorkflowBoards;
 using Aevatar.Studio.Hosting.WorkOrders;
+using Aevatar.Studio.Hosting.WorkflowDeliveries;
 using Aevatar.Studio.Hosting.NyxId;
+using Aevatar.Studio.Application.WorkflowTemplates;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Studio.Infrastructure.ScopeResolution; // DefaultAppScopeResolver
 using Aevatar.Studio.Projection.DependencyInjection;
@@ -25,6 +28,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 
 namespace Aevatar.Studio.Hosting;
@@ -37,6 +41,18 @@ internal static class StudioHostingServiceCollectionExtensions
     {
         services.TryAddSingleton(configuration);
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
+        var deliverySection = configuration.GetSection(WorkflowDeliveryOptions.SectionName);
+        services.AddOptions<WorkflowDeliveryOptions>()
+            .Bind(
+                deliverySection,
+                binder => binder.ErrorOnUnknownConfiguration = true)
+            // A present-but-invalid console origin would silently remove every customer link.
+            .Validate(
+                options => string.IsNullOrWhiteSpace(options.ConsoleWebBaseUrl) ||
+                    WorkflowDeliveryConsoleLink.TryNormalizeBaseUrl(options.ConsoleWebBaseUrl, out _),
+                $"{WorkflowDeliveryOptions.SectionName}:{nameof(WorkflowDeliveryOptions.ConsoleWebBaseUrl)} " +
+                "must be an absolute HTTPS origin (or a loopback HTTP origin) without userinfo, query, or fragment.")
+            .ValidateOnStart();
         services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()
             .AddApplicationPart(typeof(EditorController).Assembly)
@@ -51,14 +67,25 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddHttpClient();
         services.TryAddScoped<IAppAuthProfileResolver, NyxIdAppAuthProfileResolver>();
         services.TryAddSingleton(TimeProvider.System);
+        services.AddHostedService<WorkflowDeliveryPackageCatalogStartupProbe>();
         services.TryAddSingleton<
             IContentArtifactBackingContentPort,
             WorkflowFileContentArtifactBackingContentPort>();
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
         AddWorkOrderExecutionWorker(services, configuration);
+        AddWorkflowDeliveryContinuationWorker(services, configuration);
         services.Configure<NyxIdLlmCatalogCacheOptions>(
             configuration.GetSection(NyxIdLlmCatalogCacheOptions.SectionName));
+        services.TryAddSingleton<
+            INyxIdModelSourceInventoryPort,
+            NyxIdModelSourceInventoryHttpClient>();
+        services.TryAddSingleton<
+            INyxIdModelDiscoveryPort,
+            NyxIdModelDiscoveryHttpClient>();
+        services.TryAddSingleton<
+            INyxIdUserServiceInventoryPort,
+            NyxIdWorkflowDeliveryConnectionInventoryPort>();
         services.TryAddSingleton<NyxIdLlmCatalogHttpClient>();
         services.TryAddSingleton<IUserLlmCatalogPort>(sp => new CachedNyxIdLlmCatalogPort(
             sp.GetRequiredService<NyxIdLlmCatalogHttpClient>(),
@@ -87,6 +114,7 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetService<IStudioWorkspaceCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
         services.AddSingleton<IAppScopedWorkflowCatalogueService, AppScopedWorkflowCatalogueService>();
+        services.AddSingleton<PublicWorkflowTemplateService>();
         services.TryAddSingleton<
             IStudioMemberWorkflowDraftProvisioningPort,
             StudioMemberWorkflowDraftProvisioningService>();
@@ -134,5 +162,15 @@ internal static class StudioHostingServiceCollectionExtensions
         services.Configure<WorkOrderExecutionWorkerOptions>(
             configuration.GetSection(WorkOrderExecutionWorkerOptions.SectionName));
         services.AddHostedService<WorkOrderExecutionWorker>();
+    }
+
+    private static void AddWorkflowDeliveryContinuationWorker(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.Configure<WorkflowDeliveryContinuationWorkerOptions>(
+            configuration.GetSection(WorkflowDeliveryContinuationWorkerOptions.SectionName));
+        services.TryAddSingleton<WorkflowDeliveryContinuationScanner>();
+        services.AddHostedService<WorkflowDeliveryContinuationWorker>();
     }
 }

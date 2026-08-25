@@ -291,11 +291,14 @@ public sealed class NyxIdAdversarialCorpusTests
         registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
 
         // unknown_enum: an undeclared closed-vocabulary value is never silently coerced into
-        // a weaker risk.
+        // a weaker risk — the descriptor fails closed on its own and stays unavailable.
         var unknownEnum = JsonNode.Parse(pinned)!.AsObject();
         unknownEnum["actions"]!.AsArray()[0]!.AsObject()["risk"] = "unknown-risk";
-        var loadUnknownEnum = () => NyxIdAssistantActionRegistry.Load(unknownEnum.ToJsonString());
-        loadUnknownEnum.Should().Throw<NyxIdAssistantActionRegistryException>();
+        var degraded = NyxIdAssistantActionRegistry.Load(unknownEnum.ToJsonString());
+        degraded.TryGetDefinition("service.connect", out _).Should().BeFalse();
+        degraded.SkippedActions.Should().ContainSingle(skip =>
+            skip.WireAction == "service.connect" &&
+            skip.Code == "NYXID_ACTION_REGISTRY_INVALID");
     }
 
     // No path may report an effect that no receipt or postcondition backs.

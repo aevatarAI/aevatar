@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
@@ -110,6 +113,53 @@ public sealed class MainnetNyxIdChatAgentProfileResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_ShouldUseFullCohortSystemDefaultWhenScopeHasNoBinding()
+    {
+        var system = ProfileFixture.Create(AgentProfileOwners.ForSystem(), "system-profile");
+        var resolver = CreateResolver(
+            new StaticCatalogQueryPort(owner => SameOwner(owner, system.Owner)
+                ? Catalog(system, [SystemBinding(system.Target, enabled: true, 10_000)])
+                : null),
+            new StaticExecutionQueryPort(system));
+
+        var result = await resolver.ResolveAsync(new NyxIdChatAgentProfileSelectionRequest(
+            "scope-alpha", "conversation-alpha", null));
+
+        result.Status.Should().Be(NyxIdChatAgentProfileResolutionStatus.Selected);
+        result.Source.Should().Be(NyxIdChatAgentProfileSelectionSource.SystemDefault);
+        result.Profile!.ProfileId.Should().Be(system.Target.ProfileId);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_CanaryMiss_ShouldSelectPreviousReviewedProfile()
+    {
+        var owner = AgentProfileOwners.ForSystem();
+        var candidate = ProfileFixture.Create(owner, "candidate", publishedRevision: 2);
+        var previous = ProfileFixture.Create(owner, "previous", publishedRevision: 1);
+        var binding = SystemBinding(
+            candidate.Target,
+            enabled: true,
+            AgentProfilePolicies.CanaryCohortBasisPoints,
+            previous.Target);
+        var catalog = Catalog([candidate, previous], [binding]);
+        var resolver = CreateResolver(
+            new StaticCatalogQueryPort(requestedOwner => SameOwner(requestedOwner, owner) ? catalog : null),
+            new StaticExecutionQueryPort(candidate, previous));
+        var canaryConversation = FindConversation(candidate.Target, insideCanary: true);
+        var baselineConversation = FindConversation(candidate.Target, insideCanary: false);
+
+        var selectedCandidate = await resolver.ResolveAsync(new(
+            "scope-alpha", canaryConversation, null));
+        var selectedBaseline = await resolver.ResolveAsync(new(
+            "scope-alpha", baselineConversation, null));
+
+        selectedCandidate.Status.Should().Be(NyxIdChatAgentProfileResolutionStatus.Selected);
+        selectedCandidate.Profile!.ProfileId.Should().Be(candidate.Target.ProfileId);
+        selectedBaseline.Status.Should().Be(NyxIdChatAgentProfileResolutionStatus.Selected);
+        selectedBaseline.Profile!.ProfileId.Should().Be(previous.Target.ProfileId);
+    }
+
+    [Fact]
     public async Task ResolveAsync_ShouldFailClosedWhenSelectedBindingHasNoExecutionReadModel()
     {
         var scope = ProfileFixture.Create(AgentProfileOwners.ForScope("scope-alpha"), "scope-profile");
@@ -187,6 +237,25 @@ public sealed class MainnetNyxIdChatAgentProfileResolverTests
         null,
         DateTimeOffset.UnixEpoch);
 
+    private static AgentProfileCatalogSnapshot Catalog(
+        IReadOnlyList<ProfileFixture> fixtures,
+        IReadOnlyList<AgentProfileDefaultBinding> bindings) => new(
+        "namespace-system-rollout",
+        1,
+        fixtures[0].Owner.Clone(),
+        fixtures.Select(fixture => new AgentProfileCatalogEntry
+        {
+            ProfileId = fixture.Target.ProfileId,
+            ProfileSlug = fixture.Slug,
+            ProfileActorId = $"profile-{fixture.Target.ProfileId}",
+            Status = AgentProfileProvisioningStatus.Active,
+            PublishedRevision = fixture.Target.PublishedRevision,
+            SnapshotSha256 = fixture.Target.SnapshotSha256,
+        }).ToArray(),
+        bindings,
+        null,
+        DateTimeOffset.UnixEpoch);
+
     private static AgentProfileDefaultBinding ScopeBinding(AgentProfileBindingTarget target) => new()
     {
         AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
@@ -197,7 +266,8 @@ public sealed class MainnetNyxIdChatAgentProfileResolverTests
     private static AgentProfileDefaultBinding SystemBinding(
         AgentProfileBindingTarget target,
         bool enabled,
-        int cohortBasisPoints) => new()
+        int cohortBasisPoints,
+        AgentProfileBindingTarget? previousReviewedTarget = null) => new()
     {
         AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
         Target = target.Clone(),
@@ -205,8 +275,24 @@ public sealed class MainnetNyxIdChatAgentProfileResolverTests
         {
             Enabled = enabled,
             CohortBasisPoints = cohortBasisPoints,
+            PreviousReviewedTarget = previousReviewedTarget?.Clone(),
         },
     };
+
+    private static string FindConversation(AgentProfileBindingTarget target, bool insideCanary) =>
+        Enumerable.Range(0, 100_000)
+            .Select(static index => $"conversation-{index}")
+            .First(identity =>
+                (CohortBucket(target, identity) < AgentProfilePolicies.CanaryCohortBasisPoints) == insideCanary);
+
+    private static int CohortBucket(AgentProfileBindingTarget target, string identity)
+    {
+        var bytes = Encoding.UTF8.GetBytes(
+            $"{target.ProfileId}\0{target.PublishedRevision}\0{identity}");
+        Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
+        SHA256.HashData(bytes, hash);
+        return (int)(BinaryPrimitives.ReadUInt32BigEndian(hash) % AgentProfilePolicies.FullCohortBasisPoints);
+    }
 
     private static bool SameOwner(AgentProfileOwner left, AgentProfileOwner right) =>
         AgentProfileDeterminism.SameOwner(left, right);

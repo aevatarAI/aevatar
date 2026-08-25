@@ -245,6 +245,7 @@ public sealed class EditorControllerSerializationTests
                    roles:
                      - id: planner
                        allowed_tools: [search, calendar]
+                       tool_sets: [nyxid.connected_services]
                      - id: isolated
                        allowed_tools: []
                    steps:
@@ -252,10 +253,12 @@ public sealed class EditorControllerSerializationTests
                        type: llm_call
                        target_role: planner
                        allowed_tools: [calendar]
+                       tool_sets: [nyxid.connected_services]
                      - id: no_tools
                        type: llm_call
                        target_role: isolated
                        allowed_tools: []
+                       tool_sets: []
                    """,
             availableStepTypes = new[] { "llm_call" },
         });
@@ -264,7 +267,9 @@ public sealed class EditorControllerSerializationTests
         parseResponse.StatusCode.Should().Be(HttpStatusCode.OK, parseBody);
         parseBody.Should().NotContain("\"code\":\"unknown_field\"");
         parseBody.Should().Contain("\"allowedTools\":[\"search\",\"calendar\"]");
+        parseBody.Should().Contain("\"toolSets\":[\"nyxid.connected_services\"]");
         parseBody.Should().Contain("\"allowedTools\":[\"calendar\"]");
+        parseBody.Should().Contain("\"toolSets\":[]");
         parseBody.Should().Contain("\"allowedTools\":[]");
 
         using var parsedJson = JsonDocument.Parse(parseBody);
@@ -278,9 +283,11 @@ public sealed class EditorControllerSerializationTests
         var serializeBody = await serializeResponse.Content.ReadAsStringAsync();
         serializeResponse.StatusCode.Should().Be(HttpStatusCode.OK, serializeBody);
         serializeBody.Should().Contain("allowed_tools:");
+        serializeBody.Should().Contain("tool_sets:");
         serializeBody.Should().Contain("- search");
         serializeBody.Should().Contain("- calendar");
         serializeBody.Should().Contain("allowed_tools: []");
+        serializeBody.Should().Contain("tool_sets: []");
     }
 
     [Fact]

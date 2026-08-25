@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Projection.Runtime;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -37,14 +38,11 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
         EnforceGraphProviderPolicy(configuration, enableInMemoryGraph);
 
-        if (HasAllWorkflowDocumentReaders(services, documentProvider.Kind))
-            return services;
-
         var graphProviderCount = (enableNeo4jGraph ? 1 : 0) + (enableInMemoryGraph ? 1 : 0);
-        if (graphProviderCount != 1)
+        if (graphProviderCount > 1)
         {
             throw new InvalidOperationException(
-                "Exactly one graph projection provider must be enabled. Configure either Projection:Graph:Providers:Neo4j:Enabled=true or Projection:Graph:Providers:InMemory:Enabled=true.");
+                "Only one graph projection provider can be enabled. Configure either Projection:Graph:Providers:Neo4j:Enabled=true or Projection:Graph:Providers:InMemory:Enabled=true.");
         }
 
         if (documentProvider.ElasticsearchEnabled)
@@ -56,14 +54,26 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             AddInMemoryDocumentStores(services);
         }
 
+        var expectedGraphProvider = enableNeo4jGraph
+            ? new ProjectionGraphProviderStatus("Neo4j", Enabled: true)
+            : enableInMemoryGraph
+                ? new ProjectionGraphProviderStatus("InMemory", Enabled: true)
+                : new ProjectionGraphProviderStatus("Disabled", Enabled: false);
+        if (UseExistingGraphProviderOrThrow(services, expectedGraphProvider))
+            return services;
+
         if (enableNeo4jGraph)
         {
             services.AddNeo4jGraphProjectionStore(
                 optionsFactory: _ => BuildNeo4jGraphOptions(configuration));
         }
-        else
+        else if (enableInMemoryGraph)
         {
             services.AddInMemoryGraphProjectionStore();
+        }
+        else
+        {
+            services.AddDisabledGraphProjectionStore();
         }
 
         return services;
@@ -93,6 +103,13 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             configuration,
             static document => document.Id);
+        // The fleet capability authority read model is activated by the workflow projection
+        // registration (AddRuntimeFleetCapabilityProjection) and gates every schema adoption;
+        // it must have a document store binding on the same provider or admission fails closed.
+        TryAddElasticsearchDocumentStore<RuntimeFleetCapabilityAuthorityCurrentStateDocument>(
+            services,
+            configuration,
+            static document => document.Id);
 
         AddWorkflowReadModelInventoryDescriptors(services, ElasticsearchEngineLabel);
     }
@@ -119,6 +136,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             static document => document.Id,
             static document => document.UpdatedAt);
+        TryAddInMemoryDocumentStore<RuntimeFleetCapabilityAuthorityCurrentStateDocument>(
+            services,
+            static document => document.Id,
+            static document => document.UpdatedAt);
 
         AddWorkflowReadModelInventoryDescriptors(services, InMemoryEngineLabel);
     }
@@ -139,6 +160,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         TryAddWorkflowReadModelDescriptor<WorkflowActorBindingDocument>(services, "workflow-actor-binding", "WorkflowDefinitionGAgent", engineLabel, shape);
         TryAddWorkflowReadModelDescriptor<WorkflowCatalogCurrentStateDocument>(services, "workflow-catalog-current-state", "WorkflowDefinitionGAgent", engineLabel, shape);
         TryAddWorkflowReadModelDescriptor<WorkflowExternalApprovalContinuationDocument>(services, "workflow-external-approval-continuation", "WorkflowRunGAgent", engineLabel, shape);
+        TryAddWorkflowReadModelDescriptor<RuntimeFleetCapabilityAuthorityCurrentStateDocument>(services, "runtime-fleet-capability-authority-current-state", "RuntimeFleetCapabilityAuthorityGAgent", engineLabel, shape);
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered
@@ -166,17 +188,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                 sp.GetRequiredService<IProjectionDocumentReader<TDocument, string>>()));
         services.AddSingleton<IProjectionReadModelDescriptor>(sp =>
             sp.GetRequiredService<ProjectionDocumentReadModelDescriptor<TDocument>>());
-    }
-
-    private static bool HasAllWorkflowDocumentReaders(
-        IServiceCollection services,
-        ProjectionDocumentProviderKind providerKind)
-    {
-        return HasDocumentReaderForProvider<WorkflowExecutionCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkflowRunInsightReportDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkflowExternalApprovalContinuationDocument>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDocument>(IServiceCollection services)
@@ -255,17 +266,40 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         {
             throw new InvalidOperationException(
                 "Legacy provider single-selection options are no longer supported. " +
-                "Use Projection:Document:Providers:*:Enabled and Projection:Graph:Providers:*:Enabled with exactly one provider enabled per store type.");
+                "Use Projection:Document:Providers:*:Enabled with exactly one document provider and " +
+                "Projection:Graph:Providers:*:Enabled with at most one graph provider.");
         }
     }
 
     private static bool ResolveNeo4jGraphEnabled(IConfiguration configuration)
     {
         var section = configuration.GetSection("Projection:Graph:Providers:Neo4j");
-        var explicitEnabled = section["Enabled"];
-        var hasUri = (section["Uri"]?.Trim().Length ?? 0) > 0;
+        return ResolveOptionalBool(section["Enabled"], fallbackValue: false);
+    }
 
-        return ResolveOptionalBool(explicitEnabled, hasUri);
+    private static bool UseExistingGraphProviderOrThrow(
+        IServiceCollection services,
+        ProjectionGraphProviderStatus expectedStatus)
+    {
+        if (!services.Any(x => x.ServiceType == typeof(IProjectionGraphStore)))
+            return false;
+
+        var statusDescriptors = services
+            .Where(x => x.ServiceType == typeof(ProjectionGraphProviderStatus))
+            .ToArray();
+        var registeredStatus = statusDescriptors.Length == 1
+            ? statusDescriptors[0].ImplementationInstance as ProjectionGraphProviderStatus
+            : null;
+        var hasVersionedStore = services.Any(x => x.ServiceType == typeof(IVersionedProjectionGraphStore));
+        if (!hasVersionedStore || registeredStatus != expectedStatus)
+        {
+            throw new InvalidOperationException(
+                $"The existing graph projection provider registration is incompatible with the configured " +
+                $"'{expectedStatus.ProviderName}' provider. Register IProjectionGraphStore, " +
+                "IVersionedProjectionGraphStore, and ProjectionGraphProviderStatus as one matching provider.");
+        }
+
+        return true;
     }
 
     private static Neo4jProjectionGraphStoreOptions BuildNeo4jGraphOptions(IConfiguration configuration)
@@ -302,7 +336,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         {
             throw new InvalidOperationException(
                 "InMemory graph provider is not allowed by projection policy. " +
-                "Disable Projection:Graph:Providers:InMemory:Enabled and configure Neo4j.");
+                "Disable Projection:Graph:Providers:InMemory:Enabled and either configure Neo4j or disable graph projection.");
         }
     }
 

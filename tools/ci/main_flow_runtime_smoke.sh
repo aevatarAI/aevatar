@@ -276,7 +276,7 @@ wait_for_readiness() {
     fi
 
     local code
-    code="$(curl --max-time 2 -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${HTTP_PORT}/api/status" || true)"
+    code="$(curl --max-time 2 -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${HTTP_PORT}/health/ready" || true)"
     if [[ "${code}" == "200" ]]; then
       ready=1
       break

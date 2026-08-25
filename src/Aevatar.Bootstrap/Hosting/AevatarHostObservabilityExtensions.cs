@@ -16,7 +16,22 @@ public static class AevatarHostObservabilityExtensions
         "Aevatar.Agents",
         "Aevatar.Api",
         "Aevatar.CQRS.Projection",
+        "Aevatar.CQRS.Projection.Providers.Neo4j",
         "Aevatar.Kafka.Transport",
+        "Aevatar.Workflow",
+    ];
+
+    internal static readonly double[] DefaultProjectionLatencyBucketsMs =
+    [
+        1d, 5d, 10d, 25d, 50d, 100d, 250d, 500d, 1000d, 2500d, 5000d,
+        10000d, 15000d, 30000d, 60000d, 120000d, 300000d, 600000d,
+    ];
+
+    internal static readonly double[] DefaultWorkflowToolCallLatencyBucketsMs =
+    [
+        1d, 5d, 10d, 25d, 50d, 100d, 250d, 500d, 1000d, 2500d, 5000d,
+        10000d, 30000d, 60000d, 120000d, 300000d, 600000d, 900000d,
+        1200000d, 1800000d,
     ];
 
     public static WebApplicationBuilder AddAevatarHostObservability(
@@ -37,6 +52,12 @@ public static class AevatarHostObservabilityExtensions
         var runtimeLatencyBucketsMs = ResolveHistogramBuckets(
             builder.Configuration["Observability:Metrics:RuntimeLatencyBucketsMs"],
             [1d, 5d, 10d, 25d, 50d, 100d, 250d, 500d, 1000d, 2500d, 5000d, 10000d]);
+        var projectionLatencyBucketsMs = ResolveHistogramBuckets(
+            builder.Configuration["Observability:Metrics:ProjectionLatencyBucketsMs"],
+            DefaultProjectionLatencyBucketsMs);
+        var workflowToolCallLatencyBucketsMs = ResolveHistogramBuckets(
+            builder.Configuration["Observability:Metrics:WorkflowToolCallLatencyBucketsMs"],
+            DefaultWorkflowToolCallLatencyBucketsMs);
         var otlpEndpoint = ResolveOtlpEndpoint(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
 
         builder.Services
@@ -68,7 +89,16 @@ public static class AevatarHostObservabilityExtensions
                         new ExplicitBucketHistogramConfiguration { Boundaries = apiLatencyBucketsMs })
                     .AddView(
                         instrumentName: "aevatar.runtime.event_handle_duration_ms",
-                        new ExplicitBucketHistogramConfiguration { Boundaries = runtimeLatencyBucketsMs });
+                        new ExplicitBucketHistogramConfiguration { Boundaries = runtimeLatencyBucketsMs })
+                    .AddView(
+                        instrumentName: "aevatar.projection.materializer.duration",
+                        new ExplicitBucketHistogramConfiguration { Boundaries = projectionLatencyBucketsMs })
+                    .AddView(
+                        instrumentName: "aevatar.projection.neo4j.write.duration",
+                        new ExplicitBucketHistogramConfiguration { Boundaries = projectionLatencyBucketsMs })
+                    .AddView(
+                        instrumentName: "aevatar.workflow.tool_call.phase.duration",
+                        new ExplicitBucketHistogramConfiguration { Boundaries = workflowToolCallLatencyBucketsMs });
 
                 if (otlpEndpoint is not null)
                     metrics.AddOtlpExporter(options => options.Endpoint = otlpEndpoint);

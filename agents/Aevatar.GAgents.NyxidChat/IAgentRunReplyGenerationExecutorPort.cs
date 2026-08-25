@@ -281,7 +281,7 @@ public sealed record AgentRunReplyGenerationExecutionRequest(
     string RunActorId,
     int Attempt,
     NeedsLlmReplyEvent Request,
-    AgentProfileTurnCatalog? TurnCatalog = null);
+    AgentTurnToolCatalog? TurnCatalog = null);
 
 public sealed record AgentRunReplyStepExecutionRequest(
     string RunId,
@@ -291,6 +291,6 @@ public sealed record AgentRunReplyStepExecutionRequest(
     NeedsLlmReplyEvent Request,
     AgentRunReplyStepState StepState,
     Func<LLMStreamChunk, CancellationToken, Task>? ReportChunkAsync = null,
-    AgentProfileTurnCatalog? TurnCatalog = null,
+    AgentTurnToolCatalog? TurnCatalog = null,
     bool AllowDurableToolAuthorization = false,
     bool? AllowMultipleToolCalls = null);

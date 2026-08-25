@@ -39,7 +39,9 @@ public sealed class ConditionalModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = true, Output = input,
+            OutputProvenance = WorkflowStepOutputProvenance.ForwardedInput,
             BranchKey = branchKey,
         };
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);

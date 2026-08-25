@@ -68,7 +68,48 @@ public sealed record ChatHistoryTurnTerminalNotification(
     ChatHistoryTurnTerminalStatus Status,
     string Text,
     string ErrorCode,
-    DateTimeOffset ObservedAt);
+    DateTimeOffset ObservedAt,
+    IReadOnlyList<ChatHistoryTurnOperation>? Operations = null);
+
+public enum ChatHistoryTurnOperationKind
+{
+    Model = 1,
+    Tool = 2,
+    Other = 3,
+}
+
+/// <summary>
+/// One Model or Tool operation of a terminal turn, appended with that turn so a
+/// reopened transcript can render its trajectory.
+/// </summary>
+/// <remarks>
+/// Content fields are sanitized, size-bounded previews produced by the owning
+/// conversation actor. <paramref name="PreviewsTruncated"/> marks them as
+/// fragments. Timing is null when the operation never reported it and must not
+/// be inferred from arrival time. Tool result bodies are absent by design:
+/// untrusted external text must not be retained by the conversation actor.
+/// </remarks>
+public sealed record ChatHistoryTurnOperation(
+    string OperationId,
+    int Order,
+    ChatHistoryTurnOperationKind Kind,
+    string Title,
+    string Status,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? CompletedAt,
+    string? Model = null,
+    string? Provider = null,
+    string? FinishReason = null,
+    int PromptTokens = 0,
+    int CompletionTokens = 0,
+    int TotalTokens = 0,
+    string? InputPreview = null,
+    string? OutputPreview = null,
+    string? ArgumentsPreview = null,
+    bool PreviewsTruncated = false,
+    string? SafeMessage = null,
+    IReadOnlyList<string>? AvailableToolNames = null,
+    bool ToolCatalogCaptured = false);
 
 public enum ChatHistoryDeleteResultStatus
 {

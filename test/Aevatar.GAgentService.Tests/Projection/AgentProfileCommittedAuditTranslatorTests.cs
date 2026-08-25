@@ -114,6 +114,8 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         record.Annotations.Should().Contain("admission_kind", "system");
         record.Annotations.Should().Contain("enabled", "true");
         record.Annotations.Should().Contain("cohort_basis_points", "2500");
+        record.Annotations.Should().Contain("previous_reviewed_profile_id", "prof-previous");
+        record.Annotations.Should().Contain("previous_reviewed_published_revision", "1");
         AssertSensitiveBodiesOmitted(record);
     }
 
@@ -203,6 +205,13 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
             {
                 Enabled = true,
                 CohortBasisPoints = 2_500,
+                PreviousReviewedTarget = new AgentProfileBindingTarget
+                {
+                    Owner = owner.Clone(),
+                    ProfileId = "prof-previous",
+                    PublishedRevision = 1,
+                    SnapshotSha256 = ByteString.CopyFrom(Enumerable.Repeat((byte)0x33, 32).ToArray()),
+                },
             };
         }
         else

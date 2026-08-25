@@ -224,6 +224,7 @@ public class CiTestAuthorityContractTests
         Assert.Contains("start_nyxid_stub", script, StringComparison.Ordinal);
         Assert.Contains("wait_for_schedule_provisioning", script, StringComparison.Ordinal);
         Assert.Contains("scheduleProvisioningId", script, StringComparison.Ordinal);
+        Assert.Contains("/health/ready", script, StringComparison.Ordinal);
     }
 
     [Theory]

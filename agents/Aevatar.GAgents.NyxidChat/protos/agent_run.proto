@@ -349,6 +349,12 @@ message AgentRunReplyStepState {
   bool empty_reply_retry = 25;
   repeated AgentRunPendingToolAuthorization pending_tool_authorizations = 26;
   bool pending_tool_authorization_consumed = 27;
+  // Immutable authority pinned before the first user-facing model call. Exact tool objects are
+  // request-local and are therefore re-materialized from these typed facts on replay/retry.
+  aevatar.ai.AgentProfileSnapshot agent_profile_snapshot = 28;
+  aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 29;
+  aevatar.ai.AgentTurnToolCatalogProofPayload tool_catalog_proof = 30;
+  string tool_catalog_policy_version = 31;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
@@ -370,6 +376,12 @@ message AgentRunLlmStepResult {
   // initial step context predates BuildLlmStepRequest and therefore cannot
   // supply this value to a later approval continuation on its own.
   string tool_request_id = 11;
+  // Exact server-authorized catalog supplied to the provider for this model
+  // invocation. Empty also truthfully represents a no-tools model round.
+  repeated string available_tool_names = 12;
+  // Distinguishes an exact empty catalog from legacy evidence that did not
+  // capture the model-visible catalog at all.
+  bool tool_catalog_captured = 13;
 }
 
 // Typed tool IO facts returned after the run actor has reconciled and persisted

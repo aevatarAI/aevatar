@@ -12,6 +12,7 @@ namespace Aevatar.Foundation.Core.TypeSystem;
 public sealed class AgentKindRegistryBuilder
 {
     private readonly Dictionary<string, AgentRegistration> _byKind = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<Type>> _migrationTypesByKind = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Scans <paramref name="assemblies"/> for non-abstract concrete
@@ -24,7 +25,9 @@ public sealed class AgentKindRegistryBuilder
     {
         ArgumentNullException.ThrowIfNull(assemblies);
         foreach (var assembly in assemblies)
-            ScanAssembly(assembly);
+            ScanAgentAssembly(assembly);
+        foreach (var assembly in assemblies)
+            ScanMigrationAssembly(assembly);
         return this;
     }
 
@@ -59,9 +62,36 @@ public sealed class AgentKindRegistryBuilder
     /// post-build mutations to the builder do not leak into the constructed
     /// <see cref="AgentKindRegistry"/>.
     /// </summary>
-    public IReadOnlyCollection<AgentRegistration> Build() => _byKind.Values.ToList();
+    public IReadOnlyCollection<AgentRegistration> Build()
+    {
+        var registrations = new List<AgentRegistration>(_byKind.Count);
+        foreach (var registration in _byKind.Values)
+        {
+            var discovered = _migrationTypesByKind.GetValueOrDefault(registration.Kind) ?? [];
+            var declared = registration.StateMigrationTypes ?? [];
+            registrations.Add(registration with
+            {
+                StateMigrationTypes = declared
+                    .Concat(discovered)
+                    .Distinct()
+                    .ToArray(),
+            });
+        }
 
-    private void ScanAssembly(Assembly assembly)
+        var unknownKinds = _migrationTypesByKind.Keys
+            .Where(kind => !_byKind.ContainsKey(kind))
+            .OrderBy(static kind => kind, StringComparer.Ordinal)
+            .ToArray();
+        if (unknownKinds.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"State migrations target unregistered agent kinds: {string.Join(", ", unknownKinds)}.");
+        }
+
+        return registrations;
+    }
+
+    private void ScanAgentAssembly(Assembly assembly)
     {
         ArgumentNullException.ThrowIfNull(assembly);
         foreach (var type in SafeGetTypes(assembly))
@@ -77,6 +107,29 @@ public sealed class AgentKindRegistryBuilder
 
             var registration = AgentRegistration.FromAgentType(type);
             AddInternal(registration);
+        }
+    }
+
+    private void ScanMigrationAssembly(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        foreach (var type in SafeGetTypes(assembly))
+        {
+            if (type.IsAbstract || type.IsInterface || type.IsGenericTypeDefinition)
+                continue;
+
+            var migration = type.GetCustomAttribute<ActorStateMigrationAttribute>(inherit: false);
+            if (migration == null)
+                continue;
+
+            if (!_migrationTypesByKind.TryGetValue(migration.AgentKind, out var types))
+            {
+                types = [];
+                _migrationTypesByKind[migration.AgentKind] = types;
+            }
+
+            if (!types.Contains(type))
+                types.Add(type);
         }
     }
 

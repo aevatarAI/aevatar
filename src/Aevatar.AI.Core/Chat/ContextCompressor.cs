@@ -9,6 +9,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.Core.Chat;
 
@@ -250,6 +251,7 @@ public static class ContextCompressor
             ],
             Model = model,
             Tools = null,
+            ToolCatalogProof = AgentTurnToolCatalogProof.RestrictedEmpty(),
             MaxTokens = 1024,
         };
 

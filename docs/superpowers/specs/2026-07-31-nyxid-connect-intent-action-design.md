@@ -15,7 +15,7 @@ Make an ordinary request such as `我要连接 AWS Cost Explorer` reach the exis
 ## Root Cause
 
 The persisted Agent Profile already classifies members with the strong typed
-`AgentProfileSideEffectClass`, but `AgentProfileTurnCatalogMaterializer` drops that
+`AgentProfileSideEffectClass`, but `AgentTurnToolCatalogMaterializer` drops that
 field when it builds classifier candidates. The streaming classifier therefore sees
 only intent names and routing descriptions, and its instruction does not distinguish
 the user's final requested outcome from an intermediate read-only catalog lookup. A

@@ -152,7 +152,8 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                 SourceKind: "service_revision",
                 CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),
                 WorkflowId: bindingIdentity.WorkflowId,
-                RevisionId: bindingIdentity.RevisionId),
+                RevisionId: bindingIdentity.RevisionId,
+                ToolCatalogPolicyVersion: plan.ToolCatalogPolicyVersion),
             preferredActorId,
             ct);
 

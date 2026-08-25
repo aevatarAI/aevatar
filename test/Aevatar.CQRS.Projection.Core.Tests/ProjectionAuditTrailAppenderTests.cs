@@ -163,6 +163,65 @@ public sealed class ProjectionAuditTrailAppenderTests
         store.Documents.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task AppendAsync_WhenLegacyHashesDifferOnlyByTransportTrace_ShouldReturnDuplicate()
+    {
+        var original = CreateRecord("audit-1");
+        original.Correlation.TraceId = "0123456789abcdef0123456789abcdef";
+        original.Correlation.SpanId = "0123456789abcdef";
+        original.Correlation.Traceparent =
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+        original.Correlation.Tracestate = "vendor=attempt-1";
+        var retry = original.Clone();
+        retry.Correlation.TraceId = "fedcba9876543210fedcba9876543210";
+        retry.Correlation.SpanId = "fedcba9876543210";
+        retry.Correlation.Traceparent =
+            "00-fedcba9876543210fedcba9876543210-fedcba9876543210-01";
+        retry.Correlation.Tracestate = "vendor=attempt-2";
+        retry.RecordedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T08:10:11+00:00"));
+        var originalHash = ComputeContentHash(original);
+        var retryHash = ComputeContentHash(retry);
+        var store = new RecordingAuditTrailArtifactStore
+        {
+            Existing = new AuditTrailDocument
+            {
+                AuditId = "audit-1",
+                ContentHash = originalHash,
+                Record = original,
+            },
+        };
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(retry);
+
+        originalHash.Should().NotBe(retryHash);
+        result.Status.Should().Be(AuditTrailAppendStatus.Duplicate);
+        store.Documents.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenLegacyHashDiffersAndBusinessCorrelationChanges_ShouldReturnConflict()
+    {
+        var original = CreateRecord("audit-1");
+        var conflicting = original.Clone();
+        conflicting.Correlation.RequestId = "different-request";
+        var store = new RecordingAuditTrailArtifactStore
+        {
+            Existing = new AuditTrailDocument
+            {
+                AuditId = "audit-1",
+                ContentHash = ComputeContentHash(original),
+                Record = original,
+            },
+        };
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(conflicting);
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Conflict);
+        store.Documents.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("waiting_approval")]
     [InlineData("running")]

@@ -45,6 +45,17 @@ public interface INyxIdBrokerCallbackClient
         CancellationToken ct = default);
 
     /// <summary>
+    /// Exchanges an OAuth authorization code whose authorize/token request carried explicit
+    /// RFC 8707 resource indicators for an interactive service-access review.
+    /// </summary>
+    Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
+        string authorizationCode,
+        string codeVerifier,
+        string redirectUri,
+        IReadOnlyList<string>? resourceUris,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Resolves the NyxID owner of an existing binding through the owning
     /// client's binding-introspection endpoint. Used only to migrate legacy
     /// Aevatar binding documents that predate <c>owner_scope_id</c>.

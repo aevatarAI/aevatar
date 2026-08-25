@@ -47,7 +47,8 @@ public sealed record ChatHistoryConversationMessagesResult(
     ChatHistoryConversationResultStatus Status,
     IReadOnlyList<StoredChatMessage> Messages,
     long StateVersion,
-    ChatHistoryConversationProjectionStatus ProjectionStatus)
+    ChatHistoryConversationProjectionStatus ProjectionStatus,
+    IReadOnlyList<StoredChatTurnOperation> Operations)
 {
     public static ChatHistoryConversationMessagesResult Found(
         IReadOnlyList<StoredChatMessage> messages) =>
@@ -56,26 +57,67 @@ public sealed record ChatHistoryConversationMessagesResult(
     public static ChatHistoryConversationMessagesResult Found(
         IReadOnlyList<StoredChatMessage> messages,
         long stateVersion) =>
+        Found(messages, stateVersion, []);
+
+    public static ChatHistoryConversationMessagesResult Found(
+        IReadOnlyList<StoredChatMessage> messages,
+        long stateVersion,
+        IReadOnlyList<StoredChatTurnOperation> operations) =>
         new(
             ChatHistoryConversationResultStatus.Found,
             messages,
             Math.Max(0, stateVersion),
-            ChatHistoryConversationProjectionStatus.Current);
+            ChatHistoryConversationProjectionStatus.Current,
+            operations);
 
     public static ChatHistoryConversationMessagesResult Pending() =>
         new(
             ChatHistoryConversationResultStatus.Found,
             [],
             0,
-            ChatHistoryConversationProjectionStatus.Pending);
+            ChatHistoryConversationProjectionStatus.Pending,
+            []);
 
     public static ChatHistoryConversationMessagesResult NotFound() =>
         new(
             ChatHistoryConversationResultStatus.NotFound,
             [],
             0,
-            ChatHistoryConversationProjectionStatus.Current);
+            ChatHistoryConversationProjectionStatus.Current,
+            []);
 }
+
+/// <summary>
+/// One stored Model or Tool operation of a conversation turn.
+/// </summary>
+/// <remarks>
+/// This is the durable copy of the trajectory ledger. Timing is null when the
+/// operation never reported it, and previews are sanitized fragments whenever
+/// <see cref="PreviewsTruncated"/> is set. Tool result bodies are absent by
+/// design: untrusted external text is not retained by the conversation actor.
+/// </remarks>
+public sealed record StoredChatTurnOperation(
+    string TurnId,
+    string OperationId,
+    int Order,
+    string Kind,
+    string Title,
+    string Status,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? CompletedAt,
+    string? Model = null,
+    string? Provider = null,
+    string? FinishReason = null,
+    int? PromptTokens = null,
+    int? CompletionTokens = null,
+    int? TotalTokens = null,
+    string? InputPreview = null,
+    string? OutputPreview = null,
+    string? ArgumentsPreview = null,
+    bool PreviewsTruncated = false,
+    string? SafeMessage = null,
+    IReadOnlyList<string>? AvailableToolNames = null,
+    bool ToolCatalogCaptured = false);
 
 public enum ChatHistoryCreateRecoveryStatus
 {

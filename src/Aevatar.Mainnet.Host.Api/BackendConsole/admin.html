@@ -1010,6 +1010,91 @@ body.observatory-immersive .view{height:100vh;}
   .ap-action-bar{margin:14px -6px -6px;padding:11px;align-items:stretch}.ap-action-state{width:100%;margin-right:0}.ap-action-buttons,.ap-action-secondary{width:100%;padding-right:0;margin-right:0;border-right:0}.ap-action-buttons .btn{flex:1 1 auto;justify-content:center}
   .ap-skill-modal{left:0;right:0;top:auto;bottom:0;transform:none;width:100%;height:min(92dvh,760px);max-height:none;border-radius:16px 16px 0 0}.ap-skill-modal-head,.ap-skill-modal-search,.ap-skill-modal-body,.ap-skill-modal-foot{padding-left:14px;padding-right:14px}.ap-skill-modal-foot{flex-wrap:wrap}.ap-skill-pager{width:100%;order:2;margin-right:0;justify-content:space-between}.ap-skill-option{grid-template-columns:auto minmax(0,1fr)}.ap-skill-result-guid{grid-column:2;white-space:normal;overflow-wrap:anywhere}.ap-skill-result-error{grid-column:2}
 }
+
+/* ---------------- Models catalog ---------------- */
+.models-page{display:flex;flex-direction:column;gap:16px;}
+.models-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--surface);border:1px solid var(--border);border-radius:var(--r-panel);box-shadow:var(--shadow-card);}
+.models-fact{min-width:0;padding:13px 15px;border-right:1px solid var(--border);}
+.models-fact:last-child{border-right:0;}
+.models-fact small{display:block;margin-bottom:3px;color:var(--faint);font-size:10.5px;text-transform:uppercase;}
+.models-fact b,.models-fact code{display:block;overflow:hidden;color:var(--heading);font-size:12.5px;text-overflow:ellipsis;white-space:nowrap;}
+.models-fact code{font-family:var(--mono);font-weight:500;}
+.models-notice{display:flex;align-items:flex-start;gap:9px;padding:11px 13px;border:1px solid var(--primary-line);border-radius:8px;background:var(--primary-weak);color:var(--primary-strong);font-size:12.5px;}
+.models-notice.waiting{border-color:var(--waiting-bd);background:var(--waiting-bg);color:#8a570b;}
+.models-notice.success{border-color:var(--success-bd);background:var(--success-bg);color:var(--success);}
+.models-notice.failed{border-color:var(--failed-bd);background:var(--failed-bg);color:var(--failed);}
+.models-notice .grow{flex:1 1 auto;}
+.models-config{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-panel);box-shadow:var(--shadow-card);overflow:hidden;}
+.models-config-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--border);}
+.models-config-title{display:flex;flex:1 1 280px;min-width:0;flex-direction:column;gap:2px;}
+.models-config-title b{color:var(--heading);font-size:13.5px;}
+.models-config-title span{color:var(--faint);font-size:11.5px;}
+.models-config-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.models-config-actions .btn-primary:disabled{background:var(--surface-3);border-color:var(--border);color:var(--faint);opacity:.72;cursor:not-allowed;box-shadow:none;}
+.models-mode{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:13px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);}
+.models-mode-label{color:var(--muted);font-size:12.5px;font-weight:600;}
+.models-mode-help{flex:1 1 260px;color:var(--faint);font-size:11.5px;}
+.models-table .protable tbody tr{cursor:default;}
+.models-table .protable td{vertical-align:top;}
+.models-source-name{display:flex;min-width:180px;flex-direction:column;gap:2px;}
+.models-source-name b{color:var(--heading);font-size:13px;}
+.models-source-name span{color:var(--faint);font-size:11.5px;}
+.models-identity{display:flex;max-width:360px;flex-direction:column;gap:3px;}
+.models-identity code{overflow-wrap:anywhere;color:var(--heading);font:11.5px/1.4 var(--mono);}
+.models-identity span{color:var(--faint);font-size:10.5px;}
+.models-model-list{display:flex;max-width:360px;flex-wrap:wrap;gap:5px;}
+.models-model-chip{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:2px 7px;border:1px solid var(--border);border-radius:5px;background:var(--surface-2);color:var(--muted);font:11px/1.5 var(--mono);overflow-wrap:anywhere;}
+.models-model-chip button{display:inline-grid;width:24px;height:24px;flex:0 0 24px;place-items:center;border:0;border-radius:4px;background:none;color:var(--faint);font-size:14px;line-height:1;cursor:pointer;}
+.models-model-chip button:hover{color:var(--failed);}
+.models-model-chip button:focus-visible{outline:2px solid var(--primary);outline-offset:1px;}
+.models-row-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;white-space:nowrap;}
+.models-empty{padding:46px 20px;}
+.models-empty.explicit{background:var(--surface-2);}
+.models-editor-back{position:fixed;inset:0;background:rgba(14,21,38,.36);z-index:78;}
+.models-editor{position:fixed;left:50%;top:50%;z-index:79;display:flex;width:min(760px,94vw);max-height:min(800px,90vh);transform:translate(-50%,-50%);flex-direction:column;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow-hover);}
+.models-editor-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:17px 20px;border-bottom:1px solid var(--border);}
+.models-editor-head b{display:block;color:var(--heading);font-size:15px;}
+.models-editor-head span{display:block;margin-top:2px;color:var(--faint);font-size:11.5px;}
+.models-editor-body{display:flex;min-height:0;flex-direction:column;gap:16px;overflow:auto;padding:18px 20px;}
+.models-editor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;}
+.models-editor-grid .wide{grid-column:1/-1;}
+.models-editor .wz-field select,.models-editor .wz-field input{width:100%;height:36px;border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:0 10px;color:var(--heading);font:13px var(--sans);}
+.models-editor .wz-field select:focus,.models-editor .wz-field input:focus{outline:0;border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-weak);}
+.models-exact{padding:10px 11px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);}
+.models-exact code{display:block;overflow-wrap:anywhere;color:var(--heading);font:11.5px/1.55 var(--mono);}
+.models-discovery{display:flex;min-width:0;flex-direction:column;gap:10px;padding:13px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
+.models-discovery-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;}
+.models-discovery-title{display:flex;flex:1 1 280px;min-width:0;flex-direction:column;gap:2px;}
+.models-discovery-title b{color:var(--heading);font-size:12.5px;}
+.models-discovery-title span{color:var(--faint);font-size:11.5px;line-height:1.5;}
+.models-discovery-head .btn{flex:0 0 auto;white-space:nowrap;}
+.models-discovery-state{display:flex;align-items:center;gap:8px;min-height:22px;color:var(--muted);font-size:11.5px;}
+.models-discovery-state.failed{align-items:flex-start;padding:9px 10px;border:1px solid var(--failed-bd);border-radius:8px;background:var(--failed-bg);color:var(--failed);}
+.models-discovery-state .grow{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;}
+.models-discovery-state .btn{flex:0 0 auto;}
+.models-discovery-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.models-discovery-search{flex:1 1 240px;min-width:0;height:34px;border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:0 10px;color:var(--heading);font:12.5px var(--sans);}
+.models-discovery-search:focus{outline:0;border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-weak);}
+.models-discovery-count{color:var(--faint);font:11px var(--mono);white-space:nowrap;}
+.models-discovery-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.models-discovery-master{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-size:11.5px;cursor:pointer;}
+.models-discovery-master input,.models-discovery-option input{width:16px;height:16px;flex:0 0 16px;margin:0;accent-color:var(--primary);}
+.models-discovery-list{display:flex;max-height:230px;min-height:42px;flex-direction:column;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--border);border-radius:8px;background:var(--surface);}
+.models-discovery-option{display:grid;grid-template-columns:16px minmax(0,1fr);align-items:center;gap:9px;min-height:38px;padding:7px 10px;border-bottom:1px solid var(--border);cursor:pointer;}
+.models-discovery-option:last-child{border-bottom:0;}
+.models-discovery-option:hover{background:var(--surface-2);}
+.models-discovery-option code{min-width:0;overflow-wrap:anywhere;color:var(--heading);font:11.5px/1.45 var(--mono);}
+.models-discovery-empty{display:grid;min-height:68px;place-items:center;padding:12px;color:var(--faint);font-size:11.5px;text-align:center;}
+.models-manual{display:flex;align-items:center;gap:8px;}
+.models-manual input{flex:1 1 auto;min-width:0;}
+.models-manual .btn{flex:0 0 auto;white-space:nowrap;}
+.models-editor-models{display:flex;min-height:34px;align-items:flex-start;flex-wrap:wrap;gap:6px;padding-top:2px;}
+.models-editor-foot{display:flex;align-items:center;justify-content:flex-end;gap:9px;padding:13px 20px;border-top:1px solid var(--border);}
+@media (max-width:900px){.models-summary{grid-template-columns:repeat(2,minmax(0,1fr));}.models-fact:nth-child(2){border-right:0;}.models-fact:nth-child(-n+2){border-bottom:1px solid var(--border);}}
+@media (max-width:620px){
+  .models-summary{grid-template-columns:1fr;}.models-fact,.models-fact:nth-child(2){border-right:0;border-bottom:1px solid var(--border);}.models-fact:last-child{border-bottom:0;}
+  .models-notice{flex-wrap:wrap;}.models-notice .btn{width:100%;justify-content:center;}.models-config-actions{width:100%;}.models-config-actions .btn{flex:1 1 auto;justify-content:center;}.models-editor{left:0;right:0;top:auto;bottom:0;width:100%;max-height:92dvh;transform:none;border-radius:12px 12px 0 0;}.models-editor-grid{grid-template-columns:1fr;}.models-editor-grid .wide{grid-column:auto;}.models-editor-head,.models-editor-body,.models-editor-foot{padding-left:14px;padding-right:14px;}.models-editor-foot .btn{flex:1 1 0;justify-content:center;}.models-discovery-head .btn{width:100%;justify-content:center;}.models-discovery-tools{align-items:stretch;}.models-discovery-search{flex-basis:100%;}.models-discovery-count{align-self:center;}.models-discovery-bulk{justify-content:space-between;}.models-discovery-list{max-height:34dvh;}.models-manual{align-items:stretch;flex-direction:column;}.models-manual .btn{justify-content:center;}
+}
 .sc-cron{font-size:11.5px;background:var(--surface-3);border:1px solid var(--border);padding:1px 7px;border-radius:5px;color:var(--muted);}
 .sc-state{margin-left:auto;font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px;}
 .sc-state.on{color:var(--success);background:var(--success-bg);}
@@ -1388,6 +1473,10 @@ function employeeById(detail,eid){ return null; }
 var OIDC={ authority:BACKEND_CONSOLE_CONFIG.authority||'', clientId:BACKEND_CONSOLE_CONFIG.clientId||'',
   scope:BACKEND_CONSOLE_CONFIG.scope||'', resources:Array.isArray(BACKEND_CONSOLE_CONFIG.resources)?BACKEND_CONSOLE_CONFIG.resources:[], redirectUri:location.origin+'/auto/callback', storageKey:BACKEND_CONSOLE_CONFIG.storageKey||'' };
 var VOICE_TOKEN_PURPOSE='voice-realtime';
+var SERVICE_ACCESS_REVIEW_FLOW='service-access-review';
+var SERVICE_ACCESS_REVIEW_POPUP_PREFIX='aevatar-nyxid-service-review-';
+var SERVICE_ACCESS_REVIEW_MESSAGE_SOURCE='aevatar-service-access-review-auth';
+var SERVICE_ACCESS_REVIEW_POPUP=null;
 var TOKEN_KEY=OIDC.storageKey+':token', VOICE_TOKEN_KEY=OIDC.storageKey+':voice-realtime:token', PKCE_KEY=OIDC.storageKey+':pkce';
 var TOKEN_REFRESH_PROMISE=null,TOKEN_REFRESH_TIMER=null,TOKEN_REFRESH_SKEW_MS=60000,TOKEN_REFRESH_RETRY_MS=30000;
 function getToken(){ try{ var t=JSON.parse(localStorage.getItem(TOKEN_KEY)||'null'); return (t&&t.access_token)?t:null; }catch(e){ return null; } }
@@ -1477,6 +1566,19 @@ async function handleEmbeddedAuthRefresh(ev,msg){
     refreshed:result.refreshed,errorCode:result.errorCode,reason:result.reason
   },ev.origin); }catch(e){}
 }
+function handleServiceAccessReviewPopupResult(ev,msg){
+  var active=SERVICE_ACCESS_REVIEW_POPUP;
+  var requestId=serviceAccessReviewRequestId(msg&&msg.requestId);
+  if(!active||ev.source!==active.popup||requestId!==active.authRequestId)return;
+  var status=msg.status==='succeeded'?'succeeded':'failed';
+  var message=typeof msg.message==='string'?msg.message:'';
+  clearServiceAccessReviewPkce(requestId);
+  SERVICE_ACCESS_REVIEW_POPUP=null;
+  try{ if(active.requester)active.requester.postMessage({
+    source:SERVICE_ACCESS_REVIEW_MESSAGE_SOURCE,type:'service-access-review-result',
+    requestId:requestId,status:status,message:message
+  },ev.origin); }catch(e){}
+}
 function loginResources(requested){
   var merged=[];
   [OIDC.resources,Array.isArray(requested)?requested:[]].forEach(function(group){ group.forEach(function(value){ var resource=typeof value==='string'?value.trim():''; if(resource&&merged.indexOf(resource)<0) merged.push(resource); }); });
@@ -1502,34 +1604,70 @@ function loginReturnTo(){
 function showLoginGate(reason,rejectedAccessToken){
   var current=getToken();
   if(rejectedAccessToken&&current&&current.access_token!==rejectedAccessToken) return false;
-  clearToken(); ACCOUNT=null; renderAcctW(); renderLoginGate(reason||'');
+  clearToken(); ACCOUNT=null;
+  if(typeof modelsCatalogResetAll==='function')modelsCatalogResetAll('');
+  renderAcctW(); renderLoginGate(reason||'');
   return true;
 }
 function logout(){ showLoginGate('已登出 NyxID，请重新登录。'); }
 function _b64url(buf){ var s=btoa(String.fromCharCode.apply(null,new Uint8Array(buf))); return s.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function _rand(n){ var a=new Uint8Array(n); crypto.getRandomValues(a); var s=''; for(var i=0;i<a.length;i++){ s+=('0'+(a[i]&0xff).toString(16)).slice(-2); } return s.slice(0,n); }
 async function _sha256(s){ return _b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))); }
-async function beginLogin(requestedResources,tokenPurpose){
+function serviceAccessReviewPopupName(value){
+  value=typeof value==='string'?value:'';
+  return value.indexOf(SERVICE_ACCESS_REVIEW_POPUP_PREFIX)===0&&/^[A-Za-z0-9-]{16,120}$/.test(value)?value:'';
+}
+function serviceAccessReviewRequestId(value){
+  value=typeof value==='string'?value:'';
+  return /^[A-Za-z0-9-]{8,96}$/.test(value)?value:'';
+}
+function clearServiceAccessReviewPkce(authRequestId){
+  var requestId=serviceAccessReviewRequestId(authRequestId); if(!requestId)return;
+  try{ var pending=JSON.parse(sessionStorage.getItem(PKCE_KEY)||'null');
+    if(pending&&pending.authFlow===SERVICE_ACCESS_REVIEW_FLOW&&pending.authRequestId===requestId) sessionStorage.removeItem(PKCE_KEY);
+  }catch(e){}
+}
+async function beginLogin(requestedResources,tokenPurpose,authFlow,popupName,authRequestId,requestSource){
   if(!OIDC.authority||!OIDC.clientId){ alert('BackendConsole OIDC 配置缺失。'); return; }
-  var purpose=tokenPurpose===VOICE_TOKEN_PURPOSE?VOICE_TOKEN_PURPOSE:'';
+  var flow=authFlow===SERVICE_ACCESS_REVIEW_FLOW?SERVICE_ACCESS_REVIEW_FLOW:'';
+  var purpose=!flow&&tokenPurpose===VOICE_TOKEN_PURPOSE?VOICE_TOKEN_PURPOSE:'';
+  var reviewPopupName=flow?serviceAccessReviewPopupName(popupName):'';
+  var reviewRequestId=flow?serviceAccessReviewRequestId(authRequestId):'';
   /* ADR-0018：会话登录不发送显式 resource——NyxID 会按 RFC 8707 把授权收窄成该列表，
      导致 token 无法访问其他已同意的服务（如部署默认 LLM 路由）。授权集合由 NyxID
-     Consent 页决定。仅 voice-realtime 专用 token 保留有意收窄。 */
-  var resources=purpose===VOICE_TOKEN_PURPOSE?loginResources(requestedResources):[];
+     Consent 页决定。voice-realtime 专用 token 保留有意收窄；service-access-review
+     则使用完整资源并强制重新展示 consent。 */
+  var resources=purpose===VOICE_TOKEN_PURPOSE||flow===SERVICE_ACCESS_REVIEW_FLOW?loginResources(requestedResources):[];
   var verifier=_rand(64), state=_rand(32), challenge=await _sha256(verifier);
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({verifier:verifier,state:state,returnTo:loginReturnTo(),resources:resources,tokenPurpose:purpose}));
+  var pending={verifier:verifier,state:state,returnTo:loginReturnTo(),resources:resources,tokenPurpose:purpose,authFlow:flow,authRequestId:reviewRequestId};
+  var serializedPending=JSON.stringify(pending);
+  sessionStorage.setItem(PKCE_KEY,serializedPending);
   var u=new URL(OIDC.authority.replace(/\/+$/,'')+'/oauth/authorize');
   u.searchParams.set('response_type','code'); u.searchParams.set('client_id',OIDC.clientId);
   u.searchParams.set('redirect_uri',OIDC.redirectUri); u.searchParams.set('scope',OIDC.scope);
   resources.forEach(function(resource){ u.searchParams.append('resource',resource); });
+  if(flow===SERVICE_ACCESS_REVIEW_FLOW) u.searchParams.set('prompt','consent');
   u.searchParams.set('state',state); u.searchParams.set('code_challenge',challenge); u.searchParams.set('code_challenge_method','S256');
+  if(flow===SERVICE_ACCESS_REVIEW_FLOW&&reviewPopupName&&reviewRequestId){
+    var popup=null;
+    try{ popup=window.open('',reviewPopupName); }catch(e){ popup=null; }
+    if(popup&&!popup.closed){
+      try{
+        popup.sessionStorage.setItem(PKCE_KEY,serializedPending);
+        popup.location.replace(u.toString());
+        SERVICE_ACCESS_REVIEW_POPUP={popup:popup,requester:requestSource,authRequestId:reviewRequestId};
+        if(typeof popup.focus==='function')popup.focus();
+        return;
+      }catch(e){ try{popup.close();}catch(ignore){} }
+    }
+  }
   location.assign(u.toString());
 }
 function decodeJwt(tok){ try{ var p=(tok||'').split('.')[1]; if(!p) return {}; p=p.replace(/-/g,'+').replace(/_/g,'/'); return JSON.parse(decodeURIComponent(escape(atob(p)))); }catch(e){ return {}; } }
 /* 当前账号：登录后由 token claims 即时填充，再由 /api/workflow/observatory/me 充实 admin/scope。
    render() 仅在 boot 内确保 ACCOUNT 非 null 后调用。 */
 var ACCOUNT=null;
-function accountFromToken(){ var t=getToken(); if(!t) return null; var c=decodeJwt(t.id_token||t.access_token);
+function accountFromToken(token){ var t=token||getToken(); if(!t) return null; var c=decodeJwt(t.id_token||t.access_token);
   return { name:c.name||c.preferred_username||c.email||'NyxID 用户', email:c.email||'', scope:c.scope||c.tenant||'', admin:false, claims:c }; }
 /* 顶部细进度条：进行中的请求 >150ms 才显示（后台快轮询不闪烁）；挂在 body 上，切页不销毁。 */
 var NET_INFLIGHT=0,NET_SHOW_TIMER=null;
@@ -2386,6 +2524,7 @@ var NAV_ICON={
   studio:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.3 7.3L3 21l1.7-6.7A8 8 0 1 1 21 12Z"/></svg>',
   agentProfiles:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 4 7v5c0 5 3.4 8 8 9 4.6-1 8-4 8-9V7l-8-4Z"/><path d="M9 12h6M12 9v6"/></svg>',
   skills:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>',
+  models:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.5 12 2l8 3.5-8 3.5-8-3.5Z"/><path d="m4 10 8 3.5 8-3.5M4 14.5 12 18l8-3.5M4 19l8 3 8-3"/></svg>',
   sched:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
   channels:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>',
   voice:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
@@ -2396,7 +2535,7 @@ var NAV=[
   {group:'总览',   items:['fleet','status','audit','chat-activity']},
   {group:'运行观测', items:['observatory','cqrs']},
   {group:'编排调度', items:['studio','agent-profiles','skills','schedules']},
-  {group:'接入',   items:['channels','voice']}
+  {group:'接入',   items:['models','channels','voice']}
 ];
 var MODULE_META={
   fleet:{name:'全景看板', auth:'admin', icon:NAV_ICON.fleet, live:true, desc:'NyxID 全量组织 · 跨组织运行态总览'},
@@ -2406,6 +2545,7 @@ var MODULE_META={
   studio:{name:'工作台', auth:'login', icon:NAV_ICON.studio, desc:'对话式编排与工作入口'},
   'agent-profiles':{name:'Agent Profile', auth:'login', icon:NAV_ICON.agentProfiles, desc:'Agent 身份、技能装配与发布管理'},
   skills:{name:'技能调用', auth:'login', icon:NAV_ICON.skills, desc:'技能目录浏览、在线调用与定时配置'},
+  models:{name:'模型目录', auth:'login', icon:NAV_ICON.models, desc:'配置当前 scope 可见的 LLM providers 与显式模型清单'},
   schedules:{name:'排班调度', auth:'login', icon:NAV_ICON.sched, desc:'当前 scope 的 Team/member 定时任务与历史任务迁移'},
   channels:{name:'通道管理', auth:'login', icon:NAV_ICON.channels, desc:'外部消息通道接入与修复'},
   voice:{name:'语音台', auth:'login', icon:NAV_ICON.voice, live:true, desc:'实时语音会话与在线状态'},
@@ -2436,6 +2576,714 @@ function moduleSubHeader(id,rightHTML){
 function auth403(msg){
   return '<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:46px;height:46px"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>'+
     '<div class="et">需要平台管理员权限</div><div class="es">'+esc(msg||'当前账号无权查看该 scope，已按诚实态屏蔽，不展示伪造数据。')+'</div></div>';
+}
+
+/* ---------------- Models catalog ----------------
+   Candidate inventory is authoritative. Source selection uses exact service IDs;
+   URL, slug, and display-name text never decide whether a service is LLM-capable. */
+var MODELS_LIMITS={maxSources:32,maxModelsPerSource:256,maxModelsPerPolicy:2048,maxModelIdUtf8Bytes:256};
+function modelsCatalogNewOwnerState(){
+  return {loaded:false,loading:false,saving:false,forbidden:false,error:null,catalog:null,draft:null,
+    candidates:[],inventoryFresh:false,draftBaseVersion:null,dirty:false,pending:null,notice:null,conflict:false,request:0};
+}
+function modelsCatalogNewDiscoveryState(){return {loading:false,loaded:false,error:null,sourceIdentity:'',serviceSlug:'',defaultModelId:'',modelIds:[],search:'',request:0};}
+var MODELS_AUTHORITY_KEY='',MODELS_REQUEST=0,MODELS_DISCOVERY_REQUEST=0,MODELS_RETURN_FOCUS='',MODELS_DIALOG_BACKGROUND=[];
+var MODELS_STATE={owner:'scope',editor:null,scope:modelsCatalogNewOwnerState(),platform:modelsCatalogNewOwnerState()};
+function modelsCatalogOwnerState(owner){return owner==='platform'?MODELS_STATE.platform:MODELS_STATE.scope;}
+function modelsCatalogResetAll(authorityKey){
+  modelsCatalogReleaseDialogBackground();
+  MODELS_AUTHORITY_KEY=String(authorityKey||'');MODELS_REQUEST++;MODELS_DISCOVERY_REQUEST++;
+  MODELS_STATE.scope.request=-1;MODELS_STATE.platform.request=-1;
+  MODELS_STATE.scope=modelsCatalogNewOwnerState();MODELS_STATE.platform=modelsCatalogNewOwnerState();
+  MODELS_STATE.owner='scope';MODELS_STATE.editor=null;MODELS_RETURN_FOCUS='';
+}
+function modelsCatalogClearOwnerState(owner,forbidden){
+  var state=modelsCatalogOwnerState(owner),reset=modelsCatalogNewOwnerState();
+  state.request=-1;MODELS_REQUEST++;MODELS_DISCOVERY_REQUEST++;reset.request=-1;reset.forbidden=!!forbidden;Object.assign(state,reset);
+  if(MODELS_STATE.editor&&MODELS_STATE.editor.owner===owner)MODELS_STATE.editor=null;
+  return state;
+}
+function modelsCatalogAccountSubject(account){
+  var claims=account&&account.claims&&typeof account.claims==='object'?account.claims:{};
+  return String(claims.sub||claims.user_id||(account&&account.email)||'');
+}
+function modelsCatalogAuthorityKey(account){
+  var scope=account&&account.scope?String(account.scope):'';
+  var subject=modelsCatalogAccountSubject(account);
+  return [subject,scope,account&&account.admin?'admin':'user'].join('|');
+}
+function modelsCatalogSyncAuthority(){
+  var scope=ACCOUNT&&ACCOUNT.scope?String(ACCOUNT.scope):'';
+  var authorityKey=modelsCatalogAuthorityKey(ACCOUNT);
+  if(authorityKey!==MODELS_AUTHORITY_KEY)modelsCatalogResetAll(authorityKey);
+  if(!(ACCOUNT&&ACCOUNT.admin)&&MODELS_STATE.owner==='platform'){MODELS_STATE.owner='scope';MODELS_STATE.editor=null;}
+  return scope;
+}
+function modelsCatalogUniqueStrings(values){
+  var seen=Object.create(null),result=[];
+  (Array.isArray(values)?values:[]).forEach(function(value){var item=String(value==null?'':value).trim();if(item&&!seen[item]){seen[item]=true;result.push(item);}});
+  return result;
+}
+function modelsCatalogUtf8Length(value){
+  var text=String(value==null?'':value),bytes=0;
+  for(var i=0;i<text.length;i++){
+    var code=text.charCodeAt(i);
+    if(code<0x80)bytes+=1;
+    else if(code<0x800)bytes+=2;
+    else if(code>=0xd800&&code<=0xdbff&&i+1<text.length&&text.charCodeAt(i+1)>=0xdc00&&text.charCodeAt(i+1)<=0xdfff){bytes+=4;i++;}
+    else bytes+=3;
+  }
+  return bytes;
+}
+function modelsCatalogQualifiedId(source,modelId){
+  var slug=String(source&&source.serviceSlugSnapshot||'').trim(),upstream=String(modelId==null?'':modelId).trim();
+  return slug&&upstream?slug+'/'+upstream:upstream;
+}
+function modelsCatalogNormalizeSelection(value){
+  value=value&&typeof value==='object'?value:{};
+  return {mode:'explicit_models',modelIds:modelsCatalogUniqueStrings(value.modelIds)};
+}
+function modelsCatalogNormalizeSource(value,owner){
+  value=value&&typeof value==='object'?value:{};
+  var result={sourceId:String(value.sourceId||''),displayName:String(value.displayName||''),
+    serviceSlugSnapshot:String(value.serviceSlugSnapshot||''),catalogServiceId:String(value.catalogServiceId||''),
+    modelSelection:modelsCatalogNormalizeSelection(value.modelSelection)};
+  if(owner==='scope')result.userServiceId=String(value.userServiceId||'');
+  return result;
+}
+function modelsCatalogNormalize(value,owner){
+  value=value&&typeof value==='object'?value:{};
+  var mode=owner==='scope'&&value.mode==='inherit_platform'?'inherit_platform':'custom_replace';
+  var stateVersion=value.stateVersion==null?null:Number(value.stateVersion);
+  if(!Number.isFinite(stateVersion))stateVersion=null;
+  return {mode:mode,sources:(Array.isArray(value.sources)?value.sources:[]).map(function(source){return modelsCatalogNormalizeSource(source,owner);}),
+    effectiveSources:(Array.isArray(value.effectiveSources)?value.effectiveSources:[]).map(function(source){return modelsCatalogNormalizeSource(source,owner);}),
+    effectiveSource:value.effectiveSource==null?'':value.effectiveSource,stateVersion:stateVersion,
+    lastMutationId:String(value.lastMutationId||''),updatedAt:value.updatedAt?String(value.updatedAt):'',configured:value.configured!==false};
+}
+function modelsCatalogNormalizeCandidate(value){
+  value=value&&typeof value==='object'?value:{};
+  var credentialSource=value.credentialSource&&typeof value.credentialSource==='object'?value.credentialSource:{};
+  return {catalogServiceId:String(value.catalogServiceId||''),userServiceId:String(value.userServiceId||''),
+    serviceSlug:String(value.serviceSlug||''),displayName:String(value.displayName||''),
+    isActive:value.isActive==null?null:!!value.isActive,catalogMatched:value.catalogMatched==null?null:!!value.catalogMatched,
+    isSelectable:value.isSelectable===true,
+    serviceType:String(value.serviceType||'').toLowerCase(),visibility:String(value.visibility||'').toLowerCase(),
+    isCallable:value.isCallable===true,availabilityReason:String(value.availabilityReason||'').toLowerCase(),
+    credentialStatus:String(value.credentialStatus||'').toLowerCase(),credentialMissing:value.credentialMissing===true,
+    connectionStatus:String(value.connectionStatus||'').toLowerCase(),nodeStatus:String(value.nodeStatus||'').toLowerCase(),
+    credentialSourceType:String(credentialSource.type||'').toLowerCase(),organizationAllowed:credentialSource.allowed==null?null:!!credentialSource.allowed,
+    configuredModelIds:modelsCatalogUniqueStrings(value.configuredModelIds)};
+}
+function modelsCatalogNormalizeCandidates(value){
+  var services=Array.isArray(value)?value:(value&&Array.isArray(value.services)?value.services:[]);
+  return services.map(modelsCatalogNormalizeCandidate);
+}
+function modelsCatalogEnrichScopeSources(catalog,candidates){
+  ['sources','effectiveSources'].forEach(function(key){
+    (catalog[key]||[]).forEach(function(source){
+      if(!source.userServiceId)return;
+      var exact=(candidates||[]).filter(function(candidate){return candidate.userServiceId===source.userServiceId;})[0];
+      if(!exact)return;
+      source.catalogServiceId=exact.catalogServiceId;
+      if(exact.displayName)source.displayName=exact.displayName;
+      if(!source.serviceSlugSnapshot)source.serviceSlugSnapshot=exact.serviceSlug;
+    });
+  });
+  return catalog;
+}
+function modelsCatalogClone(value,owner){return modelsCatalogNormalize(value||{},owner);}
+function modelsCatalogSourcePayload(source,owner){
+  source=modelsCatalogNormalizeSource(source,owner);
+  var result={serviceSlugSnapshot:source.serviceSlugSnapshot,
+    modelSelection:{mode:source.modelSelection.mode,modelIds:source.modelSelection.modelIds.slice()}};
+  if(owner==='scope')result.userServiceId=source.userServiceId;else result.catalogServiceId=source.catalogServiceId;
+  return result;
+}
+function modelsCatalogBuildPayload(owner,state,mutationId){
+  state=state||modelsCatalogOwnerState(owner);
+  var draft=state.draft||modelsCatalogNormalize({},owner),mode=owner==='scope'?draft.mode:'custom_replace';
+  var sources=owner==='scope'&&mode==='inherit_platform'?[]:draft.sources;
+  var expectedVersion=state.draftBaseVersion!=null?state.draftBaseVersion:(state.catalog&&state.catalog.stateVersion!=null?state.catalog.stateVersion:0);
+  return {mode:mode,expectedStateVersion:expectedVersion,
+    mutationId:String(mutationId||''),sources:sources.map(function(source){return modelsCatalogSourcePayload(source,owner);})};
+}
+function modelsCatalogMutationId(){
+  if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();
+  return 'models-'+Date.now()+'-'+Math.random().toString(16).slice(2);
+}
+function modelsCatalogEndpoint(owner,candidates){
+  if(owner==='platform')return '/api/admin/llm-model-catalog'+(candidates?'/candidates':'');
+  var scope=modelsCatalogSyncAuthority();
+  return scope?'/api/scopes/'+encodeURIComponent(scope)+'/llm-model-catalog'+(candidates?'/candidates':''):'';
+}
+async function modelsCatalogResponse(path,opts){
+  var response=await adminApi(path,opts);
+  if(response&&response.forbidden)return {forbidden:true,status:403,body:null};
+  var textBody='';try{textBody=await response.text();}catch(_){}
+  var body=null;if(textBody){try{body=JSON.parse(textBody);}catch(_){body=textBody;}}
+  if(!response.ok)throw {status:response.status,body:body};
+  return {forbidden:false,status:response.status,body:body};
+}
+function modelsCatalogErrorMessage(error){
+  var body=error&&error.body,detail=body&&typeof body==='object'?(body.detail||body.title||body.code):body;
+  if(error&&error.status===409)return '配置版本已变化，请刷新后重新编辑。';
+  if(error&&error.status===422)return detail||'配置未通过校验，请检查来源与模型 ID。';
+  return (detail?String(detail):'请求失败')+(error&&error.status?' · HTTP '+error.status:'');
+}
+function modelsCatalogRememberEditorFocus(){
+  var editor=MODELS_STATE.editor;if(!editor||editor.focusTarget||typeof document==='undefined')return;
+  var active=document.activeElement;if(!active||!active.closest||!active.closest('.models-editor'))return;
+  if(active.matches('[data-models-candidate]'))editor.focusTarget='candidate';
+  else if(active.matches('[data-models-discover]'))editor.focusTarget='discover';
+  else if(active.matches('[data-models-discovery-search]'))editor.focusTarget='discovery-search';
+  else if(active.matches('[data-models-toggle-filtered]'))editor.focusTarget='discovery-master';
+  else if(active.matches('[data-models-clear-discovered]'))editor.focusTarget='discovery-clear';
+  else if(active.matches('[data-models-discovered-index]'))editor.focusTarget='discovered:'+active.getAttribute('data-models-discovered-index');
+  else if(active.matches('[data-models-manual-id]'))editor.focusTarget='manual';
+  else if(active.matches('[data-models-add-model]'))editor.focusTarget='add-model';
+  else if(active.matches('[data-models-editor-save]'))editor.focusTarget='save';
+  else if(active.matches('[data-models-remove-model]'))editor.focusTarget='remove:'+active.getAttribute('data-models-remove-model');
+  else if(active.matches('[data-models-editor-close]'))editor.focusTarget='close';
+}
+function modelsCatalogRenderIfActive(){modelsCatalogRememberEditorFocus();if((curParts()[0]||'')==='models')render();}
+async function loadModelsCatalog(owner,options){
+  options=options||{};modelsCatalogSyncAuthority();
+  if(owner==='platform'&&!(ACCOUNT&&ACCOUNT.admin))return;
+  var state=modelsCatalogOwnerState(owner),base=modelsCatalogEndpoint(owner,false);
+  if(!base){state.error='当前登录没有可用的 scope identity。';state.loaded=false;modelsCatalogRenderIfActive();return;}
+  if(state.loading)return;
+  var request=++MODELS_REQUEST;state.request=request;state.loading=true;state.inventoryFresh=false;state.error=null;state.forbidden=false;
+  if(!options.keepNotice)state.notice=null;
+  if(options.renderStart!==false)modelsCatalogRenderIfActive();
+  try{
+    var responses=await Promise.all([
+      modelsCatalogResponse(base,{cache:'no-store',silentProgress:!!options.silent}),
+      modelsCatalogResponse(modelsCatalogEndpoint(owner,true),{cache:'no-store',silentProgress:!!options.silent})
+    ]);
+    if(state.request!==request)return;
+    if(responses[0].forbidden||responses[1].forbidden){
+      modelsCatalogClearOwnerState(owner,true);modelsCatalogRenderIfActive();
+      return;
+    }
+    var candidates=modelsCatalogNormalizeCandidates(responses[1].body||{}),catalog=modelsCatalogNormalize(responses[0].body||{},owner);
+    if(owner==='scope')modelsCatalogEnrichScopeSources(catalog,candidates);
+    state.catalog=catalog;state.candidates=candidates;state.inventoryFresh=true;
+    if(options.discardDraft||!state.dirty){state.draft=modelsCatalogClone(catalog,owner);state.draftBaseVersion=catalog.stateVersion;state.dirty=false;state.conflict=false;if(options.discardDraft)MODELS_STATE.editor=null;}
+    else if(state.draftBaseVersion!=null&&catalog.stateVersion!=null&&catalog.stateVersion!==state.draftBaseVersion){state.conflict=true;state.error='配置版本已变化；当前草稿仍基于 stateVersion '+state.draftBaseVersion+'，请加载最新配置后重新编辑。';}
+    state.loaded=true;
+    if(state.pending){
+      var baseVersion=state.pending.baseVersion,currentVersion=catalog.stateVersion;
+      if(baseVersion!=null&&currentVersion!=null&&currentVersion>baseVersion){
+        if(catalog.lastMutationId===state.pending.mutationId){
+          state.notice={tone:'success',text:'配置已物化到 stateVersion '+currentVersion+'，mutationId 已确认。'};state.pending=null;
+        }else{
+          state.notice={tone:'failed',text:'配置已被另一项更新取代；已加载 stateVersion '+currentVersion+' 的最新配置，请基于最新配置重新编辑并保存。'};state.pending=null;
+        }
+      }else{
+        state.notice={tone:'waiting',text:'命令已受理，read model 尚未观察到同一 mutationId 的更高 stateVersion；请稍后刷新确认。'};
+      }
+    }
+  }catch(error){
+    if(state.request===request)state.error=modelsCatalogErrorMessage(error);
+  }finally{
+    if(state.request===request){state.loading=false;modelsCatalogRenderIfActive();}
+  }
+}
+function modelsCatalogCandidateIdentity(candidate,owner){return owner==='scope'?candidate.userServiceId:candidate.catalogServiceId;}
+function modelsCatalogSourceIdentity(source,owner){return owner==='scope'?source.userServiceId:source.catalogServiceId;}
+function modelsCatalogCandidatesForSource(source,owner,state){
+  var identity=modelsCatalogSourceIdentity(source,owner);
+  if(!identity)return [];
+  return (state.candidates||[]).filter(function(candidate){return modelsCatalogCandidateIdentity(candidate,owner)===identity;});
+}
+function modelsCatalogCandidateForSource(source,owner,state){
+  var candidates=modelsCatalogCandidatesForSource(source,owner,state);
+  return candidates.length===1?candidates[0]:null;
+}
+function modelsCatalogCandidateSelectable(candidate,owner){
+  if(!candidate||!modelsCatalogCandidateIdentity(candidate,owner))return false;
+  if(owner==='scope')return candidate.isCallable===true;
+  return candidate.isSelectable===true;
+}
+function modelsCatalogAvailabilityLabel(candidate){
+  var reason=candidate&&candidate.availabilityReason;
+  if(reason==='available')return '可用';
+  if(reason==='unsupported_service_slug')return 'Service slug 不兼容';
+  if(reason==='invalid_service_slug')return 'Service slug 不规范';
+  if(reason==='unsupported_service_type')return '非 HTTP 服务';
+  if(reason==='service_inactive')return '服务未启用';
+  if(reason==='not_public')return '不是 public 服务';
+  if(reason==='provider_service')return 'Provider 服务需要用户绑定';
+  if(reason==='unsupported_service_category')return '服务分类不支持平台直连';
+  if(reason==='user_credential_required')return '需要用户凭据';
+  if(reason==='token_exchange_unsupported')return 'Token exchange 不支持平台直连';
+  if(reason==='unsupported_auth_method')return '认证方式不支持平台直连';
+  if(reason==='credential_missing')return '凭据缺失';
+  if(reason==='credential_inactive')return '凭据状态：'+(candidate.credentialStatus||'非 active');
+  if(reason==='connection_expired')return '连接已过期';
+  if(reason==='connection_unavailable')return '连接状态：'+(candidate.connectionStatus||'不可用');
+  if(reason==='organization_access_denied')return '组织凭据无权限';
+  if(reason==='node_unavailable'){
+    if(candidate.nodeStatus==='offline')return '节点离线';
+    return '节点状态：'+(candidate.nodeStatus||'不可用');
+  }
+  if(reason==='unavailable')return '状态不可用';
+  return reason?'不可用：'+reason:'当前不可调用';
+}
+function modelsCatalogStatus(candidate,owner){
+  if(!candidate)return {tone:'failed',label:owner==='platform'?'当前 catalog inventory 不可见':'候选中不存在'};
+  if(!modelsCatalogCandidateIdentity(candidate,owner))return {tone:'failed',label:'缺少精确身份'};
+  if(owner==='platform')return modelsCatalogCandidateSelectable(candidate,owner)?{tone:'success',label:'可用'}:{tone:'failed',label:modelsCatalogAvailabilityLabel(candidate)};
+  if(candidate.isCallable===true)return {tone:'success',label:candidate.catalogMatched===false?'可用 · 自定义服务':'可用'};
+  return {tone:candidate.availabilityReason==='service_inactive'?'idle':'failed',label:modelsCatalogAvailabilityLabel(candidate)};
+}
+function modelsCatalogEditorRetainsCandidate(editor,candidate){
+  if(!editor||editor.index==null||!editor.persistedKey||editor.candidateKey!==editor.persistedKey)return false;
+  return !candidate||modelsCatalogCandidateIdentity(candidate,editor.owner)===editor.persistedKey;
+}
+function modelsCatalogSourceId(){return 'source-'+modelsCatalogMutationId();}
+function modelsCatalogOpenEditor(owner,index){
+  var state=modelsCatalogOwnerState(owner);
+  if(index==null&&state.draft.sources.length>=MODELS_LIMITS.maxSources){state.notice={tone:'failed',text:'每个模型目录最多允许 '+MODELS_LIMITS.maxSources+' 个来源。'};modelsCatalogRenderIfActive();return;}
+  var source=index==null?modelsCatalogNormalizeSource({sourceId:modelsCatalogSourceId()},owner):modelsCatalogNormalizeSource(state.draft.sources[index],owner);
+  MODELS_STATE.editor={owner:owner,index:index==null?null:Number(index),source:source,
+    candidateKey:modelsCatalogSourceIdentity(source,owner),persistedKey:index==null?'':modelsCatalogSourceIdentity(source,owner),error:null,
+    discovery:modelsCatalogNewDiscoveryState(),focusTarget:'candidate',returnFocusSelector:index==null?'[data-models-add]':'[data-models-edit="'+Number(index)+'"]'};
+  modelsCatalogRenderIfActive();
+}
+function modelsCatalogQueueReturnFocus(editor,selector){
+  MODELS_RETURN_FOCUS=String(selector||(editor&&editor.returnFocusSelector)||'');
+}
+function modelsCatalogCloseEditor(){var editor=MODELS_STATE.editor;if(editor)modelsCatalogQueueReturnFocus(editor);MODELS_STATE.editor=null;modelsCatalogRenderIfActive();}
+function modelsCatalogLeavePage(){MODELS_DISCOVERY_REQUEST++;MODELS_STATE.editor=null;MODELS_RETURN_FOCUS='';modelsCatalogReleaseDialogBackground();}
+function modelsCatalogSelectCandidate(identity){
+  var editor=MODELS_STATE.editor;if(!editor)return;
+  var state=modelsCatalogOwnerState(editor.owner),nextIdentity=String(identity||''),candidate=(state.candidates||[]).filter(function(item){return modelsCatalogCandidateIdentity(item,editor.owner)===nextIdentity;})[0];
+  var changed=editor.candidateKey!==nextIdentity;
+  if(changed){MODELS_DISCOVERY_REQUEST++;editor.discovery=modelsCatalogNewDiscoveryState();editor.source.modelSelection.modelIds=[];}
+  editor.candidateKey=nextIdentity;editor.error=null;
+  if(candidate){
+    editor.source.catalogServiceId=candidate.catalogServiceId;
+    if(editor.owner==='scope')editor.source.userServiceId=candidate.userServiceId;
+    editor.source.serviceSlugSnapshot=candidate.serviceSlug;
+    editor.source.displayName=candidate.displayName||candidate.serviceSlug||candidate.catalogServiceId;
+  }else if(changed){
+    editor.source.catalogServiceId='';if(editor.owner==='scope')editor.source.userServiceId='';
+    editor.source.serviceSlugSnapshot='';editor.source.displayName='';
+  }
+  modelsCatalogRenderIfActive();
+}
+function modelsCatalogDiscoveryEndpoint(owner,identity){
+  var base=modelsCatalogEndpoint(owner,false),exactIdentity=String(identity||'').trim();
+  return base&&exactIdentity?base+'/candidates/'+encodeURIComponent(exactIdentity)+'/models':'';
+}
+function modelsCatalogNormalizeDiscovery(value){
+  value=value&&typeof value==='object'?value:{};
+  var modelIds=modelsCatalogUniqueStrings(value.modelIds).sort(function(left,right){return left<right?-1:left>right?1:0;});
+  return {sourceIdentity:String(value.sourceIdentity||''),serviceSlug:String(value.serviceSlug||''),defaultModelId:String(value.defaultModelId||''),modelIds:modelIds};
+}
+function modelsCatalogDiscoveryErrorMessage(error){
+  var body=error&&error.body,detail=body&&typeof body==='object'?(body.detail||body.title||body.code):body;
+  if(detail)return String(detail)+(error&&error.status?' · HTTP '+error.status:'');
+  if(error&&error.status===409)return '候选服务已消失或当前不可调用，请刷新候选服务后重试。';
+  return modelsCatalogErrorMessage(error);
+}
+function modelsCatalogEditorOtherModelCount(editor,state){
+  var total=0,sources=state&&state.draft&&Array.isArray(state.draft.sources)?state.draft.sources:[];
+  sources.forEach(function(source,index){if(index!==editor.index)total+=modelsCatalogUniqueStrings(source&&source.modelSelection&&source.modelSelection.modelIds).length;});
+  return total;
+}
+function modelsCatalogEditorSelectionProblem(editor,nextModelIds){
+  var modelIds=modelsCatalogUniqueStrings(nextModelIds);
+  if(modelIds.length>MODELS_LIMITS.maxModelsPerSource)return '每个来源最多允许 '+MODELS_LIMITS.maxModelsPerSource+' 个模型 ID。';
+  var state=modelsCatalogOwnerState(editor.owner),total=modelsCatalogEditorOtherModelCount(editor,state)+modelIds.length;
+  if(total>MODELS_LIMITS.maxModelsPerPolicy)return '每个模型目录最多允许 '+MODELS_LIMITS.maxModelsPerPolicy+' 个模型 ID。';
+  for(var i=0;i<modelIds.length;i++)if(modelsCatalogUtf8Length(modelIds[i])>MODELS_LIMITS.maxModelIdUtf8Bytes)return '模型 ID「'+modelIds[i]+'」超过 '+MODELS_LIMITS.maxModelIdUtf8Bytes+' UTF-8 bytes。';
+  return '';
+}
+function modelsCatalogReplaceEditorModels(editor,nextModelIds,focusTarget){
+  if(!editor)return false;
+  var next=modelsCatalogUniqueStrings(nextModelIds),problem=modelsCatalogEditorSelectionProblem(editor,next);
+  if(problem){editor.error=problem;editor.focusTarget=focusTarget||'manual';modelsCatalogRenderIfActive();return false;}
+  editor.source.modelSelection.mode='explicit_models';editor.source.modelSelection.modelIds=next;
+  editor.error=null;editor.focusTarget=focusTarget||'manual';modelsCatalogRenderIfActive();return true;
+}
+function modelsCatalogDiscoveryItems(editor){
+  var discovery=editor&&editor.discovery?editor.discovery:modelsCatalogNewDiscoveryState(),query=String(discovery.search||'').trim().toLowerCase();
+  return discovery.modelIds.map(function(modelId,index){return {modelId:modelId,index:index};}).filter(function(item){return !query||item.modelId.toLowerCase().indexOf(query)>=0;});
+}
+async function modelsCatalogDiscoverModels(){
+  var editor=MODELS_STATE.editor;if(!editor)return;
+  var state=modelsCatalogOwnerState(editor.owner),identity=String(editor.candidateKey||''),candidate=(state.candidates||[]).filter(function(item){return modelsCatalogCandidateIdentity(item,editor.owner)===identity;})[0];
+  var retained=modelsCatalogEditorRetainsCandidate(editor,candidate);
+  if(!identity||(!retained&&!modelsCatalogCandidateSelectable(candidate,editor.owner))){editor.error='请先选择一个当前可调用的候选服务。';editor.focusTarget='candidate';modelsCatalogRenderIfActive();return;}
+  var path=modelsCatalogDiscoveryEndpoint(editor.owner,identity);if(!path)return;
+  var discovery=editor.discovery||modelsCatalogNewDiscoveryState(),request=++MODELS_DISCOVERY_REQUEST;
+  editor.discovery=discovery;discovery.request=request;discovery.loading=true;discovery.error=null;editor.error=null;editor.focusTarget='discover';modelsCatalogRenderIfActive();
+  try{
+    var response=await modelsCatalogResponse(path,{cache:'no-store',silentProgress:true});
+    if(MODELS_STATE.editor!==editor||editor.discovery!==discovery||discovery.request!==request||editor.candidateKey!==identity)return;
+    if(response.forbidden)throw {status:403,body:'当前账号无权从该候选服务获取模型。'};
+    var result=modelsCatalogNormalizeDiscovery(response.body||{}),expectedSlug=candidate?candidate.serviceSlug:editor.source.serviceSlugSnapshot;
+    if(result.sourceIdentity!==identity)throw {body:'服务返回的 sourceIdentity 与当前候选身份不一致。'};
+    if(expectedSlug&&result.serviceSlug!==expectedSlug)throw {body:'服务返回的 serviceSlug 与当前候选不一致。'};
+    discovery.loaded=true;discovery.sourceIdentity=result.sourceIdentity;discovery.serviceSlug=result.serviceSlug;discovery.defaultModelId=result.defaultModelId;discovery.modelIds=result.modelIds;discovery.search='';
+  }catch(error){
+    if(MODELS_STATE.editor===editor&&editor.discovery===discovery&&discovery.request===request&&editor.candidateKey===identity)discovery.error=modelsCatalogDiscoveryErrorMessage(error);
+  }finally{
+    if(MODELS_STATE.editor===editor&&editor.discovery===discovery&&discovery.request===request&&editor.candidateKey===identity){discovery.loading=false;modelsCatalogRenderIfActive();}
+  }
+}
+function modelsCatalogSetDiscoverySearch(value){
+  var editor=MODELS_STATE.editor;if(!editor||!editor.discovery)return;
+  editor.discovery.search=String(value||'');editor.focusTarget='discovery-search';modelsCatalogRenderIfActive();
+}
+function modelsCatalogToggleDiscoveredModel(index,checked){
+  var editor=MODELS_STATE.editor;if(!editor||!editor.discovery)return;
+  var modelId=editor.discovery.modelIds[Number(index)];if(!modelId)return;
+  var next=editor.source.modelSelection.modelIds.filter(function(item){return item!==modelId;});if(checked)next.push(modelId);
+  modelsCatalogReplaceEditorModels(editor,next,'discovered:'+Number(index));
+}
+function modelsCatalogToggleFilteredModels(checked){
+  var editor=MODELS_STATE.editor;if(!editor||!editor.discovery)return;
+  var filtered=modelsCatalogDiscoveryItems(editor).map(function(item){return item.modelId;}),visible=Object.create(null);
+  filtered.forEach(function(modelId){visible[modelId]=true;});
+  var next=editor.source.modelSelection.modelIds.filter(function(modelId){return checked||!visible[modelId];});if(checked)next=next.concat(filtered);
+  modelsCatalogReplaceEditorModels(editor,next,'discovery-master');
+}
+function modelsCatalogClearDiscoveredModels(){
+  var editor=MODELS_STATE.editor;if(!editor||!editor.discovery)return;
+  var discovered=Object.create(null);editor.discovery.modelIds.forEach(function(modelId){discovered[modelId]=true;});
+  modelsCatalogReplaceEditorModels(editor,editor.source.modelSelection.modelIds.filter(function(modelId){return !discovered[modelId];}),'discovery-clear');
+}
+function modelsCatalogEditorFocusSelector(key){
+  if(key==='candidate')return '[data-models-candidate]';
+  if(key==='discover')return '[data-models-discover]';
+  if(key==='discovery-search')return '[data-models-discovery-search]';
+  if(key==='discovery-master')return '[data-models-toggle-filtered]';
+  if(key==='discovery-clear')return '[data-models-clear-discovered]';
+  if(String(key||'').indexOf('discovered:')===0)return '[data-models-discovered-index="'+String(key).slice(11)+'"]';
+  if(key==='manual')return '[data-models-manual-id]';
+  if(key==='add-model')return '[data-models-add-model]';
+  if(key==='save')return '[data-models-editor-save]';
+  if(key==='close')return '.models-editor-head [data-models-editor-close]';
+  if(String(key||'').indexOf('remove:')===0)return '[data-models-remove-model="'+String(key).slice(7)+'"]';
+  return '';
+}
+function modelsCatalogReleaseDialogBackground(){
+  MODELS_DIALOG_BACKGROUND.forEach(function(saved){
+    var element=saved.element;if(!element)return;
+    if(saved.ariaHidden==null){if(element.removeAttribute)element.removeAttribute('aria-hidden');}else if(element.setAttribute)element.setAttribute('aria-hidden',saved.ariaHidden);
+    element.inert=saved.inert;
+  });
+  MODELS_DIALOG_BACKGROUND=[];
+}
+function modelsCatalogIsolateDialogBackground(element){
+  if(!element||MODELS_DIALOG_BACKGROUND.some(function(saved){return saved.element===element;}))return;
+  MODELS_DIALOG_BACKGROUND.push({element:element,ariaHidden:element.getAttribute?element.getAttribute('aria-hidden'):null,inert:!!element.inert});
+  if(element.setAttribute)element.setAttribute('aria-hidden','true');element.inert=true;
+}
+function modelsCatalogApplyDialogAccessibility(root){
+  if(!root||!root.querySelector)return;
+  modelsCatalogReleaseDialogBackground();
+  var editor=MODELS_STATE.editor,dialog=root.querySelector('.models-editor');
+  if(editor&&dialog){
+    var background=[root.querySelector('.sub-header')],page=root.querySelector('.models-page');
+    if(page&&page.children)Array.prototype.forEach.call(page.children,function(child){if(!(child.matches&&child.matches('.models-editor,.models-editor-back')))background.push(child);});
+    var shell=root.closest&&root.closest('#console-shell'),doc=root.ownerDocument||(typeof document==='undefined'?null:document);
+    if(shell){background.push(shell.querySelector('.rail'),shell.querySelector('.app-header'),shell.querySelector('#frame-dock'));}
+    if(doc)background.push(doc.getElementById('acctw'));
+    background.forEach(modelsCatalogIsolateDialogBackground);
+    var requestedFocus=editor.focusTarget,selector=modelsCatalogEditorFocusSelector(requestedFocus);
+    if(selector){editor.focusTarget='';var target=dialog.querySelector(selector)||dialog.querySelector('[data-models-candidate],button:not([disabled]),input:not([disabled])');if(target&&target.focus){target.focus();if(requestedFocus==='discovery-search'&&target.setSelectionRange){var end=String(target.value||'').length;target.setSelectionRange(end,end);}}}
+    return;
+  }
+  if(MODELS_RETURN_FOCUS){
+    var returnSelector=MODELS_RETURN_FOCUS;MODELS_RETURN_FOCUS='';
+    var returnTarget=root.querySelector(returnSelector)||root.querySelector('[data-models-add],[data-models-save]');
+    if(returnTarget&&returnTarget.focus)returnTarget.focus();
+  }
+}
+function modelsCatalogTrapEditorFocus(root,event){
+  if(!event||event.key!=='Tab'||!root||!root.querySelector)return false;
+  var dialog=root.querySelector('.models-editor');if(!dialog)return false;
+  var focusable=Array.prototype.filter.call(dialog.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'),function(element){return !element.disabled;});
+  if(!focusable.length)return false;
+  var first=focusable[0],last=focusable[focusable.length-1],active=dialog.ownerDocument?dialog.ownerDocument.activeElement:document.activeElement;
+  if(focusable.indexOf(active)<0){event.preventDefault();(event.shiftKey?last:first).focus();return true;}
+  if((event.shiftKey&&active===first)||(!event.shiftKey&&active===last)){event.preventDefault();(event.shiftKey?last:first).focus();return true;}
+  return false;
+}
+function modelsCatalogAddManualModel(root){
+  var editor=MODELS_STATE.editor,input=root&&root.querySelector('[data-models-manual-id]');if(!editor||!input)return;
+  var modelId=String(input.value||'').trim();if(!modelId)return;
+  if(modelsCatalogUtf8Length(modelId)>MODELS_LIMITS.maxModelIdUtf8Bytes){editor.error='模型 ID 的 UTF-8 长度不能超过 '+MODELS_LIMITS.maxModelIdUtf8Bytes+' bytes。';editor.focusTarget='manual';modelsCatalogRenderIfActive();return;}
+  modelsCatalogReplaceEditorModels(editor,editor.source.modelSelection.modelIds.concat([modelId]),'manual');
+}
+function modelsCatalogRemoveManualModel(index){
+  var editor=MODELS_STATE.editor;if(!editor)return;
+  var next=editor.source.modelSelection.modelIds.slice();next.splice(Number(index),1);modelsCatalogReplaceEditorModels(editor,next,'manual');
+}
+function modelsCatalogApplyEditor(root){
+  var editor=MODELS_STATE.editor;if(!editor)return;
+  var state=modelsCatalogOwnerState(editor.owner),candidate=(state.candidates||[]).filter(function(item){return modelsCatalogCandidateIdentity(item,editor.owner)===editor.candidateKey;})[0];
+  var retained=modelsCatalogEditorRetainsCandidate(editor,candidate);
+  if(!retained&&!modelsCatalogCandidateSelectable(candidate,editor.owner)){
+    editor.error=candidate?'当前候选不可新增：'+modelsCatalogStatus(candidate,editor.owner).label+'。':'请选择一个包含精确服务身份且当前可调用的候选来源。';editor.focusTarget='candidate';modelsCatalogRenderIfActive();return;
+  }
+  var source=modelsCatalogNormalizeSource(editor.source,editor.owner);
+  if(candidate){
+    source.catalogServiceId=candidate.catalogServiceId;source.serviceSlugSnapshot=candidate.serviceSlug;
+    if(editor.owner==='scope')source.userServiceId=candidate.userServiceId;
+    source.displayName=candidate.displayName||candidate.serviceSlug||candidate.catalogServiceId;
+  }
+  if(!source.modelSelection.modelIds.length){editor.error='至少需要一个模型 ID。';editor.focusTarget='manual';modelsCatalogRenderIfActive();return;}
+  var duplicate=state.draft.sources.some(function(item,index){return index!==editor.index&&modelsCatalogSourceIdentity(item,editor.owner)===modelsCatalogSourceIdentity(source,editor.owner);});
+  if(duplicate){editor.error='该精确服务身份已经在来源列表中。';editor.focusTarget='candidate';modelsCatalogRenderIfActive();return;}
+  var nextSources=state.draft.sources.slice(),nextIndex=editor.index==null?nextSources.length:editor.index;
+  if(editor.index==null)nextSources.push(source);else nextSources[editor.index]=source;
+  var problem=modelsCatalogValidateSources(editor.owner,nextSources);
+  if(problem){editor.error=problem;editor.focusTarget=problem.indexOf('候选服务')>=0?'candidate':'manual';modelsCatalogRenderIfActive();return;}
+  state.draft.sources=nextSources;state.dirty=true;state.notice=null;
+  modelsCatalogQueueReturnFocus(editor,'[data-models-edit="'+nextIndex+'"]');MODELS_STATE.editor=null;modelsCatalogRenderIfActive();
+}
+function modelsCatalogSetMode(mode){
+  var state=modelsCatalogOwnerState('scope');if(!state.draft)return;
+  state.draft.mode=mode==='inherit_platform'?'inherit_platform':'custom_replace';state.dirty=true;state.notice=null;MODELS_STATE.editor=null;modelsCatalogRenderIfActive();
+}
+function modelsCatalogDeleteSource(owner,index){
+  var state=modelsCatalogOwnerState(owner),source=state.draft&&state.draft.sources[Number(index)];if(!source)return;
+  if(!confirm('删除模型来源「'+(source.displayName||source.sourceId)+'」？'))return;
+  state.draft.sources.splice(Number(index),1);state.dirty=true;state.notice=null;modelsCatalogRenderIfActive();
+}
+function modelsCatalogValidateSources(owner,sources){
+  sources=Array.isArray(sources)?sources:[];
+  if(sources.length>MODELS_LIMITS.maxSources)return '每个模型目录最多允许 '+MODELS_LIMITS.maxSources+' 个来源。';
+  var identities=Object.create(null),slugs=Object.create(null),modelCount=0;
+  for(var i=0;i<sources.length;i++){
+    var source=sources[i],identity=modelsCatalogSourceIdentity(source,owner),slug=String(source.serviceSlugSnapshot||'').trim();
+    if(owner==='scope'?!source.userServiceId:(!source.catalogServiceId||!!source.userServiceId))return '来源 '+(i+1)+' 缺少精确服务身份。';
+    if(identities[identity])return '来源 '+(i+1)+' 的精确服务身份重复。';identities[identity]=true;
+    if(!slug)return '来源 '+(i+1)+' 缺少 Service slug snapshot。';
+    var slugKey=slug.toLowerCase();if(slugs[slugKey])return '来源 '+(i+1)+' 的 Service slug 与其他来源重复。';slugs[slugKey]=true;
+    var modelIds=source.modelSelection&&Array.isArray(source.modelSelection.modelIds)?source.modelSelection.modelIds:[];
+    if(!modelIds.length)return '来源 '+(i+1)+' 的模型列表不能为空。';
+    if(modelIds.length>MODELS_LIMITS.maxModelsPerSource)return '来源 '+(i+1)+' 最多允许 '+MODELS_LIMITS.maxModelsPerSource+' 个模型 ID。';
+    for(var j=0;j<modelIds.length;j++)if(modelsCatalogUtf8Length(modelIds[j])>MODELS_LIMITS.maxModelIdUtf8Bytes)return '来源 '+(i+1)+' 的模型 ID「'+modelIds[j]+'」超过 '+MODELS_LIMITS.maxModelIdUtf8Bytes+' UTF-8 bytes。';
+    modelCount+=modelIds.length;
+  }
+  if(modelCount>MODELS_LIMITS.maxModelsPerPolicy)return '每个模型目录最多允许 '+MODELS_LIMITS.maxModelsPerPolicy+' 个模型 ID。';
+  return '';
+}
+function modelsCatalogValidateDraft(owner,state){
+  var draft=state.draft||modelsCatalogNormalize({},owner);
+  if(owner==='scope'&&draft.mode==='inherit_platform')return '';
+  return modelsCatalogValidateSources(owner,draft.sources);
+}
+async function modelsCatalogSave(owner){
+  var state=modelsCatalogOwnerState(owner);if(state.saving||!state.dirty)return;
+  var problem=modelsCatalogValidateDraft(owner,state);if(problem){state.notice={tone:'failed',text:problem};modelsCatalogRenderIfActive();return;}
+  if(owner==='platform'&&state.draft.sources.length===0&&!confirm('保存空的平台默认目录？所有继承平台默认的 scope，其 /v1/models 都将返回空集合。'))return;
+  var mutationId=modelsCatalogMutationId(),payload=modelsCatalogBuildPayload(owner,state,mutationId),baseVersion=payload.expectedStateVersion;
+  state.saving=true;state.error=null;modelsCatalogRenderIfActive();
+  try{
+    var response=await modelsCatalogResponse(modelsCatalogEndpoint(owner,false),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(response.forbidden){modelsCatalogClearOwnerState(owner,true);return;}
+    state.dirty=false;state.pending={baseVersion:baseVersion,mutationId:mutationId};
+    state.notice={tone:'waiting',text:response.status===202?'命令已受理（202 Accepted）；正在刷新 read model 以确认 stateVersion 与 mutationId。':'写入响应已返回；正在刷新 read model 以确认 stateVersion 与 mutationId。'};
+    await loadModelsCatalog(owner,{keepNotice:true,renderStart:false});
+  }catch(error){state.conflict=!!(error&&error.status===409);state.error=modelsCatalogErrorMessage(error);}
+  finally{state.saving=false;modelsCatalogRenderIfActive();}
+}
+async function modelsCatalogResetScope(){
+  var state=modelsCatalogOwnerState('scope');if(state.saving)return;
+  if(!confirm('删除当前 scope 的模型目录覆盖并恢复平台默认？'))return;
+  var baseVersion=state.draftBaseVersion!=null?state.draftBaseVersion:(state.catalog&&state.catalog.stateVersion),mutationId=modelsCatalogMutationId();state.saving=true;state.error=null;modelsCatalogRenderIfActive();
+  try{
+    var response=await modelsCatalogResponse(modelsCatalogEndpoint('scope',false),{method:'DELETE',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({expectedStateVersion:baseVersion==null?0:baseVersion,mutationId:mutationId})});
+    if(response.forbidden){modelsCatalogClearOwnerState('scope',true);return;}
+    state.dirty=false;state.pending={baseVersion:baseVersion,mutationId:mutationId};
+    state.notice={tone:'waiting',text:response.status===202?'重置命令已受理（202 Accepted）；正在刷新 read model 以确认 stateVersion 与 mutationId。':'重置响应已返回；正在刷新 read model 以确认 stateVersion 与 mutationId。'};
+    await loadModelsCatalog('scope',{keepNotice:true,renderStart:false});
+  }catch(error){state.conflict=!!(error&&error.status===409);state.error=modelsCatalogErrorMessage(error);}
+  finally{state.saving=false;modelsCatalogRenderIfActive();}
+}
+function modelsCatalogDiscard(owner){
+  var state=modelsCatalogOwnerState(owner);if(!state.catalog)return;
+  state.draft=modelsCatalogClone(state.catalog,owner);state.draftBaseVersion=state.catalog.stateVersion;state.dirty=false;state.notice=null;MODELS_STATE.editor=null;
+  if(state.conflict){modelsCatalogReloadLatest(owner);return;}
+  state.error=null;modelsCatalogRenderIfActive();
+}
+function modelsCatalogReloadLatest(owner){
+  var state=modelsCatalogOwnerState(owner);if(state.loading)return;
+  if(state.dirty&&!confirm('加载最新配置将放弃当前未保存修改，继续吗？'))return;
+  loadModelsCatalog(owner,{discardDraft:true});
+}
+function modelsCatalogEffectiveSourceLabel(catalog,owner){
+  var value=catalog&&catalog.effectiveSource;
+  if(value&&typeof value==='object')value=value.kind||value.owner||value.source||'';
+  if(value==='platform'||value==='platform_default')return '平台默认';
+  if(value==='scope'||value==='scope_override')return '当前 scope';
+  if(value)return String(value);
+  return owner==='scope'&&catalog&&catalog.mode==='inherit_platform'?'平台默认':'当前配置';
+}
+function modelsCatalogHeader(){
+  var owner=MODELS_STATE.owner,platform=ACCOUNT&&ACCOUNT.admin?'<button type="button" data-models-owner="platform" aria-pressed="'+(owner==='platform')+'" class="'+(owner==='platform'?'on':'')+'">平台默认</button>':'';
+  return moduleSubHeader('models','<div class="segmented" aria-label="模型目录所有者"><button type="button" data-models-owner="scope" aria-pressed="'+(owner==='scope')+'" class="'+(owner==='scope'?'on':'')+'">当前 scope</button>'+platform+'</div>');
+}
+function modelsCatalogSummary(owner,state){
+  var catalog=state.catalog||{},scope=owner==='scope'?(modelsCatalogSyncAuthority()||'—'):'平台共享',version=catalog.stateVersion==null?'—':catalog.stateVersion;
+  var status=state.saving?'正在提交':state.loading?'正在读取':state.conflict?'版本冲突':state.pending?'已受理，待物化':state.dirty?'有未保存修改':state.error?'刷新失败':state.loaded?'已同步':'未加载';
+  return '<div class="models-summary">'+
+    '<div class="models-fact"><small>Owner</small><code>'+esc(scope)+'</code></div>'+
+    '<div class="models-fact"><small>Effective source</small><b>'+esc(modelsCatalogEffectiveSourceLabel(catalog,owner))+'</b></div>'+
+    '<div class="models-fact"><small>State version</small><code>'+esc(version)+'</code></div>'+
+    '<div class="models-fact"><small>Status</small><b>'+esc(status)+'</b></div></div>';
+}
+function modelsCatalogNotice(state){
+  var parts=[];
+  if(state.error){var recovery=state.conflict?'<button type="button" class="btn" data-models-reload-latest>加载最新配置</button>':(!state.dirty?'<button type="button" class="btn" data-models-retry>重试</button>':'');parts.push('<div class="models-notice failed" aria-live="polite"><span class="grow">'+esc(state.error)+'</span>'+recovery+'</div>');}
+  if(state.notice)parts.push('<div class="models-notice '+esc(state.notice.tone||'')+'" aria-live="polite"><span class="grow">'+esc(state.notice.text||'')+'</span>'+(state.pending?'<button type="button" class="btn" data-models-retry>刷新确认</button>':'')+'</div>');
+  return parts.join('');
+}
+function modelsCatalogModelFilter(source){
+  var selection=source.modelSelection||modelsCatalogNormalizeSelection({});
+  if(!selection.modelIds.length)return '<span class="tag tag-waiting"><span class="tdot"></span>模型清单为空</span>';
+  return '<span class="tag tag-idle"><span class="tdot"></span>'+selection.modelIds.length+' 个公开模型</span><div class="models-model-list" style="margin-top:6px">'+selection.modelIds.map(function(modelId){return '<span class="models-model-chip" title="upstream: '+esc(modelId)+'">'+esc(modelsCatalogQualifiedId(source,modelId))+'</span>';}).join('')+'</div>';
+}
+function modelsCatalogSourcesTable(owner,state,sources,editable){
+  if(!sources.length){
+    var explicit=owner==='platform'||(owner==='scope'&&state.draft&&state.draft.mode==='custom_replace');
+    var emptyTitle=owner==='platform'?'平台默认目录为空':explicit?'自定义目录为空':'暂无模型来源';
+    var emptyHelp=owner==='platform'?'所有继承平台默认的 scope，其 /v1/models 都将返回空集合。':explicit?'这是显式空的 custom_replace，系统不会回退到平台默认；/v1/models 将返回空集合。':'添加精确候选服务后，模型才会出现在目录中。';
+    return '<div class="empty models-empty'+(explicit?' explicit':'')+'">'+ICON.empty+'<div class="et">'+emptyTitle+'</div><div class="es">'+emptyHelp+'</div>'+(editable?'<button type="button" class="btn btn-primary" data-models-add>添加来源</button>':'')+'</div>';
+  }
+  var rows=sources.map(function(source,index){
+    var identityOwner=owner==='scope'&&source.userServiceId?'scope':'platform';
+    var inherited=owner==='scope'&&identityOwner==='platform',matches=inherited?[]:modelsCatalogCandidatesForSource(source,identityOwner,state);
+    var candidate=matches.length===1?matches[0]:null;
+    var status=inherited?{tone:'idle',label:'平台 catalog 直连'}:modelsCatalogStatus(candidate,identityOwner);
+    var primary=modelsCatalogSourceIdentity(source,identityOwner)||'—';
+    var secondary=identityOwner==='scope'?source.catalogServiceId:inherited?'不依赖 scope userServiceId':source.sourceId;
+    return '<tr><td><div class="models-source-name"><b>'+esc(source.displayName||source.serviceSlugSnapshot||'未命名来源')+'</b><span>'+esc(source.serviceSlugSnapshot||'无 slug snapshot')+' · '+esc(source.sourceId||'无 sourceId')+'</span></div></td>'+
+      '<td><div class="models-identity"><span>'+(identityOwner==='scope'?'userServiceId':'catalogServiceId')+'</span><code>'+esc(primary)+'</code><span>'+(identityOwner==='scope'?'catalogServiceId (inventory)':inherited?'resolved userServiceId':'sourceId')+'</span><code>'+esc(secondary||'—')+'</code></div></td>'+
+      '<td>'+modelsCatalogModelFilter(source)+'</td><td><span class="tag tag-'+status.tone+'"><span class="tdot"></span>'+esc(status.label)+'</span></td>'+
+      '<td><div class="models-row-actions">'+(editable?'<button type="button" class="btn" data-models-edit="'+index+'">编辑</button><button type="button" class="link-btn fail" data-models-delete="'+index+'">删除</button>':'<span class="field-help">只读</span>')+'</div></td></tr>';
+  }).join('');
+  return '<div class="protable-wrap models-table"><table class="protable"><thead><tr><th>来源</th><th>精确身份</th><th>模型清单</th><th>状态</th><th style="text-align:right">操作</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+function modelsCatalogCandidateOptions(editor,state){
+  var owner=editor.owner,selected=editor.candidateKey,known=false;
+  var options=(state.candidates||[]).map(function(candidate){
+    var identity=modelsCatalogCandidateIdentity(candidate,owner);if(identity===selected)known=true;
+    var status=modelsCatalogStatus(candidate,owner),selectable=modelsCatalogCandidateSelectable(candidate,owner)||modelsCatalogEditorRetainsCandidate(editor,candidate),disabled=selectable?'':' disabled';
+    var label=candidate.displayName||candidate.serviceSlug||identity||'缺少精确身份';
+    return '<option value="'+esc(identity)+'"'+(identity===selected?' selected':'')+disabled+'>'+esc(label)+' · '+esc(identity||'不可选择')+' · '+esc(status.label)+'</option>';
+  }).join('');
+  if(selected&&!known)options='<option value="'+esc(selected)+'" selected disabled>当前精确身份不在候选清单 · '+esc(selected)+'</option>'+options;
+  return '<option value=""'+(selected?'':' selected')+'>选择候选服务…</option>'+options;
+}
+function modelsCatalogDiscoveryPanel(editor,candidate){
+  var discovery=editor.discovery||modelsCatalogNewDiscoveryState(),identity=String(editor.candidateKey||''),retained=modelsCatalogEditorRetainsCandidate(editor,candidate);
+  var canDiscover=!!identity&&(retained||modelsCatalogCandidateSelectable(candidate,editor.owner));
+  var loadLabel=discovery.loading?'正在获取…':discovery.loaded?'重新获取':'获取模型';
+  var head='<div class="models-discovery-head"><div class="models-discovery-title"><b>NyxID 服务模型</b><span>从当前候选的 /models 获取上游模型 ID。</span></div><button type="button" class="btn" data-models-discover'+(!canDiscover||discovery.loading?' disabled':'')+'>'+loadLabel+'</button></div>';
+  var stateHtml='';
+  if(discovery.loading)stateHtml='<div class="models-discovery-state" aria-live="polite"><span class="spinner"></span><span>正在读取 '+esc(identity)+' 的模型…</span></div>';
+  else if(discovery.error)stateHtml='<div class="models-discovery-state failed" role="alert" aria-live="assertive"><span class="grow">'+esc(discovery.error)+'</span><button type="button" class="btn" data-models-discover'+(canDiscover?'':' disabled')+'>重试</button></div>';
+  else if(!discovery.loaded)stateHtml='<div class="models-discovery-state" aria-live="polite">'+(canDiscover?'尚未获取模型。':'选择可调用的候选服务后可获取模型。')+'</div>';
+  if(!discovery.loaded)return '<section class="models-discovery" aria-label="NyxID 服务模型发现">'+head+stateHtml+'</section>';
+  var selected=Object.create(null);editor.source.modelSelection.modelIds.forEach(function(modelId){selected[modelId]=true;});
+  var items=modelsCatalogDiscoveryItems(editor),selectedFiltered=items.filter(function(item){return !!selected[item.modelId];}).length;
+  var masterState=!items.length?'false':selectedFiltered===0?'false':selectedFiltered===items.length?'true':'mixed';
+  var selectedDiscovered=discovery.modelIds.filter(function(modelId){return !!selected[modelId];}).length;
+  var rows=items.map(function(item){return '<label class="models-discovery-option"><input type="checkbox" data-models-discovered-index="'+item.index+'"'+(selected[item.modelId]?' checked':'')+'><code>'+esc(item.modelId)+'</code></label>';}).join('');
+  if(!rows)rows='<div class="models-discovery-empty">'+(discovery.modelIds.length?'没有匹配的模型。':'该服务没有返回模型。')+'</div>';
+  var state=modelsCatalogOwnerState(editor.owner),policyCount=modelsCatalogEditorOtherModelCount(editor,state)+editor.source.modelSelection.modelIds.length;
+  var tools='<div class="models-discovery-tools"><input class="models-discovery-search" type="search" data-models-discovery-search aria-label="筛选已发现模型" placeholder="筛选模型 ID" value="'+esc(discovery.search)+'"><span class="models-discovery-count">'+items.length+' / '+discovery.modelIds.length+' · 已选 '+editor.source.modelSelection.modelIds.length+'/'+MODELS_LIMITS.maxModelsPerSource+' · 目录 '+policyCount+'/'+MODELS_LIMITS.maxModelsPerPolicy+'</span></div>'+
+    '<div class="models-discovery-bulk"><label class="models-discovery-master"><input type="checkbox" data-models-toggle-filtered aria-checked="'+masterState+'"'+(masterState==='true'?' checked':'')+(items.length?'':' disabled')+'>全选当前筛选</label><button type="button" class="btn" data-models-clear-discovered'+(selectedDiscovered?'':' disabled')+'>取消已发现选择</button></div>'+
+    '<div class="models-discovery-list" role="group" aria-label="已发现模型">'+rows+'</div>';
+  return '<section class="models-discovery" aria-label="NyxID 服务模型发现">'+head+stateHtml+'<div class="models-discovery-state" aria-live="polite">已发现 '+discovery.modelIds.length+' 个模型，已选择其中 '+selectedDiscovered+' 个。'+(discovery.defaultModelId?' 默认模型：'+esc(discovery.defaultModelId)+'。':'')+'</div>'+tools+'</section>';
+}
+function modelsCatalogEditor(){
+  var editor=MODELS_STATE.editor;if(!editor)return '';
+  var state=modelsCatalogOwnerState(editor.owner),source=editor.source,selection=source.modelSelection;
+  var candidate=(state.candidates||[]).filter(function(item){return modelsCatalogCandidateIdentity(item,editor.owner)===editor.candidateKey;})[0];
+  var candidateStatus=modelsCatalogStatus(candidate,editor.owner);
+  var primary=candidate?modelsCatalogCandidateIdentity(candidate,editor.owner):editor.candidateKey;
+  var secondary=candidate?candidate.catalogServiceId:source.catalogServiceId;
+  var chips=selection.modelIds.length?selection.modelIds.map(function(modelId,index){return '<span class="models-model-chip">'+esc(modelId)+'<button type="button" aria-label="移除 '+esc(modelId)+'" data-models-remove-model="'+index+'">×</button></span>';}).join(''):'<span class="field-err">至少添加一个模型 ID。</span>';
+  var qualifiedExample=selection.modelIds.length?modelsCatalogQualifiedId(source,selection.modelIds[0]):((candidate?candidate.serviceSlug:source.serviceSlugSnapshot)||'<service-slug>')+'/<upstream-model-id>';
+  return '<div class="models-editor-back" data-models-editor-close aria-hidden="true"></div><section class="models-editor" role="dialog" aria-modal="true" aria-labelledby="models-editor-title" aria-describedby="models-editor-description">'+
+    '<header class="models-editor-head"><div><b id="models-editor-title">'+(editor.index==null?'添加模型来源':'编辑模型来源')+'</b><span id="models-editor-description">候选来自专用 inventory，并按精确 ID 写入目录。</span></div><button type="button" class="drawer-close" data-models-editor-close aria-label="关闭">✕</button></header>'+
+    '<div class="models-editor-body">'+(editor.error?'<div class="models-notice failed" role="alert" aria-live="assertive">'+esc(editor.error)+'</div>':'')+
+      '<div class="models-editor-grid"><div class="wz-field wide"><label for="models-editor-candidate">候选服务 <span class="req">*</span></label><select id="models-editor-candidate" data-models-candidate>'+modelsCatalogCandidateOptions(editor,state)+'</select><span class="field-help">scope 按 userServiceId 选择；平台按 catalogServiceId 选择。</span></div>'+
+      '<div class="wz-field"><label for="models-editor-display-name">候选显示名称</label><input id="models-editor-display-name" value="'+esc(candidate?candidate.displayName:source.displayName)+'" readonly></div>'+
+      '<div class="wz-field"><label for="models-editor-slug">Service slug snapshot</label><input id="models-editor-slug" value="'+esc(candidate?candidate.serviceSlug:source.serviceSlugSnapshot)+'" readonly></div>'+
+      '<div class="models-exact wide"><code>'+esc(editor.owner==='scope'?'userServiceId: ':'catalogServiceId: ')+esc(primary||'—')+'</code>'+(editor.owner==='scope'?'<code>catalogServiceId: '+esc(secondary||'—')+'</code>':'')+'<code>sourceId: '+esc(source.sourceId)+'</code><span class="tag tag-'+candidateStatus.tone+'"><span class="tdot"></span>'+esc(candidateStatus.label)+'</span></div></div>'+
+      modelsCatalogDiscoveryPanel(editor,candidate)+
+      '<div class="wz-field"><label for="models-editor-manual-id">上游模型 ID <span class="req">*</span></label><div class="models-manual"><input id="models-editor-manual-id" data-models-manual-id placeholder="例如 gpt-5.5" autocomplete="off"><button type="button" class="btn" data-models-add-model>添加</button></div><span class="field-help">这里编辑上游 ID；/v1/models 发布 qualified ID，例如 <code>'+esc(qualifiedExample)+'</code>。</span><div class="models-editor-models">'+chips+'</div></div>'+
+    '</div><footer class="models-editor-foot"><button type="button" class="btn" data-models-editor-close>取消</button><button type="button" class="btn btn-primary" data-models-editor-save>保存来源</button></footer></section>';
+}
+function modelsCatalogBody(owner,state){
+  if(state.loading&&!state.loaded)return '<div class="view-scroll models-page">'+modelsCatalogSummary(owner,state)+'<div class="panel"><span class="inline-refresh"><span class="spinner"></span>正在读取模型目录与精确候选服务…</span></div></div>';
+  if(state.forbidden)return '<div class="view-scroll models-page"><div class="empty">'+ICON.warn+'<div class="et">无权读取模型目录</div><div class="es">服务返回 403；当前页面不会展示缓存或推断出的 provider。</div><button type="button" class="btn" data-models-retry>重试</button></div></div>';
+  if(!state.loaded)return '<div class="view-scroll models-page">'+modelsCatalogNotice(state)+'<div class="empty">'+ICON.warn+'<div class="et">模型目录暂不可用</div><div class="es">未能读取目录和候选 inventory。</div><button type="button" class="btn" data-models-retry>重试</button></div></div>';
+  var draft=state.draft,inherit=owner==='scope'&&draft.mode==='inherit_platform';
+  var locked=state.saving||state.loading||!!state.pending||state.conflict||!state.inventoryFresh;
+  var sources=inherit?state.catalog.effectiveSources:draft.sources,editable=!inherit&&!locked;
+  var mode=owner==='scope'?'<div class="models-mode"><span class="models-mode-label">Scope 模式</span><div class="segmented" aria-label="Scope 模型目录模式"><button type="button" data-models-mode="inherit_platform" aria-pressed="'+(draft.mode==='inherit_platform')+'" class="'+(draft.mode==='inherit_platform'?'on':'')+'"'+(locked?' disabled':'')+'>继承平台默认</button><button type="button" data-models-mode="custom_replace" aria-pressed="'+(draft.mode==='custom_replace')+'" class="'+(draft.mode==='custom_replace'?'on':'')+'"'+(locked?' disabled':'')+'>自定义替换</button></div><span class="models-mode-help">custom_replace 是完整替换；零来源仍是有效的显式空目录。</span></div>':'';
+  var title=inherit?'生效中的平台来源':owner==='platform'?'平台默认来源':'当前 scope 来源';
+  var actions=(editable&&draft.sources.length<MODELS_LIMITS.maxSources?'<button type="button" class="btn" data-models-add>添加来源</button>':'')+
+    '<button type="button" class="btn btn-primary" data-models-save'+(!state.dirty||locked?' disabled':'')+'>'+(state.saving?'提交中…':'保存配置')+'</button>'+
+    '<button type="button" class="btn" data-models-discard'+(!state.dirty||state.saving||state.loading?' disabled':'')+'>放弃修改</button>'+
+    (owner==='scope'?'<button type="button" class="btn" data-models-reset'+(locked?' disabled':'')+'>恢复平台默认</button>':'');
+  return '<div class="view-scroll models-page">'+modelsCatalogSummary(owner,state)+modelsCatalogNotice(state)+'<section class="models-config">'+mode+
+    '<div class="models-config-head"><div class="models-config-title"><b>'+title+'</b><span>'+state.candidates.length+' 个精确候选服务 · '+(inherit?'继承内容只读':'模型按公开 ID 稳定排序')+'</span></div><div class="models-config-actions">'+actions+'</div></div>'+
+    modelsCatalogSourcesTable(owner,state,sources,editable)+'</section>'+modelsCatalogEditor()+'</div>';
+}
+function viewModels(){
+  modelsCatalogSyncAuthority();var owner=MODELS_STATE.owner,state=modelsCatalogOwnerState(owner);
+  if(!state.loaded&&!state.loading&&!state.error&&!state.forbidden)loadModelsCatalog(owner,{renderStart:false});
+  return {html:modelsCatalogHeader()+modelsCatalogBody(owner,state),mount:mountModelsCatalog};
+}
+function modelsCatalogApplyDiscoveryCheckboxState(root){
+  if(!root||!root.querySelectorAll)return;
+  Array.prototype.forEach.call(root.querySelectorAll('[data-models-toggle-filtered]'),function(input){input.indeterminate=input.getAttribute('aria-checked')==='mixed';});
+}
+function mountModelsCatalog(root){
+  modelsCatalogApplyDialogAccessibility(root);
+  modelsCatalogApplyDiscoveryCheckboxState(root);
+  if(root.dataset.modelsCatalogMounted==='true')return;
+  root.dataset.modelsCatalogMounted='true';
+  root.addEventListener('click',function(event){
+    var target=event.target.closest('button,[data-models-editor-close]');if(!target||target.hasAttribute('disabled'))return;
+    if(target.hasAttribute('data-models-owner')){var owner=target.getAttribute('data-models-owner');if(owner==='platform'&&!(ACCOUNT&&ACCOUNT.admin))return;MODELS_STATE.owner=owner;MODELS_STATE.editor=null;var state=modelsCatalogOwnerState(owner);if(!state.loaded&&!state.loading)loadModelsCatalog(owner);else modelsCatalogRenderIfActive();return;}
+    if(target.hasAttribute('data-models-reload-latest')){modelsCatalogReloadLatest(MODELS_STATE.owner);return;}
+    if(target.hasAttribute('data-models-retry')){var current=modelsCatalogOwnerState(MODELS_STATE.owner);if(current.dirty&&!current.pending){toast('有未保存修改，已跳过刷新');return;}loadModelsCatalog(MODELS_STATE.owner,{keepNotice:!!current.pending});return;}
+    if(target.hasAttribute('data-models-mode')){modelsCatalogSetMode(target.getAttribute('data-models-mode'));return;}
+    if(target.hasAttribute('data-models-add')){modelsCatalogOpenEditor(MODELS_STATE.owner,null);return;}
+    if(target.hasAttribute('data-models-edit')){modelsCatalogOpenEditor(MODELS_STATE.owner,Number(target.getAttribute('data-models-edit')));return;}
+    if(target.hasAttribute('data-models-delete')){modelsCatalogDeleteSource(MODELS_STATE.owner,Number(target.getAttribute('data-models-delete')));return;}
+    if(target.hasAttribute('data-models-save')){modelsCatalogSave(MODELS_STATE.owner);return;}
+    if(target.hasAttribute('data-models-reset')){modelsCatalogResetScope();return;}
+    if(target.hasAttribute('data-models-discard')){modelsCatalogDiscard(MODELS_STATE.owner);return;}
+    if(target.hasAttribute('data-models-editor-close')){modelsCatalogCloseEditor();return;}
+    if(target.hasAttribute('data-models-discover')){modelsCatalogDiscoverModels();return;}
+    if(target.hasAttribute('data-models-clear-discovered')){modelsCatalogClearDiscoveredModels();return;}
+    if(target.hasAttribute('data-models-add-model')){modelsCatalogAddManualModel(root);return;}
+    if(target.hasAttribute('data-models-remove-model')){modelsCatalogRemoveManualModel(Number(target.getAttribute('data-models-remove-model')));return;}
+    if(target.hasAttribute('data-models-editor-save')){modelsCatalogApplyEditor(root);return;}
+  });
+  root.addEventListener('change',function(event){
+    if(event.target.matches('[data-models-candidate]'))modelsCatalogSelectCandidate(event.target.value);
+    else if(event.target.matches('[data-models-discovered-index]'))modelsCatalogToggleDiscoveredModel(Number(event.target.getAttribute('data-models-discovered-index')),event.target.checked);
+    else if(event.target.matches('[data-models-toggle-filtered]'))modelsCatalogToggleFilteredModels(event.target.checked);
+  });
+  root.addEventListener('input',function(event){if(event.target.matches('[data-models-discovery-search]'))modelsCatalogSetDiscoverySearch(event.target.value);});
+  root.addEventListener('keydown',function(event){if(modelsCatalogTrapEditorFocus(root,event))return;if(event.key==='Enter'&&event.target.matches('[data-models-manual-id]')){event.preventDefault();modelsCatalogAddManualModel(root);}else if(event.key==='Escape'&&MODELS_STATE.editor){event.preventDefault();modelsCatalogCloseEditor();}});
 }
 
 /* ---------------- 侧栏 + 账号 ---------------- */
@@ -2535,12 +3383,12 @@ function agentProfileDraftFromFields(fields){
     maximumToolPolicy:{toolNames:csv(fields.maximumTools),toolSetRefs:csv(fields.maximumToolSets)},
     recoveryToolPolicy:{toolNames:csv(fields.recoveryTools),toolSetRefs:csv(fields.recoveryToolSets)},
     maxPlanSteps:Number(fields.maxPlanSteps||4),handoffTtlSeconds:Number(fields.handoffTtlSeconds||900),
-    classifierTimeoutMs:Number(fields.classifierTimeoutMs||600),exactSkillFetchTimeoutMs:Number(fields.exactSkillFetchTimeoutMs||1500),
-    maxSelectedSkillBytes:Number(fields.maxSelectedSkillBytes||24576),members:memberFields.map(member)}};
+    classifierTimeoutMs:Number(fields.classifierTimeoutMs||15000),exactSkillFetchTimeoutMs:Number(fields.exactSkillFetchTimeoutMs||15000),
+    maxSelectedSkillBytes:Number(fields.maxSelectedSkillBytes||65536),members:memberFields.map(member)}};
 }
 function agentProfileEmptyDraft(){
-  return agentProfileDraftFromFields({activationMode:'SHADOW',maxPlanSteps:4,handoffTtlSeconds:900,classifierTimeoutMs:600,
-    exactSkillFetchTimeoutMs:1500,maxSelectedSkillBytes:24576,sideEffectClass:'READ_ONLY',members:[]});
+  return agentProfileDraftFromFields({activationMode:'SHADOW',maxPlanSteps:4,handoffTtlSeconds:900,classifierTimeoutMs:15000,
+    exactSkillFetchTimeoutMs:15000,maxSelectedSkillBytes:65536,sideEffectClass:'READ_ONLY',members:[]});
 }
 function agentProfileSlugFromName(value){
   return String(value||'').normalize('NFKD').toLowerCase().replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').replace(/-+/g,'-');
@@ -2564,7 +3412,8 @@ function agentProfileStoreWorkingDraft(draft){
   return draft;
 }
 function agentProfileRolloutFromBinding(binding){
-  return {enabled:!!(binding&&binding.enabled),cohortBasisPoints:Number(binding&&binding.cohortBasisPoints||0)};
+  return {enabled:!!(binding&&binding.enabled),cohortBasisPoints:Number(binding&&binding.cohortBasisPoints||10000),
+    previousReviewedTarget:binding&&binding.previousReviewedTarget||null};
 }
 function agentProfileUnionNames(existing,additions){
   var seen=Object.create(null),out=[];
@@ -2874,8 +3723,8 @@ function agentProfileCreateHtml(){
       '<div class="ap-slug-error" data-ap-slug-error>'+(flow.slug&&!slugOk?'slug 只能使用小写字母、数字和单连字符':'')+'</div>'+
       agentProfileHiddenValue('maximumTools',tools.join(', '))+agentProfileHiddenValue('maximumToolSets',((rt.maximumToolPolicy||{}).toolSetRefs||[]).join(', '))+
       agentProfileHiddenValue('recoveryTools',((rt.recoveryToolPolicy||{}).toolNames||[]).join(', '))+agentProfileHiddenValue('recoveryToolSets',((rt.recoveryToolPolicy||{}).toolSetRefs||[]).join(', '))+
-      agentProfileHiddenValue('maxPlanSteps',rt.maxPlanSteps||4)+agentProfileHiddenValue('handoffTtlSeconds',rt.handoffTtlSeconds||900)+agentProfileHiddenValue('classifierTimeoutMs',rt.classifierTimeoutMs||600)+
-      agentProfileHiddenValue('exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||1500)+agentProfileHiddenValue('maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576)+'</div></section>'+
+      agentProfileHiddenValue('maxPlanSteps',rt.maxPlanSteps||4)+agentProfileHiddenValue('handoffTtlSeconds',rt.handoffTtlSeconds||900)+agentProfileHiddenValue('classifierTimeoutMs',rt.classifierTimeoutMs||15000)+
+      agentProfileHiddenValue('exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||15000)+agentProfileHiddenValue('maxSelectedSkillBytes',rt.maxSelectedSkillBytes||65536)+'</div></section>'+
     '<section class="ap-step"><div class="ap-step-head"><span class="ap-step-number">02</span><div><h3>选择能力</h3><p>每个 intent 固定一个 exact Ornn skill，并审阅发布方、版本与工具。</p></div></div>'+agentProfileSkillsSectionHtml(members,pending)+'</section>'+
     '<section class="ap-step"><div class="ap-step-head"><span class="ap-step-number">03</span><div><h3>检查并创建</h3><p>创建资源和保存草稿是两个可观察步骤；不会自动发布或设为默认。</p></div></div>'+
       '<div class="ap-review"><div class="ap-review-grid"><div class="ap-review-item"><small>Owner / slug</small>'+esc(owner+(flow.slug||'待填写'))+'</div>'+
@@ -2910,12 +3759,14 @@ function agentProfileEditorHtml(){
     '<details class="ap-disclosure"><summary>固定运行参数</summary><div class="ap-grid three">'+
       agentProfileField('Max plan steps','maxPlanSteps',rt.maxPlanSteps||4,{type:'number',readonly:true,disabled:dis})+
       agentProfileField('Handoff TTL (s)','handoffTtlSeconds',rt.handoffTtlSeconds||900,{type:'number',readonly:true,disabled:dis})+
-      agentProfileField('Classifier timeout (ms)','classifierTimeoutMs',rt.classifierTimeoutMs||600,{type:'number',readonly:true,disabled:dis})+
-      agentProfileField('Exact fetch timeout (ms)','exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||1500,{type:'number',readonly:true,disabled:dis})+
-      agentProfileField('Max selected skill bytes','maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576,{type:'number',readonly:true,disabled:dis})+'</div><div class="ap-disclosure-body"><span class="ap-help">当前 nyxid.chat runtime 固定参数；由服务端 editor options 定义。</span></div></details></section>'+agentProfileDiagnosticsHtml()+'</form>'+
+      agentProfileField('Classifier timeout (ms)','classifierTimeoutMs',rt.classifierTimeoutMs||15000,{type:'number',readonly:true,disabled:dis})+
+      agentProfileField('Exact fetch timeout (ms)','exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||15000,{type:'number',readonly:true,disabled:dis})+
+      agentProfileField('Max selected skill bytes','maxSelectedSkillBytes',rt.maxSelectedSkillBytes||65536,{type:'number',readonly:true,disabled:dis})+'</div><div class="ap-disclosure-body"><span class="ap-help">当前 nyxid.chat runtime 固定参数；由服务端 editor options 定义。</span></div></details></section>'+agentProfileDiagnosticsHtml()+'</form>'+
     ((d.ownerKind==='system'&&ACCOUNT&&ACCOUNT.admin)?'<section class="ap-section"><h3>System default rollout</h3><div class="ap-rollout">'+
       agentProfileSelect('Enabled','rolloutEnabled',String(rollout.enabled),[{value:'true',label:'启用'},{value:'false',label:'停用'}],actionDisabled)+
-      agentProfileField('Cohort basis points','cohortBasisPoints',rollout.cohortBasisPoints,{type:'number',min:0,max:10000,disabled:actionDisabled})+
+      agentProfileSelect('Rollout cohort','cohortBasisPoints',String(rollout.cohortBasisPoints),[
+        {value:'500',label:'5% canary'},{value:'2500',label:'25% expanded'},{value:'10000',label:'100% full'}],actionDisabled)+
+      '<span class="ap-help">未命中的新会话固定使用上一版 reviewed Profile；回滚不会进入 unrestricted。</span>'+
       '<button class="btn" data-ap-action="system-default"'+(actionDisabled?' disabled':'')+'>保存 system 默认</button></div></section>':'')+agentProfileActionBarHtml(d,writable)+'</div>';
 }
 function agentProfileCollectFields(root){
@@ -2937,9 +3788,9 @@ function agentProfileLocalDiagnostics(draft){
   });
   if(rt.maxPlanSteps!==4)out.push({code:'PROFILE_MAX_PLAN_STEPS_INVALID',field:'maxPlanSteps',message:'当前必须为 4'});
   if(rt.handoffTtlSeconds!==900)out.push({code:'PROFILE_HANDOFF_TTL_INVALID',field:'handoffTtlSeconds',message:'当前必须为 900'});
-  if(rt.classifierTimeoutMs!==600)out.push({code:'PROFILE_CLASSIFIER_TIMEOUT_INVALID',field:'classifierTimeoutMs',message:'当前必须为 600'});
-  if(rt.exactSkillFetchTimeoutMs!==1500)out.push({code:'PROFILE_EXACT_SKILL_TIMEOUT_INVALID',field:'exactSkillFetchTimeoutMs',message:'当前必须为 1500'});
-  if(rt.maxSelectedSkillBytes!==24576)out.push({code:'PROFILE_SELECTED_SKILL_BYTES_INVALID',field:'maxSelectedSkillBytes',message:'当前必须为 24576'});
+  if(rt.classifierTimeoutMs!==15000)out.push({code:'PROFILE_CLASSIFIER_TIMEOUT_INVALID',field:'classifierTimeoutMs',message:'当前必须为 15000'});
+  if(rt.exactSkillFetchTimeoutMs!==15000)out.push({code:'PROFILE_EXACT_SKILL_TIMEOUT_INVALID',field:'exactSkillFetchTimeoutMs',message:'当前必须为 15000'});
+  if(rt.maxSelectedSkillBytes!==65536)out.push({code:'PROFILE_SELECTED_SKILL_BYTES_INVALID',field:'maxSelectedSkillBytes',message:'当前必须为 65536'});
   return out;
 }
 async function agentProfileMutation(path,method,body,etag){
@@ -4171,6 +5022,7 @@ function opsView(module){
     case 'studio': return viewStudio();
     case 'agent-profiles': return viewAgentProfiles();
     case 'skills': return viewSkills();
+    case 'models': return viewModels();
     case 'schedules': return viewSchedules();
     case 'channels': return viewChannels();
     case 'voice': return viewVoice();
@@ -4459,6 +5311,12 @@ function refreshActiveModule(){
   if(module==='audit'){ loadAuditTrail(false); toast('正在刷新审计日志'); return; }
   if(module==='chat-activity'){ loadChatActivity(false); toast('正在刷新 Chat Activity'); return; }
   if(module==='skills'){ SKILL_STATE.loaded=false; SKILLS_LOADED=false; SKILL_SCHED_LOADED=false; render(); toast('正在刷新技能列表'); return; }
+  if(module==='models'){
+    var modelsState=modelsCatalogOwnerState(MODELS_STATE.owner);
+    if(MODELS_STATE.editor){toast('请先保存或关闭模型来源编辑窗口');return;}
+    if(modelsState.dirty&&!modelsState.pending){toast('有未保存修改，已跳过刷新');return;}
+    loadModelsCatalog(MODELS_STATE.owner,{keepNotice:!!modelsState.pending});toast('正在刷新模型目录');return;
+  }
   if(module==='agent-profiles'){
     if(AGENT_PROFILE_STATE.dirty||AGENT_PROFILE_STATE.createFlow){ toast('有未保存修改，已跳过刷新'); return; }
     if(!AGENT_PROFILE_STATE.loading){ loadAgentProfiles(); toast('正在刷新 Agent Profile'); }
@@ -4474,10 +5332,17 @@ function bindEvents(){
   window.addEventListener('message',function(ev){
     if(ev.origin!==location.origin) return;
     var msg=ev.data||{};
+    if(msg&&msg.source===SERVICE_ACCESS_REVIEW_MESSAGE_SOURCE&&msg.type==='service-access-review-result'){
+      handleServiceAccessReviewPopupResult(ev,msg); return;
+    }
     if(!msg || msg.source!=='aevatar-backend-console-suite') return;
     if(msg.type==='auth-refresh-request'){ handleEmbeddedAuthRefresh(ev,msg); return; }
     if(msg.type==='auth-required'){ showLoginGate(msg.reason||'登录已过期，请重新使用 NyxID 登录。',msg.rejectedAccessToken||''); return; }
-    if(msg.type==='login-request'){ beginLogin(msg.resources,msg.tokenPurpose); }
+    if(msg.type==='login-request'){ beginLogin(msg.resources,msg.tokenPurpose,msg.authFlow,msg.popupName,msg.authRequestId,ev.source); }
+    if(msg.type==='service-access-review-finished'){
+      clearServiceAccessReviewPkce(msg.authRequestId);
+      if(SERVICE_ACCESS_REVIEW_POPUP&&SERVICE_ACCESS_REVIEW_POPUP.authRequestId===msg.authRequestId) SERVICE_ACCESS_REVIEW_POPUP=null;
+    }
     if(msg.type==='observatory-route'){ syncObservatoryHash(msg.query||{}); }
     if(msg.type==='observatory-immersive'){ setAdminImmersive(msg.enabled); }
     if(msg.type==='navigate'&&['cqrs','audit'].indexOf(msg.module)>=0){ navigate([msg.module],msg.query||{}); }
@@ -4578,7 +5443,7 @@ function bindEvents(){
     }
   });
 
-  window.addEventListener('hashchange',function(){ if(_drawerCtx) closeDrawer(); if(_srcPopEl) closeSrcPop(); setAdminImmersive(false); render(); });
+  window.addEventListener('hashchange',function(){ if((curParts()[0]||'')!=='models')modelsCatalogLeavePage(); if(_drawerCtx) closeDrawer(); if(_srcPopEl) closeSrcPop(); setAdminImmersive(false); render(); });
 }
 
 /* ---------- live stamp tick (simulated AGUI SSE heartbeat) ---------- */
@@ -4611,13 +5476,25 @@ function renderLoginGate(reason){
     '</div>';
 }
 /* /api/workflow/observatory/me 是套件共享身份探针：充实 admin/scope（失败则保留 token claims，admin=false）。 */
-async function refreshAccount(){
+async function refreshAccount(expectedAccessToken){
   try{ var me=await adminJson('/api/workflow/observatory/me');
+    var currentToken=getToken();if(expectedAccessToken&&(!currentToken||currentToken.access_token!==expectedAccessToken))return false;
     if(me && !me.forbidden){ ACCOUNT=ACCOUNT||{};
       if(me.name) ACCOUNT.name=me.name; if(me.email) ACCOUNT.email=me.email;
       var sc=me.scope||me.scopeId||me.tenant; if(sc) ACCOUNT.scope=sc;
       ACCOUNT.admin=!!(me.isAdmin||me.admin||me.platformAdmin||me.isPlatformAdmin); }
   }catch(e){ /* /me 不可用：保留 token claims */ }
+  var activeToken=getToken();return !expectedAccessToken||!!(activeToken&&activeToken.access_token===expectedAccessToken);
+}
+function syncAccountFromStoredToken(token){
+  var previous=ACCOUNT,next=accountFromToken(token),previousSubject=modelsCatalogAccountSubject(previous),nextSubject=modelsCatalogAccountSubject(next);
+  if(previous&&next&&previousSubject&&previousSubject===nextSubject){if(!next.scope)next.scope=previous.scope;next.admin=!!previous.admin;}
+  ACCOUNT=next;modelsCatalogSyncAuthority();render();renderAcctW();
+  var expectedAccessToken=token&&token.access_token;
+  refreshAccount(expectedAccessToken).then(function(applied){
+    if(applied===false||!ACCOUNT)return;
+    modelsCatalogSyncAuthority();render();renderAcctW();
+  });
 }
 /* ---------- boot ---------- */
 /* 右上角常驻登录态:渲染到 body(在 #app 之外)→切页 render() 不刷新它,固定右上角 */
@@ -4632,14 +5509,14 @@ function renderAcctW(){
 }
 (function boot(){
   bindEvents(); startClock();
-  if(!getToken()){ renderLoginGate(); return; }
-  scheduleTokenRefresh(getToken());
-  ACCOUNT=accountFromToken();
+  var bootToken=getToken();if(!bootToken){ renderLoginGate(); return; }
+  scheduleTokenRefresh(bootToken);
+  ACCOUNT=accountFromToken(bootToken);
   render(); renderAcctW();
-  refreshAccount().then(function(){ if(ACCOUNT) render(); renderAcctW(); });
+  refreshAccount(bootToken.access_token).then(function(applied){ if(applied!==false&&ACCOUNT){modelsCatalogSyncAuthority();render();} renderAcctW(); });
 })();
 window.addEventListener('storage',function(ev){ if(ev.key!==TOKEN_KEY) return; var token=getToken();
-  if(token) scheduleTokenRefresh(token); else if(ACCOUNT) showLoginGate('NyxID 登录已在其他页面结束。'); });
+  if(token){scheduleTokenRefresh(token);syncAccountFromStoredToken(token);}else if(ACCOUNT) showLoginGate('NyxID 登录已在其他页面结束。'); });
 document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'&&getToken())
   refreshAccessToken(false).catch(function(){ scheduleTokenRefreshRetry(); }); });
 window.addEventListener('pagehide',function(){ captureAdminViewState(_renderedRouteKey||adminRouteKey(location.hash)); });

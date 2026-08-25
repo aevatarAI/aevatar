@@ -38,6 +38,63 @@ public static class ServiceRevisionArtifactSnapshotExtensions
         return true;
     }
 
+    public static bool TryGetPublishedPreparedArtifact(
+        this ServiceRevisionCatalogSnapshot? catalog,
+        string revisionId,
+        string? expectedArtifactHash,
+        out PreparedServiceRevisionArtifact artifact)
+    {
+        artifact = null!;
+        if (catalog == null)
+            return false;
+
+        var revision = catalog.Revisions.FirstOrDefault(x =>
+            string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
+        if (revision == null ||
+            !string.Equals(
+                revision.Status,
+                ServiceRevisionStatus.Published.ToString(),
+                StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(revision.ArtifactHash) ||
+            revision.PreparedArtifact == null ||
+            revision.PreparedArtifact.ImplementationKind == ServiceImplementationKind.Unspecified ||
+            !string.Equals(
+                revision.ImplementationKind,
+                revision.PreparedArtifact.ImplementationKind.ToString(),
+                StringComparison.OrdinalIgnoreCase) ||
+            !MatchesCatalogIdentity(catalog.ServiceKey, revision.PreparedArtifact.Identity) ||
+            !string.Equals(revision.PreparedArtifact.RevisionId, revisionId, StringComparison.Ordinal) ||
+            !string.Equals(
+                revision.ArtifactHash ?? string.Empty,
+                revision.PreparedArtifact.ArtifactHash ?? string.Empty,
+                StringComparison.Ordinal) ||
+            !WorkflowServiceRevisionEquivalence.HasValidArtifactHash(revision.PreparedArtifact))
+        {
+            return false;
+        }
+
+        var normalizedExpectedArtifactHash = expectedArtifactHash?.Trim() ?? string.Empty;
+        if (!string.IsNullOrEmpty(normalizedExpectedArtifactHash) &&
+            !string.Equals(
+                normalizedExpectedArtifactHash,
+                revision.PreparedArtifact.ArtifactHash,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        artifact = revision.PreparedArtifact.Clone();
+        return true;
+    }
+
+    private static bool MatchesCatalogIdentity(string serviceKey, ServiceIdentity? identity) =>
+        identity != null &&
+        !string.IsNullOrWhiteSpace(identity.TenantId) &&
+        !string.IsNullOrWhiteSpace(identity.AppId) &&
+        !string.IsNullOrWhiteSpace(identity.Namespace) &&
+        !string.IsNullOrWhiteSpace(identity.ServiceId) &&
+        string.Equals(serviceKey, ServiceKeys.Build(identity), StringComparison.Ordinal);
+
     public static bool IsRevisionPreparationFailed(
         this ServiceRevisionCatalogSnapshot? catalog,
         string revisionId)
@@ -48,6 +105,19 @@ public static class ServiceRevisionArtifactSnapshotExtensions
                string.Equals(
                    revision.Status,
                    ServiceRevisionStatus.PreparationFailed.ToString(),
+                   StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsRevisionPublished(
+        this ServiceRevisionCatalogSnapshot? catalog,
+        string revisionId)
+    {
+        var revision = catalog?.Revisions.FirstOrDefault(x =>
+            string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
+        return revision != null &&
+               string.Equals(
+                   revision.Status,
+                   ServiceRevisionStatus.Published.ToString(),
                    StringComparison.OrdinalIgnoreCase);
     }
 

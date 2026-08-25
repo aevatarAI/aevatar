@@ -1,12 +1,14 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Core.Sanitization;
 using FluentAssertions;
 
 namespace Aevatar.AI.Core.Tests.Tools;
@@ -1099,12 +1101,14 @@ public sealed class AdmittedAgentToolExecutorTests
         tool.ExecutionCalls.Should().Be(1);
         appender.Records.Should().NotContain(record =>
             record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.WaitingApproval);
-        appender.Records.Where(record =>
+        var sanitizedExecutionRecords = appender.Records.Where(record =>
                 record.ToolExecution.ExecutionPhase is
                     AuditToolExecutionPhase.Running or AuditToolExecutionPhase.Terminal)
-            .Should().OnlyContain(record =>
-                record.Annotations["authorization_mode"] == "unattended_exact" &&
-                record.Annotations["authorization_id"] == "sha256:authorization");
+            .Select(record => new AuditRecordSanitizer().Sanitize(record))
+            .ToList();
+        sanitizedExecutionRecords.Should().OnlyContain(record =>
+            record.Annotations["unattended_mode"] == "unattended_exact" &&
+            record.Annotations["unattended_permit_sha256"] == "sha256:authorization");
     }
 
     [Fact]
@@ -1398,6 +1402,7 @@ public sealed class AdmittedAgentToolExecutorTests
 
         outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
         outcome.FailureCode.Should().Be("outcome_uncertain");
+        outcome.Receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
         outcome.SafeMessage.Should().Contain("OUTCOME_UNCERTAIN");
         outcome.TerminalInvoked.Should().BeFalse();
         tool.ExecutionCalls.Should().Be(0);
@@ -1442,6 +1447,87 @@ public sealed class AdmittedAgentToolExecutorTests
         tool.ExecutionCalls.Should().Be(1);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenDurableStartIsPending_ShouldReturnPendingWithoutTerminalAudit()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Started);
+        var pending = PendingOperation("operation-pending", "provider-pending");
+        var tool = new ReconcilableRecordingTool(
+            AgentToolOperationReconciliationResult.Unknown(),
+            startResult: AgentToolOperationStartResult.Pending(pending));
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(tool, pending.OperationId) with
+        {
+            ExecutionAttemptKind = AgentToolExecutionAttemptKind.Initial,
+        });
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Pending);
+        outcome.PendingOperation.Should().Be(pending);
+        outcome.CancellationRecoveryIntent.Should().NotBeNull();
+        outcome.CancellationRecoveryIntent!.FailureCode.Should()
+            .Be("code_execution_cancel_outcome_uncertain");
+        outcome.CancellationRecoveryIntent.ArgumentsSha256.Should()
+            .Be(AgentToolArgumentsDigest.ComputeSha256("{}"));
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.AuditCompleted.Should().BeTrue();
+        tool.ExecutionCalls.Should().Be(1);
+        appender.Records.Should().ContainSingle()
+            .Which.ToolExecution!.ExecutionPhase.Should().Be(AuditToolExecutionPhase.Running);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenReconciliationRemainsPending_ShouldNotRestartOperation()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var pending = PendingOperation("operation-pending", "provider-pending");
+        var refreshed = pending with
+        {
+            Status = AgentToolPendingOperationStatus.Running,
+            ETag = "\"version-2\"",
+        };
+        var tool = new ReconcilableRecordingTool(
+            AgentToolOperationReconciliationResult.Pending(refreshed));
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(tool, pending.OperationId) with
+        {
+            PendingOperation = pending,
+        });
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Pending);
+        outcome.PendingOperation.Should().Be(refreshed);
+        outcome.CancellationRecoveryIntent.Should().NotBeNull();
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ReconciliationCalls.Should().Be(1);
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenKnownProviderOperationIsNotFound_ShouldNotResubmit()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var pending = PendingOperation("operation-known", "provider-known");
+        var tool = new ReconcilableRecordingTool(
+            AgentToolOperationReconciliationResult.NotFound());
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(tool, pending.OperationId) with
+        {
+            PendingOperation = pending,
+        });
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
+        outcome.FailureCode.Should().Be("outcome_uncertain");
+        outcome.Receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ReconciliationCalls.Should().Be(1);
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -1459,18 +1545,377 @@ public sealed class AdmittedAgentToolExecutorTests
         var outcome = await executor.ExecuteAsync(CreateRecoveryRequest(tool, "operation-unknown"));
 
         outcome.FailureCode.Should().Be("outcome_uncertain");
+        outcome.Receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
         outcome.TerminalInvoked.Should().BeFalse();
         tool.ReconciliationCalls.Should().Be(1);
         tool.ExecutionCalls.Should().Be(0);
     }
 
+    [Fact]
+    public async Task CancelAsync_WhenExactAdmissionIsDuplicateAndProviderIsPending_ShouldRemainPending()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var pending = PendingOperation("operation-cancel-pending", "provider-cancel-pending");
+        var tool = new ReconcilableRecordingTool(
+            AgentToolOperationReconciliationResult.Unknown(),
+            cancellationResult: AgentToolOperationCancellationResult.Pending(pending));
+        var executor = CreateExecutor(appender, ledger);
+
+        var result = await executor.CancelAsync(CreateCancellationRequest(tool, pending));
+
+        result.Disposition.Should().Be(AgentToolCancellationDisposition.Pending);
+        result.PendingOperation.Should().Be(pending);
+        tool.CancellationCalls.Should().Be(1);
+        ledger.Facts.Should().ContainSingle().Which.OperationId.Should().Be(pending.OperationId);
+        appender.Records.Should().ContainSingle()
+            .Which.ToolExecution.ExecutionPhase.Should().Be(AuditToolExecutionPhase.Running);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenAdmissionIsNotDuplicate_ShouldNotInvokeProviderCancellation()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Started);
+        var pending = PendingOperation("operation-cancel-new", "provider-cancel-new");
+        var tool = new ReconcilableRecordingTool(AgentToolOperationReconciliationResult.Unknown());
+        var executor = CreateExecutor(appender, ledger);
+
+        var result = await executor.CancelAsync(CreateCancellationRequest(tool, pending));
+
+        result.Disposition.Should().Be(AgentToolCancellationDisposition.Failed);
+        result.FailureCode.Should().Be("tool_cancellation_admission_not_duplicate");
+        result.Retryable.Should().BeTrue();
+        tool.CancellationCalls.Should().Be(0);
+        appender.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenTerminalAuditIsUnavailable_ShouldRetryFrozenIntentWithoutProvider()
+    {
+        var appender = new RecordingAuditTrailAppender((record, index) =>
+            index == 2
+                ? AuditTrailAppendResult.StoreUnavailable(record.AuditId, "offline")
+                : AuditTrailAppendResult.Appended(record.AuditId));
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var pending = PendingOperation("operation-cancel-audit", "provider-cancel-audit");
+        var terminal = new AgentToolTerminalOutcome(
+            """{"success":false,"code":"code_execution_cancelled"}""",
+            new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Error,
+                ResultJson = """{"success":false,"code":"code_execution_cancelled"}""",
+                ErrorCode = "code_execution_cancelled",
+                ErrorMessage = "cancelled",
+                SubjectKind = "nyxid.user-service",
+                SubjectId = "service-code",
+                SubjectVersion = "version-7",
+                SubjectHash = "sha256:terminal",
+                ProviderResourceId = "provider-operation-7",
+                Effect = AgentToolReceiptEffect.Mutating,
+                MutationStage = AgentToolReceiptMutationStage.ReadModelObserved,
+            });
+        var tool = new ReconcilableRecordingTool(
+            AgentToolOperationReconciliationResult.Unknown(),
+            cancellationResult: AgentToolOperationCancellationResult.Completed(terminal));
+        var executor = CreateExecutor(appender, ledger);
+        var request = CreateCancellationRequest(tool, pending);
+
+        var first = await executor.CancelAsync(request);
+
+        first.Disposition.Should().Be(AgentToolCancellationDisposition.Pending);
+        first.FailureCode.Should().Be("audit_unavailable");
+        first.Retryable.Should().BeTrue();
+        first.PendingTerminalIntent.Should().NotBeNull();
+        first.PendingTerminalIntent!.Receipt.ErrorCode.Should().Be("code_execution_cancelled");
+        var frozenReceipt = first.PendingTerminalIntent.Receipt.Clone();
+        tool.ThrowDuringClassification = true;
+        tool.ThrowDuringReceiptCreation = true;
+
+        var retry = await executor.CancelAsync(request with
+        {
+            DeadlineUnixMs = 1,
+            TerminalIntent = first.PendingTerminalIntent,
+        });
+
+        retry.Disposition.Should().Be(AgentToolCancellationDisposition.Completed);
+        retry.CompletedOutcome!.ResultJson.Should().Be(terminal.ResultJson);
+        retry.CompletedOutcome.Receipt.ErrorCode.Should().Be(terminal.Receipt!.ErrorCode);
+        retry.CompletedOutcome.Receipt.Should().BeEquivalentTo(frozenReceipt);
+        retry.CompletedOutcome.AuditCompleted.Should().BeTrue();
+        ledger.Facts.Should().ContainSingle();
+        tool.CancellationCalls.Should().Be(1);
+        appender.Records.Select(record => record.ToolExecution.ExecutionPhase).Should().Equal(
+            AuditToolExecutionPhase.Running,
+            AuditToolExecutionPhase.Terminal,
+            AuditToolExecutionPhase.Running,
+            AuditToolExecutionPhase.Terminal);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenRunningAuditIsUnavailable_ShouldDeferTerminalAuditUntilRetry()
+    {
+        var appender = new RecordingAuditTrailAppender((record, index) =>
+            index == 1
+                ? AuditTrailAppendResult.StoreUnavailable(record.AuditId, "offline")
+                : AuditTrailAppendResult.Appended(record.AuditId));
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var pending = PendingOperation("operation-cancel-running-audit", "provider-cancel-running-audit");
+        var terminal = new AgentToolTerminalOutcome(
+            """{"success":false,"code":"code_execution_cancelled"}""",
+            new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Error,
+                ResultJson = """{"success":false,"code":"code_execution_cancelled"}""",
+                ErrorCode = "code_execution_cancelled",
+                ErrorMessage = "cancelled",
+            });
+        var tool = new ReconcilableRecordingTool(
+            AgentToolOperationReconciliationResult.Unknown(),
+            cancellationResult: AgentToolOperationCancellationResult.Completed(terminal));
+        var executor = CreateExecutor(appender, ledger);
+        var request = CreateCancellationRequest(tool, pending);
+
+        var first = await executor.CancelAsync(request);
+
+        first.Disposition.Should().Be(AgentToolCancellationDisposition.Pending);
+        first.FailureCode.Should().Be("audit_unavailable");
+        first.Retryable.Should().BeTrue();
+        first.PendingTerminalIntent.Should().NotBeNull();
+        appender.Records.Should().ContainSingle()
+            .Which.ToolExecution.ExecutionPhase.Should().Be(AuditToolExecutionPhase.Running);
+
+        var retry = await executor.CancelAsync(request with
+        {
+            TerminalIntent = first.PendingTerminalIntent,
+        });
+
+        retry.Disposition.Should().Be(AgentToolCancellationDisposition.Completed);
+        retry.CompletedOutcome.Should().NotBeNull();
+        retry.CompletedOutcome!.ResultJson.Should().Be(terminal.ResultJson);
+        retry.CompletedOutcome.Receipt.ErrorCode.Should().Be(terminal.Receipt!.ErrorCode);
+        retry.CompletedOutcome.AuditCompleted.Should().BeTrue();
+        ledger.Facts.Should().ContainSingle();
+        tool.CancellationCalls.Should().Be(1);
+        appender.Records.Select(record => record.ToolExecution.ExecutionPhase).Should().Equal(
+            AuditToolExecutionPhase.Running,
+            AuditToolExecutionPhase.Running,
+            AuditToolExecutionPhase.Terminal);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenDeadlineElapsedAndToolStillReturnsPending_ShouldAuditOutcomeUncertain()
+    {
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var pending = PendingOperation("operation-cancel-deadline", "provider-cancel-deadline");
+        var tool = new ReconcilableRecordingTool(
+            AgentToolOperationReconciliationResult.Unknown(),
+            cancellationResult: AgentToolOperationCancellationResult.Pending(pending));
+        var executor = CreateExecutor(appender, ledger);
+
+        var result = await executor.CancelAsync(
+            CreateCancellationRequest(tool, pending) with { DeadlineUnixMs = 1 });
+
+        result.Disposition.Should().Be(AgentToolCancellationDisposition.Completed);
+        result.CompletedOutcome!.AuditCompleted.Should().BeTrue();
+        result.CompletedOutcome.FailureCode.Should().Be("code_execution_cancel_outcome_uncertain");
+        result.CompletedOutcome.Receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
+        appender.Records.Should().HaveCount(2);
+        appender.Records[1].ToolExecution.ExecutionPhase.Should().Be(AuditToolExecutionPhase.Terminal);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenProviderReturnsTerminalAcrossDeadline_ShouldPreserveProviderTruth()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new MutableTimeProvider(now);
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var pending = PendingOperation("operation-cancel-terminal-race", "provider-cancel-terminal-race");
+        var terminal = new AgentToolTerminalOutcome(
+            """{"success":false,"code":"code_execution_cancelled"}""",
+            new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Error,
+                ResultJson = """{"success":false,"code":"code_execution_cancelled"}""",
+                ErrorCode = "code_execution_cancelled",
+                ErrorMessage = "cancelled",
+                SubjectKind = "nyxid.user-service",
+                SubjectId = "service-code",
+            });
+        var tool = new ReconcilableRecordingTool(
+            AgentToolOperationReconciliationResult.Unknown(),
+            cancellationResult: AgentToolOperationCancellationResult.Completed(terminal),
+            beforeCancellationResult: () => timeProvider.UtcNow = now.AddMinutes(2));
+        var executor = CreateExecutor(appender, ledger, timeProvider);
+        var request = CreateCancellationRequest(tool, pending) with
+        {
+            DeadlineUnixMs = now.AddMinutes(1).ToUnixTimeMilliseconds(),
+        };
+
+        var result = await executor.CancelAsync(request);
+
+        result.Disposition.Should().Be(AgentToolCancellationDisposition.Completed);
+        result.CompletedOutcome!.ResultJson.Should().Be(terminal.ResultJson);
+        result.CompletedOutcome.Receipt.ErrorCode.Should().Be("code_execution_cancelled");
+        result.CompletedOutcome.FailureCode.Should().NotBe("code_execution_cancel_outcome_uncertain");
+        tool.CancellationCalls.Should().Be(1);
+        appender.Records.Select(record => record.ToolExecution.ExecutionPhase).Should().Equal(
+            AuditToolExecutionPhase.Running,
+            AuditToolExecutionPhase.Terminal);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenDeadlineAlreadyElapsed_ShouldFinalizeWithoutLedgerOrProvider()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new MutableTimeProvider(now);
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.StoreUnavailable);
+        var pending = PendingOperation("operation-cancel-expired", "provider-cancel-expired");
+        var tool = new ReconcilableRecordingTool(AgentToolOperationReconciliationResult.Unknown());
+        var executor = CreateExecutor(appender, ledger, timeProvider);
+        var request = CreateCancellationRequest(tool, pending) with
+        {
+            DeadlineUnixMs = now.ToUnixTimeMilliseconds(),
+        };
+
+        var result = await executor.CancelAsync(request);
+
+        result.Disposition.Should().Be(AgentToolCancellationDisposition.Completed);
+        result.CompletedOutcome!.FailureCode.Should().Be("code_execution_cancel_outcome_uncertain");
+        ledger.Facts.Should().BeEmpty();
+        tool.CancellationCalls.Should().Be(0);
+        appender.Records.Select(record => record.ToolExecution.ExecutionPhase).Should().Equal(
+            AuditToolExecutionPhase.Running,
+            AuditToolExecutionPhase.Terminal);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenDeadlineCrossesDuringLedger_ShouldFinalizeWithoutProvider()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new MutableTimeProvider(now);
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(
+            AgentToolAdmissionStatus.StoreUnavailable,
+            () => timeProvider.UtcNow = now.AddMinutes(2));
+        var pending = PendingOperation("operation-cancel-ledger", "provider-cancel-ledger");
+        var tool = new ReconcilableRecordingTool(AgentToolOperationReconciliationResult.Unknown());
+        var executor = CreateExecutor(appender, ledger, timeProvider);
+        var request = CreateCancellationRequest(tool, pending) with
+        {
+            DeadlineUnixMs = now.AddMinutes(1).ToUnixTimeMilliseconds(),
+        };
+
+        var result = await executor.CancelAsync(request);
+
+        result.Disposition.Should().Be(AgentToolCancellationDisposition.Completed);
+        result.CompletedOutcome!.FailureCode.Should().Be("code_execution_cancel_outcome_uncertain");
+        ledger.Facts.Should().ContainSingle();
+        tool.CancellationCalls.Should().Be(0);
+        appender.Records.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenDeadlineCrossesDuringRunningAudit_ShouldFinalizeWithoutProvider()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new MutableTimeProvider(now);
+        var appender = new RecordingAuditTrailAppender((record, index) =>
+        {
+            if (index == 1)
+                timeProvider.UtcNow = now.AddMinutes(2);
+            return AuditTrailAppendResult.Appended(record.AuditId);
+        });
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var pending = PendingOperation("operation-cancel-audit-deadline", "provider-cancel-audit-deadline");
+        var tool = new ReconcilableRecordingTool(AgentToolOperationReconciliationResult.Unknown());
+        var executor = CreateExecutor(appender, ledger, timeProvider);
+        var request = CreateCancellationRequest(tool, pending) with
+        {
+            DeadlineUnixMs = now.AddMinutes(1).ToUnixTimeMilliseconds(),
+        };
+
+        var result = await executor.CancelAsync(request);
+
+        result.Disposition.Should().Be(AgentToolCancellationDisposition.Completed);
+        result.CompletedOutcome!.FailureCode.Should().Be("code_execution_cancel_outcome_uncertain");
+        tool.CancellationCalls.Should().Be(0);
+        appender.Records.Select(record => record.ToolExecution.ExecutionPhase).Should().Equal(
+            AuditToolExecutionPhase.Running,
+            AuditToolExecutionPhase.Terminal);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenDeadlineCrossesDuringProviderCancellation_ShouldAuditOutcomeUncertain()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new MutableTimeProvider(now);
+        var appender = SuccessfulAuditAppender();
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var pending = PendingOperation("operation-cancel-provider-deadline", "provider-cancel-provider-deadline");
+        var tool = new ReconcilableRecordingTool(
+            AgentToolOperationReconciliationResult.Unknown(),
+            cancellationResult: AgentToolOperationCancellationResult.Pending(pending),
+            beforeCancellationResult: () => timeProvider.UtcNow = now.AddMinutes(2));
+        var executor = CreateExecutor(appender, ledger, timeProvider);
+        var request = CreateCancellationRequest(tool, pending) with
+        {
+            DeadlineUnixMs = now.AddMinutes(1).ToUnixTimeMilliseconds(),
+        };
+
+        var result = await executor.CancelAsync(request);
+
+        result.Disposition.Should().Be(AgentToolCancellationDisposition.Completed);
+        result.CompletedOutcome!.FailureCode.Should().Be("code_execution_cancel_outcome_uncertain");
+        tool.CancellationCalls.Should().Be(1);
+        appender.Records.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenExpiredAuditRecoveryRetries_ShouldNotRepeatLedgerOrProvider()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new MutableTimeProvider(now);
+        var appender = new RecordingAuditTrailAppender((record, index) =>
+            index == 1
+                ? AuditTrailAppendResult.StoreUnavailable(record.AuditId, "offline")
+                : AuditTrailAppendResult.Appended(record.AuditId));
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Duplicate);
+        var pending = PendingOperation("operation-cancel-audit-retry", "provider-cancel-audit-retry");
+        var tool = new ReconcilableRecordingTool(AgentToolOperationReconciliationResult.Unknown());
+        var executor = CreateExecutor(appender, ledger, timeProvider);
+        var request = CreateCancellationRequest(tool, pending) with
+        {
+            DeadlineUnixMs = now.ToUnixTimeMilliseconds(),
+        };
+
+        var first = await executor.CancelAsync(request);
+        var retry = await executor.CancelAsync(request);
+
+        first.Disposition.Should().Be(AgentToolCancellationDisposition.Pending);
+        first.FailureCode.Should().Be("audit_unavailable");
+        retry.Disposition.Should().Be(AgentToolCancellationDisposition.Completed);
+        retry.CompletedOutcome!.FailureCode.Should().Be("code_execution_cancel_outcome_uncertain");
+        ledger.Facts.Should().BeEmpty();
+        tool.CancellationCalls.Should().Be(0);
+        appender.Records.Select(record => record.ToolExecution.ExecutionPhase).Should().Equal(
+            AuditToolExecutionPhase.Running,
+            AuditToolExecutionPhase.Running,
+            AuditToolExecutionPhase.Terminal);
+    }
+
     private static AdmittedAgentToolExecutor CreateExecutor(
         IAuditTrailAppender appender,
-        IAgentToolAdmissionLedger? admissionLedger = null) =>
+        IAgentToolAdmissionLedger? admissionLedger = null,
+        TimeProvider? timeProvider = null) =>
         new(
             admissionLedger ?? new RecordingAdmissionLedger(AgentToolAdmissionStatus.Started),
             appender,
-            new StableIdentityHasher());
+            new StableIdentityHasher(),
+            timeProvider);
 
     private static async Task AssertClassificationFailureAsync(
         Func<string, AgentToolCallSafety> classify,
@@ -1550,6 +1995,45 @@ public sealed class AdmittedAgentToolExecutorTests
             },
             ExecutionAttemptKind = AgentToolExecutionAttemptKind.ActorRecovery,
         };
+
+    private static AgentToolCancellationRequest CreateCancellationRequest(
+        IAgentTool tool,
+        AgentToolPendingOperation pending) =>
+        new(
+            tool,
+            "{}",
+            CreateTestExecutionContext() with
+            {
+                Request = new AgentToolRequestIdentity(
+                    "request-1",
+                    "call-1",
+                    null,
+                    TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
+                    pending.OperationId),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("actor-test"),
+            },
+            AgentToolApprovalContinuationMode.ActorOwned,
+            AgentToolExecutionAttemptKind.ActorRecovery,
+            pending,
+            AgentToolOperationCancellationReason.WorkflowStopped,
+            DeadlineUnixMs: TimeProvider.System.GetUtcNow().AddMinutes(5).ToUnixTimeMilliseconds());
+
+    private static AgentToolPendingOperation PendingOperation(
+        string operationId,
+        string providerOperationId) =>
+        new(
+            operationId,
+            providerOperationId,
+            $"/executions/{providerOperationId}",
+            $"/executions/{providerOperationId}/result",
+            $"/executions/{providerOperationId}/cancel",
+            AgentToolPendingOperationStatus.Queued,
+            null,
+            1_000,
+            TimeProvider.System.GetUtcNow().AddMinutes(10).ToUnixTimeMilliseconds(),
+            "chrono-sandbox",
+            "service-code",
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission);
 
     private static AgentToolExecutionContext CreateTestExecutionContext() =>
         AgentToolExecutionContext.Empty with
@@ -1649,16 +2133,25 @@ public sealed class AdmittedAgentToolExecutorTests
 
     private sealed class ReconcilableRecordingTool(
         AgentToolOperationReconciliationResult reconciliationResult,
-        bool throwDuringReconciliation = false) : IAgentTool, IAgentToolOperationReconciler
+        bool throwDuringReconciliation = false,
+        AgentToolOperationStartResult? startResult = null,
+        AgentToolOperationCancellationResult? cancellationResult = null,
+        Action? beforeCancellationResult = null) : IAgentTool, IAgentToolDurableOperation
     {
         public string Name => "reconcilable_tool";
         public string Description => "test";
         public string ParametersSchema => "{}";
         public int ReconciliationCalls { get; private set; }
         public int ExecutionCalls { get; private set; }
+        public int CancellationCalls { get; private set; }
+        public List<AgentToolOperationStartRequest> StartRequests { get; } = [];
+        public bool ThrowDuringClassification { get; set; }
+        public bool ThrowDuringReceiptCreation { get; set; }
 
         public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
-            new(false, false, false);
+            ThrowDuringClassification
+                ? throw new InvalidOperationException("classification changed")
+                : new(false, false, false);
 
         public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson) =>
             AgentToolReplayPolicy.Reconcilable;
@@ -1674,22 +2167,49 @@ public sealed class AdmittedAgentToolExecutorTests
             return Task.FromResult(reconciliationResult);
         }
 
+        public Task<AgentToolOperationStartResult> StartOperationAsync(
+            AgentToolOperationStartRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecutionCalls++;
+            StartRequests.Add(request);
+            return Task.FromResult(startResult ?? AgentToolOperationStartResult.Completed(
+                new AgentToolTerminalOutcome("{}")));
+        }
+
+        public Task<AgentToolOperationCancellationResult> CancelOperationAsync(
+            AgentToolOperationCancellationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            CancellationCalls++;
+            beforeCancellationResult?.Invoke();
+            return Task.FromResult(
+                cancellationResult ?? AgentToolOperationCancellationResult.Pending(request.PendingOperation));
+        }
+
         public AgentToolReceipt CreateResultReceipt(
             string callId,
             string toolName,
             string argumentsJson,
-            string resultJson) => new()
+            string resultJson)
         {
-            CallId = callId,
-            ToolName = toolName,
-            Status = AgentToolReceiptStatus.Success,
-            ResultJson = resultJson,
-        };
+            if (ThrowDuringReceiptCreation)
+                throw new InvalidOperationException("receipt mapping changed");
+
+            return new AgentToolReceipt
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
+        }
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            ExecutionCalls++;
             return Task.FromResult("{}");
         }
     }
@@ -1738,7 +2258,9 @@ public sealed class AdmittedAgentToolExecutorTests
         }
     }
 
-    private sealed class RecordingAdmissionLedger(AgentToolAdmissionStatus status) : IAgentToolAdmissionLedger
+    private sealed class RecordingAdmissionLedger(
+        AgentToolAdmissionStatus status,
+        Action? beforeResult = null) : IAgentToolAdmissionLedger
     {
         public List<AgentToolAdmissionFact> Facts { get; } = [];
 
@@ -1748,8 +2270,16 @@ public sealed class AdmittedAgentToolExecutorTests
         {
             ct.ThrowIfCancellationRequested();
             Facts.Add(fact.Clone());
+            beforeResult?.Invoke();
             return Task.FromResult(new AgentToolAdmissionResult(status));
         }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => UtcNow;
     }
 
     private sealed class DeduplicatingAdmissionLedger : IAgentToolAdmissionLedger

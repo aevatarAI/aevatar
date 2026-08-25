@@ -183,6 +183,8 @@ public sealed class ObservatoryRunSummary
 {
     public string RunId { get; init; } = string.Empty;
 
+    public string WorkflowId { get; init; } = string.Empty;
+
     public string WorkflowName { get; init; } = string.Empty;
 
     public string Status { get; init; } = string.Empty;
@@ -190,6 +192,10 @@ public sealed class ObservatoryRunSummary
     public bool? Success { get; init; }
 
     public DateTimeOffset? StartedAtUtc { get; init; }
+
+    public DateTimeOffset? CompletedAtUtc { get; init; }
+
+    public double? DurationMs { get; init; }
 
     public DateTimeOffset UpdatedAtUtc { get; init; }
 
@@ -214,7 +220,12 @@ public sealed class ObservatoryRunDetail
 
     public string InputSummary { get; init; } = string.Empty;
 
+    public WorkflowActivityRunFailureSummary FirstFailure { get; init; } = new();
+
     public ObservatoryRunDetailSectionVersions Sections { get; init; } = new();
+
+    // Schema version of the materialized run-report artifact. Empty means no report is currently available.
+    public string ReportVersion { get; init; } = string.Empty;
 
     // 06-26 detail enrichment: the run's authoritative input + final result, surfaced from the committed
     // run-report artifact. These are NOT truncated by materialization (unlike per-step OutputPreview), so the
@@ -225,13 +236,13 @@ public sealed class ObservatoryRunDetail
 
     public string FinalError { get; init; } = string.Empty;
 
+    public string CompilationError { get; init; } = string.Empty;
+
     // Diagnostics derived from committed current-state/readmodel facts and the run-report artifact. They are
     // query-time explanations, not durable log entries or deletion tombstones.
     public IReadOnlyList<ObservatoryRunDiagnostic> Diagnostics { get; init; } = [];
 
-    // 06-26 detail enrichment: per-step structured trace (status / timing / params / per-step usage). The step
-    // OUTPUT is a 240-char preview by current materialization; the FULL per-step output lives in Timeline
-    // (role.reply Content / tool-call ResultJson), which this detail already carries.
+    // Per-step structured trace, including bounded failed-step evidence and its explicit truncation status.
     public IReadOnlyList<ObservatoryStepDetail> Steps { get; init; } = [];
 
     public IReadOnlyList<ObservatoryViewEvent> Timeline { get; init; } = [];
@@ -290,6 +301,9 @@ public enum ObservatoryRunDetailSectionVersionStatus
 
     [JsonStringEnumMemberName("version_mismatch")]
     VersionMismatch = 3,
+
+    [JsonStringEnumMemberName("disabled")]
+    Disabled = 4,
 }
 
 public sealed class ObservatoryRunDetailSectionVersions
@@ -334,6 +348,10 @@ public sealed class ObservatoryRunDiagnostic
     public string StepType { get; init; } = string.Empty;
 
     public string TargetRole { get; init; } = string.Empty;
+
+    public string OperationId { get; init; } = string.Empty;
+
+    public string OperationKind { get; init; } = string.Empty;
 }
 
 // 06-26 detail enrichment: read-only per-step view DTO mirroring the committed run-report step trace.
@@ -358,18 +376,50 @@ public sealed class ObservatoryStepDetail
 
     public double? DurationMs { get; init; }
 
-    // A 240-char preview of the step output (current materialization truncates here). The full output is
-    // available via the run Timeline (role.reply Content / tool-call ResultJson); this field is a preview.
+    public string WorkerId { get; init; } = string.Empty;
+
+    // A short display preview retained for successful and failed steps.
     public string OutputPreview { get; init; } = string.Empty;
 
     public string Error { get; init; } = string.Empty;
 
+    // Failed-step evidence is stored separately from the short preview. The truncation bit is authoritative:
+    // false means the materialized failure output is complete, true means the bounded projection kept its head
+    // and tail and omitted the middle.
+    public string FailureOutput { get; init; } = string.Empty;
+
+    public bool FailureOutputTruncated { get; init; }
+
+    [JsonConverter(typeof(JsonStringEnumConverter<WorkflowStepFailureOutcome>))]
+    public WorkflowStepFailureOutcome FailureOutcome { get; init; } = WorkflowStepFailureOutcome.Unspecified;
+
+    [JsonConverter(typeof(JsonStringEnumConverter<WorkflowRecoveryFailureKind>))]
+    public WorkflowRecoveryFailureKind RecoveryFailureKind { get; init; } = WorkflowRecoveryFailureKind.Unspecified;
+
+    [JsonConverter(typeof(JsonStringEnumConverter<WorkflowStepRetryDisposition>))]
+    public WorkflowStepRetryDisposition RetryDisposition { get; init; } = WorkflowStepRetryDisposition.Unspecified;
+
+    public ObservatoryFileItemResultSetDetail? FileItemResults { get; init; }
+
+    public ObservatoryVoteAgreementDecisionDetail? VoteAgreementDecision { get; init; }
+
+    // Present only when a failed attempt was followed by a new request that is still in progress.
+    // Its request identity and timestamps belong to the failed attempt, never to the current retry.
+    public ObservatoryFailedStepAttemptDetail? LatestFailedAttempt { get; init; }
+
     public IReadOnlyDictionary<string, string> RequestParameters { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    public IReadOnlyDictionary<string, string> CompletionAnnotations { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
 
     public string NextStepId { get; init; } = string.Empty;
 
     public string BranchKey { get; init; } = string.Empty;
+
+    public string AssignedVariable { get; init; } = string.Empty;
+
+    public string AssignedValue { get; init; } = string.Empty;
 
     public string SuspensionType { get; init; } = string.Empty;
 
@@ -379,9 +429,157 @@ public sealed class ObservatoryStepDetail
 
     public int? SuspensionTimeoutSeconds { get; init; }
 
+    public string RequestedVariableName { get; init; } = string.Empty;
+
     public ObservatoryToolApprovalDetail? ToolApproval { get; init; }
 
     public ObservatoryUsageTotals Usage { get; init; } = new();
+}
+
+public sealed class ObservatoryFailedStepAttemptDetail
+{
+    public string DisplayName { get; init; } = string.Empty;
+
+    public string StepType { get; init; } = string.Empty;
+
+    public string TargetRole { get; init; } = string.Empty;
+
+    public DateTimeOffset? RequestedAtUtc { get; init; }
+
+    public DateTimeOffset? CompletedAtUtc { get; init; }
+
+    public bool? Success { get; init; }
+
+    public double? DurationMs { get; init; }
+
+    public string WorkerId { get; init; } = string.Empty;
+
+    public string OutputPreview { get; init; } = string.Empty;
+
+    public string Error { get; init; } = string.Empty;
+
+    public string FailureOutput { get; init; } = string.Empty;
+
+    public bool FailureOutputTruncated { get; init; }
+
+    [JsonConverter(typeof(JsonStringEnumConverter<WorkflowStepFailureOutcome>))]
+    public WorkflowStepFailureOutcome FailureOutcome { get; init; } = WorkflowStepFailureOutcome.Unspecified;
+
+    [JsonConverter(typeof(JsonStringEnumConverter<WorkflowRecoveryFailureKind>))]
+    public WorkflowRecoveryFailureKind RecoveryFailureKind { get; init; } = WorkflowRecoveryFailureKind.Unspecified;
+
+    [JsonConverter(typeof(JsonStringEnumConverter<WorkflowStepRetryDisposition>))]
+    public WorkflowStepRetryDisposition RetryDisposition { get; init; } = WorkflowStepRetryDisposition.Unspecified;
+
+    public ObservatoryFileItemResultSetDetail? FileItemResults { get; init; }
+
+    public ObservatoryVoteAgreementDecisionDetail? VoteAgreementDecision { get; init; }
+
+    public IReadOnlyDictionary<string, string> RequestParameters { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    public IReadOnlyDictionary<string, string> CompletionAnnotations { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    public string NextStepId { get; init; } = string.Empty;
+
+    public string BranchKey { get; init; } = string.Empty;
+
+    public string AssignedVariable { get; init; } = string.Empty;
+
+    public string AssignedValue { get; init; } = string.Empty;
+
+    public string SuspensionType { get; init; } = string.Empty;
+
+    public string SuspensionPrompt { get; init; } = string.Empty;
+
+    public string SuspensionContent { get; init; } = string.Empty;
+
+    public int? SuspensionTimeoutSeconds { get; init; }
+
+    public string RequestedVariableName { get; init; } = string.Empty;
+
+    public ObservatoryToolApprovalDetail? ToolApproval { get; init; }
+
+    public ObservatoryUsageTotals Usage { get; init; } = new();
+}
+
+public sealed class ObservatoryFileItemResultSetDetail
+{
+    public IReadOnlyList<ObservatoryFileItemResultDetail> Results { get; init; } = [];
+
+    // Zero means unknown only when ResultsTruncated is true; otherwise it is the exact source count.
+    public int SourceResultCount { get; init; }
+
+    public bool ResultsTruncated { get; init; }
+}
+
+public sealed class ObservatoryFileItemResultDetail
+{
+    public int Index { get; init; }
+
+    public ObservatoryWorkflowFileRefDetail? FileRef { get; init; }
+
+    public bool Success { get; init; }
+
+    public string Output { get; init; } = string.Empty;
+
+    public bool OutputTruncated { get; init; }
+
+    public string Error { get; init; } = string.Empty;
+
+    public bool ErrorTruncated { get; init; }
+}
+
+public sealed class ObservatoryWorkflowFileRefDetail
+{
+    public string FileId { get; init; } = string.Empty;
+
+    public string ArtifactId { get; init; } = string.Empty;
+
+    [JsonConverter(typeof(JsonStringEnumConverter<WorkflowFileSourceKind>))]
+    public WorkflowFileSourceKind SourceKind { get; init; } = WorkflowFileSourceKind.Unspecified;
+
+    public string SourceMessageId { get; init; } = string.Empty;
+
+    public string SourceResourceKey { get; init; } = string.Empty;
+
+    public string FileName { get; init; } = string.Empty;
+
+    public string MediaType { get; init; } = string.Empty;
+
+    public long SizeBytes { get; init; }
+
+    public string Sha256 { get; init; } = string.Empty;
+
+    public long CreatedAtUnixMs { get; init; }
+
+    public long ExpiresAtUnixMs { get; init; }
+
+    public string OwnerRunId { get; init; } = string.Empty;
+
+    public string OwnerScopeId { get; init; } = string.Empty;
+}
+
+public sealed class ObservatoryVoteAgreementDecisionDetail
+{
+    [JsonConverter(typeof(JsonStringEnumConverter<AgreementDecisionKind>))]
+    public AgreementDecisionKind Kind { get; init; } = AgreementDecisionKind.Unspecified;
+
+    public string BranchKey { get; init; } = string.Empty;
+
+    public string WinnerCandidateId { get; init; } = string.Empty;
+
+    public string Output { get; init; } = string.Empty;
+
+    public bool OutputTruncated { get; init; }
+
+    public string Reason { get; init; } = string.Empty;
+
+    public bool ReasonTruncated { get; init; }
+
+    public IReadOnlyDictionary<string, int> LabelCounts { get; init; } =
+        new Dictionary<string, int>(StringComparer.Ordinal);
 }
 
 public sealed class ObservatoryToolApprovalDetail

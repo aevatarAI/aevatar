@@ -44,7 +44,7 @@ public sealed class AgentToolReceiptDeliveryPolicyTests
             [],
             new AgentToolReceiptRenderer());
 
-        delivery.ReplyText.Should().Contain($"[tool receipt] {expectedStatus}: submit_invoice");
+        delivery.ReplyText.Should().Contain($"[tool receipt] {expectedStatus}: submit_record");
         delivery.ReplyText.Should().NotContain("Submission confirmed");
         delivery.OutboundIntent.Should().NotBeNull();
         delivery.OutboundIntent!.Text.Should().Be(delivery.ReplyText);
@@ -79,9 +79,9 @@ public sealed class AgentToolReceiptDeliveryPolicyTests
             new AgentToolReceiptRenderer());
 
         delivery.ReplyText.Should().StartWith("I recovered the answer from the fallback source.");
-        delivery.ReplyText.Should().Contain("[tool receipt] Failed: submit_invoice");
+        delivery.ReplyText.Should().Contain("[tool receipt] Failed: submit_record");
         delivery.OutboundIntent!.Actions.Should().ContainSingle();
-        delivery.OutboundIntent.Text.Should().Contain("[tool receipt] Failed: submit_invoice");
+        delivery.OutboundIntent.Text.Should().Contain("[tool receipt] Failed: submit_record");
         delivery.AppendedHistory.Should().ContainSingle();
         delivery.AppendedHistory[0].Content.Should().Be(delivery.ReplyText);
     }
@@ -122,7 +122,7 @@ public sealed class AgentToolReceiptDeliveryPolicyTests
             toolCalls: [],
             new AgentToolReceiptRenderer());
 
-        delivery.ReplyText.Should().Contain("[tool receipt] Failed: submit_invoice");
+        delivery.ReplyText.Should().Contain("[tool receipt] Failed: submit_record");
         delivery.ReplyText.Should().NotContain("Submission confirmed");
     }
 
@@ -140,7 +140,7 @@ public sealed class AgentToolReceiptDeliveryPolicyTests
                     new ConversationToolCallEntry
                     {
                         Id = "call-1",
-                        Name = "submit_invoice",
+                        Name = "submit_record",
                         ArgumentsJson = "{}",
                     },
                 },
@@ -195,7 +195,7 @@ public sealed class AgentToolReceiptDeliveryPolicyTests
 
     [Theory]
     [InlineData(true, "")]
-    [InlineData(false, "invoice.submit")]
+    [InlineData(false, "record.submit")]
     public void Build_WhenLegacyReceiptDeclaresMutation_ShouldBlock(
         bool isDestructive,
         string sideEffectKind)
@@ -234,7 +234,7 @@ public sealed class AgentToolReceiptDeliveryPolicyTests
         string callId,
         AgentToolReceiptStatus status,
         AgentToolReceiptEffect effect,
-        string toolName = "submit_invoice") =>
+        string toolName = "submit_record") =>
         new()
         {
             CallId = callId,

@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -44,6 +46,68 @@ public sealed class LlmRunCoreTests
         completed.Usage!.TotalTokens.Should().Be(5);
         provider.Requests.Should().ContainSingle()
             .Which.CallerContext!.ResponseId.Should().Be("resp_1");
+    }
+
+    [Fact]
+    public async Task RunAsync_ShouldPreserveCatalogServiceRouteTargetForProvider()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [new LLMStreamChunk { DeltaContent = "ok", IsLast = true }],
+        ]);
+        var command = BuildRunRequest("resp_catalog");
+        command.RouteTarget = new LLMRouteTarget
+        {
+            CatalogServiceId = "catalog-alpha",
+            ServiceSlugSnapshot = "route-alpha",
+        };
+        var core = new LlmRunCore(
+            provider,
+            [],
+            TestToolSetRegistry.Empty,
+            NullLogger<LlmRunCore>.Instance,
+            new RecordingAgentToolExecutionPort());
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(command, "run_catalog", "ApiKey"),
+            new RecordingLlmRunSink());
+
+        var recordedTarget = provider.Requests.Should().ContainSingle().Subject.RouteTarget;
+        recordedTarget.Should().NotBeNull().And.NotBeSameAs(command.RouteTarget);
+        recordedTarget!.SourceIdentityCase.Should().Be(
+            LLMRouteTarget.SourceIdentityOneofCase.CatalogServiceId);
+        recordedTarget.CatalogServiceId.Should().Be("catalog-alpha");
+        recordedTarget.ServiceSlugSnapshot.Should().Be("route-alpha");
+    }
+
+    [Fact]
+    public async Task RunAsync_ShouldPreserveUserServiceRouteTargetForProvider()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [new LLMStreamChunk { DeltaContent = "ok", IsLast = true }],
+        ]);
+        var command = BuildRunRequest("resp_user");
+        command.RouteTarget = new LLMRouteTarget
+        {
+            UserServiceId = "us-alpha",
+            ServiceSlugSnapshot = "route-alpha",
+        };
+        var core = new LlmRunCore(
+            provider,
+            [],
+            TestToolSetRegistry.Empty,
+            NullLogger<LlmRunCore>.Instance,
+            new RecordingAgentToolExecutionPort());
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(command, "run_user", "ApiKey"),
+            new RecordingLlmRunSink());
+
+        var recordedTarget = provider.Requests.Should().ContainSingle().Subject.RouteTarget;
+        recordedTarget.Should().NotBeNull().And.NotBeSameAs(command.RouteTarget);
+        recordedTarget!.SourceIdentityCase.Should().Be(
+            LLMRouteTarget.SourceIdentityOneofCase.UserServiceId);
+        recordedTarget.UserServiceId.Should().Be("us-alpha");
+        recordedTarget.ServiceSlugSnapshot.Should().Be("route-alpha");
     }
 
     [Fact]
@@ -568,7 +632,7 @@ public sealed class LlmRunCoreTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenRouteToolSetResolutionThrows_ShouldDegradeToDiProvidersWithoutFailing()
+    public async Task RunAsync_WhenRouteToolSetResolutionThrows_ShouldFailBeforeCallingModel()
     {
         // IToolSetRegistry.Resolve throws on unknown-include / cycle. A tool-set config problem
         // must degrade to DI-only providers, never fail the whole run.
@@ -590,12 +654,14 @@ public sealed class LlmRunCoreTests
             new LlmRunCoreRequest(BuildRunRequest("resp_throw", selection), "run_1", "ApiKey"),
             sink);
 
-        sink.Completed.Should().ContainSingle().Which.OutputText.Should().Be("ok");
-        sink.Failed.Should().BeEmpty();
+        provider.Requests.Should().BeEmpty();
+        sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().ContainSingle()
+            .Which.FailureCode.Should().Be(ToolSetResolveError.ResolutionFailedCode);
     }
 
     [Fact]
-    public async Task RunAsync_WhenRouteToolSetResolutionReturnsFailure_ShouldDegradeToDiProvidersWithoutFailing()
+    public async Task RunAsync_WhenRouteToolSetResolutionReturnsFailure_ShouldFailBeforeCallingModel()
     {
         // Failure result (not an exception) — e.g. unknown tool set name. Must also degrade to
         // DI-only, never fail the run.
@@ -618,8 +684,95 @@ public sealed class LlmRunCoreTests
             new LlmRunCoreRequest(BuildRunRequest("resp_fail", selection), "run_1", "ApiKey"),
             sink);
 
-        sink.Completed.Should().ContainSingle().Which.OutputText.Should().Be("ok");
-        sink.Failed.Should().BeEmpty();
+        provider.Requests.Should().BeEmpty();
+        sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().ContainSingle()
+            .Which.FailureCode.Should().Be(ToolSetResolveError.UnknownNameCode);
+    }
+
+    [Fact]
+    public async Task RunAsync_WithNewRestrictedEmptyProof_ShouldCallModelWithExplicitZeroToolCatalog()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [new LLMStreamChunk { DeltaContent = "ok", IsLast = true }],
+        ]);
+        var selection = ResponsesRuntimeToolSelectionFactory.Create(
+            new ResponsesToolClassification([], [], [], [], [])
+            {
+                OwnedCatalog = AgentTurnToolCatalogFactory.RestrictedEmpty(),
+            },
+            ResponsesToolChoiceHintPlan.Empty,
+            routeToolSetName: null);
+        var core = new LlmRunCore(
+            provider,
+            [],
+            TestToolSetRegistry.Empty,
+            NullLogger<LlmRunCore>.Instance,
+            new RecordingAgentToolExecutionPort());
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_empty_proof", selection), "run_1", "ApiKey"),
+            new RecordingLlmRunSink());
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().BeNullOrEmpty();
+        request.ToolCatalogProof.Should().NotBeNull();
+        request.ToolCatalogProof!.ToolCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenPinnedProofMatchesRematerializedContract_ShouldUseExactRuntimeObject()
+    {
+        var ingressTool = new RecordingAgentTool("web_search", "{}", description: "search", schema: "{\"type\":\"object\"}");
+        var runtimeTool = new RecordingAgentTool("WEB_SEARCH", "{}", description: "search", schema: "{\"type\":\"object\"}");
+        var profile = PinnedProfile("workspace.default");
+        var selection = PinnedSelection(ingressTool, profile);
+        var registry = Registry("workspace.default", runtimeTool);
+        var provider = new ScriptedLlmProviderFactory([
+            [new LLMStreamChunk { DeltaContent = "ok", IsLast = true }],
+        ]);
+        var core = new LlmRunCore(
+            provider,
+            [],
+            registry,
+            NullLogger<LlmRunCore>.Instance,
+            new RecordingAgentToolExecutionPort());
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_matching_proof", selection), "run_1", "ApiKey"),
+            new RecordingLlmRunSink());
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().ContainSingle().Which.Should().BeSameAs(runtimeTool);
+        request.ToolCatalogProof!.CatalogDigest.Should().Be(selection.OwnedCatalogProof.CatalogDigest);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenRematerializedContractDiffersFromPinnedProof_ShouldFailBeforeModel()
+    {
+        var ingressTool = new RecordingAgentTool("web_search", "{}", description: "search", schema: "{\"type\":\"object\"}");
+        var driftedTool = new RecordingAgentTool("web_search", "{}", description: "search changed", schema: "{\"type\":\"object\"}");
+        var profile = PinnedProfile("workspace.default");
+        var selection = PinnedSelection(ingressTool, profile);
+        var provider = new ScriptedLlmProviderFactory([
+            [new LLMStreamChunk { DeltaContent = "must not run", IsLast = true }],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(
+            provider,
+            [],
+            Registry("workspace.default", driftedTool),
+            NullLogger<LlmRunCore>.Instance,
+            new RecordingAgentToolExecutionPort());
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_drifted_proof", selection), "run_1", "ApiKey"),
+            sink);
+
+        provider.Requests.Should().BeEmpty();
+        sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().ContainSingle()
+            .Which.FailureCode.Should().Be("tool_catalog_proof_mismatch");
     }
 
     private static LlmRunRequested BuildRunRequest(
@@ -665,6 +818,58 @@ public sealed class LlmRunCoreTests
                 },
             },
         };
+
+    private static AgentProfileSnapshot PinnedProfile(string toolSetName) =>
+        AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-runtime",
+            ProfileVersion = "1.0.0",
+            AgentKind = "workspace.chat",
+            PolicyRevision = "policy-1",
+            RouteToolSetRef = toolSetName,
+            PublishedRevision = 1,
+            MaxOwnedToolCount = 8,
+            MaxSchemaBytes = 48 * 1024,
+        });
+
+    private static LlmSessionRuntimeToolSelection PinnedSelection(
+        IAgentTool ingressTool,
+        AgentProfileSnapshot profile)
+    {
+        var catalog = new AgentTurnToolCatalog(
+            [ingressTool.Name],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: "web",
+            candidateIntentId: "web",
+            diagnostics: null,
+            exactTools: [ingressTool],
+            // The planner always builds profiled catalogs on the sealed profile's budget, and the
+            // run executor re-derives that budget rather than trusting the persisted proof.
+            budget: AgentTurnToolCatalogFactory.ResolveProfileBudget(profile));
+        return ResponsesRuntimeToolSelectionFactory.Create(
+            new ResponsesToolClassification(
+                [],
+                [ingressTool],
+                [],
+                [ingressTool.Name],
+                [ingressTool.Name])
+            {
+                OwnedCatalog = catalog,
+            },
+            ResponsesToolChoiceHintPlan.Empty,
+            profile.RouteToolSetRef,
+            profile);
+    }
+
+    private static TestToolSetRegistry Registry(string name, IAgentTool tool) =>
+        new(candidate => string.Equals(candidate, name, StringComparison.Ordinal)
+            ? ToolSetResolveResult.Success(candidate, [new StaticAgentToolSource([tool])])
+            : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                ToolSetResolveError.UnknownNameCode,
+                candidate,
+                "unknown",
+                [])));
 
     private sealed class RecordingLlmRunSink : ILlmRunSink
     {
@@ -877,15 +1082,19 @@ public sealed class LlmRunCoreTests
             ValueTask.FromResult(additiveTools ?? []);
     }
 
-    private sealed class RecordingAgentTool(string name, string resultJson) : IAgentTool
+    private sealed class RecordingAgentTool(
+        string name,
+        string resultJson,
+        string description = "test tool",
+        string schema = "{\"type\":\"object\"}") : IAgentTool
     {
         public List<string> Executions { get; } = [];
 
         public string Name { get; } = name;
 
-        public string Description => "test tool";
+        public string Description => description;
 
-        public string ParametersSchema => """{"type":"object"}""";
+        public string ParametersSchema => schema;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {

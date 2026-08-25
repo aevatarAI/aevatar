@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -287,19 +288,38 @@ public static class WorkflowCapabilityEndpoints
                 onAcceptedAsync: async (receipt, token) =>
                 {
                     CapabilityTraceContext.ApplyCorrelationHeader(http.Response, receipt.Run.CorrelationId);
+                    ExceptionDispatchInfo? acceptedHookFailure = null;
                     if (onAcceptedHook != null)
-                        await onAcceptedHook(receipt.Run, token);
+                    {
+                        try
+                        {
+                            await onAcceptedHook(receipt.Run, token);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            acceptedHookFailure = ExceptionDispatchInfo.Capture(ex);
+                        }
+                    }
+
                     await writer.StartAsync(token);
                     await writer.WriteAsync(BuildRunContextFrame(receipt.Run), token);
                     scope.RecordFirstResponse();
+                    acceptedHookFailure?.Throw();
                 },
                 ct);
 
-            if (!result.Succeeded && !writer.Started)
+            if (!result.Succeeded)
             {
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
                 scope.MarkResult(statusCode);
-                await WriteRunStartFailureResponseAsync(http, statusCode, result, ct);
+                if (!writer.Started)
+                {
+                    await WriteRunStartFailureResponseAsync(http, statusCode, result, ct);
+                }
+                else
+                {
+                    await WriteStreamRunStartFailureFrameAsync(writer, result, ct);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -405,11 +425,18 @@ public static class WorkflowCapabilityEndpoints
                 scope.RecordFirstResponse();
             }
 
-            if (!result.Succeeded && !writer.Started)
+            if (!result.Succeeded)
             {
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
                 scope.MarkResult(statusCode);
-                await WriteRunStartFailureResponseAsync(http, statusCode, result, ct);
+                if (!writer.Started)
+                {
+                    await WriteRunStartFailureResponseAsync(http, statusCode, result, ct);
+                }
+                else
+                {
+                    await WriteStreamRunStartFailureFrameAsync(writer, result, ct);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -1226,6 +1253,27 @@ public static class WorkflowCapabilityEndpoints
         {
             logger?.LogWarning(writeEx, "Unexpected failure while writing SSE error frame.");
         }
+    }
+
+    private static async Task WriteStreamRunStartFailureFrameAsync(
+        ChatSseResponseWriter writer,
+        WorkflowChatRunInteractionResult result,
+        CancellationToken ct)
+    {
+        var (code, message) = result.FailureDetail == null
+            ? ChatRunStartErrorMapper.ToCommandError(result.Error)
+            : ChatRunStartErrorMapper.ToCommandError(result.FailureDetail);
+        await writer.WriteAsync(
+            new WorkflowRunEventEnvelope
+            {
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                RunError = new WorkflowRunErrorEventPayload
+                {
+                    Code = code,
+                    Message = message,
+                },
+            },
+            ct);
     }
 
     public static class WorkflowExecutionErrorMapper

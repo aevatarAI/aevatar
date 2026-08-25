@@ -68,6 +68,9 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         {
             NyxIdAssistantActionKind.ServiceConnect =>
                 await VerifyServiceConnectAsync(input, ct).ConfigureAwait(false),
+            NyxIdAssistantActionKind.ServiceAccessReview =>
+                await VerifyServiceAccessReviewAsync(input, transientToolContext, ct)
+                    .ConfigureAwait(false),
             NyxIdAssistantActionKind.ServiceReauthorize =>
                 await VerifyServiceReauthorizeAsync(input, transientToolContext, ct)
                     .ConfigureAwait(false),
@@ -105,7 +108,7 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         }
 
         var snapshot = await ReadCatalogAsync(input.OwnerSubject, ct).ConfigureAwait(false);
-        var invalid = ValidateSnapshot(input, snapshot);
+        var invalid = ValidateSnapshot(input, snapshot, exactHint);
         if (invalid is not null)
             return invalid;
 
@@ -143,6 +146,92 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
                 UserService = new NyxIdChatUserServiceRef
                 {
                     UserServiceId = matches[0].UserServiceId,
+                },
+            });
+    }
+
+    private async Task<NyxIdChatActionPostconditionResult> VerifyServiceAccessReviewAsync(
+        NyxIdChatActionPostconditionInput input,
+        AgentToolExecutionContextPayload? transientToolContext,
+        CancellationToken ct)
+    {
+        if (input.Params?.ParamsCase !=
+                NyxIdAssistantActionParams.ParamsOneofCase.ServiceAccessReview ||
+            !ValidIdentity(input.Params.ServiceAccessReview.UserServiceId) ||
+            !ValidServiceSlug(input.Params.ServiceAccessReview.ServiceSlug) ||
+            !ValidServiceResourceUri(
+                input.Params.ServiceAccessReview.ResourceUri,
+                input.Params.ServiceAccessReview.ServiceSlug))
+        {
+            return Unverified(input, InvalidInputCode, "The service-access params are invalid.");
+        }
+
+        var expectedUserServiceId = input.Params.ServiceAccessReview.UserServiceId;
+        if (input.ResourceHint is not null &&
+            input.ResourceHint.ResourceCase is not
+                (NyxIdChatSafeResourceRef.ResourceOneofCase.None or
+                 NyxIdChatSafeResourceRef.ResourceOneofCase.UserService))
+        {
+            return Unverified(
+                input,
+                MismatchCode,
+                "The service-access report referenced the wrong resource kind.");
+        }
+
+        var exactHint = ResolveUserServiceHint(input.ResourceHint);
+        if (exactHint is not null && !string.Equals(
+                exactHint,
+                expectedUserServiceId,
+                StringComparison.Ordinal))
+        {
+            return Unverified(
+                input,
+                MismatchCode,
+                "The connected-service reference did not match the requested access review.");
+        }
+
+        var bearerToken = ResolveProviderBearerToken(
+            input,
+            transientToolContext,
+            out var contextFailure);
+        if (contextFailure is not null)
+            return contextFailure;
+        if (_actionEvidenceReadPort is null)
+            return ProviderReadUnavailable(input);
+
+        var expectedServiceSlug = input.Params.ServiceAccessReview.ServiceSlug;
+        var read = await _actionEvidenceReadPort.GetServiceAccessAsync(
+                bearerToken!,
+                expectedUserServiceId,
+                expectedServiceSlug,
+                ct)
+            .ConfigureAwait(false);
+        if (!read.Succeeded)
+            return ProviderReadFailure(input, read.Failure);
+
+        var evidence = read.Value!;
+        if (!string.Equals(
+                evidence.UserServiceId,
+                expectedUserServiceId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                evidence.ServiceSlug,
+                expectedServiceSlug,
+                StringComparison.Ordinal))
+        {
+            return Unverified(
+                input,
+                MismatchCode,
+                "The exact NyxID service access did not match the requested review.");
+        }
+
+        return Verified(
+            input,
+            new NyxIdChatSafeResourceRef
+            {
+                UserService = new NyxIdChatUserServiceRef
+                {
+                    UserServiceId = evidence.UserServiceId,
                 },
             });
     }
@@ -272,10 +361,12 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         if (!read.Succeeded)
             return ProviderReadFailure(input, read.Failure);
 
+        // The display name is not compared: it is user-controlled text, not
+        // evidence. Identity, platform, scopes, and the exact service set are
+        // the typed postcondition.
         var evidence = read.Value!;
         if (!evidence.IsActive ||
             !string.Equals(evidence.Id, keyId, StringComparison.Ordinal) ||
-            !string.Equals(evidence.Name, input.Params.KeyCreate.Name, StringComparison.Ordinal) ||
             !string.Equals(evidence.Platform, input.Params.KeyCreate.Platform, StringComparison.Ordinal) ||
             !SetEquals(evidence.Scopes, ["proxy"]) ||
             evidence.AllowAllServices ||
@@ -368,11 +459,14 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
                 "The NyxID key rotation lineage did not match the requested key.");
         }
 
+        // The monotonic state_version and predecessor lineage above are the
+        // authoritative rotation evidence; the update timestamp is a freshness
+        // fence applied only when the projection serializes one.
         var now = _timeProvider.GetUtcNow();
         if (evidence.CreatedAtUtc < requestedAt ||
             evidence.CreatedAtUtc > now ||
-            versionEvidence.UpdatedAtUtc < requestedAt ||
-            versionEvidence.UpdatedAtUtc > now)
+            versionEvidence.UpdatedAtUtc is { } versionUpdatedAt &&
+            (versionUpdatedAt < requestedAt || versionUpdatedAt > now))
         {
             return Unverified(input, StaleCode, "The NyxID key rotation version was stale.");
         }
@@ -397,7 +491,8 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
 
     private NyxIdChatActionPostconditionResult? ValidateSnapshot(
         NyxIdChatActionPostconditionInput input,
-        NyxIdAuthorizationCatalogSnapshot? snapshot)
+        NyxIdAuthorizationCatalogSnapshot? snapshot,
+        string? requiredUserServiceId = null)
     {
         if (snapshot is null)
         {
@@ -423,7 +518,8 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
                 snapshot.ContentDigest,
                 NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
                     snapshot.Owner,
-                    snapshot.Services),
+                    snapshot.Services,
+                    snapshot.GatewayLLMTarget),
                 StringComparison.Ordinal))
         {
             return Unverified(
@@ -433,6 +529,33 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         }
 
         var now = _timeProvider.GetUtcNow();
+        if (requiredUserServiceId is not null)
+        {
+            var matches = snapshot.Services
+                .Where(service => string.Equals(
+                    service.UserServiceId,
+                    requiredUserServiceId,
+                    StringComparison.Ordinal))
+                .Take(2)
+                .ToArray();
+            if (matches.Length == 1 &&
+                (!NyxIdAuthorizationCatalogIntegrity.TryResolveServiceAuthorityWindow(
+                     snapshot,
+                     matches[0],
+                     out var observedAtUtc,
+                     out var freshUntilUtc) ||
+                 observedAtUtc > now ||
+                 freshUntilUtc <= now))
+            {
+                return Unverified(
+                    input,
+                    StaleCode,
+                    "The NyxID action postcondition read model is stale.");
+            }
+
+            return null;
+        }
+
         if (snapshot.ObservedAtUtc == default ||
             snapshot.ObservedAtUtc > now ||
             snapshot.FreshUntilUtc <= now)
@@ -520,6 +643,30 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
 
     private static bool ValidDisplayValue(string value) =>
         ValidIdentity(value) && value.Length <= 128;
+
+    private static bool ValidServiceSlug(string value) =>
+        ValidIdentity(value) &&
+        value.Length <= 128 &&
+        value.All(static character =>
+            char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+
+    private static bool ValidServiceResourceUri(string value, string serviceSlug)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Length > 512 ||
+            !string.Equals(value, value.Trim(), StringComparison.Ordinal) ||
+            !Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal) ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+        {
+            return false;
+        }
+
+        var expectedPathSuffix = $"/api/v1/proxy/s/{Uri.EscapeDataString(serviceSlug)}";
+        return uri.AbsolutePath.EndsWith(expectedPathSuffix, StringComparison.Ordinal);
+    }
 
     private static bool TryResolveRequestedAt(
         NyxIdChatActionPostconditionInput input,

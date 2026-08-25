@@ -643,9 +643,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 admission.CatalogDigest,
                 StringComparison.Ordinal))
         {
-            return new NyxIdOperationRequestFailure(
-                "NYXID_OPERATION_CATALOG_DRIFT",
-                "The live NyxID operation catalog no longer matches the admitted revision.");
+            _logger.LogWarning(
+                "[nyxid_proxy] Root catalog revision changed; continuing exact service and endpoint revalidation.");
         }
         var service = catalog.Services.SingleOrDefault(candidate =>
             string.Equals(candidate.UserServiceId, admission.ServiceInstanceId, StringComparison.Ordinal));

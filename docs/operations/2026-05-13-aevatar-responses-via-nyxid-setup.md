@@ -6,7 +6,7 @@
 
 - Responses 客户端走 `/v1/responses` 和 `/v1/models`，这是主入口。
 - Claude Code 这类 Messages-only 客户端走 `/v1/messages`，Chat Completions-only 客户端走 `/v1/chat/completions`。
-- `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 共用直连 tool-source plan 和工具分类；Ornn skill bridge 会在三条入口注入 `use_skill` 和 `ornn_search_skills`，Mainnet 会默认补 `workspace.default` route tool set，chat-route `ToolSetRef` 指定的专用 tool set 也会三条入口同样注入。`lark.self_notify`、`voice.realtime` 必须组合 `workspace.default`，所以 NyxID/Aevatar workspace tools 默认可见。
+- `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 共用 published profile snapshot、intent-selected exact catalog、proof 校验与 forwarded-tool 分类。普通问答不会默认注入 `workspace.default` 全量工具；web、Ornn skill、Aevatar invoke 等能力只有被本轮 profile/intent 选中时才进入小型 owned catalog，三条入口行为一致。
 - 客户端只持有 NyxID API key，不直接接触任何 LLM 供应商凭据。
 
 ## 1. 链路速览
@@ -61,7 +61,12 @@ nyxid service add llm-openai-codex
 nyxid service list
 ```
 
-之后模型名使用 `/v1/models` 返回的完整 id，格式是：
+然后登录 Aevatar Backend Admin，进入 `/admin#/models`。当前 scope 页面可以继承平台默认，
+也可以选择 NyxID `/api/v1/keys` inventory 中的 exact UserService 并显式填写模型 ID；
+平台管理员还可以在“平台默认”页配置所有继承 scope 的通用目录。系统不会根据 URL 或服务名中
+是否含 `llm` 自动识别，所以 `chrono-llm`、`chrono-llm-public` 也通过这里显式加入。
+
+配置物化后，模型名使用 `/v1/models` 返回的完整 id，格式是：
 
 ```text
 <service-slug>/<model>
@@ -167,7 +172,7 @@ export ANTHROPIC_MODEL="chrono-llm/gpt-5.5"
 - 不要用只会发 `x-api-key` 的配置项；NyxID proxy plane 识别 bearer。
 - `ANTHROPIC_BASE_URL` 停在 `/aevatar`，Claude Code 会自行拼 `/v1/messages`。
 - `/v1/messages` 是无状态协议门面，每次请求都是一轮新的 `LlmSession`；需要 `previous_response_id` continuation 时用 `/v1/responses`。
-- `/v1/messages` 与 `/v1/responses`、`/v1/chat/completions` 共享直连 tool-source plan 和工具分类；服务端会注入 Ornn skill bridge，也会按 chat-route `ToolSetRef` 注入同一批 route tools。
+- `/v1/messages` 与 `/v1/responses`、`/v1/chat/completions` 共享 exact catalog planner 和工具分类；chat-route tool set 只提供 ceiling，服务端只注入当前 profile/intent 选中的 exact tools。普通 skill intent 只有 `ornn_search_skills` + `use_skill`，authoring 工具需要显式 authoring profile。
 - Messages 的 `max_tokens` 必填。
 
 ## 7. curl 冒烟测试
@@ -251,17 +256,20 @@ curl -N "$BASE/messages" \
 | `401 unauthorized` 来自 `nyx-api.chrono-ai.fun` | API key 错或被吊销 | `nyxid api-key list` 确认，必要时重发 |
 | `403 api_key_scope_forbidden_legacy` | `--allowed-services` 填了 catalog id | 用 `nyxid service list --output json` 拿 UserService id 后重签 |
 | `403` 访问 `/proxy/s/aevatar/*` | 受限 key 没覆盖 aevatar service | 把 aevatar 的 UserService id 也加入 `--allowed-services`，或先用 `--allow-all-services` 验证 |
-| `/v1/models` 为空 | 没有可达的 LLM service，或 key service 权限太窄 | `nyxid service add <slug>`，或临时用 `--allow-all-services` |
+| `/v1/models` 为空 | 当前 scope 配置了显式空替换，或 effective policy 没有模型 | 在 `/admin#/models` 添加来源和显式模型 ID，或切回继承平台默认 |
+| 已列出的模型调用返回 NyxID `403/404` | policy 只控制发现；对应 binding、组织权限或 API key `allowed_service_ids` 不满足 | 用 `nyxid service list --output json` 核对 exact UserService，并调整 NyxID 授权后重试 |
+| `/v1/models` 返回 `503 model_catalog_unavailable` | effective policy projection 暂不可读，尤其是尚未初始化平台默认时 | 平台管理员先保存平台默认配置；若已配置则检查 projection/read model 健康状态 |
 | Aevatar 返回 `authentication_required` | 没有带 bearer，或绕过了 NyxID proxy | 确认 URL 是 `/api/v1/proxy/s/aevatar/v1/...`，并带 `Authorization: Bearer` |
 | Claude Code 404 | `ANTHROPIC_BASE_URL` 拼错 | base URL 停在 `/api/v1/proxy/s/aevatar`，不要手写到 `/v1/messages` 两次 |
 | Messages 返回 `invalid_max_tokens` | `max_tokens` 缺失或不是正整数 | 给 Messages 请求补 `max_tokens` |
 | Messages 返回 `unsupported_parameter` | 使用了 `top_p`、`top_k`、`stop_sequences` 或 forced `tool_choice` | 删除这些参数；需要完整控制面时改用 Responses |
 | Messages 图片没有进入模型 | 当前 Messages facade v1 会丢弃 image content | 先走文本；图片输入等后续协议补齐 |
-| Ornn skill 工具没出现 | Mainnet host 没启用共享直连 tool-source plan / 工具分类或未注册 skill bridge | 确认 Mainnet host 已注册 `IResponsesDirectToolPlanService`、`IResponsesToolClassificationService` 与 `ResponsesUserSkillsToolProvider` |
+| Ornn skill 工具没出现 | 本轮 profile/intent 没选择 skill runtime，或 exact catalog planner / profile read model 不可用 | 确认 route 绑定 reviewed profile、skill intent 命中，并检查 `IResponsesOwnedToolCatalogPlanner` 的 typed failure；不要用全局 provider 注入绕过 |
 | Ornn skill 工具能出现但搜索/加载失败 | 受限 NyxID API key 没覆盖 Ornn API service，或用户没有 Ornn 权限 | 把 Ornn API 的 UserService id 加进 `--allowed-services`；确认用户能访问 `ornn-api` |
 
 ## 9. 相关文档
 
+- `docs/canon/agent-turn-tool-catalog.md` — 每轮 exact owned catalog、proof、预算与 rollout 权威口径
 - `docs/canon/nyxid-responses-direct.md` — NyxID Responses / Messages 直连权威口径
 - `docs/canon/nyxid-llm-integration.md` — Aevatar 内部如何经 NyxID 调 LLM
 - `docs/canon/chat-api.md` — Workflow Chat API 能力说明

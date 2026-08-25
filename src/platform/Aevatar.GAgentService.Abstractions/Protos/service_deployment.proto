@@ -19,6 +19,36 @@ enum ServiceDeploymentActivationFailureCode {
   SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_PREPARED_ARTIFACT_MISSING = 1;
   SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_REVISION_PREPARATION_FAILED = 2;
   SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_CAPABILITY_VIEW_NOT_READY = 3;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_ADMISSION_REJECTED = 4;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_ADMISSION_EVALUATION_FAILED = 5;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_RUNTIME_ACTIVATION_FAILED = 6;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_SERVING_TARGET_DELIVERY_FAILED = 7;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_ACTIVATION_DEPENDENCY_UNAVAILABLE = 8;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_DEFAULT_SERVING_REVISION_DELIVERY_FAILED = 9;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_DEFAULT_SERVING_REVISION_SUPERSEDED = 10;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_SUPERSEDED_BY_DEACTIVATION = 11;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_SERVING_TARGET_SUPERSEDED = 12;
+}
+
+enum ServiceDeploymentActivationPhase {
+  SERVICE_DEPLOYMENT_ACTIVATION_PHASE_UNSPECIFIED = 0;
+  SERVICE_DEPLOYMENT_ACTIVATION_PHASE_ACTIVATION_PENDING = 1;
+  SERVICE_DEPLOYMENT_ACTIVATION_PHASE_RUNTIME_ACTIVATION_INVOCATION_PENDING = 2;
+  SERVICE_DEPLOYMENT_ACTIVATION_PHASE_SERVING_TARGET_DISPATCH_PENDING = 3;
+  SERVICE_DEPLOYMENT_ACTIVATION_PHASE_SERVING_TARGET_DISPATCH_ACCEPTED = 4;
+  SERVICE_DEPLOYMENT_ACTIVATION_PHASE_DEFAULT_SERVING_REVISION_DISPATCH_PENDING = 5;
+}
+
+enum ServiceDeploymentDeactivationPhase {
+  SERVICE_DEPLOYMENT_DEACTIVATION_PHASE_UNSPECIFIED = 0;
+  SERVICE_DEPLOYMENT_DEACTIVATION_PHASE_SERVING_TARGET_REMOVAL_PENDING = 1;
+  SERVICE_DEPLOYMENT_DEACTIVATION_PHASE_RUNTIME_DEACTIVATION_PENDING = 2;
+}
+
+enum ServiceDeploymentDeactivationFailureCode {
+  SERVICE_DEPLOYMENT_DEACTIVATION_FAILURE_CODE_UNSPECIFIED = 0;
+  SERVICE_DEPLOYMENT_DEACTIVATION_FAILURE_CODE_SERVING_TARGET_REMOVAL_FAILED = 1;
+  SERVICE_DEPLOYMENT_DEACTIVATION_FAILURE_CODE_RUNTIME_DEACTIVATION_FAILED = 2;
 }
 
 message ServiceDeploymentRecord {
@@ -28,6 +58,9 @@ message ServiceDeploymentRecord {
   ServiceDeploymentStatus status = 4;
   google.protobuf.Timestamp activated_at = 5;
   google.protobuf.Timestamp updated_at = 6;
+  string artifact_hash = 7;
+  string activation_attempt_id = 8;
+  string serving_target_operation_id = 9;
 }
 
 message ServiceDeploymentState {
@@ -37,6 +70,39 @@ message ServiceDeploymentState {
   string last_event_id = 4;
   map<string, ServiceDeploymentActivationFailureRecord> activation_failures = 5;
   map<string, ServiceDeploymentPendingActivationRecord> pending_activations = 6;
+  map<string, ServiceDeploymentActivationCompletionRecord> activation_completions = 7;
+  map<string, ServiceDeploymentPendingDeactivationRecord> pending_deactivations = 8;
+  map<string, ServiceDeploymentDeactivationFailureRecord> deactivation_failures = 9;
+  int64 last_serving_operation_sequence = 10;
+}
+
+message ServiceDeploymentPendingDeactivationRecord {
+  string deployment_id = 1;
+  string revision_id = 2;
+  string primary_actor_id = 3;
+  string activation_attempt_id = 4;
+  string serving_target_operation_id = 5;
+  string deactivation_operation_id = 6;
+  string removal_command_id = 7;
+  ServiceDeploymentDeactivationPhase phase = 8;
+  google.protobuf.Timestamp deadline_at = 9;
+  google.protobuf.Timestamp started_at = 10;
+  google.protobuf.Timestamp deferred_at = 11;
+  google.protobuf.Timestamp removal_dispatch_accepted_at = 12;
+  google.protobuf.Timestamp removal_observed_at = 13;
+  int32 runtime_deactivation_invocation_count = 14;
+  google.protobuf.Timestamp runtime_deactivation_invocation_started_at = 15;
+  ServiceDeploymentDeactivationFailureCode last_failure_code = 16;
+  string last_failure_reason = 17;
+}
+
+message ServiceDeploymentDeactivationFailureRecord {
+  string deployment_id = 1;
+  string revision_id = 2;
+  string deactivation_operation_id = 3;
+  ServiceDeploymentDeactivationFailureCode failure_code = 4;
+  string failure_reason = 5;
+  google.protobuf.Timestamp occurred_at = 6;
 }
 
 message ServiceDeploymentActivationFailureRecord {
@@ -44,12 +110,46 @@ message ServiceDeploymentActivationFailureRecord {
   ServiceDeploymentActivationFailureCode failure_code = 2;
   string failure_reason = 3;
   google.protobuf.Timestamp occurred_at = 4;
+  string activation_attempt_id = 5;
 }
 
 message ServiceDeploymentPendingActivationRecord {
   string revision_id = 1;
   google.protobuf.Timestamp deadline_at = 2;
   google.protobuf.Timestamp deferred_at = 3;
+  string activation_attempt_id = 4;
+  google.protobuf.Timestamp started_at = 5;
+  ServiceDeploymentActivationPhase phase = 6;
+  string deployment_id = 7;
+  string primary_actor_id = 8;
+  ServiceDeploymentActivationFailureCode last_retry_failure_code = 9;
+  string runtime_activation_operation_id = 10;
+  int32 runtime_activation_invocation_count = 11;
+  google.protobuf.Timestamp runtime_activation_invocation_started_at = 12;
+  string serving_target_operation_id = 13;
+  string serving_target_command_id = 14;
+  google.protobuf.Timestamp serving_target_dispatch_accepted_at = 15;
+  string expected_artifact_hash = 16;
+  string default_serving_operation_id = 17;
+  string default_serving_command_id = 18;
+  google.protobuf.Timestamp default_serving_dispatch_accepted_at = 19;
+  int64 serving_generation = 20;
+  google.protobuf.Timestamp serving_targets_applied_at = 21;
+  int64 serving_operation_sequence = 22;
+}
+
+message ServiceDeploymentActivationCompletionRecord {
+  string revision_id = 1;
+  string deployment_id = 2;
+  string activation_attempt_id = 3;
+  string serving_target_operation_id = 4;
+  int64 serving_generation = 5;
+  google.protobuf.Timestamp completed_at = 6;
+  string default_serving_operation_id = 7;
+  string default_serving_command_id = 8;
+  google.protobuf.Timestamp default_serving_committed_at = 9;
+  string expected_artifact_hash = 10;
+  int64 serving_operation_sequence = 11;
 }
 
 message ActivateServiceRevisionCommand {
@@ -58,11 +158,15 @@ message ActivateServiceRevisionCommand {
   // Optional deadline propagated by a previously scheduled self continuation. The
   // deployment actor owns the authoritative pending activation deadline.
   google.protobuf.Timestamp activation_deadline_at = 3;
+  string activation_attempt_id = 4;
+  optional string expected_artifact_hash = 5;
 }
 
 message DeactivateServiceDeploymentCommand {
   ServiceIdentity identity = 1;
   string deployment_id = 2;
+  google.protobuf.Timestamp deactivation_deadline_at = 3;
+  string deactivation_operation_id = 4;
 }
 
 message ServiceDeploymentDeactivatedEvent {
@@ -70,6 +174,48 @@ message ServiceDeploymentDeactivatedEvent {
   string deployment_id = 2;
   string revision_id = 3;
   google.protobuf.Timestamp deactivated_at = 4;
+  string deactivation_operation_id = 5;
+  string activation_attempt_id = 6;
+  string serving_target_operation_id = 7;
+}
+
+message ServiceDeploymentDeactivationRequestedEvent {
+  ServiceIdentity identity = 1;
+  ServiceDeploymentPendingDeactivationRecord deactivation = 2;
+}
+
+message ServiceDeploymentDeactivationDeferredEvent {
+  ServiceIdentity identity = 1;
+  ServiceDeploymentPendingDeactivationRecord deactivation = 2;
+}
+
+message ServiceDeploymentRuntimeDeactivationInvocationStartedEvent {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string deactivation_operation_id = 3;
+  int32 invocation_count = 4;
+  google.protobuf.Timestamp invocation_started_at = 5;
+  google.protobuf.Timestamp removal_observed_at = 6;
+}
+
+message ServiceDeploymentDeactivationSupersededEvent {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string deactivation_operation_id = 3;
+  string superseded_by_activation_attempt_id = 4;
+  google.protobuf.Timestamp superseded_at = 5;
+}
+
+message ServiceDeploymentDeactivationFailedEvent {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string revision_id = 3;
+  string deactivation_operation_id = 4;
+  string activation_attempt_id = 5;
+  string serving_target_operation_id = 6;
+  ServiceDeploymentDeactivationFailureCode failure_code = 7;
+  string failure_reason = 8;
+  google.protobuf.Timestamp occurred_at = 9;
 }
 
 message ServiceDeploymentActivatedEvent {
@@ -79,6 +225,8 @@ message ServiceDeploymentActivatedEvent {
   string primary_actor_id = 4;
   ServiceDeploymentStatus status = 5;
   google.protobuf.Timestamp activated_at = 6;
+  string artifact_hash = 7;
+  string activation_attempt_id = 8;
 }
 
 message ServiceDeploymentHealthChangedEvent {
@@ -94,6 +242,7 @@ message ServiceDeploymentActivationFailedEvent {
   ServiceDeploymentActivationFailureCode failure_code = 3;
   string failure_reason = 4;
   google.protobuf.Timestamp occurred_at = 5;
+  string activation_attempt_id = 6;
 }
 
 message ServiceDeploymentActivationDeferredEvent {
@@ -101,4 +250,93 @@ message ServiceDeploymentActivationDeferredEvent {
   string revision_id = 2;
   google.protobuf.Timestamp deadline_at = 3;
   google.protobuf.Timestamp deferred_at = 4;
+  string activation_attempt_id = 5;
+  google.protobuf.Timestamp started_at = 6;
+  ServiceDeploymentActivationPhase phase = 7;
+  string deployment_id = 8;
+  string primary_actor_id = 9;
+  ServiceDeploymentActivationFailureCode last_retry_failure_code = 10;
+  string runtime_activation_operation_id = 11;
+  int32 runtime_activation_invocation_count = 12;
+  google.protobuf.Timestamp runtime_activation_invocation_started_at = 13;
+  string serving_target_operation_id = 14;
+  string serving_target_command_id = 15;
+  google.protobuf.Timestamp serving_target_dispatch_accepted_at = 16;
+  string expected_artifact_hash = 17;
+  string default_serving_operation_id = 18;
+  string default_serving_command_id = 19;
+  google.protobuf.Timestamp default_serving_dispatch_accepted_at = 20;
+  int64 serving_generation = 21;
+  google.protobuf.Timestamp serving_targets_applied_at = 22;
+  int64 serving_operation_sequence = 23;
+}
+
+message ServiceDeploymentRuntimeActivationInvocationStartedEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  string activation_attempt_id = 3;
+  string operation_id = 4;
+  int32 invocation_count = 5;
+  google.protobuf.Timestamp deadline_at = 6;
+  google.protobuf.Timestamp activation_started_at = 7;
+  google.protobuf.Timestamp invocation_started_at = 8;
+}
+
+message ServiceDeploymentServingTargetsDispatchPendingEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  string deployment_id = 3;
+  string primary_actor_id = 4;
+  string activation_attempt_id = 5;
+  string operation_id = 6;
+  string command_id = 7;
+  google.protobuf.Timestamp deadline_at = 8;
+  google.protobuf.Timestamp activation_started_at = 9;
+  google.protobuf.Timestamp prepared_at = 10;
+  string expected_artifact_hash = 11;
+  int64 operation_sequence = 12;
+}
+
+message ServiceDeploymentServingTargetsDispatchAcceptedEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  string deployment_id = 3;
+  string activation_attempt_id = 4;
+  string operation_id = 5;
+  string command_id = 6;
+  google.protobuf.Timestamp accepted_at = 7;
+}
+
+message ServiceDeploymentDefaultServingRevisionDispatchPendingEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  string deployment_id = 3;
+  string activation_attempt_id = 4;
+  string operation_id = 5;
+  string command_id = 6;
+  int64 serving_generation = 7;
+  google.protobuf.Timestamp serving_targets_applied_at = 8;
+  google.protobuf.Timestamp prepared_at = 9;
+}
+
+message ServiceDeploymentDefaultServingRevisionDispatchAcceptedEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  string deployment_id = 3;
+  string activation_attempt_id = 4;
+  string operation_id = 5;
+  string command_id = 6;
+  google.protobuf.Timestamp accepted_at = 7;
+}
+
+message ServiceDeploymentServingTargetsAppliedEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  string deployment_id = 3;
+  string activation_attempt_id = 4;
+  string operation_id = 5;
+  int64 serving_generation = 6;
+  google.protobuf.Timestamp applied_at = 7;
+  google.protobuf.Timestamp default_serving_committed_at = 8;
+  int64 operation_sequence = 9;
 }

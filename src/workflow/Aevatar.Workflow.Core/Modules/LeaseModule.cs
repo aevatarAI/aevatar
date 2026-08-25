@@ -105,7 +105,11 @@ public sealed class LeaseModule : IEventModule<IWorkflowExecutionContext>
             LeaseKey = canonicalKey,
             LeaseActorId = leaseActorId,
             Action = action,
-            Input = request.Input ?? string.Empty,
+            Input = string.IsNullOrWhiteSpace(request.InputValueId)
+                ? request.Input ?? string.Empty
+                : string.Empty,
+            ExecutionId = request.ExecutionId,
+            InputValueId = request.InputValueId,
             HolderTokenVariable = WorkflowParameterValueParser.GetString(
                 request.Parameters,
                 string.Empty,
@@ -249,10 +253,13 @@ public sealed class LeaseModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = pending.StepId,
             RunId = pending.RunId,
+            ExecutionId = pending.ExecutionId,
             Success = true,
             Output = acquired.HolderToken ?? string.Empty,
             AssignedVariable = pending.HolderTokenVariable ?? string.Empty,
             AssignedValue = acquired.HolderToken ?? string.Empty,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
+            AssignedValueProvenance = WorkflowStepAssignedValueProvenance.ReferencesOutput,
         };
         FillSuccessAnnotations(completed, pending, acquired.HolderToken ?? string.Empty, acquired.Generation, acquired.ExpiresAtUnixMs);
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
@@ -271,8 +278,10 @@ public sealed class LeaseModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = pending.StepId,
             RunId = pending.RunId,
+            ExecutionId = pending.ExecutionId,
             Success = true,
             Output = renewed.HolderToken ?? string.Empty,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
         FillSuccessAnnotations(completed, pending, renewed.HolderToken ?? string.Empty, renewed.Generation, renewed.ExpiresAtUnixMs);
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
@@ -291,8 +300,10 @@ public sealed class LeaseModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = pending.StepId,
             RunId = pending.RunId,
+            ExecutionId = pending.ExecutionId,
             Success = true,
             Output = released.HolderToken ?? string.Empty,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
         completed.Annotations["lease.key"] = pending.LeaseKey;
         completed.Annotations["lease.actor_id"] = pending.LeaseActorId;
@@ -314,10 +325,12 @@ public sealed class LeaseModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = pending.StepId,
             RunId = pending.RunId,
+            ExecutionId = pending.ExecutionId,
             Success = false,
             Error = string.IsNullOrWhiteSpace(rejected.Error)
                 ? $"lease {pending.Action} rejected: {rejected.Reason}"
                 : rejected.Error,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
         completed.Annotations["lease.key"] = pending.LeaseKey;
         completed.Annotations["lease.actor_id"] = pending.LeaseActorId;
@@ -500,8 +513,10 @@ public sealed class LeaseModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = request.StepId ?? string.Empty,
                 RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
+                ExecutionId = request.ExecutionId,
                 Success = false,
                 Error = error,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             },
             TopologyAudience.Self,
             ct);

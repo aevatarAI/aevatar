@@ -110,10 +110,10 @@ The issued key must have exactly:
 - `allow_all_nodes=false` and no node grants
 - a finite configured expiry
 
-No extra service grant is accepted. NyxID's exact `chrono-sandbox` UserService
-must set `inject_delegation_token=true`, and its delegation scopes must be either
-`proxy:*` or the combined `proxy:* sandbox:execute` set. The managed request sends
-an agent key and no `Authorization` header, so `forward_access_token` does not
+No extra service grant is accepted. NyxID's exact shared `chrono-sandbox` UserService
+must set `forward_access_token=true`, `inject_delegation_token=true`, and the combined
+`proxy:* sandbox:execute` delegation scope set. The managed request sends an agent key
+only as `X-API-Key` and has no `Authorization` header, so access-token forwarding does not
 deliver a credential on this path. Aevatar validates these settings during
 explicit provisioning, reconciliation, and rotation.
 
@@ -128,7 +128,7 @@ convergence must preserve scopes required by the other path. In particular,
 adding `sandbox:execute` must preserve `proxy:*`; managed eligibility accepts that
 combined scope set. Neither execution verb may fall back to the other's path.
 
-The only persistent raw-key copy is stored in `ISecretVault`. Actor state, events, read models, APIs, logs, workflow state, and chrono request bodies contain only typed non-secret facts such as the key ID and `SecretReference`. Execution resolves the raw value immediately before the NyxID request and uses it only as that request's `X-API-Key` value. Aevatar never intentionally serializes or forwards it to chrono-sandbox or codex-runner.
+For managed `codex_exec`, the only persistent raw-key copy is stored in `ISecretVault`. Actor state, events, read models, APIs, logs, workflow state, and chrono request bodies contain only typed non-secret facts such as the key ID and `SecretReference`. Execution resolves the raw value immediately before the NyxID request and uses it only as that request's `X-API-Key` value. This managed path never intentionally forwards the key to chrono-sandbox or codex-runner. Generic `code_execute` has the separate dual-credential boundary defined in [sandbox-execution.md](sandbox-execution.md).
 
 For the internal P0, the mutable delegation-injection policy remains a trust boundary rather than an end-to-end guarantee Aevatar can enforce. The UserService owner can currently change token injection or scope after Aevatar validates it. Broad or public rollout remains blocked on #2899 providing immutable/version-bound policy or a request-level fail-closed delegation guarantee.
 

@@ -91,7 +91,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
         if (hasInlineWorkflowYamls)
         {
-            var inlineBundle = await _definitionParser.ParseInlineWorkflowBundleAsync(inlineWorkflowDocuments, ct);
+            var inlineBundle = await _definitionParser
+                .ParseInlineWorkflowBundleForPublicationAsync(inlineWorkflowDocuments, ct);
             if (!inlineBundle.Succeeded)
                 return new WorkflowActorResolutionResult(
                     null,
@@ -138,6 +139,19 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.WorkflowNotFound);
 
             workflowYamlForRun = registryDefinitionForRun.WorkflowYaml;
+            var publicationParse = await _definitionParser
+                .ParseWorkflowYamlForPublicationAsync(workflowYamlForRun, ct);
+            if (!publicationParse.Succeeded)
+            {
+                return new WorkflowActorResolutionResult(
+                    null,
+                    workflowNameForRun,
+                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    WorkflowChatRunStartFailureDetail.Create(
+                        WorkflowChatRunStartError.InvalidWorkflowYaml,
+                        publicationParse.Error,
+                        publicationParse.ExternalCapabilityReadiness));
+            }
         }
 
         var draftAdmission = hasInlineWorkflowYamls
@@ -169,7 +183,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 SourceKind: draftAdmission.Admission?.SourceKind ?? string.Empty,
                 CapabilityAdmissionPlan: draftAdmission.Admission?.CapabilityAdmissionPlan.Clone(),
                 WorkflowId: draftAdmission.Admission?.WorkflowId ?? string.Empty,
-                RevisionId: draftAdmission.Admission?.RevisionId ?? string.Empty),
+                RevisionId: draftAdmission.Admission?.RevisionId ?? string.Empty,
+                ToolCatalogPolicyVersion: WorkflowToolCatalogPolicies.CurrentVersion),
             wrapAsFallbackTrigger: !hasInlineWorkflowYamls,
             ct);
 
@@ -248,7 +263,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     SourceKind: draftAdmission.Admission?.SourceKind ?? string.Empty,
                     CapabilityAdmissionPlan: draftAdmission.Admission?.CapabilityAdmissionPlan.Clone(),
                     WorkflowId: draftAdmission.Admission?.WorkflowId ?? string.Empty,
-                    RevisionId: draftAdmission.Admission?.RevisionId ?? string.Empty),
+                    RevisionId: draftAdmission.Admission?.RevisionId ?? string.Empty,
+                    ToolCatalogPolicyVersion: WorkflowToolCatalogPolicies.CurrentVersion),
                 wrapAsFallbackTrigger: false,
                 ct);
             return new WorkflowActorResolutionResult(
@@ -297,7 +313,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 CapabilityAdmissionPlan: sourceBinding.CapabilityAdmissionPlan?.Clone(),
                 WorkflowId: sourceBinding.WorkflowId,
                 RevisionId: sourceBinding.RevisionId,
-                DefinitionVersion: ResolveDefinitionVersionForExecution(sourceBinding)),
+                DefinitionVersion: ResolveDefinitionVersionForExecution(sourceBinding),
+                ToolCatalogPolicyVersion: sourceBinding.ToolCatalogPolicyVersion),
             wrapAsFallbackTrigger: true,
             ct);
 
@@ -375,7 +392,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 CapabilityAdmissionPlan: resolvedDefinitionBinding.CapabilityAdmissionPlan?.Clone(),
                 WorkflowId: resolvedDefinitionBinding.WorkflowId?.Trim() ?? string.Empty,
                 RevisionId: resolvedDefinitionBinding.RevisionId?.Trim() ?? string.Empty,
-                DefinitionVersion: Math.Max(0, resolvedDefinitionBinding.DefinitionVersion)),
+                DefinitionVersion: Math.Max(0, resolvedDefinitionBinding.DefinitionVersion),
+                ToolCatalogPolicyVersion: resolvedDefinitionBinding.ToolCatalogPolicyVersion),
             wrapAsFallbackTrigger: false,
             ct);
 

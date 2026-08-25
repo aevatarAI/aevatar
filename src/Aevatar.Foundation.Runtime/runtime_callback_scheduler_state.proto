@@ -36,4 +36,8 @@ message RuntimeScheduledCallback {
   int32 slot_epoch = 10;
   int64 next_due_at_unix_time_ms = 11;
   RuntimeCallbackOverduePolicy overdue_policy = 12;
+  aevatar.EventEnvelope pending_delivery_envelope = 13;
+  string last_delivery_envelope_id = 14;
+  int64 last_delivery_fire_index = 15;
+  aevatar.EventEnvelope last_delivery_envelope = 16;
 }

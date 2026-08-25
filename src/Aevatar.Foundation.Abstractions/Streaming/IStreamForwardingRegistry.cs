@@ -31,6 +31,10 @@ public sealed class StreamForwardingBinding
     public long Version { get; set; }
 
     public string? LeaseId { get; set; }
+
+    public string TargetActorKind { get; set; } = string.Empty;
+
+    public long ActivationGeneration { get; set; }
 }
 
 /// <summary>
@@ -43,4 +47,16 @@ public interface IStreamForwardingRegistry
     Task RemoveAsync(string sourceStreamId, string targetStreamId, CancellationToken ct = default);
 
     Task<IReadOnlyList<StreamForwardingBinding>> ListBySourceAsync(string sourceStreamId, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Authoritative lookup for one exact stream forwarding binding. Implementations must bypass
+/// process-local read caches so activation and release decisions observe distributed topology state.
+/// </summary>
+public interface IStreamForwardingBindingAuthority
+{
+    Task<StreamForwardingBinding?> GetAsync(
+        string sourceStreamId,
+        string targetStreamId,
+        CancellationToken ct = default);
 }

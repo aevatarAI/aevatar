@@ -22,6 +22,20 @@ public sealed class StudioMemberGAgentStateTests
 {
     private readonly StudioMemberStateApplier _agent = new();
 
+    [Fact]
+    public void TransitionState_ShouldInitializeAuthorizationRevision_WhenMemberIsCreated()
+    {
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-alpha",
+            ScopeId = "scope-alpha",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        created.AuthorizationRevision.Should().Be(1);
+    }
+
     // Refactor (iter1345/cluster-519-draft-member-authority):
     //   Old pattern: tests covered only direct create semantics, leaving the
     //   draft projection ensure command contract implicit.
@@ -53,6 +67,153 @@ public sealed class StudioMemberGAgentStateTests
         created.PublishedServiceId.Should().Be(StudioMemberConventions.BuildPublishedServiceId("workflow-1"));
         created.CreatedAtUtc.Should().Be(requestedAt);
         eventSourcing.ConfirmCallCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(7, 7)]
+    public void TransitionState_ShouldKeepEffectiveAuthorizationRevisionStable_ForProvisioningBookkeeping(
+        long initialRevision,
+        long expectedRevision)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var legacy = new StudioMemberState
+        {
+            MemberId = "m-legacy",
+            ScopeId = "scope-1",
+            AuthorizationRevision = initialRevision,
+            WorkflowScheduleProvisioning = new StudioMemberWorkflowScheduleProvisioningState
+            {
+                Intent = new StudioMemberWorkflowScheduleProvisioningIntent
+                {
+                    ProvisioningId = "provisioning-1",
+                },
+                Status = StudioMemberWorkflowScheduleProvisioningStatus.PendingBinding,
+            },
+        };
+
+        var started = _agent.Apply(legacy, new StudioMemberWorkflowScheduleProvisioningAttemptStarted
+        {
+            ProvisioningId = "provisioning-1",
+            Attempt = 1,
+            StartedAtUtc = Timestamp.FromDateTimeOffset(now),
+        });
+        var deferred = _agent.Apply(started, new StudioMemberWorkflowScheduleProvisioningRetryDeferred
+        {
+            ProvisioningId = "provisioning-1",
+            Attempt = 1,
+            FailureCode = "authorization_plan_changed",
+            Detail = "retryable",
+            DeferredAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+        });
+
+        started.AuthorizationRevision.Should().Be(expectedRevision);
+        deferred.AuthorizationRevision.Should().Be(expectedRevision);
+    }
+
+    [Theory]
+    [InlineData(0, 2)]
+    [InlineData(7, 8)]
+    public void TransitionState_ShouldAdvanceAuthorizationRevision_ForAuthorityChanges(
+        long initialRevision,
+        long expectedRevision)
+    {
+        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var legacy = new StudioMemberState
+        {
+            MemberId = "m-legacy",
+            ScopeId = "scope-1",
+            PublishedServiceId = "svc-alpha",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            AuthorizationRevision = initialRevision,
+        };
+        var bindingState = legacy.Clone();
+        bindingState.Binding = new StudioMemberBindingAuthorityState
+        {
+            CurrentBindingRunId = "bind-alpha",
+            CurrentStatus = StudioMemberBindingRunStatus.Admitted,
+        };
+
+        var changes = new (StudioMemberState State, IMessage Event)[]
+        {
+            (legacy.Clone(), new StudioMemberImplementationUpdatedEvent
+            {
+                ImplementationRef = new StudioMemberImplementationRef
+                {
+                    Workflow = new StudioMemberWorkflowRef
+                    {
+                        WorkflowId = "wf-alpha",
+                        WorkflowRevision = "draft-rev-alpha",
+                    },
+                },
+                UpdatedAtUtc = now,
+            }),
+            (bindingState, new StudioMemberBindingCompletedEvent
+            {
+                BindingRunId = "bind-alpha",
+                PublishedServiceId = "svc-alpha",
+                RevisionId = "revision-alpha",
+                ImplementationKind = StudioMemberImplementationKind.Workflow,
+                CompletedAtUtc = now,
+            }),
+            (legacy.Clone(), new StudioMemberPublishedBindingRecordedEvent
+            {
+                PublishedServiceId = "svc-alpha",
+                RevisionId = "revision-alpha",
+                ImplementationKind = StudioMemberImplementationKind.Workflow,
+                ImplementationRef = new StudioMemberImplementationRef
+                {
+                    Workflow = new StudioMemberWorkflowRef
+                    {
+                        WorkflowId = "wf-alpha",
+                        WorkflowRevision = "revision-alpha",
+                    },
+                },
+                RecordedAtUtc = now,
+            }),
+            (legacy.Clone(), new StudioMemberReassignedEvent
+            {
+                MemberId = "m-legacy",
+                ScopeId = "scope-1",
+                ToTeamId = "team-alpha",
+                ReassignedAtUtc = now,
+            }),
+            (legacy.Clone(), new StudioMemberDeletedEvent
+            {
+                MemberId = "m-legacy",
+                ScopeId = "scope-1",
+                PublishedServiceId = "svc-alpha",
+                DeletedAtUtc = now,
+            }),
+        };
+
+        foreach (var change in changes)
+        {
+            _agent.Apply(change.State, change.Event).AuthorizationRevision.Should().Be(
+                expectedRevision,
+                $"{change.Event.Descriptor.Name} changes scheduled authorization authority");
+        }
+    }
+
+    [Fact]
+    public void TransitionState_ShouldRejectNegativeAuthorizationRevision()
+    {
+        var corrupted = new StudioMemberState
+        {
+            MemberId = "m-corrupted",
+            ScopeId = "scope-1",
+            AuthorizationRevision = -1,
+        };
+
+        var action = () => _agent.Apply(corrupted, new StudioMemberRenamedEvent
+        {
+            DisplayName = "renamed",
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        action.Should().Throw<TargetInvocationException>()
+            .Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Contain("authorization_revision is invalid");
     }
 
     [Fact]
@@ -701,9 +862,309 @@ public sealed class StudioMemberGAgentStateTests
 
         var sent = publisher.SentMessages.Should().ContainSingle().Subject;
         sent.TargetActorId.Should().Be(StudioMemberConventions.BuildBindingRunActorId("bind-delete"));
-        var ack = sent.Event.Should().BeOfType<StudioMemberBindingTerminalAcknowledged>().Subject;
-        ack.BindingRunId.Should().Be("bind-delete");
-        ack.Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+        var terminated = sent.Event.Should().BeOfType<StudioMemberBindingAuthorityTerminated>().Subject;
+        terminated.BindingRunId.Should().Be("bind-delete");
+        terminated.ScopeId.Should().Be("scope-1");
+        terminated.MemberId.Should().Be("m-1");
+        terminated.Failure.Code.Should().Be("STUDIO_MEMBER_DELETED");
+        terminated.Failure.FailedAtUtc.Should().Be(deletedAt);
+    }
+
+    [Fact]
+    public async Task HandleDeleteRequested_WhenCommitSucceedsButSendFails_ShouldReplayTerminationWithoutNewEvents()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-delete", now.AddSeconds(1));
+        var eventSourcing = new RecordingEventSourcing(pending, _agent.Apply);
+        var failingPublisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated termination send failure"),
+        };
+        var agent = NewHandlerAgent(pending, eventSourcing, failingPublisher);
+        var request = new StudioMemberDeleteRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(4)),
+        };
+
+        var delete = () => agent.HandleDeleteRequested(request);
+        var failure = await delete.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        failure.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("simulated termination send failure");
+
+        var committed = StudioMemberStateSetter.Get(agent);
+        committed.Deleted.Should().BeTrue();
+        committed.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.Failed);
+        committed.Binding.LastFailure.Code.Should().Be("STUDIO_MEMBER_DELETED");
+        eventSourcing.RaisedEvents.Should().HaveCount(2);
+        eventSourcing.ConfirmCallCount.Should().Be(1);
+        failingPublisher.SentMessages.Should().BeEmpty();
+
+        var replayEventSourcing = new RecordingEventSourcing(committed, _agent.Apply);
+        var replayPublisher = new RecordingEventPublisher();
+        var recovered = NewHandlerAgent(
+            committed,
+            replayEventSourcing,
+            replayPublisher,
+            callbackScheduler: new RecordingRuntimeCallbackScheduler());
+
+        await recovered.HandleEventAsync(RuntimeRetryEnvelope(request));
+
+        StudioMemberStateSetter.Get(recovered).ToByteArray().Should().Equal(committed.ToByteArray());
+        replayEventSourcing.RaisedEvents.Should().BeEmpty();
+        replayEventSourcing.ConfirmCallCount.Should().Be(0);
+        var replay = replayPublisher.SentMessages.Should().ContainSingle().Subject;
+        replay.TargetActorId.Should()
+            .Be(StudioMemberConventions.BuildBindingRunActorId("bind-delete"));
+        var terminated = replay.Event.Should()
+            .BeOfType<StudioMemberBindingAuthorityTerminated>().Subject;
+        terminated.Failure.Should().BeEquivalentTo(committed.Binding.LastFailure);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HandleOldPlatformOutcome_AfterDeleteTerminationSendFailure_ShouldResendTermination(
+        bool completed)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-delete", now.AddSeconds(1));
+        var failingEventSourcing = new RecordingEventSourcing(pending, _agent.Apply);
+        var failingPublisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated termination send failure"),
+        };
+        var deleting = NewHandlerAgent(pending, failingEventSourcing, failingPublisher);
+
+        var delete = () => deleting.HandleDeleteRequested(new StudioMemberDeleteRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(4)),
+        });
+        var failure = await delete.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+
+        var committed = StudioMemberStateSetter.Get(deleting);
+        var committedBytes = committed.ToByteArray();
+        var replayEventSourcing = new RecordingEventSourcing(committed, _agent.Apply);
+        var replayPublisher = new RecordingEventPublisher();
+        var recovered = NewHandlerAgent(committed, replayEventSourcing, replayPublisher);
+
+        if (completed)
+        {
+            await recovered.HandleBindingCompleted(new StudioMemberBindingCompletedEvent
+            {
+                BindingRunId = "bind-delete",
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                PublishedServiceId = "member-m-1",
+                RevisionId = "rev-late",
+                ImplementationKind = StudioMemberImplementationKind.Script,
+                CompletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(3)),
+            });
+        }
+        else
+        {
+            await recovered.HandleBindingFailed(new StudioMemberBindingFailedEvent
+            {
+                BindingRunId = "bind-delete",
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                Failure = new StudioMemberBindingFailure
+                {
+                    Code = "SCOPE_BINDING_FAILED",
+                    Message = "late platform failure from before deletion",
+                    FailedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(3)),
+                },
+            });
+        }
+
+        StudioMemberStateSetter.Get(recovered).ToByteArray().Should().Equal(committedBytes);
+        replayEventSourcing.RaisedEvents.Should().BeEmpty();
+        replayEventSourcing.ConfirmCallCount.Should().Be(0);
+        var sent = replayPublisher.SentMessages.Should().ContainSingle().Subject;
+        sent.TargetActorId.Should()
+            .Be(StudioMemberConventions.BuildBindingRunActorId("bind-delete"));
+        var termination = sent.Event.Should()
+            .BeOfType<StudioMemberBindingAuthorityTerminated>().Subject;
+        termination.Failure.Should().BeEquivalentTo(committed.Binding.LastFailure);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_AfterCommittedDelete_ShouldReplayTerminationWithoutNewEvents()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-delete", now.AddSeconds(1));
+        var deletedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(4));
+        var failed = new StudioMemberBindingFailedEvent
+        {
+            BindingRunId = "bind-delete",
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "STUDIO_MEMBER_DELETED",
+                Message = "member was deleted before binding completed.",
+                FailedAtUtc = deletedAt,
+            },
+        };
+        var committed = _agent.Apply(pending, failed);
+        committed = _agent.Apply(committed, new StudioMemberDeletedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            PublishedServiceId = "member-m-1",
+            DeletedAtUtc = deletedAt,
+        });
+        var eventSourcing = new RecordingEventSourcing(committed, _agent.Apply);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(
+            committed,
+            eventSourcing,
+            publisher,
+            callbackScheduler: new RecordingRuntimeCallbackScheduler());
+
+        await agent.ActivateAsync();
+
+        StudioMemberStateSetter.Get(agent).ToByteArray().Should().Equal(committed.ToByteArray());
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+        var replay = publisher.SentMessages.Should().ContainSingle().Subject;
+        replay.TargetActorId.Should()
+            .Be(StudioMemberConventions.BuildBindingRunActorId("bind-delete"));
+        replay.Event.Should().BeOfType<StudioMemberBindingAuthorityTerminated>();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_AfterOrdinaryCommittedDelete_ShouldNotSendTermination()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var created = NewCreatedScriptMember(now);
+        var committed = _agent.Apply(created, new StudioMemberDeletedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            PublishedServiceId = "member-m-1",
+            DeletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+        });
+        var eventSourcing = new RecordingEventSourcing(committed, _agent.Apply);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(
+            committed,
+            eventSourcing,
+            publisher,
+            callbackScheduler: new RecordingRuntimeCallbackScheduler());
+
+        await agent.ActivateAsync();
+
+        StudioMemberStateSetter.Get(agent).ToByteArray().Should().Equal(committed.ToByteArray());
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteBeforeBindingRunTerminal_ShouldConvergeAcrossActorsAfterLatePlatformOutcomes()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-delete", now.AddSeconds(1));
+        var bindingRun = new StudioMemberBindingRunState
+        {
+            BindingRunId = "bind-delete",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            Status = StudioMemberBindingRunStatus.PlatformBindingPending,
+            PlatformBindingCommandId = "platform-bind-delete",
+            PlatformBindingProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            PlatformExecutionAttempt = 1,
+            PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandInFlight,
+        };
+        var bindingRunApplier = new StudioMemberBindingRunStateApplier();
+        var eventSourcing = new RecordingEventSourcing(pending, _agent.Apply);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(pending, eventSourcing, publisher);
+        var deletedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(4));
+
+        await agent.HandleDeleteRequested(new StudioMemberDeleteRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = deletedAt,
+        });
+
+        var committedAfterDelete = StudioMemberStateSetter.Get(agent);
+        committedAfterDelete.Deleted.Should().BeTrue();
+        committedAfterDelete.Binding.CurrentBindingRunId.Should().Be("bind-delete");
+        committedAfterDelete.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.Failed);
+        committedAfterDelete.Binding.LastFailure.Code.Should().Be("STUDIO_MEMBER_DELETED");
+        var committedBytes = committedAfterDelete.ToByteArray();
+        var eventCount = eventSourcing.RaisedEvents.Count;
+        var termination = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberBindingAuthorityTerminated>().Subject;
+
+        var afterTermination = bindingRunApplier.Apply(bindingRun, termination);
+        afterTermination.Status.Should()
+            .Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        afterTermination.Failure.Code.Should().Be("STUDIO_MEMBER_DELETED");
+
+        var afterPlatformFailure = bindingRunApplier.Apply(
+            afterTermination,
+            new StudioMemberPlatformBindingExecutionFailed
+            {
+                BindingRunId = "bind-delete",
+                PlatformBindingCommandId = "platform-bind-delete",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 1,
+                ExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandInFlight,
+                Failure = new StudioMemberBindingFailure
+                {
+                    Code = "SCOPE_BINDING_FAILED",
+                    Message = "late platform terminal notification",
+                    FailedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(5)),
+                },
+            });
+        afterPlatformFailure.ToByteArray().Should().Equal(afterTermination.ToByteArray());
+
+        var afterPlatformSuccess = bindingRunApplier.Apply(
+            afterPlatformFailure,
+            new StudioMemberPlatformBindingExecutionSucceeded
+            {
+                BindingRunId = "bind-delete",
+                PlatformBindingCommandId = "platform-bind-delete",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 1,
+                Result = new StudioMemberPlatformBindingResult
+                {
+                    PublishedServiceId = "member-m-1",
+                    RevisionId = "rev-late",
+                    ImplementationKind = StudioMemberImplementationKind.Script,
+                },
+                CompletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(6)),
+            });
+        afterPlatformSuccess.ToByteArray().Should().Equal(afterTermination.ToByteArray());
+
+        await agent.HandleBindingFailed(new StudioMemberBindingFailedEvent
+        {
+            BindingRunId = "bind-delete",
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            Failure = afterPlatformSuccess.Failure.Clone(),
+        });
+
+        StudioMemberStateSetter.Get(agent).ToByteArray().Should().Equal(committedBytes);
+        eventSourcing.RaisedEvents.Should().HaveCount(eventCount);
+        eventSourcing.ConfirmCallCount.Should().Be(1);
+        publisher.SentMessages.Should().HaveCount(2);
+        var replayAck = publisher.SentMessages.Last();
+        replayAck.TargetActorId.Should()
+            .Be(StudioMemberConventions.BuildBindingRunActorId("bind-delete"));
+        var lateAck = replayAck.Event.Should().BeOfType<StudioMemberBindingTerminalAcknowledged>().Subject;
+        lateAck.Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+
+        var convergedRun = bindingRunApplier.Apply(afterPlatformFailure, lateAck);
+        convergedRun.Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+        convergedRun.Failure.Code.Should().Be("STUDIO_MEMBER_DELETED");
     }
 
     [Fact]
@@ -1971,6 +2432,25 @@ public sealed class StudioMemberGAgentStateTests
         method.Invoke(agent, [actorId]);
     }
 
+    private static EventEnvelope RuntimeRetryEnvelope(IMessage evt)
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = $"retry-{Guid.NewGuid():N}",
+            Payload = Any.Pack(evt),
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                "studio-member-command-authority",
+                "studio-member:scope-1:m-1"),
+        };
+        envelope.EnsureRuntime().Retry = new EnvelopeRetryContext
+        {
+            OriginEventId = "origin-studio-member-event",
+            Attempt = 1,
+            LastErrorType = nameof(IRuntimeEnvelopeRetryableException),
+        };
+        return envelope;
+    }
+
     private StudioMemberState StartWorkflowBindingRun(
         StudioMemberState state,
         string bindingRunId,
@@ -2052,6 +2532,24 @@ public sealed class StudioMemberGAgentStateTests
             var result = TransitionStateMethod.Invoke(_agent, [current, evt])
                 ?? throw new InvalidOperationException("TransitionState returned null.");
             return (StudioMemberState)result;
+        }
+    }
+
+    private sealed class StudioMemberBindingRunStateApplier
+    {
+        private static readonly MethodInfo TransitionStateMethod =
+            typeof(StudioMemberBindingRunGAgent).GetMethod(
+                "TransitionState",
+                BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Binding run TransitionState method not found.");
+
+        private readonly StudioMemberBindingRunGAgent _agent = new();
+
+        public StudioMemberBindingRunState Apply(StudioMemberBindingRunState current, IMessage evt)
+        {
+            var result = TransitionStateMethod.Invoke(_agent, [current, evt])
+                ?? throw new InvalidOperationException("Binding run TransitionState returned null.");
+            return (StudioMemberBindingRunState)result;
         }
     }
 
@@ -2192,6 +2690,7 @@ public sealed class StudioMemberGAgentStateTests
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
+        public Exception? SendException { get; init; }
         public List<SentMessage> SentMessages { get; } = [];
 
         public Task PublishAsync<TEvent>(
@@ -2211,6 +2710,9 @@ public sealed class StudioMemberGAgentStateTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
+            if (SendException != null)
+                return Task.FromException(SendException);
+
             SentMessages.Add(new SentMessage(targetActorId, evt));
             return Task.CompletedTask;
         }

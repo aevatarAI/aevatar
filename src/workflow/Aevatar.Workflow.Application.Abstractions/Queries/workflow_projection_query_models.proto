@@ -98,6 +98,8 @@ message WorkflowActorSnapshot {
   string run_id = 32;
   WorkflowRunRecoveryCapability recovery_capability = 33;
   aevatar.workflow.WorkflowRunLineage lineage = 34;
+  string compilation_error = 35;
+  aevatar.workflow.WorkflowValueLifecycleFailureKind terminal_value_lifecycle_failure_kind = 36;
 }
 
 message WorkflowRunActivityInitiatorSnapshot {
@@ -180,9 +182,24 @@ message WorkflowRunGraphExportEdge {
   map<string, string> properties = 6;
 }
 
+message WorkflowRunGraphExportRouteFingerprint {
+  string contract_id = 1;
+  int64 contract_version = 2;
+  string physical_namespace = 3;
+  int64 route_epoch = 4;
+}
+
+message WorkflowRunGraphExportSourceCoordinate {
+  string actor_id = 1;
+  int64 state_version = 2;
+  string event_id = 3;
+}
+
 message WorkflowRunGraphExportSubgraph {
   string root_node_id = 1;
   repeated WorkflowRunGraphExportNode nodes = 2;
   repeated WorkflowRunGraphExportEdge edges = 3;
   int64 source_state_version = 4;
+  WorkflowRunGraphExportRouteFingerprint route_fingerprint = 5;
+  WorkflowRunGraphExportSourceCoordinate source_coordinate = 6;
 }

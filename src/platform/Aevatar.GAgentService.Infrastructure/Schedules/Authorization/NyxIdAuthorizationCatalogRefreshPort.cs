@@ -193,6 +193,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         NyxIdAuthorizationCatalogRefreshPort.CatalogObservationTimeout;
 
     private const string CatalogMismatchFailureCode = "nyxid_scope_plan_catalog_mismatch";
+    private const string ScopePlanClockSkewExceededFailureCode = "nyxid_scope_plan_clock_skew_exceeded";
     private const string ProviderTimedOutFailureCode = "nyxid_catalog_refresh_provider_timed_out";
     private const string LLMModelsTransportFailureCode = "nyxid_llm_models_transport_failure";
     private const string LLMTargetInventoryMismatchFailureCode = "nyxid_llm_target_inventory_mismatch";
@@ -536,7 +537,9 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             return;
         }
 
+        var scopePlanRequestedAt = _timeProvider.GetUtcNow();
         string scopePlanResponse;
+        DateTimeOffset scopePlanReceivedAt;
         try
         {
             scopePlanResponse = await client.PlanApiKeyScopeAsync(
@@ -544,6 +547,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                 selectedServiceIds,
                 targetOrganizationId: null,
                 ct);
+            scopePlanReceivedAt = _timeProvider.GetUtcNow();
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -562,6 +566,25 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
 
         var scopePlan = scopePlanResult.Value!;
+        if (!NyxIdAuthorizationCatalogIntegrity.IsProviderEvaluationWithinRequestWindow(
+                scopePlanRequestedAt,
+                scopePlanReceivedAt,
+                scopePlan.EvaluatedAtUtc))
+        {
+            LogWithoutThrowing(
+                LogLevel.Warning,
+                "NyxID scope-plan evaluation time exceeded the allowed clock-skew window. requestStartedAtUtc={RequestStartedAtUtc} responseReceivedAtUtc={ResponseReceivedAtUtc} providerEvaluatedAtUtc={ProviderEvaluatedAtUtc} maximumProviderClockSkew={MaximumProviderClockSkew}",
+                scopePlanRequestedAt,
+                scopePlanReceivedAt,
+                scopePlan.EvaluatedAtUtc,
+                NyxIdAuthorizationCatalogIntegrity.MaximumProviderClockSkew);
+            await RecordCatalogUnstableRefreshAsync(
+                normalizedOwner,
+                refreshId,
+                ScopePlanClockSkewExceededFailureCode,
+                ct).ConfigureAwait(false);
+            return;
+        }
         if (!MatchesPersonalCatalog(scopePlan, normalizedOwner, eligibleServices))
         {
             await InvalidateUnstableAsync(
@@ -573,7 +596,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
 
         var inventoryById = eligibleServices.ToDictionary(static service => service.Id, StringComparer.Ordinal);
-        var observedAt = _timeProvider.GetUtcNow();
+        var observedAt = scopePlanReceivedAt;
         var freshUntil = observedAt.Add(CatalogFreshnessLifetime);
         var services = scopePlan.Services
             .Select(grant => MapServiceEvidence(

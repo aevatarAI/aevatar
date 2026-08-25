@@ -484,9 +484,6 @@ public sealed class ServiceExposureReconcileHookTests
         public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default) =>
             Task.FromResult(Receipt);
 
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default) =>
-            Task.FromResult(Receipt);
-
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default) =>
             Task.FromResult(Receipt);
 

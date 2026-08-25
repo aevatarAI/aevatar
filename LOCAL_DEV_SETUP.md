@@ -14,7 +14,7 @@
 
 - `local`：完全本地，读写态都是临时的
 - `persistent-local`：Orleans + Garnet，actor 状态可跨重启保留
-- `distributed`：Kafka / Elasticsearch / Neo4j 分布式配置
+- `distributed`：Kafka / Garnet / Elasticsearch 分布式配置；图投影默认关闭，不依赖 Neo4j
 
 常用示例：
 

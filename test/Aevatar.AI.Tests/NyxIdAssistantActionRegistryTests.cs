@@ -13,36 +13,32 @@ public sealed class NyxIdAssistantActionRegistryTests
     private const string LegacyRevision = "nyxid-assistant-actions.v4";
     private const string TransitionRevision = "nyxid-assistant-actions.v5";
     private const string LeastScopeRevision = "nyxid-assistant-actions.v6";
-    private const string SupportedRevision = "nyxid-assistant-actions.v7";
+    private const string KeyRotationRevision = "nyxid-assistant-actions.v7";
+    private const string SupportedRevision = "nyxid-assistant-actions.v8";
 
     [Fact]
-    public void Load_ShouldPinSchemaVersionAndRevision()
+    public void Load_ShouldPinSchemaVersionAndPassRevisionThrough()
     {
         var registry = NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithKeyRotation());
+            RegistryJsonWithServiceReauthorize());
 
         registry.SchemaVersion.Should().Be(4);
         registry.RegistryRevision.Should().Be(SupportedRevision);
 
-        var legacy = NyxIdAssistantActionRegistry.Load(
-            RegistryJson(revision: LegacyRevision));
-        legacy.RegistryRevision.Should().Be(LegacyRevision);
-        legacy.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        var future = NyxIdAssistantActionRegistry.Load(
+            RegistryJson(revision: "nyxid-assistant-actions.future"));
+        future.RegistryRevision.Should().Be("nyxid-assistant-actions.future");
+        future.TryGetDefinition("service.connect", out _).Should().BeTrue();
+
+        var unlabeled = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithoutRevision());
+        unlabeled.RegistryRevision.Should().BeEmpty();
+        unlabeled.TryGetDefinition("service.connect", out _).Should().BeTrue();
 
         Action act = () => NyxIdAssistantActionRegistry.Load(
             RegistryJson(schemaVersion: 3));
         act.Should().Throw<NyxIdAssistantActionRegistryException>()
             .Which.Code.Should().Be("NYXID_ACTION_SCHEMA_UNSUPPORTED");
-
-        act = () => NyxIdAssistantActionRegistry.Load(
-            RegistryJson(revision: "nyxid-assistant-actions.future"));
-        act.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_REVISION_UNSUPPORTED");
-
-        act = () => NyxIdAssistantActionRegistry.Load(
-            RegistryJson(revision: SupportedRevision));
-        act.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
     }
 
     [Fact]
@@ -53,101 +49,135 @@ public sealed class NyxIdAssistantActionRegistryTests
 
         registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
         registry.TryGetDefinition("workflow.launch", out _).Should().BeFalse();
+        registry.SkippedActions.Should().BeEmpty();
     }
 
     [Fact]
-    public void Load_ShouldPinWaveOneSchemasAndKeepUnimplementedActionsClosed()
+    public void Load_ShouldKeepExecutableActionsWhenServedListIsPartial()
     {
-        var registry = NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithWaveOneActions());
+        var connectOnly = NyxIdAssistantActionRegistry.Load(
+            RegistryJson(revision: SupportedRevision));
 
-        registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-        registry.TryGetDefinition("key.create", out _).Should().BeFalse();
-        registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        connectOnly.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        connectOnly.TryGetDefinition("key.create", out _).Should().BeFalse();
+        connectOnly.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        connectOnly.SkippedActions.Should().BeEmpty();
+    }
 
-        var legacy = NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithWaveOneActions(revision: LegacyRevision));
-        legacy.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        legacy.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-        legacy.TryGetDefinition("key.create", out _).Should().BeFalse();
-        legacy.TryGetDefinition("key.rotate", out _).Should().BeFalse();
-
-        Action staleReauthorizeSchema = () => NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithWaveOneActions(
+    [Fact]
+    public void Load_ShouldDegradeDivergentDescriptorsPerActionAndKeepTheRest()
+    {
+        var staleReauthorize = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithServiceReauthorize(
                 serviceReauthorizeSchema: StaleServiceReauthorizeSchema));
-        staleReauthorizeSchema.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+        staleReauthorize.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        staleReauthorize.TryGetDefinition("key.create", out _).Should().BeTrue();
+        staleReauthorize.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+        staleReauthorize.SkippedActions.Should().ContainSingle(skip =>
+            skip.WireAction == "service.reauthorize" &&
+            skip.Code == "NYXID_ACTION_REGISTRY_INVALID");
 
-        Action relaxedKeyCreateSchema = () => NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithWaveOneActions(
-                keyCreateSchema: RelaxedKeyCreateSchema));
-        relaxedKeyCreateSchema.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+        var relaxedKeyCreate = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithServiceReauthorize(keyCreateSchema: KeyCreateSchema));
+        relaxedKeyCreate.TryGetDefinition("key.create", out _).Should().BeFalse();
+        relaxedKeyCreate.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        relaxedKeyCreate.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+        relaxedKeyCreate.SkippedActions.Should().ContainSingle(skip =>
+            skip.WireAction == "key.create" &&
+            skip.Code == "NYXID_ACTION_REGISTRY_INVALID");
 
-        Action callerRememberPolicy = () => NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithWaveOneActions(keyCreateRememberEligible: true));
-        callerRememberPolicy.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+        var rememberedReauthorization = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithServiceReauthorize(serviceReauthorizeRememberEligible: true));
+        rememberedReauthorization.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        rememberedReauthorization.SkippedActions.Should().ContainSingle(skip =>
+            skip.WireAction == "service.reauthorize");
 
-        Action rememberedReauthorization = () => NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithWaveOneActions(serviceReauthorizeRememberEligible: true));
-        rememberedReauthorization.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
-    }
-
-    [Fact]
-    public void Load_ShouldExposeLeastScopeKeyCreateOnlyInV6()
-    {
-        var registry = NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithLeastScopeKeyCreate());
-
-        registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        registry.TryGetDefinition("key.create", out _).Should().BeTrue();
-        registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-        registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
-        NyxIdAssistantActionRegistry.IsActionExecutable(
-                LeastScopeRevision,
-                NyxIdAssistantActionKind.KeyCreate)
-            .Should().BeTrue();
-        NyxIdAssistantActionRegistry.IsActionExecutable(
-                TransitionRevision,
-                NyxIdAssistantActionKind.KeyCreate)
-            .Should().BeFalse();
-
-        Action staleSchema = () => NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithLeastScopeKeyCreate(KeyCreateSchema));
-        staleSchema.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
-    }
-
-    [Fact]
-    public void Load_ShouldExposeKeyRotationOnlyInV7()
-    {
-        var registry = NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithKeyRotation());
-
-        registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        registry.TryGetDefinition("key.create", out _).Should().BeTrue();
-        registry.TryGetDefinition("key.rotate", out _).Should().BeTrue();
-        registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-        NyxIdAssistantActionRegistry.IsActionExecutable(
-                SupportedRevision,
-                NyxIdAssistantActionKind.KeyRotate)
-            .Should().BeTrue();
-        NyxIdAssistantActionRegistry.IsActionExecutable(
-                LeastScopeRevision,
-                NyxIdAssistantActionKind.KeyRotate)
-            .Should().BeFalse();
-    }
-
-    [Fact]
-    public void Load_ShouldRejectUnsupportedTierForKnownAction()
-    {
-        Action v2 = () => NyxIdAssistantActionRegistry.Load(
+        var unsupportedTier = NyxIdAssistantActionRegistry.Load(
             RegistryJson(tier: "v2"));
-        v2.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_TIER_UNSUPPORTED");
+        unsupportedTier.TryGetDefinition("service.connect", out _).Should().BeFalse();
+        unsupportedTier.SkippedActions.Should().ContainSingle(skip =>
+            skip.WireAction == "service.connect" &&
+            skip.Code == "NYXID_ACTION_TIER_UNSUPPORTED");
+    }
+
+    [Fact]
+    public void Load_ShouldKeepUnimplementedActionsClosedRegardlessOfRevision()
+    {
+        foreach (var payload in new[]
+                 {
+                     RegistryJsonWithWaveOneActions(),
+                     RegistryJsonWithWaveOneActions(revision: LegacyRevision),
+                     RegistryJsonWithServiceReauthorize(),
+                 })
+        {
+            var registry = NyxIdAssistantActionRegistry.Load(payload);
+            registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
+            registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+            Action validate = () => registry.ValidateRequest(
+                "service.reauthorize",
+                """{"userServiceId":"us-github-alpha","requestedScopes":["repo"]}""");
+            validate.Should().Throw<NyxIdAssistantActionRegistryException>()
+                .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        }
+    }
+
+    [Fact]
+    public void Load_ShouldExposeExecutableActionsRegardlessOfRevisionLabel()
+    {
+        var keyRotation = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation());
+        keyRotation.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        keyRotation.TryGetDefinition("key.create", out _).Should().BeTrue();
+        keyRotation.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+
+        var futureRevision = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation(revision: "nyxid-assistant-actions.v99"));
+        futureRevision.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+
+        var staleKeyCreate = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithLeastScopeKeyCreate(KeyCreateSchema));
+        staleKeyCreate.TryGetDefinition("key.create", out _).Should().BeFalse();
+        staleKeyCreate.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        staleKeyCreate.SkippedActions.Should().ContainSingle(skip =>
+            skip.WireAction == "key.create");
+    }
+
+    [Fact]
+    public void IsActionExecutable_ShouldNotDependOnNyxIdRevisionLabel()
+    {
+        foreach (var revision in new[]
+                 {
+                     LegacyRevision,
+                     SupportedRevision,
+                     "nyxid-assistant-actions.v99",
+                     string.Empty,
+                 })
+        {
+            NyxIdAssistantActionRegistry.IsActionExecutable(
+                    revision, NyxIdAssistantActionKind.ServiceConnect)
+                .Should().BeTrue();
+            NyxIdAssistantActionRegistry.IsActionExecutable(
+                    revision, NyxIdAssistantActionKind.KeyCreate)
+                .Should().BeTrue();
+            NyxIdAssistantActionRegistry.IsActionExecutable(
+                    revision, NyxIdAssistantActionKind.KeyRotate)
+                .Should().BeTrue();
+            NyxIdAssistantActionRegistry.IsActionExecutable(
+                    revision, NyxIdAssistantActionKind.ServiceReauthorize)
+                .Should().BeFalse();
+            NyxIdAssistantActionRegistry.IsActionExecutable(
+                    revision, NyxIdAssistantActionKind.ServiceAccessReview)
+                .Should().BeFalse();
+        }
+
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                NyxIdAssistantActionRegistry.ServiceAccessReviewRegistryRevision,
+                NyxIdAssistantActionKind.ServiceAccessReview)
+            .Should().BeTrue();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                NyxIdAssistantActionRegistry.ServiceAccessReviewRegistryRevision,
+                NyxIdAssistantActionKind.ServiceConnect)
+            .Should().BeFalse();
     }
 
     [Fact]
@@ -386,22 +416,39 @@ public sealed class NyxIdAssistantActionRegistryTests
     }
 
     [Fact]
+    public void StartupSnapshot_ShouldUpgradeOnlyTheStartupFallbackRegistry()
+    {
+        var snapshot = new NyxIdAssistantActionRegistrySnapshot();
+        snapshot.Initialize(NyxIdAssistantActionRegistry.CreateDisabled());
+
+        var served = NyxIdAssistantActionRegistry.Load(RegistryJson());
+        snapshot.TryUpgrade(served).Should().BeTrue();
+        snapshot.GetRequired().Should().BeSameAs(served);
+
+        snapshot.TryUpgrade(NyxIdAssistantActionRegistry.Load(RegistryJson()))
+            .Should().BeFalse();
+        snapshot.GetRequired().Should().BeSameAs(served);
+
+        Action fallbackUpgrade = () => snapshot.TryUpgrade(
+            NyxIdAssistantActionRegistry.CreateDisabled());
+        fallbackUpgrade.Should().Throw<InvalidOperationException>()
+            .WithMessage("*fallback*");
+    }
+
+    [Fact]
     public async Task StartupService_ShouldFetchAndValidateRegistryOnce()
     {
         foreach (var (payload, revision) in new[]
                  {
                      (RegistryJson(), LegacyRevision),
-                     (RegistryJsonWithWaveOneActions(), TransitionRevision),
                      (RegistryJsonWithLeastScopeKeyCreate(), LeastScopeRevision),
-                     (RegistryJsonWithKeyRotation(), SupportedRevision),
+                     (RegistryJsonWithKeyRotation(), KeyRotationRevision),
+                     (RegistryJsonWithServiceReauthorize(), SupportedRevision),
                  })
         {
             var source = new RecordingRegistrySource(payload);
             var snapshot = new NyxIdAssistantActionRegistrySnapshot();
-            var service = new NyxIdAssistantActionRegistryStartupService(
-                source,
-                snapshot,
-                NullLogger<NyxIdAssistantActionRegistryStartupService>.Instance);
+            using var service = CreateStartupService(source, snapshot);
 
             await service.StartAsync(CancellationToken.None);
 
@@ -411,6 +458,39 @@ public sealed class NyxIdAssistantActionRegistryTests
             await service.StopAsync(CancellationToken.None);
             source.FetchCount.Should().Be(1);
         }
+    }
+
+    [Fact]
+    public async Task StartupService_ShouldRetryTransientStartupFailuresBeforeSucceeding()
+    {
+        var source = new FlakyRegistrySource(RegistryJson(), failuresBeforeSuccess: 2);
+        var snapshot = new NyxIdAssistantActionRegistrySnapshot();
+        using var service = CreateStartupService(source, snapshot);
+
+        await service.StartAsync(CancellationToken.None);
+
+        source.FetchCount.Should().Be(3);
+        snapshot.GetRequired().TryGetDefinition("service.connect", out _).Should().BeTrue();
+        await service.StopAsync(CancellationToken.None);
+        source.FetchCount.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task StartupService_ShouldRecoverServedRegistryAfterStartupFailure()
+    {
+        var source = new FlakyRegistrySource(RegistryJson(), failuresBeforeSuccess: 4);
+        var snapshot = new NyxIdAssistantActionRegistrySnapshot();
+        using var service = CreateStartupService(source, snapshot);
+
+        await service.StartAsync(CancellationToken.None);
+
+        snapshot.GetRequired().TryGetDefinition("service.connect", out _).Should().BeFalse();
+
+        await service.RecoveryCompletion;
+
+        source.FetchCount.Should().Be(5);
+        snapshot.GetRequired().TryGetDefinition("service.connect", out _).Should().BeTrue();
+        await service.StopAsync(CancellationToken.None);
     }
 
     [Theory]
@@ -431,7 +511,11 @@ public sealed class NyxIdAssistantActionRegistryTests
         var source = new FailingRegistrySource(failure);
         var snapshot = new NyxIdAssistantActionRegistrySnapshot();
         var logger = new RecordingLogger<NyxIdAssistantActionRegistryStartupService>();
-        var service = new NyxIdAssistantActionRegistryStartupService(source, snapshot, logger);
+        using var service = CreateStartupService(
+            source,
+            snapshot,
+            logger,
+            recoveryRetryDelay: Timeout.InfiniteTimeSpan);
 
         await service.StartAsync(CancellationToken.None);
 
@@ -442,25 +526,31 @@ public sealed class NyxIdAssistantActionRegistryTests
             """{"catalogService":{"serviceSlug":"api-github"}}""");
         validate.Should().Throw<NyxIdAssistantActionRegistryException>()
             .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
-        logger.Entries.Should().ContainSingle();
-        logger.Entries.Single().Level.Should().Be(LogLevel.Error);
-        logger.Entries.Single().Message.Should().Contain(failure.GetType().Name);
-        logger.Entries.Single().Message.Should().NotContain(sensitiveDetail);
-        logger.Entries.Single().Exception.Should().BeNull();
+        logger.Entries.Should().HaveCount(
+            NyxIdAssistantActionRegistryStartupService.StartupFetchAttempts + 1);
+        logger.Entries.Take(NyxIdAssistantActionRegistryStartupService.StartupFetchAttempts)
+            .Should().OnlyContain(entry =>
+                entry.Level == LogLevel.Warning &&
+                entry.Message.Contains(failure.GetType().Name));
+        logger.Entries.Last().Level.Should().Be(LogLevel.Error);
+        logger.Entries.Should().OnlyContain(entry =>
+            !entry.Message.Contains(sensitiveDetail) && entry.Exception == null);
+        await service.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task StartupService_ShouldDisableAssistantActionsWhenRegistryContractIsInvalid()
     {
         var snapshot = new NyxIdAssistantActionRegistrySnapshot();
-        var service = new NyxIdAssistantActionRegistryStartupService(
+        using var service = CreateStartupService(
             new RecordingRegistrySource("not-json"),
             snapshot,
-            NullLogger<NyxIdAssistantActionRegistryStartupService>.Instance);
+            recoveryRetryDelay: Timeout.InfiniteTimeSpan);
 
         await service.StartAsync(CancellationToken.None);
 
         snapshot.GetRequired().TryGetDefinition("service.connect", out _).Should().BeFalse();
+        await service.StopAsync(CancellationToken.None);
     }
 
     [Fact]
@@ -469,10 +559,9 @@ public sealed class NyxIdAssistantActionRegistryTests
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
         var snapshot = new NyxIdAssistantActionRegistrySnapshot();
-        var service = new NyxIdAssistantActionRegistryStartupService(
+        using var service = CreateStartupService(
             new RecordingRegistrySource(RegistryJson()),
-            snapshot,
-            NullLogger<NyxIdAssistantActionRegistryStartupService>.Instance);
+            snapshot);
 
         Func<Task> start = () => service.StartAsync(cts.Token);
 
@@ -481,6 +570,18 @@ public sealed class NyxIdAssistantActionRegistryTests
         read.Should().Throw<InvalidOperationException>()
             .WithMessage("*not initialized*");
     }
+
+    private static NyxIdAssistantActionRegistryStartupService CreateStartupService(
+        INyxIdAssistantActionRegistrySource source,
+        NyxIdAssistantActionRegistrySnapshot snapshot,
+        ILogger<NyxIdAssistantActionRegistryStartupService>? logger = null,
+        TimeSpan? recoveryRetryDelay = null) =>
+        new(
+            source,
+            snapshot,
+            logger ?? NullLogger<NyxIdAssistantActionRegistryStartupService>.Instance,
+            startupRetryDelay: TimeSpan.Zero,
+            recoveryRetryDelay: recoveryRetryDelay ?? TimeSpan.Zero);
 
     [Fact]
     public async Task HttpSource_ShouldFetchCanonicalPublicRouteWithoutCredentials()
@@ -738,10 +839,11 @@ public sealed class NyxIdAssistantActionRegistryTests
         }
         """;
 
-    private static string RegistryJsonWithKeyRotation() => $$"""
+    private static string RegistryJsonWithKeyRotation(
+        string revision = KeyRotationRevision) => $$"""
         {
           "schema_version": 4,
-          "revision": "{{SupportedRevision}}",
+          "revision": "{{revision}}",
           "actions": [
             {
               "action": "service.connect",
@@ -755,6 +857,50 @@ public sealed class NyxIdAssistantActionRegistryTests
               "action": "key.create",
               "description": "Create a least-scope API key.",
               "params_schema": {{LeastScopeKeyCreateSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
+            },
+            {
+              "action": "key.rotate",
+              "description": "Rotate an API key.",
+              "params_schema": {{KeyRotateSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
+            }
+          ]
+        }
+        """;
+
+    private static string RegistryJsonWithServiceReauthorize(
+        string serviceReauthorizeSchema = ServiceReauthorizeSchema,
+        string keyCreateSchema = LeastScopeKeyCreateSchema,
+        bool serviceReauthorizeRememberEligible = false) => $$"""
+        {
+          "schema_version": 4,
+          "revision": "{{SupportedRevision}}",
+          "actions": [
+            {
+              "action": "service.connect",
+              "description": "Connect a service.",
+              "params_schema": {{ServiceConnectSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
+            },
+            {
+              "action": "service.reauthorize",
+              "description": "Reauthorize a connected service.",
+              "params_schema": {{serviceReauthorizeSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": {{serviceReauthorizeRememberEligible.ToString().ToLowerInvariant()}}
+            },
+            {
+              "action": "key.create",
+              "description": "Create a least-scope API key.",
+              "params_schema": {{keyCreateSchema}},
               "risk": "grant",
               "tier": "v1",
               "remember_eligible": false
@@ -791,6 +937,22 @@ public sealed class NyxIdAssistantActionRegistryTests
               "risk": "grant",
               "tier": "v1",
               "remember_eligible": false
+            }
+          ]
+        }
+        """;
+
+    private static string RegistryJsonWithoutRevision() => $$"""
+        {
+          "schema_version": 4,
+          "actions": [
+            {
+              "action": "service.connect",
+              "description": "Connect a service.",
+              "params_schema": {{ServiceConnectSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
             }
           ]
         }
@@ -841,6 +1003,21 @@ public sealed class NyxIdAssistantActionRegistryTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromException<string>(exception);
+        }
+    }
+
+    private sealed class FlakyRegistrySource(string json, int failuresBeforeSuccess)
+        : INyxIdAssistantActionRegistrySource
+    {
+        public int FetchCount { get; private set; }
+
+        public Task<string> FetchAsync(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            FetchCount++;
+            return FetchCount <= failuresBeforeSuccess
+                ? Task.FromException<string>(new HttpRequestException("transient-startup-failure"))
+                : Task.FromResult(json);
         }
     }
 

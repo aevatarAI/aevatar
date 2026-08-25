@@ -114,6 +114,268 @@ def line_number(text: str, offset: int) -> int:
 
 violations: list[tuple[str, str, int, str]] = []
 
+
+def add_files(
+    files: set[pathlib.Path],
+    base: pathlib.Path,
+    suffixes: set[str],
+    *,
+    name_contains: str | None = None,
+) -> None:
+    if not base.exists():
+        return
+    for path in base.rglob("*"):
+        if not path.is_file() or path.suffix not in suffixes:
+            continue
+        if any(part in {"bin", "obj", "node_modules"} for part in path.parts):
+            continue
+        if path.name.endswith(".g.cs"):
+            continue
+        if name_contains is not None and name_contains not in path.name.lower():
+            continue
+        files.add(path)
+
+
+# NyxID Chat owns domain-neutral execution mechanics. Concrete business
+# evidence, policy, and fixed workflow routes belong to loaded skills,
+# workflows, or provider-owned typed extensions and must not leak back into
+# the shared actor, projection, provider, prompt, or frontend contracts.
+owned_business_semantics_files: set[pathlib.Path] = set()
+add_files(owned_business_semantics_files, nyxid, {".cs", ".proto"})
+for prompt_name in ("system-prompt.md", "system-skill-overlay-default.md"):
+    prompt_path = nyxid / "Skills" / prompt_name
+    if prompt_path.exists():
+        owned_business_semantics_files.add(prompt_path)
+for studio_boundary in (
+    "Aevatar.Studio.Projection",
+    "Aevatar.Studio.Application.Abstractions",
+    "Aevatar.Studio.Infrastructure",
+):
+    add_files(
+        owned_business_semantics_files,
+        root / "src" / studio_boundary,
+        {".cs", ".proto"},
+        name_contains="nyxidchat",
+    )
+add_files(
+    owned_business_semantics_files,
+    root / "apps" / "aevatar-console-web" / "src" / "pages" / "chat",
+    {".ts", ".tsx"},
+)
+
+# Ambiguous external names are forbidden only in Aevatar-owned production
+# defaults. Tests must remain able to prove that arbitrary user content and
+# provider operation names pass through generic NyxID Chat contracts unchanged.
+def is_test_fixture(path: pathlib.Path) -> bool:
+    path_from_root = path.relative_to(root)
+    return (
+        path_from_root.parts[0] == "test"
+        or ".test." in path.name.lower()
+        or ".spec." in path.name.lower()
+    )
+
+
+platform_owned_business_identity_files = {
+    path for path in owned_business_semantics_files if not is_test_fixture(path)
+}
+mainnet_config_root = root / "src" / "Aevatar.Mainnet.Host.Api"
+if mainnet_config_root.exists():
+    platform_owned_business_identity_files.update(
+        mainnet_config_root.glob("appsettings*.json")
+    )
+
+# Broad shared directories are checked only for unmistakable types, tool names,
+# and fixed routes from the removed implementation. Common terms such as
+# roleTitle or costCenter are checked only on NyxID Chat-owned surfaces.
+specific_business_semantics_files = set(owned_business_semantics_files)
+for production_root, suffixes in (
+    (root / "agents", {".cs", ".proto"}),
+    (root / "src", {".cs", ".proto"}),
+    (root / "apps" / "aevatar-console-web" / "src", {".ts", ".tsx"}),
+    (root / "test", {".cs", ".json", ".md", ".proto", ".yaml", ".yml"}),
+    (root / "docs", {".html", ".md"}),
+    (root / "apps" / "aevatar-console-web" / "docs", {".html", ".md"}),
+    (root / "workflows", {".json", ".md", ".yaml", ".yml"}),
+    (root / "demos", {".cs", ".json", ".md", ".proto", ".ts", ".tsx", ".yaml", ".yml"}),
+    (root / "delivery-workflows", {".yaml", ".yml"}),
+    (root / "workflow-delivery-packages", {".yaml", ".yml"}),
+):
+    add_files(specific_business_semantics_files, production_root, suffixes)
+if mainnet_config_root.exists():
+    specific_business_semantics_files.update(mainnet_config_root.glob("appsettings*.json"))
+locale_root = root / "apps" / "aevatar-console-web" / "src" / "locales"
+if locale_root.exists():
+    specific_business_semantics_files.update(locale_root.glob("projectMessages.*.ts"))
+
+# Product workflow packages are deployment-owned extension inputs. The source
+# tree must not ship any package under either the legacy or current package
+# directory, regardless of how its business vocabulary is spelled.
+for package_root_name in ("delivery-workflows", "workflow-delivery-packages"):
+    package_root = root / package_root_name
+    if not package_root.exists():
+        continue
+    for path in sorted(package_root.rglob("*")):
+        if path.is_file() and path.suffix in {".yaml", ".yml"}:
+            violations.append(
+                (
+                    "bundled workflow delivery packages",
+                    relative(path),
+                    1,
+                    path.name,
+                )
+            )
+
+# Firecrawl output is a local design aid, not a production source artifact.
+# Keeping the directory forbidden also covers binary screenshots that cannot
+# be inspected by the lexical scanner below.
+studio_design_cache = (
+    root
+    / "src"
+    / "workflow"
+    / "Aevatar.Workflow.Infrastructure"
+    / "CapabilityApi"
+    / "StudioAssistant"
+    / ".firecrawl"
+)
+if studio_design_cache.exists():
+    for path in sorted(studio_design_cache.rglob("*")):
+        if path.is_file():
+            violations.append(
+                (
+                    "production-source design cache artifacts",
+                    relative(path),
+                    1,
+                    path.name,
+                )
+            )
+
+specific_business_semantics_patterns = (
+    re.compile(
+        r"\b(?:NyxIdChat|Chat)(?:MoneyValue|InvoiceEvidence|"
+        r"InvoiceDuplicateEvidence|ReimbursementEvidence|"
+        r"CandidateRubricCriterion|CandidateCriterionScore|"
+        r"CandidateScreeningEvidence|TaskDomain(?:State)?|"
+        r"ReimbursementArtifact|CandidateTrackerArtifact|"
+        r"Expense(?:Claim|Report)(?:Evidence|Artifact|State)|"
+        r"(?:Applicant|Candidate)(?:Screening|Assessment|Scoring|Tracker)?"
+        r"(?:Evidence|Artifact|State)|ResumeScreening(?:Evidence|Artifact|State)|"
+        r"VerifiedArtifact(?:State)?)(?:Document|Snapshot)?\b"
+    ),
+    re.compile(
+        r"\b(?:NyxIdChatDomainEvidenceContract|DomainEvidenceAgentToolSource|"
+        r"ReimbursementEvidenceTool|CandidateScreeningEvidenceTool|"
+        r"ExpenseClaimEvidenceTool|ApplicantScreeningEvidenceTool|"
+        r"CandidateAssessmentEvidenceTool|ResumeScreeningEvidenceTool|"
+        r"NyxIdChatDomainContinuationInput|DomainEvidenceBand|"
+        r"VerifiedArtifactBand)\b"
+    ),
+    re.compile(
+        r"\b(?:BudgetVariance|EmployeeAttendance|HROnboarding|"
+        r"NewHireOnboarding)(?:Report|Fixture|Monitor|State|Artifact)?\b"
+    ),
+    re.compile(
+        r"\b(?:(?:reimbursement|expense_claim|applicant_screening|"
+        r"candidate_(?:screening|assessment|scoring)|resume_screening)"
+        r"_evidence_commit)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:reimbursement|typed[ -]+reimbursement[ -]+evidence|"
+        r"expense[ -]+claim|applicant[ -]+screening|resume[ -]+screening|"
+        r"candidate[ -]+screening|candidate[ -]+assessment|"
+        r"candidate[ -]+scoring|candidate[ -]+tracker|"
+        r"employee[ -]+attendance|(?:hr|new[ -]+hire)[ -]+onboarding|"
+        r"budget[ -]+variance|"
+        r"exact[ -]+duplicate[ -]+relationships?|"
+        r"user[ -]+authored[ -]+rubric)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:FIN-0[12]|fin[-_]invoice[-_]precheck[-_]approval|"
+        r"fin[-_]budget[-_]variance[-_]monitor|"
+        r"hr[-_]onboarding[-_]email[-_]approval|"
+        r"hr[-_]monthly[-_]attendance[-_]approval|"
+        r"hr[-_]attendance[-_]fill[-_]reminder|"
+        r"(?:expense|reimbursement)[-_](?:claim|approval|review|submit)|"
+        r"(?:applicant|candidate|resume)[-_](?:screening|assessment|scoring|tracker)|"
+        r"(?:employee|staff)[-_]attendance|"
+        r"(?:hr|new[-_]hire)[-_]onboarding)(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:"
+        r"invoice[-_]ocr[-_]policy[-_]review|"
+        r"synthetic[-_]invoice[-_]review|"
+        r"invoice[-_](?:match|file[-_]extract|"
+        r"pdf[-_](?:extraction[-_])?workflow))"
+        r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:"
+        r"invoice[ -]+(?:classifier|pdf[ -]+(?:workflow|intake[ -]+flow))|"
+        r"finance[ -]+ops|run[-_]finance[-_][A-Za-z0-9][A-Za-z0-9_-]*)"
+        r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+)
+
+platform_owned_business_identity_patterns = (
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:candidate[-_ ]+score|screening[-_ ]+threshold)"
+        r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:invoice[-_](?:approval|review)|"
+        r"submit[-_]invoice|invoice\.submit)"
+        r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+)
+
+owned_business_field_patterns = (
+    re.compile(
+        r"\b(?:source_invoices|sourceInvoices|retained_source_ordinals|"
+        r"retainedSourceOrdinals|duplicate_invoices|duplicateInvoices|"
+        r"expense_category|expenseCategory|cost_center|costCenter|"
+        r"reimbursement_currency_instruction|reimbursementCurrencyInstruction|"
+        r"candidate_screening|candidateScreening|candidate_tracker|"
+        r"candidateTracker|candidate_name|candidateName|role_title|roleTitle|"
+        r"applicant_name|applicantName|candidate_score|candidateScore|"
+        r"screening_score|screeningScore|assessment_score|assessmentScore|"
+        r"rubric|total_score|totalScore|tracker_table_id|trackerTableId)\b"
+    ),
+)
+
+
+def scan_business_patterns(
+    path: pathlib.Path,
+    text: str,
+    patterns: tuple[re.Pattern[str], ...],
+    *,
+    line_offset: int = 0,
+) -> None:
+    for pattern in patterns:
+        for match in pattern.finditer(text):
+            violations.append(
+                (
+                    "business-specific NyxIdChat semantics",
+                    relative(path),
+                    line_offset + line_number(text, match.start()),
+                    match.group(0),
+                )
+            )
+
+
+for path in sorted(specific_business_semantics_files):
+    text = path.read_text(encoding="utf-8")
+    scan_business_patterns(path, text, specific_business_semantics_patterns)
+    if path in owned_business_semantics_files:
+        scan_business_patterns(path, text, owned_business_field_patterns)
+    if path in platform_owned_business_identity_files:
+        scan_business_patterns(path, text, platform_owned_business_identity_patterns)
+
 # Actor-owned facts must not migrate into service fields. The declaration must
 # be a mutable collection field and its name must carry operation/action/
 # cancellation semantics. Method-local temporary collections never match the

@@ -25,7 +25,8 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
 
     public string Name => "workflow_execution_bridge";
 
-    public int Priority => 0;
+    // The kernel must inspect child completions before foreach mutates its attempt ledger.
+    public int Priority => 1;
 
     internal void CancelBackgroundWork()
     {
@@ -39,6 +40,79 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
         var workflowContext = WorkflowExecutionContextAdapter.Create(ctx, _stateHost);
+        if (envelope.Payload?.Is(StepRequestEvent.Descriptor) == true)
+        {
+            var request = envelope.Payload.Unpack<StepRequestEvent>();
+            if (!WorkflowExecutionStateAccess.MatchesAuthoritativeRun(_stateHost.RunId, request.RunId))
+            {
+                ctx.Logger.LogWarning(
+                    "workflow_execution_bridge: ignore fenced step request currentRun={CurrentRunId} requestedRun={RequestedRunId} step={StepId}",
+                    _stateHost.RunId,
+                    request.RunId,
+                    request.StepId);
+                return;
+            }
+
+            var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+                workflowContext,
+                WorkflowExecutionKernel.ModuleStateKey);
+            if (WorkflowExecutionValueStore.IsNormalized(kernelState) &&
+                !string.Equals(
+                    envelope.Route?.PublisherActorId,
+                    ctx.AgentId,
+                    StringComparison.Ordinal))
+            {
+                ctx.Logger.LogWarning(
+                    "workflow_execution_bridge: reject non-self normalized step request actor={ActorId} publisher={PublisherActorId} step={StepId}",
+                    ctx.AgentId,
+                    envelope.Route?.PublisherActorId ?? string.Empty,
+                    request.StepId);
+                return;
+            }
+            if (WorkflowExecutionValueStore.PrepareInternalDispatch(
+                    kernelState,
+                    request,
+                    envelope.Id))
+            {
+                await WorkflowExecutionStateAccess.SaveAsync(
+                    workflowContext,
+                    WorkflowExecutionKernel.ModuleStateKey,
+                    kernelState,
+                    ct);
+                envelope.Payload = Google.Protobuf.WellKnownTypes.Any.Pack(request);
+            }
+        }
+
+        // The kernel is the sole authority that admits a normalized
+        // completion.  A completion rejected by the kernel must not continue
+        // through this bridge into composite modules, otherwise a stale child
+        // can still decrement counters or resolve a newer parent attempt.
+        if (envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true)
+        {
+            var completion = envelope.Payload.Unpack<StepCompletedEvent>();
+            var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+                workflowContext,
+                WorkflowExecutionKernel.ModuleStateKey);
+            if (WorkflowExecutionValueStore.IsNormalized(kernelState))
+            {
+                var selfPublished = string.Equals(
+                    envelope.Route?.PublisherActorId,
+                    ctx.AgentId,
+                    StringComparison.Ordinal);
+                if (!selfPublished ||
+                    !WorkflowExecutionValueStore.IsAcceptedCompletion(kernelState, completion))
+                {
+                    ctx.Logger.LogWarning(
+                        "workflow_execution_bridge: reject non-authoritative normalized completion actor={ActorId} publisher={PublisherActorId} step={StepId} execution={ExecutionId}",
+                        ctx.AgentId,
+                        envelope.Route?.PublisherActorId ?? string.Empty,
+                        completion.StepId,
+                        completion.ExecutionId);
+                    return;
+                }
+            }
+        }
+
         foreach (var executor in _executors)
         {
             if (!executor.CanHandle(envelope))
@@ -84,6 +158,7 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
                         Success = false,
                         FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
                         Error = WorkflowRuntimeFailureMessages.StepExecutorFailed(request.StepId, request.StepType, ex),
+                        OutputProvenance = WorkflowStepOutputProvenance.Produced,
                     },
                     TopologyAudience.Self,
                     ct);

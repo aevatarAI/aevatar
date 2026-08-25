@@ -58,7 +58,21 @@ NyxID direct Responses / Messages / Chat Completions 的 `LlmSessionGAgent` 使�
 2. `docs/canon/cqrs-projection.md:46`
 3. `docs/canon/overview.md:79`
 
-### 2.2 Role chat turn deadline 边界
+### 2.2 每轮不可变工具目录
+
+所有用户面 LLM generation 在进入一次 `ChatStreamAsync(maxRounds)` 前只物化一次
+`AgentTurnToolCatalog`。同一 stream 的每个 tool round 复用相同 exact tool objects、
+`AuthorizationFence`、model-visible declarations 与 catalog proof/digest；typed receipt 只提供下一次调用所需的
+参数或身份，不在当前 stream 中扩大 authority。无法预先授权的 continuation 必须进入下一 turn 再重新物化，
+禁止 per-round schema mutation、末尾无条件 union 或 proof mismatch 后回退到全量 DI providers。
+
+跨 actor/off-grain 边界只持久化 typed proof。执行端从同一 source 重新发现 exact objects 后逐项验证名称、
+description、canonical parameters schema、origin 与 selector digest，任一 mismatch 在模型或工具副作用前 fail closed。
+0-tool 是 restricted empty catalog，不是 `null`/unrestricted。Responses、Workflow、Channel、NyxID Chat 与 Voice
+的 route-specific 预算和 proof contract 见 [agent-turn-tool-catalog.md](agent-turn-tool-catalog.md)。面向用户的实时链路
+仍只允许 `ChatStreamAsync`；`ChatAsync` 仅限明确的非交互式离线场景。
+
+### 2.3 Role chat turn deadline 边界
 
 `RoleGAgent` 及其 Workflow/NyxID/Chatbot Classifier 交互入口使用 Host-owned 最大 turn deadline，默认为
 120000 ms，Host 可通过 `Aevatar:AI:MaxTurnDeadlineMs` 设置严格正数上限。请求中的

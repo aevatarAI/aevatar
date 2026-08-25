@@ -543,8 +543,9 @@ public sealed class NyxIdChatTurnOperationDispatchPort
 
         var frozenCommand = command.Clone();
         var canaryEffectFaultEligible = NyxIdChatCanaryEffectFaultDecisions.MatchesTurnDispatch(
-            frozenCommand.PlanGateContinuation?.CanaryEffectFault,
+            frozenCommand.Tool?.CanaryEffectFault,
             frozenCommand,
+            session.Request?.ToolContext ?? session.StepState?.ToolContext,
             Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
         _ = Task.Run(
             () => ExecuteAndSignalAsync(
@@ -617,38 +618,30 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                 command.Key.OperationId);
             result = ExecutionFailure(command);
         }
-
-        try
+        finally
         {
-            if (canaryEffectFaultEligible &&
-                IsCanaryEffectFaultBoundaryResult(command, result))
+            releaseLease(executionLease);
+        }
+
+        if (canaryEffectFaultEligible &&
+            IsCanaryEffectFaultBoundaryResult(command, result))
+        {
+            try
             {
-                try
-                {
-                    await DispatchCanaryEffectFaultAsync(
-                            turnActorId,
-                            command.PlanGateContinuation.CanaryEffectFault,
-                            result,
-                            correlationId)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception exception)
-                {
-                    _logger.LogWarning(
-                        exception,
-                        "NyxIdChat canary result-boundary dispatch failed; falling back to the normal denied completion: turnActor={TurnActorId} operation={OperationId}",
+                await DispatchCanaryEffectFaultAsync(
                         turnActorId,
-                        command.Key.OperationId);
-                    await DispatchCompletionAsync(
-                            turnActorId,
-                            result,
-                            NyxIdChatTurnOperationCompletionSource.Execution,
-                            correlationId)
-                        .ConfigureAwait(false);
-                }
+                        command.Tool.CanaryEffectFault,
+                        result,
+                        correlationId)
+                    .ConfigureAwait(false);
             }
-            else
+            catch (Exception exception)
             {
+                _logger.LogWarning(
+                    exception,
+                    "NyxIdChat canary result-boundary dispatch failed; falling back to the normal denied completion: turnActor={TurnActorId} operation={OperationId}",
+                    turnActorId,
+                    command.Key.OperationId);
                 await DispatchCompletionAsync(
                         turnActorId,
                         result,
@@ -657,9 +650,14 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                     .ConfigureAwait(false);
             }
         }
-        finally
+        else
         {
-            releaseLease(executionLease);
+            await DispatchCompletionAsync(
+                    turnActorId,
+                    result,
+                    NyxIdChatTurnOperationCompletionSource.Execution,
+                    correlationId)
+                .ConfigureAwait(false);
         }
     }
 
@@ -730,19 +728,19 @@ public sealed class NyxIdChatTurnOperationDispatchPort
         NyxIdChatOperationDispatchCommand? command,
         NyxIdChatOperationResultSignal? result)
     {
-        var continuation = command?.PlanGateContinuation;
-        var admission = continuation?.OperationAdmission;
+        var input = command?.Tool;
+        var admission = input?.OperationAdmission;
         var tool = result?.Tool;
         var receipt = tool?.Receipt;
         return command?.Key is not null &&
                result?.Key is not null &&
                command.Key.Equals(result.Key) &&
-               continuation?.CanaryEffectFault?.Key?.Equals(command.Key) == true &&
-               !string.IsNullOrWhiteSpace(continuation.ToolCallId) &&
-               !string.IsNullOrWhiteSpace(continuation.ToolName) &&
+               input?.CanaryEffectFault?.Key?.Equals(command.Key) == true &&
+               !string.IsNullOrWhiteSpace(input.CallId) &&
+               !string.IsNullOrWhiteSpace(input.ToolName) &&
                !string.IsNullOrWhiteSpace(admission?.ServiceInstanceId) &&
                string.Equals(
-                   continuation.CanaryEffectFault.ServiceInstanceId,
+                   input.CanaryEffectFault.ServiceInstanceId,
                    admission.ServiceInstanceId,
                    StringComparison.Ordinal) &&
                tool?.ExternalEffect == NyxIdChatEffectEvidence.NotApplied &&
@@ -760,8 +758,8 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                    NyxIdApprovalFailedCode,
                    StringComparison.Ordinal) &&
                !string.IsNullOrWhiteSpace(receipt.ApprovalRequestId) &&
-               string.Equals(receipt.CallId, continuation.ToolCallId, StringComparison.Ordinal) &&
-               string.Equals(receipt.ToolName, continuation.ToolName, StringComparison.Ordinal) &&
+               string.Equals(receipt.CallId, input.CallId, StringComparison.Ordinal) &&
+               string.Equals(receipt.ToolName, input.ToolName, StringComparison.Ordinal) &&
                string.Equals(receipt.SubjectKind, "nyxid.user-service", StringComparison.Ordinal) &&
                string.Equals(
                    receipt.SubjectId,
@@ -863,8 +861,7 @@ public sealed class NyxIdChatTurnOperationDispatchPort
          {
              Approved: true,
              MayChangeExternalState: true,
-         }) ||
-        command.PlanGateContinuation?.MayChangeExternalState == true;
+         });
 
     private sealed class Session(NyxIdChatTurnOperationDispatchPort owner)
         : INyxIdChatTurnOperationDispatchSession

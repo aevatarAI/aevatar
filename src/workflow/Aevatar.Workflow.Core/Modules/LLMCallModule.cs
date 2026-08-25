@@ -22,7 +22,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;
     private const string LlmWatchdogCallbackPrefix = "llm-watchdog";
-    private const string ModuleStateKey = "llm_call";
+    internal const string ModuleStateKey = "llm_call";
 
     private readonly WorkflowStepTargetAgentResolver? _targetAgentResolver;
     private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
@@ -111,6 +111,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 RequestDispatched = false,
                 WatchdogCallbackId = BuildWatchdogCallbackId(sessionId),
                 DispatchOperationId = BuildDispatchOperationId(sessionId),
+                ExecutionId = request.ExecutionId,
+                InputValueId = request.InputValueId,
             };
             runtimeState.PendingBySessionId[sessionId] = pendingState;
             await SaveStateAsync(runtimeState, ctx, ct);
@@ -212,8 +214,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = pending.StepId,
                 RunId = pending.RunId,
+                ExecutionId = pending.ExecutionId,
                 Success = true,
                 Output = evt.Content ?? string.Empty,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 WorkerId = publisherActorId,
                 Usage = evt.Usage?.Clone(),
             },
@@ -414,6 +418,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             // fills a caller scope that is otherwise unset.
             ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
             ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
+            ToolCatalogPolicyVersion = Normalize(ctx.ToolCatalogPolicyVersion) ?? string.Empty,
         };
         intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
@@ -437,12 +442,16 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
-        var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
-        intent.CallerCredential = await BuildRoleCallerCredentialAsync(
-            callerCredential,
-            HasUnattendedWebhookAuthorization(ctx),
-            ct);
-        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+        if (!WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyDurableAgentKeyOrSenderNyxIdAccessToken(
+                ctx,
+                intent))
+        {
+            var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
+            intent.CallerCredential = await BuildRoleCallerCredentialAsync(
+                callerCredential,
+                HasUnattendedWebhookAuthorization(ctx),
+                ct);
+        }
         CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);
         CopyParametersToChatRequest(request, intent, timeoutMs);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
@@ -486,6 +495,19 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         if (!resolved.Found)
             return new WorkflowCallerCredential();
 
+        var durable = resolved.Credential.DurableCallerCredential;
+        if (WorkflowLlmExecutionIntentRuntimeContextAccess.IsDurableAgentKeyCredential(durable))
+        {
+            // Unattended workflows carry only the vault-backed Agent Key handle across
+            // the role-actor boundary. The role resolves it locally for every NyxID-backed
+            // tool path; a short-lived delegation token never replaces this authority.
+            return new WorkflowCallerCredential
+            {
+                DurableCallerCredential = durable.Clone(),
+                Kind = NyxIdCallerCredentialKind.AgentKey,
+            };
+        }
+
         if (!hasUnattendedWebhookAuthorization)
         {
             return await WorkflowCallerAccessTokenResolver.ResolveAsync(
@@ -494,7 +516,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 ct);
         }
 
-        var durable = resolved.Credential.DurableCallerCredential;
         if (durable?.SourceKind != DurableCallerCredentialSourceKind.WebhookBinding)
             return new WorkflowCallerCredential();
 
@@ -529,6 +550,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             error,
             workerId,
             recoveryFailureKind,
+            pending.ExecutionId,
             ctx,
             ct);
 
@@ -545,6 +567,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             error,
             workerId,
             WorkflowRecoveryFailureKind.Unspecified,
+            string.Empty,
             ctx,
             ct);
 
@@ -554,6 +577,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         string error,
         string workerId,
         WorkflowRecoveryFailureKind recoveryFailureKind,
+        string executionId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct) =>
         ctx.PublishAsync(
@@ -561,8 +585,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = stepId,
                 RunId = runId,
+                ExecutionId = executionId,
                 Success = false,
                 Error = error,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 WorkerId = string.IsNullOrWhiteSpace(workerId) ? ctx.AgentId : workerId,
                 RecoveryFailureKind = recoveryFailureKind,
             },

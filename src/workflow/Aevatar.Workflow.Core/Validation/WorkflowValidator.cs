@@ -5,6 +5,8 @@
 
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Agreement;
+using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Core.Validation;
 
@@ -64,6 +66,8 @@ public static class WorkflowValidator
             roleIds.Add(role.Id);
         }
 
+        ValidateValueLifecycles(wf.Steps, stepIds, nested: false, errors);
+
         foreach (var step in allSteps)
         {
             if (!string.IsNullOrWhiteSpace(step.TargetRole) &&
@@ -83,14 +87,142 @@ public static class WorkflowValidator
 
             ValidateBranchTargets(step, stepIds, errors);
             ValidateTypeSpecificRules(step, availableWorkflowNames, knownCanonicalStepTypes, options, errors);
-
         }
+
+        if (options.RequireExplicitLlmAgentToolScopes)
+            ValidateLlmAgentToolScopes(wf, allSteps, errors);
 
         DetectCompensationCycles(allSteps, stepIds, errors);
         ValidateCompensationTargetsExcludedFromForwardPath(allSteps, errors);
         ValidateNestedCompensationTargets(allSteps, errors);
 
         return errors;
+    }
+
+    private static void ValidateLlmAgentToolScopes(
+        WorkflowDefinition workflow,
+        IReadOnlyList<StepDefinition> allSteps,
+        List<string> errors)
+    {
+        var rolesById = workflow.Roles
+            .Where(static role => !string.IsNullOrWhiteSpace(role.Id))
+            .GroupBy(static role => role.Id.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var role in workflow.Roles)
+        {
+            if (role.AgentToolScope is not null)
+                ValidateAgentToolScope($"Role '{role.Id}'", role.AgentToolScope, errors);
+        }
+
+        foreach (var step in allSteps)
+        {
+            if (step.AgentToolScope is not null)
+                ValidateAgentToolScope($"Step '{step.Id}'", step.AgentToolScope, errors);
+
+            if (!CanInvokeLlm(step))
+                continue;
+
+            var targetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(workflow, step);
+            var roleScope = rolesById.TryGetValue(targetRole, out var role)
+                ? role.AgentToolScope
+                : null;
+            if (roleScope is null && step.AgentToolScope is null)
+            {
+                errors.Add(
+                    $"Step '{step.Id}' can invoke llm_call and must declare an explicit allowed_tools scope " +
+                    "on the step or its target role.");
+            }
+        }
+    }
+
+    private static bool CanInvokeLlm(StepDefinition step)
+    {
+        if (string.Equals(
+                WorkflowPrimitiveCatalog.ToCanonicalType(step.Type),
+                "llm_call",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return step.Parameters.Any(static pair =>
+            WorkflowPrimitiveCatalog.IsStepTypeParameterKey(pair.Key) &&
+            string.Equals(
+                WorkflowPrimitiveCatalog.ToCanonicalType(pair.Value),
+                "llm_call",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void ValidateAgentToolScope(
+        string owner,
+        WorkflowAgentToolScopeDefinition scope,
+        List<string> errors)
+    {
+        if (!scope.RestrictAllowedToolNames)
+        {
+            errors.Add($"{owner} tool scope must explicitly declare allowed_tools (an empty list is valid).");
+            return;
+        }
+
+        var normalizedNames = scope.AllowedToolNames
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(static name => name.Trim())
+            .ToArray();
+        if (normalizedNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() != normalizedNames.Length)
+            errors.Add($"{owner} allowed_tools contains duplicate names.");
+    }
+
+    private static void ValidateValueLifecycles(
+        IEnumerable<StepDefinition> steps,
+        ISet<string> stepIds,
+        bool nested,
+        List<string> errors)
+    {
+        foreach (var step in steps)
+        {
+            var lifecycle = step.ValueLifecycle;
+            if (lifecycle != null)
+            {
+                if (nested)
+                {
+                    errors.Add($"步骤 '{step.Id}' 的 value_lifecycle 只允许声明在顶层步骤");
+                }
+
+                if (lifecycle.ReleaseVariablesAfterSuccess.Count == 0)
+                {
+                    errors.Add(
+                        $"步骤 '{step.Id}' 的 value_lifecycle.release_variables_after_success 不能为空");
+                }
+
+                var names = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var rawName in lifecycle.ReleaseVariablesAfterSuccess)
+                {
+                    var name = rawName?.Trim() ?? string.Empty;
+                    if (name.Length == 0)
+                    {
+                        errors.Add($"步骤 '{step.Id}' 的 value_lifecycle 包含空变量名");
+                        continue;
+                    }
+
+                    if (!names.Add(name))
+                    {
+                        errors.Add($"步骤 '{step.Id}' 的 value_lifecycle 重复释放变量 '{name}'");
+                        continue;
+                    }
+
+                    if (!WorkflowExecutionValueStore.IsLifecycleReleaseVariableKey(name) ||
+                        stepIds.Contains(name))
+                    {
+                        errors.Add(
+                            $"步骤 '{step.Id}' 的 value_lifecycle 只能释放 author-owned 变量，'{name}' 是保留名称");
+                    }
+                }
+            }
+
+            if (step.Children is { Count: > 0 })
+                ValidateValueLifecycles(step.Children, stepIds, nested: true, errors);
+        }
     }
 
     private static void DetectCompensationCycles(
@@ -571,6 +703,12 @@ public static class WorkflowValidator
         /// 是否禁止在待校验 workflow 中使用 dynamic_workflow（该原语保留给引擎内部重配置流程）。
         /// </summary>
         public bool DisallowDynamicWorkflowStep { get; init; }
+
+        /// <summary>
+        /// Publication/binding gate for the current workflow tool-catalog policy. Normal parsing
+        /// leaves this disabled so already-committed v0 runs can still be replayed unchanged.
+        /// </summary>
+        public bool RequireExplicitLlmAgentToolScopes { get; init; }
     }
 
     private static IEnumerable<StepDefinition> EnumerateSteps(IEnumerable<StepDefinition> steps)

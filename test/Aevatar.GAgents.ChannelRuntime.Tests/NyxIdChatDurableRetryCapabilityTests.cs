@@ -112,7 +112,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     [Theory]
     [InlineData("fresh-per-request-token", AgentToolReceiptStatus.ApprovalRequired)]
     [InlineData("valid-grant-token", AgentToolReceiptStatus.Success)]
-    public async Task ConfirmedEffectRetry_AfterFreshTurnSession_ShouldRematerializeExactCapability(
+    public async Task DirectEffectRetry_AfterFreshTurnSession_ShouldRematerializeExactCapability(
         string retryToken,
         AgentToolReceiptStatus expectedStatus)
     {
@@ -127,22 +127,15 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             stateVersion: 20,
             Now);
         retry.ShouldCommit.Should().BeTrue();
-        retry.ShouldDispatch.Should().BeFalse();
-        retry.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
-
-        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
-            retry.State,
-            BuildPlanConfirmation(retry.State, retryToken, expectedStateVersion: 21),
-            currentStateVersion: 21,
-            Now);
-        confirmed.ShouldCommit.Should().BeTrue();
-        confirmed.NextCommand.Should().NotBeNull();
-        confirmed.NextCommand!.Key.OperationGeneration.Should().Be(2);
-        confirmed.NextCommand.PlanGateContinuation.RetryArguments.Should().NotBeNull();
+        retry.ShouldDispatch.Should().BeTrue();
+        retry.NextCommand.Should().NotBeNull();
+        retry.NextCommand!.Key.OperationGeneration.Should().Be(2);
+        retry.NextCommand.Tool.RematerializeDurableAuthorization.Should().BeTrue();
+        retry.NextCommand.Tool.RetryAuthorizationSourceKey.Should().NotBeNull();
 
         var freshSession = new NyxIdChatTransientExecutionSession();
         var result = await executor.ExecuteAsync(
-            confirmed.NextCommand,
+            retry.NextCommand,
             freshSession,
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
@@ -169,7 +162,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     }
 
     [Fact]
-    public async Task ConfirmedEffectRetry_WithRematerializedConnectedServiceTool_ShouldPreserveNyxIdApprovalRequest()
+    public async Task DirectEffectRetry_WithRematerializedConnectedServiceTool_ShouldPreserveNyxIdApprovalRequest()
     {
         const string firstToken = "generation-one-token";
         const string nearExpiryToken = "near-expiry-token";
@@ -235,20 +228,12 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
                 credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation),
             stateVersion: 70,
             Now);
-        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
-            retry.State,
-            BuildPlanConfirmation(
-                retry.State,
-                nearExpiryToken,
-                expectedStateVersion: 71,
-                credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation),
-            currentStateVersion: 71,
-            Now);
-        confirmed.NextCommand.Should().NotBeNull();
+        retry.ShouldDispatch.Should().BeTrue();
+        retry.NextCommand.Should().NotBeNull();
 
         var discoveriesBeforeRetry = source.DiscoveryCount;
         var execution = await executor.ExecuteAsync(
-            confirmed.NextCommand!,
+            retry.NextCommand!,
             new NyxIdChatTransientExecutionSession(),
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
@@ -273,84 +258,40 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     }
 
     [Fact]
-    public async Task UnprofiledConfirmedEffectRetry_ShouldRebuildBaseRouteAndExecuteGenerationTwo()
+    public async Task UnprofiledDirectEffectPlan_ShouldNotMintDurableAuthorityOrDispatchTool()
     {
         var tool = new RetryEffectTool();
         var executor = CreateTurnExecutor(tool);
-        var (state, _) = await BuildReconciledNotAppliedStateAsync(
-            executor,
-            tool,
-            profiled: false);
-        var effect = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
-        var retry = NyxIdChatControlCommands.Retry(
-            state,
-            BuildRetryCommand(effect, "valid-grant-token", expectedStateVersion: 20),
-            stateVersion: 20,
-            Now);
-
-        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
-            retry.State,
-            BuildPlanConfirmation(retry.State, "valid-grant-token", expectedStateVersion: 21),
-            currentStateVersion: 21,
-            Now);
-
-        confirmed.ShouldCommit.Should().BeTrue();
-        confirmed.NextCommand.Should().NotBeNull();
-        confirmed.NextCommand!.Key.OperationGeneration.Should().Be(2);
-        confirmed.NextCommand.PlanGateContinuation.AgentProfile.Should().BeNull();
-        confirmed.NextCommand.PlanGateContinuation.AgentProfileTurnAuthority.Should().BeNull();
-        var result = await executor.ExecuteAsync(
-            confirmed.NextCommand,
-            new NyxIdChatTransientExecutionSession(),
+        var llmKey = Key("step-llm", "operation-llm", generation: 1);
+        var initialState = ActiveLlmState(llmKey, tool.Name, profiled: false);
+        var session = new NyxIdChatTransientExecutionSession();
+        var llmResult = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = llmKey.Clone(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "Create the approval record.",
+                        SessionId = "turn-alpha",
+                        ScopeId = "scope-alpha",
+                        ToolContext = ToolContext("unprofiled-token"),
+                    },
+                },
+            },
+            session,
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
 
-        result.Result.Failure.Should().BeNull(result.Result.Failure?.ToString());
-        result.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
-        tool.ExecutionTokens.Should().Equal("uncertain-token", "valid-grant-token");
-        Encoding.UTF8.GetString(retry.State.ToByteArray()).Should().NotContain("valid-grant-token");
-        retry.State.ToString().Should().NotContain("valid-grant-token");
-    }
-
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task UnprofiledConfirmedEffectRetry_WhenCurrentBaseRouteDrifts_ShouldFailClosed(
-        bool removeTool)
-    {
-        var tool = new RetryEffectTool();
-        var executor = CreateTurnExecutor(tool);
-        var (state, _) = await BuildReconciledNotAppliedStateAsync(
-            executor,
-            tool,
-            profiled: false);
-        var effect = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
-        var retry = NyxIdChatControlCommands.Retry(
-            state,
-            BuildRetryCommand(effect, "valid-grant-token", expectedStateVersion: 30),
-            stateVersion: 30,
-            Now);
-        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
-            retry.State,
-            BuildPlanConfirmation(retry.State, "valid-grant-token", expectedStateVersion: 31),
-            currentStateVersion: 31,
-            Now);
-        if (removeTool)
-            tool.IsBaseRouteAvailable = false;
-        else
-            tool.DescriptionOverride = "The current base route exposes a different contract.";
-
-        var result = await executor.ExecuteAsync(
-            confirmed.NextCommand!,
-            new NyxIdChatTransientExecutionSession(),
-            static (_, _) => Task.CompletedTask,
-            CancellationToken.None);
-
-        result.Result.Failure.Should().NotBeNull();
-        result.Result.Failure.FailureCode.Should().Be(
-            NyxIdChatTurnOperationExecutor.ToolAuthorizationMismatchCode);
-        result.Result.Failure.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotStarted);
-        tool.ExecutionTokens.Should().Equal("uncertain-token");
+        llmResult.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
+        var call = llmResult.Result.Llm.ToolCalls.Should().ContainSingle().Subject;
+        call.OperationAdmission.Should().BeNull();
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(initialState, llmResult.Result, Now);
+        planned.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        planned.NextCommand.Should().BeNull(
+            "restricted-empty turns cannot dispatch a model-invented hidden tool");
+        tool.ExecutionTokens.Should().BeEmpty();
     }
 
     [Theory]
@@ -363,34 +304,30 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         var executor = CreateTurnExecutor(tool);
         var (state, _) = await BuildReconciledNotAppliedStateAsync(executor, tool);
         var effect = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
-        var retry = NyxIdChatControlCommands.Retry(
-            state,
-            BuildRetryCommand(effect, "valid-grant-token", expectedStateVersion: 35),
-            stateVersion: 35,
-            Now);
-        var asymmetricState = retry.State.Clone();
+        var asymmetricState = state.Clone();
         if (removeProfile)
             asymmetricState.AgentProfile = null;
         else
             asymmetricState.ActiveTurn.AgentProfileTurnAuthority = null;
-        var rejected = NyxIdChatPlanGateDecisions.Resolve(
+        var rejected = NyxIdChatControlCommands.Retry(
             asymmetricState,
-            BuildPlanConfirmation(asymmetricState, "valid-grant-token", expectedStateVersion: 36),
-            currentStateVersion: 36,
+            BuildRetryCommand(effect, "valid-grant-token", expectedStateVersion: 35),
+            stateVersion: 35,
             Now);
-        rejected.ShouldCommit.Should().BeFalse();
+        rejected.ShouldCommit.Should().BeTrue();
+        rejected.ShouldDispatch.Should().BeFalse();
         rejected.NextCommand.Should().BeNull();
 
-        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
-            retry.State,
-            BuildPlanConfirmation(retry.State, "valid-grant-token", expectedStateVersion: 36),
-            currentStateVersion: 36,
+        var retry = NyxIdChatControlCommands.Retry(
+            state,
+            BuildRetryCommand(effect, "valid-grant-token", expectedStateVersion: 36),
+            stateVersion: 36,
             Now);
-        var command = confirmed.NextCommand!.Clone();
+        var command = retry.NextCommand!.Clone();
         if (removeProfile)
-            command.PlanGateContinuation.AgentProfile = null;
+            command.Tool.AgentProfile = null;
         else
-            command.PlanGateContinuation.AgentProfileTurnAuthority = null;
+            command.Tool.AgentProfileTurnAuthority = null;
 
         var result = await executor.ExecuteAsync(
             command,
@@ -408,7 +345,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task DurableRetryMalformedContinuation_ShouldFailClosedBeforeExternalExecution(
+    public async Task DurableRetryMalformedCommand_ShouldFailClosedBeforeExternalExecution(
         bool removeArguments)
     {
         var tool = new RetryEffectTool();
@@ -420,16 +357,11 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             BuildRetryCommand(effect, "valid-grant-token", expectedStateVersion: 37),
             stateVersion: 37,
             Now);
-        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
-            retry.State,
-            BuildPlanConfirmation(retry.State, "valid-grant-token", expectedStateVersion: 38),
-            currentStateVersion: 38,
-            Now);
-        var command = confirmed.NextCommand!.Clone();
+        var command = retry.NextCommand!.Clone();
         if (removeArguments)
-            command.PlanGateContinuation.RetryArguments = null;
+            command.Tool.RetryAuthorizationSourceKey = null;
         else
-            command.PlanGateContinuation.ToolContext = null;
+            command.Tool.ToolContext = null;
 
         var result = await executor.ExecuteAsync(
             command,
@@ -449,7 +381,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     [InlineData("revoked-grant-token")]
     [InlineData("scope-mismatched-grant-token")]
     [InlineData("ttl-expired-grant-token")]
-    public async Task ConfirmedGrantRetry_WhenStandingGrantIsInvalid_ShouldReenterExactApproval(
+    public async Task DirectGrantRetry_WhenStandingGrantIsInvalid_ShouldReenterExactApproval(
         string retryToken)
     {
         var tool = new RetryEffectTool();
@@ -461,14 +393,8 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             BuildRetryCommand(effect, retryToken, expectedStateVersion: 22),
             stateVersion: 22,
             Now);
-        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
-            retry.State,
-            BuildPlanConfirmation(retry.State, retryToken, expectedStateVersion: 23),
-            currentStateVersion: 23,
-            Now);
-
         var execution = await executor.ExecuteAsync(
-            confirmed.NextCommand!,
+            retry.NextCommand!,
             new NyxIdChatTransientExecutionSession(),
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
@@ -478,12 +404,12 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         execution.Result.Tool.Receipt.NyxIdApprovalDecisionMode.Should().Be(
             NyxIdApprovalDecisionMode.Grant);
         execution.Result.Tool.Receipt.ApprovalRequestId.Should().Be("approval-generation-2");
-        confirmed.NextCommand!.Key.OperationGeneration.Should().Be(2);
+        retry.NextCommand!.Key.OperationGeneration.Should().Be(2);
         tool.ExecutionTokens.Should().Equal("uncertain-token", retryToken);
     }
 
     [Fact]
-    public async Task ConfirmedPerRequestRetry_WhenDecisionArrivesDuringInvocation_ShouldVerifyGenerationTwo()
+    public async Task DirectPerRequestRetry_WhenDecisionArrivesDuringInvocation_ShouldVerifyGenerationTwo()
     {
         var tool = new RetryEffectTool();
         var executor = CreateTurnExecutor(tool);
@@ -496,14 +422,8 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             BuildRetryCommand(effect, retryToken, expectedStateVersion: 25),
             stateVersion: 25,
             Now);
-        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
-            retry.State,
-            BuildPlanConfirmation(retry.State, retryToken, expectedStateVersion: 26),
-            currentStateVersion: 26,
-            Now);
-
         var execution = await executor.ExecuteAsync(
-            confirmed.NextCommand!,
+            retry.NextCommand!,
             new NyxIdChatTransientExecutionSession(),
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
@@ -512,12 +432,12 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         execution.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
         execution.Result.Tool.Receipt.ApprovalRequestId.Should().BeEmpty(
             "Tier B cannot observe the request identity when NyxID synchronously returns the downstream success");
-        confirmed.NextCommand!.Key.OperationGeneration.Should().Be(2);
+        retry.NextCommand!.Key.OperationGeneration.Should().Be(2);
         tool.PerRequestApprovalIds.Should().Equal("approval-generation-2");
         tool.ExecutionTokens.Should().Equal("uncertain-token", retryToken);
 
         var afterEffect = NyxIdChatTaskLifecycle.ApplyOperationResult(
-            confirmed.State,
+            retry.State,
             execution.Result,
             Now);
         afterEffect.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
@@ -563,7 +483,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     }
 
     [Fact]
-    public async Task ConfirmedEffectRetry_WhenCurrentDefinitionDrifts_ShouldFailClosedBeforeExecution()
+    public async Task DirectEffectRetry_WhenCurrentDefinitionDrifts_ShouldFailClosedBeforeExecution()
     {
         var tool = new RetryEffectTool();
         var executor = CreateTurnExecutor(tool);
@@ -574,15 +494,10 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             BuildRetryCommand(toolStep, "fresh-token", expectedStateVersion: 30),
             stateVersion: 30,
             Now);
-        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
-            retry.State,
-            BuildPlanConfirmation(retry.State, "fresh-token", expectedStateVersion: 31),
-            currentStateVersion: 31,
-            Now);
         tool.DescriptionOverride = "The current catalog now exposes a different definition.";
 
         var result = await executor.ExecuteAsync(
-            confirmed.NextCommand!,
+            retry.NextCommand!,
             new NyxIdChatTransientExecutionSession(),
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
@@ -600,8 +515,6 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         var tool = new RetryEffectTool();
         var executor = CreateTurnExecutor(tool);
         var (state, _) = await BuildReconciledNotAppliedStateAsync(executor, tool);
-        state.ActiveTask.Gate.Mode = NyxIdChatPlanGateMode.Auto;
-        state.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var toolStep = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
 
         var retry = NyxIdChatControlCommands.Retry(
@@ -638,8 +551,6 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         var tool = new RetryEffectTool();
         var executor = CreateTurnExecutor(tool);
         var (state, _) = await BuildReconciledNotAppliedStateAsync(executor, tool);
-        state.ActiveTask.Gate.Mode = NyxIdChatPlanGateMode.Auto;
-        state.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var toolStep = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
         var command = BuildRetryCommand(toolStep, "valid-grant-token", expectedStateVersion: 45);
         switch (tamper)
@@ -674,7 +585,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     }
 
     [Fact]
-    public async Task ConfirmedEffectRetry_WhenCurrentCatalogRevokesTool_ShouldFailClosed()
+    public async Task DirectEffectRetry_WhenCurrentCatalogRevokesTool_ShouldFailClosed()
     {
         var tool = new RetryEffectTool();
         var registry = new StaticToolSetRegistry("profile.route", [tool]);
@@ -688,20 +599,14 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             Now);
         var committedAuthority = retry.State.ActiveTurn.AgentProfileTurnAuthority.Clone();
         registry.ReplaceTools([]);
-        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
-            retry.State,
-            BuildPlanConfirmation(retry.State, "valid-grant-token", expectedStateVersion: 51),
-            currentStateVersion: 51,
-            Now);
-
-        confirmed.ShouldCommit.Should().BeTrue();
-        confirmed.NextCommand.Should().NotBeNull();
-        confirmed.NextCommand!.PlanGateContinuation.AgentProfileTurnAuthority
+        retry.ShouldCommit.Should().BeTrue();
+        retry.NextCommand.Should().NotBeNull();
+        retry.NextCommand!.Tool.AgentProfileTurnAuthority
             .Should().BeEquivalentTo(committedAuthority);
-        confirmed.NextCommand.PlanGateContinuation.AgentProfileTurnAuthority
+        retry.NextCommand.Tool.AgentProfileTurnAuthority
             .AuthorityCeilingToolNames.Should().ContainSingle(tool.Name);
         var result = await executor.ExecuteAsync(
-            confirmed.NextCommand,
+            retry.NextCommand,
             new NyxIdChatTransientExecutionSession(),
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
@@ -746,20 +651,14 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
             initialState,
             llmResult.Result,
-            Now,
-            planGateConfirmationThresholdSeconds: 1);
+            Now);
         var plannedTool = planned.State.ActiveTask.Steps.Single(step =>
             step.Kind == NyxIdChatStepKind.Tool);
         plannedTool.Operation.Key.OperationGeneration = 2;
-        planned.State.ActiveTask.Gate.Admissions.Single().Key.OperationGeneration = 2;
         plannedTool.RematerializeDurableAuthorization.Should().BeFalse();
-        var confirmation = NyxIdChatPlanGateDecisions.Resolve(
-            planned.State,
-            BuildPlanConfirmation(planned.State, "uncertain-token", expectedStateVersion: 60),
-            currentStateVersion: 60,
-            Now);
-        confirmation.NextCommand.Should().NotBeNull();
-        confirmation.NextCommand!.PlanGateContinuation.RetryArguments.Should().BeNull();
+        planned.NextCommand.Should().NotBeNull();
+        planned.NextCommand!.Tool.RematerializeDurableAuthorization.Should().BeFalse();
+        planned.NextCommand.Tool.RetryAuthorizationSourceKey.Should().BeNull();
 
         var result = await executor.ExecuteAsync(
             new NyxIdChatOperationDispatchCommand
@@ -798,7 +697,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             interactiveReplyCollector: null,
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             registry ?? new StaticToolSetRegistry("profile.route", [tool]),
             new NoMatchClassifier());
         return new NyxIdChatTurnOperationExecutor(
@@ -825,7 +724,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             interactiveReplyCollector: null,
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             registry,
             new NoMatchClassifier());
         return new NyxIdChatTurnOperationExecutor(
@@ -881,21 +780,15 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
             initialState,
             llmResult.Result,
-            Now,
-            planGateConfirmationThresholdSeconds: 1);
+            Now);
         planned.Outcome.Should().Be(
             NyxIdChatTransitionOutcome.Accepted,
             "the initial exact-service plan should not be rejected: {0} {1}",
             planned.ReasonCode,
             planned.SafeMessage);
-        planned.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
-        var firstConfirmation = NyxIdChatPlanGateDecisions.Resolve(
-            planned.State,
-            BuildPlanConfirmation(planned.State, initialToken, expectedStateVersion: 10),
-            currentStateVersion: 10,
-            Now);
+        planned.NextCommand.Should().NotBeNull();
         var firstToolResult = await executor.ExecuteAsync(
-            firstConfirmation.NextCommand!,
+            planned.NextCommand!,
             session,
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
@@ -907,7 +800,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             retryEffectTool.ExecutionTokens.Should().Equal(initialToken);
 
         var uncertain = NyxIdChatTaskLifecycle.ApplyOperationResult(
-            firstConfirmation.State,
+            planned.State,
             firstToolResult.Result,
             Now);
         uncertain.NextCommand.Should().NotBeNull();
@@ -998,28 +891,6 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         ToolContext = ToolContext(token, $"retry-{expectedStateVersion}", credentialKind),
     };
 
-    private static NyxIdChatPlanResolveCommand BuildPlanConfirmation(
-        NyxIdChatConversationGAgentState state,
-        string token,
-        long expectedStateVersion,
-        AgentToolNyxIdCredentialKind credentialKind =
-            AgentToolNyxIdCredentialKind.SourceReadableUserBearer) => new()
-    {
-        ScopeId = state.ScopeId,
-        OwnerSubject = state.OwnerSubject,
-        ConversationActorId = state.ConversationActorId,
-        TaskId = state.ActiveTask.TaskId,
-        PlanId = state.ActiveTask.PlanId,
-        PlanRevision = state.ActiveTask.PlanRevision,
-        RequestId = state.ActiveTask.Gate.RequestId,
-        ClientRequestId = $"client-confirm-{expectedStateVersion}",
-        Confirmed = true,
-        ExpectedStateVersion = expectedStateVersion,
-        CommandId = $"command-confirm-{expectedStateVersion}",
-        CorrelationId = $"correlation-confirm-{expectedStateVersion}",
-        ToolContext = ToolContext(token, state.ActiveTask.Gate.RequestId, credentialKind),
-    };
-
     private static AgentToolExecutionContextPayload ToolContext(
         string token,
         string? requestId = null,
@@ -1103,14 +974,6 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             ActorId = key.ConversationActorId,
             PlanId = "plan-alpha",
             PlanRevision = 1,
-            Gate = new NyxIdChatPlanGate
-            {
-                Mode = NyxIdChatPlanGateMode.Auto,
-                Status = NyxIdChatPlanGateStatus.Satisfied,
-                TaskId = key.TaskId,
-                PlanId = "plan-alpha",
-                PlanRevision = 1,
-            },
             CreatedAt = Now.Clone(),
             UpdatedAt = Now.Clone(),
         };
@@ -1201,14 +1064,14 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
             CancellationToken ct,
-            AgentProfileTurnCatalog? turnCatalog = null)
+            AgentTurnToolCatalog? turnCatalog = null)
         {
             var tools = new ToolManager();
             if (!forceDisableTools && (staticToolAvailable?.Invoke() ?? true))
             {
                 tools.Register(turnCatalog is null
                     ? [tool]
-                    : turnCatalog.RouteOwnedTools.Values);
+                    : turnCatalog.ExactTools.Values);
             }
             var runtime = new ChatRuntime(
                 () => provider,

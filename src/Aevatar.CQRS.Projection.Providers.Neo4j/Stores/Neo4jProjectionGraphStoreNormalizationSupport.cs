@@ -63,16 +63,16 @@ internal static class Neo4jProjectionGraphStoreNormalizationSupport
         return normalized;
     }
 
-    internal static string NormalizeConstraintName(string rawName)
+    internal static string NormalizeSchemaName(string rawName)
     {
         var chars = rawName
             .Select(ch => char.IsLetterOrDigit(ch) || ch == '_' ? char.ToLowerInvariant(ch) : '_')
             .ToArray();
         var normalized = new string(chars);
         if (normalized.Length == 0)
-            return "projection_graph_constraint";
+            return "projection_graph_schema";
         if (char.IsDigit(normalized[0]))
-            normalized = $"c_{normalized}";
+            normalized = $"s_{normalized}";
         return normalized;
     }
 }

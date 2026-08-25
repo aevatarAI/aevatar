@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Integration.AI;
@@ -26,6 +27,11 @@ internal static class WorkflowCallerCredentialToolContextMapper
         var context = AgentToolExecutionContext.Empty with
         {
             WorkflowRuntime = workflowRuntimeContext,
+            CredentialSource = credential?.DurableCallerCredential?.SourceKind ==
+                               DurableCallerCredentialSourceKind.ChannelRegistration
+                ? AgentToolCredentialSource.ChannelRegistration
+                : AgentToolCredentialSource.Unspecified,
+            DurableNyxIdCredential = credential?.DurableCallerCredential?.Clone(),
             Caller = AgentToolCallerContext.Empty with
             {
                 OwnerSubject = Normalize(credential?.NyxIdAuthority?.ExternalUserId),
@@ -54,6 +60,8 @@ internal static class WorkflowCallerCredentialToolContextMapper
                 AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
             NyxIdCallerCredentialKind.ProxyDelegation =>
                 AgentToolNyxIdCredentialKind.ProxyDelegation,
+            NyxIdCallerCredentialKind.AgentKey =>
+                AgentToolNyxIdCredentialKind.AgentKey,
             _ => AgentToolNyxIdCredentialKind.Unspecified,
         };
         var sourceReadableToken = supplementalSourceReadableToken.IsValid

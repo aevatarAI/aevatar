@@ -1078,6 +1078,12 @@ const enUSMessages = {
     'No callable endpoint is available.',
   'pages.teammemberinvoke.endpoint.missing.description':
     'The published service has no callable endpoints available to this page.',
+  'pages.teammemberinvoke.endpoint.notReady':
+    'Member endpoint is not ready.',
+  'pages.teammemberinvoke.endpoint.notReady.description':
+    'The endpoint contract is valid, but its runtime is not ready to accept invocations.',
+  'pages.teammemberinvoke.endpoint.versionPending.description':
+    'Committed service and revision source versions are not visible yet.',
   'pages.teammemberinvoke.fact.member': 'Member',
   'pages.teammemberinvoke.fact.revision': 'Serving state',
   'pages.teammemberinvoke.fact.service': 'Service',
@@ -1094,6 +1100,7 @@ const enUSMessages = {
     'View runs from the published member service.',
   'pages.teammemberinvoke.publishedRuns.publishFirst':
     'Publish this member to start recording published runs.',
+  'pages.teammemberinvoke.refresh': 'Refresh status',
   'pages.teammemberinvoke.resolve.in.studio': 'Open Workflow Studio',
   'pages.teammemberinvoke.route.missing': 'Missing member route',
   'pages.teammemberinvoke.route.missing.description':
@@ -1430,6 +1437,8 @@ const enUSMessages = {
   'pages.studio.studiomemberinvokeinspector.service.target': 'Service target',
   'pages.studio.studiomemberinvokeinspector.title': 'Details',
   'pages.studio.studiomemberinvokepanel.endpoint': 'Endpoint',
+  'pages.studio.studiomemberinvokepanel.endpoint.contract.changed':
+    'The selected member endpoint is unavailable or no longer matches this published service.',
   'pages.studio.studiomemberinvokepanel.inspector': 'Details',
   'pages.actors.index.actor': 'Actor',
   'pages.actors.index.command.recorded': 'Command recorded',

@@ -38,56 +38,6 @@ public sealed class NyxIdChatStateEndpointTests
     public async Task GetState_ActiveTask_ShouldExactlyMatchLiveTaskPlanAndStepChanged()
     {
         var task = BuildConvergenceTask();
-        task.SchemaVersion = 6;
-        task.Domain = new NyxIdChatTaskDomainState
-        {
-            Reimbursement = new NyxIdChatReimbursementEvidence
-            {
-                EvidenceId = "reimbursement-evidence-alpha",
-                SourceInputRequestId = "input-reimbursement-alpha",
-                ExpenseCategory = "travel",
-                CostCenter = "cc-42",
-                ReimbursementCurrencyInstruction = "Submit in SGD",
-                RetainedSourceOrdinals = { 1, 2 },
-                DuplicateInvoices =
-                {
-                    new NyxIdChatInvoiceDuplicateEvidence
-                    {
-                        DuplicateSourceOrdinal = 3,
-                        RetainedSourceOrdinal = 1,
-                    },
-                },
-                CommittedAt = Timestamp.FromDateTimeOffset(
-                    DateTimeOffset.Parse("2026-08-07T12:25:07Z")),
-                GuardedToolName = "approval_instance_create",
-            },
-        };
-        task.Domain.Reimbursement.SourceInvoices.Add(new NyxIdChatInvoiceEvidence
-        {
-            SourceOrdinal = 1,
-            Vendor = "Northwind Air",
-            InvoiceNumber = "INV-001",
-            InvoiceDate = "2026-08-01",
-            Amount = new NyxIdChatMoneyValue
-            {
-                CurrencyCode = "SGD",
-                MinorUnits = 12_500,
-                FractionDigits = 2,
-            },
-        });
-        task.Artifact = new NyxIdChatVerifiedArtifactState
-        {
-            CheckName = "approval.instance.exists",
-            VerifiedAt = Timestamp.FromDateTimeOffset(
-                DateTimeOffset.Parse("2026-08-07T12:25:09Z")),
-            Reimbursement = new NyxIdChatReimbursementArtifact
-            {
-                ProviderInstanceId = "approval-instance-alpha",
-                CostCenter = "cc-42",
-                RetainedItemCount = 2,
-                DuplicateItemCount = 1,
-            },
-        };
         task.Steps[0].Kind = NyxIdChatStepKind.Tool;
         task.Steps[0].Operation.Kind = NyxIdChatStepKind.Tool;
         task.Steps[0].Source = new NyxIdChatStepSource
@@ -232,15 +182,6 @@ public sealed class NyxIdChatStateEndpointTests
         presentation["skill"]!["source"]!.GetValue<string>().Should().Be("remote");
         currentTask["steps"]![1]!["source"]!["postcondition"]!["providerResourceId"]!
             .GetValue<string>().Should().Be("repository-alpha");
-        currentTask["schemaVersion"]!.GetValue<int>().Should().Be(6);
-        currentTask["domain"]!["reimbursement"]!["evidenceId"]!
-            .GetValue<string>().Should().Be("reimbursement-evidence-alpha");
-        currentTask["domain"]!["reimbursement"]!["sourceInvoices"]![0]!["amount"]!["minorUnits"]!
-            .GetValue<long>().Should().Be(12_500);
-        currentTask["artifact"]!["reimbursement"]!["providerInstanceId"]!
-            .GetValue<string>().Should().Be("approval-instance-alpha");
-        currentTask["artifact"]!["reimbursement"]!["retainedItemCount"]!
-            .GetValue<int>().Should().Be(2);
     }
 
     [Fact]
@@ -249,56 +190,7 @@ public sealed class NyxIdChatStateEndpointTests
         var evaluatedAt = Timestamp.FromDateTimeOffset(
             DateTimeOffset.Parse("2026-08-09T08:00:00Z"));
         var task = BuildConvergenceTask();
-        task.SchemaVersion = 6;
-        task.Domain = new NyxIdChatTaskDomainState
-        {
-            CandidateScreening = new NyxIdChatCandidateScreeningEvidence
-            {
-                EvidenceId = "candidate-evidence-alpha",
-                SourceInputRequestId = "input-threshold",
-                CandidateName = "Candidate Alpha",
-                RoleTitle = "Platform Engineer",
-                Rubric =
-                {
-                    new NyxIdChatCandidateRubricCriterion
-                    {
-                        CriterionId = "systems",
-                        Title = "Systems",
-                        MaximumPoints = 100,
-                    },
-                },
-                Scores =
-                {
-                    new NyxIdChatCandidateCriterionScore
-                    {
-                        CriterionId = "systems",
-                        AwardedPoints = 80,
-                        Evidence = "Designed actor protocols.",
-                    },
-                },
-                TotalScore = 80,
-                TrackerTable = "Candidate Tracker",
-                TrackerTableId = "tbl-candidates",
-                Stage = "accepted",
-                GuardedToolName = "bitable_record_create",
-                CommittedAt = evaluatedAt.Clone(),
-            },
-        };
-        task.Artifact = new NyxIdChatVerifiedArtifactState
-        {
-            CheckName = "bitable.record.exists",
-            VerifiedAt = evaluatedAt.Clone(),
-            CandidateTracker = new NyxIdChatCandidateTrackerArtifact
-            {
-                ProviderRecordId = "rec-candidate-alpha",
-                CandidateName = "Candidate Alpha",
-                Score = 80,
-                Threshold = 75,
-                TrackerTable = "Candidate Tracker",
-                TrackerTableId = "tbl-candidates",
-                Stage = "accepted",
-            },
-        };
+        task.SchemaVersion = 5;
         task.Steps[1].Guard = new NyxIdChatStepGuard
         {
             ConditionStepId = "step-condition",
@@ -311,7 +203,7 @@ public sealed class NyxIdChatStateEndpointTests
             Kind = NyxIdChatStepKind.Condition,
             Status = NyxIdChatStepStatus.Done,
             Required = true,
-            Description = "Check the candidate score.",
+            Description = "Check the observed value.",
             Source = new NyxIdChatStepSource
             {
                 Condition = new NyxIdChatConditionStepSource
@@ -409,7 +301,7 @@ public sealed class NyxIdChatStateEndpointTests
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         var snapshot = JsonNode.Parse(response.Body)!["snapshot"]!;
-        snapshot["activeTask"]!["schemaVersion"]!.GetValue<int>().Should().Be(6);
+        snapshot["activeTask"]!["schemaVersion"]!.GetValue<int>().Should().Be(5);
         var conditionStep = snapshot["activeTask"]!["steps"]![1]!;
         conditionStep["kind"]!.GetValue<string>().Should().Be("condition");
         var condition = conditionStep["source"]!["condition"]!["condition"]!;
@@ -450,14 +342,6 @@ public sealed class NyxIdChatStateEndpointTests
                 snapshot["latestInputResolution"]!["answer"])
             .Should().BeTrue(
                 "live input.changed and current-state reload expose the same typed answer");
-        snapshot["activeTask"]!["domain"]!["candidateScreening"]!["totalScore"]!
-            .GetValue<int>().Should().Be(80);
-        snapshot["activeTask"]!["domain"]!["candidateScreening"]!["scores"]![0]!["evidence"]!
-            .GetValue<string>().Should().Be("Designed actor protocols.");
-        snapshot["activeTask"]!["artifact"]!["candidateTracker"]!["providerRecordId"]!
-            .GetValue<string>().Should().Be("rec-candidate-alpha");
-        snapshot["activeTask"]!["artifact"]!["candidateTracker"]!["threshold"]!
-            .GetValue<long>().Should().Be(75);
     }
 
     [Fact]
@@ -537,16 +421,7 @@ public sealed class NyxIdChatStateEndpointTests
                             "service-slug-beta",
                             "connected-service-beta",
                             null))),
-            ],
-            Gate: new NyxIdChatConversationPlanGateSnapshot(
-                "confirm",
-                "Review the complete plan.",
-                "pending",
-                "gate-alpha",
-                "task-alpha",
-                1,
-                null,
-                "plan-alpha"));
+            ]);
         var queryPort = new RecordingQueryPort
         {
             Result = NyxIdChatConversationStateQueryResult.Current(new NyxIdChatConversationStateSnapshot(
@@ -596,12 +471,11 @@ public sealed class NyxIdChatStateEndpointTests
         json.RootElement.GetProperty("turnId").GetString().Should().Be("turn-alpha");
         json.RootElement.GetProperty("snapshot").GetProperty("actorId").GetString()
             .Should().Be("conversation-alpha");
-        var gate = json.RootElement
+        json.RootElement
             .GetProperty("snapshot")
             .GetProperty("activeTask")
-            .GetProperty("gate");
-        gate.GetProperty("mode").GetString().Should().Be("confirm");
-        gate.GetProperty("status").GetString().Should().Be("pending");
+            .TryGetProperty("gate", out _)
+            .Should().BeFalse();
         var pendingApproval = json.RootElement
             .GetProperty("snapshot")
             .GetProperty("pendingApproval");
@@ -730,6 +604,71 @@ public sealed class NyxIdChatStateEndpointTests
     }
 
     [Fact]
+    public async Task GetState_ServiceConnectRequest_ShouldOmitUnsetOptionalTypedParameters()
+    {
+        var serviceConnect = new NyxIdChatActionSnapshot(
+            4,
+            "action-service-connect",
+            "turn-alpha",
+            "task-alpha",
+            "step-service-connect",
+            "service.connect",
+            DateTimeOffset.Parse("2026-08-14T01:00:00Z"),
+            [],
+            null,
+            new NyxIdChatActionRequestSnapshot(
+                4,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                "step-service-connect",
+                "action-service-connect",
+                "service.connect",
+                new NyxIdChatActionParamsSnapshot(
+                    CatalogService: new NyxIdChatCatalogServiceConnectSnapshot(
+                        "github",
+                        ["repo:read"],
+                        ViaNodeId: null,
+                        TargetOrgId: null))));
+        var queryPort = new RecordingQueryPort
+        {
+            Result = NyxIdChatConversationStateQueryResult.Current(
+                new NyxIdChatConversationStateSnapshot(
+                    ActorId: "conversation-alpha",
+                    ScopeId: "scope-alpha",
+                    StateVersion: 12,
+                    ProgressSequence: 41,
+                    UpdatedAt: DateTimeOffset.Parse("2026-08-14T01:01:00Z"),
+                    ActiveTurn: null,
+                    LatestTurn: null,
+                    RecentTerminalTurns: [],
+                    ActiveTask: null,
+                    PendingApproval: null,
+                    PendingActions: [serviceConnect],
+                    ControlFence: null,
+                    LatestControlResult: null,
+                    ContinuationAdmission: null)),
+        };
+
+        var response = await ExecuteAsync(queryPort, string.Empty);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(response.Body);
+        var catalogService = json.RootElement
+            .GetProperty("snapshot")
+            .GetProperty("pendingActions")[0]
+            .GetProperty("request")
+            .GetProperty("params")
+            .GetProperty("catalogService");
+        catalogService.GetProperty("serviceSlug").GetString().Should().Be("github");
+        catalogService.GetProperty("requestedScopes").EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("repo:read");
+        catalogService.TryGetProperty("viaNodeId", out _).Should().BeFalse();
+        catalogService.TryGetProperty("targetOrgId", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GetState_ShouldReturnReloadRequiredForInvalidNumericCursorWithoutQuerying()
     {
         var queryPort = new RecordingQueryPort();
@@ -854,27 +793,6 @@ public sealed class NyxIdChatStateEndpointTests
             PlanId = "plan-alpha",
             PlanRevision = 2,
             Title = "Complete the requested assistant task",
-            Gate = new NyxIdChatPlanGate
-            {
-                Mode = NyxIdChatPlanGateMode.Confirm,
-                Reason = "Confirm the exact repository operation.",
-                Status = NyxIdChatPlanGateStatus.Pending,
-                RequestId = "plan-gate-alpha",
-                TaskId = "task-alpha",
-                PlanId = "plan-alpha",
-                PlanRevision = 2,
-                Admissions =
-                {
-                    new NyxIdChatPlanOperationAdmission
-                    {
-                        Key = operation.Key.Clone(),
-                        ToolCallId = "call-alpha",
-                        ToolName = "repository_update",
-                        ArgumentsSha256 = NyxIdChatPlanGateDecisions.HashArguments(
-                            "{\"repositoryId\":\"repo-alpha\"}"),
-                    },
-                },
-            },
             Steps =
             {
                 new NyxIdChatTaskStepState

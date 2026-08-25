@@ -74,17 +74,9 @@ public sealed class ScopeServiceRevisionEndpointTests : ScopeServiceEndpointTest
         var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/binding/revisions/rev-1:activate", new { });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        host.ServiceCommandPort.SetDefaultServingCommand.Should().NotBeNull();
-        host.ServiceCommandPort.SetDefaultServingCommand!.Identity.Should().BeEquivalentTo(new ServiceIdentity
-        {
-            TenantId = "scope-a",
-            AppId = "default",
-            Namespace = "default",
-            ServiceId = "default",
-        });
-        host.ServiceCommandPort.SetDefaultServingCommand.RevisionId.Should().Be("rev-1");
         host.ServiceCommandPort.ActivateRevisionCommand.Should().NotBeNull();
         host.ServiceCommandPort.ActivateRevisionCommand!.RevisionId.Should().Be("rev-1");
+        host.ServiceCommandPort.ActivateRevisionCommand.ExpectedArtifactHash.Should().Be("hash-1");
     }
 
     [Fact]
@@ -158,7 +150,6 @@ public sealed class ScopeServiceRevisionEndpointTests : ScopeServiceEndpointTest
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         body.Should().NotBeNull();
         body!["code"].Should().Be("SCOPE_BINDING_REVISION_RETIRED");
-        host.ServiceCommandPort.SetDefaultServingCommand.Should().BeNull();
         host.ServiceCommandPort.ActivateRevisionCommand.Should().BeNull();
     }
 

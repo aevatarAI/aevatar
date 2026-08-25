@@ -42,7 +42,12 @@ public sealed record NyxIdProxyTextResponse(
     bool Succeeded,
     string Content,
     string? Detail = null,
-    int HttpStatus = 0);
+    int HttpStatus = 0,
+    string? Location = null,
+    string? ETag = null,
+    TimeSpan? RetryAfter = null,
+    string? RequestId = null,
+    string? CorrelationId = null);
 
 // Refactor (iter1535/cluster-issue-1535):
 //   Old pattern: NyxID relay update failures collapsed to Detail/EditUnsupported strings.
@@ -94,6 +99,9 @@ internal sealed record NyxIdProxyError(
 public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 {
     internal const int DelegationRefreshMaxResponseBytes = 16 * 1024;
+
+    public bool HasPublicApiEndpoint =>
+        !string.IsNullOrWhiteSpace(_options.EffectiveApiBaseUrl);
 
     private enum ProxyCredentialTransport
     {
@@ -271,11 +279,22 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetServiceAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", ct);
 
+    // Secret-free authorization evidence projection (NyxID#1464); the only
+    // route assistant-action postconditions may read for a user service.
+    public Task<string> GetServiceAuthorizationAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}/authorization", ct);
+
     public Task<string> DeleteServiceAsync(string token, string id, CancellationToken ct) =>
         DeleteAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", ct);
 
     public Task<string> CreateServiceAsync(string token, string body, CancellationToken ct) =>
         PostAsync(token, "/api/v1/keys", body, ct);
+
+    internal Task<NyxIdProxyTextResponse> CreateServiceResponseAsync(
+        string token,
+        string body,
+        CancellationToken ct) =>
+        PostTextResponseAsync(token, "/api/v1/keys", body, ct);
 
     // ─── Session Refresh ───
 
@@ -550,6 +569,36 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             ct);
     }
 
+    /// <summary>
+    /// Sends one bounded proxy exchange through the configured public NyxID API endpoint.
+    /// This method never selects <c>InternalApiBaseUrl</c> and never replays through the
+    /// transport fallback path, so callers can use it for durable mutation recovery.
+    /// </summary>
+    public Task<NyxIdProxyTextResponse> ProxyPublicRequestBoundedAsync(
+        string token,
+        string slug,
+        string userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
+        return ProxyPublicRequestBoundedCoreAsync(
+            token,
+            slug,
+            userServiceId.Trim(),
+            path,
+            method,
+            body,
+            extraHeaders,
+            maxBytes,
+            ct);
+    }
+
     public Task<NyxIdProxyTextResponse> ProxyRequestBoundedWithApiKeyAsync(
         string apiKey,
         string slug,
@@ -710,6 +759,34 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return await SendTextResponseAsync(request, maxBytes, ct);
     }
 
+    private async Task<NyxIdProxyTextResponse> ProxyPublicRequestBoundedCoreAsync(
+        string token,
+        string slug,
+        string userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        using var request = CreateProxyRequest(
+            token,
+            slug,
+            userServiceId,
+            path,
+            method,
+            body,
+            extraHeaders,
+            publicApiOnly: true,
+            applyAmbientIdempotencyKey: false);
+        return await SendTextResponseAsync(
+            request,
+            maxBytes,
+            ct,
+            allowPublicTransportFallback: false);
+    }
+
     private async Task<NyxIdProxyTextResponse> ProxyRequestBoundedWithApiKeyCoreAsync(
         string apiKey,
         string slug,
@@ -758,9 +835,11 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         string method,
         string? body,
         Dictionary<string, string>? extraHeaders,
-        ProxyCredentialTransport credentialTransport = ProxyCredentialTransport.AuthorizationBearer)
+        ProxyCredentialTransport credentialTransport = ProxyCredentialTransport.AuthorizationBearer,
+        bool publicApiOnly = false,
+        bool applyAmbientIdempotencyKey = true)
     {
-        var url = BuildProxyUrl(slug, userServiceId, path);
+        var url = BuildProxyUrl(slug, userServiceId, path, publicApiOnly);
         var httpMethod = new HttpMethod(method.ToUpperInvariant());
         var request = new HttpRequestMessage(httpMethod, url);
         if (credentialTransport == ProxyCredentialTransport.ApiKeyHeader)
@@ -779,7 +858,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         }
 
-        ApplyIdempotencyKey(request, httpMethod);
+        if (applyAmbientIdempotencyKey)
+            ApplyIdempotencyKey(request, httpMethod);
         return request;
     }
 
@@ -951,11 +1031,15 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return await SendBinaryResponseAsync(request, NormalizeProxyFileArtifactMaxBytes(maxBytes), ct);
     }
 
-    private string BuildProxyUrl(string slug, string? userServiceId, string path)
+    private string BuildProxyUrl(
+        string slug,
+        string? userServiceId,
+        string path,
+        bool publicApiOnly = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(slug);
         ArgumentNullException.ThrowIfNull(path);
-        var baseUrl = GetTransportBaseUrl();
+        var baseUrl = publicApiOnly ? GetPublicApiBaseUrl() : GetTransportBaseUrl();
         var normalizedPath = path.TrimStart('/');
         var fragmentIndex = normalizedPath.IndexOf('#', StringComparison.Ordinal);
         if (fragmentIndex >= 0)
@@ -1025,6 +1109,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     /// </summary>
     public Task<string> ListUserServicesAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/user-services", ct);
+
+    public Task<NyxIdProxyTextResponse> ListUserServicesBoundedAsync(
+        string token,
+        long maxBytes,
+        CancellationToken ct) =>
+        GetBoundedAsync(token, "/api/v1/user-services", maxBytes, ct);
 
     /// <summary>
     /// Requests NyxID's authoritative constrained API-key grants for an exact service set.
@@ -1189,6 +1279,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> ListApprovalServiceConfigsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/approvals/service-configs", ct);
 
+    public Task<NyxIdProxyTextResponse> ListApprovalServiceConfigsBoundedAsync(
+        string token,
+        long maxBytes,
+        CancellationToken ct) =>
+        GetBoundedAsync(token, "/api/v1/approvals/service-configs", maxBytes, ct);
+
     // ─── Profile ───
 
     public Task<string> UpdateProfileAsync(string token, string body, CancellationToken ct) =>
@@ -1224,6 +1320,17 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> UpdateServiceRouteAsync(string token, string id, string body, CancellationToken ct) =>
         PutAsync(token, $"/api/v1/user-services/{Uri.EscapeDataString(id)}", body, ct);
 
+    internal Task<NyxIdProxyTextResponse> UpdateServiceRouteResponseAsync(
+        string token,
+        string id,
+        string body,
+        CancellationToken ct) =>
+        PutTextResponseAsync(
+            token,
+            $"/api/v1/user-services/{Uri.EscapeDataString(id)}",
+            body,
+            ct);
+
     // ─── Proxy (additions) ───
 
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
@@ -1236,6 +1343,11 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     public Task<string> GetApiKeyAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}", ct);
+
+    // Secret-free authorization evidence projection (NyxID#1464); the only
+    // route assistant-action postconditions may read for an agent API key.
+    public Task<string> GetApiKeyAuthorizationAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}/authorization", ct);
 
     public Task<string> ListDurableGrantsAsync(
         string token,
@@ -1338,6 +1450,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     public Task<string> GetNotificationSettingsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/notifications/settings", ct);
+
+    public Task<NyxIdProxyTextResponse> GetNotificationSettingsBoundedAsync(
+        string token,
+        long maxBytes,
+        CancellationToken ct) =>
+        GetBoundedAsync(token, "/api/v1/notifications/settings", maxBytes, ct);
 
     public Task<string> UpdateNotificationSettingsAsync(string token, string body, CancellationToken ct) =>
         PutAsync(token, "/api/v1/notifications/settings", body, ct);
@@ -1710,6 +1828,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         _options.EffectiveApiBaseUrl?.TrimEnd('/') ??
         throw new InvalidOperationException("NyxID public API base URL is not configured.");
 
+    // Canonical RFC 8707 resource indicator for one exact proxied service.
+    // The shape mirrors the proxy transport routes above and the pinned
+    // service-access-review contract (…/api/v1/proxy/s/{slug}).
+    internal string BuildServiceProxyResourceUri(string serviceSlug) =>
+        $"{GetPublicApiBaseUrl()}/api/v1/proxy/s/{Uri.EscapeDataString(serviceSlug)}";
+
     private static bool ApplyExtraHeaders(
         HttpRequestMessage request,
         Dictionary<string, string>? extraHeaders)
@@ -1779,13 +1903,35 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return await SendAsync(request, ct);
     }
 
+    private async Task<NyxIdProxyTextResponse> GetBoundedAsync(
+        string token,
+        string path,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
+
+        var url = $"{GetPublicApiBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return await SendTextResponseAsync(request, maxBytes, ct);
+    }
+
     internal async Task<string> PostAsync(string token, string path, string body, CancellationToken ct)
+        => (await PostTextResponseAsync(token, path, body, ct)).Content;
+
+    private async Task<NyxIdProxyTextResponse> PostTextResponseAsync(
+        string token,
+        string path,
+        string body,
+        CancellationToken ct)
     {
         var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-        return await SendAsync(request, ct);
+        return await SendTextResponseAsync(request, ct);
     }
 
     internal async Task<string> PostWithoutAuthAsync(string path, string body, CancellationToken ct)
@@ -1806,12 +1952,19 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     }
 
     internal async Task<string> PutAsync(string token, string path, string body, CancellationToken ct)
+        => (await PutTextResponseAsync(token, path, body, ct)).Content;
+
+    private async Task<NyxIdProxyTextResponse> PutTextResponseAsync(
+        string token,
+        string path,
+        string body,
+        CancellationToken ct)
     {
         var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Put, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-        return await SendAsync(request, ct);
+        return await SendTextResponseAsync(request, ct);
     }
 
     internal async Task<string> DeleteAsync(string token, string path, CancellationToken ct)
@@ -1988,15 +2141,21 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     private async Task<NyxIdProxyTextResponse> SendTextResponseAsync(
         HttpRequestMessage request,
         long maxBytes,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool allowPublicTransportFallback = true)
     {
         try
         {
             using var response = await SendWithPublicTransportFallbackAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                allowPublicTransportFallback: true,
+                allowPublicTransportFallback,
                 ct);
+            var location = ReadBoundedResponseHeader(response, "Location", 2_048);
+            var etag = ReadBoundedResponseHeader(response, "ETag", 512);
+            var retryAfter = ResolveRetryAfter(response.Headers.RetryAfter);
+            var requestId = ReadBoundedResponseHeader(response, "X-Request-ID", 128);
+            var correlationId = ReadBoundedResponseHeader(response, "X-Correlation-ID", 128);
             if (response.Content.Headers.ContentLength is { } contentLength &&
                 contentLength > maxBytes)
             {
@@ -2009,7 +2168,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                     false,
                     string.Empty,
                     Detail: "content_length_exceeds_max_bytes",
-                    HttpStatus: (int)response.StatusCode);
+                    HttpStatus: (int)response.StatusCode,
+                    Location: location,
+                    ETag: etag,
+                    RetryAfter: retryAfter,
+                    RequestId: requestId,
+                    CorrelationId: correlationId);
             }
 
             var content = await ReadBoundedContentAsync(response.Content, maxBytes, ct);
@@ -2023,7 +2187,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                     false,
                     string.Empty,
                     Detail: "content_exceeds_max_bytes",
-                    HttpStatus: (int)response.StatusCode);
+                    HttpStatus: (int)response.StatusCode,
+                    Location: location,
+                    ETag: etag,
+                    RetryAfter: retryAfter,
+                    RequestId: requestId,
+                    CorrelationId: correlationId);
             }
 
             var text = Encoding.UTF8.GetString(content.Content);
@@ -2037,13 +2206,23 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                     false,
                     text,
                     Detail: "http_error",
-                    HttpStatus: (int)response.StatusCode);
+                    HttpStatus: (int)response.StatusCode,
+                    Location: location,
+                    ETag: etag,
+                    RetryAfter: retryAfter,
+                    RequestId: requestId,
+                    CorrelationId: correlationId);
             }
 
             return new NyxIdProxyTextResponse(
                 true,
                 text,
-                HttpStatus: (int)response.StatusCode);
+                HttpStatus: (int)response.StatusCode,
+                Location: location,
+                ETag: etag,
+                RetryAfter: retryAfter,
+                RequestId: requestId,
+                CorrelationId: correlationId);
         }
         catch (OperationCanceledException)
         {
@@ -2060,6 +2239,39 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 string.Empty,
                 Detail: "bounded_proxy_transport_failure");
         }
+    }
+
+    private static string? ReadBoundedResponseHeader(
+        HttpResponseMessage response,
+        string name,
+        int maxLength)
+    {
+        if (!response.Headers.TryGetValues(name, out var values))
+            return null;
+
+        using var enumerator = values.GetEnumerator();
+        if (!enumerator.MoveNext())
+            return null;
+        var value = enumerator.Current?.Trim();
+        if (enumerator.MoveNext() ||
+            string.IsNullOrWhiteSpace(value) ||
+            value.Length > maxLength ||
+            value.Any(static character => char.IsControl(character)))
+        {
+            return null;
+        }
+
+        return value;
+    }
+
+    private static TimeSpan? ResolveRetryAfter(RetryConditionHeaderValue? retryAfter)
+    {
+        if (retryAfter?.Delta is { } delta)
+            return delta < TimeSpan.Zero ? TimeSpan.Zero : delta;
+        if (retryAfter?.Date is not { } date)
+            return null;
+        var remaining = date - DateTimeOffset.UtcNow;
+        return remaining < TimeSpan.Zero ? TimeSpan.Zero : remaining;
     }
 
     private async Task<HttpResponseMessage> SendWithPublicTransportFallbackAsync(

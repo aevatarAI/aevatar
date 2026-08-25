@@ -23,13 +23,20 @@ public sealed class ChatRouteResolver
     // Implement (issue #693):
     //   Behavior: resolve snapshot rules by priority, then default_target, then env/options fallback.
     //   Why this shape: ingress entries need a deterministic library decision without actor hops or IO.
-    public ChatRouteDecision Resolve(ChatRoutePolicySnapshot? snapshot, ChatRouteInput input)
+    public ChatRouteDecision Resolve(
+        ChatRoutePolicySnapshot? snapshot,
+        ChatRouteInput input,
+        string? implicitToolSetNameOverride = null)
     {
         ArgumentNullException.ThrowIfNull(input);
 
         if (snapshot is null)
         {
-            return ApplyDefaultToolSet(_fallbackProvider.GetFallbackDecision());
+            return ApplyDefaults(
+                _fallbackProvider.GetFallbackDecision().Clone(),
+                input.SourceKind,
+                implicitToolSetNameOverride,
+                replaceExisting: !string.IsNullOrWhiteSpace(implicitToolSetNameOverride));
         }
 
         foreach (var rule in snapshot.Rules)
@@ -50,10 +57,16 @@ public sealed class ChatRouteResolver
                 continue;
             }
 
-            return ApplyDefaultToolSet(NewDecision(rule.Action, matchedRuleId: rule.RuleId, usedFallback: false));
+            return ApplyDefaults(
+                NewDecision(rule.Action, matchedRuleId: rule.RuleId, usedFallback: false),
+                input.SourceKind,
+                implicitToolSetNameOverride);
         }
 
-        return ApplyDefaultToolSet(NewDecision(snapshot.DefaultTarget, matchedRuleId: string.Empty, usedFallback: false));
+        return ApplyDefaults(
+            NewDecision(snapshot.DefaultTarget, matchedRuleId: string.Empty, usedFallback: false),
+            input.SourceKind,
+            implicitToolSetNameOverride);
     }
 
     private static bool HasAction(ChatRouteAction? action) =>
@@ -94,23 +107,54 @@ public sealed class ChatRouteResolver
             ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
-    private ChatRouteDecision ApplyDefaultToolSet(ChatRouteDecision decision)
+    private ChatRouteDecision ApplyDefaults(
+        ChatRouteDecision decision,
+        ChatSourceKind sourceKind,
+        string? implicitToolSetNameOverride,
+        bool replaceExisting = false)
     {
-        var toolSetName = _options.Value.Defaults.DefaultForwardToModelToolSetName;
-        if (string.IsNullOrWhiteSpace(toolSetName))
-            return decision;
-
-        ApplyDefaultToolSet(decision.Action?.ForwardToModel, toolSetName);
+        var toolSetName = string.IsNullOrWhiteSpace(implicitToolSetNameOverride)
+            ? _options.Value.Defaults.DefaultForwardToModelToolSetName
+            : implicitToolSetNameOverride;
+        if (!string.IsNullOrWhiteSpace(toolSetName))
+            ApplyDefaultToolSet(decision.Action?.ForwardToModel, toolSetName, replaceExisting);
+        ApplyDefaultProfileKind(decision.Action?.ForwardToModel, sourceKind);
         return decision;
     }
 
-    private static void ApplyDefaultToolSet(ForwardToModel? forwardToModel, string toolSetName)
+    private static void ApplyDefaultProfileKind(ForwardToModel? forwardToModel, ChatSourceKind sourceKind)
+    {
+        if (forwardToModel is null ||
+            forwardToModel.ProfileKind != ChatRouteAgentProfileKind.Unspecified)
+        {
+            return;
+        }
+
+        forwardToModel.ProfileKind = sourceKind switch
+        {
+            ChatSourceKind.Direct => ChatRouteAgentProfileKind.NyxidChat,
+            ChatSourceKind.NyxRelay => ChatRouteAgentProfileKind.ChannelReply,
+            ChatSourceKind.NyxResponses => ChatRouteAgentProfileKind.WorkspaceChat,
+            ChatSourceKind.Voice => ChatRouteAgentProfileKind.WorkspaceChat,
+            _ => ChatRouteAgentProfileKind.WorkspaceChat,
+        };
+    }
+
+    private static void ApplyDefaultToolSet(
+        ForwardToModel? forwardToModel,
+        string toolSetName,
+        bool replaceExisting)
     {
         if (forwardToModel is null)
             return;
 
+        // A route-policy action with an explicit tool set remains authoritative. A fallback
+        // provider, however, only supplies the host default; a selected sealed Agent Profile may
+        // replace that implicit default so system-owned profiles can be rolled out without
+        // broadening the unprofiled route.
         if (forwardToModel.ToolSetRef is not null &&
-            !string.IsNullOrWhiteSpace(forwardToModel.ToolSetRef.Name))
+            !string.IsNullOrWhiteSpace(forwardToModel.ToolSetRef.Name) &&
+            !replaceExisting)
         {
             return;
         }

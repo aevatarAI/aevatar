@@ -455,6 +455,7 @@ public sealed class TeamAutomationObservationCorrelationTests
             string actorId,
             ScheduledDispatchConfiguration configuration,
             PreparedScheduledDispatchTarget dispatch,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task<DispatchAdmission> DispatchEnsureAsync(
@@ -464,16 +465,28 @@ public sealed class TeamAutomationObservationCorrelationTests
             CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task<DispatchAdmission> DispatchEnableAsync(
-            string actorId, string reason, CancellationToken ct = default) => throw new NotSupportedException();
+            string actorId,
+            string reason,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
+            CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task<DispatchAdmission> DispatchDisableAsync(
-            string actorId, string reason, CancellationToken ct = default) => throw new NotSupportedException();
+            string actorId,
+            string reason,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
+            CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task<DispatchAdmission> DispatchDeleteAsync(
-            string actorId, string reason, CancellationToken ct = default) => throw new NotSupportedException();
+            string actorId,
+            string reason,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
+            CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task<DispatchAdmission> DispatchRunNowAsync(
-            string actorId, DateTimeOffset scheduledFireAt, CancellationToken ct = default) =>
+            string actorId,
+            DateTimeOffset scheduledFireAt,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public virtual Task<DispatchAdmission> DispatchCompleteTeamAutomationRevocationAsync(

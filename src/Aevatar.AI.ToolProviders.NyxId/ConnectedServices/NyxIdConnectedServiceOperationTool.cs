@@ -34,7 +34,10 @@ internal static class NyxIdConnectedServiceOperationToolFactory
             service.ServiceSlug,
             endpoint,
             endpoint.ContractDigest).NyxIdUserService;
-        var admission = NyxIdConnectedServiceOperationAdmissionMapper.Map(proof, catalogDigest);
+        var admission = NyxIdConnectedServiceOperationAdmissionMapper.Map(
+            proof,
+            catalogDigest,
+            serviceInstance.CatalogServiceSlug);
         if (!NyxIdConnectedServiceExposurePolicy.Allows(admission))
             return null;
 
@@ -44,7 +47,6 @@ internal static class NyxIdConnectedServiceOperationToolFactory
             service.ServiceName,
             endpoint.Name,
             serviceInstance.Label,
-            serviceInstance.CatalogServiceSlug,
             readinessCapabilityId,
             serviceInstance.AccessTokenSource,
             readBackPlan);
@@ -87,7 +89,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     private const string ProxyResponseTooLargeErrorCode = "NYXID_PROXY_RESPONSE_TOO_LARGE";
     private const string ReadTooLargeErrorCode = "NYXID_CONNECTED_SERVICE_READ_TOO_LARGE";
     private const string ReadTooLargeErrorMessage =
-        "The connected-service read result exceeded the bounded projection limit.";
+        "The connected-service read result exceeded the bounded projection limit. " +
+        "Retry with a narrower query or smaller page size and paginate across bounded reads.";
     private const string ReadProjectionKind = "connected_service_read_projection";
     private const string EffectReceiptKind = "connected_service_effect_receipt";
 
@@ -108,7 +111,6 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         string serviceLabel,
         string operationLabel,
         string connectionLabel,
-        string catalogServiceSlug,
         string? readinessCapabilityId,
         NyxIdServiceAccessTokenSource accessTokenSource,
         NyxIdConnectedServiceReadBackPlan? readBackPlan = null)
@@ -128,7 +130,6 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         Presentation = BuildPresentation(
             admission,
             NormalizeModelLabel(connectionLabel, _serviceLabel, selectorSecrets),
-            catalogServiceSlug,
             readinessCapabilityId);
     }
 
@@ -156,14 +157,13 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     private ToolPresentationDescriptor BuildPresentation(
         AgentToolOperationAdmission admission,
         string connectionLabel,
-        string catalogServiceSlug,
         string? readinessCapabilityId)
     {
         var source = new NyxIdOperationRef
         {
             ConnectedServiceId = admission.ServiceInstanceId,
             ServiceSlug = admission.ServiceSlug,
-            CatalogServiceSlug = catalogServiceSlug ?? string.Empty,
+            CatalogServiceSlug = admission.CatalogServiceSlug ?? string.Empty,
             ConnectionLabel = connectionLabel,
             ConnectorDisplayName = _serviceLabel,
             OperationId = admission.Identity is AgentToolOperationIdentity.PublishedEndpoint published
@@ -307,19 +307,20 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         string toolName)
     {
         var result = BuildReadProjection(
-            "rejected",
+            "retry_required",
             data: null,
             ReadTooLargeErrorCode,
             ReadTooLargeErrorMessage);
+        var receipt = NyxIdProxyReceiptFactory.CreateSuccess(
+            callId,
+            toolName,
+            OperationAdmission.ServiceInstanceId,
+            result) ?? throw new InvalidOperationException(
+            "A connected-service operation must have a valid UserService identity.");
+        receipt.Effect = AgentToolReceiptEffect.ReadOnly;
         return new AgentToolTerminalOutcome(
             result,
-            NyxIdProxyReceiptFactory.CreateError(
-                callId,
-                toolName,
-                OperationAdmission.ServiceInstanceId,
-                ReadTooLargeErrorCode,
-                ReadTooLargeErrorMessage,
-                result));
+            receipt);
     }
 
     private AgentToolTerminalOutcome BuildEffectOutcome(
@@ -577,7 +578,8 @@ internal static class NyxIdConnectedServiceOperationAdmissionMapper
 {
     public static AgentToolOperationAdmission Map(
         NyxIdUserServiceCapabilityRef proof,
-        string catalogDigest) => new(
+        string catalogDigest,
+        string catalogServiceSlug) => new(
         proof.UserServiceId,
         proof.ServiceSlugSnapshot,
         new AgentToolOperationIdentity.PublishedEndpoint(proof.EndpointId),
@@ -599,7 +601,9 @@ internal static class NyxIdConnectedServiceOperationAdmissionMapper
                 proof.ResponsePolicy.FileArtifactAllowed,
                 proof.ResponsePolicy.MediaTypes.ToArray()),
         MapExecutionPolicy(proof.ExecutionPolicy),
-        catalogDigest);
+        catalogDigest,
+        ReadBack: null,
+        CatalogServiceSlug: catalogServiceSlug);
 
     private static AgentToolOperationParameter MapParameter(NyxIdOperationParameterContract parameter) => new(
         parameter.Name,

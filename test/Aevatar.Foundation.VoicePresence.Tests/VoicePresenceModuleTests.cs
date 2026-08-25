@@ -3268,7 +3268,7 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public async Task InitializeAsync_should_merge_discovered_tool_definitions_into_session()
+    public async Task InitializeAsync_should_replace_legacy_tools_with_sealed_catalog_definitions()
     {
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(
@@ -3287,8 +3287,9 @@ public class VoicePresenceModuleTests
         await OpenLocalProviderSessionAsync(module, provider);
 
         provider.LastSession.ShouldNotBeNull();
-        provider.LastSession.ToolNames.ShouldContain("doorbell.open");
-        provider.LastSession.ToolDefinitions.Select(static x => x.Name).ShouldContain("door.close");
+        provider.LastSession.ToolNames.ShouldBeEmpty();
+        provider.LastSession.ToolDefinitions.Select(static x => x.Name)
+            .ShouldBe(["door.close"]);
     }
 
     [Fact]
@@ -3778,13 +3779,13 @@ public class VoicePresenceModuleTests
     {
         public VoiceToolExecutionContext? LastToolContext { get; private set; }
 
-        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+        public Task<VoiceToolCatalogSnapshot> DiscoverAsync(
             VoiceToolExecutionContext? toolContext = null,
             CancellationToken ct = default)
         {
             _ = ct;
             LastToolContext = toolContext?.Clone();
-            return Task.FromResult(tools);
+            return Task.FromResult(CreateToolCatalogSnapshot(tools));
         }
     }
 
@@ -4041,7 +4042,7 @@ public class VoicePresenceModuleTests
 
     private sealed class ThrowingVoiceToolCatalog : IVoiceToolCatalog
     {
-        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+        public Task<VoiceToolCatalogSnapshot> DiscoverAsync(
             VoiceToolExecutionContext? toolContext = null,
             CancellationToken ct = default)
         {
@@ -4049,6 +4050,41 @@ public class VoicePresenceModuleTests
             _ = ct;
             throw new InvalidOperationException("catalog failed");
         }
+    }
+
+    private static VoiceToolCatalogSnapshot CreateToolCatalogSnapshot(
+        IReadOnlyList<VoiceToolDefinition> definitions)
+    {
+        foreach (var definition in definitions)
+        {
+            if (definition.Owner == VoiceToolOwner.Unspecified)
+                definition.Owner = VoiceToolOwner.Actor;
+        }
+
+        var snapshot = new VoiceToolCatalogSnapshot
+        {
+            PolicyVersion = "test-voice-policy/v1",
+            Proof = new VoiceAgentTurnToolCatalogProof
+            {
+                ToolCount = definitions.Count,
+                SchemaBytes = definitions.Sum(static definition =>
+                    System.Text.Encoding.UTF8.GetByteCount(definition.ParametersSchema ?? string.Empty)),
+                CatalogDigest = "sha256:test",
+                MaximumToolCount = VoiceToolCatalogSnapshotValidator.MaximumToolCount,
+                MaximumSchemaBytes = VoiceToolCatalogSnapshotValidator.MaximumSchemaBytes,
+            },
+        };
+        snapshot.Tools.AddRange(definitions.Select(static definition => definition.Clone()));
+        snapshot.Proof.ToolDescriptors.AddRange(definitions.Select(static definition =>
+            new VoiceAgentTurnToolDescriptorProof
+            {
+                Name = definition.Name,
+                ExactDescription = definition.Description,
+                CanonicalSchema = Google.Protobuf.ByteString.CopyFromUtf8(definition.ParametersSchema ?? string.Empty),
+                SchemaSha256 = "sha256:test",
+                OriginKind = "Voice",
+            }));
+        return snapshot;
     }
 
 }

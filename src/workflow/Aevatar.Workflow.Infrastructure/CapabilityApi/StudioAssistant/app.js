@@ -1,4 +1,4 @@
-import "./transport.js?v=20260814-m46-nyxid-api-routing";
+import "./transport.js?v=20260823-m62-studio-redesign";
 import {
   consumeSse,
   mergeUsage,
@@ -9,24 +9,28 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260814-m46-nyxid-api-routing";
+} from "./protocol.js?v=20260823-m62-studio-redesign";
 import {
   buildConnectCardBlock,
-  connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260814-m46-nyxid-api-routing";
+} from "./blocks.js?v=20260823-m62-studio-redesign";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260814-m46-nyxid-api-routing";
-import { describeReadinessFailure } from "./readiness.js?v=20260814-m46-nyxid-api-routing";
+} from "./actor-state.js?v=20260823-m62-studio-redesign";
+import { describeReadinessFailure } from "./readiness.js?v=20260823-m62-studio-redesign";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
+const SERVICE_ACCESS_REVIEW_KEY = "aevatar-studio:pending-service-access-review:v1";
+const ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED_CODE =
+  "NYXID_ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
+let serviceAccessReviewResumePromise = null;
 
 const surfaceLabels = {
   workflow: "Workflow API",
@@ -106,11 +110,8 @@ const dom = {
   recentGroup: $("#recentGroup"),
   recentSessionsList: $("#recentSessionsList"),
   requestTraceCount: $("#requestTraceCount"),
-  requestTraceEmpty: $("#requestTraceEmpty"),
   requestTraceLive: $("#requestTraceLive"),
-  requestTraceList: $("#requestTraceList"),
   requestTracePanel: $("#requestTracePanel"),
-  requestTraceRailCount: $("#requestTraceRailCount"),
   needsYouCount: $("#needsYouCount"),
   needsYouFilterButton: $("#needsYouFilterButton"),
   removeAttachmentButton: $("#removeAttachmentButton"),
@@ -161,20 +162,29 @@ const dom = {
   traceEventFact: $("#traceEventFact"),
   traceInputFact: $("#traceInputFact"),
   traceOperationCount: $("#traceOperationCount"),
-  traceOperationDurationFact: $("#traceOperationDurationFact"),
   traceOperationEmpty: $("#traceOperationEmpty"),
-  traceOperationIdFact: $("#traceOperationIdFact"),
-  traceOperationInputFact: $("#traceOperationInputFact"),
-  traceOperationInputSection: $("#traceOperationInputSection"),
-  traceOperationKindFact: $("#traceOperationKindFact"),
   traceOperationList: $("#traceOperationList"),
-  traceOperationOutputFact: $("#traceOperationOutputFact"),
-  traceOperationOutputSection: $("#traceOperationOutputSection"),
   traceOperationOverview: $("#traceOperationOverview"),
-  traceOperationSection: $("#traceOperationSection"),
-  traceOperationStartedFact: $("#traceOperationStartedFact"),
-  traceOperationStatusFact: $("#traceOperationStatusFact"),
-  traceOperationTitleFact: $("#traceOperationTitleFact"),
+  trajectoryDetails: $("#trajectoryDetails"),
+  trajectoryDetailsBody: $("#trajectoryDetailsBody"),
+  trajectoryDetailsClose: $("#trajectoryDetailsClose"),
+  trajectoryDetailsKind: $("#trajectoryDetailsKind"),
+  trajectoryDetailsLocation: $("#trajectoryDetailsLocation"),
+  trajectoryDetailsResize: $("#trajectoryDetailsResize"),
+  trajectoryDetailsTabs: $("#trajectoryDetailsTabs"),
+  trajectoryDurationButton: $("#trajectoryDurationButton"),
+  trajectoryFoldCallsButton: $("#trajectoryFoldCallsButton"),
+  trajectoryFoldCallsIcon: $("#trajectoryFoldCallsIcon"),
+  trajectoryFoldRequestsButton: $("#trajectoryFoldRequestsButton"),
+  trajectoryFoldRequestsIcon: $("#trajectoryFoldRequestsIcon"),
+  trajectoryLedger: $("#trajectoryLedger"),
+  trajectoryOverviewBoundaries: $("#trajectoryOverviewBoundaries"),
+  trajectoryOverviewEmpty: $("#trajectoryOverviewEmpty"),
+  trajectoryOverviewHairline: $("#trajectoryOverviewHairline"),
+  trajectoryOverviewSelection: $("#trajectoryOverviewSelection"),
+  trajectoryOverviewSpans: $("#trajectoryOverviewSpans"),
+  trajectoryOverviewTrack: $("#trajectoryOverviewTrack"),
+  trajectorySearchInput: $("#trajectorySearchInput"),
   traceOutputFact: $("#traceOutputFact"),
   traceOutputSection: $("#traceOutputSection"),
   traceReadonlyNotice: $("#traceReadonlyNotice"),
@@ -272,11 +282,20 @@ function createConversationState({ actorId = null, meta = null, title = "新会�
     workflowSessionId: createId("workflow-session"),
     actorProjection: createActorProjection(actorId),
     stateReloadInFlight: null,
+    actionActorProjections: new Map(),
+    actionStateReloads: new Map(),
+    actionStateNotices: new Map(),
+    actionStateRefreshTimers: new Map(),
+    actionActorTaskElements: new Map(),
+    actionActorControlReceipts: new Map(),
     actionFrameCache: new Map(),
     actorStateNotice: "",
     actorTaskElement: null,
     actorControlReceipt: null,
     actorStateRefreshTimer: null,
+    actorStateRefreshGeneration: 0,
+    actionStateRefreshGenerations: new Map(),
+    historyRecoveredTurnId: null,
     needsYouDrafts: new Map(),
     needsYouSubmissions: new Map(),
     approvalConfirmRequestId: null,
@@ -419,6 +438,9 @@ function upsertTraceOperation(trace, patch) {
       id: String(patch.id || key.slice(key.indexOf(":") + 1)),
       kind: String(patch.kind).toLowerCase(),
       title: "Operation",
+      invocationName: "",
+      description: "",
+      presentation: null,
       status: "running",
       input: "",
       output: "",
@@ -426,6 +448,7 @@ function upsertTraceOperation(trace, patch) {
       model: "",
       provider: "",
       tools: [],
+      toolCatalogCaptured: false,
       round: null,
       sessionId: "",
       finishReason: "",
@@ -445,12 +468,18 @@ function upsertTraceOperation(trace, patch) {
   }
 
   for (const field of [
-    "title", "status", "input", "output", "reasoning", "model", "provider", "round",
-    "sessionId", "finishReason", "error",
+    "title", "invocationName", "description", "status", "input", "output", "reasoning",
+    "model", "provider", "round", "sessionId", "finishReason", "error",
   ]) {
     if (patch[field] !== undefined && patch[field] !== null) record[field] = patch[field];
   }
+  if (patch.presentation && typeof patch.presentation === "object") {
+    record.presentation = patch.presentation;
+  }
   if (Array.isArray(patch.tools)) record.tools = [...patch.tools];
+  if (typeof patch.toolCatalogCaptured === "boolean") {
+    record.toolCatalogCaptured = patch.toolCatalogCaptured;
+  }
   const serverSequence = Number(patch.serverSequence);
   if (Number.isSafeInteger(serverSequence) && serverSequence > 0) {
     record.serverSequence = Number.isSafeInteger(record.serverSequence)
@@ -479,6 +508,215 @@ function createInputTraceOperation(trace) {
     record.timingClock = "client";
   }
   return record;
+}
+
+// ---------------------------------------------------------------------------
+// Trajectory recovery.
+//
+// The live ledger is built from SSE frames, which are gone after a reload. Two
+// committed sources restore it, and neither infers a record it did not read:
+//   * stored turns  — `operations` from GET /api/chat/conversations/{id}
+//   * the in-flight turn — the conversation actor's current-state projection
+// Recovered containers are keyed by the server's `turnId`, because
+// `clientRequestId` is a browser identity that does not survive the reload. A
+// live container already owning that turn is never overwritten.
+// ---------------------------------------------------------------------------
+
+function restoredTraceKey(turnId) {
+  return `turn:${String(turnId || "").trim()}`;
+}
+
+function ensureRestoredRequestTrace(entry, turnId, { prompt = "", status = "closed" } = {}) {
+  const normalizedTurnId = String(turnId || "").trim();
+  if (!entry || !normalizedTurnId) return null;
+  for (const candidate of entry.traces.values()) {
+    if (String(candidate.serverTurnId || "").trim() === normalizedTurnId) return candidate;
+  }
+  const key = restoredTraceKey(normalizedTurnId);
+  const existing = entry.traces.get(key);
+  if (existing) return existing;
+
+  const run = createRunState();
+  run.status = status;
+  run.clientRequestId = key;
+  run.request = { prompt: String(prompt || "") };
+  run.context = { actorId: entry.actorId || "", turnId: normalizedTurnId };
+  const trace = {
+    key,
+    clientRequestId: key,
+    serverRunId: null,
+    serverTurnId: normalizedTurnId,
+    restored: true,
+    run,
+    records: [],
+    recordIndex: new Map(),
+    selectedOperationKey: null,
+    activeModelOperationKey: null,
+    followLatestOperation: false,
+    nextOperationSequence: 0,
+    typedModelLifecycleObserved: true,
+    element: null,
+    fields: null,
+  };
+  entry.traces.set(key, trace);
+  entry.traceOrder.unshift(key);
+  return trace;
+}
+
+function restoredOperationTimestamp(value) {
+  const timestamp = traceServerTimestamp(value);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
+}
+
+function restoredOperationUsage(operation) {
+  const usage = {
+    promptTokens: operation?.promptTokens ?? null,
+    completionTokens: operation?.completionTokens ?? null,
+    totalTokens: operation?.totalTokens ?? null,
+  };
+  return Object.values(usage).some((value) => value != null) ? usage : null;
+}
+
+function applyRestoredOperation(trace, operation, { kind, id, title }) {
+  const key = traceOperationKey(kind, id);
+  const tool = kind === "tool"
+    ? describeToolOperation({
+      toolName: operation?.toolName || title,
+      presentation: operation?.presentation,
+    })
+    : null;
+  const record = upsertTraceOperation(trace, {
+    key,
+    id,
+    kind,
+    title: tool?.title || title || traceOperationKindLabel(kind),
+    invocationName: tool?.invocationName || "",
+    description: tool?.description || "",
+    presentation: tool?.presentation || null,
+    status: String(operation?.status || "closed").toLowerCase(),
+    input: operation?.inputPreview || operation?.argumentsPreview || "",
+    // Tool result bodies are never archived, so a restored tool record reports
+    // its status and timing but honestly has no captured output.
+    output: operation?.outputPreview || "",
+    model: operation?.model || "",
+    provider: operation?.provider || "",
+    tools: Array.isArray(operation?.availableToolNames) ? operation.availableToolNames : [],
+    toolCatalogCaptured: operation?.toolCatalogCaptured === true,
+    finishReason: operation?.finishReason || "",
+    error: operation?.status === "error" ? operation?.safeMessage || "" : "",
+    usage: restoredOperationUsage(operation),
+    serverSequence: Number.isSafeInteger(operation?.order) && operation.order > 0
+      ? operation.order
+      : undefined,
+  });
+  if (!record) return null;
+  record.restored = true;
+  record.previewsTruncated = Boolean(operation?.previewsTruncated);
+  record.startedAt = restoredOperationTimestamp(operation?.startedAt);
+  record.completedAt = restoredOperationTimestamp(operation?.completedAt);
+  record.timingClock = record.startedAt == null ? null : "server";
+  return record;
+}
+
+function restoreTrajectoryFromStoredOperations(entry, operations, messages) {
+  if (!entry || !Array.isArray(operations) || !operations.length) return;
+  const promptByTurn = new Map();
+  for (const message of messages || []) {
+    if (message?.role !== "user" || !message.turnId) continue;
+    if (!promptByTurn.has(message.turnId)) promptByTurn.set(message.turnId, message.content || "");
+  }
+
+  const grouped = new Map();
+  for (const operation of operations) {
+    const turnId = String(operation?.turnId || "").trim();
+    if (!turnId) continue;
+    if (!grouped.has(turnId)) grouped.set(turnId, []);
+    grouped.get(turnId).push(operation);
+  }
+
+  for (const [turnId, turnOperations] of grouped) {
+    const trace = ensureRestoredRequestTrace(entry, turnId, {
+      prompt: promptByTurn.get(turnId) || "",
+      status: turnOperations.some((operation) => operation?.status === "error")
+        ? "error"
+        : "complete",
+    });
+    if (!trace || !trace.restored || trace.records.length) continue;
+    const ordered = [...turnOperations]
+      .sort((left, right) => (Number(left?.order) || 0) - (Number(right?.order) || 0));
+    const firstStart = ordered
+      .map((operation) => restoredOperationTimestamp(operation?.startedAt))
+      .find((value) => value != null) ?? null;
+    const lastEnd = ordered
+      .map((operation) => restoredOperationTimestamp(operation?.completedAt))
+      .filter((value) => value != null)
+      .at(-1) ?? null;
+    trace.run.startedAt = firstStart;
+    trace.run.completedAt = lastEnd;
+
+    const input = createInputTraceOperation(trace);
+    if (input) {
+      input.restored = true;
+      input.startedAt = firstStart;
+      input.timingClock = firstStart == null ? null : "server";
+    }
+    for (const operation of ordered) {
+      applyRestoredOperation(trace, operation, {
+        kind: operation?.kind === "model" ? "model" : "tool",
+        id: operation?.operationId || `${turnId}:${operation?.order ?? 0}`,
+        title: operation?.title,
+      });
+    }
+  }
+}
+
+function restoreTrajectoryFromActorProjection(entry, projection) {
+  const task = projection?.task;
+  const turnId = String(task?.turnId || "").trim();
+  if (!entry || !turnId || !(projection?.steps instanceof Map)) return;
+  const steps = [...projection.steps.values()]
+    .filter((step) => step?.operation?.requestedAt &&
+      (step.kind === "llm" || step.kind === "tool"));
+  if (!steps.length) return;
+
+  const trace = ensureRestoredRequestTrace(entry, turnId, {
+    prompt: projection?.activeTurn?.turnId === turnId
+      ? projection?.activeTurn?.prompt || ""
+      : projection?.latestTurn?.prompt || "",
+    status: task?.status === "failed" ? "error" : "running",
+  });
+  if (!trace || !trace.restored) return;
+
+  const firstStart = steps
+    .map((step) => restoredOperationTimestamp(step.operation.requestedAt))
+    .find((value) => value != null) ?? null;
+  if (trace.run.startedAt == null) trace.run.startedAt = firstStart;
+  const input = createInputTraceOperation(trace);
+  if (input && input.startedAt == null) {
+    input.restored = true;
+    input.startedAt = firstStart;
+    input.timingClock = firstStart == null ? null : "server";
+  }
+
+  for (const step of steps) {
+    applyRestoredOperation(trace, {
+      status: step.status,
+      title: step.kind === "tool" ? step.source?.tool?.toolName : step.source?.llm?.model,
+      toolName: step.source?.tool?.toolName || "",
+      presentation: step.source?.tool?.presentation || null,
+      model: step.source?.llm?.model || "",
+      startedAt: step.operation.requestedAt,
+      completedAt: step.operation.completedAt,
+      safeMessage: step.safeMessage,
+      order: step.order,
+    }, {
+      kind: step.kind === "llm" ? "model" : "tool",
+      id: step.operation.operationId || step.stepId,
+      title: step.kind === "tool"
+        ? step.source?.tool?.toolName
+        : step.source?.llm?.model || step.description,
+    });
+  }
 }
 
 function selectedTraceOperation(trace) {
@@ -560,6 +798,68 @@ function traceOperationRound(value, fallback) {
   return Number.isSafeInteger(round) ? round : fallback;
 }
 
+function normalizedToolText(value, limit = 180) {
+  return typeof value === "string"
+    ? value.replace(/\s+/g, " ").trim().slice(0, limit)
+    : "";
+}
+
+function containsOpaqueToolInvocation(value) {
+  return /\bnyxop_[0-9a-f]{24,}\b/i.test(String(value || ""));
+}
+
+function readableToolInvocationName(value) {
+  const name = normalizedToolText(value);
+  if (!name || containsOpaqueToolInvocation(name)) return "连接服务操作";
+  return name.replace(/[_./:-]+/g, " ").replace(/\s+/g, " ").trim() || "工具操作";
+}
+
+function nyxIdToolPresentationSource(presentation) {
+  if (!presentation || typeof presentation !== "object") return null;
+  const direct = presentation.nyxIdOperation;
+  if (direct && typeof direct === "object") return direct;
+  const sourceRef = presentation.sourceRef;
+  return sourceRef?.nyxIdOperation && typeof sourceRef.nyxIdOperation === "object"
+    ? sourceRef.nyxIdOperation
+    : null;
+}
+
+function describeToolOperation(value = {}) {
+  const presentation = value?.presentation && typeof value.presentation === "object"
+    ? value.presentation
+    : null;
+  const source = nyxIdToolPresentationSource(presentation);
+  const invocationName = normalizedToolText(
+    presentation?.invocationName || value?.invocationName || value?.toolName,
+  );
+  const presentedName = normalizedToolText(presentation?.displayName);
+  const displayName = presentedName && !containsOpaqueToolInvocation(presentedName)
+    ? presentedName
+    : readableToolInvocationName(invocationName);
+  const serviceLabel = normalizedToolText(
+    source?.connectionLabel || source?.connectorDisplayName ||
+    source?.catalogServiceSlug || source?.serviceSlug,
+  );
+  const title = serviceLabel && !displayName.toLocaleLowerCase().includes(serviceLabel.toLocaleLowerCase())
+    ? `${serviceLabel} · ${displayName}`
+    : displayName;
+  return {
+    invocationName,
+    displayName,
+    serviceLabel,
+    title,
+    description: normalizedToolText(presentation?.description, 320),
+    kind: normalizedToolText(presentation?.kind),
+    presentation,
+  };
+}
+
+function toolActivityRunningCopy(tool) {
+  return tool.serviceLabel
+    ? `正在通过 ${tool.serviceLabel} 执行 ${tool.displayName}…`
+    : `正在执行 ${tool.displayName}…`;
+}
+
 function traceToolOperation(trace, event, { create = false } = {}) {
   ensureTraceOperationState(trace);
   if (!trace) return null;
@@ -568,11 +868,15 @@ function traceToolOperation(trace, event, { create = false } = {}) {
   const existing = key ? trace.recordIndex.get(key) : null;
   if (existing || !create) return existing;
   const resolvedId = id || createId("tool-call");
+  const presentation = describeToolOperation(event);
   return upsertTraceOperation(trace, {
     key: traceOperationKey("tool", resolvedId),
     id: resolvedId,
     kind: "tool",
-    title: event?.toolName || "tool",
+    title: presentation.title,
+    invocationName: presentation.invocationName,
+    description: presentation.description,
+    presentation: presentation.presentation,
     status: "running",
   });
 }
@@ -613,9 +917,14 @@ function applyRoleChatTraceSnapshot(trace, event) {
     const tool = traceToolOperation(trace, {
       toolCallId: call.callId,
       toolName: call.toolName,
+      presentation: call.presentation,
     }, { create: true });
     if (!tool) continue;
-    tool.title = call.toolName || tool.title;
+    const presentation = describeToolOperation(call);
+    tool.title = presentation.title || tool.title;
+    tool.invocationName = presentation.invocationName || tool.invocationName;
+    tool.description = presentation.description || tool.description;
+    tool.presentation = presentation.presentation || tool.presentation;
     if (!tool.input && call.argumentsJson) tool.input = String(call.argumentsJson);
     if (!tool.output && receipt?.resultJson) tool.output = String(receipt.resultJson);
     if (receipt) tool.status = traceTerminalOperationStatus(receipt);
@@ -624,9 +933,14 @@ function applyRoleChatTraceSnapshot(trace, event) {
     const tool = traceToolOperation(trace, {
       toolCallId: receipt.callId,
       toolName: receipt.toolName,
+      presentation: receipt.presentation,
     }, { create: true });
     if (!tool) continue;
-    tool.title = receipt.toolName || tool.title;
+    const presentation = describeToolOperation(receipt);
+    tool.title = presentation.title || tool.title;
+    tool.invocationName = presentation.invocationName || tool.invocationName;
+    tool.description = presentation.description || tool.description;
+    tool.presentation = presentation.presentation || tool.presentation;
     if (!tool.output && receipt.resultJson) tool.output = String(receipt.resultJson);
     tool.status = traceTerminalOperationStatus(receipt);
   }
@@ -650,6 +964,7 @@ function applyRequestTraceEvent(entry, run, event) {
         provider: event.provider || model.provider,
         input: event.inputSummary || model.input,
         tools: Array.isArray(event.availableToolNames) ? event.availableToolNames : model.tools,
+        toolCatalogCaptured: Array.isArray(event.availableToolNames) || model.toolCatalogCaptured,
         round,
         sessionId: event.sessionId || model.sessionId,
         serverSequence: event.sequence,
@@ -709,10 +1024,14 @@ function applyRequestTraceEvent(entry, run, event) {
     case "tool_start": {
       const tool = traceToolOperation(trace, event, { create: true });
       if (!tool) break;
-      tool.title = event.toolName || tool.title;
+      const presentation = describeToolOperation(event);
       upsertTraceOperation(trace, {
         key: tool.key,
         kind: "tool",
+        title: presentation.title,
+        invocationName: presentation.invocationName,
+        description: presentation.description,
+        presentation: presentation.presentation,
         sessionId: event.sessionId || tool.sessionId,
         serverSequence: event.sequence,
       });
@@ -723,7 +1042,13 @@ function applyRequestTraceEvent(entry, run, event) {
     case "tool_end": {
       const tool = traceToolOperation(trace, event, { create: true });
       if (!tool) break;
-      tool.title = event.toolName || tool.title;
+      if (event.presentation || event.toolName) {
+        const presentation = describeToolOperation(event);
+        tool.title = presentation.title || tool.title;
+        tool.invocationName = presentation.invocationName || tool.invocationName;
+        tool.description = presentation.description || tool.description;
+        tool.presentation = presentation.presentation || tool.presentation;
+      }
       if (event.argumentsJson) tool.input = String(event.argumentsJson);
       if (event.result !== undefined && event.result !== null) tool.output = String(event.result);
       else if (event.error) tool.output = String(event.error);
@@ -835,186 +1160,925 @@ function traceOperationStatusLabel(status) {
   }[String(status || "").toLowerCase()] || "状态未知";
 }
 
-function traceOperationPreview(record) {
-  const value = record?.kind === "input" ? record.input : record?.output || record?.input;
-  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 180) ||
-    (record?.status === "running" ? "等待结果" : "未上报内容");
-}
+// ---------------------------------------------------------------------------
+// Trajectory ledger.
+//
+// A request is only the stable container; its Input / Model / Tool operations
+// are the selectable records. One operation identity is shared by its overview
+// span, its ledger row and the details pane, so all three always describe the
+// same recorded facts. Timing is rendered only when the operation reported it.
+// ---------------------------------------------------------------------------
+
+const TRAJECTORY_LANE = { input: 0, model: 1, tool: 2 };
+const TRAJECTORY_DETAILS_MIN_WIDTH = 240;
+const TRAJECTORY_DETAILS_DEFAULT_WIDTH = 340;
+const TRAJECTORY_RANGE_MIN_PX = 3;
+const TRAJECTORY_TAIL_THRESHOLD_PX = 24;
+
+const trajectory = {
+  durationMode: true,
+  foldCalls: false,
+  foldedRequests: new Set(),
+  search: "",
+  range: null,
+  viewport: null,
+  detailsWidth: null,
+  detailsTab: null,
+  detailsOpen: false,
+  domain: null,
+  spans: [],
+  rows: [],
+  drag: null,
+};
 
 function traceOperationIcon(kind) {
   return { input: "corner-down-right", model: "sparkles", tool: "wrench" }[kind] || "circle";
 }
 
-function createTraceOperationRow(entry, trace, record) {
-  const row = el("button", `trace-operation-row ${record.kind}`);
-  row.type = "button";
-  row.setAttribute("role", "option");
-  row.dataset.operationKey = record.key;
-  const marker = el("span", "trace-operation-marker");
-  marker.append(iconNode(traceOperationIcon(record.kind)));
-  const copy = el("span", "trace-operation-copy");
-  const heading = el("span", "trace-operation-heading");
-  const kind = el("small", "trace-operation-kind", traceOperationKindLabel(record.kind));
-  const title = el("strong", "trace-operation-title");
-  heading.append(kind, title);
-  const preview = el("small", "trace-operation-preview");
-  copy.append(heading, preview);
-  const timing = el("span", "trace-operation-timing");
-  const status = el("small", "trace-operation-status");
-  const duration = el("strong", "trace-operation-duration mono");
-  timing.append(status, duration);
-  row.append(marker, copy, timing, iconNode("chevron-right"));
-  record.element = row;
-  record.fields = { kind, title, preview, status, duration };
-  row.addEventListener("click", () => selectTraceOperation(entry, trace, record.key, { openDetails: true }));
-  row.addEventListener("keydown", (event) => moveTraceOperationSelection(event, entry, trace, record.key));
-  return row;
+function trajectoryPreview(value, limit = 220) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
 }
 
-function updateTraceOperationRow(entry, trace, record) {
-  const row = record.element || createTraceOperationRow(entry, trace, record);
-  const selected = trace.selectedOperationKey === record.key;
-  row.className = `trace-operation-row ${record.kind} ${record.status || "running"}${selected ? " selected" : ""}`;
-  row.setAttribute("aria-selected", String(selected));
-  row.tabIndex = selected ? 0 : -1;
-  record.fields.title.textContent = record.title || traceOperationKindLabel(record.kind);
-  record.fields.preview.textContent = traceOperationPreview(record);
-  record.fields.status.textContent = traceOperationStatusLabel(record.status);
-  record.fields.duration.textContent = traceOperationDuration(record);
-  return row;
+function trajectoryRowTitle(record) {
+  if (record.kind === "input") return trajectoryPreview(record.input) || "空请求";
+  if (record.kind === "model") return record.model || record.title || "LLM response";
+  return describeToolOperation({
+    toolName: record.invocationName || record.title,
+    presentation: record.presentation,
+  }).title;
 }
 
-function selectTraceOperation(entry, trace, key, { openDetails = false, focusRow = false } = {}) {
+function trajectoryRowResult(record) {
+  if (record.kind === "input") return null;
+  const output = trajectoryPreview(record.error || record.output || record.reasoning);
+  if (output) return { text: output, error: Boolean(record.error) || record.status === "error" };
+  if (record.status === "running" && record.kind === "tool") {
+    return {
+      text: toolActivityRunningCopy(describeToolOperation({
+        toolName: record.invocationName || record.title,
+        presentation: record.presentation,
+      })),
+      pending: true,
+    };
+  }
+  if (record.status === "running") return { text: "等待结果", pending: true };
+  if (record.status === "error") return { text: "执行失败", error: true };
+  return { text: "已完成", pending: false };
+}
+
+function trajectoryLoadedToolsSummary(record, limit = 3) {
+  if (record.kind !== "model" || !record.toolCatalogCaptured) return null;
+  if (!Array.isArray(record.tools) || !record.tools.length) return "已加载 0";
+  const names = record.tools.slice(0, limit).join(", ");
+  const remaining = Math.max(0, record.tools.length - limit);
+  return `已加载 ${record.tools.length} · ${names}${remaining ? ` +${remaining}` : ""}`;
+}
+
+function trajectoryRequestSummary(records) {
+  const models = records.filter((record) => record.kind === "model").length;
+  const tools = records.filter((record) => record.kind === "tool").length;
+  const parts = [`${records.length} 条记录`];
+  if (models) parts.push(`${models} 次模型响应`);
+  if (tools) parts.push(`${tools} 次工具调用`);
+  return parts.join(" · ");
+}
+
+function trajectoryCollapsedCallsSummary(tools) {
+  const failed = tools.filter((tool) => tool.status === "error").length;
+  const names = [...new Set(tools.map(trajectoryRowTitle).filter(Boolean))].slice(0, 3).join(", ");
+  const summary = `${tools.length} 次工具调用${names ? ` · ${names}` : ""}`;
+  return failed ? `${summary} · ${failed} 失败` : summary;
+}
+
+function trajectorySearchText(row) {
+  if (row.type === "request") {
+    return `${row.number} ${row.records.map((record) => record.title).join(" ")}`.toLowerCase();
+  }
+  const record = row.record;
+  return [
+    traceOperationKindLabel(record.kind),
+    trajectoryRowTitle(record),
+    record.model,
+    record.provider,
+    record.input,
+    record.output,
+    record.reasoning,
+    record.error,
+    ...(record.tools || []),
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function orderedRequestTraces(entry) {
+  return [...(entry?.traceOrder || [])]
+    .map((key) => entry?.traces?.get(key))
+    .filter(Boolean)
+    .reverse();
+}
+
+function buildTrajectoryRows(entry) {
+  const rows = [];
+  orderedRequestTraces(entry).forEach((trace, index) => {
+    const records = orderedTraceOperations(trace);
+    const number = index + 1;
+    if (!records.length) return;
+    if (trajectory.foldedRequests.has(trace.key) && records.length > 1) {
+      rows.push({
+        type: "request",
+        key: `request:${trace.key}`,
+        trace,
+        number,
+        records,
+        requestStart: true,
+        requestEnd: true,
+      });
+      return;
+    }
+    let cursor = 0;
+    let first = true;
+    while (cursor < records.length) {
+      const record = records[cursor];
+      const collapsedCalls = [];
+      if (trajectory.foldCalls && record.kind === "model") {
+        let lookahead = cursor + 1;
+        while (lookahead < records.length && records[lookahead].kind === "tool") {
+          collapsedCalls.push(records[lookahead]);
+          lookahead += 1;
+        }
+      }
+      rows.push({
+        type: "operation",
+        key: `${trace.key} ${record.key}`,
+        trace,
+        number,
+        record,
+        collapsedCalls,
+        requestStart: first,
+        requestEnd: false,
+      });
+      first = false;
+      cursor += 1 + collapsedCalls.length;
+    }
+    const last = rows.at(-1);
+    if (last) last.requestEnd = true;
+  });
+  return rows;
+}
+
+function trajectoryVisibleRecords(rows) {
+  return rows.flatMap((row) => (row.type === "operation"
+    ? [row.record, ...row.collapsedCalls]
+    : row.records));
+}
+
+function trajectorySpanRange(record) {
+  if (!Number.isFinite(record.startedAt)) return null;
+  const end = Number.isFinite(record.completedAt) && record.completedAt >= record.startedAt
+    ? record.completedAt
+    : null;
+  return { start: record.startedAt, end };
+}
+
+function buildTrajectorySpans(rows) {
+  const records = trajectoryVisibleRecords(rows);
+  if (!records.length) return { domain: null, spans: [] };
+  if (!trajectory.durationMode) {
+    return {
+      domain: { start: 0, end: records.length, mode: "sequence" },
+      spans: records.map((record, index) => ({
+        record,
+        start: index,
+        end: index,
+        equal: true,
+      })),
+    };
+  }
+  const timed = records
+    .map((record) => ({ record, range: trajectorySpanRange(record) }))
+    .filter((candidate) => candidate.range !== null);
+  if (!timed.length) return { domain: null, spans: [] };
+  const start = Math.min(...timed.map((candidate) => candidate.range.start));
+  const end = Math.max(
+    start + 1,
+    ...timed.map((candidate) => candidate.range.end ?? candidate.range.start),
+  );
+  return {
+    domain: { start, end, mode: "duration" },
+    spans: timed.map((candidate) => ({
+      record: candidate.record,
+      start: candidate.range.start,
+      end: candidate.range.end,
+      equal: false,
+    })),
+  };
+}
+
+function trajectoryViewport() {
+  const domain = trajectory.domain;
+  if (!domain) return null;
+  const viewport = trajectory.viewport;
+  if (!viewport) return { start: domain.start, end: domain.end };
+  const width = Math.max(1e-6, viewport.end - viewport.start);
+  const clampedStart = Math.max(domain.start, Math.min(viewport.start, domain.end - width));
+  return { start: clampedStart, end: clampedStart + width };
+}
+
+function trajectoryRequestBoundaries(rows) {
+  const boundaries = [];
+  for (const row of rows) {
+    if (!row.requestStart) continue;
+    const first = row.type === "operation" ? row.record : row.records[0];
+    if (Number.isFinite(first?.startedAt)) boundaries.push({ at: first.startedAt, number: row.number });
+  }
+  return boundaries;
+}
+
+function trajectoryRecordInRange(record) {
+  if (trajectory.range === null) return true;
+  const { start, end } = trajectory.range;
+  if (!trajectory.durationMode) {
+    const index = trajectory.spans.findIndex((span) => span.record === record);
+    return index >= 0 && index >= Math.floor(start) && index <= Math.ceil(end);
+  }
+  if (!Number.isFinite(record.startedAt)) return false;
+  const recordEnd = Number.isFinite(record.completedAt) ? record.completedAt : record.startedAt;
+  return record.startedAt <= end && recordEnd >= start;
+}
+
+function trajectoryRowInRange(row) {
+  if (trajectory.range === null) return true;
+  const records = row.type === "operation" ? [row.record, ...row.collapsedCalls] : row.records;
+  return records.some((record) => trajectoryRecordInRange(record));
+}
+
+function selectedTrajectoryRecord(entry) {
+  const trace = selectedRequestTrace(entry);
+  return trace ? selectedTraceOperation(trace) : null;
+}
+
+function selectTraceOperation(entry, trace, key, { focusRow = false } = {}) {
   ensureTraceOperationState(trace);
   if (!entry || !trace?.recordIndex.has(key)) return;
   entry.selectedTraceKey = trace.key;
   trace.selectedOperationKey = key;
   trace.followLatestOperation = false;
+  trajectory.detailsOpen = true;
   if (entry !== state.activeConversation) return;
   renderRequestTraces(entry);
   renderInspector();
-  setInspectorTab("run");
-  if (openDetails) openMobilePanel("inspector");
+  renderEventLog();
   if (focusRow) trace.recordIndex.get(key)?.element?.focus();
 }
 
-function moveTraceOperationSelection(event, entry, trace, key) {
+function moveTraceOperationSelection(event, entry) {
   if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
-  const keys = orderedTraceOperations(trace).map((record) => record.key);
-  const index = Math.max(0, keys.indexOf(key));
+  const operations = trajectory.rows.filter((row) => row.type === "operation");
+  if (!operations.length) return;
+  const trace = selectedRequestTrace(entry);
+  const currentKey = trace?.selectedOperationKey;
+  const index = Math.max(0, operations.findIndex((row) =>
+    row.trace === trace && row.record.key === currentKey));
   const nextIndex = event.key === "Home"
     ? 0
     : event.key === "End"
-      ? keys.length - 1
+      ? operations.length - 1
       : event.key === "ArrowUp"
         ? Math.max(0, index - 1)
-        : Math.min(keys.length - 1, index + 1);
-  selectTraceOperation(entry, trace, keys[nextIndex], { openDetails: true, focusRow: true });
+        : Math.min(operations.length - 1, index + 1);
+  const next = operations[nextIndex];
+  selectTraceOperation(entry, next.trace, next.record.key, { focusRow: true });
 }
 
-function traceOperationOverviewRange(trace) {
-  ensureTraceOperationState(trace);
-  const serverRecords = trace.records.filter((record) =>
-    record.timingClock === "server" && Number.isFinite(record.startedAt));
-  const comparable = serverRecords.length
-    ? serverRecords
-    : trace.records.filter((record) => Number.isFinite(record.startedAt));
-  if (!comparable.length) return null;
-  const start = Math.min(...comparable.map((record) => record.startedAt));
-  const knownEnds = comparable.flatMap((record) =>
-    Number.isFinite(record.completedAt) ? [record.completedAt] : [record.startedAt]);
-  const end = Math.max(start + 1, ...knownEnds);
-  return { start, end, clock: serverRecords.length ? "server" : comparable[0].timingClock };
-}
+function createTrajectoryOperationRow(entry, row) {
+  const record = row.record;
+  const element = el("tr", "trajectory-row");
+  element.tabIndex = 0;
+  element.dataset.kind = record.kind;
+  element.dataset.operationKey = record.key;
+  element.dataset.traceKey = row.trace.key;
 
-function createTraceOperationBar(trace, record, range) {
-  const selected = trace.selectedOperationKey === record.key;
-  const bar = el(
-    "button",
-    `trace-operation-duration-bar ${record.kind} ${record.status || "running"}${selected ? " selected" : ""}`,
-  );
-  bar.type = "button";
-  const comparable = range && record.timingClock === range.clock && Number.isFinite(record.startedAt);
-  const duration = traceOperationDurationMs(record);
-  const rangeDuration = range ? Math.max(1, range.end - range.start) : 1;
-  const orderedRecords = orderedTraceOperations(trace);
-  const sequenceDenominator = Math.max(1, orderedRecords.length - 1);
-  const sequenceIndex = Math.max(0, orderedRecords.findIndex((candidate) => candidate.key === record.key));
-  const sequenceLeft = orderedRecords.length === 1 ? 0 : sequenceIndex / sequenceDenominator * 100;
-  const left = comparable ? (record.startedAt - range.start) / rangeDuration * 100 : sequenceLeft;
-  const width = comparable && duration != null ? duration / rangeDuration * 100 : 0;
-  bar.style.setProperty("--trace-operation-left", `${Math.max(0, Math.min(100, left))}%`);
-  bar.style.setProperty("--trace-operation-width", `${Math.max(0, Math.min(100 - left, width))}%`);
-  bar.dataset.timingRecorded = String(duration != null);
-  bar.dataset.operationKey = record.key;
-  bar.title = `${traceOperationKindLabel(record.kind)} · ${record.title} · ${traceOperationDuration(record)}`;
-  bar.setAttribute("aria-label", bar.title);
-  bar.setAttribute("aria-pressed", String(selected));
-  bar.addEventListener("click", () => {
-    const entry = state.activeConversation;
-    const selectedTrace = selectedRequestTrace(entry);
-    if (entry && selectedTrace === trace) selectTraceOperation(entry, trace, record.key, { openDetails: true });
+  const event = el("td", "trajectory-event");
+  const requestRail = el("span", "trajectory-request-rail");
+  const selectionRail = el("span", "trajectory-selection-rail");
+  const requestLabel = el("button", "trajectory-request-label");
+  requestLabel.type = "button";
+  const eventInner = el("div", "trajectory-event-inner");
+  const kindSlot = el("span", "trajectory-kind-slot");
+  const kindTag = el("span", "trajectory-kind-tag");
+  kindTag.dataset.kind = record.kind;
+  kindTag.append(iconNode(traceOperationIcon(record.kind)), el("span", "", traceOperationKindLabel(record.kind)));
+  kindSlot.append(kindTag);
+  eventInner.append(kindSlot);
+  event.append(requestRail, selectionRail, requestLabel, eventInner);
+
+  const content = el("td", "trajectory-content");
+  const inner = el("div", "trajectory-content-inner");
+  const time = el("span", "trajectory-row-time");
+  const text = el("span", "trajectory-content-text");
+  const title = el("span", "trajectory-content-title");
+  const tools = el("span", "trajectory-content-tools");
+  const arrow = el("span", "trajectory-content-arrow", "→");
+  const result = el("span", "trajectory-content-result");
+  text.append(title, tools, arrow, result);
+  inner.append(text, time);
+  content.append(inner);
+
+  element.append(event, content);
+  record.element = element;
+  record.fields = { requestRail, selectionRail, requestLabel, kindTag, title, tools, arrow, result, time };
+  element.addEventListener("click", () => {
+    selectTraceOperation(entry, row.trace, record.key);
   });
-  record.barElement = bar;
-  return bar;
+  element.addEventListener("keydown", (keyEvent) => {
+    if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+      keyEvent.preventDefault();
+      selectTraceOperation(entry, row.trace, record.key);
+      return;
+    }
+    moveTraceOperationSelection(keyEvent, entry);
+  });
+  requestLabel.addEventListener("click", (clickEvent) => {
+    clickEvent.stopPropagation();
+    toggleTrajectoryRequest(entry, row.trace.key);
+  });
+  return element;
 }
 
-function renderTraceOperationOverview(trace) {
-  if (!dom.traceOperationOverview) return;
-  ensureTraceOperationState(trace);
-  if (!trace?.records.length) {
-    dom.traceOperationOverview.replaceChildren();
-    return;
+function updateTrajectoryOperationRow(entry, row, searchQuery) {
+  const record = row.record;
+  const element = record.element || createTrajectoryOperationRow(entry, row);
+  const trace = row.trace;
+  const selected = entry.selectedTraceKey === trace.key && trace.selectedOperationKey === record.key;
+  const activeRequest = entry.selectedTraceKey === trace.key;
+  element.dataset.selected = String(selected);
+  element.dataset.status = record.status || "running";
+  element.dataset.requestStart = String(Boolean(row.requestStart));
+  element.dataset.requestEnd = String(Boolean(row.requestEnd));
+  element.dataset.inRange = String(trajectoryRowInRange(row));
+  element.dataset.searchMatch = String(!searchQuery || trajectorySearchText(row).includes(searchQuery));
+  element.setAttribute("aria-selected", String(selected));
+
+  const fields = record.fields;
+  fields.requestRail.hidden = !activeRequest;
+  fields.selectionRail.hidden = !selected;
+  fields.requestLabel.hidden = !row.requestStart;
+  if (row.requestStart) {
+    fields.requestLabel.textContent = `Req ${row.number}`;
+    fields.requestLabel.dataset.active = String(activeRequest);
+    fields.requestLabel.title = trajectory.foldedRequests.has(trace.key)
+      ? `展开请求 ${row.number}`
+      : `折叠请求 ${row.number}`;
   }
-  const range = traceOperationOverviewRange(trace);
-  const lanes = [
-    ["input", "Input"],
-    ["model", "Model"],
-    ["tool", "Tools"],
-  ].map(([kind, label]) => {
-    const lane = el("div", `trace-operation-lane ${kind}`);
-    const laneLabel = el("span", "trace-operation-lane-label", label);
-    const track = el("div", "trace-operation-lane-track");
-    for (const record of orderedTraceOperations(trace).filter((candidate) => candidate.kind === kind)) {
-      track.append(createTraceOperationBar(trace, record, range));
-    }
-    lane.append(laneLabel, track);
-    return lane;
-  });
-  dom.traceOperationOverview.replaceChildren(...lanes);
+
+  const collapsed = row.collapsedCalls.length > 0;
+  fields.title.textContent = trajectoryRowTitle(record);
+  fields.title.classList.toggle("mono", record.kind === "tool");
+  const loadedTools = trajectoryLoadedToolsSummary(record);
+  fields.tools.hidden = loadedTools === null;
+  fields.tools.textContent = loadedTools || "";
+  fields.tools.title = loadedTools === null ? "" : record.tools.join("\n");
+  const result = collapsed
+    ? { text: trajectoryCollapsedCallsSummary(row.collapsedCalls), pending: false }
+    : trajectoryRowResult(record);
+  fields.arrow.hidden = result === null;
+  fields.result.hidden = result === null;
+  if (result !== null) {
+    fields.result.textContent = result.text;
+    fields.result.dataset.error = String(Boolean(result.error));
+    fields.result.dataset.pending = String(Boolean(result.pending));
+  }
+  const duration = traceOperationDurationMs(record);
+  fields.time.textContent = duration == null
+    ? (record.status === "running" ? "运行中" : "—")
+    : formatDuration(duration);
+  element.title = `${traceOperationKindLabel(record.kind)} · ${trajectoryRowTitle(record)} · ${traceOperationDuration(record)}`;
+  return element;
 }
 
-function renderTraceOperations(entry, trace) {
-  if (!dom.traceOperationList) return;
-  ensureTraceOperationState(trace);
-  const records = orderedTraceOperations(trace);
-  if (dom.traceOperationCount) dom.traceOperationCount.textContent = String(records.length);
-  if (!records.length) {
-    dom.traceOperationEmpty?.classList.remove("hidden");
-    if (dom.traceOperationEmpty &&
-        (dom.traceOperationList.firstElementChild !== dom.traceOperationEmpty ||
-         dom.traceOperationList.childElementCount !== 1)) {
-      dom.traceOperationList.replaceChildren(dom.traceOperationEmpty);
+function createTrajectoryRequestRow(entry, row) {
+  const element = el("tr", "trajectory-row");
+  element.tabIndex = 0;
+  element.dataset.kind = "request";
+  element.dataset.traceKey = row.trace.key;
+
+  const event = el("td", "trajectory-event");
+  const requestRail = el("span", "trajectory-request-rail");
+  const requestLabel = el("button", "trajectory-request-label");
+  requestLabel.type = "button";
+  const eventInner = el("div", "trajectory-event-inner");
+  const kindSlot = el("span", "trajectory-kind-slot");
+  const kindTag = el("span", "trajectory-kind-tag");
+  kindTag.dataset.kind = "request";
+  kindTag.append(iconNode("waypoints"), el("span", "", "REQUEST"));
+  kindSlot.append(kindTag);
+  eventInner.append(kindSlot);
+  event.append(requestRail, requestLabel, eventInner);
+
+  const content = el("td", "trajectory-content");
+  const collapsedText = el("span", "trajectory-collapsed");
+  const ellipsis = el("span", "trajectory-collapsed-ellipsis", "…");
+  const summary = el("span", "trajectory-collapsed-text");
+  collapsedText.append(ellipsis, summary);
+  content.append(collapsedText);
+
+  element.append(event, content);
+  row.trace.summaryElement = element;
+  row.trace.summaryFields = { requestRail, requestLabel, summary };
+  const expand = () => toggleTrajectoryRequest(entry, row.trace.key);
+  element.addEventListener("click", expand);
+  element.addEventListener("keydown", (keyEvent) => {
+    if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+    keyEvent.preventDefault();
+    expand();
+  });
+  return element;
+}
+
+function updateTrajectoryRequestRow(entry, row, searchQuery) {
+  const element = row.trace.summaryElement || createTrajectoryRequestRow(entry, row);
+  const activeRequest = entry.selectedTraceKey === row.trace.key;
+  element.dataset.selected = "false";
+  element.dataset.status = row.trace.run?.status || "idle";
+  element.dataset.requestStart = "true";
+  element.dataset.requestEnd = "true";
+  element.dataset.inRange = String(trajectoryRowInRange(row));
+  element.dataset.searchMatch = String(!searchQuery || trajectorySearchText(row).includes(searchQuery));
+  const fields = row.trace.summaryFields;
+  fields.requestRail.hidden = !activeRequest;
+  fields.requestLabel.textContent = `Req ${row.number}`;
+  fields.requestLabel.dataset.active = String(activeRequest);
+  fields.requestLabel.title = `展开请求 ${row.number}`;
+  fields.summary.textContent = trajectoryRequestSummary(row.records);
+  element.title = `请求 ${row.number} 已折叠 · ${trajectoryRequestSummary(row.records)}`;
+  return element;
+}
+
+function toggleTrajectoryRequest(entry, key) {
+  if (trajectory.foldedRequests.has(key)) trajectory.foldedRequests.delete(key);
+  else trajectory.foldedRequests.add(key);
+  renderRequestTraces(entry);
+}
+
+function renderTrajectoryLedger(entry, rows) {
+  const body = dom.traceOperationList;
+  if (!body) return;
+  const searchQuery = trajectory.search.trim().toLowerCase();
+  if (!rows.length) {
+    body.replaceChildren();
+    if (dom.traceOperationEmpty) {
+      dom.traceOperationEmpty.classList.remove("hidden");
+      dom.traceOperationEmpty.querySelector("strong").textContent = "尚无操作记录";
     }
-    renderTraceOperationOverview(trace);
     return;
   }
   dom.traceOperationEmpty?.classList.add("hidden");
-  if (!trace.recordIndex.has(trace.selectedOperationKey)) {
-    trace.selectedOperationKey = records.at(-1).key;
-  }
-  const needsIcons = records.some((record) => !record.element);
-  const rows = records.map((record) => updateTraceOperationRow(entry, trace, record));
-  rows.forEach((row, index) => {
-    const current = dom.traceOperationList.children[index];
-    if (current !== row) dom.traceOperationList.insertBefore(row, current || null);
+  const ledger = dom.trajectoryLedger;
+  const atTail = ledger
+    ? ledger.scrollHeight - ledger.clientHeight - ledger.scrollTop <= TRAJECTORY_TAIL_THRESHOLD_PX
+    : false;
+  const needsIcons = rows.some((row) => (row.type === "operation"
+    ? !row.record.element
+    : !row.trace.summaryElement));
+  const elements = rows.map((row) => (row.type === "operation"
+    ? updateTrajectoryOperationRow(entry, row, searchQuery)
+    : updateTrajectoryRequestRow(entry, row, searchQuery)));
+  elements.forEach((element, index) => {
+    const current = body.children[index];
+    if (current !== element) body.insertBefore(element, current || null);
   });
-  while (dom.traceOperationList.childElementCount > rows.length) {
-    dom.traceOperationList.lastElementChild.remove();
+  while (body.childElementCount > elements.length) body.lastElementChild.remove();
+  if (needsIcons) refreshIcons(body);
+  const visible = elements.some((element) => element.dataset.searchMatch !== "false");
+  if (dom.traceOperationEmpty) {
+    dom.traceOperationEmpty.classList.toggle("hidden", visible);
+    dom.traceOperationEmpty.querySelector("strong").textContent = "没有匹配的记录";
   }
-  if (needsIcons) refreshIcons(dom.traceOperationList);
-  renderTraceOperationOverview(trace);
+  if (atTail && ledger) ledger.scrollTop = ledger.scrollHeight;
+}
+
+function createTrajectorySpanElement(entry, span) {
+  const element = el("button", "trajectory-span");
+  element.type = "button";
+  element.dataset.kind = span.record.kind;
+  element.dataset.operationKey = span.record.key;
+  element.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const trace = trajectory.rows.find((row) =>
+      row.type === "operation" && row.record === span.record)?.trace;
+    if (trace) selectTraceOperation(entry, trace, span.record.key);
+  });
+  element.addEventListener("pointerdown", (event) => { event.stopPropagation(); });
+  return element;
+}
+
+function applyTrajectoryProjection(rows) {
+  const projection = buildTrajectorySpans(rows);
+  trajectory.domain = projection.domain;
+  trajectory.spans = projection.spans;
+  if (trajectory.domain === null) {
+    trajectory.viewport = null;
+    trajectory.range = null;
+  }
+}
+
+function renderTrajectoryOverview(entry, rows) {
+  const track = dom.trajectoryOverviewTrack;
+  if (!track) return;
+  const projection = { domain: trajectory.domain, spans: trajectory.spans };
+  const searchQuery = trajectory.search.trim().toLowerCase();
+  const viewport = trajectoryViewport();
+  const empty = !projection.domain || !projection.spans.length;
+  dom.trajectoryOverviewEmpty?.classList.toggle("hidden", !empty);
+  if (empty) {
+    dom.trajectoryOverviewSpans?.replaceChildren();
+    dom.trajectoryOverviewBoundaries?.replaceChildren();
+    dom.trajectoryOverviewSelection?.classList.add("hidden");
+    if (dom.trajectoryOverviewEmpty) {
+      dom.trajectoryOverviewEmpty.textContent = trajectory.durationMode
+        ? "尚无记录的时序"
+        : "尚无操作记录";
+    }
+    return;
+  }
+  const width = Math.max(1e-6, viewport.end - viewport.start);
+  const percent = (value) => ((value - viewport.start) / width) * 100;
+  const selectedRecord = selectedTrajectoryRecord(entry);
+  const spanElements = projection.spans.map((span) => {
+    const element = span.record.barElement || createTrajectorySpanElement(entry, span);
+    span.record.barElement = element;
+    const left = percent(span.start);
+    const spanWidth = span.equal
+      ? 0
+      : span.end === null ? 0 : percent(span.end) - left;
+    element.style.setProperty("--trajectory-span-left", `${left}%`);
+    element.style.setProperty("--trajectory-span-width", `${Math.max(0, spanWidth)}%`);
+    element.style.setProperty("--trajectory-span-lane", String(TRAJECTORY_LANE[span.record.kind] ?? 0));
+    element.dataset.equalDuration = String(span.equal);
+    element.dataset.timing = span.equal ? "sequence" : span.end === null ? "start-only" : "recorded";
+    element.dataset.status = span.record.status || "running";
+    element.dataset.current = String(selectedRecord === span.record);
+    element.dataset.inRange = String(trajectoryRecordInRange(span.record));
+    element.dataset.searchMatch = String(
+      !searchQuery || trajectorySearchText({ type: "operation", record: span.record }).includes(searchQuery),
+    );
+    const label = `${traceOperationKindLabel(span.record.kind)} · ${trajectoryRowTitle(span.record)} · ${traceOperationDuration(span.record)}`;
+    element.title = label;
+    element.setAttribute("aria-label", label);
+    return element;
+  });
+  dom.trajectoryOverviewSpans?.replaceChildren(...spanElements);
+
+  const boundaries = trajectory.durationMode
+    ? trajectoryRequestBoundaries(rows)
+    : rows.flatMap((row, index) => (row.requestStart && index > 0
+      ? [{ at: index, number: row.number }]
+      : []));
+  dom.trajectoryOverviewBoundaries?.replaceChildren(...boundaries.map((boundary) => {
+    const element = el("span", "trajectory-request-boundary");
+    element.style.setProperty("--trajectory-boundary-left", `${percent(boundary.at)}%`);
+    return element;
+  }));
+
+  const selection = dom.trajectoryOverviewSelection;
+  if (selection) {
+    const range = trajectory.range;
+    selection.classList.toggle("hidden", range === null);
+    if (range !== null) {
+      const bounds = track.getBoundingClientRect();
+      const left = (percent(range.start) / 100) * bounds.width;
+      const right = (percent(range.end) / 100) * bounds.width;
+      selection.style.setProperty("--trajectory-selection-left", `${Math.min(left, right)}px`);
+      selection.style.setProperty("--trajectory-selection-width", `${Math.abs(right - left)}px`);
+    }
+  }
+}
+
+function trajectoryDomainAt(clientX) {
+  const track = dom.trajectoryOverviewTrack;
+  const viewport = trajectoryViewport();
+  if (!track || !viewport) return null;
+  const bounds = track.getBoundingClientRect();
+  if (bounds.width <= 0) return null;
+  const ratio = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
+  return viewport.start + ratio * (viewport.end - viewport.start);
+}
+
+function bindTrajectoryOverview() {
+  const track = dom.trajectoryOverviewTrack;
+  if (!track) return;
+  track.addEventListener("contextmenu", (event) => { event.preventDefault(); });
+  track.addEventListener("pointerdown", (event) => {
+    const at = trajectoryDomainAt(event.clientX);
+    if (at === null) return;
+    if (event.button === 2) {
+      trajectory.drag = { mode: "pan", pointerId: event.pointerId, clientX: event.clientX, moved: false };
+      track.dataset.panning = "true";
+    } else if (event.button === 0) {
+      trajectory.drag = { mode: "range", pointerId: event.pointerId, clientX: event.clientX, anchor: at };
+    } else return;
+    track.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  track.addEventListener("pointermove", (event) => {
+    const hairline = dom.trajectoryOverviewHairline;
+    const bounds = track.getBoundingClientRect();
+    if (hairline) {
+      hairline.classList.remove("hidden");
+      hairline.style.setProperty("--trajectory-hairline-left", `${event.clientX - bounds.left}px`);
+    }
+    const drag = trajectory.drag;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    if (drag.mode === "pan") {
+      const viewport = trajectoryViewport();
+      const domain = trajectory.domain;
+      if (!viewport || !domain || bounds.width <= 0) return;
+      const delta = ((event.clientX - drag.clientX) / bounds.width) * (viewport.end - viewport.start);
+      drag.clientX = event.clientX;
+      drag.moved = true;
+      const span = viewport.end - viewport.start;
+      const start = Math.max(domain.start, Math.min(viewport.start - delta, domain.end - span));
+      trajectory.viewport = { start, end: start + span };
+      renderRequestTraces();
+      return;
+    }
+    const at = trajectoryDomainAt(event.clientX);
+    if (at === null) return;
+    trajectory.range = { start: Math.min(drag.anchor, at), end: Math.max(drag.anchor, at) };
+    drag.clientXEnd = event.clientX;
+    renderRequestTraces();
+  });
+  const endDrag = (event) => {
+    const drag = trajectory.drag;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    trajectory.drag = null;
+    delete track.dataset.panning;
+    if (track.hasPointerCapture(event.pointerId)) track.releasePointerCapture(event.pointerId);
+    if (drag.mode === "pan" && !drag.moved) {
+      trajectory.range = null;
+      renderRequestTraces();
+      return;
+    }
+    if (drag.mode !== "range") return;
+    if (Math.abs((drag.clientXEnd ?? drag.clientX) - drag.clientX) < TRAJECTORY_RANGE_MIN_PX) {
+      trajectory.range = null;
+    }
+    renderRequestTraces();
+  };
+  track.addEventListener("pointerup", endDrag);
+  track.addEventListener("pointercancel", endDrag);
+  track.addEventListener("pointerleave", () => {
+    dom.trajectoryOverviewHairline?.classList.add("hidden");
+  });
+  track.addEventListener("wheel", (event) => {
+    const domain = trajectory.domain;
+    const viewport = trajectoryViewport();
+    if (!domain || !viewport) return;
+    const focus = trajectoryDomainAt(event.clientX);
+    if (focus === null) return;
+    event.preventDefault();
+    const domainWidth = domain.end - domain.start;
+    const scale = event.deltaY > 0 ? 1.25 : 0.8;
+    const width = Math.max(
+      domainWidth / 200,
+      Math.min(domainWidth, (viewport.end - viewport.start) * scale),
+    );
+    const ratio = (focus - viewport.start) / Math.max(1e-6, viewport.end - viewport.start);
+    const start = Math.max(domain.start, Math.min(focus - ratio * width, domain.end - width));
+    trajectory.viewport = width >= domainWidth ? null : { start, end: start + width };
+    renderRequestTraces();
+  }, { passive: false });
+}
+
+function trajectoryDetailTabs(record) {
+  const tabs = [{ id: "overview", label: "概览" }];
+  if (record.input || (record.kind === "model" && record.toolCatalogCaptured)) {
+    tabs.push({ id: "input", label: "输入" });
+  }
+  if (record.output || record.reasoning || record.error) tabs.push({ id: "output", label: "输出" });
+  if (Number.isFinite(record.startedAt)) tabs.push({ id: "timing", label: "计时" });
+  return tabs;
+}
+
+function trajectoryFactList(pairs) {
+  const list = el("dl", "trajectory-facts");
+  for (const [term, value, mono] of pairs) {
+    if (value === null || value === undefined || value === "") continue;
+    const row = el("div");
+    const dd = el("dd", mono ? "mono" : "", String(value));
+    dd.title = String(value);
+    row.append(el("dt", "", term), dd);
+    list.append(row);
+  }
+  return list;
+}
+
+function trajectoryPayloadGroup(label, value, { truncated = false } = {}) {
+  const group = el("div", "trajectory-payload-group");
+  const heading = el("span", "", label);
+  // A restored preview is a stored fragment, never the complete payload.
+  if (truncated) heading.append(el("i", "trajectory-payload-note", "已截断的存档预览"));
+  group.append(heading, el("pre", "trajectory-payload", value));
+  return group;
+}
+
+function renderTrajectoryDetailBody(record, trace) {
+  const tab = trajectory.detailsTab;
+  const truncated = Boolean(record.previewsTruncated);
+  if (tab === "input") {
+    const body = el("div");
+    if (record.input) body.append(trajectoryPayloadGroup("Input", record.input, { truncated }));
+    if (record.kind === "model" && record.toolCatalogCaptured) {
+      body.append(trajectoryPayloadGroup("本轮加载工具", record.tools?.length ? record.tools.join("\n") : "无"));
+    }
+    if (!body.childElementCount) body.append(el("p", "trajectory-payload-empty", "未捕获输入"));
+    return body;
+  }
+  if (tab === "output") {
+    const body = el("div");
+    if (record.output) body.append(trajectoryPayloadGroup("Output", record.output, { truncated }));
+    if (record.reasoning) body.append(trajectoryPayloadGroup("Reasoning", record.reasoning));
+    if (record.error) body.append(trajectoryPayloadGroup("Error", record.error));
+    if (!body.childElementCount) body.append(el("p", "trajectory-payload-empty", "未捕获输出"));
+    return body;
+  }
+  if (tab === "timing") {
+    return trajectoryFactList([
+      ["开始", traceOperationStartedAt(record)],
+      ["结束", Number.isFinite(record.completedAt)
+        ? traceOperationStartedAt({ startedAt: record.completedAt })
+        : "不可用"],
+      ["Duration", traceOperationDuration(record)],
+      ["时钟", record.timingClock === "server" ? "服务端上报" : record.timingClock === "client" ? "浏览器发起" : "不可用"],
+    ]);
+  }
+  const tool = record.kind === "tool"
+    ? describeToolOperation({
+      toolName: record.invocationName || record.title,
+      presentation: record.presentation,
+    })
+    : null;
+  return trajectoryFactList([
+    ["状态", traceOperationStatusLabel(record.status)],
+    ["动作", tool?.displayName || null],
+    ["连接", tool?.serviceLabel || null],
+    ["说明", tool?.description || null],
+    ["内部 Operation", record.id || record.key, true],
+    ["内部 Tool", record.kind === "tool" ? record.invocationName || null : null, true],
+    ["开始", traceOperationStartedAt(record)],
+    ["Duration", traceOperationDuration(record)],
+    ["模型", record.kind === "model" ? record.model || "未上报" : null],
+    ["Provider", record.kind === "model" ? record.provider || "未上报" : null],
+    ["加载工具", record.kind === "model"
+      ? record.toolCatalogCaptured ? record.tools?.length || 0 : "未上报"
+      : null],
+    ["Round", record.round == null ? null : String(record.round)],
+    ["Finish reason", record.finishReason || null],
+    ["Input tokens", record.usage?.promptTokens ?? null],
+    ["Output tokens", record.usage?.completionTokens ?? null],
+    ["Total tokens", record.usage?.totalTokens ?? null],
+    ["Session", record.sessionId || null, true],
+    ["Turn", trace?.serverTurnId || null, true],
+    ["Request", trace?.restored ? null : trace?.clientRequestId || null, true],
+    ["Run", trace?.serverRunId || trace?.run?.context?.runId || null, true],
+    ["来源", trace?.restored ? "已存档轨迹" : null],
+  ]);
+}
+
+function setTrajectoryDetailsWidth(width) {
+  const split = dom.trajectoryDetails?.parentElement;
+  if (!split) return;
+  split.style.setProperty(
+    "--trajectory-details-width",
+    `${width ?? TRAJECTORY_DETAILS_DEFAULT_WIDTH}px`,
+  );
+}
+
+function renderTrajectoryDetails(entry) {
+  const panel = dom.trajectoryDetails;
+  if (!panel) return;
+  const trace = selectedRequestTrace(entry);
+  const record = trajectory.detailsOpen ? selectedTrajectoryRecord(entry) : null;
+  panel.classList.toggle("hidden", !record);
+  if (!record) return;
+  setTrajectoryDetailsWidth(trajectory.detailsWidth);
+  dom.trajectoryDetailsKind.textContent = traceOperationKindLabel(record.kind);
+  dom.trajectoryDetailsKind.dataset.kind = record.kind;
+  const requestNumber = trajectory.rows.find((row) => row.trace === trace)?.number;
+  const location = `${requestNumber ? `Req ${requestNumber} · ` : ""}${trajectoryRowTitle(record)}`;
+  dom.trajectoryDetailsLocation.textContent = location;
+  dom.trajectoryDetailsLocation.title = location;
+
+  const tabs = trajectoryDetailTabs(record);
+  if (!tabs.some((tab) => tab.id === trajectory.detailsTab)) trajectory.detailsTab = tabs[0].id;
+  dom.trajectoryDetailsTabs.replaceChildren(...tabs.map((tab) => {
+    const button = el("button", "trajectory-details-tab", tab.label);
+    button.type = "button";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(trajectory.detailsTab === tab.id));
+    button.addEventListener("click", () => {
+      trajectory.detailsTab = tab.id;
+      renderTrajectoryDetails(entry);
+    });
+    return button;
+  }));
+  dom.trajectoryDetailsBody.replaceChildren(renderTrajectoryDetailBody(record, trace));
+}
+
+function updateTrajectoryToolbar(entry) {
+  const traces = orderedRequestTraces(entry);
+  const foldable = traces.filter((trace) => orderedTraceOperations(trace).length > 1);
+  const allFolded = foldable.length > 0 && foldable.every((trace) => trajectory.foldedRequests.has(trace.key));
+  if (dom.trajectoryDurationButton) {
+    dom.trajectoryDurationButton.setAttribute("aria-pressed", String(trajectory.durationMode));
+    dom.trajectoryDurationButton.title = trajectory.durationMode ? "切换为等宽排布" : "按记录耗时排布";
+  }
+  if (dom.trajectoryFoldRequestsButton) {
+    dom.trajectoryFoldRequestsButton.setAttribute("aria-pressed", String(allFolded));
+    dom.trajectoryFoldRequestsButton.title = allFolded ? "展开全部请求" : "折叠全部请求";
+    dom.trajectoryFoldRequestsIcon.textContent = allFolded ? "⊞" : "⊟";
+  }
+  if (dom.trajectoryFoldCallsButton) {
+    dom.trajectoryFoldCallsButton.setAttribute("aria-pressed", String(trajectory.foldCalls));
+    dom.trajectoryFoldCallsButton.title = trajectory.foldCalls ? "展开工具调用" : "折叠模型记录下的工具调用";
+    dom.trajectoryFoldCallsIcon.textContent = trajectory.foldCalls ? "⊞" : "⊟";
+  }
+}
+
+function toggleAllTrajectoryRequests(entry) {
+  const foldable = orderedRequestTraces(entry).filter((trace) => orderedTraceOperations(trace).length > 1);
+  const allFolded = foldable.length > 0 && foldable.every((trace) => trajectory.foldedRequests.has(trace.key));
+  for (const trace of foldable) {
+    if (allFolded) trajectory.foldedRequests.delete(trace.key);
+    else trajectory.foldedRequests.add(trace.key);
+  }
+  renderRequestTraces(entry);
+}
+
+function bindTrajectoryControls() {
+  dom.trajectoryDurationButton?.addEventListener("click", () => {
+    trajectory.durationMode = !trajectory.durationMode;
+    trajectory.range = null;
+    trajectory.viewport = null;
+    renderRequestTraces();
+  });
+  dom.trajectoryFoldRequestsButton?.addEventListener("click", () => {
+    toggleAllTrajectoryRequests(state.activeConversation);
+  });
+  dom.trajectoryFoldCallsButton?.addEventListener("click", () => {
+    trajectory.foldCalls = !trajectory.foldCalls;
+    renderRequestTraces();
+  });
+  dom.trajectorySearchInput?.addEventListener("input", (event) => {
+    trajectory.search = event.currentTarget.value;
+    renderRequestTraces();
+  });
+  dom.trajectoryDetailsClose?.addEventListener("click", () => {
+    trajectory.detailsOpen = false;
+    renderRequestTraces();
+  });
+  bindTrajectoryDetailsResize();
+  bindTrajectoryOverview();
+}
+
+function bindTrajectoryDetailsResize() {
+  const handle = dom.trajectoryDetailsResize;
+  const panel = dom.trajectoryDetails;
+  if (!handle || !panel) return;
+  let drag = null;
+  const clamp = (width) => {
+    const split = panel.parentElement;
+    const max = split ? split.getBoundingClientRect().width * 0.7 : width;
+    return Math.max(TRAJECTORY_DETAILS_MIN_WIDTH, Math.min(width, max));
+  };
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    drag = { pointerId: event.pointerId, clientX: event.clientX, width: panel.getBoundingClientRect().width };
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    trajectory.detailsWidth = clamp(drag.width + drag.clientX - event.clientX);
+    setTrajectoryDetailsWidth(trajectory.detailsWidth);
+  });
+  const stop = (event) => {
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    drag = null;
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+  };
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
+  handle.addEventListener("dblclick", () => {
+    trajectory.detailsWidth = null;
+    setTrajectoryDetailsWidth(null);
+  });
+  handle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowLeft" ? 1 : -1;
+    trajectory.detailsWidth = clamp(panel.getBoundingClientRect().width + direction * 24);
+    setTrajectoryDetailsWidth(trajectory.detailsWidth);
+  });
 }
 
 function requestTraceInput(trace) {
@@ -1069,55 +2133,9 @@ function requestTraceStartTime(trace, { detailed = false } = {}) {
     : date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-function createRequestTraceRow(entry, trace) {
-  const row = el("button", "request-trace-row");
-  row.type = "button";
-  row.setAttribute("role", "option");
-  row.dataset.traceKey = trace.key;
-  const marker = el("span", "request-trace-marker");
-  marker.append(iconNode("waypoints"));
-  const copy = el("span", "request-trace-copy");
-  const input = el("strong", "request-trace-prompt");
-  const identity = el("small", "request-trace-identity mono");
-  copy.append(input, identity);
-  const metrics = el("span", "request-trace-row-metrics");
-  const status = el("span", "request-trace-row-status");
-  const counts = el("span", "request-trace-row-counts");
-  const timing = el("span", "request-trace-row-timing");
-  metrics.append(status, counts, timing);
-  row.append(marker, copy, metrics, iconNode("chevron-right"));
-  trace.element = row;
-  trace.fields = { marker, input, identity, status, counts, timing };
-  row.addEventListener("click", () => selectRequestTrace(entry, trace.key, { openDetails: true }));
-  row.addEventListener("keydown", (event) => moveRequestTraceSelection(event, entry, trace.key));
-  return row;
-}
-
-function updateRequestTraceRow(entry, trace) {
-  const row = trace.element || createRequestTraceRow(entry, trace);
-  const run = trace.run;
-  const selected = entry.selectedTraceKey === trace.key;
-  row.className = `request-trace-row ${run.status || "idle"}${selected ? " selected" : ""}`;
-  row.setAttribute("aria-selected", String(selected));
-  row.tabIndex = selected ? 0 : -1;
-  trace.fields.input.textContent = requestTraceInput(trace);
-  const serverRunId = trace.serverRunId || run.context?.runId || "";
-  trace.fields.identity.textContent = serverRunId
-    ? `request ${trace.clientRequestId} · run ${serverRunId}`
-    : `request ${trace.clientRequestId}`;
-  trace.fields.status.textContent = requestTraceStatusLabel(run.status);
-  trace.fields.counts.textContent = `${run.events.length} 事件 · ${run.tools.size} 工具`;
-  trace.fields.timing.textContent = `${requestTraceStartTime(trace)} · ${requestTraceDuration(trace)}`;
-  return row;
-}
-
 function renderRequestTraces(entry = state.activeConversation) {
-  if (!entry || entry !== state.activeConversation || !dom.requestTraceList) return;
-  const traces = entry.traceOrder
-    .map((key) => entry.traces.get(key))
-    .filter(Boolean);
-  dom.requestTraceCount.textContent = String(traces.length);
-  if (dom.requestTraceRailCount) dom.requestTraceRailCount.textContent = String(traces.length);
+  if (!entry || entry !== state.activeConversation || !dom.traceOperationList) return;
+  const traces = orderedRequestTraces(entry);
   const activeTrace = currentRequestTrace(entry);
   const receiving = Boolean(entry.controllers?.size && activeTrace?.run?.status === "running");
   const liveCopy = receiving
@@ -1125,64 +2143,24 @@ function renderRequestTraces(entry = state.activeConversation) {
     : activeTrace?.run?.startedAt
       ? "SSE 已结束"
       : "本页会话";
+  dom.requestTraceCount.textContent = String(traces.length);
   dom.requestTraceLive.classList.toggle("active", receiving);
   dom.requestTraceLive.querySelector("span").textContent = liveCopy;
-  if (!traces.length) {
-    entry.selectedTraceKey = null;
-    if (dom.requestTraceList.firstElementChild !== dom.requestTraceEmpty || dom.requestTraceList.childElementCount !== 1) {
-      dom.requestTraceList.replaceChildren(dom.requestTraceEmpty);
-    }
-    dom.requestTraceEmpty.classList.remove("hidden");
-    if (dom.traceOperationCount) dom.traceOperationCount.textContent = "0";
-    if (dom.traceOperationOverview) dom.traceOperationOverview.replaceChildren();
-    if (dom.traceOperationList && dom.traceOperationEmpty) {
-      dom.traceOperationEmpty.classList.remove("hidden");
-      dom.traceOperationList.replaceChildren(dom.traceOperationEmpty);
-    }
-    refreshIcons(dom.requestTraceEmpty);
-    return;
+  if (!entry.traces.has(entry.selectedTraceKey)) {
+    entry.selectedTraceKey = activeTrace?.key || traces.at(-1)?.key || null;
   }
-  dom.requestTraceEmpty.classList.add("hidden");
-  if (!entry.traces.has(entry.selectedTraceKey)) entry.selectedTraceKey = traces[0].key;
-  const needsIcons = traces.some((trace) => !trace.element);
-  const rows = traces.map((trace) => updateRequestTraceRow(entry, trace));
-  rows.forEach((row, index) => {
-    const current = dom.requestTraceList.children[index];
-    if (current !== row) dom.requestTraceList.insertBefore(row, current || null);
-  });
-  while (dom.requestTraceList.childElementCount > rows.length) {
-    dom.requestTraceList.lastElementChild.remove();
+  const rows = buildTrajectoryRows(entry);
+  trajectory.rows = rows;
+  if (dom.traceOperationCount) {
+    dom.traceOperationCount.textContent = String(
+      traces.reduce((total, trace) => total + orderedTraceOperations(trace).length, 0),
+    );
   }
-  if (needsIcons) refreshIcons(dom.requestTraceList);
-  renderTraceOperations(entry, selectedRequestTrace(entry) || traces[0]);
-}
-
-function selectRequestTrace(entry, key, { openDetails = false, focusRow = false } = {}) {
-  if (!entry?.traces?.has(key)) return;
-  entry.selectedTraceKey = key;
-  ensureTraceOperationState(entry.traces.get(key));
-  if (entry !== state.activeConversation) return;
-  renderRequestTraces(entry);
-  renderInspector();
-  renderEventLog();
-  setInspectorTab("run");
-  if (openDetails) openMobilePanel("inspector");
-  if (focusRow) entry.traces.get(key)?.element?.focus();
-}
-
-function moveRequestTraceSelection(event, entry, key) {
-  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
-  event.preventDefault();
-  const keys = entry.traceOrder.filter((candidate) => entry.traces.has(candidate));
-  const index = Math.max(0, keys.indexOf(key));
-  const nextIndex = event.key === "Home"
-    ? 0
-    : event.key === "End"
-      ? keys.length - 1
-      : event.key === "ArrowUp"
-        ? Math.max(0, index - 1)
-        : Math.min(keys.length - 1, index + 1);
-  selectRequestTrace(entry, keys[nextIndex], { openDetails: true, focusRow: true });
+  applyTrajectoryProjection(rows);
+  updateTrajectoryToolbar(entry);
+  renderTrajectoryLedger(entry, rows);
+  renderTrajectoryOverview(entry, rows);
+  renderTrajectoryDetails(entry);
 }
 
 function queueRequestTraceRender(entry = conversationContext || state.activeConversation) {
@@ -1364,6 +2342,111 @@ function createId(prefix) {
   return `${prefix}-${id}`;
 }
 
+function conversationStateVersion(entry) {
+  const projectionVersion = Number.isSafeInteger(entry?.actorProjection?.stateVersion) && entry.actorProjection.stateVersion > 0
+    ? entry.actorProjection.stateVersion
+    : 0;
+  const metaVersion = Number.isSafeInteger(entry?.meta?.stateVersion) && entry.meta.stateVersion > 0
+    ? entry.meta.stateVersion
+    : 0;
+  return Math.max(projectionVersion, metaVersion);
+}
+
+function ensureConversationProjectionVersion(entry) {
+  if (!entry) return null;
+  const projection = entry.actorProjection || createActorProjection(entry.actorId || null);
+  const projectionVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0
+    ? projection.stateVersion
+    : 0;
+  const metaVersion = Number.isSafeInteger(entry.meta?.stateVersion) && entry.meta.stateVersion > 0
+    ? entry.meta.stateVersion
+    : 0;
+  const nextVersion = Math.max(projectionVersion, metaVersion);
+  if (nextVersion > projectionVersion) projection.stateVersion = nextVersion;
+  entry.actorProjection = projection;
+  return projection;
+}
+
+function reliableConversationStateVersion(entry) {
+  return conversationStateVersion(entry);
+}
+
+function actorProjectionFor(entry, actorId = entry?.actorId) {
+  if (!entry) return null;
+  if (!actorId || actorId === entry.actorId) {
+    if (!entry.actorProjection || (!entry.actorProjection.actorId && actorId)) {
+      entry.actorProjection = createActorProjection(actorId || null);
+    }
+    return entry.actorProjection;
+  }
+  entry.actionActorProjections ||= new Map();
+  let projection = entry.actionActorProjections.get(actorId);
+  if (!projection) {
+    projection = createActorProjection(actorId);
+    entry.actionActorProjections.set(actorId, projection);
+  }
+  return projection;
+}
+
+function setActorProjectionFor(entry, actorId, projection) {
+  if (!entry || !projection) return projection;
+  if (!actorId || actorId === entry.actorId) {
+    entry.actorProjection = projection;
+  } else {
+    entry.actionActorProjections ||= new Map();
+    entry.actionActorProjections.set(actorId, projection);
+  }
+  return projection;
+}
+
+function actorIdForEvent(entry, event, { streamActorId = null } = {}) {
+  if (event?.type === "action_request") return event.actionRequest?.actorId || null;
+  return streamActorId || event?.payload?.actorId || entry?.actorId || null;
+}
+
+function reduceActorEventForEntry(entry, event, options = {}) {
+  const actorId = actorIdForEvent(entry, event, options);
+  if (!entry || !actorId) return null;
+  const projection = actorProjectionFor(entry, actorId);
+  const routedEvent = event.type === "action_request" && actorId !== entry.actorId
+    ? { ...event, sequence: projection.progressSequence }
+    : event;
+  const next = reduceActorEvent(projection, routedEvent);
+  setActorProjectionFor(entry, actorId, next);
+  return { actorId, projection: next };
+}
+
+function adoptRunStartedConversationActor(
+  entry,
+  actorId,
+  { preserveConversationActor = false } = {},
+) {
+  if (!entry || !actorId || preserveConversationActor) return false;
+  entry.actorId = actorId;
+  state.actorId = actorId;
+  if (!entry.actorProjection?.actorId) entry.actorProjection = createActorProjection(actorId);
+  return true;
+}
+
+function actorStateVersion(entry, actorId = entry?.actorId) {
+  const projection = actorProjectionFor(entry, actorId);
+  const projectionVersion = Number.isSafeInteger(projection?.stateVersion) && projection.stateVersion > 0
+    ? projection.stateVersion
+    : 0;
+  return actorId === entry?.actorId
+    ? Math.max(projectionVersion, conversationStateVersion(entry))
+    : projectionVersion;
+}
+
+function actorProjections(entry) {
+  if (!entry) return [];
+  const projections = [actorProjectionFor(entry, entry.actorId)];
+  for (const projection of entry.actionActorProjections?.values?.() || []) {
+    if (projection && projection !== projections[0]) projections.push(projection);
+  }
+  return projections.filter(Boolean);
+}
+
 initializeConversationStates();
 
 function refreshIcons(root = document) {
@@ -1404,10 +2487,14 @@ async function init() {
 }
 
 function bindEvents() {
+  globalThis.AevatarStudioAuth.onServiceAccessReviewResult?.((result) => {
+    void handleServiceAccessReviewResult(result);
+  });
   dom.conversationViewButton.addEventListener("click", () => switchWorkspaceView("conversation"));
   dom.traceViewButton.addEventListener("click", () => switchWorkspaceView("traces"));
   dom.conversationViewButton.addEventListener("keydown", moveWorkspaceView);
   dom.traceViewButton.addEventListener("keydown", moveWorkspaceView);
+  bindTrajectoryControls();
   dom.composerForm.addEventListener("submit", (event) => {
     event.preventDefault();
     void submitComposer();
@@ -1527,6 +2614,14 @@ function writeStorage(key, value) {
     localStorage.setItem(key, value);
   } catch {
     // Storage may be disabled; the demo remains usable for the current page.
+  }
+}
+
+function removeStorage(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Storage may be disabled; the current page can still finish the live journey.
   }
 }
 
@@ -1857,9 +2952,13 @@ function actionCacheKey(actorId, actionRequestId) {
   return `nyxid-chat:v4-action:${actorId}:${actionRequestId}`;
 }
 
+function actionEntryKey(actorId, actionRequestId) {
+  return `${actorId}:${actionRequestId}`;
+}
+
 function cacheActionRequest(entry, request) {
   if (!entry || !request) return;
-  entry.actionFrameCache.set(request.actionRequestId, request);
+  entry.actionFrameCache.set(actionEntryKey(request.actorId, request.actionRequestId), request);
   try {
     sessionStorage.setItem(
       actionCacheKey(request.actorId, request.actionRequestId),
@@ -1870,30 +2969,25 @@ function cacheActionRequest(entry, request) {
   }
 }
 
-function invalidateActionRequestCache(entry, actionRequestId) {
-  if (!entry || !actionRequestId) return;
-  entry.actionFrameCache.delete(actionRequestId);
+function invalidateActionRequestCache(entry, actorId, actionRequestId) {
+  if (!entry || !actorId || !actionRequestId) return;
+  entry.actionFrameCache.delete(actionEntryKey(actorId, actionRequestId));
   try {
-    sessionStorage.removeItem(actionCacheKey(
-      entry.actorProjection?.actorId || entry.actorId,
-      actionRequestId,
-    ));
+    sessionStorage.removeItem(actionCacheKey(actorId, actionRequestId));
   } catch {
     // Session cache is optional; the conflicted projection remains disabled.
   }
 }
 
-function restoreProjectionActionCaches(entry) {
-  let projection = entry?.actorProjection;
+function restoreProjectionActionCaches(entry, actorId = entry?.actorId) {
+  let projection = actorProjectionFor(entry, actorId);
   if (!projection?.actions?.size) return projection;
   for (const summary of projection.actions.values()) {
-    let cached = entry.actionFrameCache.get(summary.actionRequestId) || null;
+    const cacheActorId = projection.actorId || actorId;
+    let cached = entry.actionFrameCache.get(actionEntryKey(cacheActorId, summary.actionRequestId)) || null;
     if (!cached) {
       try {
-        const raw = sessionStorage.getItem(actionCacheKey(
-          projection.actorId || entry.actorId,
-          summary.actionRequestId,
-        ));
+        const raw = sessionStorage.getItem(actionCacheKey(cacheActorId, summary.actionRequestId));
         cached = raw ? JSON.parse(raw) : null;
       } catch {
         cached = null;
@@ -1901,18 +2995,18 @@ function restoreProjectionActionCaches(entry) {
     }
     const request = restoreCachedAction(summary, cached);
     if (!request) continue;
-    entry.actionFrameCache.set(request.actionRequestId, request);
+    entry.actionFrameCache.set(actionEntryKey(request.actorId, request.actionRequestId), request);
     projection = reduceActorEvent(projection, {
       type: "action_request",
       sequence: projection.progressSequence,
       actionRequest: request,
     });
   }
-  entry.actorProjection = projection;
+  setActorProjectionFor(entry, actorId, projection);
   return projection;
 }
 
-function createConnectCard(action, { conversation = null } = {}) {
+function createConnectCard(action, { conversation = null, projection = null } = {}) {
   const request = action?.request || null;
   if (!request) return null;
   const block = buildConnectCardBlock(request, state.connectors);
@@ -1920,10 +3014,11 @@ function createConnectCard(action, { conversation = null } = {}) {
     action,
     request,
     conversation,
+    projectionActorId: projection?.actorId || request.actorId,
     slug: block.catalog_slug,
     root: el("section", "connect-card"),
     block,
-    status: action.conflicted ? "conflicted" : "needs_connection",
+    status: action.conflicted ? "conflicted" : block.state,
     keyInputOpen: false,
     busy: false,
     error: "",
@@ -1938,11 +3033,6 @@ function createConnectCard(action, { conversation = null } = {}) {
   card.root.dataset.taskId = request.taskId;
   card.root.dataset.stepId = request.stepId;
   if (card.slug) card.root.dataset.slug = card.slug;
-  card.block = {
-    ...card.block,
-    state: "needs_connection",
-    steps: connectCardSteps(card.block.service_name, card.block.auth_kind),
-  };
   renderConnectCard(card);
   liveConnectCards.add(card);
   return card;
@@ -1950,34 +3040,47 @@ function createConnectCard(action, { conversation = null } = {}) {
 
 function renderActionCards(entry = conversationContext || state.activeConversation) {
   if (!entry) return;
-  const projection = entry.actorProjection;
-  if (!projection?.actions?.size && !entry.run.cardElements.size) return;
+  const projections = actorProjections(entry);
+  if (!projections.some((projection) => projection.actions?.size) && !entry.run.cardElements.size) return;
   const container = entry.run.actionCardsElement || el("div", "action-card-list");
   entry.run.actionCardsElement = container;
 
-  for (const action of projection?.actions?.values?.() || []) {
-    if (action.action !== "service.connect" || !action.request) continue;
-    let card = entry.run.cardElements.get(action.actionRequestId);
-    if (!card) {
-      card = createConnectCard(action, { conversation: entry });
-      if (!card) continue;
-      entry.run.cardElements.set(action.actionRequestId, card);
-    } else {
-      card.action = action;
-      card.request = action.request;
-      if (action.conflicted) {
-        card.status = "conflicted";
-        card.error = "Action identity conflict；该 browser journey 已禁用。";
-      } else {
-        applyActorActionProof(card, action, projection);
+  for (const projection of projections) {
+    if (!actionActorJourneyReady(entry, projection)) continue;
+    for (const action of projection.actions?.values?.() || []) {
+      if (!["service.connect", "service.access_review"].includes(action.action) || !action.request) {
+        continue;
       }
-      renderConnectCard(card);
+      const key = actionEntryKey(action.request.actorId, action.actionRequestId);
+      let card = entry.run.cardElements.get(key);
+      if (!card) {
+        card = createConnectCard(action, { conversation: entry, projection });
+        if (!card) continue;
+        entry.run.cardElements.set(key, card);
+      } else {
+        card.action = action;
+        card.request = action.request;
+        card.projectionActorId = projection.actorId || action.request.actorId;
+        if (action.conflicted) {
+          card.status = "conflicted";
+          card.error = "Action identity conflict；该 browser journey 已禁用。";
+        } else {
+          applyActorActionProof(card, action, projection);
+        }
+        renderConnectCard(card);
+      }
     }
   }
 
   container.replaceChildren(...[...entry.run.cardElements.values()].map((card) => card.root));
   if (!container.isConnected) ensureAssistantBody().append(container);
   scrollThread();
+}
+
+function actionActorJourneyReady(entry, projection) {
+  if (!entry || !projection) return false;
+  if (projection.actorId === entry.actorId) return true;
+  return actorStateVersion(entry, projection.actorId) > 0 && Boolean(projection.task);
 }
 
 function actionResourceUserServiceId(resource) {
@@ -2100,6 +3203,343 @@ function clearExternalJourneyTimer(card) {
   card.externalExpiryTimer = null;
 }
 
+async function refreshNyxIdAuthorizationCatalog(userServiceId) {
+  const requiredUserServiceId = String(userServiceId || "").trim();
+  if (!requiredUserServiceId) {
+    const error = new Error("NyxID UserService.id is required before refreshing the authorization catalog.");
+    error.code = "NYXID_USER_SERVICE_ID_MISSING";
+    throw error;
+  }
+  const response = await fetch("/api/auth/nyxid/authorization-catalog:refresh", {
+    method: "POST",
+    headers: demoHeaders(),
+    body: JSON.stringify({ requiredUserServiceIds: [requiredUserServiceId] }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (response.ok && payload?.ready === true) return payload;
+
+  const refreshStatus = String(payload?.refreshStatus || "").trim();
+  const visibilityStatus = String(payload?.visibilityStatus || "").trim();
+  const failureCode = String(
+    payload?.visibilityFailureCode || payload?.refreshFailureCode || payload?.code || "",
+  ).trim();
+  const requiredStateVersion = Number(payload?.requiredStateVersion || 0);
+  const visibleStateVersion = Number(payload?.visibleStateVersion || 0);
+  const versionDetail = requiredStateVersion > 0
+    ? `（可见版本 ${visibleStateVersion}/${requiredStateVersion}）`
+    : "";
+  const statusDetail = [
+    refreshStatus ? `refresh=${refreshStatus}` : "",
+    visibilityStatus ? `visibility=${visibilityStatus}` : "",
+    failureCode ? `code=${failureCode}` : "",
+  ].filter(Boolean).join(", ");
+  const pending = response.status === 202 || visibilityStatus === "projection_pending";
+  const error = new Error(pending
+    ? `NyxID 授权目录尚未可见${versionDetail}，请稍后点击“我已连接，刷新状态”重试。`
+    : `无法刷新 NyxID 授权目录${statusDetail ? `（${statusDetail}）` : ""}，请稍后重试。`);
+  error.code = "NYXID_AUTHORIZATION_CATALOG_NOT_READY";
+  throw error;
+}
+
+async function completeServiceConnectAction(card, userServiceId) {
+  const requiredUserServiceId = String(userServiceId || "").trim();
+  if (!requiredUserServiceId) {
+    const error = new Error("NyxID UserService.id is required before completing the connection action.");
+    error.code = "NYXID_USER_SERVICE_ID_MISSING";
+    throw error;
+  }
+  await refreshNyxIdAuthorizationCatalog(requiredUserServiceId);
+  await submitActionContinuation(card, "completed", {
+    userService: { userServiceId: requiredUserServiceId },
+  });
+  return true;
+}
+
+function proxyCatalogContainsService(catalog, userServiceId, serviceSlug, resourceUri = "") {
+  const expectedUserServiceId = String(userServiceId || "").trim();
+  const expectedServiceSlug = String(serviceSlug || "").trim();
+  const expectedResourceUri = String(resourceUri || "").trim();
+  if (!expectedUserServiceId || !expectedServiceSlug || !expectedResourceUri) return false;
+  const matches = (Array.isArray(catalog?.services) ? catalog.services : []).filter((service) =>
+    String(service?.userServiceId || "").trim() === expectedUserServiceId &&
+    String(service?.serviceSlug || "").trim() === expectedServiceSlug &&
+    String(service?.resourceUri || "").trim() === expectedResourceUri);
+  return matches.length === 1;
+}
+
+function serviceAccessReviewParams(card) {
+  const value = card?.request?.params?.serviceAccessReview || null;
+  const params = {
+    userServiceId: String(value?.userServiceId || "").trim(),
+    serviceSlug: String(value?.serviceSlug || "").trim(),
+    resourceUri: String(value?.resourceUri || "").trim(),
+  };
+  if (!params.userServiceId || !params.serviceSlug || !params.resourceUri) {
+    const error = new Error("Typed NyxID service access review params are incomplete.");
+    error.code = "NYXID_SERVICE_ACCESS_REVIEW_PARAMS_INVALID";
+    throw error;
+  }
+  return params;
+}
+
+function actionContinuationCredentialRefreshParams(card, resource) {
+  const review = card?.request?.params?.serviceAccessReview || null;
+  const userServiceId = String(
+    actionResourceUserServiceId(resource) || review?.userServiceId || "",
+  ).trim();
+  const serviceSlug = String(
+    review?.serviceSlug ||
+    card?.request?.params?.catalogService?.serviceSlug ||
+    card?.block?.catalog_slug ||
+    "",
+  ).trim();
+  const resourceUri = String(
+    review?.resourceUri ||
+    globalThis.AevatarStudioAuth.serviceResourceUri?.(serviceSlug) ||
+    "",
+  ).trim();
+  if (!userServiceId || !serviceSlug || !resourceUri) {
+    const error = new Error("Cannot resolve the exact NyxID service authorization for this action continuation.");
+    error.code = "NYXID_ACTION_CONTINUATION_CREDENTIAL_REFRESH_PARAMS_INVALID";
+    throw error;
+  }
+  return { userServiceId, serviceSlug, resourceUri };
+}
+
+async function beginActionContinuationCredentialRefresh(
+  card,
+  disposition,
+  resource,
+  { openAuthorization = true } = {},
+) {
+  try {
+    const params = actionContinuationCredentialRefreshParams(card, resource);
+    const conversationId = String(card?.conversation?.actorId || "").trim();
+    const actorId = String(card?.request?.actorId || "").trim();
+    const originTurnId = String(card?.request?.originTurnId || "").trim();
+    const actionRequestId = String(card?.request?.actionRequestId || "").trim();
+    const action = String(card?.request?.action || "").trim();
+    if (!conversationId || !actorId || !originTurnId || !actionRequestId || !action) {
+      const error = new Error("Cannot preserve the browser action identity for NyxID consent review.");
+      error.code = "NYXID_ACTION_IDENTITY_MISSING";
+      throw error;
+    }
+
+    const continuation = continuationIntent(card, disposition, resource);
+    const report = continuation.actions[0];
+    const pending = {
+      schemaVersion: 3,
+      action,
+      conversationId,
+      actorId,
+      originTurnId,
+      actionRequestId,
+      disposition: report.disposition,
+      resource: report.resource,
+      serviceSlug: params.serviceSlug,
+      userServiceId: params.userServiceId,
+      resourceUri: params.resourceUri,
+      clientRequestId: continuation.clientRequestId,
+      createdAt: Date.now(),
+    };
+
+    globalThis.AevatarStudioAuth.clearServiceAccessReviewToken?.();
+    writeStorage(SERVICE_ACCESS_REVIEW_KEY, JSON.stringify(pending));
+    card.authorizationRefresh = {
+      disposition: report.disposition,
+      resource: report.resource,
+    };
+    card.busy = false;
+    card.status = "reauthorizing";
+    card.error = "";
+    card.note = openAuthorization
+      ? `当前 NyxID 登录仍有效；正在打开 NyxID 服务授权以继续 ${card.block.service_name} action。`
+      : `当前 NyxID 登录仍有效；需要更新 NyxID 服务授权才能继续 ${card.block.service_name} action。请点击下方按钮。`;
+    renderConnectCard(card);
+    if (!openAuthorization) return true;
+    await globalThis.AevatarStudioAuth.beginServiceAccessReview([params.resourceUri]);
+    return true;
+  } catch (error) {
+    card.busy = false;
+    card.status = "reauthorizing";
+    card.error = error?.message || "无法开始 NyxID 服务访问审查。";
+    card.note = "原 action 和会话状态已保留；可重试更新 NyxID 服务授权。";
+    renderConnectCard(card);
+    return false;
+  }
+}
+
+async function beginServiceAccessReviewAction(card) {
+  const params = serviceAccessReviewParams(card);
+  return beginActionContinuationCredentialRefresh(
+    card,
+    "completed",
+    { userService: { userServiceId: params.userServiceId } },
+  );
+}
+
+async function loadServiceAccessReviewCatalog() {
+  const response = await globalThis.AevatarStudioAuth.fetchServiceAccessReviewCatalog();
+  if (!response.ok) throw await responseError(response);
+  const payload = await response.json();
+  return {
+    proxyBaseUrl: String(payload?.proxyBaseUrl || "").trim().replace(/\/+$/, ""),
+    resources: Array.isArray(payload?.resources) ? payload.resources : [],
+    services: Array.isArray(payload?.services) ? payload.services : [],
+  };
+}
+
+async function resumePendingServiceAccessReview() {
+  const pending = readJsonStorage(SERVICE_ACCESS_REVIEW_KEY);
+  if (!pending) return false;
+  const valid = pending.schemaVersion === 3 &&
+    typeof pending.action === "string" && pending.action &&
+    typeof pending.conversationId === "string" && pending.conversationId &&
+    typeof pending.actorId === "string" && pending.actorId &&
+    typeof pending.originTurnId === "string" && pending.originTurnId &&
+    typeof pending.actionRequestId === "string" && pending.actionRequestId &&
+    pending.disposition === "completed" &&
+    actionResourceUserServiceId(pending.resource) === pending.userServiceId &&
+    typeof pending.serviceSlug === "string" && pending.serviceSlug &&
+    typeof pending.userServiceId === "string" && pending.userServiceId &&
+    typeof pending.resourceUri === "string" && pending.resourceUri &&
+    typeof pending.clientRequestId === "string" && pending.clientRequestId;
+  if (!valid) {
+    removeStorage(SERVICE_ACCESS_REVIEW_KEY);
+    globalThis.AevatarStudioAuth.clearServiceAccessReviewToken?.();
+    return false;
+  }
+
+  try {
+    const catalog = await loadServiceAccessReviewCatalog();
+    if (!proxyCatalogContainsService(
+      catalog,
+      pending.userServiceId,
+      pending.serviceSlug,
+      pending.resourceUri,
+    )) {
+      return false;
+    }
+    const conversation = state.conversations.find((item) => item.id === pending.conversationId);
+    if (!conversation) return false;
+    await loadConversation(conversation);
+    const entry = findConversationState(pending.conversationId);
+    if (!entry) return false;
+    await refreshActionActorState(entry, pending.actorId, { uncursored: true });
+    renderActionCards(entry);
+    const card = entry.run?.cardElements?.get(
+      actionEntryKey(pending.actorId, pending.actionRequestId),
+    );
+    if (!card?.request || card.request.action !== pending.action) return false;
+    const params = actionContinuationCredentialRefreshParams(card, pending.resource);
+    if (params.userServiceId !== pending.userServiceId ||
+        params.serviceSlug !== pending.serviceSlug ||
+        params.resourceUri !== pending.resourceUri) {
+      return false;
+    }
+
+    const continuation = validateActionContinuation({
+      type: "action.continue",
+      clientRequestId: pending.clientRequestId,
+      originTurnId: pending.originTurnId,
+      actions: [{
+        actionRequestId: pending.actionRequestId,
+        originTurnId: pending.originTurnId,
+        disposition: pending.disposition,
+        resource: pending.resource,
+      }],
+    }, { expectedAction: card.request.action });
+    card.conversation = entry;
+    card.continuation = continuation;
+    card.report = continuation.actions[0];
+    card.authorizationRefresh = {
+      disposition: pending.disposition,
+      resource: pending.resource,
+    };
+    card.status = "reauthorizing";
+    card.note = "NyxID 服务授权已更新；正在恢复原 browser action 和会话。";
+    renderConnectCard(card);
+    const result = await submitActionContinuation(
+      card,
+      pending.disposition,
+      pending.resource,
+      { credential: "serviceAccessReview" },
+    );
+    if (result?.verified !== true || result?.terminalObserved !== true) return false;
+    removeStorage(SERVICE_ACCESS_REVIEW_KEY);
+    globalThis.AevatarStudioAuth.clearServiceAccessReviewToken();
+    return true;
+  } catch (error) {
+    const entry = findConversationState(pending.conversationId);
+    const card = entry?.run?.cardElements?.get(
+      actionEntryKey(pending.actorId, pending.actionRequestId),
+    );
+    if (card) {
+      card.busy = false;
+      card.status = "reauthorizing";
+      card.error = error?.message || "恢复 NyxID browser action 失败。";
+      card.note = "原卡片、会话和 clientRequestId 已保留；可直接重试授权，无需刷新页面。";
+      renderConnectCard(card);
+    }
+    return false;
+  }
+}
+
+function markServiceAccessReviewInterrupted(pending, message) {
+  const entry = findConversationState(pending?.conversationId);
+  const card = entry?.run?.cardElements?.get(
+    actionEntryKey(pending?.actorId, pending?.actionRequestId),
+  );
+  if (!card) return;
+  card.busy = false;
+  card.status = "reauthorizing";
+  card.error = message || "NyxID 服务授权未完成。";
+  card.note = "原 action、会话和 clientRequestId 已保留；可直接重新打开授权窗口。";
+  renderConnectCard(card);
+}
+
+async function handleServiceAccessReviewResult(result = {}) {
+  const pending = readJsonStorage(SERVICE_ACCESS_REVIEW_KEY);
+  if (result.status !== "succeeded") {
+    markServiceAccessReviewInterrupted(pending, result.message);
+    showToast(result.message || "NyxID 服务授权未完成；原任务仍然保留。");
+    return false;
+  }
+  if (!pending) {
+    showToast("NyxID 服务授权已更新。");
+    void loadServices();
+    return true;
+  }
+  if (serviceAccessReviewResumePromise) return serviceAccessReviewResumePromise;
+
+  setComposerStatus("NyxID 授权已更新，正在恢复原任务…", { working: true });
+  serviceAccessReviewResumePromise = (async () => {
+    const resumed = await resumePendingServiceAccessReview();
+    await loadServices().catch(() => {});
+    if (resumed) {
+      showToast("NyxID 授权已更新，原任务已继续。");
+    } else if (readJsonStorage(SERVICE_ACCESS_REVIEW_KEY)) {
+      showToast("NyxID 授权已更新；原任务已恢复，正在等待 Actor 确认。");
+    } else {
+      showToast("NyxID 授权已更新。");
+    }
+    return resumed;
+  })();
+  try {
+    return await serviceAccessReviewResumePromise;
+  } finally {
+    serviceAccessReviewResumePromise = null;
+    setComposerStatus(state.activeController
+      ? "正在接收生产 Agent 输出 · 停止接收不会撤销已提交操作"
+      : state.auth.authenticated
+        ? "生产环境 · 使用当前账户的 services，高风险操作需要确认"
+        : "登录后使用当前账户已配置的 services", {
+      working: Boolean(state.activeController),
+    });
+    renderActorControlUi();
+  }
+}
+
 async function submitConnectCredential(card, credential, input = null) {
   const value = String(credential || "").trim();
   if (!value) {
@@ -2111,6 +3551,9 @@ async function submitConnectCredential(card, credential, input = null) {
   card.error = "";
   renderConnectCard(card);
   try {
+    if (!(card.externalBaseline instanceof Set)) {
+      card.externalBaseline = matchingUserServiceIds(card);
+    }
     let response;
     try {
       response = await fetch("/api/nyxid/keys", {
@@ -2134,15 +3577,17 @@ async function submitConnectCredential(card, credential, input = null) {
       throw error;
     }
     card.keyInputOpen = false;
-    await submitActionContinuation(card, "completed", {
-      userService: { userServiceId },
-    });
-    void loadServices();
+    const completed = await completeServiceConnectAction(card, userServiceId);
+    if (completed) void loadServices();
   } catch (error) {
     card.busy = false;
     card.error = error.message || "连接失败，请重试。";
-    if (error.code === "NYXID_USER_SERVICE_ID_MISSING") {
+    if (error.code === "NYXID_USER_SERVICE_ID_MISSING" ||
+        error.code === "NYXID_AUTHORIZATION_CATALOG_NOT_READY") {
       card.status = "error";
+      if (error.code === "NYXID_AUTHORIZATION_CATALOG_NOT_READY") {
+        card.note = "API key 已保存；授权目录就绪后可直接刷新状态，无需再次提交 key。";
+      }
       renderConnectCard(card);
     } else {
       await submitActionContinuation(card, "failed");
@@ -2175,11 +3620,35 @@ function continuationMatches(card, disposition, resource = null) {
     JSON.stringify(card.continuation.actions[0]?.resource || null) === JSON.stringify(resource));
 }
 
-async function submitActionContinuation(card, disposition, resource = null) {
+function actionContinuationReconciliationFrame(event) {
+  return [
+    "run_started",
+    "task_snapshot",
+    "task_step_changed",
+    "continuation_changed",
+    "run_finished",
+    "run_error",
+    "keepalive",
+  ].includes(event?.type);
+}
+
+async function reconcileActionContinuation(card, conversation) {
+  if (card.status === "verified") return true;
+  const refreshed = await refreshActionActorState(conversation, card.request.actorId);
+  return withConversationState(conversation, () => {
+    const projection = refreshed || actorProjectionFor(conversation, card.request.actorId);
+    const projected = projection?.actions?.get(card.request.actionRequestId);
+    const verified = applyActorActionProof(card, projected || card.action, projection);
+    if (verified) renderConnectCard(card);
+    return verified || card.status === "verified";
+  });
+}
+
+async function submitActionContinuation(card, disposition, resource = null, options = {}) {
   const conversation = card.conversation;
   if (!conversation || card.status === "conflicted") return;
   if (card.continuation && !continuationMatches(card, disposition, resource)) {
-    const refreshed = await refreshActorState(conversation);
+    const refreshed = await refreshActionActorState(conversation, card.request.actorId);
     const pending = refreshed?.actions?.get(card.request.actionRequestId);
     if (!pending || !restoreCachedAction(pending, card.request)) {
       card.busy = false;
@@ -2213,17 +3682,27 @@ async function submitActionContinuation(card, disposition, resource = null) {
   card.error = "";
   card.note = "正在向 Aevatar 报告 browser journey 结果。";
   renderConnectCard(card);
+  let terminalObserved = false;
   try {
-    const response = await fetch("/api/demo/chat", {
-      method: "POST",
-      headers: demoHeaders(),
-      signal: controller.signal,
-      body: JSON.stringify({
-        surface: "nyxid-chat",
-        ...continuation,
-        conversationId: card.request.actorId,
-      }),
-    });
+    const body = {
+      surface: "nyxid-chat",
+      ...continuation,
+      conversationId: card.request.actorId,
+    };
+    const useServiceAccessReviewCredential =
+      options?.credential === "serviceAccessReview" ||
+      (card.request.action === "service.access_review" && disposition === "completed");
+    const response = useServiceAccessReviewCredential
+      ? await globalThis.AevatarStudioAuth.continueServiceAccessReview(body, {
+        headers: demoHeaders(),
+        signal: controller.signal,
+      })
+      : await fetch("/api/demo/chat", {
+        method: "POST",
+        headers: demoHeaders(),
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      });
     if (!response.ok) throw await responseError(response);
     card.status = disposition === "completed" ? "awaiting_verification" : "reported";
     card.note = disposition === "completed"
@@ -2231,12 +3710,20 @@ async function submitActionContinuation(card, disposition, resource = null) {
       : `Browser journey 已报告 ${disposition}；等待 actor 状态确认。`;
     renderConnectCard(card);
     await consumeSse(response, async (raw) => {
-      withConversationState(conversation, () => handleFrame(raw));
+      const event = withConversationState(conversation, () => handleFrame(raw, {
+        streamActorId: card.request.actorId,
+        preserveConversationActor: true,
+      }));
+      if (disposition === "completed" && actionContinuationReconciliationFrame(event)) {
+        await reconcileActionContinuation(card, conversation);
+      }
+      terminalObserved = ["run_finished", "run_error", "run_stopped"].includes(event?.type);
+      return terminalObserved ? false : undefined;
     });
-    await refreshActorState(conversation);
+    if (card.status !== "verified") {
+      await reconcileActionContinuation(card, conversation);
+    }
     withConversationState(conversation, () => {
-      const projected = conversation.actorProjection.actions.get(card.request.actionRequestId);
-      applyActorActionProof(card, projected || card.action, conversation.actorProjection);
       if (card.status !== "verified") {
         card.status = disposition === "completed" ? "awaiting_verification" : "reported";
         card.note = disposition === "completed"
@@ -2246,7 +3733,25 @@ async function submitActionContinuation(card, disposition, resource = null) {
       card.busy = false;
       renderConnectCard(card);
     });
+    return {
+      verified: card.status === "verified",
+      terminalObserved,
+    };
   } catch (error) {
+    if (error.code === ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED_CODE &&
+        disposition === "completed" && actionResourceUserServiceId(resource)) {
+      const credentialRefreshStarted = await beginActionContinuationCredentialRefresh(
+        card,
+        disposition,
+        resource,
+        { openAuthorization: false },
+      );
+      return {
+        verified: false,
+        terminalObserved,
+        credentialRefreshStarted,
+      };
+    }
     withConversationState(conversation, () => {
       card.busy = false;
       card.status = "error";
@@ -2255,6 +3760,10 @@ async function submitActionContinuation(card, disposition, resource = null) {
         : error.message || "Action continuation 提交失败。";
       renderConnectCard(card);
     });
+    return {
+      verified: false,
+      terminalObserved,
+    };
   } finally {
     withConversationState(conversation, () => {
       releaseConversationController(conversation, controller);
@@ -2289,10 +3798,21 @@ async function refreshConnectCard(card) {
     renderConnectCard(card);
     return;
   }
-  await submitActionContinuation(card, "completed", {
-    userService: { userServiceId: candidates[0] },
-  });
-  void loadServices();
+  card.busy = true;
+  card.note = "已检测到新的 UserService；正在检查当前 NyxID OAuth 服务范围。";
+  renderConnectCard(card);
+  const userServiceId = candidates[0];
+  try {
+    const completed = await completeServiceConnectAction(card, userServiceId);
+    if (completed) void loadServices();
+  } catch (error) {
+    card.busy = false;
+    card.status = "error";
+    card.error = error.message || "无法刷新 NyxID 授权目录，请稍后重试。";
+    card.note = "连接已存在于 NyxID；授权目录就绪前不会向 Actor 报告完成。";
+    renderConnectCard(card);
+    return;
+  }
 }
 
 function updateLiveConnectCards() {
@@ -2301,7 +3821,7 @@ function updateLiveConnectCards() {
       liveConnectCards.delete(card);
       continue;
     }
-    if (["reporting", "awaiting_verification", "verified", "conflicted"].includes(card.status)) {
+    if (["reauthorizing", "reporting", "awaiting_verification", "verified", "conflicted"].includes(card.status)) {
       continue;
     }
     if (!card.keyInputOpen && !card.busy) {
@@ -2319,7 +3839,9 @@ function updateLiveConnectCards() {
 function connectCardPill(card) {
   const labels = {
     needs_connection: "未连接",
+    needs_review: "需要授权",
     waiting_for_user: "等待连接",
+    reauthorizing: "正在更新授权",
     reporting: "正在报告",
     awaiting_verification: "等待 Actor 验证",
     reported: "等待 Actor 确认",
@@ -2353,8 +3875,10 @@ function renderConnectCard(card) {
   brandCopy.append(el("div", "cc-title", block.service_name));
   const subtitle = card.status === "conflicted"
     ? "同一个 actionRequestId 出现了不一致的 authoritative params"
+    : card.status === "reauthorizing"
+    ? "正在更新 NyxID 服务授权；原 action 与会话保持不变"
     : card.status === "verified"
-    ? "Actor 已验证精确的连接 postcondition"
+    ? "Actor 已验证精确的 typed postcondition"
     : ["reporting", "awaiting_verification", "reported"].includes(card.status)
       ? "Browser journey 不是成功证明；正在等待 actor 状态"
     : block.subtitle || (block.known ? "连接后 Agent 可通过 NyxID proxy 调用" : "该服务不在 NyxID 目录中，可在 NyxID 里手动添加");
@@ -2410,9 +3934,10 @@ function renderConnectCardActions(card) {
     wrap.append(el("div", "cc-hint", card.note));
   }
   const actions = el("div", "cc-actions");
+  const serviceAccessReview = card.request.action === "service.access_review";
   const apiKeyFlow = card.block.known && card.block.auth_kind === "api_key";
 
-  if (card.status === "error" && card.continuation && card.report) {
+  if (card.status === "error" && card.continuation && card.report && !card.authorizationRefresh) {
     const retryReport = el("button", "cc-btn primary cc-retry-report", "重试报告");
     retryReport.type = "button";
     retryReport.disabled = card.busy;
@@ -2422,6 +3947,47 @@ function renderConnectCardActions(card) {
       card.report.resource || null,
     ));
     actions.append(retryReport);
+  }
+
+  if (!serviceAccessReview && card.authorizationRefresh &&
+      ["reauthorizing", "error"].includes(card.status)) {
+    const review = el("button", "cc-btn primary", "");
+    review.type = "button";
+    review.append(
+      iconNode("shield-check"),
+      el("span", "", card.error ? "重试更新 NyxID 服务授权" : "更新 NyxID 服务授权"),
+    );
+    review.disabled = card.busy || card.status === "conflicted";
+    review.addEventListener("click", () => void beginActionContinuationCredentialRefresh(
+      card,
+      card.authorizationRefresh.disposition,
+      card.authorizationRefresh.resource,
+    ));
+    actions.append(review);
+    wrap.append(actions);
+    return wrap;
+  }
+
+  if (serviceAccessReview) {
+    const review = el("button", "cc-btn primary", "");
+    review.type = "button";
+    review.append(
+      iconNode("shield-check"),
+      el("span", "", card.status === "reauthorizing"
+        ? "重新打开 NyxID 授权"
+        : "更新 OAuth client 访问"),
+    );
+    review.disabled = card.busy || card.status === "conflicted";
+    review.addEventListener("click", () => void beginServiceAccessReviewAction(card));
+    actions.append(review);
+
+    const decline = el("button", "cc-btn ghost cc-decline", "拒绝授权");
+    decline.type = "button";
+    decline.disabled = card.busy || card.status === "conflicted";
+    decline.addEventListener("click", () => void submitActionContinuation(card, "declined"));
+    actions.append(decline);
+    wrap.append(actions);
+    return wrap;
   }
 
   if (card.keyInputOpen && apiKeyFlow) {
@@ -2564,7 +4130,7 @@ function renderAuthUi() {
     setConnectionStatus("idle", "登录 NyxID");
     setRouteState(dom.routeUpstreamState, "waiting");
     setRouteState(dom.routeOrnnState, "waiting");
-    dom.composerStatus.textContent = "登录后使用当前账户已配置的 services";
+    setComposerStatus("登录后使用当前账户已配置的 services");
     state.conversations = [];
     state.historyError = null;
     state.historyLoading = false;
@@ -2755,6 +4321,7 @@ async function refreshRuntimeData() {
   if (!state.auth.authenticated) return;
   await checkConnection(state.config, false);
   await loadConversations();
+  await resumePendingServiceAccessReview();
 }
 
 function updateConfigUi() {
@@ -2773,9 +4340,9 @@ function updateConfigUi() {
   dom.commandFactRow.classList.toggle("hidden", isNyxIdChat);
   dom.stopButton.setAttribute("aria-label", "停止接收");
   dom.stopButton.title = "停止接收（不会撤销已提交的生产操作）";
-  dom.composerStatus.textContent = state.auth.authenticated
+  setComposerStatus(state.auth.authenticated
     ? "生产环境 · 使用当前账户的 services，高风险操作需要确认"
-    : "登录后使用当前账户已配置的 services";
+    : "登录后使用当前账户已配置的 services");
   renderHistoryList();
 }
 
@@ -2934,7 +4501,9 @@ async function loadConversations({ silent = false } = {}) {
       const entry = findConversationState(conversation.id);
       if (!entry) continue;
       entry.meta = conversation;
+      if (conversation.stateVersion > 0) ensureConversationProjectionVersion(entry);
       if (!entry.controller) entry.title = conversation.title;
+      if (entry === state.activeConversation) renderActorProjection(entry);
     }
     const current = state.conversations.find((item) => item.id === state.actorId);
     if (current) {
@@ -3048,7 +4617,9 @@ async function loadConversation(conversation) {
   if (cached) {
     cached.meta = conversation;
     cached.title = conversation.title;
+    if (conversation.stateVersion > 0) ensureConversationProjectionVersion(cached);
     activateConversationState(cached);
+    renderActorProjection(cached);
     renderActiveConversationState();
     closeMobilePanels();
     void refreshActorState(cached);
@@ -3061,7 +4632,9 @@ async function loadConversation(conversation) {
       cache: "no-store",
     });
     if (!response.ok) throw await responseError(response);
-    const messages = normalizeStoredMessages(await response.json());
+    const payload = await response.json();
+    const messages = normalizeStoredMessages(payload);
+    const storedOperations = Array.isArray(payload?.operations) ? payload.operations : [];
     if (sequence !== state.conversationLoadSequence || configKey !== historyConfigKey()) return;
     const existing = findConversationState(conversation.id);
     if (existing) {
@@ -3077,7 +4650,10 @@ async function loadConversation(conversation) {
       meta: conversation,
       title: conversation.title,
     });
+    if (conversation.stateVersion > 0) ensureConversationProjectionVersion(entry);
+    restoreTrajectoryFromStoredOperations(entry, storedOperations, messages);
     activateConversationState(entry);
+    renderActorProjection(entry);
     state.run.context = {
       actorId: conversation.id,
     };
@@ -3107,12 +4683,30 @@ function actorStateTurnId(projection) {
 }
 
 async function refreshActorState(entry, { uncursored = false } = {}) {
-  if (!entry?.actorId) return null;
-  if (entry.stateReloadInFlight && !uncursored) return entry.stateReloadInFlight;
+  return refreshActorStateFor(entry, entry?.actorId, { uncursored });
+}
+
+async function refreshActionActorState(entry, actorId, { uncursored = false } = {}) {
+  if (!entry || !actorId || actorId === entry.actorId) {
+    return refreshActorState(entry, { uncursored });
+  }
+  return refreshActorStateFor(entry, actorId, { uncursored });
+}
+
+async function refreshActorStateFor(entry, actorId, { uncursored = false } = {}) {
+  if (!entry || !actorId) return null;
+  const isConversationActor = actorId === entry.actorId;
+  entry.actionStateReloads ||= new Map();
+  const inFlight = isConversationActor
+    ? entry.stateReloadInFlight
+    : entry.actionStateReloads.get(actorId);
+  if (inFlight && !uncursored) return inFlight;
 
   const request = (async () => {
     const params = new URLSearchParams();
-    const projection = entry.actorProjection || createActorProjection(entry.actorId);
+    const projection = isConversationActor
+      ? ensureConversationProjectionVersion(entry) || createActorProjection(actorId)
+      : actorProjectionFor(entry, actorId);
     const turnId = actorStateTurnId(projection);
     if (!uncursored && projection.stateVersion > 0 && turnId) {
       params.set("afterStateVersion", String(projection.stateVersion));
@@ -3121,45 +4715,75 @@ async function refreshActorState(entry, { uncursored = false } = {}) {
     const query = params.size ? `?${params}` : "";
     try {
       const response = await fetch(
-        `/api/demo/conversations/${encodeURIComponent(entry.actorId)}/state${query}`,
+        `/api/demo/conversations/${encodeURIComponent(actorId)}/state${query}`,
         { headers: demoHeaders(), cache: "no-store" },
       );
       if (!response.ok) throw await responseError(response);
       const result = applyCurrentStateResult(projection, await response.json());
-      entry.actorProjection = result.projection;
+      setActorProjectionFor(entry, actorId, result.projection);
+      // The conversation actor owns the in-flight turn's step ledger. Rebuilding
+      // its trace container here is what makes a mid-run reload keep its
+      // trajectory; committed turns come from the stored chat history instead.
+      if (isConversationActor) restoreTrajectoryFromActorProjection(entry, result.projection);
       if (result.reloadWithoutCursor) {
-        if (!uncursored) return refreshActorState(entry, { uncursored: true });
-        entry.actorStateNotice = "Actor 要求重新加载状态，请稍后重试。";
+        if (!uncursored) return refreshActorStateFor(entry, actorId, { uncursored: true });
+        setActorStateNotice(entry, actorId, "Actor 要求重新加载状态，请稍后重试。");
       } else if (result.projection.stateVersion === 0 && !result.projection.task) {
-        entry.actorStateNotice = "该会话没有可恢复的 actor 状态。";
+        setActorStateNotice(entry, actorId, "该会话没有可恢复的 actor 状态。");
       } else {
-        entry.actorStateNotice = "";
+        setActorStateNotice(entry, actorId, "");
       }
-      restoreProjectionActionCaches(entry);
-      renderActorProjection(entry);
+      restoreProjectionActionCaches(entry, actorId);
+      renderActorProjection(entry, actorId);
       renderActionCards(entry);
-      if (entry === state.activeConversation) renderActiveConversationState();
-      return entry.actorProjection;
+      if (entry === state.activeConversation) {
+        renderActiveConversationState();
+        renderRequestTraces(entry);
+      }
+      return actorProjectionFor(entry, actorId);
     } catch (error) {
-      entry.actorStateNotice = `无法恢复 actor 状态：${String(error?.message || "unknown error").slice(0, 300)}`;
-      renderActorProjection(entry);
+      setActorStateNotice(
+        entry,
+        actorId,
+        `无法恢复 actor 状态：${String(error?.message || "unknown error").slice(0, 300)}`,
+      );
+      renderActorProjection(entry, actorId);
       return null;
     }
   })();
 
-  entry.stateReloadInFlight = request;
+  if (isConversationActor) entry.stateReloadInFlight = request;
+  else entry.actionStateReloads.set(actorId, request);
   try {
     return await request;
   } finally {
-    if (entry.stateReloadInFlight === request) entry.stateReloadInFlight = null;
+    if (isConversationActor) {
+      if (entry.stateReloadInFlight === request) entry.stateReloadInFlight = null;
+    } else if (entry.actionStateReloads.get(actorId) === request) {
+      entry.actionStateReloads.delete(actorId);
+    }
   }
+}
+
+function actorStateNotice(entry, actorId) {
+  if (!entry || !actorId || actorId === entry.actorId) return entry?.actorStateNotice || "";
+  return entry.actionStateNotices?.get(actorId) || "";
+}
+
+function setActorStateNotice(entry, actorId, message) {
+  if (!entry || !actorId || actorId === entry.actorId) {
+    if (entry) entry.actorStateNotice = message;
+    return;
+  }
+  entry.actionStateNotices ||= new Map();
+  if (message) entry.actionStateNotices.set(actorId, message);
+  else entry.actionStateNotices.delete(actorId);
 }
 
 function entryActorProjection(entry = state.activeConversation) {
   if (!entry) return null;
-  if (!entry.actorProjection || (!entry.actorProjection.actorId && entry.actorId)) {
-    entry.actorProjection = createActorProjection(entry.actorId || null);
-  }
+  actorProjectionFor(entry, entry.actorId);
+  ensureConversationProjectionVersion(entry);
   return entry.actorProjection;
 }
 
@@ -3240,8 +4864,14 @@ function actorStepSourceLabel(step) {
   const source = step?.source || {};
   if (source.llm) return source.llm.model ? `LLM · ${source.llm.model}` : "LLM";
   if (source.tool) {
-    return [source.tool.serviceSlug || source.tool.serviceId, source.tool.toolName]
-      .filter(Boolean).join(" · ") || "工具";
+    const tool = describeToolOperation(source.tool);
+    const kind = {
+      nyxIdOperation: "NyxID 连接服务",
+      builtIn: "内置工具",
+      mcp: "MCP 工具",
+      skill: "Skill",
+    }[tool.kind] || "工具";
+    return [tool.serviceLabel, kind].filter(Boolean).join(" · ");
   }
   if (source.browserAction) return `NyxID Action · ${source.browserAction.action || "browser"}`;
   if (source.postcondition) {
@@ -3251,6 +4881,30 @@ function actorStepSourceLabel(step) {
   if (source.approval) return "审批";
   if (source.web) return "Web";
   return step?.kind || "步骤";
+}
+
+function actorStepDisplayName(step) {
+  const source = step?.source || {};
+  if (source.tool) {
+    const tool = describeToolOperation(source.tool);
+    return tool.serviceLabel
+      ? `通过 ${tool.serviceLabel} 执行 ${tool.displayName}`
+      : `执行 ${tool.displayName}`;
+  }
+  const description = normalizedToolText(step?.description, 400);
+  if (description && !containsOpaqueToolInvocation(description)) return description;
+  return {
+    llm: "生成 AI 回复",
+    input: "等待用户输入",
+    approval: "等待用户确认",
+    browser_action: "执行浏览器操作",
+    postcondition: "验证执行结果",
+    web: "访问 Web 内容",
+  }[String(step?.kind || "").toLowerCase()] || "执行计划步骤";
+}
+
+function actorStepEffectLabel(step) {
+  return actorEffectCopy[String(step?.externalEffect || "").toLowerCase()]?.label || "外部影响未上报";
 }
 
 function actorAddedByLabel(addedBy) {
@@ -3284,7 +4938,7 @@ function renderActorRecovery(projection) {
     group.append(el("strong", "actor-recovery-label", label));
     for (const step of facts) {
       const item = el("div", "actor-recovery-item");
-      item.append(el("span", "", step.description || step.stepId || "Actor step"));
+      item.append(el("span", "", actorStepDisplayName(step)));
       const detail = actorStepEvidenceDetail(step);
       if (detail) item.append(el("small", "", detail));
       group.append(item);
@@ -3294,54 +4948,31 @@ function renderActorRecovery(projection) {
   return recovery.childElementCount ? recovery : null;
 }
 
-// The gate status is actor-owned. An absent status is rendered as unknown rather than as
-// satisfied, so a decoder that has not seen the fact never implies the plan may run.
-function actorPlanGateStatus(task) {
-  const status = String(task?.gate?.status || "").toLowerCase();
-  return status === "pending" || status === "satisfied" || status === "rejected" ? status : "";
-}
-
-function actorPlanGateCopy(status) {
-  return {
-    pending: "待确认",
-    satisfied: "已确认",
-    rejected: "已拒绝",
-  }[status] || "需确认";
-}
-
-// A plan gate decision is an Aevatar-scoped local admission, not a NyxID authorization: it
-// admits the already-communicated plan and never grants service access, approves a tool
-// request, or proves an external effect.
-function actorPendingPlanGate(projection) {
-  const gate = projection?.task?.gate;
-  if (!gate || actorPlanGateStatus(projection.task) !== "pending") return null;
-  const identified = (value) => typeof value === "string" && value.trim().length > 0;
-  if (!identified(gate.requestId) || !identified(projection.task.taskId)) return null;
-  return gate;
-}
-
-function needsYouKey(kind, requestId) {
-  return `${kind}:${requestId}`;
+function needsYouKey(kind, requestId, actorId = "") {
+  return `${actorId}:${kind}:${requestId}`;
 }
 
 function pruneNeedsYouState(entry, projection) {
+  const actorId = projection?.actorId || entry?.actorId || "";
+  const actorPrefix = `${actorId}:`;
   const activeKeys = new Set();
   if (projection.pendingInput?.requestId) {
-    activeKeys.add(needsYouKey("input", projection.pendingInput.requestId));
+    activeKeys.add(needsYouKey("input", projection.pendingInput.requestId, actorId));
   }
   if (projection.pendingApproval?.approvalRequestId) {
-    activeKeys.add(needsYouKey("approval", projection.pendingApproval.approvalRequestId));
+    activeKeys.add(needsYouKey("approval", projection.pendingApproval.approvalRequestId, actorId));
   }
-  const pendingGate = actorPendingPlanGate(projection);
-  if (pendingGate) activeKeys.add(needsYouKey("plan", pendingGate.requestId));
   for (const key of entry.needsYouDrafts.keys()) {
-    if (!activeKeys.has(key)) entry.needsYouDrafts.delete(key);
+    if (key.startsWith(actorPrefix) && !activeKeys.has(key)) entry.needsYouDrafts.delete(key);
   }
   for (const key of entry.needsYouSubmissions.keys()) {
-    if (!activeKeys.has(key)) entry.needsYouSubmissions.delete(key);
+    if (key.startsWith(actorPrefix) && !activeKeys.has(key)) entry.needsYouSubmissions.delete(key);
   }
+  const approvalKey = projection.pendingApproval?.approvalRequestId
+    ? needsYouKey("approval", projection.pendingApproval.approvalRequestId, actorId)
+    : null;
   if (!projection.pendingApproval ||
-      entry.approvalConfirmRequestId !== projection.pendingApproval.approvalRequestId) {
+      entry.approvalConfirmRequestId !== approvalKey) {
     entry.approvalConfirmRequestId = null;
   }
 }
@@ -3360,7 +4991,7 @@ function renderComposerInputRequest(entry, projection) {
     return;
   }
 
-  const key = needsYouKey("input", pending.requestId);
+  const key = needsYouKey("input", pending.requestId, projection.actorId || entry.actorId);
   const draft = entry.needsYouDrafts.get(key) || { selectedOptionIds: new Set(), freeText: "" };
   entry.needsYouDrafts.set(key, draft);
   const submission = entry.needsYouSubmissions.get(key);
@@ -3405,7 +5036,7 @@ function renderComposerInputRequest(entry, projection) {
 function renderPendingInput(entry, projection) {
   const pending = projection.pendingInput;
   if (!pending?.requestId) return null;
-  const key = needsYouKey("input", pending.requestId);
+  const key = needsYouKey("input", pending.requestId, projection.actorId || entry.actorId);
   const draft = entry.needsYouDrafts.get(key) || { selectedOptionIds: new Set(), freeText: "" };
   entry.needsYouDrafts.set(key, draft);
   const submission = entry.needsYouSubmissions.get(key);
@@ -3431,95 +5062,20 @@ function renderPendingInput(entry, projection) {
   return section;
 }
 
-function renderPlanGateDecision(entry, projection) {
-  const gate = actorPendingPlanGate(projection);
-  if (!gate) return null;
-  const requestId = gate.requestId;
-  const key = needsYouKey("plan", requestId);
-  const submission = entry.needsYouSubmissions.get(key);
-  const locked = submission?.status === "pending" || submission?.status === "accepted";
-  const reliableVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0;
-  const section = el("section", "needs-you-panel plan-gate-required");
-  section.dataset.requestId = requestId;
-  const heading = el("div", "needs-you-heading");
-  heading.append(iconNode("list-checks"), el("strong", "", "需要你确认计划"));
-  section.append(heading);
-
-  section.append(el(
-    "p",
-    "needs-you-boundary",
-    "确认后 Actor 才会执行已说明的计划。这是 Aevatar 本地准入，不授予 NyxID 访问权限，" +
-    "也不代表外部变更已经发生。",
-  ));
-  if (gate.reason) section.append(el("p", "actor-plan-gate-reason", gate.reason));
-
-  const facts = el("dl", "approval-facts");
-  const appendFact = (label, value) => {
-    if (!value) return;
-    facts.append(el("dt", "", label), el("dd", "", value));
-  };
-  appendFact("计划", gate.planId || projection.task.planId);
-  appendFact("修订", Number.isSafeInteger(gate.planRevision) && gate.planRevision > 0
-    ? `Revision ${gate.planRevision}`
-    : "");
-  // Admissions are the exact operations this decision admits. Naming them keeps the
-  // confirmation specific instead of a blanket "go ahead".
-  const admissions = Array.isArray(gate.admissions) ? gate.admissions : [];
-  appendFact("准入操作", admissions.length ? String(admissions.length) : "");
-  if (facts.childElementCount) section.append(facts);
-
-  for (const admission of admissions.slice(0, 8)) {
-    const label = admission?.toolName || admission?.stepId;
-    if (!label) continue;
-    section.append(el("div", "actor-plan-admission mono", label));
-  }
-
-  const footer = el("div", "needs-you-actions");
-  const confirm = el("button", "needs-you-primary", "确认执行");
-  confirm.type = "button";
-  confirm.disabled = locked || !reliableVersion;
-  confirm.addEventListener("click", () => void submitPlanGateDecision(entry, gate, true));
-  const reject = el("button", "needs-you-secondary", "拒绝");
-  reject.type = "button";
-  reject.disabled = locked || !reliableVersion;
-  reject.addEventListener("click", () => void submitPlanGateDecision(entry, gate, false));
-  const status = el("span", `needs-you-state ${submission?.status || ""}`,
-    submission?.message || (!reliableVersion ? "正在同步 Actor 状态…" : ""));
-  footer.append(confirm, reject, status);
-  section.append(footer);
-  // Free-text objection is steering, not a gate decision: the composer already routes a
-  // message during an active task to task.steer, which re-plans instead of admitting.
-  section.append(el(
-    "p",
-    "needs-you-hint",
-    "想改计划就直接发消息，Actor 会按调整重新规划。",
-  ));
-  return section;
-}
-
-function submitPlanGateDecision(entry, gate, confirmed) {
-  return submitNeedsYouDecision(entry, "plan", gate.requestId, {
-    type: "plan.resolve",
-    confirmed,
-    taskId: entryActorProjection(entry)?.task?.taskId,
-    planId: gate.planId,
-    planRevision: gate.planRevision,
-  });
-}
-
 function renderPendingApproval(entry, projection) {
   const pending = projection.pendingApproval;
   if (!pending?.approvalRequestId) return null;
   const requestId = pending.approvalRequestId;
-  const key = needsYouKey("approval", requestId);
+  const actorId = projection.actorId || entry.actorId;
+  const key = needsYouKey("approval", requestId, actorId);
   const draft = entry.needsYouDrafts.get(key) || { reason: "" };
   entry.needsYouDrafts.set(key, draft);
   const submission = entry.needsYouSubmissions.get(key);
   const locked = submission?.status === "pending" || submission?.status === "accepted";
-  const reliableVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0;
+  const reliableVersion = actorStateVersion(entry, actorId);
   const outsideGrant = pending.grantBoundary !== "within_grant";
   const irreversible = pending.reversibility === "irreversible";
-  const confirming = irreversible && entry.approvalConfirmRequestId === requestId;
+  const confirming = irreversible && entry.approvalConfirmRequestId === key;
   const section = el("section", `needs-you-panel approval-required${irreversible ? " dangerous" : ""}`);
   section.dataset.requestId = requestId;
   const heading = el("div", "needs-you-heading");
@@ -3572,55 +5128,68 @@ function renderPendingApproval(entry, projection) {
     confirming ? "确认批准" : irreversible ? "审查并批准" : "批准",
   );
   approve.type = "button";
-  approve.disabled = locked || !reliableVersion;
+  approve.disabled = locked || reliableVersion <= 0;
   approve.addEventListener("click", () => {
     if (irreversible && !confirming) {
-      entry.approvalConfirmRequestId = requestId;
-      renderActorProjection(entry);
+      entry.approvalConfirmRequestId = key;
+      renderActorProjection(entry, actorId);
       return;
     }
     void submitNeedsYouDecision(entry, "approval", requestId, {
       type: "approval.resolve",
       approved: true,
       reason: draft.reason.trim(),
-    });
+    }, { actorId, projection });
   });
   const reject = el("button", "needs-you-secondary", "拒绝");
   reject.type = "button";
-  reject.disabled = locked || !reliableVersion;
+  reject.disabled = locked || reliableVersion <= 0;
   reject.addEventListener("click", () => void submitNeedsYouDecision(entry, "approval", requestId, {
     type: "approval.resolve",
     approved: false,
     reason: draft.reason.trim(),
-  }));
+  }, { actorId, projection }));
   const status = el("span", `needs-you-state ${submission?.status || ""}`,
-    submission?.message || (!reliableVersion ? "正在同步 Actor 状态…" : ""));
+    submission?.message || (reliableVersion <= 0 ? "正在同步 Actor 状态…" : ""));
   footer.append(approve, reject, status);
   section.append(footer);
   return section;
 }
 
-async function submitNeedsYouDecision(entry, kind, requestId, payload) {
-  const projection = entryActorProjection(entry);
-  if (!entry?.actorId || !projection || !requestId ||
-      !Number.isSafeInteger(projection.stateVersion) || projection.stateVersion <= 0) return false;
-  const key = needsYouKey(kind, requestId);
+async function submitNeedsYouDecision(
+  entry,
+  kind,
+  requestId,
+  payload,
+  { actorId = entry?.actorId, projection = actorProjectionFor(entry, actorId) } = {},
+) {
+  if (!actorId || !projection || !requestId) return false;
+  const key = needsYouKey(kind, requestId, actorId);
   const existing = entry.needsYouSubmissions.get(key);
   if (existing?.status === "pending" || existing?.status === "accepted") return false;
   const clientRequestId = createId(`client-${kind}`);
-  entry.needsYouSubmissions.set(key, { status: "pending", message: "正在提交…" });
-  renderActorProjection(entry);
+  entry.needsYouSubmissions.set(key, { status: "pending", message: "正在同步 Actor 状态…" });
+  renderActorProjection(entry, actorId);
   try {
+    const refreshedProjection = await refreshActorStateFor(
+      entry,
+      actorId,
+      { uncursored: true },
+    );
+    const reliableVersion = actorStateVersion(entry, actorId);
+    if (!refreshedProjection || reliableVersion <= 0) {
+      throw new Error("无法同步最新 Actor 状态。");
+    }
     const response = await fetch("/api/demo/chat", {
       method: "POST",
       headers: demoHeaders(),
       body: JSON.stringify({
         surface: "nyxid-chat",
         ...payload,
-        conversationId: entry.actorId,
+        conversationId: actorId,
         requestId,
         clientRequestId,
-        expectedStateVersion: projection.stateVersion,
+        expectedStateVersion: reliableVersion,
       }),
     });
     if (!response.ok) throw await responseError(response);
@@ -3629,45 +5198,296 @@ async function submitNeedsYouDecision(entry, kind, requestId, payload) {
       status: "accepted",
       message: "已受理，等待 Actor 确认。",
     });
-    renderActorProjection(entry);
-    await refreshActorState(entry);
-    if (entry.actorStateRefreshTimer) window.clearTimeout(entry.actorStateRefreshTimer);
-    entry.actorStateRefreshTimer = window.setTimeout(() => {
-      entry.actorStateRefreshTimer = null;
-      void refreshActorState(entry);
-      void loadConversations({ silent: true });
-    }, 500);
+    renderActorProjection(entry, actorId);
+    await refreshActorStateFor(entry, actorId);
+    scheduleActorStateRefresh(entry, actorId, 500);
     return true;
   } catch (error) {
     entry.needsYouSubmissions.set(key, {
       status: "error",
       message: `提交失败：${String(error?.message || "unknown error").slice(0, 240)}`,
     });
-    renderActorProjection(entry);
-    await refreshActorState(entry, { uncursored: true });
+    renderActorProjection(entry, actorId);
+    await refreshActorStateFor(entry, actorId, { uncursored: true });
     return false;
   }
 }
 
-function renderActorProjection(entry) {
-  if (!entry?.thread) return;
-  const projection = entry.actorProjection || createActorProjection(entry.actorId);
-  const hasProjection = Boolean(
-    projection.task || projection.pendingInput || projection.pendingApproval ||
-    projection.actions.size || projection.conflicts.length || entry.actorStateNotice,
-  );
-  if (!hasProjection) {
+function terminalConversationHistoryReady(messages, turnId) {
+  if (!Array.isArray(messages) || !messages.length) return false;
+  const expectedTurnId = String(turnId || "").trim();
+  if (!expectedTurnId) return false;
+  const last = messages.at(-1);
+  return last?.role === "assistant" &&
+    String(last.turnId || "").trim() === expectedTurnId &&
+    Boolean(String(last.content || last.error || "").trim());
+}
+
+function replaceConversationHistory(
+  entry,
+  messages,
+  projection,
+  terminalStatus,
+  expectedRun = entry?.run,
+) {
+  if (!entry?.thread || entry.controller || entry.run !== expectedRun ||
+      !terminalConversationHistoryReady(messages, actorStateTurnId(projection))) {
+    return false;
+  }
+  withConversationState(entry, () => {
+    const recoveredRun = createRunState();
+    recoveredRun.surface = "nyxid-chat";
+    recoveredRun.status = terminalStatus;
+    recoveredRun.completedAt = Date.now();
+    recoveredRun.context = {
+      actorId: entry.actorId,
+      turnId: actorStateTurnId(projection),
+    };
+    state.run = recoveredRun;
+    entry.run = recoveredRun;
     entry.actorTaskElement?.remove();
     entry.actorTaskElement = null;
+    for (const element of entry.actionActorTaskElements?.values?.() || []) element.remove();
+    entry.actionActorTaskElements?.clear?.();
+    dom.thread.replaceChildren();
+    for (const message of messages) renderStoredMessage(message);
+    if (entry.meta) {
+      entry.meta = {
+        ...entry.meta,
+        messageCount: messages.length,
+      };
+    }
+    renderActorProjection(entry);
     if (entry === state.activeConversation) {
+      renderActiveConversationState();
+      scrollThread();
+    }
+    refreshIcons(entry.thread);
+  });
+  return true;
+}
+
+async function recoverTerminalConversation(entry, projection, terminalStatus) {
+  if (!entry?.actorId || !projection) return false;
+  if (entry.controller) return true;
+  const turnId = actorStateTurnId(projection);
+  if (!turnId) return false;
+  if (entry.historyRecoveredTurnId === turnId) return true;
+  const recoveryRun = entry.run;
+  try {
+    await loadConversations({ silent: true });
+    if (entry.controller || entry.run !== recoveryRun) return true;
+    const response = await fetch(historyUrl(entry.actorId), {
+      headers: demoHeaders(),
+      cache: "no-store",
+    });
+    if (!response.ok) throw await responseError(response);
+    const messages = normalizeStoredMessages(await response.json());
+    if (entry.controller || entry.run !== recoveryRun) return true;
+    if (!terminalConversationHistoryReady(messages, turnId)) return false;
+    if (!replaceConversationHistory(entry, messages, projection, terminalStatus, recoveryRun)) {
+      return Boolean(entry.controller || entry.run !== recoveryRun);
+    }
+    entry.historyRecoveredTurnId = turnId;
+    setActorStateNotice(entry, entry.actorId, "");
+    return true;
+  } catch (error) {
+    if (entry.controller || entry.run !== recoveryRun) return true;
+    setActorStateNotice(
+      entry,
+      entry.actorId,
+      `Actor 已到终态，但最终回复恢复失败：${String(error?.message || "unknown error").slice(0, 240)}`,
+    );
+    renderActorProjection(entry);
+    return false;
+  }
+}
+
+function actorStateFollowNeeded(entry, actorId, projection) {
+  if (!entry || !actorId || !projection || actorTerminalRunStatus(projection)) return false;
+  const attention = projection.pendingInput?.requestId
+    ? ["input", projection.pendingInput.requestId]
+    : projection.pendingApproval?.approvalRequestId
+      ? ["approval", projection.pendingApproval.approvalRequestId]
+      : null;
+  if (attention) {
+    const submission = entry.needsYouSubmissions.get(needsYouKey(attention[0], attention[1], actorId));
+    if (!submission || !["pending", "accepted"].includes(submission.status)) return false;
+  }
+  const status = String(
+    projection.task?.status || projection.taskStatus || projection.activeTurn?.status || "",
+  ).toLowerCase();
+  return ["active", "running", "waiting", "planned"].includes(status);
+}
+
+function markActorRunFollowing(entry, actorId) {
+  if (!entry?.run || actorId !== entry.actorId) return;
+  entry.run.status = "running";
+  entry.run.completedAt = null;
+  if (entry === state.activeConversation) renderActiveConversationState();
+}
+
+function actorStateFollowGeneration(entry, actorId) {
+  if (!entry || !actorId) return 0;
+  if (actorId === entry.actorId) {
+    return Number.isSafeInteger(entry.actorStateRefreshGeneration)
+      ? entry.actorStateRefreshGeneration
+      : 0;
+  }
+  entry.actionStateRefreshGenerations ||= new Map();
+  const generation = entry.actionStateRefreshGenerations.get(actorId);
+  return Number.isSafeInteger(generation) ? generation : 0;
+}
+
+function advanceActorStateFollowGeneration(entry, actorId) {
+  const generation = actorStateFollowGeneration(entry, actorId) + 1;
+  if (actorId === entry.actorId) {
+    entry.actorStateRefreshGeneration = generation;
+  } else {
+    entry.actionStateRefreshGenerations ||= new Map();
+    entry.actionStateRefreshGenerations.set(actorId, generation);
+  }
+  return generation;
+}
+
+function actorStateFollowIsCurrent(entry, actorId, generation) {
+  return actorStateFollowGeneration(entry, actorId) === generation;
+}
+
+async function followActorStateRefresh(entry, actorId, attemptsRemaining, generation) {
+  if (!actorStateFollowIsCurrent(entry, actorId, generation)) return;
+  const projection = actorId === entry.actorId
+    ? await refreshActorState(entry)
+    : await refreshActionActorState(entry, actorId);
+  if (!actorStateFollowIsCurrent(entry, actorId, generation)) return;
+  if (!projection) {
+    if (attemptsRemaining > 1) {
+      scheduleActorStateRefresh(entry, actorId, 1000, attemptsRemaining - 1, generation);
+    }
+    return;
+  }
+
+  const terminalStatus = actorTerminalRunStatus(projection);
+  if (terminalStatus) {
+    if (actorId !== entry.actorId) return;
+    const turnId = actorStateTurnId(projection);
+    const liveTerminalReply = terminalStatus === "complete" &&
+      entry.run?.status === "complete" && Boolean(entry.run.assistantText?.trim()) &&
+      (!turnId || entry.run?.context?.turnId === turnId);
+    const alreadyRecovered = Boolean(turnId) && entry.historyRecoveredTurnId === turnId;
+    if (liveTerminalReply || alreadyRecovered) {
+      entry.run.status = terminalStatus;
+      entry.run.completedAt ||= Date.now();
+      if (entry === state.activeConversation) renderActiveConversationState();
+      return;
+    }
+    const recovered = await recoverTerminalConversation(entry, projection, terminalStatus);
+    if (!actorStateFollowIsCurrent(entry, actorId, generation)) return;
+    if (!recovered && attemptsRemaining > 1) {
+      setActorStateNotice(entry, actorId, "Actor 已到终态，正在恢复最终回复…");
+      renderActorProjection(entry, actorId);
+      scheduleActorStateRefresh(entry, actorId, 750, attemptsRemaining - 1, generation);
+    } else if (!recovered) {
+      setActorStateNotice(
+        entry,
+        actorId,
+        "Actor 已到终态，但最终回复尚未进入会话历史。重新打开会话可继续恢复。",
+      );
+      renderActorProjection(entry, actorId);
+    }
+    return;
+  }
+
+  markActorRunFollowing(entry, actorId);
+  if (!actorStateFollowNeeded(entry, actorId, projection)) return;
+  if (attemptsRemaining > 1) {
+    scheduleActorStateRefresh(entry, actorId, 1000, attemptsRemaining - 1, generation);
+  } else {
+    setActorStateNotice(entry, actorId, "Actor 仍在执行，但自动状态跟随已超时。重新打开会话可继续恢复。");
+    renderActorProjection(entry, actorId);
+  }
+}
+
+function scheduleActorStateRefresh(
+  entry,
+  actorId,
+  delayMs = 500,
+  attemptsRemaining = 300,
+  generation = null,
+) {
+  if (!entry || !actorId || attemptsRemaining <= 0) return;
+  const followGeneration = Number.isSafeInteger(generation) && generation > 0
+    ? generation
+    : advanceActorStateFollowGeneration(entry, actorId);
+  if (!actorStateFollowIsCurrent(entry, actorId, followGeneration)) return;
+  if (actorId === entry.actorId) {
+    if (entry.actorStateRefreshTimer) window.clearTimeout(entry.actorStateRefreshTimer);
+    const timer = window.setTimeout(async () => {
+      if (entry.actorStateRefreshTimer !== timer ||
+          !actorStateFollowIsCurrent(entry, actorId, followGeneration)) {
+        return;
+      }
+      entry.actorStateRefreshTimer = null;
+      await followActorStateRefresh(entry, actorId, attemptsRemaining, followGeneration);
+    }, delayMs);
+    entry.actorStateRefreshTimer = timer;
+    return;
+  }
+  entry.actionStateRefreshTimers ||= new Map();
+  const current = entry.actionStateRefreshTimers.get(actorId);
+  if (current) window.clearTimeout(current);
+  const timer = window.setTimeout(async () => {
+    if (entry.actionStateRefreshTimers.get(actorId) !== timer ||
+        !actorStateFollowIsCurrent(entry, actorId, followGeneration)) {
+      return;
+    }
+    entry.actionStateRefreshTimers.delete(actorId);
+    await followActorStateRefresh(entry, actorId, attemptsRemaining, followGeneration);
+  }, delayMs);
+  entry.actionStateRefreshTimers.set(actorId, timer);
+}
+
+function actorTaskElementFor(entry, actorId) {
+  if (!entry || !actorId || actorId === entry.actorId) return entry?.actorTaskElement || null;
+  return entry.actionActorTaskElements?.get(actorId) || null;
+}
+
+function setActorTaskElement(entry, actorId, element) {
+  if (!entry || !actorId || actorId === entry.actorId) {
+    if (entry) entry.actorTaskElement = element;
+    return;
+  }
+  entry.actionActorTaskElements ||= new Map();
+  if (element) entry.actionActorTaskElements.set(actorId, element);
+  else entry.actionActorTaskElements.delete(actorId);
+}
+
+function actorControlReceiptFor(entry, actorId) {
+  if (!entry || !actorId || actorId === entry.actorId) return entry?.actorControlReceipt || null;
+  return entry.actionActorControlReceipts?.get(actorId) || null;
+}
+
+function renderActorProjection(entry, actorId = entry?.actorId) {
+  if (!entry?.thread) return;
+  const projection = actorProjectionFor(entry, actorId) || createActorProjection(actorId);
+  const notice = actorStateNotice(entry, actorId);
+  const isConversationActor = actorId === entry.actorId;
+  const hasProjection = Boolean(
+    projection.task || projection.pendingInput || projection.pendingApproval ||
+    projection.actions.size || projection.conflicts.length || notice,
+  );
+  if (!hasProjection) {
+    actorTaskElementFor(entry, actorId)?.remove();
+    setActorTaskElement(entry, actorId, null);
+    if (isConversationActor && entry === state.activeConversation) {
       renderComposerInputRequest(entry, projection);
       renderInspector();
     }
     return;
   }
 
-  const root = entry.actorTaskElement || el("section", "actor-task");
-  entry.actorTaskElement = root;
+  const root = actorTaskElementFor(entry, actorId) || el("section", "actor-task");
+  setActorTaskElement(entry, actorId, root);
   if (root.dataset.collapsed !== "true" && root.dataset.collapsed !== "false") {
     root.dataset.collapsed = "false";
   }
@@ -3676,9 +5496,9 @@ function renderActorProjection(entry) {
   const status = String(
     task?.status || projection.taskStatus || projection.latestTurn?.status || "unknown",
   ).toLowerCase();
-  root.className = `actor-task ${status}`;
+  root.className = `actor-task ${status}${isConversationActor ? "" : " action-actor-task"}`;
   root.classList.toggle("collapsed", root.dataset.collapsed === "true");
-  root.dataset.actorId = projection.actorId || entry.actorId || "";
+  root.dataset.actorId = projection.actorId || actorId || "";
   if (task?.taskId) root.dataset.taskId = task.taskId;
   if (task?.turnId) root.dataset.turnId = task.turnId;
   if (task?.planId) root.dataset.planId = task.planId;
@@ -3700,7 +5520,7 @@ function renderActorProjection(entry) {
     title.append(el(
       "small",
       "actor-task-current",
-      `${actorStatusCopy(currentStep.status)} · ${currentStep.description || currentStep.stepId}`,
+      `${actorStatusCopy(currentStep.status)} · ${actorStepDisplayName(currentStep)}`,
     ));
   }
   const summary = el("div", "actor-task-summary");
@@ -3741,25 +5561,12 @@ function renderActorProjection(entry) {
       planId.title = task.planId;
       meta.append(planId);
     }
-    const gateMode = String(task.gate?.mode || "auto").toLowerCase();
-    const gateStatus = actorPlanGateStatus(task);
-    const gate = el(
-      "span",
-      `actor-plan-gate ${gateMode}${gateStatus ? ` ${gateStatus}` : ""}`,
-      gateMode === "confirm" ? actorPlanGateCopy(gateStatus) : "自动执行",
-    );
-    if (task.gate?.reason) gate.title = task.gate.reason;
-    meta.append(gate);
     root.append(meta);
-    if (task.gate?.reason) root.append(el("p", "actor-plan-gate-reason", task.gate.reason));
   }
 
   pruneNeedsYouState(entry, projection);
-  // The plan gate is the "may I start" decision, so it precedes the per-step decisions.
-  const planGate = renderPlanGateDecision(entry, projection);
   const pendingInput = renderPendingInput(entry, projection);
   const pendingApproval = renderPendingApproval(entry, projection);
-  if (planGate) root.append(planGate);
   if (pendingInput) root.append(pendingInput);
   if (pendingApproval) root.append(pendingApproval);
 
@@ -3775,7 +5582,7 @@ function renderActorProjection(entry) {
       row.dataset.stepKind = step.kind || "";
       const copy = el("div", "actor-step-copy");
       copy.append(
-        el("strong", "", step.description || step.stepId || "Actor step"),
+        el("strong", "", actorStepDisplayName(step)),
         el("small", "actor-step-source", `${actorStatusCopy(stepStatus)} · ${actorStepSourceLabel(step)}`),
       );
       const annotations = el("div", "actor-step-annotations");
@@ -3887,11 +5694,12 @@ function renderActorProjection(entry) {
       `Actor projection conflict: ${projection.conflicts.at(-1).code}`,
     ));
   }
-  if (entry.actorStateNotice) {
-    root.append(el("div", "actor-state-notice", entry.actorStateNotice));
+  if (notice) {
+    root.append(el("div", "actor-state-notice", notice));
   }
-  if (entry.actorControlReceipt) {
-    const receipt = entry.actorControlReceipt;
+  const controlReceipt = actorControlReceiptFor(entry, actorId);
+  if (controlReceipt) {
+    const receipt = controlReceipt;
     root.append(el(
       "div",
       `actor-control-receipt ${receipt.status === "error" ? "actor-control-error" : ""}`,
@@ -3899,7 +5707,7 @@ function renderActorProjection(entry) {
     ));
   }
   mountActorTask(entry.thread, root);
-  if (entry === state.activeConversation) {
+  if (isConversationActor && entry === state.activeConversation) {
     renderComposerInputRequest(entry, projection);
     renderInspector();
   }
@@ -3931,7 +5739,8 @@ async function submitActorControl(kind, step = null, instruction = null) {
   if (kind === "steer" && !String(instruction || "").trim()) return;
 
   const turnId = actorControlTurnId(projection);
-  if (!turnId || !Number.isSafeInteger(projection.stateVersion) || projection.stateVersion < 0) {
+  const reliableVersion = reliableConversationStateVersion(entry);
+  if (!turnId || reliableVersion <= 0) {
     entry.actorControlReceipt = {
       status: "error",
       message: "Actor control 缺少可靠的 turn/state identity。",
@@ -3955,7 +5764,7 @@ async function submitActorControl(kind, step = null, instruction = null) {
       turnId,
       stopRequestId: createId("stop"),
       clientRequestId: createId("client-stop"),
-      expectedStateVersion: projection.stateVersion,
+      expectedStateVersion: reliableVersion,
     };
   } else if (kind === "steer") {
     body = {
@@ -3966,7 +5775,7 @@ async function submitActorControl(kind, step = null, instruction = null) {
       steeringId: createId("steering"),
       clientRequestId: createId("client-steering"),
       instruction: String(instruction).trim(),
-      expectedStateVersion: projection.stateVersion,
+      expectedStateVersion: reliableVersion,
     };
   } else {
     const generation = actorOperationGeneration(step);
@@ -3988,7 +5797,7 @@ async function submitActorControl(kind, step = null, instruction = null) {
       [`${kind}RequestId`]: createId(kind),
       clientRequestId: createId(`client-${kind}`),
       expectedOperationGeneration: generation,
-      expectedStateVersion: projection.stateVersion,
+      expectedStateVersion: reliableVersion,
     };
   }
 
@@ -4155,7 +5964,7 @@ function activePendingInputContext() {
   const projection = entryActorProjection(entry);
   const pending = projection?.pendingInput;
   if (!entry || !pending?.requestId) return null;
-  const key = needsYouKey("input", pending.requestId);
+  const key = needsYouKey("input", pending.requestId, projection.actorId || entry.actorId);
   const draft = entry.needsYouDrafts.get(key) || { selectedOptionIds: new Set(), freeText: "" };
   entry.needsYouDrafts.set(key, draft);
   return { entry, projection, pending, key, draft };
@@ -4227,7 +6036,7 @@ async function sendPrompt(overridePrompt, options = {}) {
       attachment: attachment == null ? null : structuredClone(attachment),
       clientRequestId: createId("client-text"),
     };
-    dom.composerStatus.textContent = "完成必需的运行准备后，将继续这条请求。";
+    setComposerStatus("完成必需的运行准备后，将继续这条请求。");
     dom.readinessPanel.scrollIntoView?.({ block: "nearest" });
     return;
   }
@@ -4392,7 +6201,7 @@ async function responseError(response) {
   }
 }
 
-function handleFrame(raw) {
+function handleFrame(raw, { streamActorId = null, preserveConversationActor = false } = {}) {
   const event = normalizeFrame(raw);
   applyRequestTraceEvent(conversationContext || state.activeConversation, state.run, event);
   recordEvent(event, raw);
@@ -4411,17 +6220,18 @@ function handleFrame(raw) {
       if (typeof attachRequestTraceServerFacts === "function") {
         attachRequestTraceServerFacts(conversationContext || state.activeConversation, state.run, event);
       }
-      state.actorId = state.run.surface === "nyxid-chat"
-        ? state.run.context.actorId || state.actorId
-        : state.actorId;
       if (state.run.surface === "nyxid-chat") {
         const owner = conversationContext || state.activeConversation;
-        if (owner) {
-          owner.actorId = state.actorId;
+        const adopted = adoptRunStartedConversationActor(
+          owner,
+          state.run.context.actorId,
+          { preserveConversationActor },
+        );
+        if (adopted) {
           entryActorProjection(owner);
+          renderHistoryList();
+          scheduleHistoryRefresh();
         }
-        renderHistoryList();
-        scheduleHistoryRefresh();
       }
       updateRunProgress("Agent 已启动，正在分析请求…");
       setRunStatus("running", "Running");
@@ -4438,34 +6248,28 @@ function handleFrame(raw) {
     case "action_request": {
       const entry = conversationContext || state.activeConversation;
       if (!entry) break;
-      const projection = entryActorProjection(entry);
-      entry.actorProjection = reduceActorEvent(projection, event);
+      const routed = reduceActorEventForEntry(entry, event, { streamActorId });
+      if (!routed) break;
+      const { actorId, projection } = routed;
       if (event.type === "action_request" && event.actionRequest) {
-        const action = entry.actorProjection.actions.get(event.actionRequest.actionRequestId);
+        const action = projection.actions.get(event.actionRequest.actionRequestId);
         if (action?.conflicted) {
-          invalidateActionRequestCache(entry, event.actionRequest.actionRequestId);
+          invalidateActionRequestCache(entry, actorId, event.actionRequest.actionRequestId);
         } else if (action?.request) {
           cacheActionRequest(entry, action.request);
         }
+        void refreshActionActorState(entry, actorId);
       }
       if (event.type === "approval_requested") {
         state.run.approvalCard?.card?.remove();
         state.run.approvalCard = null;
         state.run.pendingApproval = null;
       }
-      renderActorProjection(entry);
+      renderActorProjection(entry, actorId);
       renderActionCards(entry);
       if (entry === state.activeConversation) renderActiveConversationState();
-      const needsStateRefresh =
-        ["input_requested", "input_changed", "approval_requested", "approval_changed"].includes(event.type) ||
-        (event.type === "task_snapshot" && actorPendingPlanGate(entry.actorProjection));
-      if (needsStateRefresh) {
-        if (entry.actorStateRefreshTimer) window.clearTimeout(entry.actorStateRefreshTimer);
-        entry.actorStateRefreshTimer = window.setTimeout(() => {
-          entry.actorStateRefreshTimer = null;
-          void refreshActorState(entry);
-          void loadConversations({ silent: true });
-        }, 300);
+      if (["input_requested", "input_changed", "approval_requested", "approval_changed"].includes(event.type)) {
+        scheduleActorStateRefresh(entry, actorId, 300);
       }
       break;
     }
@@ -4570,6 +6374,7 @@ function handleFrame(raw) {
   const owner = conversationContext || state.activeConversation;
   if (typeof queueRequestTraceRender === "function") queueRequestTraceRender(owner);
   else renderInspector();
+  return event;
 }
 
 function pickContext(event) {
@@ -4651,8 +6456,8 @@ function ensureActivityCard() {
   disclosure.classList.add("activity-disclosure");
   const icon = document.createElement("i");
   icon.dataset.lucide = "workflow";
-  const label = el("span", "", "Run");
-  const status = el("span", "", "Running");
+  const label = el("span", "", "AI 执行");
+  const status = el("span", "", "正在准备");
   header.append(disclosure, icon, label, status);
   header.addEventListener("click", () => {
     const collapsed = card.classList.toggle("collapsed");
@@ -4736,7 +6541,7 @@ function removeRunProgress() {
 function addTool(event) {
   const id = event.toolCallId || createId("tool");
   if (state.run.tools.has(id)) return;
-  const name = event.toolName || "tool";
+  const presentation = describeToolOperation(event);
   const card = ensureActivityCard();
   const row = el("div", "tool-row");
   row.dataset.toolCallId = id;
@@ -4745,22 +6550,27 @@ function addTool(event) {
   icon.dataset.lucide = "loader-circle";
   stateIcon.append(icon);
   const copy = el("div", "tool-copy");
-  copy.append(el("strong", "", name), el("small", "", "Running"));
+  copy.append(
+    el("strong", "", presentation.title),
+    el("small", "", toolActivityRunningCopy(presentation)),
+  );
   const duration = el("span", "tool-duration", "…");
   row.append(stateIcon, copy, duration);
   card.append(row);
   state.run.tools.set(id, {
     id,
-    name,
+    name: presentation.title,
+    invocationName: presentation.invocationName,
+    presentation: presentation.presentation,
     status: "running",
     startedAt: Date.now(),
     row,
     copy: copy.querySelector("small"),
     duration,
   });
-  startStep(name, "tool", id);
+  startStep(presentation.title, "tool", id);
   updateActivityProgress();
-  if (/ornn_search_skills|use_skill/i.test(name)) {
+  if (/ornn_search_skills|use_skill/i.test(presentation.invocationName)) {
     dom.routeOrnnState.textContent = "active";
     dom.routeOrnnState.className = "route-state active";
   }
@@ -4773,8 +6583,11 @@ function updateActivityProgress() {
   const tools = Array.from(state.run.tools.values());
   if (!tools.length) return;
   const done = tools.filter((tool) => tool.status !== "running").length;
-  state.run.activityStatus.textContent =
-    `${done} / ${tools.length} steps${done === tools.length ? " · complete" : ""}`;
+  const active = tools.filter((tool) => tool.status === "running").at(-1);
+  state.run.activityStatus.textContent = active
+    ? `正在执行 · ${active.name}`
+    : `已完成 ${done} 项`;
+  state.run.activityStatus.title = active?.name || `已完成 ${done} 项操作`;
 }
 
 function finishTool(event) {
@@ -4792,7 +6605,9 @@ function finishTool(event) {
   resolved.row.classList.remove("done", "error");
   resolved.row.classList.add(resolved.status);
   resolved.row.querySelector(".tool-state-icon").replaceChildren(iconNode(succeeded ? "check" : "x"));
-  resolved.copy.textContent = summarizeToolResult(event.result || event.error);
+  const result = summarizeToolResult(event.result || event.error);
+  const hasResult = result && !/^completed$/i.test(result);
+  resolved.copy.textContent = `${succeeded ? "已完成" : "执行失败"}${hasResult ? ` · ${result}` : ""}`;
   const authorizationFailure = findServiceAuthorizationFailure(event.result || event.error);
   if (authorizationFailure && !state.run.authorizationPrompted) {
     state.run.authorizationPrompted = true;
@@ -4807,7 +6622,7 @@ function finishTool(event) {
   resolved.duration.textContent = formatDuration(resolved.completedAt - resolved.startedAt);
   updateActivityProgress();
   finishStep(resolved.name, "tool", resolved.status, resolved.id);
-  if (/ornn_search_skills|use_skill/i.test(resolved.name)) {
+  if (/ornn_search_skills|use_skill/i.test(resolved.invocationName)) {
     applyHealthRouteState();
   }
   refreshIcons(resolved.row);
@@ -4867,7 +6682,7 @@ function finalizeRunningExecution(status, detail) {
   }
   if (state.run.activityStatus) {
     if (state.run.tools.size) updateActivityProgress();
-    else state.run.activityStatus.textContent = status === "done" ? "Complete" : "Ended";
+    else state.run.activityStatus.textContent = status === "done" ? "已完成" : "已结束";
   }
   applyHealthRouteState();
 }
@@ -4883,11 +6698,13 @@ function applyRoleChatCompletion(event) {
     addTool({
       toolCallId: call.callId,
       toolName: call.toolName,
+      presentation: call.presentation,
       argumentsJson: call.argumentsJson,
     });
     finishTool({
       toolCallId: call.callId,
       toolName: call.toolName,
+      presentation: call.presentation,
       result: receipt?.resultJson,
       error: receipt?.errorMessage || receipt?.errorCode,
       status: receipt?.status,
@@ -4897,10 +6714,15 @@ function applyRoleChatCompletion(event) {
 
   for (const receipt of receipts) {
     if (calls.some((call) => call.callId === receipt.callId)) continue;
-    addTool({ toolCallId: receipt.callId, toolName: receipt.toolName });
+    addTool({
+      toolCallId: receipt.callId,
+      toolName: receipt.toolName,
+      presentation: receipt.presentation,
+    });
     finishTool({
       toolCallId: receipt.callId,
       toolName: receipt.toolName,
+      presentation: receipt.presentation,
       result: receipt.resultJson,
       error: receipt.errorMessage || receipt.errorCode,
       status: receipt.status,
@@ -5018,7 +6840,7 @@ function renderApproval(event) {
   const card = el("section", "approval-card");
   const header = el("div", "approval-header");
   header.append(iconNode("shield-alert"), el("span", "", "需要确认"));
-  const toolName = event.toolName || "workflow continuation";
+  const toolName = readableToolInvocationName(event.toolName || "workflow continuation");
   const description = event.prompt || `Agent 请求执行 ${toolName}`;
   const paragraph = el("p", "", description);
   const args = event.argumentsJson ? parseArguments(event.argumentsJson) : null;
@@ -5380,49 +7202,6 @@ function inspectorTraceOperation(entry = state.activeConversation, trace = inspe
   return entry?.mainView === "traces" ? selectedTraceOperation(trace) : null;
 }
 
-function renderTraceOperationInspector(trace) {
-  if (!dom.traceOperationSection) return;
-  const record = inspectorTraceOperation(state.activeConversation, trace);
-  dom.traceOperationSection.classList.toggle("hidden", !record);
-  if (!record) return;
-  dom.traceOperationKindFact.textContent = traceOperationKindLabel(record.kind);
-  dom.traceOperationKindFact.className = `trace-operation-kind ${record.kind}`;
-  dom.traceOperationTitleFact.textContent = record.title || traceOperationKindLabel(record.kind);
-  dom.traceOperationIdFact.textContent = record.id || record.key;
-  dom.traceOperationIdFact.title = record.id || record.key;
-  dom.traceOperationStatusFact.textContent = traceOperationStatusLabel(record.status);
-  dom.traceOperationStartedFact.textContent = traceOperationStartedAt(record);
-  dom.traceOperationDurationFact.textContent = traceOperationDuration(record);
-  const modelFacts = record.kind === "model"
-      ? [
-        record.model ? `Model: ${record.model}` : "",
-        record.provider ? `Provider: ${record.provider}` : "",
-        record.round != null ? `Round: ${record.round}` : "",
-        record.sessionId ? `Session: ${record.sessionId}` : "",
-        record.finishReason ? `Finish reason: ${record.finishReason}` : "",
-        record.usage?.promptTokens != null ? `Input tokens: ${record.usage.promptTokens}` : "",
-        record.usage?.completionTokens != null ? `Output tokens: ${record.usage.completionTokens}` : "",
-        record.usage?.totalTokens != null ? `Total tokens: ${record.usage.totalTokens}` : "",
-      ].filter(Boolean).join("\n")
-    : "";
-  const toolCatalog = record.kind === "model" && record.tools?.length
-    ? `Available tools:\n${record.tools.join("\n")}`
-    : "";
-  const outputValue = [
-    String(record.output || ""),
-    record.reasoning ? `Reasoning:\n${record.reasoning}` : "",
-    record.error ? `Error:\n${record.error}` : "",
-    modelFacts,
-  ].filter(Boolean).join("\n\n");
-  const inputValue = [String(record.input || ""), toolCatalog].filter(Boolean).join("\n\n");
-  const hasInput = inputValue.length > 0;
-  const hasOutput = outputValue.length > 0;
-  dom.traceOperationInputSection?.classList.toggle("hidden", !hasInput);
-  dom.traceOperationOutputSection?.classList.toggle("hidden", !hasOutput);
-  if (dom.traceOperationInputFact) dom.traceOperationInputFact.textContent = inputValue;
-  if (dom.traceOperationOutputFact) dom.traceOperationOutputFact.textContent = outputValue;
-}
-
 function paintRunStatus(status, label = requestTraceStatusEnglish(status)) {
   dom.runStatus.className = `run-status ${status || "idle"}`;
   dom.runStatus.querySelector("strong").textContent = label;
@@ -5448,7 +7227,6 @@ function renderInspector() {
   dom.inspectorEyebrow.textContent = operation ? traceOperationKindLabel(operation.kind) : trace ? "Request trace" : "Current run";
   dom.inspectorTitle.textContent = operation ? operation.title || "操作详情" : trace ? "轨迹详情" : "运行详情";
   paintRunStatus(visibleStatus);
-  renderTraceOperationInspector(trace);
   dom.traceClientRequestFact.textContent = trace?.clientRequestId || run.clientRequestId || "—";
   dom.traceClientRequestFact.title = trace?.clientRequestId || run.clientRequestId || "";
   dom.traceInputFact.textContent = trace
@@ -5506,7 +7284,7 @@ function renderActorControlUi() {
     dom.promptInput.disabled = true;
     dom.attachButton.disabled = true;
     dom.composerServicesButton.disabled = true;
-    dom.composerStatus.textContent = "正在查看历史轨迹；返回当前轨迹后可继续操作";
+    setComposerStatus("正在查看历史轨迹；返回当前轨迹后可继续操作");
     return;
   }
   const projection = entryActorProjection(state.activeConversation);
@@ -5519,12 +7297,12 @@ function renderActorControlUi() {
   if (pendingInput) {
     const submission = pendingInput.entry.needsYouSubmissions.get(pendingInput.key);
     const locked = submission?.status === "pending" || submission?.status === "accepted";
-    const reliableVersion = Number.isSafeInteger(projection?.stateVersion) && projection.stateVersion > 0;
+    const reliableVersion = reliableConversationStateVersion(state.activeConversation);
     const hasAnswer = Boolean(
       dom.promptInput.value.trim() || pendingInput.draft.selectedOptionIds.size,
     );
     dom.sendButton.classList.remove("hidden");
-    dom.sendButton.disabled = !state.auth.authenticated || locked || !reliableVersion || !hasAnswer;
+    dom.sendButton.disabled = !state.auth.authenticated || locked || reliableVersion <= 0 || !hasAnswer;
     dom.sendButton.setAttribute("aria-label", "提交回答");
     dom.sendButton.title = "提交回答";
     dom.steerButton.classList.add("hidden");
@@ -5534,11 +7312,11 @@ function renderActorControlUi() {
     dom.attachButton.disabled = true;
     dom.composerServicesButton.disabled = true;
     dom.observationDisconnectButton.classList.toggle("hidden", !state.activeController);
-    dom.composerStatus.textContent = locked
+    setComposerStatus(locked
       ? submission.message || "回答已受理，等待 Actor 确认。"
-      : reliableVersion
+      : reliableVersion > 0
         ? "一次回答全部缺口；提交后 Actor 将继续当前任务"
-        : "正在同步 Actor 状态…";
+        : "正在同步 Actor 状态…", { working: locked || reliableVersion <= 0 });
     return;
   }
 
@@ -5557,7 +7335,13 @@ function renderActorControlUi() {
   dom.sendButton.setAttribute("aria-label", "发送");
   dom.sendButton.title = "发送";
   if (actorActive) {
-    dom.composerStatus.textContent = "当前任务执行中；输入内容将作为 steering 指令提交";
+    setComposerStatus("Agent 正在执行当前任务；仍可输入 steering 指令", { working: true });
+  } else if (state.activeController) {
+    setComposerStatus("正在接收生产 Agent 输出 · 停止接收不会撤销已提交操作", { working: true });
+  } else {
+    setComposerStatus(state.auth.authenticated
+      ? "生产环境 · 使用当前账户的 services，高风险操作需要确认"
+      : "登录后使用当前账户已配置的 services");
   }
   dom.observationDisconnectButton.classList.toggle("hidden", !state.activeController);
 }
@@ -5600,9 +7384,15 @@ function renderSteps(run = inspectorRunState(), { trace = null, allowActorProjec
     const row = el("div", `inspector-step ${step.status}`);
     const dot = el("span", "step-dot");
     dot.append(iconNode(step.status === "done" ? "check" : step.status === "error" ? "x" : "loader-circle"));
-    const name = el("strong", "", step.description || step.name || step.stepId || "Actor step");
+    const name = el("strong", "", actorSteps
+      ? actorStepDisplayName(step)
+      : step.description || step.name || "执行步骤");
     if (actorSteps) {
-      row.append(dot, name, el("small", "", `${step.status || "unknown"} · ${step.externalEffect || "no effect fact"}`));
+      row.append(dot, name, el(
+        "small",
+        "",
+        `${actorStatusCopy(step.status)} · ${actorStepSourceLabel(step)} · ${actorStepEffectLabel(step)}`,
+      ));
     } else {
       const elapsed = step.completedAt
         ? step.completedAt - step.startedAt
@@ -5684,6 +7474,12 @@ function setRunStatus(status, label) {
   paintRunStatus(status, label);
 }
 
+function setComposerStatus(message, { working = false } = {}) {
+  dom.composerStatus.textContent = message;
+  dom.composerStatus.classList.toggle("working", working);
+  dom.composerStatus.setAttribute("aria-busy", String(working));
+}
+
 function setRunningUi(running) {
   if (!isActiveConversationContext()) return;
   const canCompose = state.auth.authenticated && !running;
@@ -5700,11 +7496,11 @@ function setRunningUi(running) {
   dom.servicesButton.disabled = false;
   dom.connectionButton.disabled = false;
   if (!running) dom.stopButton.disabled = false;
-  dom.composerStatus.textContent = running
+  setComposerStatus(running
     ? "正在接收生产 Agent 输出 · 停止接收不会撤销已提交操作"
     : state.auth.authenticated
       ? "生产环境 · 使用当前账户的 services，高风险操作需要确认"
-      : "登录后使用当前账户已配置的 services";
+      : "登录后使用当前账户已配置的 services", { working: running });
   renderActorControlUi();
 }
 
@@ -5712,7 +7508,7 @@ function cancelRun() {
   if (isReviewingHistoricalTrace()) return;
   if (!state.activeController) return;
   dom.stopButton.disabled = true;
-  dom.composerStatus.textContent = "正在停止当前页面接收…";
+  setComposerStatus("正在停止当前页面接收…", { working: true });
   abortConversationRun(state.activeConversation);
 }
 
@@ -5720,7 +7516,7 @@ function cancelObservation() {
   if (isReviewingHistoricalTrace()) return;
   if (!state.activeController) return;
   dom.observationDisconnectButton.disabled = true;
-  dom.composerStatus.textContent = "正在停止当前页面观察…";
+  setComposerStatus("正在停止当前页面观察…", { working: true });
   abortConversationRun(state.activeConversation);
 }
 

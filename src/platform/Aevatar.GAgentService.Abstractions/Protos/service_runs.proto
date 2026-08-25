@@ -48,6 +48,7 @@ message ServiceRunRecord {
   string schedule_id = 18;
   ServiceRunCompletionNotificationTarget completion_notification_target = 19;
   repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 20;
+  string schedule_operation_id = 21;
 }
 
 message ServiceRunState {

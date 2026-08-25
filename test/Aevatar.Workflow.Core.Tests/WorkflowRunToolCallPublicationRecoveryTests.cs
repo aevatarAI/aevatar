@@ -1,9 +1,11 @@
+using System.Diagnostics.Metrics;
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -17,13 +19,659 @@ using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.Workflow.Core.Tests;
 
 #pragma warning disable CS0612 // Recovery coverage intentionally seeds and inspects legacy payload fields.
 public sealed class WorkflowRunToolCallPublicationRecoveryTests
 {
+    [Fact]
+    public async Task Activation_WhenStartIntentWasCommittedBeforeSelfDispatch_ShouldRepublishUntilKernelCheckpoint()
+    {
+        const string actorId = "run-start-outbox-recovery";
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        var start = new StartWorkflowEvent
+        {
+            RunId = actorId,
+            WorkflowName = "tool_recovery",
+            Input = "recover-me",
+            BindingGeneration = seed.State.BindingGeneration,
+            ValueRepresentation = WorkflowExecutionValueRepresentation.Legacy,
+        };
+        await PersistForTestAsync(seed, new WorkflowRunExecutionStartedEvent
+        {
+            RunId = actorId,
+            WorkflowName = start.WorkflowName,
+            Input = start.Input,
+            StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            PendingStartWorkflow = start.Clone(),
+        });
+
+        seed.State.PendingStartWorkflow.Should().NotBeNull();
+
+        var recovered = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out var recoveryPublisher);
+        await recovered.ActivateAsync();
+
+        var republished = recoveryPublisher.Published
+            .Where(static publication => publication.Audience == TopologyAudience.Self)
+            .Select(static publication => publication.Event)
+            .OfType<StartWorkflowEvent>()
+            .Should().ContainSingle().Subject;
+        republished.ToByteString().Should().Equal(start.ToByteString());
+
+        await recovered.HandleEventAsync(EnvelopeFrom(actorId, republished));
+
+        recovered.State.PendingStartWorkflow.Should().BeNull();
+        recovered.State.ExecutionStates.Should().ContainKey(WorkflowExecutionKernel.ModuleStateKey);
+
+        var afterCheckpoint = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out var afterCheckpointPublisher);
+        await afterCheckpoint.ActivateAsync();
+
+        afterCheckpointPublisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StartWorkflowEvent>()
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PendingAttemptCommit_WhenPublicationHookFails_ShouldRecoverOriginalPersistenceFactOnReactivation()
+    {
+        const string actorId = "run-tool-attempt-fact-recovery";
+        var now = new DateTimeOffset(2026, 8, 20, 12, 0, 0, TimeSpan.Zero);
+        var clock = new FakeTimeProvider(now);
+        var store = new InMemoryEventStore();
+        var publicationStore = new InMemoryCommittedStatePublicationStateStore();
+        var telemetryLogger = new RecordingPersistenceLogger();
+        var telemetryHook = new WorkflowToolCallAttemptPersistenceTelemetryHook(telemetryLogger);
+        var failingHook = new FailOnceCommittedPublicationHook();
+        var hooks = new OrderedCommittedPublicationHook(failingHook, telemetryHook);
+        var first = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out _,
+            publicationHook: hooks,
+            publicationStateStore: publicationStore,
+            timeProvider: clock);
+        await first.ActivateAsync();
+        await BindToolWorkflowAsync(first, actorId);
+        var pending = CreatePendingExecution(
+            actorId,
+            index: 1,
+            WorkflowToolCallExecutionPhase.ExecutionPending);
+        pending.TimeoutDeadlineUnixMs = now.AddMinutes(5).ToUnixTimeMilliseconds();
+        pending.AttemptPreparationStartedAtUtc = Timestamp.FromDateTimeOffset(now.AddMilliseconds(-250));
+        var state = new ToolCallModuleState();
+        state.PendingExecutions[$"{pending.CallId}|{pending.ExecutionId}"] = pending;
+        failingHook.FailNext = true;
+
+        await FluentActions.Awaiting(() =>
+                ((IWorkflowExecutionStateHost)first).UpsertExecutionStateAsync(
+                    ToolCallModule.ModuleStateKey,
+                    Any.Pack(state)))
+            .Should().ThrowAsync<CommittedStatePublicationException>();
+
+        var committedBeforeRecovery = await store.GetEventsAsync(actorId);
+        var committedFact = committedBeforeRecovery
+            .Where(static evt => evt.EventData?.Is(WorkflowExecutionStateUpsertedEvent.Descriptor) == true)
+            .SelectMany(static evt => evt.EventData!
+                .Unpack<WorkflowExecutionStateUpsertedEvent>()
+                .ToolCallAttemptPersistenceFacts
+                .Select(fact => (Event: evt, Fact: fact)))
+            .Should().ContainSingle().Subject;
+        committedFact.Fact.ScopeId.Should().Be("scope-1");
+        committedFact.Fact.RunId.Should().Be(actorId);
+        committedFact.Fact.StepId.Should().Be(pending.StepId);
+        committedFact.Fact.CallId.Should().Be(pending.CallId);
+        committedFact.Fact.ExecutionId.Should().Be(pending.ExecutionId);
+        committedFact.Fact.ContinuationId.Should().Be(pending.ContinuationId);
+        committedFact.Fact.Attempt.Should().Be(1);
+        committedFact.Fact.ObservedAtUtc.ToDateTimeOffset().Should().Be(now);
+        committedFact.Fact.PreparationElapsedMs.Should().Be(250);
+        telemetryLogger.PendingPersistenceEntries.Should().BeEmpty(
+            "the injected failure happens after commit but before the telemetry hook runs");
+
+        var recovered = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out _,
+            publicationHook: hooks,
+            publicationStateStore: publicationStore,
+            timeProvider: clock);
+        await recovered.ActivateAsync();
+
+        recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingExecutions.Values.Should().ContainSingle()
+            .Which.ContinuationId.Should().Be(pending.ContinuationId);
+        var allCommittedFacts = (await store.GetEventsAsync(actorId))
+            .Where(static evt => evt.EventData?.Is(WorkflowExecutionStateUpsertedEvent.Descriptor) == true)
+            .SelectMany(static evt => evt.EventData!
+                .Unpack<WorkflowExecutionStateUpsertedEvent>()
+                .ToolCallAttemptPersistenceFacts)
+            .ToArray();
+        allCommittedFacts.Should().ContainSingle()
+            .Which.ToByteArray().Should().Equal(committedFact.Fact.ToByteArray());
+        telemetryLogger.PendingPersistenceEntries.Should().ContainSingle()
+            .And.OnlyContain(entry =>
+                Equals(entry["ObservedAtUtc"], now) &&
+                Equals(entry["CommittedEventId"], committedFact.Event.EventId) &&
+                Equals(entry["CommittedStateVersion"], committedFact.Event.Version) &&
+                Equals(entry["ContinuationId"], pending.ContinuationId));
+        (await publicationStore.LoadAsync(actorId))!.PublishedVersion
+            .Should().BeGreaterThanOrEqualTo(committedFact.Event.Version);
+    }
+
+    [Fact]
+    public async Task PendingAttemptTelemetry_WhenCheckpointFailsAfterHook_ShouldRetryWithStableCommittedIdentity()
+    {
+        const string actorId = "run-tool-attempt-telemetry-retry";
+        var now = new DateTimeOffset(2026, 8, 20, 13, 0, 0, TimeSpan.Zero);
+        var clock = new FakeTimeProvider(now);
+        var store = new InMemoryEventStore();
+        var publicationStore = new InMemoryCommittedStatePublicationStateStore();
+        var failingCheckpointStore = new FailOnceAdvancePublicationStateStore(publicationStore);
+        var telemetryLogger = new RecordingPersistenceLogger();
+        var telemetryHook = new WorkflowToolCallAttemptPersistenceTelemetryHook(telemetryLogger);
+        var first = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out _,
+            publicationHook: telemetryHook,
+            publicationStateStore: failingCheckpointStore,
+            timeProvider: clock);
+        await first.ActivateAsync();
+        await BindToolWorkflowAsync(first, actorId);
+        failingCheckpointStore.AdvanceAttempts.Clear();
+
+        var pending = CreatePendingExecution(
+            actorId,
+            index: 1,
+            WorkflowToolCallExecutionPhase.ExecutionPending);
+        pending.TimeoutDeadlineUnixMs = now.AddMinutes(5).ToUnixTimeMilliseconds();
+        pending.AttemptPreparationStartedAtUtc = Timestamp.FromDateTimeOffset(now.AddMilliseconds(-250));
+        var state = new ToolCallModuleState();
+        state.PendingExecutions[$"{pending.CallId}|{pending.ExecutionId}"] = pending;
+        var measurements = new List<MetricMeasurement>();
+
+        using (ListenForWorkflowToolCallMetrics(measurements))
+        {
+            failingCheckpointStore.FailNext = true;
+            var publicationFailure = await FluentActions.Awaiting(() =>
+                    ((IWorkflowExecutionStateHost)first).UpsertExecutionStateAsync(
+                        ToolCallModule.ModuleStateKey,
+                        Any.Pack(state)))
+                .Should().ThrowAsync<CommittedStatePublicationException>();
+            publicationFailure.Which.Stage.Should().Be(CommittedStatePublicationFailureStage.Checkpoint);
+
+            var recovered = CreateAgent(
+                actorId,
+                store,
+                new RecordingCallbackScheduler(),
+                out _,
+                out _,
+                publicationHook: telemetryHook,
+                publicationStateStore: failingCheckpointStore,
+                timeProvider: clock);
+            await recovered.ActivateAsync();
+
+            recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+                .Unpack<ToolCallModuleState>()
+                .PendingExecutions.Values.Should().ContainSingle()
+                .Which.Attempt.Should().Be(1);
+        }
+
+        var committedFact = (await store.GetEventsAsync(actorId))
+            .Where(static evt => evt.EventData?.Is(WorkflowExecutionStateUpsertedEvent.Descriptor) == true)
+            .SelectMany(static evt => evt.EventData!
+                .Unpack<WorkflowExecutionStateUpsertedEvent>()
+                .ToolCallAttemptPersistenceFacts
+                .Select(fact => (Event: evt, Fact: fact)))
+            .Should().ContainSingle().Subject;
+        var entries = telemetryLogger.PendingPersistenceEntries;
+        entries.Should().HaveCount(2);
+        entries.Should().OnlyContain(entry =>
+            Equals(entry["CommittedEventId"], committedFact.Event.EventId) &&
+            Equals(entry["CommittedStateVersion"], committedFact.Event.Version) &&
+            Equals(entry["Attempt"], 1));
+
+        failingCheckpointStore.AdvanceAttempts.Should().HaveCount(2);
+        failingCheckpointStore.AdvanceAttempts.Should().OnlyContain(attempt =>
+            attempt.EventId == committedFact.Event.EventId &&
+            attempt.Version == committedFact.Event.Version);
+
+        measurements.Should().HaveCount(4);
+        measurements.Count(measurement =>
+                measurement.Instrument == WorkflowToolCallTelemetry.WaterlineTotalMetricName)
+            .Should().Be(2);
+        measurements.Count(measurement =>
+                measurement.Instrument == WorkflowToolCallTelemetry.PhaseDurationMetricName)
+            .Should().Be(2);
+        var allowedTagKeys = new[]
+        {
+            WorkflowToolCallTelemetry.WaterlineTag,
+            WorkflowToolCallTelemetry.PhaseTag,
+            WorkflowToolCallTelemetry.DispositionTag,
+            WorkflowToolCallTelemetry.DeliveryMethodTag,
+        };
+        measurements.Should().OnlyContain(measurement =>
+            measurement.Tags.Keys.SequenceEqual(allowedTagKeys) &&
+            Equals(measurement.Tags[WorkflowToolCallTelemetry.WaterlineTag], "pending_state_persisted") &&
+            Equals(measurement.Tags[WorkflowToolCallTelemetry.PhaseTag], "actor_preparation") &&
+            Equals(measurement.Tags[WorkflowToolCallTelemetry.DispositionTag], "none") &&
+            Equals(measurement.Tags[WorkflowToolCallTelemetry.DeliveryMethodTag], "none"));
+    }
+
+    [Fact]
+    public async Task RetryAttemptCommit_WhenPublicationHookFails_ShouldRecoverOneCommittedFactPerAttempt()
+    {
+        const string actorId = "run-tool-retry-attempt-fact-recovery";
+        var now = new DateTimeOffset(2026, 8, 20, 14, 0, 0, TimeSpan.Zero);
+        var clock = new FakeTimeProvider(now);
+        var store = new InMemoryEventStore();
+        var publicationStore = new InMemoryCommittedStatePublicationStateStore();
+        var telemetryLogger = new RecordingPersistenceLogger();
+        var telemetryHook = new WorkflowToolCallAttemptPersistenceTelemetryHook(telemetryLogger);
+        var failingHook = new FailOnceCommittedPublicationHook();
+        var hooks = new OrderedCommittedPublicationHook(failingHook, telemetryHook);
+        var first = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out _,
+            publicationHook: hooks,
+            publicationStateStore: publicationStore,
+            timeProvider: clock);
+        await first.ActivateAsync();
+        await BindToolWorkflowAsync(first, actorId);
+
+        var pending = CreatePendingExecution(
+            actorId,
+            index: 1,
+            WorkflowToolCallExecutionPhase.ExecutionPending);
+        pending.TimeoutDeadlineUnixMs = now.AddMinutes(5).ToUnixTimeMilliseconds();
+        pending.AttemptPreparationStartedAtUtc = Timestamp.FromDateTimeOffset(now.AddMilliseconds(-250));
+        var attemptOneState = new ToolCallModuleState();
+        var pendingKey = $"{pending.CallId}|{pending.ExecutionId}";
+        attemptOneState.PendingExecutions[pendingKey] = pending;
+        await ((IWorkflowExecutionStateHost)first).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(attemptOneState));
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var attemptTwoState = attemptOneState.Clone();
+        var retryPending = attemptTwoState.PendingExecutions[pendingKey];
+        retryPending.Attempt = 2;
+        retryPending.ExecutionPhase = WorkflowToolCallExecutionPhase.RetryPending;
+        retryPending.AttemptPreparationStartedAtUtc =
+            Timestamp.FromDateTimeOffset(clock.GetUtcNow().AddMilliseconds(-125));
+        failingHook.FailNext = true;
+
+        var publicationFailure = await FluentActions.Awaiting(() =>
+                ((IWorkflowExecutionStateHost)first).UpsertExecutionStateAsync(
+                    ToolCallModule.ModuleStateKey,
+                    Any.Pack(attemptTwoState)))
+            .Should().ThrowAsync<CommittedStatePublicationException>();
+        publicationFailure.Which.Stage.Should().Be(CommittedStatePublicationFailureStage.AdapterAcceptance);
+        telemetryLogger.PendingPersistenceEntries.Select(ReadAttempt).Should().Equal(1);
+
+        var recovered = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out _,
+            publicationHook: hooks,
+            publicationStateStore: publicationStore,
+            timeProvider: clock);
+        await recovered.ActivateAsync();
+
+        var committedFacts = (await store.GetEventsAsync(actorId))
+            .Where(static evt => evt.EventData?.Is(WorkflowExecutionStateUpsertedEvent.Descriptor) == true)
+            .SelectMany(static evt => evt.EventData!
+                .Unpack<WorkflowExecutionStateUpsertedEvent>()
+                .ToolCallAttemptPersistenceFacts
+                .Select(fact => (Event: evt, Fact: fact)))
+            .OrderBy(static committed => committed.Fact.Attempt)
+            .ToArray();
+        committedFacts.Select(static committed => committed.Fact.Attempt).Should().Equal(1, 2);
+        committedFacts.GroupBy(static committed => committed.Fact.Attempt)
+            .Should().OnlyContain(group => group.Count() == 1);
+
+        var entries = telemetryLogger.PendingPersistenceEntries;
+        entries.Should().HaveCount(2);
+        entries.Select(ReadAttempt).Should().Equal(1, 2);
+        var attemptTwoFact = committedFacts.Single(static committed => committed.Fact.Attempt == 2);
+        entries.Single(entry => ReadAttempt(entry) == 2).Should().Match<IReadOnlyDictionary<string, object?>>(
+            entry =>
+                Equals(entry["CommittedEventId"], attemptTwoFact.Event.EventId) &&
+                Equals(entry["CommittedStateVersion"], attemptTwoFact.Event.Version));
+        recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingExecutions.Values.Should().ContainSingle()
+            .Which.Attempt.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Activation_ShouldSchedulePersistedForEachPublicationForNonTerminalRun()
+    {
+        const string actorId = "run-foreach-publication-recovery";
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindForEachWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ForEachModule.ModuleStateKey,
+            Any.Pack(CreatePendingForEachState(actorId)));
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out _, out var publisher);
+        await recovered.ActivateAsync();
+
+        recovered.State.Compiled.Should().BeTrue(recovered.State.CompilationError);
+        recovered.State.ExecutionStates[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>()
+            .Parents[$"{actorId}:foreach-step"]
+            .PendingDispatches.Should().ContainSingle();
+
+        var retry = scheduler.TimeoutRequests
+            .Where(request => request.TriggerEnvelope.Payload?.Is(
+                ForEachPublicationRetryFiredEvent.Descriptor) == true)
+            .Should().ContainSingle().Subject;
+        retry.TriggerEnvelope.Payload!.Unpack<ForEachPublicationRetryFiredEvent>()
+            .ParentKey.Should().Be($"{actorId}:foreach-step");
+
+        await recovered.HandleEventAsync(retry.TriggerEnvelope);
+
+        var replayed = publisher.Published.Select(item => item.Event).OfType<StepRequestEvent>()
+            .Should().ContainSingle().Subject;
+        replayed.StepId.Should().Be("foreach-step_item_0");
+        replayed.ExecutionId.Should().Be("foreach-child-execution");
+        replayed.IdempotencyKey.Should().Be("foreach-child-idempotency");
+    }
+
+    [Fact]
+    public async Task TerminalActivation_ShouldNotSchedulePersistedForEachPublication()
+    {
+        const string actorId = "run-foreach-terminal-publication";
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindForEachWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ForEachModule.ModuleStateKey,
+            Any.Pack(CreatePendingForEachState(actorId)));
+        await PersistForTestAsync(seed, new WorkflowCompletedEvent
+        {
+            RunId = actorId,
+            WorkflowName = "tool_recovery",
+            Success = true,
+            Output = "done",
+        });
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out _, out _);
+        await recovered.ActivateAsync();
+
+        recovered.State.Status.Should().Be("completed");
+        scheduler.TimeoutRequests
+            .Where(request => request.TriggerEnvelope.Payload?.Is(
+                ForEachPublicationRetryFiredEvent.Descriptor) == true)
+            .Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task ForEachChildCompletion_ShouldAvoidKernelCheckpointAndPreserveObservatoryArtifact(
+        int itemCount)
+    {
+        const string actorId = "run-foreach-child-checkpoint";
+        var store = new InMemoryEventStore();
+        var agent = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out var publisher);
+        await agent.ActivateAsync();
+        await BindForEachWorkflowAsync(agent, actorId);
+
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, new StartWorkflowEvent
+        {
+            RunId = actorId,
+            WorkflowName = "foreach_recovery",
+            Input = string.Join("\n---\n", Enumerable.Range(0, itemCount).Select(static index => $"item-{index}")),
+        }));
+        var parentRequest = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle(request => request.StepId == "foreach-step")
+            .Subject;
+        publisher.Published.Clear();
+
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, parentRequest));
+        var childRequests = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepRequestEvent>()
+            .OrderBy(static request => request.StepId, StringComparer.Ordinal)
+            .ToArray();
+        childRequests.Should().HaveCount(itemCount);
+        publisher.Published.Clear();
+
+        var child = childRequests[0];
+        var completion = new StepCompletedEvent
+        {
+            RunId = actorId,
+            StepId = child.StepId,
+            ExecutionId = child.ExecutionId,
+            Success = true,
+            Output = "child-output-0",
+        };
+        var versionBeforeCompletion = await store.GetVersionAsync(actorId);
+
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, completion));
+
+        var committed = await store.GetEventsAsync(actorId, versionBeforeCompletion);
+        var executionStateUpserts = committed
+            .Where(static item => item.EventData?.Is(WorkflowExecutionStateUpsertedEvent.Descriptor) == true)
+            .Select(static item => item.EventData!.Unpack<WorkflowExecutionStateUpsertedEvent>())
+            .ToArray();
+        var expectedForEachCheckpoints = itemCount == 1 ? 2 : 1;
+        executionStateUpserts.Should().HaveCount(expectedForEachCheckpoints)
+            .And.OnlyContain(upsert => upsert.ScopeKey == ForEachModule.ModuleStateKey);
+        committed.Should().HaveCount(expectedForEachCheckpoints + 1,
+            "schema-v0 children remain foreach-owned artifacts and do not checkpoint the kernel");
+        (await store.GetVersionAsync(actorId))
+            .Should().Be(versionBeforeCompletion + expectedForEachCheckpoints + 1);
+
+        var observableCompletion = committed
+            .Where(static item => item.EventData?.Is(StepCompletedEvent.Descriptor) == true)
+            .Select(static item => item.EventData!.Unpack<StepCompletedEvent>())
+            .Should().ContainSingle().Subject;
+        observableCompletion.Should().BeEquivalentTo(completion);
+        agent.State.ProcessedStepCompletionKeys.Should().ContainSingle();
+
+        var forEachState = agent.State.ExecutionStates[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>();
+        if (itemCount == 1)
+        {
+            forEachState.Parents.Should().BeEmpty();
+            forEachState.CompletionTombstones.Should().ContainSingle();
+            forEachState.CompletedChildOutputs.Should().Contain(child.StepId, completion.Output);
+            publisher.Published
+                .Select(static publication => publication.Event)
+                .OfType<StepCompletedEvent>()
+                .Should().ContainSingle(parentCompletion => parentCompletion.StepId == "foreach-step");
+        }
+        else
+        {
+            var parent = forEachState.Parents.Values.Should().ContainSingle().Subject;
+            parent.Collected.Should().ContainSingle(result =>
+                result.StepId == child.StepId && result.Output == completion.Output);
+            publisher.Published
+                .Select(static publication => publication.Event)
+                .OfType<StepCompletedEvent>()
+                .Should().BeEmpty();
+        }
+
+        agent.State.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>()
+            .Variables.Should().NotContainKey(child.StepId);
+    }
+
+    [Fact]
+    public async Task Reconciliation_ShouldCompleteActiveForEachWithPersistedFailedChild()
+    {
+        const string actorId = "run-foreach-stranded-failure";
+        var store = new InMemoryEventStore();
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(actorId, store, scheduler, out _, out var publisher);
+        await agent.ActivateAsync();
+        await BindForEachWorkflowAsync(agent, actorId);
+        await PersistForTestAsync(agent, new WorkflowRunExecutionStartedEvent
+        {
+            RunId = actorId,
+            WorkflowName = "foreach_recovery",
+            Input = "alpha\n---\nbeta",
+            StartedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, new StartWorkflowEvent
+        {
+            RunId = actorId,
+            WorkflowName = "foreach_recovery",
+            Input = "alpha\n---\nbeta",
+        }));
+        var parentRequest = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle(request => request.StepId == "foreach-step")
+            .Subject;
+        publisher.Published.Clear();
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, parentRequest));
+        var childRequests = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepRequestEvent>()
+            .OrderBy(static request => request.StepId, StringComparer.Ordinal)
+            .ToArray();
+        childRequests.Should().HaveCount(2);
+
+        var strandedState = agent.State.ExecutionStates[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>();
+        var parent = strandedState.Parents.Values.Should().ContainSingle().Subject;
+        parent.PendingDispatches.Clear();
+        parent.DispatchedStepIds.Clear();
+        parent.DispatchedStepIds.Add(childRequests.Select(static request => request.StepId));
+        parent.Collected.Add(new ForEachItemResult
+        {
+            StepId = childRequests[0].StepId,
+            Index = 0,
+            Success = false,
+            Error = "historical child failure",
+        });
+        parent.CollectedStepIds.Add(childRequests[0].StepId);
+        parent.SettledWorkerStepIds.Add(childRequests[0].StepId);
+        strandedState.Backpressure.Queue.Clear();
+        strandedState.Backpressure.HeadIndex = 0;
+        strandedState.Backpressure.ActiveWorkers = 1;
+        await ((IWorkflowExecutionStateHost)agent).UpsertExecutionStateAsync(
+            ForEachModule.ModuleStateKey,
+            Any.Pack(strandedState));
+        var activeKernel = agent.State.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        activeKernel.Active.Should().BeTrue();
+        activeKernel.RunId.Should().Be(actorId);
+        activeKernel.CurrentStepId.Should().Be("foreach-step");
+        activeKernel.CurrentStepDispatchPending.Should().BeFalse();
+        activeKernel.ExecutionIdsByStepId["foreach-step"].Should().Be(parentRequest.ExecutionId);
+        parent.ParentExecutionId.Should().Be(parentRequest.ExecutionId);
+        var reconciliationProbe = agent.State.ExecutionStates[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>();
+        ForEachModule.TryPrepareFailedParentCompletion(
+                reconciliationProbe,
+                agent.State.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+                    .Unpack<WorkflowExecutionKernelState>(),
+                actorId,
+                "foreach-step",
+                parentRequest.ExecutionId,
+                0,
+                out _,
+                out var probeChanged,
+                out _,
+                out _)
+            .Should().BeTrue();
+        probeChanged.Should().BeTrue();
+        publisher.Published.Clear();
+
+        await agent.HandleEventAsync(EnvelopeFrom(
+            "workflow.run.terminal-recovery",
+            new ReconcileWorkflowTerminalStateCommand
+            {
+                RunId = actorId,
+                ObservedStateVersion = 1550,
+            }));
+
+        var pending = agent.State.ExecutionStates[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>()
+            .Parents.Values.Should().ContainSingle().Subject.PendingCompletion;
+        pending.Should().NotBeNull();
+        pending.ExecutionId.Should().Be(parentRequest.ExecutionId);
+        pending.Success.Should().BeFalse();
+        pending.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        pending.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+
+        var recovery = scheduler.TimeoutRequests
+            .Where(request => request.TriggerEnvelope.Payload?.Is(
+                ForEachPublicationRetryFiredEvent.Descriptor) == true)
+            .Should().ContainSingle().Subject;
+        await agent.HandleEventAsync(recovery.TriggerEnvelope);
+        var parentCompletion = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle(completion => completion.StepId == "foreach-step")
+            .Subject;
+
+        publisher.Published.Clear();
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, parentCompletion));
+        var workflowCompletion = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<WorkflowCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        workflowCompletion.Success.Should().BeFalse();
+
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, workflowCompletion));
+        agent.State.Status.Should().Be("failed");
+        agent.State.FinalError.Should().Contain(ForEachModule.FailedItemsError);
+    }
+
     [Fact]
     public async Task Activation_ShouldScheduleAndDrainPersistedCompletionOutboxWithoutExecutingTool()
     {
@@ -1224,6 +1872,220 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             .Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task Activation_ShouldPrepareAndSchedulePersistedPendingOperationWithoutExecutingTool()
+    {
+        const string actorId = "run-tool-operation-recovery";
+        const string executionId = "exec-1";
+        var callId = $"workflow:{actorId}:tool-step:{executionId}";
+        var pending = CreatePendingOperation(actorId, executionId, callId);
+        var seededState = new ToolCallModuleState();
+        seededState.PendingOperations[
+            RuntimeCallbackKeyComposer.BuildKey('|', callId, executionId)] = pending;
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(seededState));
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out var tool, out _);
+        await recovered.ActivateAsync();
+
+        var scheduled = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
+        var poll = scheduled.TriggerEnvelope.Payload!
+            .Unpack<WorkflowToolCallOperationPollFiredEvent>();
+        poll.OperationId.Should().Be(pending.OperationId);
+        poll.PollAttempt.Should().Be(1);
+        poll.CallbackId.Should().StartWith("workflow-tool-operation-poll:");
+        tool.ExecuteCalls.Should().Be(0);
+        var recoveredPending = recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        recoveredPending.PollCallbackId.Should().Be(poll.CallbackId);
+        recoveredPending.NextPollUnixMs.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task Activation_ShouldPublishTypedOperationContinuation_WhenPollSchedulingFails()
+    {
+        const string actorId = "run-tool-operation-scheduler-failure";
+        const string executionId = "exec-1";
+        var callId = $"workflow:{actorId}:tool-step:{executionId}";
+        var pending = CreatePendingOperation(actorId, executionId, callId);
+        var seededState = new ToolCallModuleState();
+        seededState.PendingOperations[
+            RuntimeCallbackKeyComposer.BuildKey('|', callId, executionId)] = pending;
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(seededState));
+
+        var scheduler = new RecordingCallbackScheduler(failSchedule: true);
+        var recovered = CreateAgent(actorId, store, scheduler, out var tool, out var publisher);
+        await recovered.ActivateAsync();
+
+        scheduler.ScheduleAttempts.Should().Be(1);
+        var continuation = publisher.Published
+            .Where(publication => publication.Audience == TopologyAudience.Self)
+            .Select(publication => publication.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Subject;
+        continuation.OperationId.Should().Be(pending.OperationId);
+        continuation.CallbackId.Should().StartWith("workflow-tool-operation-poll:");
+        tool.ExecuteCalls.Should().Be(0);
+        recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingOperations.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Activation_ShouldRecoverStopCancellationInsteadOfOrdinaryOperationPoll()
+    {
+        const string actorId = "run-tool-stop-cancellation-recovery";
+        const string executionId = "exec-1";
+        var callId = $"workflow:{actorId}:tool-step:{executionId}";
+        var pending = CreatePendingOperation(actorId, executionId, callId);
+        var seededState = new ToolCallModuleState
+        {
+            StopCancellation = new PendingWorkflowToolStopCancellation
+            {
+                StopKind = WorkflowToolStopKind.WorkflowRunStopped,
+                RunId = actorId,
+                Reason = "requested by caller",
+                CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(2).ToUnixTimeMilliseconds(),
+            },
+        };
+        seededState.PendingOperations[
+            RuntimeCallbackKeyComposer.BuildKey('|', callId, executionId)] = pending;
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(seededState));
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out var tool, out _);
+        await recovered.ActivateAsync();
+
+        var scheduled = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
+        var cancellation = scheduled.TriggerEnvelope.Payload!
+            .Unpack<WorkflowToolCallStopCancellationFiredEvent>();
+        cancellation.OperationId.Should().Be(pending.OperationId);
+        cancellation.Attempt.Should().Be(1);
+        cancellation.CallbackId.Should().StartWith("workflow-tool-stop-cancellation:");
+        scheduled.TriggerEnvelope.Payload.Is(WorkflowToolCallOperationPollFiredEvent.Descriptor)
+            .Should().BeFalse();
+        tool.ExecuteCalls.Should().Be(0);
+        var recoveredPending = recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        recoveredPending.StopCancellationPhase.Should().Be(WorkflowToolStopCancellationPhase.Requested);
+        recoveredPending.StopCancellationCallbackId.Should().Be(cancellation.CallbackId);
+    }
+
+    [Fact]
+    public async Task Activation_WhenStopCancellationHasSettled_ShouldRepublishOriginalStop()
+    {
+        const string actorId = "run-tool-stop-release-recovery";
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(new ToolCallModuleState
+            {
+                StopCancellation = new PendingWorkflowToolStopCancellation
+                {
+                    StopKind = WorkflowToolStopKind.WorkflowStopped,
+                    RunId = actorId,
+                    WorkflowName = "tool_recovery",
+                    Reason = "requested by caller",
+                    CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(2).ToUnixTimeMilliseconds(),
+                },
+            }));
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out var tool, out var publisher);
+        await recovered.ActivateAsync();
+
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        publisher.Published
+            .Where(publication => publication.Audience == TopologyAudience.Self)
+            .Select(publication => publication.Event)
+            .OfType<WorkflowStoppedEvent>()
+            .Should().ContainSingle()
+            .Which.Reason.Should().Be("requested by caller");
+        tool.ExecuteCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Activation_WhenPersistedStopKindIsUnknown_ShouldExposeRetryableRecoveryFailure()
+    {
+        const string actorId = "run-tool-stop-release-unknown-kind";
+        const int unknownStopKind = 99;
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(new ToolCallModuleState
+            {
+                StopCancellation = new PendingWorkflowToolStopCancellation
+                {
+                    StopKind = (WorkflowToolStopKind)unknownStopKind,
+                    RunId = actorId,
+                    Reason = "requested by caller",
+                    CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(2).ToUnixTimeMilliseconds(),
+                },
+            }));
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out var tool, out var publisher);
+
+        var failure = await FluentActions.Awaiting(() => recovered.ActivateAsync())
+            .Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        failure.Which.Message.Should().Contain($"unsupported stop kind '{unknownStopKind}'");
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        var publishedEvents = publisher.Published.Select(static publication => publication.Event).ToArray();
+        publishedEvents.OfType<WorkflowStoppedEvent>().Should().BeEmpty();
+        publishedEvents.OfType<WorkflowRunStoppedEvent>().Should().BeEmpty();
+        tool.ExecuteCalls.Should().Be(0);
+        recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .StopCancellation!.StopKind.Should().Be((WorkflowToolStopKind)unknownStopKind);
+    }
+
+    [Fact]
+    public void TypedStopHandlers_ShouldRunAfterWorkflowExecutionBridgeGate()
+    {
+        var stopped = typeof(WorkflowRunGAgent)
+            .GetMethod(nameof(WorkflowRunGAgent.HandleWorkflowStopped))!
+            .GetCustomAttribute<Aevatar.Foundation.Abstractions.Attributes.EventHandlerAttribute>();
+        var runStopped = typeof(WorkflowRunGAgent)
+            .GetMethod(nameof(WorkflowRunGAgent.HandleWorkflowRunStoppedAsync))!
+            .GetCustomAttribute<Aevatar.Foundation.Abstractions.Attributes.EventHandlerAttribute>();
+
+        stopped.Should().NotBeNull();
+        stopped!.Priority.Should().BeGreaterThan(0);
+        runStopped.Should().NotBeNull();
+        runStopped!.Priority.Should().BeGreaterThan(0);
+    }
+
     private static ToolCallModuleState CreateRecoverableToolState(string runId)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -1297,6 +2159,36 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
         };
         var state = new ToolCallModuleState();
         state.PendingApprovals[$"{runId}:tool-step:exec-1:{callId}:approval-1"] = pending;
+        return state;
+    }
+
+    private static ForEachModuleState CreatePendingForEachState(string runId)
+    {
+        var state = new ForEachModuleState
+        {
+            Backpressure = BackpressureHelper.Initialize(1),
+        };
+        state.Backpressure.ActiveWorkers = 1;
+        state.Parents[$"{runId}:foreach-step"] = new ForEachParentState
+        {
+            Expected = 1,
+            ParentRunId = runId,
+            ParentStepId = "foreach-step",
+            PendingDispatches =
+            {
+                BackpressureHelper.ToQueueEntry(
+                    "foreach-step_item_0",
+                    "tool_call",
+                    runId,
+                    "input",
+                    string.Empty,
+                    null,
+                    executionId: "foreach-child-execution",
+                    idempotencyKey: "foreach-child-idempotency"),
+            },
+        };
+        state.Parents[$"{runId}:foreach-step"].ChildExecutionIds["foreach-step_item_0"] =
+            "foreach-child-execution";
         return state;
     }
 
@@ -1430,6 +2322,67 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
         await task;
     }
 
+    private static int ReadAttempt(IReadOnlyDictionary<string, object?> entry) =>
+        Convert.ToInt32(entry["Attempt"]);
+
+    private static MeterListener ListenForWorkflowToolCallMetrics(List<MetricMeasurement> measurements)
+    {
+        var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (instrument.Meter.Name == WorkflowToolCallTelemetry.MeterName)
+                meterListener.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
+            RecordMetricMeasurement(measurements, instrument, value, tags));
+        listener.SetMeasurementEventCallback<double>((instrument, value, tags, _) =>
+            RecordMetricMeasurement(measurements, instrument, value, tags));
+        listener.Start();
+        return listener;
+    }
+
+    private static void RecordMetricMeasurement(
+        List<MetricMeasurement> measurements,
+        Instrument instrument,
+        double value,
+        ReadOnlySpan<KeyValuePair<string, object?>> tags)
+    {
+        var copiedTags = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var tag in tags)
+            copiedTags[tag.Key] = tag.Value;
+
+        lock (measurements)
+            measurements.Add(new MetricMeasurement(instrument.Name, value, copiedTags));
+    }
+
+    private static PendingToolCallOperationState CreatePendingOperation(
+        string actorId,
+        string executionId,
+        string callId) =>
+        new()
+        {
+            RunId = actorId,
+            StepId = "tool-step",
+            ExecutionId = executionId,
+            ToolName = "counting_tool",
+            ToolCallId = callId,
+            OperationId = "tool:v1:operation:" + new string('b', 64),
+            ProviderOperationId = "provider-operation-1",
+            StatusPath = "/executions/provider-operation-1",
+            ResultPath = "/executions/provider-operation-1/result",
+            CancelPath = "/executions/provider-operation-1/cancel",
+            Status = WorkflowToolPendingOperationStatus.Running,
+            RetryAfterMs = 100,
+            ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            ServiceSlug = "chrono-sandbox",
+            TerminalDecision = WorkflowToolCallTerminalDecision.NoApproval,
+            ProtectedMaterialReference = CreateProtectedReference(
+                $"material-{executionId}",
+                actorId,
+                1),
+            ProtectedMaterialDigestSha256 = new string('a', 64),
+        };
+
     private static WorkflowRunGAgent CreateAgent(
         string actorId,
         InMemoryEventStore store,
@@ -1437,7 +2390,9 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
         out RecordingWorkflowTool tool,
         out RecordingEventPublisher publisher,
         IRuntimeSecretStore? runtimeSecretStore = null,
-        ICommittedStatePublicationHook? publicationHook = null)
+        ICommittedStatePublicationHook? publicationHook = null,
+        ICommittedStatePublicationStateStore? publicationStateStore = null,
+        TimeProvider? timeProvider = null)
     {
         tool = new RecordingWorkflowTool("counting_tool");
         var module = new ToolCallModule(
@@ -1447,9 +2402,11 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
         var runtime = new UnsupportedActorRuntime();
         var pack = new ToolModulePack();
         publisher = new RecordingEventPublisher();
-        var agent = new WorkflowRunGAgent(runtime, runtime, moduleFactory, [pack])
+        var agent = new WorkflowRunGAgent(runtime, runtime, moduleFactory, [pack], timeProvider: timeProvider)
         {
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkflowRunState>(store),
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkflowRunState>(
+                store,
+                publicationStateStore: publicationStateStore),
             EventPublisher = publisher,
             Services = new TestServiceProvider(scheduler, runtimeSecretStore, publicationHook),
             Logger = NullLogger.Instance,
@@ -1461,6 +2418,40 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
     private static Task BindToolWorkflowAsync(WorkflowRunGAgent agent, string runId)
     {
         var bind = CreateBindEvent(runId);
+        return agent.BindWorkflowRunDefinitionAsync(
+            bind.DefinitionActorId,
+            bind.WorkflowYaml,
+            bind.WorkflowName,
+            bind.InlineWorkflowYamls,
+            bind.RunId,
+            bind.ScopeId,
+            bind.RunOrigin,
+            bind.ScheduleId,
+            bind.WorkflowId,
+            bind.RevisionId,
+            bind.DefinitionVersion,
+            bind.CapabilityAdmissionPlan,
+            bind.ExpectedExecutionMode,
+            bind.InitialLineage,
+            bind.ReusePolicy,
+            bind.BindingGeneration,
+            bind.ReuseAuthorityActorId);
+    }
+
+    private static Task BindForEachWorkflowAsync(WorkflowRunGAgent agent, string runId)
+    {
+        var bind = CreateBindEvent(runId);
+        bind.WorkflowName = "foreach_recovery";
+        bind.WorkflowYaml = """
+                            name: foreach_recovery
+                            roles: []
+                            steps:
+                              - id: foreach-step
+                                type: foreach
+                                parameters:
+                                  sub_step_type: tool_call
+                                  sub_param_tool: counting_tool
+                            """;
         return agent.BindWorkflowRunDefinitionAsync(
             bind.DefinitionActorId,
             bind.WorkflowYaml,
@@ -1495,6 +2486,7 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
         public IReadOnlyList<WorkflowModuleRegistration> Modules { get; } =
         [
             WorkflowModuleRegistration.Create<ToolCallModule>("tool_call"),
+            WorkflowModuleRegistration.Create<ForEachModule>("foreach"),
         ];
 
         public IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanders { get; } =
@@ -1509,7 +2501,12 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
     {
         public bool TryCreate(string name, out IEventModule<IWorkflowExecutionContext>? created)
         {
-            created = string.Equals(name, "tool_call", StringComparison.OrdinalIgnoreCase) ? module : null;
+            created = name.ToLowerInvariant() switch
+            {
+                "tool_call" => module,
+                "foreach" => new ForEachModule(),
+                _ => null,
+            };
             return created != null;
         }
     }
@@ -1659,6 +2656,111 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             throw new InvalidOperationException("injected committed publication failure");
         }
     }
+
+    private sealed class OrderedCommittedPublicationHook(
+        params ICommittedStatePublicationHook[] hooks)
+        : ICommittedStatePublicationHook
+    {
+        public async Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
+        {
+            foreach (var hook in hooks)
+                await hook.BeforePublishAsync(context, ct);
+        }
+    }
+
+    private sealed class FailOnceAdvancePublicationStateStore(
+        ICommittedStatePublicationStateStore inner)
+        : ICommittedStatePublicationStateStore
+    {
+        public bool FailNext { get; set; }
+
+        public List<StateEvent> AdvanceAttempts { get; } = [];
+
+        public Task<CommittedStatePublicationState?> LoadAsync(
+            string actorId,
+            CancellationToken ct = default) =>
+            inner.LoadAsync(actorId, ct);
+
+        public Task<CommittedStatePublicationState> InitializeAsync(
+            string actorId,
+            long baselinePublishedVersion,
+            CancellationToken ct = default) =>
+            inner.InitializeAsync(actorId, baselinePublishedVersion, ct);
+
+        public Task<CommittedStatePublicationState> AdvanceAsync(
+            string actorId,
+            long expectedPublishedVersion,
+            StateEvent publishedEvent,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AdvanceAttempts.Add(publishedEvent.Clone());
+            if (!FailNext)
+            {
+                return inner.AdvanceAsync(
+                    actorId,
+                    expectedPublishedVersion,
+                    publishedEvent,
+                    ct);
+            }
+
+            FailNext = false;
+            throw new InvalidOperationException("injected publication checkpoint failure");
+        }
+
+        public Task<CommittedStatePublicationState> RecordFailureAsync(
+            string actorId,
+            long expectedPublishedVersion,
+            StateEvent failedEvent,
+            CommittedStatePublicationFailureStage stage,
+            Exception error,
+            CancellationToken ct = default) =>
+            inner.RecordFailureAsync(
+                actorId,
+                expectedPublishedVersion,
+                failedEvent,
+                stage,
+                error,
+                ct);
+    }
+
+    private sealed class RecordingPersistenceLogger
+        : ILogger<WorkflowToolCallAttemptPersistenceTelemetryHook>
+    {
+        private readonly List<IReadOnlyDictionary<string, object?>> _entries = [];
+
+        public IReadOnlyList<IReadOnlyDictionary<string, object?>> PendingPersistenceEntries =>
+            _entries.Where(entry => Equals(entry.GetValueOrDefault("Waterline"), "pending_state_persisted"))
+                .ToArray();
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _ = logLevel;
+            _ = eventId;
+            _ = exception;
+            _ = formatter;
+            _entries.Add(state is IEnumerable<KeyValuePair<string, object?>> values
+                ? values
+                    .Where(static value => !string.Equals(value.Key, "{OriginalFormat}", StringComparison.Ordinal))
+                    .ToDictionary(static value => value.Key, static value => value.Value, StringComparer.Ordinal)
+                : new Dictionary<string, object?>(StringComparer.Ordinal));
+        }
+    }
+
+    private sealed record MetricMeasurement(
+        string Instrument,
+        double Value,
+        IReadOnlyDictionary<string, object?> Tags);
 
     private sealed class RecordingRuntimeSecretStore : IRuntimeSecretStore
     {

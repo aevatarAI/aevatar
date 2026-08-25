@@ -1,5 +1,6 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -101,6 +102,7 @@ public sealed partial class ConversationGAgent :
         StateTransitionMatcher
             .Match(current, evt)
             .On<ConversationTurnCompletedEvent>(ApplyTurnCompleted)
+            .On<ConversationAgentProfilePinnedEvent>(ApplyAgentProfilePinned)
             .On<NeedsLlmReplyEvent>(ApplyLlmReplyRequested)
             .On<NeedsWorkflowDraftRunEvent>(ApplyWorkflowDraftRunRequested)
             .On<ConversationContinueRejectedEvent>(ApplyContinueRejected)
@@ -340,6 +342,7 @@ public sealed partial class ConversationGAgent :
             var runCopy = result.LlmReplyRequest.Clone();
             runCopy.TargetActorId = Id;
             runCopy.TargetRef = targetRef.Clone();
+            runCopy.AgentProfile = State.AgentProfile?.Clone();
             // Refactor (iter98/cluster-002): Old=ConversationGAgent filled run_id from correlation_id; New=producer must supply run_id before this handoff.
             runCopy.RunId = NormalizeOptional(runCopy.RunId)!;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);
@@ -974,6 +977,24 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
+        if (!await EnsureAgentProfilePinnedAsync(evt.AgentProfile, evt.RunId))
+        {
+            Logger.LogError(
+                "Rejected LLM reply produced with a different Agent Profile snapshot. correlation={CorrelationId} runId={RunId}",
+                evt.CorrelationId,
+                evt.RunId);
+            evt = evt.Clone();
+            evt.TerminalState = LlmReplyTerminalState.Failed;
+            evt.ErrorCode = "agent_profile_pin_mismatch";
+            evt.ErrorSummary = "The LLM run profile does not match the conversation profile pin.";
+            evt.Outbound = new MessageContent
+            {
+                Text = "Sorry, the conversation profile changed unexpectedly. Please start a new conversation and try again.",
+            };
+            evt.AppendedHistory.Clear();
+            evt.AgentProfile = null;
+        }
+
         if (IsWorkflowRunDeliveryDelegation(evt.WorkflowRunDelivery))
         {
             await CompleteWorkflowRunDeliveryDelegationAsync(
@@ -1176,6 +1197,25 @@ public sealed partial class ConversationGAgent :
                 evt.CorrelationId,
                 State.Conversation?.CanonicalKey);
             return;
+        }
+
+        if (!await EnsureAgentProfilePinnedAsync(evt.AgentProfile, evt.RunId))
+        {
+            Logger.LogError(
+                "Rejected Lark card completion produced with a different Agent Profile snapshot. correlation={CorrelationId} runId={RunId}",
+                evt.CorrelationId,
+                evt.RunId);
+            evt = evt.Clone();
+            evt.AppendedHistory.Clear();
+            evt.AgentProfile = null;
+            evt.DeliveryFailure = new LlmReplyDeliveryFailedEvent
+            {
+                CorrelationId = evt.CorrelationId ?? string.Empty,
+                RunId = evt.RunId ?? string.Empty,
+                ErrorCode = "agent_profile_pin_mismatch",
+                ErrorMessage = "The LLM run profile does not match the conversation profile pin.",
+                FailedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
         }
 
         var nowMs = evt.CompletedAtUnixMs > 0
@@ -3122,6 +3162,38 @@ public sealed partial class ConversationGAgent :
         NormalizeRecentAttachmentActivities(next.RecentAttachmentActivities, evt.CompletedAtUnixMs);
         next.LastUpdatedUnixMs = evt.CompletedAtUnixMs;
         return next;
+    }
+
+    private static ConversationGAgentState ApplyAgentProfilePinned(
+        ConversationGAgentState current,
+        ConversationAgentProfilePinnedEvent evt)
+    {
+        var next = current.Clone();
+        if (next.AgentProfile is null && evt.Profile is not null)
+            next.AgentProfile = evt.Profile.Clone();
+        if (evt.PinnedAtUnixMs > next.LastUpdatedUnixMs)
+            next.LastUpdatedUnixMs = evt.PinnedAtUnixMs;
+        return next;
+    }
+
+    private async Task<bool> EnsureAgentProfilePinnedAsync(
+        AgentProfileSnapshot? profile,
+        string? sourceRunId)
+    {
+        if (profile is null)
+            return true;
+        if (State.AgentProfile is not null)
+            return State.AgentProfile.Equals(profile);
+        if (profile.DeterministicPolicySha256.Length != 32)
+            return false;
+
+        await PersistDomainEventAsync(new ConversationAgentProfilePinnedEvent
+        {
+            Profile = profile.Clone(),
+            SourceRunId = sourceRunId?.Trim() ?? string.Empty,
+            PinnedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+        return true;
     }
 
     // /clear semantics: the retained transcript window and the recent attachment

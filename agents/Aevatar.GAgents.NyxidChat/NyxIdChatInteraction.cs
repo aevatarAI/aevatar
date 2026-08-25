@@ -163,7 +163,8 @@ public sealed record NyxIdActionContinuationCommand(
     string ClientRequestId,
     IReadOnlyList<NyxIdChatActionReport> Actions,
     string? CommandId = null,
-    string? CorrelationId = null)
+    string? CorrelationId = null,
+    AgentToolExecutionContextPayload? ToolContext = null)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
@@ -184,6 +185,7 @@ public enum NyxIdChatStartError
     None = 0,
     ActorNotFound = 1,
     ProjectionUnavailable = 2,
+    AdmissionUnavailable = 3,
 }
 
 public readonly record struct NyxIdChatCompletionStatus
@@ -405,9 +407,14 @@ internal sealed class NyxIdChatCommandTargetResolver
         if (!resolved.Succeeded || resolved.Target is null)
         {
             return CommandTargetResolution<NyxIdChatCommandTarget, NyxIdChatStartError>.Failure(
-                resolved.Error == NyxIdChatLifecycleCommandStartError.TargetNotFound
-                    ? NyxIdChatStartError.ActorNotFound
-                    : NyxIdChatStartError.ProjectionUnavailable);
+                resolved.Error switch
+                {
+                    NyxIdChatLifecycleCommandStartError.TargetNotFound => NyxIdChatStartError.ActorNotFound,
+                    NyxIdChatLifecycleCommandStartError.AdmissionUnavailable or
+                        NyxIdChatLifecycleCommandStartError.RouteRejected or
+                        NyxIdChatLifecycleCommandStartError.AccessDenied => NyxIdChatStartError.AdmissionUnavailable,
+                    _ => NyxIdChatStartError.ProjectionUnavailable,
+                });
         }
 
         command.CreatedLocally = resolved.Target.CreatedLocally;
@@ -663,6 +670,8 @@ internal sealed class NyxIdActionContinuationCommandEnvelopeFactory
             CommandId = context.CommandId,
             CorrelationId = context.CorrelationId,
         };
+        if (command.ToolContext is not null)
+            message.ToolContext = command.ToolContext.Clone();
         message.Actions.Add(command.Actions.Select(static action => action.Clone()));
 
         return new EventEnvelope

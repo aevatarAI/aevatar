@@ -8,8 +8,16 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 /// <summary>
 /// Executes caller-provided source through the runtime-neutral code execution boundary.
 /// </summary>
-public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INyxIdBuiltInTool
+public sealed class NyxIdCodeExecuteTool(
+    ICodeExecutionPort executionPort,
+    IDurableCodeExecutionPort? durableExecutionPort = null,
+    TimeProvider? timeProvider = null) :
+    INyxIdBuiltInTool,
+    IAgentToolDurableOperation
 {
+    private static readonly TimeSpan SubmitRecoveryWindow = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan DefaultRetryAfter = TimeSpan.FromSeconds(1);
+
     private static readonly HashSet<string> CompletedFailureCodes = new(StringComparer.Ordinal)
     {
         "code_execution_failed",
@@ -21,6 +29,11 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
     {
         "code_execution_credential_unavailable",
         "code_execution_admission_invalid",
+        "code_execution_cancel_outcome_uncertain",
+        "code_execution_cancelled",
+        "code_execution_durable_context_invalid",
+        "code_execution_durable_transport_unavailable",
+        "code_execution_outcome_uncertain",
         "code_execution_outcome_invalid",
         "code_execution_request_invalid",
         "code_execution_response_invalid",
@@ -31,6 +44,7 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         "code_execution_route_missing",
         "code_execution_route_policy_mismatch",
         "code_execution_route_resolution_failed",
+        "code_execution_submit_recovery_expired",
         "code_execution_timed_out",
         "code_execution_transport_unavailable",
         "FORBIDDEN",
@@ -41,14 +55,26 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         "NYXID_PROXY_HTTP_429",
         "NYXID_PROXY_HTTP_502",
         "NYXID_PROXY_UNAUTHORIZED",
+        "OPERATION_EXPIRED",
         "SANDBOX_CREATION_FAILED",
         "SANDBOX_TIMEOUT",
         "SANDBOX_UNREACHABLE",
         "UNAUTHENTICATED",
     };
 
+    private static readonly HashSet<string> OutcomeUncertainFailureCodes = new(StringComparer.Ordinal)
+    {
+        "code_execution_cancel_outcome_uncertain",
+        "code_execution_outcome_uncertain",
+        "code_execution_submit_recovery_expired",
+        "OPERATION_EXPIRED",
+    };
+
     private readonly ICodeExecutionPort _executionPort =
         executionPort ?? throw new ArgumentNullException(nameof(executionPort));
+    private readonly IDurableCodeExecutionPort? _durableExecutionPort =
+        durableExecutionPort ?? executionPort as IDurableCodeExecutionPort;
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     public string Name => "code_execute";
 
@@ -62,11 +88,12 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
 
     public bool IsReadOnly => true;
 
-    // The sandbox is isolated from Aevatar-owned state, but caller-provided code can
-    // still perform arbitrary network effects. A transport timeout therefore leaves
-    // the execution outcome uncertain and must not authorize an automatic replay.
+    // Direct sessions preserve the legacy one-shot contract. Workflow tool calls use
+    // provider idempotency plus actor-owned reconciliation and never fall back to /execute.
     public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson) =>
-        AgentToolReplayPolicy.NonReplayable;
+        AgentToolRequestContext.Current?.InvocationSurface == AgentToolInvocationSurface.WorkflowToolCall
+            ? AgentToolReplayPolicy.Reconcilable
+            : AgentToolReplayPolicy.NonReplayable;
 
     public string ParametersSchema => """
         {
@@ -80,6 +107,13 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
             "code": {
               "type": "string",
               "description": "Code to execute"
+            },
+            "timeout_secs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600,
+              "default": 180,
+              "description": "Maximum script execution time in seconds"
             }
           },
           "required": ["language", "code"]
@@ -95,6 +129,591 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         string argumentsJson,
         CancellationToken ct = default) =>
         ExecuteCoreAsync(callId, toolName, argumentsJson, ct);
+
+    public async Task<AgentToolOperationStartResult> StartOperationAsync(
+        AgentToolOperationStartRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (AgentToolRequestContext.Current?.InvocationSurface !=
+            AgentToolInvocationSurface.WorkflowToolCall)
+        {
+            return AgentToolOperationStartResult.Completed(TerminalFailure(
+                request.CallId,
+                request.ToolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_durable_context_invalid",
+                    "Durable code execution requires an actor-owned workflow tool call.")));
+        }
+
+        if (!IsOpaqueOperationId(request.OperationId))
+        {
+            return AgentToolOperationStartResult.Completed(TerminalFailure(
+                request.CallId,
+                request.ToolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_admission_invalid",
+                    "The workflow code execution operation identity is invalid.")));
+        }
+
+        var preparation = PrepareExecution(request.ArgumentsJson);
+        if (preparation.Failure is not null)
+        {
+            return AgentToolOperationStartResult.Completed(
+                TerminalFailure(request.CallId, request.ToolName, preparation.Failure));
+        }
+
+        if (_durableExecutionPort is null)
+        {
+            return AgentToolOperationStartResult.Completed(TerminalFailure(
+                request.CallId,
+                request.ToolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.TargetNotConfigured,
+                    "code_execution_durable_transport_unavailable",
+                    "Durable code execution transport is not configured.")));
+        }
+
+        var outcome = await _durableExecutionPort.SubmitAsync(
+                new DurableCodeExecutionSubmitRequest(preparation.Request!, request.OperationId),
+                ct)
+            .ConfigureAwait(false);
+        if (outcome.Receipt is { } receipt && outcome.Failure is null)
+        {
+            return AgentToolOperationStartResult.Pending(
+                ToPendingOperation(request.OperationId, receipt));
+        }
+
+        if (outcome.Receipt is null && IsRecoverableSubmitFailure(outcome.Failure))
+        {
+            var now = _timeProvider.GetUtcNow();
+            return AgentToolOperationStartResult.Pending(new AgentToolPendingOperation(
+                request.OperationId,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                AgentToolPendingOperationStatus.SubmissionUncertain,
+                null,
+                RetryAfterMilliseconds(outcome.Failure!.RetryAfter, DefaultRetryAfter),
+                now.Add(SubmitRecoveryWindow).ToUnixTimeMilliseconds(),
+                preparation.Request!.Route.ServiceSlug,
+                preparation.Request.Route.UserServiceId,
+                preparation.Request.Route.Source));
+        }
+
+        return AgentToolOperationStartResult.Completed(TerminalFailure(
+            request.CallId,
+            request.ToolName,
+            outcome.Failure is null
+                ? InvalidDurableOutcomeFailure()
+                : ToCodeExecutionFailure(outcome.Failure)));
+    }
+
+    public async Task<AgentToolOperationReconciliationResult> ReconcileOperationAsync(
+        AgentToolOperationReconciliationRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var pending = request.PendingOperation;
+        var callId = request.ExecutionContext.Request.CallId ?? string.Empty;
+        if (!IsOpaqueOperationId(request.OperationId))
+            return AgentToolOperationReconciliationResult.Unknown();
+
+        if (pending is not null &&
+            !string.Equals(pending.OperationId, request.OperationId, StringComparison.Ordinal))
+        {
+            return AgentToolOperationReconciliationResult.Unknown();
+        }
+
+        var preparation = PrepareExecution(request.ArgumentsJson);
+        if (preparation.Failure is not null)
+        {
+            return AgentToolOperationReconciliationResult.Completed(
+                TerminalFailure(callId, Name, preparation.Failure));
+        }
+
+        var executionRequest = preparation.Request!;
+        CodeExecutionRouteIdentity? pendingRoute = null;
+        if (pending is not null &&
+            (!TryResolvePendingRoute(pending, out pendingRoute) ||
+             !IsCompatiblePendingRoute(pendingRoute, executionRequest.Route)))
+        {
+            return AgentToolOperationReconciliationResult.Completed(TerminalFailure(
+                callId,
+                Name,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_admission_invalid",
+                    "The pending code execution route does not match its current admission proof.")));
+        }
+
+        if (_durableExecutionPort is null)
+        {
+            return AgentToolOperationReconciliationResult.Completed(TerminalFailure(
+                callId,
+                Name,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.TargetNotConfigured,
+                    "code_execution_durable_transport_unavailable",
+                    "Durable code execution transport is not configured.")));
+        }
+
+        var route = pendingRoute ?? executionRequest.Route;
+        if (pending is null || string.IsNullOrWhiteSpace(pending.ProviderOperationId))
+        {
+            return await RecoverSubmissionAsync(request, pending, executionRequest, callId, ct)
+                .ConfigureAwait(false);
+        }
+
+        var operationRequest = new DurableCodeExecutionOperationRequest(
+            pending.ProviderOperationId,
+            route,
+            executionRequest.Caller,
+            pending.ETag);
+        if (IsExpired(pending))
+        {
+            return await ExpireKnownOperationAsync(callId, operationRequest, ct)
+                .ConfigureAwait(false);
+        }
+
+        return await ReconcileKnownOperationAsync(callId, pending, operationRequest, route, ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<AgentToolOperationCancellationResult> CancelOperationAsync(
+        AgentToolOperationCancellationRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var pending = request.PendingOperation;
+        var callId = request.ExecutionContext.Request.CallId ?? string.Empty;
+        if (request.Reason != AgentToolOperationCancellationReason.WorkflowStopped ||
+            AgentToolRequestContext.Current?.InvocationSurface != AgentToolInvocationSurface.WorkflowToolCall ||
+            !IsOpaqueOperationId(request.OperationId) ||
+            !string.Equals(pending.OperationId, request.OperationId, StringComparison.Ordinal))
+        {
+            return CancellationPendingOrUncertain(request, pending, callId);
+        }
+
+        var preparation = PrepareExecution(request.ArgumentsJson);
+        if (preparation.Failure is not null)
+            return CancellationPendingOrUncertain(request, pending, callId);
+        if (!TryResolvePendingRoute(pending, out var route) ||
+            !IsCompatiblePendingRoute(route, preparation.Request!.Route))
+        {
+            return CancellationPendingOrUncertain(request, pending, callId);
+        }
+
+        if (_durableExecutionPort is null || string.IsNullOrWhiteSpace(pending.ProviderOperationId))
+            return CancellationPendingOrUncertain(request, pending, callId);
+
+        var operationRequest = new DurableCodeExecutionOperationRequest(
+            pending.ProviderOperationId,
+            route,
+            preparation.Request.Caller);
+        var cancelled = await _durableExecutionPort.CancelAsync(operationRequest, ct)
+            .ConfigureAwait(false);
+        if (cancelled.Failure is { } cancellationFailure)
+        {
+            return CancellationPendingOrUncertain(
+                request,
+                UpdatePending(
+                    pending,
+                    retryAfter: cancellationFailure.RetryAfter),
+                callId);
+        }
+
+        if (cancelled.Snapshot is not { } snapshot ||
+            !string.Equals(snapshot.ProviderOperationId, pending.ProviderOperationId, StringComparison.Ordinal) ||
+            !Equals(snapshot.ResolvedRoute, route))
+        {
+            return CancellationPendingOrUncertain(request, pending, callId);
+        }
+
+        var refreshed = UpdatePending(
+            pending,
+            status: ToPendingOperationStatus(snapshot.State),
+            etag: snapshot.ETag,
+            retryAfter: snapshot.RetryAfter,
+            expiresAt: snapshot.ExpiresAt,
+            route: snapshot.ResolvedRoute);
+        var terminal = await ResolveCancellationTerminalAsync(
+                callId,
+                snapshot,
+                operationRequest,
+                route,
+                ct)
+            .ConfigureAwait(false);
+        if (terminal.CompletedOutcome is not null)
+            return AgentToolOperationCancellationResult.Completed(terminal.CompletedOutcome);
+
+        return CancellationPendingOrUncertain(
+            request,
+            UpdatePending(refreshed, retryAfter: terminal.RetryAfter),
+            callId);
+    }
+
+    private async Task<AgentToolOperationReconciliationResult> RecoverSubmissionAsync(
+        AgentToolOperationReconciliationRequest request,
+        AgentToolPendingOperation? pending,
+        CodeExecutionRequest executionRequest,
+        string callId,
+        CancellationToken ct)
+    {
+        if (pending is not null && IsExpired(pending))
+            return SubmitRecoveryExpired(callId);
+
+        var restarted = await StartOperationAsync(
+                new AgentToolOperationStartRequest(
+                    request.OperationId,
+                    callId,
+                    Name,
+                    request.ArgumentsJson,
+                    request.ExecutionContext),
+                ct)
+            .ConfigureAwait(false);
+        var reconciliation = ToReconciliationResult(restarted, pending?.ExpiresAtUnixMs);
+        if (reconciliation.PendingOperation is not { } recoveredPending ||
+            !IsExpired(recoveredPending))
+        {
+            return reconciliation;
+        }
+
+        if (string.IsNullOrWhiteSpace(recoveredPending.ProviderOperationId))
+            return SubmitRecoveryExpired(callId);
+
+        if (!TryResolvePendingRoute(recoveredPending, out var recoveredRoute) ||
+            !IsCompatiblePendingRoute(recoveredRoute, executionRequest.Route))
+        {
+            return AgentToolOperationReconciliationResult.Completed(TerminalFailure(
+                callId,
+                Name,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_admission_invalid",
+                    "The recovered code execution route does not match its current admission proof.")));
+        }
+
+        return await ExpireKnownOperationAsync(
+                callId,
+                new DurableCodeExecutionOperationRequest(
+                    recoveredPending.ProviderOperationId,
+                    recoveredRoute,
+                    executionRequest.Caller),
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<AgentToolOperationReconciliationResult> ReconcileKnownOperationAsync(
+        string callId,
+        AgentToolPendingOperation pending,
+        DurableCodeExecutionOperationRequest operationRequest,
+        CodeExecutionRouteIdentity route,
+        CancellationToken ct)
+    {
+        var status = await _durableExecutionPort!.GetStatusAsync(operationRequest, ct)
+            .ConfigureAwait(false);
+        if (status.Failure is not null)
+        {
+            if (!status.Failure.Retryable)
+            {
+                return AgentToolOperationReconciliationResult.Completed(
+                    TerminalFailure(callId, Name, ToCodeExecutionFailure(status.Failure)));
+            }
+
+            return await PendingKnownOperationOrExpireAsync(
+                    callId,
+                    UpdatePending(
+                        pending,
+                        retryAfter: status.Failure.RetryAfter ?? status.RetryAfter),
+                    operationRequest,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        if (status.NotModified)
+        {
+            return await PendingKnownOperationOrExpireAsync(
+                    callId,
+                    UpdatePending(pending, etag: status.ETag, retryAfter: status.RetryAfter),
+                    operationRequest,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        if (status.Snapshot is not { } snapshot)
+            return AgentToolOperationReconciliationResult.Unknown();
+
+        if (!string.Equals(
+                snapshot.ProviderOperationId,
+                pending.ProviderOperationId,
+                StringComparison.Ordinal) ||
+            !Equals(snapshot.ResolvedRoute, route))
+        {
+            return AgentToolOperationReconciliationResult.Completed(TerminalFailure(
+                callId,
+                Name,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_admission_invalid",
+                    "The provider operation identity does not match its admitted route.")));
+        }
+
+        var refreshed = UpdatePending(
+            pending,
+            status: ToPendingOperationStatus(snapshot.State),
+            etag: snapshot.ETag,
+            retryAfter: snapshot.RetryAfter ?? status.RetryAfter,
+            expiresAt: snapshot.ExpiresAt,
+            route: snapshot.ResolvedRoute);
+        if (snapshot.State is DurableCodeExecutionState.Cancelled or
+            DurableCodeExecutionState.OutcomeUncertain)
+        {
+            return AgentToolOperationReconciliationResult.Completed(TerminalFailure(
+                callId,
+                Name,
+                new CodeExecutionFailure(
+                    snapshot.State == DurableCodeExecutionState.OutcomeUncertain
+                        ? CodeExecutionFailureKind.OutcomeUncertain
+                        : CodeExecutionFailureKind.ExecutionFailed,
+                    snapshot.State == DurableCodeExecutionState.Cancelled
+                        ? "code_execution_cancelled"
+                        : "code_execution_outcome_uncertain",
+                    snapshot.State == DurableCodeExecutionState.Cancelled
+                        ? "Code execution was cancelled."
+                        : "The code execution outcome is uncertain.")));
+        }
+
+        if (snapshot.State is not (DurableCodeExecutionState.Succeeded or
+            DurableCodeExecutionState.Failed))
+        {
+            return snapshot.State == DurableCodeExecutionState.Unspecified
+                ? AgentToolOperationReconciliationResult.Unknown()
+                : await PendingKnownOperationOrExpireAsync(
+                        callId,
+                        refreshed,
+                        operationRequest,
+                        ct)
+                    .ConfigureAwait(false);
+        }
+
+        return await ReconcileKnownResultAsync(callId, refreshed, operationRequest, route, ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<AgentToolOperationReconciliationResult> ReconcileKnownResultAsync(
+        string callId,
+        AgentToolPendingOperation refreshed,
+        DurableCodeExecutionOperationRequest operationRequest,
+        CodeExecutionRouteIdentity route,
+        CancellationToken ct)
+    {
+        var result = await _durableExecutionPort!.GetResultAsync(
+                operationRequest with { ETag = null },
+                ct)
+            .ConfigureAwait(false);
+        if (result.Outcome is not null && result.Failure is null && !result.Pending)
+        {
+            if (result.Outcome.ResolvedRoute is { } resultRoute && !Equals(resultRoute, route))
+            {
+                return AgentToolOperationReconciliationResult.Completed(TerminalFailure(
+                    callId,
+                    Name,
+                    new CodeExecutionFailure(
+                        CodeExecutionFailureKind.AdmissionDenied,
+                        "code_execution_admission_invalid",
+                        "The provider result route does not match its admitted operation.")));
+            }
+
+            return AgentToolOperationReconciliationResult.Completed(
+                Terminal(callId, Name, result.Outcome));
+        }
+
+        if (result.Pending || result.Failure?.Retryable == true)
+        {
+            return await PendingKnownOperationOrExpireAsync(
+                    callId,
+                    UpdatePending(
+                        refreshed,
+                        retryAfter: result.Failure?.RetryAfter ?? result.RetryAfter),
+                    operationRequest,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        return AgentToolOperationReconciliationResult.Completed(TerminalFailure(
+            callId,
+            Name,
+            result.Failure is null
+                ? InvalidDurableOutcomeFailure()
+                : ToCodeExecutionFailure(result.Failure)));
+    }
+
+    private async Task<AgentToolOperationReconciliationResult> PendingKnownOperationOrExpireAsync(
+        string callId,
+        AgentToolPendingOperation pending,
+        DurableCodeExecutionOperationRequest operationRequest,
+        CancellationToken ct) =>
+        IsExpired(pending)
+            ? await ExpireKnownOperationAsync(callId, operationRequest, ct).ConfigureAwait(false)
+            : AgentToolOperationReconciliationResult.Pending(pending);
+
+    private async Task<AgentToolOperationReconciliationResult> ExpireKnownOperationAsync(
+        string callId,
+        DurableCodeExecutionOperationRequest operationRequest,
+        CancellationToken ct)
+    {
+        var cancelled = await _durableExecutionPort!.CancelAsync(
+                operationRequest with { ETag = null },
+                ct)
+            .ConfigureAwait(false);
+        if (cancelled.Failure is null &&
+            cancelled.Snapshot is { } snapshot &&
+            string.Equals(
+                snapshot.ProviderOperationId,
+                operationRequest.ProviderOperationId,
+                StringComparison.Ordinal) &&
+            Equals(snapshot.ResolvedRoute, operationRequest.Route))
+        {
+            var terminal = await ResolveCancellationTerminalAsync(
+                    callId,
+                    snapshot,
+                    operationRequest,
+                    operationRequest.Route,
+                    ct)
+                .ConfigureAwait(false);
+            if (terminal.CompletedOutcome is not null)
+            {
+                return AgentToolOperationReconciliationResult.Completed(
+                    terminal.CompletedOutcome);
+            }
+        }
+
+        return AgentToolOperationReconciliationResult.Completed(TerminalFailure(
+            callId,
+            Name,
+            new CodeExecutionFailure(
+                CodeExecutionFailureKind.OutcomeUncertain,
+                "OPERATION_EXPIRED",
+                "The durable code execution deadline expired; cancellation was requested.")));
+    }
+
+    private async Task<CancellationTerminalResolution> ResolveCancellationTerminalAsync(
+        string callId,
+        DurableCodeExecutionSnapshot snapshot,
+        DurableCodeExecutionOperationRequest operationRequest,
+        CodeExecutionRouteIdentity route,
+        CancellationToken ct)
+    {
+        if (snapshot.State == DurableCodeExecutionState.Cancelled)
+        {
+            return CancellationTerminalResolution.Completed(TerminalFailure(
+                callId,
+                Name,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.ExecutionFailed,
+                    "code_execution_cancelled",
+                    "Code execution cancellation was confirmed.")));
+        }
+
+        if (snapshot.State == DurableCodeExecutionState.OutcomeUncertain)
+        {
+            return CancellationTerminalResolution.Completed(TerminalFailure(
+                callId,
+                Name,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.OutcomeUncertain,
+                    "code_execution_outcome_uncertain",
+                    "The code execution outcome is uncertain.")));
+        }
+
+        if (snapshot.State is not (DurableCodeExecutionState.Succeeded or
+            DurableCodeExecutionState.Failed))
+        {
+            return CancellationTerminalResolution.Pending();
+        }
+
+        var result = await _durableExecutionPort!.GetResultAsync(
+                operationRequest with { ETag = null },
+                ct)
+            .ConfigureAwait(false);
+        if (result.Outcome is not null && result.Failure is null && !result.Pending)
+        {
+            if (result.Outcome.ResolvedRoute is { } resultRoute && !Equals(resultRoute, route))
+                return CancellationTerminalResolution.Pending();
+
+            return CancellationTerminalResolution.Completed(
+                Terminal(callId, Name, result.Outcome));
+        }
+
+        if (result.Pending || result.Failure?.Retryable == true)
+        {
+            return CancellationTerminalResolution.Pending(
+                result.Failure?.RetryAfter ?? result.RetryAfter);
+        }
+
+        return CancellationTerminalResolution.Completed(TerminalFailure(
+            callId,
+            Name,
+            result.Failure is null
+                ? InvalidDurableOutcomeFailure()
+                : ToCodeExecutionFailure(result.Failure)));
+    }
+
+    private AgentToolOperationReconciliationResult SubmitRecoveryExpired(string callId) =>
+        AgentToolOperationReconciliationResult.Completed(TerminalFailure(
+            callId,
+            Name,
+            new CodeExecutionFailure(
+                CodeExecutionFailureKind.OutcomeUncertain,
+                "code_execution_submit_recovery_expired",
+                "The durable code execution recovery window expired.")));
+
+    private AgentToolOperationCancellationResult CancellationPendingOrUncertain(
+        AgentToolOperationCancellationRequest request,
+        AgentToolPendingOperation pending,
+        string callId) =>
+        HasCancellationDeadlineElapsed(request.DeadlineUnixMs)
+            ? AgentToolOperationCancellationResult.Completed(TerminalFailure(
+                callId,
+                "code_execute",
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.OutcomeUncertain,
+                    "code_execution_cancel_outcome_uncertain",
+                    "The provider terminal outcome could not be confirmed before the workflow stop deadline.")))
+            : AgentToolOperationCancellationResult.Pending(pending);
+
+    private bool HasCancellationDeadlineElapsed(long deadlineUnixMs) =>
+        deadlineUnixMs > 0 &&
+        deadlineUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+
+    private bool IsExpired(AgentToolPendingOperation pending) =>
+        pending.ExpiresAtUnixMs > 0 &&
+        pending.ExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+
+    private static AgentToolOperationReconciliationResult ToReconciliationResult(
+        AgentToolOperationStartResult started,
+        long? existingSubmitDeadlineUnixMs = null) =>
+        started.Disposition switch
+        {
+            AgentToolOperationStartDisposition.Pending when started.PendingOperation is not null =>
+                AgentToolOperationReconciliationResult.Pending(
+                    existingSubmitDeadlineUnixMs.HasValue &&
+                    string.IsNullOrWhiteSpace(started.PendingOperation.ProviderOperationId)
+                        ? started.PendingOperation with
+                        {
+                            ExpiresAtUnixMs = EarlierDeadline(
+                                existingSubmitDeadlineUnixMs.Value,
+                                started.PendingOperation.ExpiresAtUnixMs),
+                        }
+                        : started.PendingOperation),
+            AgentToolOperationStartDisposition.Completed when started.CompletedOutcome is not null =>
+                AgentToolOperationReconciliationResult.Completed(started.CompletedOutcome),
+            _ => AgentToolOperationReconciliationResult.Unknown(),
+        };
 
     public AgentToolReceipt? CreateResultReceipt(
         string callId,
@@ -138,7 +757,19 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
                 return null;
             }
 
-            return FailureReceipt(callId, toolName, resultJson, code, message, userServiceId: null);
+            return FailureReceipt(
+                callId,
+                toolName,
+                resultJson,
+                new CodeExecutionFailure(
+                    CompletedFailureCodes.Contains(code)
+                        ? CodeExecutionFailureKind.ExecutionFailed
+                        : OutcomeUncertainFailureCodes.Contains(code)
+                            ? CodeExecutionFailureKind.OutcomeUncertain
+                            : CodeExecutionFailureKind.AdmissionDenied,
+                    code,
+                    message),
+                userServiceId: null);
         }
         catch (JsonException)
         {
@@ -152,15 +783,35 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         string argumentsJson,
         CancellationToken ct)
     {
-        var args = ToolArgs.Parse(argumentsJson);
-        var language = args.Str("language");
-        var source = args.Str("code");
-        if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(source))
+        if (AgentToolRequestContext.Current?.InvocationSurface ==
+            AgentToolInvocationSurface.WorkflowToolCall)
         {
             return TerminalFailure(
                 callId,
                 toolName,
                 new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_durable_context_invalid",
+                    "Workflow code execution must use the durable operation contract."));
+        }
+
+        var preparation = PrepareExecution(argumentsJson);
+        if (preparation.Failure is not null)
+            return TerminalFailure(callId, toolName, preparation.Failure);
+
+        var outcome = await _executionPort.ExecuteAsync(preparation.Request!, ct)
+            .ConfigureAwait(false);
+        return Terminal(callId, toolName, outcome);
+    }
+
+    private static CodeExecutionPreparation PrepareExecution(string argumentsJson)
+    {
+        var args = ToolArgs.Parse(argumentsJson);
+        var language = args.Str("language");
+        var source = args.Str("code");
+        if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(source))
+        {
+            return CodeExecutionPreparation.Failed(new CodeExecutionFailure(
                     CodeExecutionFailureKind.AdmissionDenied,
                     "code_execution_request_invalid",
                     "Both 'language' and 'code' are required."));
@@ -168,34 +819,45 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
 
         if (!TryParseLanguage(language, out var codeLanguage))
         {
-            return TerminalFailure(
-                callId,
-                toolName,
-                new CodeExecutionFailure(
+            return CodeExecutionPreparation.Failed(new CodeExecutionFailure(
                     CodeExecutionFailureKind.AdmissionDenied,
                     "code_execution_request_invalid",
                     "Language must be one of: python, javascript, typescript, bash."));
         }
 
-        var credentials = AgentToolRequestContext.Current?.Credentials;
-        var executionBearerToken = ResolveExecutionBearerToken(credentials);
-        if (executionBearerToken is null)
+        var timeoutSeconds = CodeExecutionContract.DefaultTimeoutSeconds;
+        if (args.Element("timeout_secs") is { } timeoutElement &&
+            (timeoutElement.ValueKind != JsonValueKind.Number ||
+             !timeoutElement.TryGetInt32(out timeoutSeconds)))
         {
-            return TerminalFailure(
-                callId,
-                toolName,
-                new CodeExecutionFailure(
+            return CodeExecutionPreparation.Failed(new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_request_invalid",
+                    "'timeout_secs' must be an integer between 1 and 600."));
+        }
+
+        if (!CodeExecutionContract.IsValidTimeoutSeconds(timeoutSeconds))
+        {
+            return CodeExecutionPreparation.Failed(new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_request_invalid",
+                    "'timeout_secs' must be an integer between 1 and 600."));
+        }
+
+        var credentials = AgentToolRequestContext.Current?.Credentials;
+        var executionCredential = ResolveExecutionCredential(credentials);
+        if (executionCredential.Token is null ||
+            executionCredential.Kind == CodeExecutionNyxIdCredentialKind.Unspecified)
+        {
+            return CodeExecutionPreparation.Failed(new CodeExecutionFailure(
                     CodeExecutionFailureKind.AdmissionDenied,
                     "code_execution_credential_unavailable",
                     "A typed NyxID execution credential is required for code execution."));
         }
 
-        if (!TryResolveAdmittedRoute(out var admittedUserServiceId))
+        if (!TryResolveAdmittedRoute(out var admittedServiceSlug, out var admittedUserServiceId))
         {
-            return TerminalFailure(
-                callId,
-                toolName,
-                new CodeExecutionFailure(
+            return CodeExecutionPreparation.Failed(new CodeExecutionFailure(
                     CodeExecutionFailureKind.AdmissionDenied,
                     "code_execution_admission_invalid",
                     "The workflow code execution admission proof is invalid."));
@@ -204,46 +866,45 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         var sourceReadableBearerToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials);
         if (sourceReadableBearerToken is null && admittedUserServiceId is null)
         {
-            return TerminalFailure(
-                callId,
-                toolName,
-                new CodeExecutionFailure(
+            return CodeExecutionPreparation.Failed(new CodeExecutionFailure(
                     CodeExecutionFailureKind.AdmissionDenied,
                     "code_execution_credential_unavailable",
                     "A source-readable NyxID credential is required to resolve the code execution route."));
         }
 
-        var outcome = await _executionPort.ExecuteAsync(
-                new CodeExecutionRequest(
-                    codeLanguage,
-                    source,
-                    new CodeExecutionRouteIdentity(
-                        CodeExecutionContract.ServiceSlug,
-                        admittedUserServiceId,
-                        admittedUserServiceId is null
-                            ? CodeExecutionRouteIdentitySource.CodeExecutionContract
-                            : CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
-                    new CodeExecutionCallerContext(
-                        executionBearerToken,
-                        sourceReadableBearerToken)),
-                ct)
-            .ConfigureAwait(false);
-        return Terminal(callId, toolName, outcome);
+        return CodeExecutionPreparation.Succeeded(new CodeExecutionRequest(
+            codeLanguage,
+            source,
+            timeoutSeconds,
+            new CodeExecutionRouteIdentity(
+                admittedServiceSlug,
+                admittedUserServiceId,
+                admittedUserServiceId is null
+                    ? CodeExecutionRouteIdentitySource.CodeExecutionContract
+                    : CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+            new CodeExecutionCallerContext(
+                executionCredential.Token,
+                sourceReadableBearerToken,
+                executionCredential.Kind)));
     }
 
-    private static string? ResolveExecutionBearerToken(AgentToolCredentials? credentials)
+    private static (string? Token, CodeExecutionNyxIdCredentialKind Kind)
+        ResolveExecutionCredential(AgentToolCredentials? credentials)
     {
-        if (credentials?.NyxIdCredentialKind is not (
-                AgentToolNyxIdCredentialKind.SourceReadableUserBearer or
-                AgentToolNyxIdCredentialKind.ProxyDelegation))
+        var kind = credentials?.NyxIdCredentialKind switch
         {
-            return null;
-        }
+            AgentToolNyxIdCredentialKind.SourceReadableUserBearer or
+                AgentToolNyxIdCredentialKind.ProxyDelegation =>
+                CodeExecutionNyxIdCredentialKind.Bearer,
+            AgentToolNyxIdCredentialKind.AgentKey =>
+                CodeExecutionNyxIdCredentialKind.AgentKey,
+            _ => CodeExecutionNyxIdCredentialKind.Unspecified,
+        };
 
-        return NormalizeBearerToken(credentials.NyxIdAccessToken);
+        return (NormalizeCredential(credentials?.NyxIdAccessToken), kind);
     }
 
-    private static string? NormalizeBearerToken(string? token)
+    private static string? NormalizeCredential(string? token)
     {
         if (string.IsNullOrWhiteSpace(token))
             return null;
@@ -259,8 +920,206 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         return normalized;
     }
 
-    private static bool TryResolveAdmittedRoute(out string? userServiceId)
+    private static AgentToolPendingOperation ToPendingOperation(
+        string operationId,
+        DurableCodeExecutionReceipt receipt) =>
+        new(
+            operationId,
+            receipt.ProviderOperationId,
+            receipt.StatusPath,
+            receipt.ResultPath,
+            receipt.CancelPath,
+            ToPendingOperationStatus(receipt.State),
+            null,
+            RetryAfterMilliseconds(receipt.RetryAfter, DefaultRetryAfter),
+            receipt.ExpiresAt.ToUnixTimeMilliseconds(),
+            receipt.ResolvedRoute.ServiceSlug,
+            receipt.ResolvedRoute.UserServiceId,
+            receipt.ResolvedRoute.Source);
+
+    private static AgentToolPendingOperation UpdatePending(
+        AgentToolPendingOperation pending,
+        AgentToolPendingOperationStatus? status = null,
+        string? etag = null,
+        TimeSpan? retryAfter = null,
+        DateTimeOffset? expiresAt = null,
+        CodeExecutionRouteIdentity? route = null) =>
+        pending with
+        {
+            Status = status ?? pending.Status,
+            ETag = string.IsNullOrWhiteSpace(etag) ? pending.ETag : etag,
+            RetryAfterMilliseconds = retryAfter is null
+                ? pending.RetryAfterMilliseconds
+                : RetryAfterMilliseconds(retryAfter, DefaultRetryAfter),
+            ExpiresAtUnixMs = expiresAt is null
+                ? pending.ExpiresAtUnixMs
+                : EarlierDeadline(
+                    pending.ExpiresAtUnixMs,
+                    expiresAt.Value.ToUnixTimeMilliseconds()),
+            ServiceSlug = route?.ServiceSlug ?? pending.ServiceSlug,
+            UserServiceId = route?.UserServiceId ?? pending.UserServiceId,
+            RouteIdentitySource = route?.Source ?? pending.RouteIdentitySource,
+        };
+
+    private static long EarlierDeadline(long existingUnixMs, long incomingUnixMs)
     {
+        if (existingUnixMs <= 0)
+            return incomingUnixMs;
+        if (incomingUnixMs <= 0)
+            return existingUnixMs;
+
+        return Math.Min(existingUnixMs, incomingUnixMs);
+    }
+
+    private static bool IsRecoverableSubmitFailure(DurableCodeExecutionFailure? failure) =>
+        failure is
+        {
+            Retryable: true,
+            Kind: DurableCodeExecutionFailureKind.SubmissionUncertain or
+                DurableCodeExecutionFailureKind.TransportUnavailable or
+                DurableCodeExecutionFailureKind.TimedOut or
+                DurableCodeExecutionFailureKind.RateLimited or
+                DurableCodeExecutionFailureKind.ServiceUnavailable,
+        };
+
+    private static bool IsOpaqueOperationId(string? operationId)
+    {
+        const string prefix = "tool:v1:operation:";
+        if (operationId is null ||
+            operationId.Length != prefix.Length + 64 ||
+            !operationId.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (var character in operationId.AsSpan(prefix.Length))
+        {
+            if (character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryResolvePendingRoute(
+        AgentToolPendingOperation pending,
+        out CodeExecutionRouteIdentity route)
+    {
+        route = new CodeExecutionRouteIdentity(
+            pending.ServiceSlug,
+            pending.UserServiceId,
+            pending.RouteIdentitySource);
+        if (!CodeExecutionContract.IsValidServiceSlug(route.ServiceSlug) ||
+            route.Source == CodeExecutionRouteIdentitySource.Unspecified ||
+            !Enum.IsDefined(route.Source))
+        {
+            return false;
+        }
+
+        if (route.UserServiceId is null)
+        {
+            return route.Source == CodeExecutionRouteIdentitySource.CodeExecutionContract &&
+                   string.Equals(
+                       route.ServiceSlug,
+                       CodeExecutionContract.ServiceSlug,
+                       StringComparison.Ordinal);
+        }
+
+        if ((route.Source is CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog or
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission) &&
+            !CodeExecutionContract.IsSupportedServiceSlug(route.ServiceSlug))
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(route.UserServiceId) &&
+               string.Equals(route.UserServiceId, route.UserServiceId.Trim(), StringComparison.Ordinal);
+    }
+
+    private static bool IsCompatiblePendingRoute(
+        CodeExecutionRouteIdentity pendingRoute,
+        CodeExecutionRouteIdentity preparedRoute)
+    {
+        if (Equals(pendingRoute, preparedRoute))
+            return true;
+
+        // V4 plans have no proof-bound code route. Submit resolves the contract route once and
+        // the actor must keep polling that exact catalog route from its durable receipt.
+        return preparedRoute.Source == CodeExecutionRouteIdentitySource.CodeExecutionContract &&
+               preparedRoute.UserServiceId is null &&
+               pendingRoute.Source == CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog &&
+               !string.IsNullOrWhiteSpace(pendingRoute.UserServiceId) &&
+               CodeExecutionContract.IsSupportedServiceSlug(pendingRoute.ServiceSlug);
+    }
+
+    private static long RetryAfterMilliseconds(TimeSpan? value, TimeSpan fallback)
+    {
+        var selected = value is { } retryAfter && retryAfter > TimeSpan.Zero
+            ? retryAfter
+            : fallback;
+        return Math.Clamp((long)Math.Ceiling(selected.TotalMilliseconds), 250L, 30_000L);
+    }
+
+    private static AgentToolPendingOperationStatus ToPendingOperationStatus(
+        DurableCodeExecutionState state) =>
+        state switch
+        {
+            DurableCodeExecutionState.Unspecified => AgentToolPendingOperationStatus.Unspecified,
+            DurableCodeExecutionState.Queued => AgentToolPendingOperationStatus.Queued,
+            DurableCodeExecutionState.Provisioning => AgentToolPendingOperationStatus.Provisioning,
+            DurableCodeExecutionState.Preparing => AgentToolPendingOperationStatus.Preparing,
+            DurableCodeExecutionState.Running => AgentToolPendingOperationStatus.Running,
+            DurableCodeExecutionState.Collecting => AgentToolPendingOperationStatus.Collecting,
+            DurableCodeExecutionState.Succeeded => AgentToolPendingOperationStatus.Succeeded,
+            DurableCodeExecutionState.Failed => AgentToolPendingOperationStatus.Failed,
+            DurableCodeExecutionState.Cancelled => AgentToolPendingOperationStatus.Cancelled,
+            DurableCodeExecutionState.OutcomeUncertain => AgentToolPendingOperationStatus.OutcomeUncertain,
+            _ => throw new ArgumentOutOfRangeException(nameof(state), state, "Unknown durable code execution state."),
+        };
+
+    private static CodeExecutionFailure InvalidDurableOutcomeFailure() =>
+        new(
+            CodeExecutionFailureKind.MalformedOutput,
+            "code_execution_outcome_invalid",
+            "Code execution returned an invalid outcome.");
+
+    private static CodeExecutionFailure ToCodeExecutionFailure(
+        DurableCodeExecutionFailure failure) =>
+        new(
+            failure.Kind switch
+            {
+                DurableCodeExecutionFailureKind.AdmissionDenied or
+                    DurableCodeExecutionFailureKind.IdempotencyConflict =>
+                    CodeExecutionFailureKind.AdmissionDenied,
+                DurableCodeExecutionFailureKind.TargetNotConfigured =>
+                    CodeExecutionFailureKind.TargetNotConfigured,
+                DurableCodeExecutionFailureKind.TimedOut =>
+                    CodeExecutionFailureKind.TimedOut,
+                DurableCodeExecutionFailureKind.ResponseTooLarge =>
+                    CodeExecutionFailureKind.ResponseTooLarge,
+                DurableCodeExecutionFailureKind.MalformedOutput =>
+                    CodeExecutionFailureKind.MalformedOutput,
+                DurableCodeExecutionFailureKind.ProviderRejected or
+                    DurableCodeExecutionFailureKind.ExecutionFailed or
+                    DurableCodeExecutionFailureKind.Cancelled =>
+                    CodeExecutionFailureKind.ExecutionFailed,
+                DurableCodeExecutionFailureKind.OperationNotFound or
+                    DurableCodeExecutionFailureKind.Expired or
+                    DurableCodeExecutionFailureKind.OutcomeUncertain or
+                    DurableCodeExecutionFailureKind.SubmissionUncertain =>
+                    CodeExecutionFailureKind.OutcomeUncertain,
+                _ => CodeExecutionFailureKind.TransportUnavailable,
+            },
+            failure.Code,
+            failure.Message,
+            failure.DiagnosticId,
+            failure.ProviderPhase);
+
+    private static bool TryResolveAdmittedRoute(
+        out string serviceSlug,
+        out string? userServiceId)
+    {
+        serviceSlug = CodeExecutionContract.ServiceSlug;
         userServiceId = null;
         var admission = AgentToolRequestContext.Current?.OperationAdmission;
         if (admission is null)
@@ -271,10 +1130,7 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
                 admission.ServiceInstanceId,
                 admission.ServiceInstanceId.Trim(),
                 StringComparison.Ordinal) ||
-            !string.Equals(
-                admission.ServiceSlug,
-                CodeExecutionContract.ServiceSlug,
-                StringComparison.Ordinal) ||
+            !CodeExecutionContract.IsSupportedServiceSlug(admission.ServiceSlug) ||
             admission.Identity is not AgentToolOperationIdentity.PlatformBuiltIn
             {
                 CapabilityId: "code_execute",
@@ -287,6 +1143,7 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
             return false;
         }
 
+        serviceSlug = admission.ServiceSlug;
         userServiceId = admission.ServiceInstanceId;
         return true;
     }
@@ -324,13 +1181,7 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         var userServiceId = outcome.ResolvedRoute?.UserServiceId;
         var receipt = outcome.Failure is null
             ? SuccessReceipt(callId, toolName, resultJson, userServiceId)
-            : FailureReceipt(
-                callId,
-                toolName,
-                resultJson,
-                outcome.Failure.Code,
-                outcome.Failure.Message,
-                userServiceId);
+            : FailureReceipt(callId, toolName, resultJson, outcome.Failure, userServiceId);
         return new AgentToolTerminalOutcome(resultJson, receipt);
     }
 
@@ -371,16 +1222,18 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         string callId,
         string toolName,
         string resultJson,
-        string errorCode,
-        string errorMessage,
+        CodeExecutionFailure failure,
         string? userServiceId) =>
         NyxIdProxyReceiptFactory.CreateError(
             callId,
             string.IsNullOrWhiteSpace(toolName) ? "code_execute" : toolName,
             userServiceId,
-            errorCode,
-            errorMessage,
-            resultJson);
+            failure.Code,
+            failure.Message,
+            resultJson,
+            failure.Kind == CodeExecutionFailureKind.OutcomeUncertain
+                ? AgentToolFailureOutcome.OutcomeUncertain
+                : AgentToolFailureOutcome.CalleeConfirmed);
 
     private static string SerializeOutcome(CodeExecutionOutcome outcome)
     {
@@ -397,6 +1250,20 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
 
         if (result is not null)
         {
+            var providerPhase = ProviderPhaseName(failure!.ProviderPhase);
+            if (providerPhase is not null)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    output = Output(result),
+                    error = failure.Code,
+                    code = failure.Code,
+                    message = failure.Message,
+                    diagnostic_id = failure.DiagnosticId,
+                    provider_phase = providerPhase,
+                });
+            }
             return JsonSerializer.Serialize(new
             {
                 success = false,
@@ -408,6 +1275,19 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
             });
         }
 
+        var terminalProviderPhase = ProviderPhaseName(failure!.ProviderPhase);
+        if (terminalProviderPhase is not null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = failure.Code,
+                code = failure.Code,
+                message = failure.Message,
+                diagnostic_id = failure.DiagnosticId,
+                provider_phase = terminalProviderPhase,
+            });
+        }
         return JsonSerializer.Serialize(new
         {
             success = false,
@@ -417,6 +1297,18 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
             diagnostic_id = failure.DiagnosticId,
         });
     }
+
+    private static string? ProviderPhaseName(DurableCodeExecutionPhase phase) => phase switch
+    {
+        DurableCodeExecutionPhase.SandboxCreate => "sandbox_create",
+        DurableCodeExecutionPhase.SandboxReady => "sandbox_ready",
+        DurableCodeExecutionPhase.InputWrite => "input_write",
+        DurableCodeExecutionPhase.DependencyInstall => "dependency_install",
+        DurableCodeExecutionPhase.Execute => "execute",
+        DurableCodeExecutionPhase.Collect => "collect",
+        DurableCodeExecutionPhase.CleaningUp => "cleaning_up",
+        _ => null,
+    };
 
     private static object Output(CodeExecutionResult result) => new
     {
@@ -455,4 +1347,26 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
 
     private static bool TryReadNonEmptyString(JsonElement owner, string name, out string value) =>
         TryReadString(owner, name, out value) && !string.IsNullOrWhiteSpace(value);
+
+    private sealed record CancellationTerminalResolution(
+        AgentToolTerminalOutcome? CompletedOutcome,
+        TimeSpan? RetryAfter)
+    {
+        public static CancellationTerminalResolution Completed(AgentToolTerminalOutcome outcome) =>
+            new(outcome, null);
+
+        public static CancellationTerminalResolution Pending(TimeSpan? retryAfter = null) =>
+            new(null, retryAfter);
+    }
+
+    private sealed record CodeExecutionPreparation(
+        CodeExecutionRequest? Request,
+        CodeExecutionFailure? Failure)
+    {
+        public static CodeExecutionPreparation Succeeded(CodeExecutionRequest request) =>
+            new(request, null);
+
+        public static CodeExecutionPreparation Failed(CodeExecutionFailure failure) =>
+            new(null, failure);
+    }
 }

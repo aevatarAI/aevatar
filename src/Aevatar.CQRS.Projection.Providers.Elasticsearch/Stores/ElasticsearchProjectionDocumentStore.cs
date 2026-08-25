@@ -15,6 +15,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     : IProjectionDocumentReader<TReadModel, TKey>,
       IProjectionDocumentWriter<TReadModel>,
+      IProjectionDocumentMutator<TReadModel, TKey>,
       IProjectionIndexConsistencyProbe<TReadModel>,
       IProjectionIndexReconcileTarget,
       IDisposable
@@ -25,6 +26,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     private readonly JsonFormatter _formatter;
     private readonly JsonParser _parser;
     private readonly HttpClient _httpClient;
+    private readonly HttpClient _reindexHttpClient;
     private readonly ElasticsearchIndexLifecycleManager _indexManager;
     private readonly ElasticsearchOptimisticWriter<TReadModel> _writer;
     private readonly Func<TReadModel, TKey> _keySelector;
@@ -74,12 +76,22 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         _httpClient.BaseAddress = endpoint;
         _repairRequestTimeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs));
         _httpClient.Timeout = _repairRequestTimeout;
+        // Schema-drift healing runs a synchronous _reindex that legitimately outlives the
+        // per-request timeout; give the lifecycle manager a client that can wait for it.
+        _reindexHttpClient = httpMessageHandler == null
+            ? new HttpClient()
+            : new HttpClient(httpMessageHandler, disposeHandler: false);
+        _reindexHttpClient.BaseAddress = endpoint;
+        _reindexHttpClient.Timeout = TimeSpan.FromTicks(Math.Max(
+            _repairRequestTimeout.Ticks,
+            ElasticsearchIndexLifecycleManager.ReindexRequestTimeout.Ticks));
 
         if (!string.IsNullOrWhiteSpace(options.Username))
         {
             var raw = $"{options.Username}:{options.Password}";
             var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(raw));
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
+            _reindexHttpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
         }
 
         var descriptor = new TReadModel().Descriptor;
@@ -106,7 +118,11 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         _exactMatchFieldPathResolver = BuildExactMatchFieldPathResolver(descriptor, _indexMetadata);
         _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;
 
-        _indexManager = new ElasticsearchIndexLifecycleManager(_httpClient, _autoCreateIndex, _logger);
+        _indexManager = new ElasticsearchIndexLifecycleManager(
+            _httpClient,
+            _autoCreateIndex,
+            _logger,
+            _reindexHttpClient);
         _writer = new ElasticsearchOptimisticWriter<TReadModel>(
             _httpClient, _formatter, _parser, _autoCreateIndex, _missingIndexBehavior, _logger);
     }
@@ -120,6 +136,40 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         await _indexManager.EnsureIndexAsync(indexTarget.IndexName, indexTarget.Metadata, ct);
         var keyValue = ResolveReadModelKey(readModel);
         return await _writer.UpsertAsync(indexTarget.IndexName, keyValue, readModel, ct);
+    }
+
+    public async Task<ProjectionDocumentMutationResult<TReadModel>> MutateAsync(
+        TKey key,
+        Func<TReadModel?, TReadModel> reducer,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(reducer);
+        ct.ThrowIfCancellationRequested();
+        ThrowIfDynamicReadModelMutationUnsupported();
+
+        var keyValue = FormatKey(key);
+        if (keyValue.Length == 0)
+            throw new ArgumentException("Projection mutation key must be non-empty.", nameof(key));
+
+        await _indexManager.EnsureIndexAsync(_indexName, _indexMetadata, ct);
+        return await _writer.MutateAsync(
+            _indexName,
+            keyValue,
+            existing =>
+            {
+                var incoming = reducer(existing)
+                               ?? throw new InvalidOperationException(
+                                   $"Projection mutation reducer returned null for read-model '{typeof(TReadModel).FullName}'.");
+                var incomingKey = ResolveReadModelKey(incoming);
+                if (!string.Equals(incomingKey, keyValue, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Projection mutation for read-model '{typeof(TReadModel).FullName}' changed key '{keyValue}' to '{incomingKey}'.");
+                }
+
+                return incoming;
+            },
+            ct);
     }
 
     public async Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
@@ -898,6 +948,16 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             "Dynamically indexed read models must delete via provider-native index-scoped operations.");
     }
 
+    private void ThrowIfDynamicReadModelMutationUnsupported()
+    {
+        if (!_supportsDynamicIndexing)
+            return;
+
+        throw new InvalidOperationException(
+            $"Elasticsearch 'mutation' by key is not supported for dynamically indexed read model '{typeof(TReadModel).FullName}'. " +
+            "Use a provider contract with an explicit physical index selector.");
+    }
+
     private async Task<ExistingProjectionState> TryGetExistingProjectionStateAsync(
         string indexName,
         string keyValue,
@@ -1054,6 +1114,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
 
     public void Dispose()
     {
+        _reindexHttpClient.Dispose();
         _httpClient.Dispose();
         _indexManager.Dispose();
     }

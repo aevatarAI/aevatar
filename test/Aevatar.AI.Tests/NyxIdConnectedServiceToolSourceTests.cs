@@ -158,11 +158,17 @@ public class NyxIdConnectedServiceToolSourceTests
         ]);
         var owner = tool.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
         owner.OperationAdmission.ServiceInstanceId.Should().Be("usvc-alpha");
+        owner.OperationAdmission.CatalogServiceSlug.Should().Be("svc-shop");
         owner.OperationAdmission.Identity.Should().Be(
             new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"));
         owner.OperationAdmission.CatalogDigest.Should().Be(
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         owner.OperationAdmission.ContractDigest.Should().MatchRegex("^[0-9a-f]{64}$");
+        tool.Presentation.NyxIdOperation.CatalogServiceSlug.Should().Be(
+            owner.OperationAdmission.CatalogServiceSlug);
+        AgentToolOperationSelector.ComputeDigest(owner.OperationAdmission).Should().NotBe(
+            AgentToolOperationSelector.ComputeDigest(
+                owner.OperationAdmission with { CatalogServiceSlug = "svc-other" }));
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
         schema.RootElement.GetProperty("properties").EnumerateObject()
             .Select(static property => property.Name)
@@ -176,6 +182,30 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.RawOpenApiRequests.Should().BeEmpty();
         handler.ExactReads.Should().BeEmpty();
         handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_DelegatedBrowserCredentials_ShouldSplitInventoryAndExecutionAuthority()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["discovery-token"] = Keys(
+            InstanceWithOpenApiUrl(
+                "usvc-alpha",
+                "api-shop",
+                "svc-shop",
+                "https://nyx.test/api/v1/proxy/services/usvc-alpha/openapi.json"));
+        handler.McpConfigByToken["execution-token"] = ExactMcpCatalog;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext(
+            "execution-token",
+            sourceReadableToken: "discovery-token",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation);
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle();
+        handler.DiscoveryTokens.Should().Equal("discovery-token");
+        handler.McpConfigTokens.Should().Equal("execution-token");
     }
 
     [Theory]
@@ -625,10 +655,11 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
-    public async Task DynamicOperation_CatalogDigestDrift_FailsBeforeProxy()
+    public async Task DynamicOperation_RootCatalogDigestDrift_ContinuesExactRevalidationAndProxy()
     {
         var handler = ExactOperationHandler();
-        var source = CreateSource(handler);
+        var logger = new RecordingLogger<NyxIdConnectedServiceToolSource>();
+        var source = CreateSource(handler, logger: logger);
 
         using var scope = PushContext("user-token");
         var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
@@ -641,9 +672,11 @@ public class NyxIdConnectedServiceToolSourceTests
             tool.Name,
             """{"path_params":{"orderId":"order-alpha"}}""");
 
-        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
-        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_CATALOG_DRIFT");
-        handler.ProxyRequests.Should().BeEmpty();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        handler.McpConfigRequests.Should().Be(2);
+        handler.ProxyRequests.Should().ContainSingle();
+        logger.Output.Should().Contain(
+            "Root catalog revision changed; continuing exact service and endpoint revalidation.");
     }
 
     [Fact]
@@ -691,12 +724,15 @@ public class NyxIdConnectedServiceToolSourceTests
             """{"path_params":{"orderId":"order-alpha"}}""");
 
         using var result = JsonDocument.Parse(outcome.ResultJson);
-        result.RootElement.GetProperty("status").GetString().Should().Be("rejected");
+        result.RootElement.GetProperty("status").GetString().Should().Be("retry_required");
         result.RootElement.GetProperty("error_code").GetString()
             .Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
         Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
         outcome.ResultJson.Should().NotContain(marker);
-        outcome.Receipt!.ErrorCode.Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ErrorCode.Should().BeEmpty();
+        outcome.Receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
         handler.ProxyRequests.Should().ContainSingle();
     }
 
@@ -716,11 +752,14 @@ public class NyxIdConnectedServiceToolSourceTests
             """{"path_params":{"orderId":"order-alpha"}}""");
 
         using var result = JsonDocument.Parse(outcome.ResultJson);
-        result.RootElement.GetProperty("status").GetString().Should().Be("rejected");
+        result.RootElement.GetProperty("status").GetString().Should().Be("retry_required");
         result.RootElement.GetProperty("error_code").GetString()
             .Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
         Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
-        outcome.Receipt!.ErrorCode.Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ErrorCode.Should().BeEmpty();
+        outcome.Receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
         handler.ProxyRequests.Should().ContainSingle();
     }
 
@@ -871,7 +910,8 @@ public class NyxIdConnectedServiceToolSourceTests
             AgentToolOperationAdmissionPayload.Parser.ParseFrom(
                 AgentToolOperationAdmissionPayloadMapper.ToPayload(frozen).ToByteArray()));
         reloaded.Should().NotBeNull();
-        reloaded!.ReadBack!.ProviderResourceArgument.Should().Be(
+        reloaded!.CatalogServiceSlug.Should().Be("api-lark-bot");
+        reloaded.ReadBack!.ProviderResourceArgument.Should().Be(
             frozen.ReadBack.ProviderResourceArgument,
             "the exact provider identity target is an actor-persisted typed contract");
         reloaded.ReadBack.EffectResultIdentityJsonPointer.Should().Be("/data/message_id");
@@ -971,24 +1011,18 @@ public class NyxIdConnectedServiceToolSourceTests
                 },
             },
             now);
-        planned.NextCommand.Should().BeNull();
-        planned.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
-        planned.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
-        var confirmed = ConfirmPendingPlan(planned.State, now);
-        confirmed.ShouldCommit.Should().BeTrue();
-        confirmed.NextCommand.Should().NotBeNull();
-        var effectCommand = confirmed.NextCommand!;
+        planned.NextCommand.Should().NotBeNull();
+        var effectCommand = planned.NextCommand!;
         effectCommand.InputCase.Should().Be(
-            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
-        var effectAdmission = effectCommand.PlanGateContinuation;
-        effectAdmission.ArgumentsSha256.Should().Equal(
-            NyxIdChatPlanGateDecisions.HashArguments(arguments));
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+        var effectAdmission = effectCommand.Tool;
+        effectAdmission.ArgumentsJson.Should().Be(arguments);
 
         var effectContext = AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(
                 "request-effect-alpha",
-                effectAdmission.ToolCallId) with
+                effectAdmission.CallId) with
             {
                 OperationId = effectCommand.Key.OperationId,
             },
@@ -1022,7 +1056,7 @@ public class NyxIdConnectedServiceToolSourceTests
         effectOutcome.ResultJson.Should().NotContain("om_provider_alpha");
 
         var afterEffect = NyxIdChatTaskLifecycle.ApplyOperationResult(
-            confirmed.State,
+            planned.State,
             new NyxIdChatOperationResultSignal
             {
                 Key = effectCommand.Key.Clone(),
@@ -1453,10 +1487,17 @@ public class NyxIdConnectedServiceToolSourceTests
 
     private static AgentToolContextScope PushContext(
         string userToken,
-        string? organizationToken = null) =>
+        string? organizationToken = null,
+        string? sourceReadableToken = null,
+        AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentials(userToken, organizationToken, null),
+            Credentials = new AgentToolCredentials(
+                userToken,
+                organizationToken,
+                null,
+                credentialKind,
+                sourceReadableToken),
             Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
         });
 
@@ -1534,37 +1575,6 @@ public class NyxIdConnectedServiceToolSourceTests
         };
     }
 
-    private static NyxIdChatPlanResolutionDecision ConfirmPendingPlan(
-        NyxIdChatConversationGAgentState state,
-        Timestamp now)
-    {
-        const long stateVersion = 17;
-        var gate = state.ActiveTask.Gate;
-        return NyxIdChatPlanGateDecisions.Resolve(
-            state,
-            new NyxIdChatPlanResolveCommand
-            {
-                ScopeId = state.ScopeId,
-                ConversationActorId = state.ConversationActorId,
-                TaskId = gate.TaskId,
-                PlanId = gate.PlanId,
-                PlanRevision = gate.PlanRevision,
-                RequestId = gate.RequestId,
-                ClientRequestId = "confirm-dynamic-effect-plan",
-                Confirmed = true,
-                ExpectedStateVersion = stateVersion,
-                ToolContext = new AgentToolExecutionContextPayload
-                {
-                    Credentials = new AgentToolCredentialsPayload
-                    {
-                        NyxIdAccessToken = "user-token",
-                    },
-                },
-            },
-            currentStateVersion: stateVersion,
-            now);
-    }
-
     private static string Instance(
         string id,
         string slug,
@@ -1598,6 +1608,7 @@ public class NyxIdConnectedServiceToolSourceTests
           "slug": "{{slug}}",
           "label": "Shop",
           "catalog_service_id": "{{catalogServiceId}}",
+          "catalog_service_slug": "{{catalogServiceId}}",
           "endpoint_id": "instance-endpoint-alpha",
           "endpoint_url": "https://shop.test",
           "openapi_url": "{{openApiUrl}}",
@@ -2122,6 +2133,8 @@ public class NyxIdConnectedServiceToolSourceTests
 
         public Dictionary<string, string> KeysByToken { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> McpConfigByToken { get; } = new(StringComparer.Ordinal);
+        public List<string> DiscoveryTokens { get; } = [];
+        public List<string> McpConfigTokens { get; } = [];
         public List<string> RawOpenApiRequests { get; } = [];
         public List<string> ExactReads { get; } = [];
         public List<ProxyRequestRecord> ProxyRequests { get; } = [];
@@ -2145,6 +2158,7 @@ public class NyxIdConnectedServiceToolSourceTests
             if (path == "/api/v1/keys")
             {
                 DiscoveryRequests++;
+                DiscoveryTokens.Add(token);
                 if (CancelDiscoveryWith is not null)
                 {
                     CancelDiscoveryWith.Cancel();
@@ -2158,6 +2172,7 @@ public class NyxIdConnectedServiceToolSourceTests
             if (path == "/api/v1/mcp/config")
             {
                 McpConfigRequests++;
+                McpConfigTokens.Add(token);
                 if (CancelMcpConfigWith is not null)
                 {
                     CancelMcpConfigWith.Cancel();

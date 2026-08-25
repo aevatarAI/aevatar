@@ -19,13 +19,14 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
         ArgumentNullException.ThrowIfNull(now);
         next = state;
 
-        if (IsExactReplay(state.CanaryEffectFault, command))
+        if (IsExactReplay(state.CanaryEffectFault?.ArmIntent, command))
             return false;
-        if (!IsValidArm(state, command, stateVersion, now, out var catalogDigest) ||
+        if (!IsValidArm(state, command, stateVersion, now) ||
             state.CanaryEffectFault is
             {
                 Status: NyxIdChatCanaryEffectFaultStatus.Armed,
-            } existing && existing.Directive?.ExpiresAt?.ToDateTimeOffset() > now.ToDateTimeOffset())
+                ArmIntent.ExpiresAt: { } existingExpiry,
+            } && existingExpiry.ToDateTimeOffset() > now.ToDateTimeOffset())
         {
             return false;
         }
@@ -33,13 +34,12 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
         next = state.Clone();
         next.CanaryEffectFault = new NyxIdChatCanaryEffectFaultState
         {
-            Directive = new NyxIdChatCanaryEffectFaultDirective
+            ArmIntent = new NyxIdChatCanaryEffectFaultArmIntent
             {
                 ArmId = command.ArmId.Trim(),
                 ClientRequestId = command.ClientRequestId.Trim(),
-                Key = command.Key.Clone(),
+                SourceOperationKey = command.SourceOperationKey.Clone(),
                 ServiceInstanceId = command.ServiceInstanceId.Trim(),
-                CatalogDigest = catalogDigest,
                 OwnerSubject = command.OwnerSubject.Trim(),
                 ExpiresAt = command.ExpiresAt.Clone(),
             },
@@ -51,51 +51,70 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
         return true;
     }
 
-    public static NyxIdChatCanaryEffectFaultDirective? ForwardForPlanResolution(
+    public static NyxIdChatCanaryEffectFaultDirective? TryAttachToDirectToolDispatch(
         NyxIdChatConversationGAgentState state,
-        NyxIdChatPlanResolveCommand command,
-        NyxIdChatOperationDispatchCommand dispatch,
+        NyxIdChatOperationKey sourceOperationKey,
+        NyxIdChatOperationDispatchCommand? dispatch,
         Timestamp now)
     {
         ArgumentNullException.ThrowIfNull(state);
-        ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(dispatch);
+        ArgumentNullException.ThrowIfNull(sourceOperationKey);
         ArgumentNullException.ThrowIfNull(now);
 
-        var arm = state.CanaryEffectFault;
-        var directive = arm?.Directive;
-        if (arm?.Status != NyxIdChatCanaryEffectFaultStatus.Armed || directive is null)
+        var fault = state.CanaryEffectFault;
+        var intent = fault?.ArmIntent;
+        if (fault?.Status != NyxIdChatCanaryEffectFaultStatus.Armed || intent is null)
             return null;
-        if (directive.ExpiresAt?.ToDateTimeOffset() <= now.ToDateTimeOffset())
+        if (intent.ExpiresAt?.ToDateTimeOffset() <= now.ToDateTimeOffset())
         {
-            arm.Status = NyxIdChatCanaryEffectFaultStatus.Expired;
+            fault.Status = NyxIdChatCanaryEffectFaultStatus.Expired;
             return null;
         }
 
-        var continuation = dispatch.PlanGateContinuation;
-        var operation = continuation?.OperationAdmission;
-        var safety = EffectSafety(continuation?.MayChangeExternalState == true);
-        if (!string.Equals(state.OwnerSubject, directive.OwnerSubject, StringComparison.Ordinal) ||
-            !string.Equals(command.OwnerSubject, directive.OwnerSubject, StringComparison.Ordinal) ||
-            !string.Equals(
-                continuation?.ToolContext?.Caller?.OwnerSubject,
-                directive.OwnerSubject,
-                StringComparison.Ordinal) ||
-            directive.Key is null ||
-            !directive.Key.Equals(dispatch.Key) ||
-            directive.Key.OperationGeneration != 1 ||
+        if (intent.SourceOperationKey is null ||
+            !intent.SourceOperationKey.Equals(sourceOperationKey))
+        {
+            return null;
+        }
+        if (!string.Equals(state.OwnerSubject, intent.OwnerSubject, StringComparison.Ordinal))
+        {
+            fault.Status = NyxIdChatCanaryEffectFaultStatus.Expired;
+            return null;
+        }
+
+        var tool = dispatch?.Tool;
+        var operation = tool?.OperationAdmission;
+        var safety = EffectSafety(tool?.MayChangeExternalState == true);
+        if (dispatch?.Key is null ||
+            dispatch.Key.OperationGeneration != 1 ||
+            tool is null ||
+            !tool.MayChangeExternalState ||
             operation?.ReadBack is null ||
-            !string.Equals(operation.ServiceInstanceId, directive.ServiceInstanceId,
+            !string.Equals(operation.ServiceInstanceId, intent.ServiceInstanceId,
                 StringComparison.Ordinal) ||
-            !string.Equals(operation.CatalogDigest, directive.CatalogDigest, StringComparison.Ordinal) ||
-            !NyxIdChatOperationAdmissionPolicy.IsValid(operation, safety))
+            !IsCatalogDigest(operation.CatalogDigest) ||
+            !NyxIdChatOperationAdmissionPolicy.IsValid(operation, safety) ||
+            !NyxIdChatOperationAdmissionPolicy.IsValidReadBack(operation.ReadBack, operation))
         {
+            fault.Status = NyxIdChatCanaryEffectFaultStatus.Expired;
             return null;
         }
 
-        arm.Status = NyxIdChatCanaryEffectFaultStatus.Forwarded;
-        arm.ForwardedAt = now.Clone();
-        return directive.Clone();
+        var directive = new NyxIdChatCanaryEffectFaultDirective
+        {
+            ArmId = intent.ArmId,
+            ClientRequestId = intent.ClientRequestId,
+            Key = dispatch.Key.Clone(),
+            ServiceInstanceId = intent.ServiceInstanceId,
+            CatalogDigest = operation.CatalogDigest,
+            OwnerSubject = intent.OwnerSubject,
+            ExpiresAt = intent.ExpiresAt.Clone(),
+        };
+        fault.Directive = directive.Clone();
+        fault.Status = NyxIdChatCanaryEffectFaultStatus.Forwarded;
+        fault.ForwardedAt = now.Clone();
+        tool.CanaryEffectFault = directive.Clone();
+        return directive;
     }
 
     public static bool TryMarkConsumed(
@@ -191,19 +210,20 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
     internal static bool MatchesTurnDispatch(
         NyxIdChatCanaryEffectFaultDirective? directive,
         NyxIdChatOperationDispatchCommand command,
+        AgentToolExecutionContextPayload? toolContext,
         Timestamp now)
     {
-        var continuation = command.PlanGateContinuation;
-        var operation = continuation?.OperationAdmission;
-        var safety = EffectSafety(continuation?.MayChangeExternalState == true);
+        var tool = command.Tool;
+        var operation = tool?.OperationAdmission;
+        var safety = EffectSafety(tool?.MayChangeExternalState == true);
         return directive?.Key is not null &&
                directive.Key.Equals(command.Key) &&
                directive.Key.OperationGeneration == 1 &&
                directive.ExpiresAt?.ToDateTimeOffset() > now.ToDateTimeOffset() &&
-               continuation?.MayChangeExternalState == true &&
+               tool?.MayChangeExternalState == true &&
                operation?.ReadBack is not null &&
                string.Equals(
-                   continuation.ToolContext?.Caller?.OwnerSubject,
+                   toolContext?.Caller?.OwnerSubject,
                    directive.OwnerSubject,
                    StringComparison.Ordinal) &&
                string.Equals(operation.ServiceInstanceId, directive.ServiceInstanceId,
@@ -218,10 +238,8 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
         NyxIdChatConversationGAgentState state,
         NyxIdChatCanaryEffectFaultArmCommand command,
         long stateVersion,
-        Timestamp now,
-        out string catalogDigest)
+        Timestamp now)
     {
-        catalogDigest = string.Empty;
         var expiresAt = command.ExpiresAt?.ToDateTimeOffset();
         var nowValue = now.ToDateTimeOffset();
         return command.ExpectedStateVersion == stateVersion &&
@@ -231,104 +249,52 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
                !string.IsNullOrWhiteSpace(command.ConversationActorId) &&
                !string.IsNullOrWhiteSpace(command.ServiceInstanceId) &&
                !string.IsNullOrWhiteSpace(command.OwnerSubject) &&
-               command.Key is not null &&
-               HasCompleteKey(command.Key) &&
-               command.Key.OperationGeneration == 1 &&
+               command.SourceOperationKey is not null &&
+               HasCompleteKey(command.SourceOperationKey) &&
                string.Equals(state.ScopeId, command.ScopeId.Trim(), StringComparison.Ordinal) &&
                string.Equals(state.ConversationActorId, command.ConversationActorId.Trim(),
                    StringComparison.Ordinal) &&
-               string.Equals(state.ConversationActorId, command.Key.ConversationActorId,
+               string.Equals(
+                   state.ConversationActorId,
+                   command.SourceOperationKey.ConversationActorId,
                    StringComparison.Ordinal) &&
                string.Equals(state.OwnerSubject, command.OwnerSubject.Trim(), StringComparison.Ordinal) &&
                expiresAt > nowValue &&
                expiresAt <= nowValue + MaximumArmLifetime &&
-               MatchesPendingEffect(state, command, out catalogDigest);
+               MatchesRunningSourceOperation(state, command.SourceOperationKey);
     }
 
-    private static bool MatchesPendingEffect(
+    private static bool MatchesRunningSourceOperation(
         NyxIdChatConversationGAgentState state,
-        NyxIdChatCanaryEffectFaultArmCommand command,
-        out string catalogDigest)
+        NyxIdChatOperationKey sourceOperationKey)
     {
-        catalogDigest = string.Empty;
         var task = state.ActiveTask;
-        var gate = task?.Gate;
-        var key = command.Key;
-        if (state.ActiveTurn is not
-            {
-                Status: NyxIdChatTurnStatus.Active,
-            } activeTurn ||
+        if (state.ActiveTurn is not { Status: NyxIdChatTurnStatus.Active } activeTurn ||
             task is null ||
             task.Status != NyxIdChatTaskStatus.Active ||
-            gate is not
-            {
-                Mode: NyxIdChatPlanGateMode.Confirm,
-                Status: NyxIdChatPlanGateStatus.Pending,
-            } ||
-            gate.Admissions.Count != 1 ||
-            key is null ||
-            !string.Equals(activeTurn.TurnId, key.TurnId, StringComparison.Ordinal) ||
-            !string.Equals(activeTurn.TaskId, key.TaskId, StringComparison.Ordinal) ||
-            !string.Equals(task.TaskId, key.TaskId, StringComparison.Ordinal) ||
-            !string.Equals(task.TurnId, key.TurnId, StringComparison.Ordinal) ||
-            !string.Equals(task.TaskId, gate.TaskId, StringComparison.Ordinal) ||
-            !string.Equals(task.PlanId, gate.PlanId, StringComparison.Ordinal) ||
-            task.PlanRevision != gate.PlanRevision)
+            !string.Equals(activeTurn.TurnId, sourceOperationKey.TurnId, StringComparison.Ordinal) ||
+            !string.Equals(activeTurn.TaskId, sourceOperationKey.TaskId, StringComparison.Ordinal) ||
+            !string.Equals(task.TaskId, sourceOperationKey.TaskId, StringComparison.Ordinal) ||
+            !string.Equals(task.TurnId, sourceOperationKey.TurnId, StringComparison.Ordinal))
         {
             return false;
         }
 
-        var gateAdmission = gate.Admissions[0];
-        var turnAdmission = state.ActiveTurnPlanGateAdmission;
         var steps = task.Steps
             .Where(candidate =>
-                candidate.Status == NyxIdChatStepStatus.Planned &&
-                candidate.Kind == NyxIdChatStepKind.Tool &&
-                candidate.MayChangeExternalState &&
-                string.Equals(candidate.StepId, key.StepId, StringComparison.Ordinal) &&
-                candidate.Operation?.Key?.Equals(key) == true)
+                candidate.Kind == NyxIdChatStepKind.Llm &&
+                candidate.Status == NyxIdChatStepStatus.Running &&
+                candidate.Operation?.Key?.Equals(sourceOperationKey) == true &&
+                candidate.Operation.Phase is
+                    NyxIdChatOperationPhase.Requested or
+                    NyxIdChatOperationPhase.Dispatched or
+                    NyxIdChatOperationPhase.Running)
             .Take(2)
             .ToArray();
-        if (steps.Length != 1)
-            return false;
-
-        if (steps[0] is not { Source.Tool: { } stepTool } step)
-            return false;
-
-        var operation = stepTool.OperationAdmission;
-        var matches = gateAdmission.Key?.Equals(key) == true &&
-               string.IsNullOrWhiteSpace(gateAdmission.ActionRequestId) &&
-               !string.IsNullOrWhiteSpace(gateAdmission.ToolCallId) &&
-               !string.IsNullOrWhiteSpace(gateAdmission.ToolName) &&
-               !gateAdmission.ArgumentsSha256.IsEmpty &&
-               turnAdmission?.Key?.Equals(key) == true &&
-               string.Equals(turnAdmission.GateRequestId, gate.RequestId, StringComparison.Ordinal) &&
-               string.Equals(turnAdmission.TaskId, gate.TaskId, StringComparison.Ordinal) &&
-               string.Equals(turnAdmission.PlanId, gate.PlanId, StringComparison.Ordinal) &&
-               turnAdmission.PlanRevision == gate.PlanRevision &&
-               string.Equals(
-                   turnAdmission.ToolCallId,
-                   gateAdmission.ToolCallId,
-                   StringComparison.Ordinal) &&
-               string.Equals(
-                   turnAdmission.ToolName,
-                   gateAdmission.ToolName,
-                   StringComparison.Ordinal) &&
-               turnAdmission.ArgumentsSha256.Equals(gateAdmission.ArgumentsSha256) &&
-               string.Equals(
-                   stepTool.ToolName,
-                   gateAdmission.ToolName,
-                   StringComparison.Ordinal) &&
-               turnAdmission.MayChangeExternalState &&
-               turnAdmission.OperationAdmission?.Equals(operation) == true &&
-               operation?.ReadBack is not null &&
-               string.Equals(operation.ServiceInstanceId, command.ServiceInstanceId.Trim(),
-                   StringComparison.Ordinal) &&
-               IsCatalogDigest(operation.CatalogDigest) &&
-               NyxIdChatOperationAdmissionPolicy.IsValid(operation, EffectSafety(true));
-        if (matches)
-            catalogDigest = operation!.CatalogDigest;
-        return matches;
+        return steps.Length == 1 &&
+               string.Equals(task.ActiveStepId, steps[0].StepId, StringComparison.Ordinal) &&
+               string.Equals(task.ActiveOperationId, sourceOperationKey.OperationId,
+                   StringComparison.Ordinal);
     }
 
     private static NyxIdChatToolCallSafety EffectSafety(bool mayChangeExternalState) => new()
@@ -339,28 +305,26 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
     };
 
     private static bool IsExactReplay(
-        NyxIdChatCanaryEffectFaultState? current,
-        NyxIdChatCanaryEffectFaultArmCommand command)
-    {
-        var directive = current?.Directive;
-        return directive is not null &&
-               string.Equals(directive.ArmId, command.ArmId?.Trim(), StringComparison.Ordinal) &&
-               string.Equals(directive.ClientRequestId, command.ClientRequestId?.Trim(),
-                   StringComparison.Ordinal) &&
-               directive.Key?.Equals(command.Key) == true &&
-               string.Equals(directive.ServiceInstanceId, command.ServiceInstanceId?.Trim(),
-                   StringComparison.Ordinal) &&
-               string.Equals(directive.OwnerSubject, command.OwnerSubject?.Trim(),
-                   StringComparison.Ordinal) &&
-               directive.ExpiresAt?.Equals(command.ExpiresAt) == true;
-    }
+        NyxIdChatCanaryEffectFaultArmIntent? current,
+        NyxIdChatCanaryEffectFaultArmCommand command) =>
+        current is not null &&
+        string.Equals(current.ArmId, command.ArmId?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(current.ClientRequestId, command.ClientRequestId?.Trim(),
+            StringComparison.Ordinal) &&
+        current.SourceOperationKey?.Equals(command.SourceOperationKey) == true &&
+        string.Equals(current.ServiceInstanceId, command.ServiceInstanceId?.Trim(),
+            StringComparison.Ordinal) &&
+        string.Equals(current.OwnerSubject, command.OwnerSubject?.Trim(),
+            StringComparison.Ordinal) &&
+        current.ExpiresAt?.Equals(command.ExpiresAt) == true;
 
     private static bool HasCompleteKey(NyxIdChatOperationKey key) =>
         !string.IsNullOrWhiteSpace(key.ConversationActorId) &&
         !string.IsNullOrWhiteSpace(key.TurnId) &&
         !string.IsNullOrWhiteSpace(key.TaskId) &&
         !string.IsNullOrWhiteSpace(key.StepId) &&
-        !string.IsNullOrWhiteSpace(key.OperationId);
+        !string.IsNullOrWhiteSpace(key.OperationId) &&
+        key.OperationGeneration > 0;
 
     private static bool IsCatalogDigest(string? value)
     {

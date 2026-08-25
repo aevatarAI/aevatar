@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Projection.ReadModels;
 
@@ -120,6 +121,36 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             });
         }
 
+        if (!string.IsNullOrWhiteSpace(query.ServiceKey))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.ServiceKey),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.ServiceKey.Trim()),
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.ServiceId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.ServiceId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.ServiceId.Trim()),
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.ServiceRevisionId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.ServiceRevisionId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.ServiceRevisionId.Trim()),
+            });
+        }
+
         if (query.ScheduleKind != null)
         {
             filters.Add(new ProjectionDocumentFilter
@@ -235,6 +266,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             OwnerLLMServiceSlug = document.OwnerLlmServiceSlug ?? string.Empty,
             OwnerLLMModel = document.OwnerLlmModel ?? string.Empty,
             ServiceRevisionId = document.ServiceRevisionId ?? string.Empty,
+            ServiceIdentity = document.ServiceIdentity?.Clone() ?? new ServiceIdentity(),
             NyxIdRevocationStatus = document.NyxidRevocationStatus ?? string.Empty,
             VaultRevocationStatus = document.VaultRevocationStatus ?? string.Empty,
         };

@@ -37,6 +37,10 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
             readOperation.ReadBack is not null ||
             !string.Equals(effectOperation.ServiceInstanceId, readOperation.ServiceInstanceId, StringComparison.Ordinal) ||
             !string.Equals(effectOperation.ServiceSlug, readOperation.ServiceSlug, StringComparison.Ordinal) ||
+            !string.Equals(
+                effectOperation.CatalogServiceSlug,
+                readOperation.CatalogServiceSlug,
+                StringComparison.Ordinal) ||
             !string.Equals(effectOperation.CatalogDigest, readOperation.CatalogDigest, StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(binding.CheckName) ||
             binding.Match == AgentToolReadBackMatch.Unspecified ||
@@ -371,8 +375,16 @@ internal static class NyxIdAssistantOperationReadBackRegistry
         if (readEndpoints.Length != 1 || !readEndpoints[0].IsReadOnly)
             return null;
 
-        var effectAdmission = Map(service, effectEndpoint, catalogDigest);
-        var readAdmission = Map(service, readEndpoints[0], catalogDigest);
+        var effectAdmission = Map(
+            service,
+            effectEndpoint,
+            catalogDigest,
+            serviceInstance.CatalogServiceSlug);
+        var readAdmission = Map(
+            service,
+            readEndpoints[0],
+            catalogDigest,
+            serviceInstance.CatalogServiceSlug);
         return NyxIdConnectedServiceReadBackPlan.Create(effectAdmission, readAdmission, bindings[0]);
     }
 
@@ -400,13 +412,17 @@ internal static class NyxIdAssistantOperationReadBackRegistry
     private static AgentToolOperationAdmission Map(
         NyxIdMcpService service,
         NyxIdMcpEndpoint endpoint,
-        string catalogDigest)
+        string catalogDigest,
+        string catalogServiceSlug)
     {
         var proof = NyxIdOperationAdmissionProofBuilder.Build(
             service.UserServiceId,
             service.ServiceSlug,
             endpoint,
             endpoint.ContractDigest).NyxIdUserService;
-        return NyxIdConnectedServiceOperationAdmissionMapper.Map(proof, catalogDigest);
+        return NyxIdConnectedServiceOperationAdmissionMapper.Map(
+            proof,
+            catalogDigest,
+            catalogServiceSlug);
     }
 }

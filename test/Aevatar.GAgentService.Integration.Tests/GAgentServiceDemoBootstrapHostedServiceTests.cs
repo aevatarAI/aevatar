@@ -3,7 +3,10 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Core.Assemblers;
+using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Hosting.Demo;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -42,12 +45,11 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
         commandPort.PublishRevisionCommands.Select(x => x.RevisionId)
             .Should()
             .OnlyContain(x => x == "builtin-v1");
-        commandPort.SetDefaultServingRevisionCommands.Select(x => x.RevisionId)
-            .Should()
-            .OnlyContain(x => x == "builtin-v1");
         commandPort.ActivateServiceRevisionCommands.Select(x => x.RevisionId)
             .Should()
             .OnlyContain(x => x == "builtin-v1");
+        commandPort.ActivateServiceRevisionCommands.Should().OnlyContain(x =>
+            !string.IsNullOrWhiteSpace(x.ExpectedArtifactHash));
         commandPort.ReplaceServingTargetsCommands.Should().HaveCount(3);
         commandPort.ReplaceServingTargetsCommands.Should().OnlyContain(x =>
             x.Targets.Count == 1 &&
@@ -77,7 +79,6 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
         commandPort.CreateRevisionCommands.Should().BeEmpty();
         commandPort.PrepareRevisionCommands.Should().BeEmpty();
         commandPort.PublishRevisionCommands.Should().BeEmpty();
-        commandPort.SetDefaultServingRevisionCommands.Should().BeEmpty();
         commandPort.ActivateServiceRevisionCommands.Should().BeEmpty();
         commandPort.ReplaceServingTargetsCommands.Should().BeEmpty();
     }
@@ -97,6 +98,8 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
         services.AddSingleton<IServiceCommandPort>(commandPort);
         services.AddSingleton<IServiceLifecycleQueryPort>(queryPort);
         services.AddSingleton<IServiceServingQueryPort>(queryPort);
+        services.AddSingleton<IServiceImplementationAdapter, DemoWorkflowImplementationAdapter>();
+        services.AddSingleton<PreparedServiceRevisionArtifactAssembler>();
         services.AddSingleton<IOptions<GAgentServiceDemoOptions>>(Options.Create(options));
         services.AddSingleton<IHostEnvironment>(new RecordingHostEnvironment
         {
@@ -121,8 +124,6 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
         public List<PublishServiceRevisionCommand> PublishRevisionCommands { get; } = [];
 
         public List<RetireServiceRevisionCommand> RetireRevisionCommands { get; } = [];
-
-        public List<SetDefaultServingRevisionCommand> SetDefaultServingRevisionCommands { get; } = [];
 
         public List<ActivateServiceRevisionCommand> ActivateServiceRevisionCommands { get; } = [];
 
@@ -176,12 +177,6 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
             return Task.FromResult(CreateReceipt(command.Identity));
         }
 
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)
-        {
-            SetDefaultServingRevisionCommands.Add(command.Clone());
-            return Task.FromResult(CreateReceipt(command.Identity));
-        }
-
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default)
         {
             ActivateServiceRevisionCommands.Add(command.Clone());
@@ -232,6 +227,53 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
 
         private static ServiceCommandAcceptedReceipt CreateReceipt(ServiceIdentity identity) =>
             new(ServiceKeys.Build(identity), Guid.NewGuid().ToString("N"), ServiceKeys.Build(identity));
+    }
+
+    private sealed class DemoWorkflowImplementationAdapter : IServiceImplementationAdapter
+    {
+        public ServiceImplementationKind ImplementationKind => ServiceImplementationKind.Workflow;
+
+        public Task<PreparedServiceRevisionArtifact> PrepareRevisionAsync(
+            PrepareServiceRevisionRequest request,
+            CancellationToken ct = default)
+        {
+            var spec = request.Spec?.WorkflowSpec
+                ?? throw new InvalidOperationException("workflow spec is required");
+            var executionMode = spec.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified
+                ? ExternalCapabilityExecutionMode.Interactive
+                : spec.ExpectedExecutionMode;
+            var plan = spec.CapabilityAdmissionPlan?.Clone() ?? new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = executionMode,
+            };
+            var artifact = new PreparedServiceRevisionArtifact
+            {
+                Identity = request.Spec.Identity?.Clone(),
+                RevisionId = request.Spec.RevisionId,
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        ToolCatalogPolicyVersion = spec.ToolCatalogPolicyVersion,
+                        WorkflowName = spec.WorkflowName,
+                        WorkflowYaml = spec.WorkflowYaml,
+                        WorkflowId = string.IsNullOrWhiteSpace(spec.WorkflowId)
+                            ? request.Spec.RevisionId
+                            : spec.WorkflowId,
+                        RevisionId = request.Spec.RevisionId,
+                        ExecutionMode = executionMode,
+                        CapabilityAdmissionPlan = plan,
+                    },
+                },
+            };
+            artifact.Endpoints.Add(new ServiceEndpointDescriptor
+            {
+                EndpointId = "chat",
+                Kind = ServiceEndpointKind.Chat,
+            });
+            return Task.FromResult(artifact);
+        }
     }
 
     private sealed class RecordingServiceQueryPort : IServiceLifecycleQueryPort, IServiceServingQueryPort

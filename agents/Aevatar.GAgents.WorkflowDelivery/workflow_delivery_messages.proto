@@ -1,0 +1,537 @@
+syntax = "proto3";
+package aevatar.gagents.workflow_delivery;
+option csharp_namespace = "Aevatar.GAgents.WorkflowDelivery";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+import "scheduled_invocation_authorization_evidence.proto";
+import "workflow_capability_admission.proto";
+
+enum WorkflowDeliveryLifecycleStatus {
+  WORKFLOW_DELIVERY_LIFECYCLE_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_DELIVERY_LIFECYCLE_STATUS_ACTIVE = 1;
+  WORKFLOW_DELIVERY_LIFECYCLE_STATUS_REVOKED = 2;
+}
+
+enum WorkflowDeliveryVariableKind {
+  WORKFLOW_DELIVERY_VARIABLE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_DELIVERY_VARIABLE_KIND_STRING = 1;
+  WORKFLOW_DELIVERY_VARIABLE_KIND_INTEGER = 2;
+  WORKFLOW_DELIVERY_VARIABLE_KIND_NUMBER = 3;
+  WORKFLOW_DELIVERY_VARIABLE_KIND_BOOLEAN = 4;
+}
+
+enum WorkflowDeliveryTriggerKind {
+  WORKFLOW_DELIVERY_TRIGGER_KIND_UNSPECIFIED = 0;
+  WORKFLOW_DELIVERY_TRIGGER_KIND_NONE = 1;
+  WORKFLOW_DELIVERY_TRIGGER_KIND_ONE_SHOT = 2;
+  WORKFLOW_DELIVERY_TRIGGER_KIND_CRON = 3;
+}
+
+enum WorkflowInstallationStatus {
+  WORKFLOW_INSTALLATION_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_INSTALLATION_STATUS_ACCEPTED = 1;
+  WORKFLOW_INSTALLATION_STATUS_PROVISIONING_ACCEPTED = 2;
+  WORKFLOW_INSTALLATION_STATUS_FAILED = 3;
+  WORKFLOW_INSTALLATION_STATUS_READY = 4;
+}
+
+enum WorkflowInstallationWithdrawalReason {
+  WORKFLOW_INSTALLATION_WITHDRAWAL_REASON_UNSPECIFIED = 0;
+  WORKFLOW_INSTALLATION_WITHDRAWAL_REASON_DELIVERY_REVOKED = 1;
+  WORKFLOW_INSTALLATION_WITHDRAWAL_REASON_DELIVERY_EXPIRED = 2;
+}
+
+enum WorkflowScheduleReadinessStatus {
+  WORKFLOW_SCHEDULE_READINESS_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_SCHEDULE_READINESS_STATUS_READY = 1;
+}
+
+enum WorkflowAcceptanceRunStatus {
+  WORKFLOW_ACCEPTANCE_RUN_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_ACCEPTANCE_RUN_STATUS_TERMINAL_SUCCESS = 1;
+  WORKFLOW_ACCEPTANCE_RUN_STATUS_TERMINAL_FAILURE = 2;
+}
+
+enum WorkflowInstallationArtifactKind {
+  WORKFLOW_INSTALLATION_ARTIFACT_KIND_UNSPECIFIED = 0;
+  WORKFLOW_INSTALLATION_ARTIFACT_KIND_RUN_OUTPUT = 1;
+  WORKFLOW_INSTALLATION_ARTIFACT_KIND_SIDE_EFFECT_RECEIPT = 2;
+  WORKFLOW_INSTALLATION_ARTIFACT_KIND_APPROVAL_RESULT = 3;
+  WORKFLOW_INSTALLATION_ARTIFACT_KIND_EXTERNAL_RESOURCE = 4;
+}
+
+enum WorkflowInstallationArtifactVerificationStatus {
+  WORKFLOW_INSTALLATION_ARTIFACT_VERIFICATION_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_INSTALLATION_ARTIFACT_VERIFICATION_STATUS_VERIFIED = 1;
+  WORKFLOW_INSTALLATION_ARTIFACT_VERIFICATION_STATUS_REJECTED = 2;
+}
+
+enum WorkflowDeliveryConnectionStatus {
+  WORKFLOW_DELIVERY_CONNECTION_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_DELIVERY_CONNECTION_STATUS_PENDING = 1;
+  WORKFLOW_DELIVERY_CONNECTION_STATUS_COMPLETED = 2;
+  WORKFLOW_DELIVERY_CONNECTION_STATUS_FAILED = 3;
+  WORKFLOW_DELIVERY_CONNECTION_STATUS_EXPIRED = 4;
+}
+
+enum WorkflowDeliveryAcceptanceMode {
+  WORKFLOW_DELIVERY_ACCEPTANCE_MODE_UNSPECIFIED = 0;
+  WORKFLOW_DELIVERY_ACCEPTANCE_MODE_AUTOMATIC_PREVIEW = 1;
+  WORKFLOW_DELIVERY_ACCEPTANCE_MODE_MANUAL = 2;
+}
+
+message WorkflowDeliveryVariableDefinition {
+  string key = 1;
+  string label = 2;
+  string description = 3;
+  WorkflowDeliveryVariableKind kind = 4;
+  bool required = 5;
+  string yaml_pointer = 6;
+  string json_pointer = 7;
+  string default_value = 8;
+}
+
+message WorkflowDeliveryConnectionSlotDefinition {
+  string key = 1;
+  string label = 2;
+  string service_slug = 3;
+  bool required = 4;
+}
+
+enum WorkflowDeliveryAcceptanceDateProjection {
+  WORKFLOW_DELIVERY_ACCEPTANCE_DATE_PROJECTION_UNSPECIFIED = 0;
+  WORKFLOW_DELIVERY_ACCEPTANCE_DATE_PROJECTION_UTC_DATE = 1;
+  WORKFLOW_DELIVERY_ACCEPTANCE_DATE_PROJECTION_UTC_YEAR_MONTH = 2;
+  WORKFLOW_DELIVERY_ACCEPTANCE_DATE_PROJECTION_UTC_ISO_WEEK = 3;
+  WORKFLOW_DELIVERY_ACCEPTANCE_DATE_PROJECTION_UTC_COMPACT_DATE = 4;
+}
+
+message WorkflowDeliveryInstallationCreatedAtUtcInput {
+  WorkflowDeliveryAcceptanceDateProjection date_projection = 1;
+  sint32 day_offset = 2;
+}
+
+message WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput {}
+
+message WorkflowDeliveryAcceptanceInputBinding {
+  string key = 1;
+  string prefix = 2;
+  string suffix = 3;
+  oneof source {
+    WorkflowDeliveryInstallationCreatedAtUtcInput installation_created_at_utc = 4;
+    WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput authenticated_owner_external_user_id = 5;
+  }
+}
+
+message WorkflowDeliveryAcceptanceInputRecipe {
+  google.protobuf.Struct literals = 1;
+  repeated WorkflowDeliveryAcceptanceInputBinding bindings = 2;
+}
+
+message WorkflowDeliveryAcceptancePolicy {
+  WorkflowDeliveryAcceptanceMode mode = 1;
+  string limitation = 2;
+  WorkflowDeliveryAcceptanceInputRecipe input = 3;
+}
+
+message WorkflowPackageVersionSnapshot {
+  string package_id = 1;
+  string package_version_id = 2;
+  string workflow_name = 3;
+  string version = 4;
+  string display_name = 5;
+  string description = 6;
+  string source_yaml = 7;
+  string source_hash = 8;
+  repeated WorkflowDeliveryVariableDefinition variable_schema = 9;
+  repeated WorkflowDeliveryConnectionSlotDefinition connection_slots = 10;
+  repeated string capabilities = 11;
+  string risk_summary = 12;
+  repeated string parser_diagnostics = 13;
+  string created_by = 14;
+  google.protobuf.Timestamp created_at_utc = 15;
+  string package_hash = 16;
+  WorkflowDeliveryAcceptancePolicy acceptance_policy = 17;
+}
+
+message WorkflowDeliveryTriggerIntent {
+  WorkflowDeliveryTriggerKind kind = 1;
+  string cron = 2;
+  string time_zone = 3;
+  bool run_immediately = 4;
+}
+
+message WorkflowDeliveryConfirmationReference {
+  string call_site_id = 1;
+  string request_contract_digest = 2;
+}
+
+message WorkflowDeliveryAuthorizationOwnerContext {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  string subject_platform = 2;
+  string subject_tenant = 3;
+  string subject_external_user_id = 4;
+  string verified_binding_id = 5;
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity authenticated_actor = 6;
+}
+
+message WorkflowDeliveryConnectionState {
+  string slot_key = 1;
+  string service_slug = 2;
+  string link_id = 3;
+  WorkflowDeliveryConnectionStatus status = 4;
+  string user_service_id = 5;
+  google.protobuf.Timestamp updated_at_utc = 6;
+}
+
+message WorkflowPublishedServiceReadinessEvidence {
+  string published_service_id = 1;
+  bool committed = 2;
+  bool runnable = 3;
+  int64 committed_state_version = 4;
+}
+
+message WorkflowBoundRevisionReadinessEvidence {
+  string revision_id = 1;
+  string binding_run_id = 2;
+  bool bound = 3;
+  int64 committed_state_version = 4;
+}
+
+message WorkflowNoTriggerReadinessEvidence {
+  bool ready = 1;
+}
+
+message WorkflowScheduleReadinessEvidence {
+  string schedule_id = 1;
+  string schedule_provisioning_id = 2;
+  WorkflowScheduleReadinessStatus status = 3;
+  int64 committed_state_version = 4;
+}
+
+message WorkflowTriggerReadinessEvidence {
+  WorkflowDeliveryTriggerIntent intent = 1;
+  oneof readiness {
+    WorkflowNoTriggerReadinessEvidence no_trigger = 2;
+    WorkflowScheduleReadinessEvidence schedule = 3;
+  }
+}
+
+message WorkflowAcceptanceRunReadinessEvidence {
+  string acceptance_run_id = 1;
+  WorkflowAcceptanceRunStatus status = 2;
+  int64 committed_state_version = 3;
+}
+
+message WorkflowInstallationArtifactEvidence {
+  WorkflowInstallationArtifactKind kind = 1;
+  string artifact_id = 2;
+  WorkflowInstallationArtifactVerificationStatus verification_status = 3;
+  string verification_reference = 4;
+  string content_digest = 5;
+}
+
+message WorkflowInstallationReadinessEvidence {
+  WorkflowPublishedServiceReadinessEvidence published_service = 1;
+  WorkflowBoundRevisionReadinessEvidence bound_revision = 2;
+  WorkflowTriggerReadinessEvidence trigger = 3;
+  WorkflowAcceptanceRunReadinessEvidence acceptance_run = 4;
+  repeated WorkflowInstallationArtifactEvidence artifacts = 5;
+}
+
+message WorkflowInstallationContinuationClaim {
+  string claim_id = 1;
+  string claimant_id = 2;
+  WorkflowInstallationStatus expected_status = 3;
+  int32 attempt = 4;
+  string operation_id = 5;
+  google.protobuf.Timestamp claimed_at_utc = 6;
+  google.protobuf.Timestamp expires_at_utc = 7;
+}
+
+message WorkflowInstallationState {
+  string installation_id = 1;
+  string idempotency_key = 2;
+  string scope_id = 3;
+  string team_id = 4;
+  map<string, string> configuration_values = 5;
+  map<string, string> connection_references = 6;
+  WorkflowDeliveryTriggerIntent trigger_intent = 7;
+  string source_hash = 8;
+  string resolved_hash = 9;
+  string resolved_yaml = 10;
+  repeated WorkflowDeliveryConfirmationReference confirmations = 11;
+  WorkflowInstallationStatus status = 12;
+  string stage = 13;
+  string error_code = 14;
+  string error_message = 15;
+  string workflow_id = 16;
+  string member_id = 17;
+  string published_service_id = 18;
+  string revision_id = 19;
+  string binding_run_id = 20;
+  string schedule_id = 21;
+  string schedule_provisioning_id = 22;
+  string schedule_provisioning_status = 23;
+  WorkflowInstallationReadinessEvidence readiness_evidence = 24;
+  reserved 25;
+  int32 attempt = 26;
+  google.protobuf.Timestamp created_at_utc = 27;
+  google.protobuf.Timestamp updated_at_utc = 28;
+  string operation_id = 29;
+  aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 30;
+  WorkflowDeliveryAuthorizationOwnerContext authenticated_owner = 31;
+  WorkflowInstallationStatus failure_origin_status = 32;
+  WorkflowInstallationContinuationClaim continuation_claim = 33;
+  google.protobuf.Struct acceptance_input = 34;
+}
+
+message WorkflowDeliveryState {
+  string delivery_id = 1;
+  WorkflowPackageVersionSnapshot package = 2;
+  string target_scope_id = 3;
+  google.protobuf.Timestamp expires_at_utc = 4;
+  string note = 5;
+  WorkflowDeliveryLifecycleStatus lifecycle_status = 6;
+  string created_by = 7;
+  google.protobuf.Timestamp created_at_utc = 8;
+  google.protobuf.Timestamp accessed_at_utc = 9;
+  string revoked_by = 10;
+  google.protobuf.Timestamp revoked_at_utc = 11;
+  repeated WorkflowDeliveryConnectionState connections = 12;
+  WorkflowInstallationState installation = 13;
+  bool expires_at_defaulted = 14;
+}
+
+message CreateWorkflowDeliveryCommand {
+  string delivery_id = 1;
+  WorkflowPackageVersionSnapshot package = 2;
+  string target_scope_id = 3;
+  google.protobuf.Timestamp expires_at_utc = 4;
+  string note = 5;
+  string created_by = 6;
+  google.protobuf.Timestamp created_at_utc = 7;
+  bool expires_at_defaulted = 8;
+}
+
+message WorkflowDeliveryCreatedEvent {
+  string delivery_id = 1;
+  WorkflowPackageVersionSnapshot package = 2;
+  string target_scope_id = 3;
+  google.protobuf.Timestamp expires_at_utc = 4;
+  string note = 5;
+  string created_by = 6;
+  google.protobuf.Timestamp created_at_utc = 7;
+  bool expires_at_defaulted = 8;
+}
+
+message RecordWorkflowDeliveryAccessCommand {
+  string delivery_id = 1;
+  string target_scope_id = 2;
+  google.protobuf.Timestamp accessed_at_utc = 3;
+}
+
+message WorkflowDeliveryAccessRecordedEvent {
+  google.protobuf.Timestamp accessed_at_utc = 1;
+}
+
+message RevokeWorkflowDeliveryCommand {
+  string delivery_id = 1;
+  string revoked_by = 2;
+  google.protobuf.Timestamp revoked_at_utc = 3;
+}
+
+message WorkflowDeliveryRevokedEvent {
+  string revoked_by = 1;
+  google.protobuf.Timestamp revoked_at_utc = 2;
+}
+
+message BeginWorkflowDeliveryConnectionCommand {
+  string delivery_id = 1;
+  string target_scope_id = 2;
+  string slot_key = 3;
+  string service_slug = 4;
+  string link_id = 5;
+  google.protobuf.Timestamp requested_at_utc = 6;
+}
+
+message WorkflowDeliveryConnectionBegunEvent {
+  string slot_key = 1;
+  string service_slug = 2;
+  string link_id = 3;
+  google.protobuf.Timestamp requested_at_utc = 4;
+}
+
+message UpdateWorkflowDeliveryConnectionCommand {
+  string delivery_id = 1;
+  string target_scope_id = 2;
+  string slot_key = 3;
+  string link_id = 4;
+  WorkflowDeliveryConnectionStatus status = 5;
+  string user_service_id = 6;
+  google.protobuf.Timestamp updated_at_utc = 7;
+}
+
+message WorkflowDeliveryConnectionUpdatedEvent {
+  string slot_key = 1;
+  string link_id = 2;
+  WorkflowDeliveryConnectionStatus status = 3;
+  string user_service_id = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+}
+
+message AttachWorkflowDeliveryConnectionCommand {
+  string delivery_id = 1;
+  string target_scope_id = 2;
+  string slot_key = 3;
+  string service_slug = 4;
+  string user_service_id = 5;
+  google.protobuf.Timestamp attached_at_utc = 6;
+  int64 expected_state_version = 7;
+}
+
+message WorkflowDeliveryConnectionAttachedEvent {
+  string slot_key = 1;
+  string service_slug = 2;
+  string user_service_id = 3;
+  google.protobuf.Timestamp attached_at_utc = 4;
+}
+
+message StartWorkflowInstallationCommand {
+  string delivery_id = 1;
+  string installation_id = 2;
+  string idempotency_key = 3;
+  string scope_id = 4;
+  string team_id = 5;
+  map<string, string> configuration_values = 6;
+  map<string, string> connection_references = 7;
+  WorkflowDeliveryTriggerIntent trigger_intent = 8;
+  string source_hash = 9;
+  string resolved_hash = 10;
+  string resolved_yaml = 11;
+  repeated WorkflowDeliveryConfirmationReference confirmations = 12;
+  google.protobuf.Timestamp requested_at_utc = 13;
+  string operation_id = 14;
+  aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 15;
+  WorkflowDeliveryAuthorizationOwnerContext authenticated_owner = 16;
+}
+
+message WorkflowInstallationStartedEvent {
+  WorkflowInstallationState installation = 1;
+}
+
+message RetryWorkflowInstallationCommand {
+  string delivery_id = 1;
+  string installation_id = 2;
+  string idempotency_key = 3;
+  google.protobuf.Timestamp requested_at_utc = 4;
+  string operation_id = 5;
+}
+
+message WorkflowInstallationRetryRequestedEvent {
+  google.protobuf.Timestamp requested_at_utc = 1;
+  string operation_id = 2;
+}
+
+message ClaimWorkflowInstallationContinuationCommand {
+  string delivery_id = 1;
+  string installation_id = 2;
+  WorkflowInstallationStatus expected_status = 3;
+  int32 attempt = 4;
+  string operation_id = 5;
+  string claim_id = 6;
+  string claimant_id = 7;
+  google.protobuf.Duration requested_duration = 8;
+}
+
+message WorkflowInstallationContinuationClaimedEvent {
+  WorkflowInstallationContinuationClaim claim = 1;
+}
+
+message WorkflowInstallationWithdrawnEvent {
+  WorkflowInstallationWithdrawalReason reason = 1;
+  google.protobuf.Timestamp withdrawn_at_utc = 2;
+  int32 attempt = 3;
+  string operation_id = 4;
+  WorkflowInstallationStatus failed_from_status = 5;
+}
+
+message RecordWorkflowProvisioningAcceptedCommand {
+  string delivery_id = 1;
+  string installation_id = 2;
+  string member_id = 3;
+  string workflow_id = 4;
+  string published_service_id = 5;
+  string revision_id = 6;
+  string binding_run_id = 7;
+  string schedule_id = 8;
+  string schedule_provisioning_id = 9;
+  string schedule_provisioning_status = 10;
+  google.protobuf.Timestamp accepted_at_utc = 11;
+  int32 attempt = 12;
+  string operation_id = 13;
+  string continuation_claim_id = 14;
+  string continuation_claimant_id = 15;
+}
+
+message WorkflowProvisioningAcceptedEvent {
+  string member_id = 1;
+  string workflow_id = 2;
+  string published_service_id = 3;
+  string revision_id = 4;
+  string binding_run_id = 5;
+  string schedule_id = 6;
+  string schedule_provisioning_id = 7;
+  string schedule_provisioning_status = 8;
+  google.protobuf.Timestamp accepted_at_utc = 9;
+  int32 attempt = 10;
+  string operation_id = 11;
+  string continuation_claim_id = 12;
+  string continuation_claimant_id = 13;
+}
+
+message RecordWorkflowInstallationReadyCommand {
+  string delivery_id = 1;
+  string installation_id = 2;
+  WorkflowInstallationReadinessEvidence evidence = 3;
+  google.protobuf.Timestamp ready_at_utc = 4;
+  int32 attempt = 5;
+  string operation_id = 6;
+  string continuation_claim_id = 7;
+  string continuation_claimant_id = 8;
+}
+
+message WorkflowInstallationReadyEvent {
+  WorkflowInstallationReadinessEvidence evidence = 1;
+  google.protobuf.Timestamp ready_at_utc = 2;
+  int32 attempt = 3;
+  string operation_id = 4;
+  string continuation_claim_id = 5;
+  string continuation_claimant_id = 6;
+}
+
+message RecordWorkflowInstallationFailedCommand {
+  string delivery_id = 1;
+  string installation_id = 2;
+  string error_code = 3;
+  string error_message = 4;
+  google.protobuf.Timestamp failed_at_utc = 5;
+  int32 attempt = 6;
+  string operation_id = 7;
+  WorkflowInstallationStatus expected_status = 8;
+  string continuation_claim_id = 9;
+  string continuation_claimant_id = 10;
+}
+
+message WorkflowInstallationFailedEvent {
+  string error_code = 1;
+  string error_message = 2;
+  google.protobuf.Timestamp failed_at_utc = 3;
+  int32 attempt = 4;
+  string operation_id = 5;
+  WorkflowInstallationStatus failed_from_status = 6;
+  string continuation_claim_id = 7;
+  string continuation_claimant_id = 8;
+}

@@ -88,6 +88,35 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                         progressed.Progress.ToolStarted.ToolName),
                 },
             },
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.ModelStarted => new AGUIEvent
+            {
+                ModelCallStart = new ModelCallStartEvent
+                {
+                    OperationId = progressed.Progress.ModelStarted.OperationId,
+                    SessionId = turnId,
+                    Round = progressed.Progress.ModelStarted.Round,
+                    Model = progressed.Progress.ModelStarted.Model,
+                    Provider = progressed.Progress.ModelStarted.Provider,
+                    InputSummary = progressed.Progress.ModelStarted.InputSummary,
+                    AvailableToolNames = { progressed.Progress.ModelStarted.AvailableToolNames },
+                },
+            },
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.ModelCompleted => new AGUIEvent
+            {
+                ModelCallEnd = new ModelCallEndEvent
+                {
+                    OperationId = progressed.Progress.ModelCompleted.OperationId,
+                    SessionId = turnId,
+                    Round = progressed.Progress.ModelCompleted.Round,
+                    Model = progressed.Progress.ModelCompleted.Model,
+                    Content = progressed.Progress.ModelCompleted.Content,
+                    ReasoningContent = progressed.Progress.ModelCompleted.ReasoningContent,
+                    Usage = BuildModelUsage(progressed.Progress.ModelCompleted),
+                    FinishReason = progressed.Progress.ModelCompleted.FinishReason,
+                    Success = progressed.Progress.ModelCompleted.Success,
+                    Error = progressed.Progress.ModelCompleted.Error,
+                },
+            },
             NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase => null,
             NyxIdChatOperationProgressSignal.ProgressOneofCase.StreamingBatch => null,
             _ => null,
@@ -148,6 +177,18 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             },
             _ => throw new InvalidOperationException("Streaming progress contains an empty segment."),
         };
+
+    private static UsageEvent? BuildModelUsage(NyxIdChatModelCompletedProgress completed) =>
+        completed.Usage is null
+            ? null
+            : new UsageEvent
+            {
+                Available = true,
+                PromptTokens = completed.Usage.PromptTokens,
+                CompletionTokens = completed.Usage.CompletionTokens,
+                TotalTokens = completed.Usage.TotalTokens,
+                Model = string.IsNullOrWhiteSpace(completed.Model) ? null : completed.Model,
+            };
 
     public static IReadOnlyList<AGUIEvent> BuildProgressCadence(
         NyxIdChatOperationStepChangedCommittedEvent committed)
@@ -286,19 +327,6 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             return [];
 
         var frames = BuildTaskFrames(committed.Task, ResolveActiveOrLast(committed.Task), sequence);
-        if (committed.State is null ||
-            !NyxIdChatPlanGateDecisions.CanPublishAction(committed.State, committed.Request))
-        {
-            AppendTerminalIfNeeded(
-                frames,
-                actorId,
-                turnId,
-                committed.Task,
-                committed.OriginTurn,
-                sequence);
-            return frames;
-        }
-
         frames.Add(Custom(ActionRequestEventName, wirePayload, sequence));
         AppendTerminalIfNeeded(frames, actorId, turnId, committed.Task, committed.OriginTurn, sequence);
         return frames;
@@ -343,71 +371,6 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         return [Custom(ApprovalChangedEventName, committed.Resolution, sequence)];
     }
 
-    public static IReadOnlyList<AGUIEvent> BuildPlanResolutionChanged(
-        NyxIdChatPlanResolutionCommittedEvent committed)
-    {
-        ArgumentNullException.ThrowIfNull(committed);
-        var sequence = committed.State?.ProgressSequence ?? 0;
-        if (committed.Resolution is null ||
-            committed.State?.ActiveTask is not { } task ||
-            committed.State.ActiveTurn is not { } turn ||
-            sequence <= 0)
-        {
-            return [];
-        }
-
-        var frames = BuildTaskFrames(task, ResolveActiveOrLast(task), sequence);
-        if (committed.Resolution.Confirmed)
-        {
-            var actionAdmission = task.Gate?.Admissions.SingleOrDefault(candidate =>
-                !string.IsNullOrWhiteSpace(candidate.ActionRequestId));
-            var request = actionAdmission is null
-                ? null
-                : committed.State.PendingActions.SingleOrDefault(candidate =>
-                    string.Equals(
-                        candidate.ActionRequestId,
-                        actionAdmission.ActionRequestId,
-                        StringComparison.Ordinal));
-            if (request is not null &&
-                NyxIdChatPlanGateDecisions.CanPublishAction(committed.State, request) &&
-                MapActionRequestWirePayload(request) is { } wirePayload)
-            {
-                frames.Add(Custom(ActionRequestEventName, wirePayload, sequence));
-            }
-        }
-        AppendTerminalIfNeeded(
-            frames,
-            committed.State.ConversationActorId,
-            turn.TurnId,
-            task,
-            turn,
-            sequence);
-        return frames;
-    }
-
-    public static IReadOnlyList<AGUIEvent> BuildPlanGateCapabilityExpired(
-        NyxIdChatPlanGateCapabilityExpiredCommittedEvent committed)
-    {
-        ArgumentNullException.ThrowIfNull(committed);
-        var sequence = committed.State?.ProgressSequence ?? 0;
-        if (committed.State?.ActiveTask is not { } task ||
-            committed.State.ActiveTurn is not { } turn ||
-            sequence <= 0)
-        {
-            return [];
-        }
-
-        var frames = BuildTaskFrames(task, ResolveActiveOrLast(task), sequence);
-        AppendTerminalIfNeeded(
-            frames,
-            committed.State.ConversationActorId,
-            turn.TurnId,
-            task,
-            turn,
-            sequence);
-        return frames;
-    }
-
     private static NyxIdAssistantActionRequestWirePayload? MapActionRequestWirePayload(
         NyxIdChatActionRequestState request)
     {
@@ -433,6 +396,11 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 new NyxIdAssistantActionWireParams
                 {
                     ServiceReauthorize = request.Params.ServiceReauthorize.Clone(),
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.ServiceAccessReview =>
+                new NyxIdAssistantActionWireParams
+                {
+                    ServiceAccessReview = request.Params.ServiceAccessReview.Clone(),
                 },
             NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
                 new NyxIdAssistantActionWireParams
@@ -462,6 +430,10 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 when request.Params.ParamsCase ==
                     NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
                 "service.reauthorize",
+            NyxIdAssistantActionKind.ServiceAccessReview
+                when request.Params.ParamsCase ==
+                    NyxIdAssistantActionParams.ParamsOneofCase.ServiceAccessReview =>
+                "service.access_review",
             NyxIdAssistantActionKind.KeyCreate
                 when request.Params.ParamsCase ==
                     NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>

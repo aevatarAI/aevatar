@@ -196,6 +196,7 @@ public sealed class WorkflowParser
             Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(parameters),
             Capability = MapCapability(s.Capability),
             ResponseProjection = MapResponseProjection(s.ResponseProjection),
+            ValueLifecycle = MapValueLifecycle(s.ValueLifecycle),
             TransformOperation = MapTransformOperation(canonicalType, parameters),
             Presentation = presentation,
             AgentToolScope = agentToolScope,
@@ -211,6 +212,17 @@ public sealed class WorkflowParser
             OnError = MapOnError(s.OnError),
             TimeoutMs = s.TimeoutMs,
         };
+    }
+
+    private static WorkflowStepValueLifecycle? MapValueLifecycle(RawStepValueLifecycle? lifecycle)
+    {
+        if (lifecycle == null)
+            return null;
+
+        var mapped = new WorkflowStepValueLifecycle();
+        if (lifecycle.ReleaseVariablesAfterSuccess != null)
+            mapped.ReleaseVariablesAfterSuccess.Add(lifecycle.ReleaseVariablesAfterSuccess);
+        return mapped;
     }
 
     private static ExternalWorkflowCapabilitySelector? MapCapability(RawStepCapability? capability)
@@ -1594,6 +1606,8 @@ public sealed class WorkflowParser
         public RawStepCapability? Capability { get; set; }
         [YamlMember(Alias = "response_projection")]
         public RawToolResponseProjection? ResponseProjection { get; set; }
+        [YamlMember(Alias = "value_lifecycle")]
+        public RawStepValueLifecycle? ValueLifecycle { get; set; }
         public object? InteractionSpec { get; set; }
         public object? InteractionTemplateSpec { get; set; }
         public string? DeliveryTargetId { get; set; }
@@ -1607,6 +1621,12 @@ public sealed class WorkflowParser
         public string? IdempotencyKey { get; set; }
         public RawOnError? OnError { get; set; }
         public int? TimeoutMs { get; set; }
+    }
+
+    private sealed class RawStepValueLifecycle
+    {
+        [YamlMember(Alias = "release_variables_after_success")]
+        public List<string>? ReleaseVariablesAfterSuccess { get; set; }
     }
 
     private sealed class RawStepCapability

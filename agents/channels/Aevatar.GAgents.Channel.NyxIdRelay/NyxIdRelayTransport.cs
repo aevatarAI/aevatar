@@ -231,7 +231,7 @@ public sealed class NyxIdRelayTransport
         {
             foreach (var callbackAttachment in callbackAttachments)
             {
-                var attachment = BuildAttachment(callbackAttachment);
+                var attachment = BuildAttachment(callbackAttachment, platform);
                 if (attachment is not null)
                     AddAttachment(attachments, seenAttachmentKeys, attachment, platform);
             }
@@ -265,9 +265,12 @@ public sealed class NyxIdRelayTransport
         return $"{attachment.Kind}:{attachmentId}";
     }
 
-    private static AttachmentRef? BuildAttachment(NyxIdRelayAttachmentPayload attachment)
+    private static AttachmentRef? BuildAttachment(NyxIdRelayAttachmentPayload attachment, string platform)
     {
-        var locator = NormalizeOptional(attachment.Url);
+        var url = NormalizeOptional(attachment.Url);
+        var imageKey = IsLark(platform) ? NormalizeOptional(attachment.ImageKey) : null;
+        var fileKey = IsLark(platform) ? NormalizeOptional(attachment.FileKey) : null;
+        var locator = imageKey ?? fileKey ?? url;
         if (locator is null)
             return null;
 
@@ -275,7 +278,11 @@ public sealed class NyxIdRelayTransport
             ?? NormalizeOptional(attachment.ContentType)
             ?? NormalizeOptional(attachment.Type)
             ?? string.Empty;
-        var kind = MapAttachmentKind(attachment.ContentType ?? attachment.Type ?? attachment.MimeType);
+        var kind = imageKey is not null
+            ? AttachmentKind.Image
+            : fileKey is not null
+                ? AttachmentKind.File
+                : MapAttachmentKind(attachment.ContentType ?? attachment.Type ?? attachment.MimeType);
         var name = NormalizeOptional(attachment.Filename)
             ?? NormalizeOptional(attachment.FileName)
             ?? NormalizeOptional(attachment.Name)
@@ -287,7 +294,7 @@ public sealed class NyxIdRelayTransport
             Kind = kind,
             Name = name,
             ContentType = contentType,
-            ExternalUrl = IsHttpUrl(locator) ? locator : string.Empty,
+            ExternalUrl = url is not null && IsHttpUrl(url) ? url : string.Empty,
             SizeBytes = NormalizeSizeBytes(attachment.SizeBytes),
         };
     }
@@ -1087,9 +1094,25 @@ public sealed class NyxIdRelayTransport
 
         return platform switch
         {
-            "lark" or "feishu" => NormalizeOptional(larkFacts.PlatformMessageId) ?? string.Empty,
+            "lark" or "feishu" => ResolveAttachmentPlatformMessageId(payload)
+                                  ?? NormalizeOptional(larkFacts.PlatformMessageId)
+                                  ?? string.Empty,
             _ => string.Empty,
         };
+    }
+
+    private static string? ResolveAttachmentPlatformMessageId(NyxIdRelayCallbackPayload payload)
+    {
+        if (payload.Content?.Attachments is not { Count: > 0 } attachments)
+            return null;
+
+        foreach (var attachment in attachments)
+        {
+            if (NormalizeOptional(attachment.PlatformMessageId) is { } platformMessageId)
+                return platformMessageId;
+        }
+
+        return null;
     }
 
     private static RelayDeliveryTarget ResolveDeliveryTarget(

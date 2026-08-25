@@ -146,7 +146,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
     private static string DecorateViaReflection(
         RoleGAgent agent,
         string basePrompt,
-        AgentProfileTurnCatalog? turnCatalog)
+        AgentTurnToolCatalog? turnCatalog)
     {
         var decorate = agent.GetType().GetMethod(
             "DecorateSystemPrompt",
@@ -217,7 +217,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
                 },
             });
 
-        public string DecorateForTest(string basePrompt, AgentProfileTurnCatalog? turnCatalog) =>
+        public string DecorateForTest(string basePrompt, AgentTurnToolCatalog? turnCatalog) =>
             DecorateSystemPrompt(basePrompt, turnCatalog);
     }
 

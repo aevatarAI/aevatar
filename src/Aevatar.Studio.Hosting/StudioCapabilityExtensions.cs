@@ -45,6 +45,7 @@ public static class StudioCapabilityExtensions
                 StudioMemberEndpoints.Map(app);
                 StudioMemberAutomationEndpoints.Map(app);
                 StudioProvisioningEndpoints.Map(app);
+                WorkflowDeliveryEndpoints.Map(app);
                 StudioTeamEndpoints.Map(app);
                 ContentArtifactEndpoints.Map(app);
                 WorkOrderEndpoints.Map(app);

@@ -5,7 +5,9 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -13,11 +15,15 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
+
+internal sealed class AgentProfileRequiredToolUnavailableException()
+    : InvalidOperationException("The sealed Profile readiness tool is unavailable.");
 
 // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
 //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
@@ -29,6 +35,7 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
 {
     private const string InvalidGrantRevokeReason = "nyx_invalid_grant";
+    internal const string ToolCatalogPolicyVersion = "agent-turn-tool-catalog/v1";
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
@@ -38,6 +45,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private readonly INyxIdCapabilityBroker? _capabilityBroker;
     private readonly IBindingRevocationReconciler? _bindingRevocationReconciler;
     private readonly IFileArtifactReadPort? _fileArtifactReadPort;
+    private readonly IAgentProfileTurnSnapshotResolver? _profileSnapshotResolver;
+    private readonly IAgentProfileTurnToolCatalogPlanner? _profileCatalogPlanner;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunReplyGenerationExecutor> _logger;
 
@@ -52,7 +61,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         TimeProvider? timeProvider = null,
         INyxIdCapabilityBroker? capabilityBroker = null,
         IBindingRevocationReconciler? bindingRevocationReconciler = null,
-        IFileArtifactReadPort? fileArtifactReadPort = null)
+        IFileArtifactReadPort? fileArtifactReadPort = null,
+        IAgentProfileTurnSnapshotResolver? profileSnapshotResolver = null,
+        IAgentProfileTurnToolCatalogPlanner? profileCatalogPlanner = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -63,6 +74,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _capabilityBroker = capabilityBroker;
         _bindingRevocationReconciler = bindingRevocationReconciler;
         _fileArtifactReadPort = fileArtifactReadPort;
+        _profileSnapshotResolver = profileSnapshotResolver;
+        _profileCatalogPlanner = profileCatalogPlanner;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -87,6 +100,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 throw;
             }
 
+            var catalogPlan = await ResolveInitialTurnCatalogAsync(
+                    request,
+                    replyRequest,
+                    generationContext,
+                    metadataCts.Token)
+                .ConfigureAwait(false);
+            var turnCatalog = catalogPlan.Catalog;
+
             var generator = RequireStepGenerator();
             var plan = await generator.BuildStepPlanAsync(
                 replyRequest.Activity!,
@@ -97,7 +118,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 BuildAttachmentInputContext(replyRequest, generationContext.LlmControl),
                 forceDisableTools: false,
                 metadataCts.Token,
-                request.TurnCatalog)
+                turnCatalog)
                 .ConfigureAwait(false);
             var ownerFallbackControl = ResolveInitialOwnerFallbackControl(
                 generationContext.OwnerFallbackLlmControl,
@@ -126,7 +147,13 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ToolContext = plan.ToolContext.ToPayload(),
                 OwnerFallbackLlmControl = ownerFallbackControl.ToPayload(),
                 OwnerFallbackToolContext = ownerFallbackToolContext.ToPayload(),
+                ToolCatalogProof = turnCatalog.Proof.ToPayload(),
+                ToolCatalogPolicyVersion = ToolCatalogPolicyVersion,
             };
+            if (catalogPlan.ProfileSnapshot is not null)
+                state.AgentProfileSnapshot = catalogPlan.ProfileSnapshot.Clone();
+            if (catalogPlan.Authority is not null)
+                state.AgentProfileTurnAuthority = catalogPlan.Authority.Clone();
             foreach (var pair in plan.Metadata)
                 state.ExternalMetadata[pair.Key] = pair.Value;
             state.Messages.AddRange(plan.InitialMessages.Select(AgentRunReplyStepMappers.ToProto));
@@ -173,6 +200,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
         (stepControl, planToolContext) = await ReSupplyRuntimeCredentialsAsync(request, stepControl, planToolContext, ct)
             .ConfigureAwait(false);
+        var turnCatalog = await ResolvePersistedTurnCatalogAsync(workItem, planToolContext, ct)
+            .ConfigureAwait(false);
         var plan = await generator.BuildStepPlanAsync(
                 request.Activity!,
                 stepMetadata,
@@ -182,7 +211,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 attachmentContext: null,
                 forceDisableTools: workItem.StepState.FinalNoToolsStep,
                 ct: ct,
-                turnCatalog: workItem.TurnCatalog)
+                turnCatalog: turnCatalog)
             .ConfigureAwait(false);
         var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
         var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
@@ -210,7 +239,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ToolContext = llmRequest.ToolContext,
                 RoutingContext = llmRequest.RoutingContext,
                 LlmControl = llmRequest.LlmControl,
+                RouteTarget = llmRequest.RouteTarget?.Clone(),
                 Tools = null,
+                ToolCatalogProof = AgentTurnToolCatalogProof.RestrictedEmpty(
+                    llmRequest.ToolCatalogProof?.Budget),
                 Model = llmRequest.Model,
                 Temperature = llmRequest.Temperature,
                 MaxTokens = llmRequest.MaxTokens,
@@ -231,6 +263,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText || deferPotentialToolCallText
             ? []
             : null;
+        LLMStreamChunk? deferredModelCompletion = null;
 
         async Task DeliverLlmChunkAsync(LLMStreamChunk chunk, CancellationToken token)
         {
@@ -245,7 +278,24 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 await workItem.ReportChunkAsync(chunk, token).ConfigureAwait(false);
         }
 
-        var recoveryToolCall = workItem.StepState.FinalNoToolsStep
+        ChatRuntimeStepRecoveryToolCall? requiredToolCall = null;
+        if (!workItem.StepState.FinalNoToolsStep &&
+            workItem.StepState.Round == 0 &&
+            turnCatalog.HasUnresolvedConnectedServiceSelectors)
+        {
+            if (turnCatalog.RequiredToolInvocation is null)
+                throw new AgentProfileRequiredToolUnavailableException();
+
+            requiredToolCall = await plan.StepExecutor.TryAuthorizeRequiredToolCallAsync(
+                    llmRequest,
+                    turnCatalog.RequiredToolInvocation,
+                    ct)
+                .ConfigureAwait(false);
+            if (requiredToolCall is null)
+                throw new AgentProfileRequiredToolUnavailableException();
+        }
+
+        var recoveryToolCall = requiredToolCall is not null || workItem.StepState.FinalNoToolsStep
             ? null
             : await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
                     llmRequest,
@@ -254,7 +304,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     ct)
                 .ConfigureAwait(false);
         ChatRuntimeStepLlmResult llmResult;
-        if (recoveryToolCall is not null)
+        var modelInvocationStarted = false;
+        if (requiredToolCall is not null)
+        {
+            llmResult = BuildSkillRecoveryLlmResult(requiredToolCall);
+        }
+        else if (recoveryToolCall is not null)
         {
             llmResult = BuildSkillRecoveryLlmResult(recoveryToolCall);
         }
@@ -267,6 +322,29 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                         llmRequest,
                         async (chunk, token) =>
                         {
+                            if (chunk.LLMInvocationStarted is not null)
+                                modelInvocationStarted = true;
+
+                            // The start is committed even while potential tool-call prose stays
+                            // hidden. A successful end waits for the round shape so a normal reply
+                            // remains ordered START -> visible deltas -> END.
+                            if (chunk.LLMInvocationStarted is not null)
+                            {
+                                await DeliverLlmChunkAsync(chunk, token).ConfigureAwait(false);
+                                return;
+                            }
+                            if (chunk.LLMInvocationCompleted is { Success: true } &&
+                                deferredLlmChunks is not null)
+                            {
+                                deferredModelCompletion = chunk;
+                                return;
+                            }
+                            if (chunk.LLMInvocationCompleted is not null)
+                            {
+                                await DeliverLlmChunkAsync(chunk, token).ConfigureAwait(false);
+                                return;
+                            }
+
                             if (deferredLlmChunks is not null)
                             {
                                 deferredLlmChunks.Add(chunk);
@@ -329,6 +407,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             foreach (var chunk in deferredLlmChunks)
                 await DeliverLlmChunkAsync(chunk, ct).ConfigureAwait(false);
         }
+        if (deferredModelCompletion is not null)
+            await DeliverLlmChunkAsync(deferredModelCompletion, ct).ConfigureAwait(false);
         if (streamingState is not null && !approvalRequired && !hasToolCalls)
             await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
 
@@ -347,6 +427,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             result.Usage = usage;
         if (effectiveToolCalls is { Count: > 0 })
             result.ToolCalls.AddRange(effectiveToolCalls.Select(AgentRunReplyStepMappers.ToProto));
+        if (modelInvocationStarted)
+        {
+            result.ToolCatalogCaptured = true;
+            result.AvailableToolNames.AddRange(llmResult.AuthorizedTools
+                .Select(static tool => tool.Name?.Trim() ?? string.Empty)
+                .Where(static name => name.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(static name => name, StringComparer.Ordinal));
+        }
 
         if (TryTakeOutboundIntent(generator) is { } outboundIntent)
             result.OutboundIntent = outboundIntent.Clone();
@@ -582,7 +671,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             ToolContext = request.ToolContext,
             RoutingContext = request.RoutingContext,
             LlmControl = request.LlmControl,
+            RouteTarget = request.RouteTarget?.Clone(),
             Tools = request.Tools,
+            ToolCatalogProof = request.ToolCatalogProof,
             Model = request.Model,
             Temperature = request.Temperature,
             MaxTokens = request.MaxTokens,
@@ -754,6 +845,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         (stepControl, planToolContext) = await ReSupplyRuntimeCredentialsAsync(request, stepControl, planToolContext, ct)
             .ConfigureAwait(false);
+        var turnCatalog = await ResolvePersistedTurnCatalogAsync(workItem, planToolContext, ct)
+            .ConfigureAwait(false);
         var plan = await generator.BuildStepPlanAsync(
                 request.Activity,
                 stepMetadata,
@@ -763,7 +856,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 attachmentContext: null,
                 forceDisableTools: false,
                 ct: ct,
-                turnCatalog: workItem.TurnCatalog)
+                turnCatalog: turnCatalog)
             .ConfigureAwait(false);
         var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
         var toolRequestId = pendingApproval?.ToolRequestId ?? request.Activity.Id;
@@ -1129,6 +1222,268 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return new StreamingReplyRunState(sink, throttle, maxInterimChunks, _timeProvider);
     }
 
+    private sealed record AgentRunTurnCatalogPlan(
+        AgentTurnToolCatalog Catalog,
+        AgentProfileSnapshot? ProfileSnapshot = null,
+        AgentProfileTurnAuthorityState? Authority = null);
+
+    private async Task<AgentRunTurnCatalogPlan> ResolveInitialTurnCatalogAsync(
+        AgentRunReplyGenerationExecutionRequest request,
+        NeedsLlmReplyEvent replyRequest,
+        ReplyGenerationContext generationContext,
+        CancellationToken ct)
+    {
+        if (request.TurnCatalog is not null)
+            return new AgentRunTurnCatalogPlan(request.TurnCatalog);
+
+        var forward = replyRequest.TargetRef?.ForwardToModel;
+        if (forward is null || forward.ProfileKind == ChatRouteAgentProfileKind.Unspecified)
+            return new AgentRunTurnCatalogPlan(AgentTurnToolCatalogFactory.RestrictedEmpty());
+
+        if (_profileCatalogPlanner is null)
+        {
+            throw CatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogNeedsDisambiguation,
+                "The agent profile catalog planner is unavailable for this channel turn.");
+        }
+
+        AgentProfileSnapshot profile;
+        if (replyRequest.AgentProfile is not null)
+        {
+            if (!AgentProfileSnapshotCodec.Verify(replyRequest.AgentProfile))
+            {
+                throw CatalogFailure(
+                    AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+                    "The conversation-pinned channel agent profile snapshot digest is invalid.");
+            }
+
+            profile = replyRequest.AgentProfile.Clone();
+        }
+        else
+        {
+            if (_profileSnapshotResolver is null)
+            {
+                throw CatalogFailure(
+                    AgentTurnToolCatalogFailureCode.CatalogNeedsDisambiguation,
+                    "The agent profile read model is unavailable for this channel turn.");
+            }
+
+            var scopeId = NormalizeOptional(generationContext.ToolContext.Caller.ScopeId);
+            if (scopeId is null)
+            {
+                throw new AgentProfileTurnSnapshotResolutionException(
+                    AgentProfileTurnSnapshotResolutionStatus.ExplicitReferenceInvalid,
+                    "The channel turn has no typed caller scope for agent profile resolution.");
+            }
+
+            var resolution = await _profileSnapshotResolver.ResolveAsync(
+                    scopeId,
+                    request.RunId,
+                    forward.ProfileKind,
+                    forward.ProfileRef,
+                    ct)
+                .ConfigureAwait(false);
+            if (resolution.Status == AgentProfileTurnSnapshotResolutionStatus.Unprofiled)
+                return new AgentRunTurnCatalogPlan(AgentTurnToolCatalogFactory.RestrictedEmpty());
+            if (!resolution.IsSelected || resolution.Profile is null)
+            {
+                throw new AgentProfileTurnSnapshotResolutionException(
+                    resolution.Status,
+                    "The reviewed agent profile could not be resolved for this channel turn.");
+            }
+
+            profile = resolution.Profile.Clone();
+        }
+
+        var expectedAgentKind = forward.ProfileKind switch
+        {
+            ChatRouteAgentProfileKind.WorkspaceChat => AgentProfilePolicies.WorkspaceChatAgentKind,
+            ChatRouteAgentProfileKind.ChannelReply => AgentProfilePolicies.ChannelReplyAgentKind,
+            ChatRouteAgentProfileKind.NyxidChat => AgentProfilePolicies.NyxIdChatAgentKind,
+            _ => null,
+        };
+        if (expectedAgentKind is null ||
+            !string.Equals(profile.AgentKind, expectedAgentKind, StringComparison.Ordinal))
+        {
+            throw CatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+                "The channel route agent kind does not match the pinned agent profile.");
+        }
+
+        var routeToolSetName = NormalizeOptional(forward.ToolSetRef?.Name);
+        if (routeToolSetName is not null &&
+            !string.Equals(routeToolSetName, profile.RouteToolSetRef, StringComparison.Ordinal))
+        {
+            throw CatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+                "The channel route tool-set ceiling does not match the pinned agent profile.");
+        }
+
+        var preparation = await _profileCatalogPlanner.PrepareAsync(
+                profile,
+                request.RunId,
+                replyRequest.Activity?.Content?.Text ?? string.Empty,
+                [],
+                generationContext.ToolContext,
+                ct)
+            .ConfigureAwait(false);
+        if (profile.ActivationMode == AgentProfileActivationMode.Shadow)
+        {
+            _logger.LogInformation(
+                "Channel AgentRun shadow catalog observed without changing model or executor tools. policy={PolicyVersion} profile={ProfileId} revision={PublishedRevision} intent={IntentId} candidateOwned={OwnedCount} candidateSchemaBytes={SchemaBytes} candidateDigest={CatalogDigest}",
+                ToolCatalogPolicyVersion,
+                profile.ProfileId,
+                profile.PublishedRevision,
+                preparation.Authority.CandidateRoute?.IntentId ?? string.Empty,
+                preparation.ShadowCandidateProof?.ToolCount ?? 0,
+                preparation.ShadowCandidateProof?.SchemaBytes ?? 0,
+                preparation.ShadowCandidateProof?.CatalogDigest ?? string.Empty);
+            return new AgentRunTurnCatalogPlan(
+                AgentTurnToolCatalogFactory.RestrictedEmpty(),
+                profile);
+        }
+
+        var materialization = await _profileCatalogPlanner.MaterializeCommittedAsync(
+                profile,
+                preparation.Authority,
+                generationContext.ToolContext.Credentials.NyxIdAccessToken,
+                [],
+                generationContext.ToolContext,
+                ct)
+            .ConfigureAwait(false);
+        _logger.LogInformation(
+            "Channel AgentRun tool catalog pinned. policy={PolicyVersion} profile={ProfileId} revision={PublishedRevision} intent={IntentId} owned={OwnedCount} schemaBytes={SchemaBytes} digest={CatalogDigest}",
+            ToolCatalogPolicyVersion,
+            profile.ProfileId,
+            profile.PublishedRevision,
+            materialization.Catalog.SelectedIntentId ?? materialization.Catalog.CandidateIntentId ?? string.Empty,
+            materialization.Catalog.Proof.ToolCount,
+            materialization.Catalog.Proof.SchemaBytes,
+            materialization.Catalog.Proof.CatalogDigest);
+        return new AgentRunTurnCatalogPlan(
+            materialization.Catalog,
+            profile,
+            materialization.ReconcileProposal);
+    }
+
+    private async Task<AgentTurnToolCatalog> ResolvePersistedTurnCatalogAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        var state = workItem.StepState;
+        if (workItem.TurnCatalog is not null)
+            return VerifyPersistedTurnCatalog(state, workItem.TurnCatalog);
+
+        var profile = state.AgentProfileSnapshot;
+        var authority = state.AgentProfileTurnAuthority;
+        if (profile is null && authority is null)
+        {
+            return VerifyPersistedTurnCatalog(
+                state,
+                RestrictedEmptyForPersistedProof(state.ToolCatalogProof));
+        }
+        if (profile is null)
+        {
+            throw CatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+                "The persisted channel turn authority has no pinned agent profile snapshot.");
+        }
+        if (!AgentProfileSnapshotCodec.Verify(profile))
+        {
+            throw CatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+                "The persisted channel agent profile snapshot digest is invalid.");
+        }
+        if (authority is null)
+        {
+            if (profile.ActivationMode != AgentProfileActivationMode.Shadow)
+            {
+                throw CatalogFailure(
+                    AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+                    "The persisted active channel profile has no turn authority.");
+            }
+
+            return VerifyPersistedTurnCatalog(
+                state,
+                RestrictedEmptyForPersistedProof(state.ToolCatalogProof));
+        }
+        if (_profileCatalogPlanner is null)
+        {
+            throw CatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogNeedsDisambiguation,
+                "The agent profile catalog planner is unavailable for channel turn replay.");
+        }
+
+        var materialization = await _profileCatalogPlanner.MaterializeCommittedAsync(
+                profile,
+                authority,
+                toolContext.Credentials.NyxIdAccessToken,
+                [],
+                toolContext,
+                ct)
+            .ConfigureAwait(false);
+        if (!materialization.ReconcileProposal.Equals(authority))
+        {
+            throw CatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+                "The re-materialized channel turn authority differs from its persisted authority.");
+        }
+
+        return VerifyPersistedTurnCatalog(state, materialization.Catalog);
+    }
+
+    private static AgentTurnToolCatalog RestrictedEmptyForPersistedProof(
+        AgentTurnToolCatalogProofPayload? payload)
+    {
+        var budget = payload is null
+            ? AgentTurnToolCatalogBudget.Ordinary
+            : AgentTurnToolCatalogProofPayloadMapper.FromPayload(payload).Budget;
+        return AgentTurnToolCatalogFactory.RestrictedEmpty(budget);
+    }
+
+    private static AgentTurnToolCatalog VerifyPersistedTurnCatalog(
+        AgentRunReplyStepState state,
+        AgentTurnToolCatalog catalog)
+    {
+        if (state.ToolCatalogProof is null)
+        {
+            if (state.AgentProfileSnapshot is not null || state.AgentProfileTurnAuthority is not null)
+            {
+                throw CatalogFailure(
+                    AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+                    "The persisted profiled channel turn has no tool catalog proof.");
+            }
+
+            return catalog;
+        }
+        if (!string.Equals(
+                state.ToolCatalogPolicyVersion,
+                ToolCatalogPolicyVersion,
+                StringComparison.Ordinal))
+        {
+            throw CatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+                "The persisted channel tool catalog policy version is unsupported.");
+        }
+
+        var persistedProof = AgentTurnToolCatalogProofPayloadMapper.FromPayload(state.ToolCatalogProof);
+        persistedProof.AssertMatchesExactTools(catalog.ExactTools.Values);
+        if (!catalog.Proof.ToPayload().Equals(state.ToolCatalogProof))
+        {
+            throw CatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+                "The re-materialized channel tool catalog differs from its persisted proof.");
+        }
+
+        return catalog;
+    }
+
+    private static AgentTurnToolCatalogException CatalogFailure(
+        AgentTurnToolCatalogFailureCode code,
+        string detail) =>
+        new(new AgentTurnToolCatalogFailure(code, detail));
+
     private sealed record ReplyGenerationContext(
         IReadOnlyDictionary<string, string> Metadata,
         LLMControlContext LlmControl,
@@ -1294,6 +1649,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 SourceReadableNyxIdAccessToken = NormalizeOptional(
                                                      requestCredentials.SourceReadableNyxIdAccessToken) ??
                                                  planToolContext.Credentials.SourceReadableNyxIdAccessToken,
+                NyxIdCredentialAuthority = requestCredentials.NyxIdCredentialAuthority ==
+                                           AgentToolNyxIdCredentialAuthority.Unspecified
+                    ? planToolContext.Credentials.NyxIdCredentialAuthority
+                    : requestCredentials.NyxIdCredentialAuthority,
             },
         };
         var requestControl = LLMControlContextMapper.FromPayload(request.LlmControl);
@@ -1313,6 +1672,30 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                                      stepControl.SenderNyxIdAccessToken,
         };
         var toolContext = control.ToToolContext(planToolContext);
+        var activityUserToken = NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        var requestToolContextOwnsCredential = requestCredentials.NyxIdCredentialAuthority ==
+                                               AgentToolNyxIdCredentialAuthority.ToolExecutionContext;
+        var executionAccessToken = activityUserToken ??
+                                   (requestToolContextOwnsCredential
+                                       ? NormalizeOptional(requestCredentials.NyxIdAccessToken)
+                                       : null);
+        var executionOrgToken = activityUserToken ??
+                                (requestToolContextOwnsCredential
+                                    ? NormalizeOptional(requestCredentials.NyxIdOrgToken)
+                                    : null);
+        if (executionAccessToken is not null || executionOrgToken is not null)
+        {
+            // LlmControl owns model routing. Explicit request credentials own tool execution,
+            // while a current Activity user token remains the highest-priority user authority.
+            toolContext = toolContext with
+            {
+                Credentials = toolContext.Credentials with
+                {
+                    NyxIdAccessToken = executionAccessToken ?? toolContext.Credentials.NyxIdAccessToken,
+                    NyxIdOrgToken = executionOrgToken ?? toolContext.Credentials.NyxIdOrgToken,
+                },
+            };
+        }
         return (control, toolContext);
     }
 

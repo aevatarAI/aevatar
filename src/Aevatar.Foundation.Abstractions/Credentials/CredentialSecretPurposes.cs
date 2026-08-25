@@ -15,12 +15,14 @@ public static class CredentialSecretPurposes
     public const string WorkflowConnectorExternalActionCompletion = "workflow.connector-external-action-completion";
     public const string DeviceHmacSigningKey = "device.hmac-signing-key";
     public const string OAuthStateTokenHmacKey = "identity.oauth-state-token-hmac-key";
-    public const string ChannelWorkflowResultDeliveryAgentKey = "channel.workflow-result-delivery-agent-key";
+    // The persisted purpose literal predates its use as the canonical credential for the
+    // entire channel workflow. Keep the wire/storage value while naming the code contract
+    // for its current scope.
+    public const string ChannelNyxIdAgentKey = "channel.workflow-result-delivery-agent-key";
+    public const string ChannelWorkflowResultDeliveryAgentKey = ChannelNyxIdAgentKey;
     public const string ManagedCodexInvocationAgentKey = "managed.codex-invocation-agent-key";
     public const string NyxIdChatRecoveryCredential = "nyxid-chat.recovery-credential";
     public const string NyxIdChatPendingFirstTurn = "nyxid-chat.pending-first-turn";
     public const string NyxIdChatPendingSteeringContinuation =
         "nyxid-chat.pending-steering-continuation";
-    public const string NyxIdChatPendingPlanGateContinuation =
-        "nyxid-chat.pending-plan-gate-continuation";
 }

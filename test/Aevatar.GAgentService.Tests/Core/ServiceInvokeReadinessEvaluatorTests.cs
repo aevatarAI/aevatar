@@ -217,6 +217,7 @@ public sealed class ServiceInvokeReadinessEvaluatorTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow-alpha",
                     WorkflowYaml = "name: workflow-alpha\nsteps: []",
                     ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
@@ -237,6 +238,7 @@ public sealed class ServiceInvokeReadinessEvaluatorTests
                 {
                     WorkflowPlan = new WorkflowServiceDeploymentPlan
                     {
+                        ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                         WorkflowName = "workflow-alpha",
                         WorkflowYaml = "name: workflow-alpha\nsteps: []",
                         ExecutionMode = ExternalCapabilityExecutionMode.Interactive,

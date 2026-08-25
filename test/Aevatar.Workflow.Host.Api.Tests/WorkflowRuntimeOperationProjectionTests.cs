@@ -26,7 +26,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
             store,
-            store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
         {
@@ -50,7 +49,19 @@ public sealed class WorkflowRuntimeOperationProjectionTests
             model: "deepseek-chat",
             provider: "deepseek",
             inputSummary: "Find today's deployment status.",
-            availableToolNames: ["status", "search"]));
+            availableToolNames: ["status", "search"],
+            toolCatalogPolicyVersion: WorkflowToolCatalogPolicies.CurrentVersion,
+            toolCatalogProof: new WorkflowAgentTurnToolCatalogProof
+            {
+                Budget = new WorkflowAgentTurnToolCatalogBudgetProof
+                {
+                    MaximumToolCount = WorkflowToolCatalogPolicies.MaximumWorkflowToolCount,
+                    MaximumSchemaBytes = WorkflowToolCatalogPolicies.MaximumWorkflowSchemaBytes,
+                },
+                ToolCount = 2,
+                SchemaBytes = 384,
+                CatalogDigest = "catalog-digest-alpha",
+            }));
         await ProjectOperationAsync(projector, context, 2, Operation(
             "model-0",
             WorkflowRuntimeOperationKind.Model,
@@ -125,6 +136,10 @@ public sealed class WorkflowRuntimeOperationProjectionTests
         firstModel.Provider.Should().Be("deepseek");
         firstModel.InputSummary.Should().Be("Find today's deployment status.");
         firstModel.AvailableToolNames.Should().Equal("search", "status");
+        firstModel.ToolCatalogPolicyVersion.Should().Be(WorkflowToolCatalogPolicies.CurrentVersion);
+        firstModel.ToolCatalogToolCount.Should().Be(2);
+        firstModel.ToolCatalogSchemaBytes.Should().Be(384);
+        firstModel.ToolCatalogDigest.Should().Be("catalog-digest-alpha");
         firstModel.Output.Should().BeEmpty("a tool-call-only model response is still a distinct operation");
         firstModel.ReasoningContent.Should().Be("A status tool is required.");
         firstModel.FinishReason.Should().Be("tool_calls");
@@ -154,7 +169,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
     {
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
-            store,
             store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
@@ -210,7 +224,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
             store,
-            store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
         {
@@ -246,7 +259,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
     {
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
-            store,
             store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
@@ -289,7 +301,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
     {
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
-            store,
             store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
@@ -359,7 +370,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
     {
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
-            store,
             store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
@@ -454,7 +464,9 @@ public sealed class WorkflowRuntimeOperationProjectionTests
         string toolCallId = "",
         string toolName = "",
         string argumentsJson = "",
-        string resultJson = "")
+        string resultJson = "",
+        string toolCatalogPolicyVersion = "",
+        WorkflowAgentTurnToolCatalogProof? toolCatalogProof = null)
     {
         var operation = new WorkflowRuntimeOperationRecordedEvent
         {
@@ -478,6 +490,8 @@ public sealed class WorkflowRuntimeOperationProjectionTests
             ToolName = toolName,
             ArgumentsJson = argumentsJson,
             ResultJson = resultJson,
+            ToolCatalogPolicyVersion = toolCatalogPolicyVersion,
+            ToolCatalogProof = toolCatalogProof,
         };
         if (eventTime.HasValue)
             operation.EventTime = Timestamp.FromDateTimeOffset(eventTime.Value);
@@ -515,7 +529,8 @@ public sealed class WorkflowRuntimeOperationProjectionTests
 
     private sealed class RecordingReportStore
         : IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>,
-          IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>
+          IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>,
+          IProjectionDocumentMutator<WorkflowRunInsightReportDocument, string>
     {
         public WorkflowRunInsightReportDocument? Stored { get; private set; }
 
@@ -539,12 +554,30 @@ public sealed class WorkflowRuntimeOperationProjectionTests
 
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             Task.FromResult(ProjectionWriteResult.Duplicate());
+
+        public Task<ProjectionDocumentMutationResult<WorkflowRunInsightReportDocument>> MutateAsync(
+            string key,
+            Func<WorkflowRunInsightReportDocument?, WorkflowRunInsightReportDocument> reducer,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var existing = Stored?.Clone();
+            var incoming = reducer(existing);
+            var result = ProjectionWriteResultEvaluator.Evaluate(Stored, incoming);
+            if (result.IsApplied)
+                Stored = incoming.Clone();
+
+            return Task.FromResult(new ProjectionDocumentMutationResult<WorkflowRunInsightReportDocument>(
+                result,
+                Stored?.Clone()));
+        }
     }
 
     private sealed class RecordingGraphWriter : IProjectionGraphWriter<WorkflowRunInsightReportDocument>
     {
         public Task UpsertAsync(
             WorkflowRunInsightReportDocument readModel,
+            string projectionKind,
             CancellationToken ct = default) =>
             Task.CompletedTask;
     }

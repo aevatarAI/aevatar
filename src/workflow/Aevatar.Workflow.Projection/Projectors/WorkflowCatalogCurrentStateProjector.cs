@@ -162,6 +162,7 @@ public sealed class WorkflowCatalogCurrentStateProjector
             WorkflowCalls = workflowCalls
                 .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
                 .ToList(),
+            CatalogPublicationContractVersion = state.CatalogPublicationContractVersion ?? string.Empty,
         };
     }
 

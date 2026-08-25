@@ -23,13 +23,16 @@ public sealed class ChannelWorkflowDraftRunAdmission
 {
     private readonly ChannelWorkflowDraftRunIntentParser _parser;
     private readonly IScopeWorkflowQueryPort? _workflowQueryPort;
+    private readonly IChannelWorkflowAuthorizedScopeResolver? _authorizedScopeResolver;
 
     public ChannelWorkflowDraftRunAdmission(
         ChannelWorkflowDraftRunIntentParser parser,
-        IScopeWorkflowQueryPort? workflowQueryPort = null)
+        IScopeWorkflowQueryPort? workflowQueryPort = null,
+        IChannelWorkflowAuthorizedScopeResolver? authorizedScopeResolver = null)
     {
         _parser = parser ?? throw new ArgumentNullException(nameof(parser));
         _workflowQueryPort = workflowQueryPort;
+        _authorizedScopeResolver = authorizedScopeResolver;
     }
 
     public async Task<ChannelWorkflowDraftRunAdmissionResult> TryAdmitAsync(
@@ -37,6 +40,7 @@ public sealed class ChannelWorkflowDraftRunAdmission
         ChannelBotRegistrationEntry registration,
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
+        ExternalSubjectRef? senderSubject,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
@@ -46,10 +50,26 @@ public sealed class ChannelWorkflowDraftRunAdmission
         if (!_parser.TryParse(inboundEvent.Text, out var intent))
             return ChannelWorkflowDraftRunAdmissionResult.NotMatched;
 
-        var scopeId = NormalizeOptional(activity.TransportExtras?.NyxRegistrationScopeId) ??
-                      NormalizeOptional(registration.ScopeId);
-        if (scopeId is null)
-            return ChannelWorkflowDraftRunAdmissionResult.Rejected("无法确定当前 NyxID scope,暂不能运行 workflow。");
+        var authorization = _authorizedScopeResolver is null
+            ? ChannelWorkflowAuthorizedScopeResolution.Denied(
+                ChannelWorkflowScopeAuthorizationFailure.AuthorityUnavailable)
+            : await _authorizedScopeResolver
+                .ResolveAsync(senderSubject, registration.ScopeId, ct)
+                .ConfigureAwait(false);
+        if (!authorization.IsAuthorized)
+        {
+            return authorization.Failure switch
+            {
+                ChannelWorkflowScopeAuthorizationFailure.RegistrationScopeMissing =>
+                    ChannelWorkflowDraftRunAdmissionResult.Rejected("无法确定当前 NyxID scope,暂不能运行 workflow。"),
+                ChannelWorkflowScopeAuthorizationFailure.BindingUnavailable =>
+                    ChannelWorkflowDraftRunAdmissionResult.Rejected("请先完成 NyxID 绑定,再运行 workflow。"),
+                _ => ChannelWorkflowDraftRunAdmissionResult.Rejected(
+                    "当前 NyxID 身份无权运行该 bot scope 的 workflow。"),
+            };
+        }
+
+        var scopeId = authorization.AuthorizedScopeId;
 
         var userAccessToken = NormalizeOptional(runtimeContext.NyxUserAccessToken) ??
                               NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken);

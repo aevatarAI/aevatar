@@ -5,7 +5,9 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Projection.ReadModels;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -23,6 +25,7 @@ internal sealed class FileBackedWorkflowCatalogPort
     private readonly IWorkflowDefinitionBindObservationProjectionPort _observationProjection;
     private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
     private readonly IWorkflowActorBindingReader? _bindingReader;
+    private readonly IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>? _catalogReader;
     private readonly WorkflowDefinitionFileSourceOptions _options;
     private readonly ILogger<FileBackedWorkflowCatalogPort> _logger;
 
@@ -34,7 +37,8 @@ internal sealed class FileBackedWorkflowCatalogPort
         IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         IOptions<WorkflowDefinitionFileSourceOptions> options,
         ILogger<FileBackedWorkflowCatalogPort>? logger = null,
-        IWorkflowActorBindingReader? bindingReader = null)
+        IWorkflowActorBindingReader? bindingReader = null,
+        IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>? catalogReader = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
@@ -45,6 +49,7 @@ internal sealed class FileBackedWorkflowCatalogPort
         _capabilityAdmissionService = capabilityAdmissionService ??
                                       throw new ArgumentNullException(nameof(capabilityAdmissionService));
         _bindingReader = bindingReader;
+        _catalogReader = catalogReader;
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         if (_options.BindCommitTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
@@ -72,7 +77,22 @@ internal sealed class FileBackedWorkflowCatalogPort
                 continue;
             }
 
-            await MaterializeDefinitionAsync(definition, ct);
+            try
+            {
+                await MaterializeDefinitionAsync(definition, ct);
+            }
+            catch (WorkflowExternalCapabilityAdmissionException ex) when (
+                _options.SkipSourceCredentialRequiredDefinitionsOnStartup &&
+                string.Equals(
+                    ex.SafeBlockerCode,
+                    "CODE_EXECUTION_SOURCE_CREDENTIAL_REQUIRED",
+                    StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Skipping startup workflow definition '{WorkflowName}' because source credentials are required and startup skipping is enabled.",
+                    definition.WorkflowName);
+            }
         }
     }
 
@@ -156,6 +176,8 @@ internal sealed class FileBackedWorkflowCatalogPort
             !string.IsNullOrWhiteSpace(binding.WorkflowId) ||
             !string.IsNullOrWhiteSpace(binding.RevisionId) ||
             persistedPlan == null ||
+            !WorkflowToolCatalogPolicies.IsCurrent(binding.ToolCatalogPolicyVersion) ||
+            !WorkflowCatalogPublicationContracts.IsCurrent(binding.CatalogPublicationContractVersion) ||
             !string.Equals(
                 persistedPlan.AdmissionDigest,
                 capabilityAdmissionPlan.AdmissionDigest,
@@ -168,11 +190,64 @@ internal sealed class FileBackedWorkflowCatalogPort
             return false;
         }
 
+        if (!await HasFreshPublicCatalogReadModelAsync(definition, actorId, binding.SourceVersion, ct)
+                .ConfigureAwait(false))
+        {
+            return false;
+        }
+
         _logger.LogInformation(
             "Reused committed startup workflow definition '{WorkflowName}' from WorkflowGAgent '{ActorId}' at state version {StateVersion}.",
             definition.WorkflowName,
             actorId,
             binding.SourceVersion);
+        return true;
+    }
+
+    private async Task<bool> HasFreshPublicCatalogReadModelAsync(
+        WorkflowDefinitionRegistration definition,
+        string actorId,
+        long sourceVersion,
+        CancellationToken ct)
+    {
+        if (_catalogReader == null)
+        {
+            _logger.LogInformation(
+                "Startup workflow definition '{WorkflowName}' cannot reuse committed binding for WorkflowGAgent '{ActorId}' because the public catalog readmodel reader is unavailable.",
+                definition.WorkflowName,
+                actorId);
+            return false;
+        }
+
+        var workflowName = definition.WorkflowName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(workflowName))
+            return false;
+
+        var catalog = await _catalogReader.GetAsync(workflowName, ct).ConfigureAwait(false);
+        if (catalog == null)
+        {
+            _logger.LogInformation(
+                "Startup workflow definition '{WorkflowName}' will refresh WorkflowGAgent '{ActorId}' because its public catalog readmodel is missing.",
+                definition.WorkflowName,
+                actorId);
+            return false;
+        }
+
+        if (catalog.StateVersion != sourceVersion ||
+            !WorkflowCatalogPublicationContracts.IsCurrent(catalog.CatalogPublicationContractVersion) ||
+            !string.Equals(catalog.ActorId, actorId, StringComparison.Ordinal) ||
+            !string.Equals(catalog.WorkflowName, workflowName, StringComparison.Ordinal))
+        {
+            _logger.LogInformation(
+                "Startup workflow definition '{WorkflowName}' will refresh WorkflowGAgent '{ActorId}' because its public catalog readmodel is stale or from an old contract. Binding version: {BindingVersion}; catalog version: {CatalogVersion}; catalog contract: {CatalogContractVersion}.",
+                definition.WorkflowName,
+                actorId,
+                sourceVersion,
+                catalog.StateVersion,
+                catalog.CatalogPublicationContractVersion);
+            return false;
+        }
+
         return true;
     }
 
@@ -279,6 +354,8 @@ internal sealed class FileBackedWorkflowCatalogPort
                     : definition.SourceKind.Trim(),
                 CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
                 ExpectedExecutionMode = definition.ExpectedExecutionMode,
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                CatalogPublicationContractVersion = WorkflowCatalogPublicationContracts.CurrentVersion,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(PublisherActorId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation

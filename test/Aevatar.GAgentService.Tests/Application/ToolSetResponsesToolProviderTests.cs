@@ -35,7 +35,7 @@ public sealed class ToolSetResponsesToolProviderTests
         var tools = await provider.GetAdditiveToolsAsync(ToolProviderContext);
 
         tools.Select(static tool => tool.Name)
-            .Should().Equal("nyxid_services", "invoke_service", "use_skill");
+            .Should().Equal("invoke_service", "nyxid_services", "use_skill");
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public sealed class ToolSetResponsesToolProviderTests
     }
 
     [Fact]
-    public async Task GetAdditiveToolsAsync_WhenSourceDiscoveryFails_ShouldContinueWithOtherSourcesAndLogWarning()
+    public async Task GetAdditiveToolsAsync_WhenSourceDiscoveryFails_ShouldFailClosedAndLogTypedReason()
     {
         var logger = new RecordingLogger();
         var provider = new ToolSetResponsesToolProvider(
@@ -78,39 +78,40 @@ public sealed class ToolSetResponsesToolProviderTests
             ],
             logger);
 
-        var tools = await provider.GetAdditiveToolsAsync(ToolProviderContext);
+        var act = () => provider.GetAdditiveToolsAsync(ToolProviderContext).AsTask();
 
-        tools.Select(static tool => tool.Name).Should().ContainSingle("use_skill");
+        var exception = await act.Should().ThrowAsync<AgentToolDiscoveryException>();
+        exception.Which.Failure.Code.Should().Be(AgentToolDiscoveryFailureCode.SourceFailed);
         logger.Messages.Should().Contain(message =>
-            message.Contains("route tool source discovery failed", StringComparison.Ordinal) &&
-            message.Contains(nameof(FaultingToolSource), StringComparison.Ordinal));
+            message.Contains("route tool discovery failed closed", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task GetAdditiveToolsAsync_WhenAllSourcesFail_ShouldReturnEmptyListWithoutThrowing()
+    public async Task GetAdditiveToolsAsync_WhenAllSourcesFail_ShouldReturnFirstTypedFailure()
     {
         var logger = new RecordingLogger();
         var provider = new ToolSetResponsesToolProvider(
             [new FaultingToolSource(), new FaultingToolSource()],
             logger);
 
-        var tools = await provider.GetAdditiveToolsAsync(ToolProviderContext);
+        var act = () => provider.GetAdditiveToolsAsync(ToolProviderContext).AsTask();
 
-        tools.Should().BeEmpty();
-        logger.Messages.Should().HaveCountGreaterThanOrEqualTo(2);
+        var exception = await act.Should().ThrowAsync<AgentToolDiscoveryException>();
+        exception.Which.Failure.Code.Should().Be(AgentToolDiscoveryFailureCode.SourceFailed);
+        logger.Messages.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task GetAdditiveToolsAsync_WhenLoggerIsNull_ShouldFallBackToNullLoggerAndSwallowSourceFailure()
+    public async Task GetAdditiveToolsAsync_WhenLoggerIsNull_ShouldFailClosedWithoutNullReference()
     {
         // logger == null must not NRE when a source fails (factory passes NullLogger.Instance).
         var provider = new ToolSetResponsesToolProvider(
             [new FaultingToolSource(), new StaticToolSource([new StaticTool("use_skill")])],
             logger: null!);
 
-        var tools = await provider.GetAdditiveToolsAsync(ToolProviderContext);
+        var act = () => provider.GetAdditiveToolsAsync(ToolProviderContext).AsTask();
 
-        tools.Select(static tool => tool.Name).Should().ContainSingle("use_skill");
+        await act.Should().ThrowAsync<AgentToolDiscoveryException>();
     }
 
     [Fact]
@@ -130,7 +131,7 @@ public sealed class ToolSetResponsesToolProviderTests
     }
 
     [Fact]
-    public async Task GetAdditiveToolsAsync_WhenTokenCancelledButSourceFailsWithoutObservingIt_ShouldStillSwallow()
+    public async Task GetAdditiveToolsAsync_WhenTokenCancelledButSourceFailsWithoutObservingIt_ShouldFailClosed()
     {
         // The provider does not pre-emptively probe the token; a source that fails with a
         // non-cancellation exception is swallowed even when the token is already cancelled.
@@ -141,11 +142,11 @@ public sealed class ToolSetResponsesToolProviderTests
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        var tools = await provider.GetAdditiveToolsAsync(ToolProviderContext, cts.Token);
+        var act = () => provider.GetAdditiveToolsAsync(ToolProviderContext, cts.Token).AsTask();
 
-        tools.Should().BeEmpty();
+        await act.Should().ThrowAsync<AgentToolDiscoveryException>();
         logger.Messages.Should().Contain(message =>
-            message.Contains("route tool source discovery failed", StringComparison.Ordinal));
+            message.Contains("route tool discovery failed closed", StringComparison.Ordinal));
     }
 
     private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource

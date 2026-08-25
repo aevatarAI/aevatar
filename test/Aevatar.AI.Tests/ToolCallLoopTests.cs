@@ -1098,11 +1098,16 @@ public class ToolCallLoopTests
         var tools = new ToolManager();
         tools.Register(exactTool);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var routeTarget = new LLMRouteTarget
+        {
+            CatalogServiceId = "catalog-chrono",
+            ServiceSlugSnapshot = "chrono-llm-public",
+        };
 
         var result = await NewToolCallLoop(tools).ExecuteAsync(
             provider,
             messages,
-            new LLMRequest { Messages = [], Tools = [exactTool] },
+            new LLMRequest { Messages = [], RouteTarget = routeTarget, Tools = [exactTool] },
             maxRounds: 1,
             CancellationToken.None);
 
@@ -1112,6 +1117,8 @@ public class ToolCallLoopTests
             initialResult => initialResult.Content.Should().Be("ok"),
             rejectedFinalResult => IsSafeRejectedToolFailure(rejectedFinalResult, "echo").Should().BeTrue());
         provider.Requests.Should().HaveCount(3);
+        provider.Requests.Should().OnlyContain(request =>
+            request.RouteTarget != null && request.RouteTarget.Equals(routeTarget));
         provider.Requests[1].Tools.Should().BeNull();
         provider.Requests[2].Tools.Should().BeNull();
     }
@@ -1230,6 +1237,7 @@ public class ToolCallLoopTests
         ToolContext = request.ToolContext,
         RoutingContext = request.RoutingContext,
         LlmControl = request.LlmControl,
+        RouteTarget = request.RouteTarget?.Clone(),
         Tools = tools,
         Model = request.Model,
         Temperature = request.Temperature,

@@ -40,12 +40,17 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
     [Fact]
     public async Task DiscoverToolsAsync_ClassifiesEveryToolByHumanSessionRequirement()
     {
-        var source = new NyxIdAgentToolSource(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
-            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" }, new HttpClient()),
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var client = new NyxIdApiClient(options, new HttpClient());
+        var privilegedSource = new NyxIdAgentToolSource(options, client);
+        var executionSource = new NyxIdExecutionAgentToolSource(
+            options,
+            client,
             codeExecutionPorts: [new StubCodeExecutionPort()]);
 
-        var tools = await source.DiscoverToolsAsync();
+        var tools = (await privilegedSource.DiscoverToolsAsync())
+            .Concat(await executionSource.DiscoverToolsAsync())
+            .ToArray();
 
         tools.Should().NotBeEmpty();
         foreach (var tool in tools)

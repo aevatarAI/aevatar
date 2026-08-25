@@ -2072,11 +2072,16 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (admission is null)
             return null;
 
+        ExternalSubjectRef? senderSubject = null;
+        if (TryResolveExternalSubject(inbound, registration, out var resolvedSenderSubject))
+            senderSubject = resolvedSenderSubject;
+
         var result = await admission.TryAdmitAsync(
                 activity,
                 registration,
                 inboundEvent,
                 runtimeContext,
+                senderSubject,
                 ct)
             .ConfigureAwait(false);
         if (!result.Matched)

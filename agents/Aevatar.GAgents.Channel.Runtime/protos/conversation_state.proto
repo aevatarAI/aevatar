@@ -7,6 +7,7 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 import "chat_activity.proto";
 import "conversation_events.proto";
 import "delivery_ledger.proto";
+import "ai_messages.proto";
 
 message ConversationGAgentState {
   aevatar.gagents.channel.abstractions.ConversationReference conversation = 1;
@@ -38,6 +39,9 @@ message ConversationGAgentState {
   repeated string bot_sent_platform_message_ids = 15;
   repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 16;
   aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 17;
+  // Immutable profile pinned by the first completed profiled run. Later runs reuse this exact
+  // snapshot; route/profile binding changes apply only to new conversations.
+  aevatar.ai.AgentProfileSnapshot agent_profile = 18;
 }
 
 // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):

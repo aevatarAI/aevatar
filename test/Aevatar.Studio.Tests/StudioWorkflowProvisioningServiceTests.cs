@@ -989,6 +989,189 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_WithExistingPlanAndExpiredDurableCatalog_ShouldRefreshAndContinue()
+    {
+        var catalogReady = true;
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(
+            durableCatalogReady: () => catalogReady);
+        var identity = ProvisionIdentity("scope-studio-alpha", "team-alpha", "Monitor");
+        var plan = await admission.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-studio-alpha",
+                StudioExplicitRequestAdmissionTestKit.CallerId,
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    StudioExplicitRequestAdmissionTestKit.CallerBearer),
+                StudioExplicitRequestAdmissionTestKit.OrganizationBearer),
+            StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
+            new Dictionary<string, string>(),
+            "test_prepare_plan",
+            ExternalCapabilityExecutionMode.Durable,
+            [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                identity.WorkflowId,
+                identity.RevisionId)],
+            workflowId: identity.WorkflowId,
+            revisionId: identity.RevisionId));
+        catalogReady = false;
+        admission.Requests.Clear();
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31))
+        {
+            OnRefresh = () => catalogReady = true,
+        };
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Ready,
+            31,
+            31,
+            string.Empty));
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        await sut.ProvisionAsync(
+            "scope-studio-alpha",
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = "team-alpha",
+                AuthenticatedOwner = TestAuthenticatedOwner(
+                    ownerSubject: StudioExplicitRequestAdmissionTestKit.CallerId),
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    existingPlan: plan,
+                    executionMode: ExternalCapabilityExecutionMode.Durable),
+            });
+
+        admission.RefreshRequests.Should().HaveCount(2);
+        refresh.Owner.Should().BeEquivalentTo(TestAuthenticatedOwner(
+            ownerSubject: StudioExplicitRequestAdmissionTestKit.CallerId).Owner);
+        refresh.BearerToken.Should().Be("runtime-caller-credential");
+        refresh.Request!.RequiredServices.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("usvc-alpha");
+        visibility.RequiredStateVersion.Should().Be(31);
+        member.BindRequest.Should().NotBeNull();
+        member.BindRequest!.RevisionId.Should().Be(identity.RevisionId);
+        schedule.Ensured.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WithExistingPlanAndMixedCatalogBlockers_ShouldFailClosedWithoutRefresh()
+    {
+        var capability = DurableExplicitRequestCapability("usvc-alpha");
+        var existingPlan = CapabilityPlan(capability);
+        var admission = new StudioWorkflowCapabilityAdmissionTestService
+        {
+            OnRefresh = _ => throw DurableAuthorizationUnavailable(
+                capability,
+                includeAdditionalBlocker: true),
+        };
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31));
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Ready,
+            31,
+            31,
+            string.Empty));
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        var action = () => sut.ProvisionAsync(
+            "scope-studio-alpha",
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = "team-alpha",
+                AuthenticatedOwner = TestAuthenticatedOwner(
+                    ownerSubject: StudioExplicitRequestAdmissionTestKit.CallerId),
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    existingPlan: existingPlan,
+                    executionMode: ExternalCapabilityExecutionMode.Durable),
+            });
+
+        await action.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        admission.RefreshRequests.Should().ContainSingle();
+        refresh.Request.Should().BeNull();
+        visibility.RequiredStateVersion.Should().Be(0);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProvisionAsync_WithPlanReturnedByPrepare_ShouldReuseItsBoundRevisionIdentity(
+        bool includeCallerCredential)
+    {
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule, admission);
+        var provisionalIdentity = ProvisionIdentity(
+            "scope-studio-alpha",
+            "team-alpha",
+            "Monitor");
+        var prepareRequest = new ProvisionWorkflowRequest(
+            "Monitor",
+            StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+        {
+            TeamId = "team-alpha",
+            AuthenticatedOwner = TestAuthenticatedOwner(),
+            CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                    string.Empty,
+                    string.Empty)],
+                ExternalCapabilityExecutionMode.Durable),
+        };
+
+        var preparation = await sut.PrepareAsync(
+            "scope-studio-alpha",
+            Caller,
+            prepareRequest);
+
+        preparation.RevisionId.Should().NotBe(provisionalIdentity.RevisionId);
+        preparation.CapabilityAdmissionPlan.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(preparation.RevisionId);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+
+        await sut.ProvisionAsync(
+            "scope-studio-alpha",
+            Caller,
+            new ProvisionWorkflowRequest(
+                "Monitor",
+                StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = "team-alpha",
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    existingPlan: preparation.CapabilityAdmissionPlan,
+                    executionMode: ExternalCapabilityExecutionMode.Durable,
+                    includeCallerCredential: includeCallerCredential),
+            });
+
+        member.BindRequest.Should().NotBeNull();
+        member.BindRequest!.RevisionId.Should().Be(preparation.RevisionId);
+        admission.RefreshRequests.Should().HaveCount(includeCallerCredential ? 1 : 0);
+        admission.PersistedRequests.Should().HaveCount(includeCallerCredential ? 0 : 1);
+    }
+
+    [Fact]
     public async Task ProvisionAsync_RejectsMissingTeamId_BeforeAdmissionOrProvisioning()
     {
         var member = NewMemberService();
@@ -1223,6 +1406,93 @@ public sealed class StudioWorkflowProvisioningServiceTests
         scheduleCommand.Intent.AuthenticatedOwner.VerifiedBindingId.Should().Be("binding-alpha");
         scheduleCommand.Intent.ToString().Should().NotContain("must-not-enter-intent");
         member.GetBindingRunCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WithAcceptanceInput_ShouldRenderClonedSnapshotIntoSchedulePrompt()
+    {
+        var member = NewMemberService();
+        var bindingPort = new RecordingBindingPort(member, WorkflowId, RevisionId);
+        var scheduleCommand = new RecordingScheduleProvisioningCommandPort();
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            bindingPort,
+            scheduleCommand,
+            new StudioWorkflowCapabilityAdmissionTestService());
+        var sourceInput = new Struct
+        {
+            Fields =
+            {
+                ["dry_run"] = Google.Protobuf.WellKnownTypes.Value.ForBool(true),
+                ["limit"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(5),
+            },
+        };
+        var request = new ProvisionWorkflowRequest("Monitor", "name: monitor")
+        {
+            TeamId = TeamId,
+            AuthenticatedOwner = TestAuthenticatedOwner(),
+            AcceptanceInput = sourceInput,
+        };
+
+        sourceInput.Fields["dry_run"] = Google.Protobuf.WellKnownTypes.Value.ForBool(false);
+        request.AcceptanceInput!.Fields["limit"] =
+            Google.Protobuf.WellKnownTypes.Value.ForNumber(99);
+
+        await sut.ProvisionAsync(ScopeId, Caller, request);
+
+        var expectedInput = new Struct
+        {
+            Fields =
+            {
+                ["dry_run"] = Google.Protobuf.WellKnownTypes.Value.ForBool(true),
+                ["limit"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(5),
+            },
+        };
+        request.AcceptanceInput.Should().BeEquivalentTo(expectedInput);
+        scheduleCommand.Intent!.Prompt.Should().Be(
+            Google.Protobuf.JsonFormatter.Default.Format(expectedInput));
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_DeliveryRetry_ShouldReplayCurrentIntentAndAdvanceNextAttempt()
+    {
+        var member = NewMemberService();
+        var bindingPort = new RecordingBindingPort(member, WorkflowId, RevisionId);
+        var scheduleCommand = new RecordingScheduleProvisioningCommandPort();
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            bindingPort,
+            scheduleCommand,
+            new StudioWorkflowCapabilityAdmissionTestService());
+        var attemptOne = new ProvisionWorkflowRequest(
+            "Workflow Alpha [delivery-alpha]",
+            "name: monitor",
+            Prompt: string.Empty)
+        {
+            TeamId = TeamId,
+            AuthenticatedOwner = TestAuthenticatedOwner(),
+            ScheduleOperationId = " installation-alpha:provision:a1 ",
+            ScheduleIdempotencyKey = " publish-alpha ",
+        };
+
+        var first = await sut.ProvisionAsync(ScopeId, Caller, attemptOne);
+        var replay = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            attemptOne with { ScheduleOperationId = "installation-alpha:provision:a1" });
+        var retry = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            attemptOne with { ScheduleOperationId = "installation-alpha:provision:a2" });
+
+        scheduleCommand.Intents.Should().HaveCount(3);
+        scheduleCommand.Intents[0].ScheduleOperationId.Should().Be("installation-alpha:provision:a1");
+        scheduleCommand.Intents[1].ProvisioningId.Should().Be(scheduleCommand.Intents[0].ProvisioningId);
+        scheduleCommand.Intents[2].ProvisioningId.Should().NotBe(scheduleCommand.Intents[0].ProvisioningId);
+        scheduleCommand.Intents.Select(static intent => intent.ScheduleIdempotencyKey)
+            .Should().OnlyContain(key => key == "publish-alpha");
+        first.ScheduleProvisioningId.Should().Be(replay.ScheduleProvisioningId);
+        retry.ScheduleProvisioningId.Should().NotBe(first.ScheduleProvisioningId);
     }
 
     [Fact]
@@ -2144,11 +2414,14 @@ public sealed class StudioWorkflowProvisioningServiceTests
     {
         public StudioWorkflowScheduleProvisioningIntent? Intent { get; private set; }
 
+        public List<StudioWorkflowScheduleProvisioningIntent> Intents { get; } = [];
+
         public Task<StudioWorkflowScheduleProvisioningAcceptance> AcceptAsync(
             StudioWorkflowScheduleProvisioningIntent intent,
             CancellationToken ct = default)
         {
             Intent = intent;
+            Intents.Add(intent);
             return Task.FromResult(new StudioWorkflowScheduleProvisioningAcceptance(
                 true,
                 intent.ProvisioningId,
@@ -2262,6 +2535,13 @@ public sealed class StudioWorkflowProvisioningServiceTests
             RequiredStateVersion = requiredStateVersion;
             return Task.FromResult(result);
         }
+
+        public Task<NyxIdAuthorizationCatalogVisibilityResult> ResolveRequiredServicesAsync(
+            AuthorizationOwnerIdentity owner,
+            long requiredStateVersion,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+            CancellationToken ct = default) =>
+            ResolveAsync(owner, requiredStateVersion, ct);
     }
 
     private sealed class RecordingWorkflowSchedulePort : IStudioMemberWorkflowSchedulePort
@@ -2603,15 +2883,15 @@ public sealed class StudioWorkflowProvisioningServiceTests
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> EnableAsync(
-            string scheduleId, string reason, CancellationToken ct = default) =>
+            string scheduleId, string reason, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> DisableAsync(
-            string scheduleId, string reason, CancellationToken ct = default) =>
+            string scheduleId, string reason, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> DeleteAsync(
-            string scheduleId, string reason, CancellationToken ct = default) =>
+            string scheduleId, string reason, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchDetail?> GetAsync(
@@ -2631,7 +2911,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
-            string scheduleId, CancellationToken ct = default) =>
+            string scheduleId, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

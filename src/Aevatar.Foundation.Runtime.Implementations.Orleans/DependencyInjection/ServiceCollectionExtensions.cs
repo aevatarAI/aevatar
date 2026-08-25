@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.Configurations;
 using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.Foundation.Core.Runtime;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
@@ -9,6 +10,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInj
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Orleans.Hosting;
 using Orleans.Serialization;
@@ -16,6 +18,7 @@ using Orleans.Streams;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Streaming;
+using Orleans.Runtime;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 
@@ -34,6 +37,8 @@ public static class ServiceCollectionExtensions
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
         services.Replace(ServiceDescriptor.Singleton<IActorDispatchPort, OrleansActorDispatchPort>());
+        services.Replace(ServiceDescriptor.Singleton<IRuntimeActorStateSchemaActivationSealSupport,
+            OrleansRuntimeActorStateSchemaActivationSealSupport>());
         services.AddSerializer(serializerBuilder => serializerBuilder.AddProtobufSerializer());
         services.TryAddSingleton<EventSourcingRuntimeOptions>();
         services.RemoveAll(typeof(IStateStore<>));
@@ -41,6 +46,18 @@ public static class ServiceCollectionExtensions
         services.RemoveAll(typeof(IEventSourcingBehaviorFactory<>));
         services.RemoveAll<ICommittedStatePublicationStateStore>();
         services.TryAddSingleton<IRuntimeActorStateBindingAccessor, AsyncLocalRuntimeActorStateBindingAccessor>();
+        services.TryAddSingleton<AsyncLocalRuntimeActorStateSchemaContextAccessor>();
+        services.TryAddSingleton<IRuntimeActorStateSchemaContextReader>(sp =>
+            sp.GetRequiredService<AsyncLocalRuntimeActorStateSchemaContextAccessor>());
+        services.TryAddSingleton<IRuntimeActorStateSchemaContextAccessor>(sp =>
+            sp.GetRequiredService<AsyncLocalRuntimeActorStateSchemaContextAccessor>());
+        services.TryAddSingleton<IRuntimeActorStateSchemaContextBinder>(sp =>
+            sp.GetRequiredService<AsyncLocalRuntimeActorStateSchemaContextAccessor>());
+        services.TryAddSingleton<AsyncLocalRuntimeFleetReconcileDeliveryAttestationAccessor>();
+        services.TryAddSingleton<IRuntimeFleetReconcileDeliveryAttestationReader>(sp =>
+            sp.GetRequiredService<AsyncLocalRuntimeFleetReconcileDeliveryAttestationAccessor>());
+        services.TryAddSingleton<IRuntimeFleetReconcileDeliveryAttestationBinder>(sp =>
+            sp.GetRequiredService<AsyncLocalRuntimeFleetReconcileDeliveryAttestationAccessor>());
         services.TryAddTransient(typeof(IStateStore<>), typeof(RuntimeActorGrainStateStore<>));
         services.TryAddTransient(typeof(IEventSourcingSnapshotStore<>), typeof(RuntimeActorGrainEventSourcingSnapshotStore<>));
         services.TryAddTransient<ICommittedStatePublicationStateStore, RuntimeActorGrainCommittedStatePublicationStateStore>();
@@ -66,6 +83,15 @@ public static class ServiceCollectionExtensions
         }
 
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
+        services.TryAddSingleton<IRuntimeFleetCapabilityAdmissionReader,
+            DenyAllRuntimeFleetCapabilityAdmissionReader>();
+        services.TryAddSingleton<IRuntimeFleetCapabilityQuiescenceReader,
+            DenyAllRuntimeFleetCapabilityQuiescenceReader>();
+        services.TryAddSingleton<OrleansRuntimeFleetMembershipOptions>();
+        services.Replace(ServiceDescriptor.Singleton<IRuntimeFleetMembershipSnapshotSource,
+            OrleansRuntimeFleetMembershipSnapshotSource>());
+        services.Replace(ServiceDescriptor.Singleton<IRuntimeLocalMembershipIdentityReader,
+            OrleansRuntimeLocalMembershipIdentityReader>());
 
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
         services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
@@ -77,12 +103,19 @@ public static class ServiceCollectionExtensions
         // (Provider=Orleans) keeps the in-memory scheduler — durable timeouts/reminders then
         // live in process memory and are lost on every pod restart. Replace guarantees the
         // durable Orleans scheduler wins, consistent with IActorRuntime/IActorDispatchPort/IActorKindProbe.
-        services.Replace(ServiceDescriptor.Singleton<IActorRuntimeCallbackScheduler, OrleansActorRuntimeDurableCallbackScheduler>());
+        services.TryAddSingleton<OrleansActorRuntimeDurableCallbackScheduler>();
+        services.Replace(ServiceDescriptor.Singleton<IActorRuntimeCallbackScheduler>(sp =>
+            sp.GetRequiredService<OrleansActorRuntimeDurableCallbackScheduler>()));
+        services.Replace(ServiceDescriptor.Singleton<IRuntimeFleetReconcileScheduleOwner>(sp =>
+            sp.GetRequiredService<OrleansActorRuntimeDurableCallbackScheduler>()));
+        services.Replace(ServiceDescriptor.Singleton<IRuntimeFleetReconcileDeliveryVerifier>(sp =>
+            sp.GetRequiredService<OrleansActorRuntimeDurableCallbackScheduler>()));
         services.Replace(ServiceDescriptor.Singleton<IActorKindProbe, OrleansActorKindProbe>());
         // Kind-token identity registry. Modules contribute their kinds in
         // their own DI extensions; the runtime guarantees the registry is
         // available here so RuntimeActorGrain resolves identities by kind.
-        services.AddAevatarAgentKindRegistry();
+        services.AddAevatarAgentKindRegistry(builder =>
+            builder.ScanAssemblies(typeof(RuntimeFleetCapabilityAuthorityGAgent).Assembly));
         services.TryAddSingleton<IActorEventSubscriptionProvider>(sp =>
             new StreamProviderActorEventSubscriptionProvider(sp.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>()));
         services.AddAevatarFoundationRuntimeOrleansStreaming();
@@ -131,6 +164,9 @@ public static class ServiceCollectionExtensions
                 orleansOptions.QueueCacheSize = options.QueueCacheSize;
                 orleansOptions.MaxEventDeliveryTime = options.MaxEventDeliveryTime;
             });
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<
+                ILifecycleParticipant<ISiloLifecycle>,
+                RuntimeFleetAuthoritySiloLifecycleParticipant>());
         });
 
         return builder;
@@ -203,6 +239,10 @@ public static class ServiceCollectionExtensions
 
     private static void ConfigureReminderService(ISiloBuilder builder, AevatarOrleansRuntimeOptions options)
     {
+        builder.Configure<ReminderOptions>(reminderOptions =>
+            reminderOptions.MinimumReminderPeriod =
+                RuntimeCallbackSchedulerGrain.FleetReconcilePeriod);
+
         if (IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet))
         {
             builder.UseRedisReminderService(

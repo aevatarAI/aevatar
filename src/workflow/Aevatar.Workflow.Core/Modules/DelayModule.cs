@@ -46,8 +46,10 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = stepId,
                     RunId = runId,
+                    ExecutionId = request.ExecutionId,
                     Success = false,
                     Error = "delay step requires non-empty run_id and step_id",
+                    OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 }, TopologyAudience.Self, ct);
                 return;
             }
@@ -77,15 +79,21 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = stepId,
                     RunId = runId,
+                    ExecutionId = request.ExecutionId,
                     Success = true,
                     Output = request.Input ?? string.Empty,
+                    OutputProvenance = WorkflowStepOutputProvenance.ForwardedInput,
                 }, TopologyAudience.Self, ct);
                 return;
             }
 
             state.Pending[BuildPendingKey(pendingKey)] = new PendingDelayState
             {
-                Input = request.Input ?? string.Empty,
+                Input = string.IsNullOrWhiteSpace(request.InputValueId)
+                    ? request.Input ?? string.Empty
+                    : string.Empty,
+                InputValueId = request.InputValueId,
+                ExecutionId = request.ExecutionId,
                 CallbackId = BuildDelayCallbackId(runId, stepId, ResolveOriginEnvelopeId(envelope)),
                 StepId = stepId,
             };
@@ -132,12 +140,22 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        var output = pending.Input;
+        if (!string.IsNullOrWhiteSpace(pending.InputValueId))
+        {
+            var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+                ctx,
+                WorkflowExecutionKernel.ModuleStateKey);
+            output = WorkflowExecutionValueStore.GetCanonicalValue(kernelState, pending.InputValueId).Value;
+        }
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = stepIdFired,
             RunId = runIdFired,
+            ExecutionId = pending.ExecutionId,
             Success = true,
-            Output = pending.Input,
+            Output = output,
+            OutputProvenance = WorkflowStepOutputProvenance.ForwardedInput,
         }, TopologyAudience.Self, ct);
 
         stateForCallback.Pending.Remove(BuildPendingKey(firedKey));

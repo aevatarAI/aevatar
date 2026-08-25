@@ -43,6 +43,7 @@ enum NyxIdChatTurnIntent {
   NYX_ID_CHAT_TURN_INTENT_SERVICE_CONNECT = 1;
   NYX_ID_CHAT_TURN_INTENT_KEY_CREATE = 2;
   NYX_ID_CHAT_TURN_INTENT_KEY_ROTATE = 3;
+  NYX_ID_CHAT_TURN_INTENT_WORKFLOW_AUTHORING = 4;
 }
 
 enum NyxIdChatTaskStatus {
@@ -118,19 +119,6 @@ enum NyxIdChatThresholdOrigin {
   NYX_ID_CHAT_THRESHOLD_ORIGIN_UNSPECIFIED = 0;
   NYX_ID_CHAT_THRESHOLD_ORIGIN_SUGGESTED = 1;
   NYX_ID_CHAT_THRESHOLD_ORIGIN_USER_OVERRIDE = 2;
-}
-
-enum NyxIdChatPlanGateMode {
-  NYX_ID_CHAT_PLAN_GATE_MODE_UNSPECIFIED = 0;
-  NYX_ID_CHAT_PLAN_GATE_MODE_AUTO = 1;
-  NYX_ID_CHAT_PLAN_GATE_MODE_CONFIRM = 2;
-}
-
-enum NyxIdChatPlanGateStatus {
-  NYX_ID_CHAT_PLAN_GATE_STATUS_UNSPECIFIED = 0;
-  NYX_ID_CHAT_PLAN_GATE_STATUS_PENDING = 1;
-  NYX_ID_CHAT_PLAN_GATE_STATUS_SATISFIED = 2;
-  NYX_ID_CHAT_PLAN_GATE_STATUS_REJECTED = 3;
 }
 
 enum NyxIdChatStepAddedBy {
@@ -230,6 +218,12 @@ enum NyxIdChatContinuationAdmissionStatus {
   NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_STARTED = 5;
 }
 
+enum NyxIdChatAuthorizationResumeRequirement {
+  NYX_ID_CHAT_AUTHORIZATION_RESUME_REQUIREMENT_UNSPECIFIED = 0;
+  NYX_ID_CHAT_AUTHORIZATION_RESUME_REQUIREMENT_COMPLETE_ORIGINAL_SERVICE_REQUEST = 1;
+  NYX_ID_CHAT_AUTHORIZATION_RESUME_REQUIREMENT_COMMUNICATE_AUTHORIZATION_COMPLETION = 2;
+}
+
 enum NyxIdChatStepControlKind {
   NYX_ID_CHAT_STEP_CONTROL_KIND_UNSPECIFIED = 0;
   NYX_ID_CHAT_STEP_CONTROL_KIND_RETRY = 1;
@@ -275,6 +269,7 @@ enum NyxIdAssistantActionKind {
   NYX_ID_ASSISTANT_ACTION_KIND_DEVELOPER_APP_ROTATE_SECRET = 12;
   NYX_ID_ASSISTANT_ACTION_KIND_ACCOUNT_MFA_SETUP = 13;
   NYX_ID_ASSISTANT_ACTION_KIND_DEVICE_ONBOARD = 14;
+  NYX_ID_ASSISTANT_ACTION_KIND_SERVICE_ACCESS_REVIEW = 15;
 }
 
 enum NyxIdAssistantActionRisk {
@@ -298,6 +293,18 @@ message NyxIdChatOperationKey {
   string step_id = 4;
   string operation_id = 5;
   int64 operation_generation = 6;
+}
+
+// Owner-bound intent armed while the source LLM operation is still running.
+// The exact effect operation does not exist yet and is sealed only when the
+// LLM result materializes one direct typed Tool operation.
+message NyxIdChatCanaryEffectFaultArmIntent {
+  string arm_id = 1;
+  string client_request_id = 2;
+  NyxIdChatOperationKey source_operation_key = 3;
+  string service_instance_id = 4;
+  string owner_subject = 5;
+  google.protobuf.Timestamp expires_at = 6;
 }
 
 // Owner-bound, one-shot production canary directive. It is server-authored,
@@ -326,6 +333,7 @@ message NyxIdChatCanaryEffectFaultState {
   string approval_subject_id = 11;
   string approval_call_id = 12;
   string approval_tool_name = 13;
+  NyxIdChatCanaryEffectFaultArmIntent arm_intent = 14;
 }
 
 message NyxIdChatAvailableActions {
@@ -336,6 +344,25 @@ message NyxIdChatAvailableActions {
 
 message NyxIdChatLLMStepSource {
   string model = 1;
+  // Present only for the exact LLM continuation admitted after a browser-owned
+  // NyxID action has been verified through its typed postcondition.
+  optional string action_request_id = 2;
+  // Frozen actor-owned completion obligation for the exact verified action.
+  NyxIdChatAuthorizationResumeRequirement resume_requirement = 3;
+}
+
+// Credential-free typed arguments for the platform readiness gate that may
+// need to be re-run after a verified browser-owned authorization action.
+message NyxIdChatRequireServiceParams {
+  string service_slug = 1;
+  repeated string requested_scopes = 2;
+  string service_label = 3;
+  string resource_uri = 4;
+}
+
+message NyxIdChatAuthorizationReadinessInput {
+  string tool_name = 1;
+  NyxIdChatRequireServiceParams params = 2;
 }
 
 message NyxIdChatToolStepSource {
@@ -352,6 +379,9 @@ message NyxIdChatToolStepSource {
   NyxIdCatalogServiceConnectParams service_connect_postcondition = 7;
   // Bounded provider-authored presentation retained for recovery and retry.
   aevatar.foundation.tools.ToolPresentationDescriptor presentation = 8;
+  // Frozen independently of retry authorization. It contains no credential,
+  // bearer, operation admission, or caller-supplied prose.
+  NyxIdChatAuthorizationReadinessInput authorization_readiness = 9;
 }
 
 message NyxIdChatBrowserActionStepSource {
@@ -386,6 +416,8 @@ message NyxIdChatApprovalStepSource {
 message NyxIdChatWebStepSource {}
 
 message NyxIdChatNumericConditionState {
+  reserved 11;
+  reserved "source_evidence_id";
   string condition_id = 1;
   string source_input_request_id = 2;
   int64 suggested_threshold = 3;
@@ -396,7 +428,6 @@ message NyxIdChatNumericConditionState {
   NyxIdChatConditionOutcome outcome = 8;
   google.protobuf.Timestamp evaluated_at = 9;
   string guarded_tool_name = 10;
-  string source_evidence_id = 11;
 }
 
 message NyxIdChatConditionStepSource {
@@ -419,50 +450,6 @@ message NyxIdChatStepSource {
     NyxIdChatWebStepSource web = 7;
     NyxIdChatConditionStepSource condition = 8;
   }
-}
-
-message NyxIdChatPlanOperationAdmission {
-  NyxIdChatOperationKey key = 1;
-  string tool_call_id = 2;
-  string tool_name = 3;
-  bytes arguments_sha256 = 4;
-  string action_request_id = 5;
-  NyxIdAssistantActionKind action = 6;
-  bytes action_params_sha256 = 7;
-  // Credential-free, actor-authored postcondition input. This is distinct from
-  // a browser action admission and is dispatched only after the exact plan
-  // revision is confirmed.
-  NyxIdChatActionPostconditionInput action_postcondition = 8;
-}
-
-message NyxIdChatPlanGate {
-  NyxIdChatPlanGateMode mode = 1;
-  string reason = 2;
-  NyxIdChatPlanGateStatus status = 3;
-  string request_id = 4;
-  string task_id = 5;
-  int32 plan_revision = 6;
-  repeated NyxIdChatPlanOperationAdmission admissions = 7;
-  google.protobuf.Timestamp decided_at = 8;
-  string plan_id = 9;
-}
-
-// Durable receiver-side admission for one exact plan-gate continuation. Raw
-// arguments and credentials are deliberately absent; the arguments digest and
-// provider-authored operation admission are sufficient to fail closed.
-message NyxIdChatTurnPlanGateAdmissionState {
-  NyxIdChatOperationKey key = 1;
-  string gate_request_id = 2;
-  string task_id = 3;
-  string plan_id = 4;
-  int32 plan_revision = 5;
-  string tool_call_id = 6;
-  string tool_name = 7;
-  bytes arguments_sha256 = 8;
-  bool may_change_external_state = 9;
-  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 10;
-  google.protobuf.Timestamp admitted_at = 11;
-  bool rematerialize_durable_authorization = 12;
 }
 
 message NyxIdChatStepEstimate {
@@ -552,6 +539,47 @@ message NyxIdChatTaskStepState {
   // evidence authorizes this explicit retry.
   NyxIdChatOperationKey retry_authorization_source_key = 28;
   NyxIdChatStepGuard guard = 29;
+  // Bounded, sanitized transcript facts kept so the turn's operation ledger
+  // survives past the live event stream. Credentials, operation admissions and
+  // raw content parts never enter this record.
+  NyxIdChatOperationLedgerFacts operation_ledger_facts = 30;
+}
+
+// Sanitized, size-bounded ledger facts for one committed operation result.
+// Each preview is truncated for storage; `previews_truncated` says so honestly
+// instead of presenting a fragment as the complete payload.
+message NyxIdChatOperationLedgerFacts {
+  // Tool result bodies are untrusted external text and are deliberately absent:
+  // conversation actor state is re-read when rebuilding model input.
+  reserved 5;
+  reserved "result_preview";
+  aevatar.ai.TokenUsagePayload usage = 1;
+  string input_preview = 2;
+  string output_preview = 3;
+  string arguments_preview = 4;
+  bool previews_truncated = 6;
+  string model = 7;
+  string provider = 8;
+  string finish_reason = 9;
+  repeated string available_tool_names = 10;
+  bool tool_catalog_captured = 11;
+}
+
+// One operation of a terminal turn, snapshotted from the owning task's steps so
+// it can be appended together with the turn's chat history record.
+message NyxIdChatTurnOperationSnapshot {
+  string operation_id = 1;
+  string step_id = 2;
+  int32 order = 3;
+  NyxIdChatStepKind kind = 4;
+  NyxIdChatStepStatus status = 5;
+  string title = 6;
+  string description = 7;
+  google.protobuf.Timestamp started_at = 8;
+  google.protobuf.Timestamp completed_at = 9;
+  string terminal_code = 10;
+  string safe_message = 11;
+  NyxIdChatOperationLedgerFacts ledger_facts = 12;
 }
 
 message NyxIdChatPlanRevisionRecord {
@@ -562,107 +590,9 @@ message NyxIdChatPlanRevisionRecord {
   repeated string cancelled_step_ids = 5;
 }
 
-// Exact decimal money as supplied by the task producer. The minor-unit form
-// avoids locale parsing and floating-point drift in actor-owned evidence.
-message NyxIdChatMoneyValue {
-  string currency_code = 1;
-  int64 minor_units = 2;
-  uint32 fraction_digits = 3;
-}
-
-message NyxIdChatInvoiceEvidence {
-  int32 source_ordinal = 1;
-  string vendor = 2;
-  string invoice_number = 3;
-  string invoice_date = 4;
-  NyxIdChatMoneyValue amount = 5;
-}
-
-message NyxIdChatInvoiceDuplicateEvidence {
-  int32 duplicate_source_ordinal = 1;
-  int32 retained_source_ordinal = 2;
-}
-
-// Actor-validated reimbursement facts. Raw provider arguments are not part of
-// this contract and remain transient at the connected-service boundary.
-message NyxIdChatReimbursementEvidence {
-  string evidence_id = 1;
-  string source_input_request_id = 2;
-  string expense_category = 3;
-  string cost_center = 4;
-  string reimbursement_currency_instruction = 5;
-  repeated NyxIdChatInvoiceEvidence source_invoices = 6;
-  repeated int32 retained_source_ordinals = 7;
-  repeated NyxIdChatInvoiceDuplicateEvidence duplicate_invoices = 8;
-  google.protobuf.Timestamp committed_at = 9;
-  string guarded_tool_name = 10;
-}
-
-message NyxIdChatCandidateRubricCriterion {
-  string criterion_id = 1;
-  string title = 2;
-  int32 maximum_points = 3;
-}
-
-message NyxIdChatCandidateCriterionScore {
-  string criterion_id = 1;
-  int32 awarded_points = 2;
-  string evidence = 3;
-}
-
-// User-authored rubric plus the model's bounded, evidence-linked score. The
-// actor validates totals and binds condition evaluation to evidence_id.
-message NyxIdChatCandidateScreeningEvidence {
-  string evidence_id = 1;
-  string source_input_request_id = 2;
-  string candidate_name = 3;
-  string role_title = 4;
-  repeated NyxIdChatCandidateRubricCriterion rubric = 5;
-  repeated NyxIdChatCandidateCriterionScore scores = 6;
-  int32 total_score = 7;
-  string tracker_table = 8;
-  string tracker_table_id = 9;
-  string stage = 10;
-  string guarded_tool_name = 11;
-  google.protobuf.Timestamp committed_at = 12;
-}
-
-message NyxIdChatTaskDomainState {
-  oneof domain {
-    NyxIdChatReimbursementEvidence reimbursement = 1;
-    NyxIdChatCandidateScreeningEvidence candidate_screening = 2;
-  }
-}
-
-message NyxIdChatReimbursementArtifact {
-  string provider_instance_id = 1;
-  string cost_center = 2;
-  int32 retained_item_count = 3;
-  int32 duplicate_item_count = 4;
-}
-
-message NyxIdChatCandidateTrackerArtifact {
-  string provider_record_id = 1;
-  string candidate_name = 2;
-  int32 score = 3;
-  int64 threshold = 4;
-  string tracker_table = 5;
-  string tracker_table_id = 6;
-  string stage = 7;
-}
-
-// Artifact truth is created only by a matching admitted read-back. Assistant
-// prose and transport acceptance cannot populate this state.
-message NyxIdChatVerifiedArtifactState {
-  string check_name = 1;
-  google.protobuf.Timestamp verified_at = 2;
-  oneof artifact {
-    NyxIdChatReimbursementArtifact reimbursement = 3;
-    NyxIdChatCandidateTrackerArtifact candidate_tracker = 4;
-  }
-}
-
 message NyxIdChatTaskState {
+  reserved 16, 19, 20;
+  reserved "gate", "domain", "artifact";
   string task_id = 1;
   string turn_id = 2;
   NyxIdChatTaskStatus status = 3;
@@ -678,11 +608,8 @@ message NyxIdChatTaskState {
   string plan_id = 13;
   int32 plan_revision = 14;
   string title = 15;
-  NyxIdChatPlanGate gate = 16;
   repeated NyxIdChatPlanRevisionRecord plan_revisions = 17;
   int32 plan_revision_history_start = 18;
-  NyxIdChatTaskDomainState domain = 19;
-  NyxIdChatVerifiedArtifactState artifact = 20;
 }
 
 // Public TaskPlan projection shared by live AGUI frames and current-state
@@ -738,6 +665,8 @@ message NyxIdChatTaskPlanStep {
 }
 
 message NyxIdChatTaskPlan {
+  reserved 16, 19, 20;
+  reserved "gate", "domain", "artifact";
   string task_id = 1;
   string turn_id = 2;
   NyxIdChatTaskStatus status = 3;
@@ -753,11 +682,8 @@ message NyxIdChatTaskPlan {
   string plan_id = 13;
   int32 plan_revision = 14;
   string title = 15;
-  NyxIdChatPlanGate gate = 16;
   repeated NyxIdChatPlanRevisionRecord plan_revisions = 17;
   int32 plan_revision_history_start = 18;
-  NyxIdChatTaskDomainState domain = 19;
-  NyxIdChatVerifiedArtifactState artifact = 20;
 }
 
 message NyxIdChatTaskStepChanged {
@@ -888,17 +814,6 @@ message NyxIdChatApprovalResolutionState {
   google.protobuf.Timestamp committed_at = 6;
 }
 
-message NyxIdChatPlanResolutionState {
-  string request_id = 1;
-  string client_request_id = 2;
-  NyxIdChatNeedsYouResolutionOutcome outcome = 3;
-  bool confirmed = 4;
-  string task_id = 5;
-  int32 plan_revision = 6;
-  google.protobuf.Timestamp committed_at = 7;
-  string plan_id = 8;
-}
-
 message NyxIdChatConversationAttentionState {
   NyxIdChatTaskStatus task_status = 1;
   NyxIdChatAttentionKind attention_kind = 2;
@@ -981,6 +896,12 @@ message NyxIdServiceReauthorizeParams {
   repeated string requested_scopes = 2;
 }
 
+message NyxIdServiceAccessReviewParams {
+  string user_service_id = 1;
+  string service_slug = 2;
+  string resource_uri = 3;
+}
+
 message NyxIdProviderSetAppCredentialsParams {
   string provider_slug = 1;
 }
@@ -1051,6 +972,7 @@ message NyxIdAssistantActionParams {
     NyxIdDeveloperAppRotateSecretParams developer_app_rotate_secret = 13;
     NyxIdAccountMfaSetupParams account_mfa_setup = 14;
     NyxIdDeviceOnboardParams device_onboard = 15;
+    NyxIdServiceAccessReviewParams service_access_review = 16;
   }
 }
 
@@ -1063,6 +985,7 @@ message NyxIdAssistantActionWireParams {
     NyxIdCatalogServiceConnectParams catalog_service = 1;
     NyxIdCustomServiceConnectParams custom_service = 2;
     NyxIdServiceReauthorizeParams service_reauthorize = 3;
+    NyxIdServiceAccessReviewParams service_access_review = 8;
   }
   string key_create_name = 4 [json_name = "name"];
   string key_create_platform = 5 [json_name = "platform"];
@@ -1116,6 +1039,22 @@ message NyxIdChatSafeResourceRef {
   }
 }
 
+// Credential-free, transient fact supplied only when a browser-owned NyxID
+// authorization action has passed its exact typed postcondition. The turn
+// executor may use it to narrow request-local tools and orient the resumed LLM;
+// it never carries a bearer, credential, or generic extension bag.
+message NyxIdChatVerifiedAuthorizationContinuation {
+  string action_request_id = 1;
+  string origin_turn_id = 2;
+  string source_tool_step_id = 3;
+  string postcondition_step_id = 4;
+  NyxIdChatSafeResourceRef verified_resource = 5;
+  string service_slug = 6;
+  google.protobuf.Timestamp verified_at = 7;
+  NyxIdChatAuthorizationResumeRequirement resume_requirement = 8;
+  NyxIdChatAuthorizationReadinessInput authorization_readiness = 9;
+}
+
 message NyxIdChatActionRequestState {
   int32 schema_version = 1;
   string registry_revision = 2;
@@ -1134,6 +1073,9 @@ message NyxIdChatActionRequestState {
   repeated NyxIdChatActionReport reports = 13;
   // The latest typed read-model proof attempt for this exact action request.
   NyxIdChatActionPostconditionResult postcondition_result = 14;
+  // The readiness tool whose authorization blocker caused this browser action.
+  // Empty for standalone browser-action handoffs.
+  optional string source_tool_step_id = 15;
 }
 
 message NyxIdChatActionReport {
@@ -1157,6 +1099,11 @@ message NyxIdAssistantActionDefinitionSnapshot {
 }
 
 message NyxIdChatConversationGAgentState {
+  reserved 31, 32, 38, 39, 40, 44, 45;
+  reserved "recent_plan_resolutions", "latest_plan_resolution",
+      "active_turn_plan_gate_admission", "pending_plan_gate_admission_revocation",
+      "pending_plan_gate_admission_delivery", "pending_plan_gate_continuation",
+      "pending_plan_gate_continuation_key";
   string conversation_actor_id = 1;
   string scope_id = 2;
   aevatar.ai.AIAgentConfigOverrides role_configuration = 3;
@@ -1208,8 +1155,6 @@ message NyxIdChatConversationGAgentState {
   // Durable, secret-free outbox for the self-message that materializes an
   // ask_user tool call as the exact actor-owned pending input fact.
   NyxIdChatInputRequestCommand pending_input_request = 30;
-  repeated NyxIdChatPlanResolutionState recent_plan_resolutions = 31;
-  NyxIdChatPlanResolutionState latest_plan_resolution = 32;
   // Server-sealed first-turn command retained only until canonical history
   // initialization is admitted. Raw credentials never enter actor state.
   aevatar.credentials.DurableCallerCredentialRef pending_creation_first_turn = 33;
@@ -1219,16 +1164,6 @@ message NyxIdChatConversationGAgentState {
   aevatar.credentials.DurableCallerCredentialRef pending_steering_continuation = 35;
   string pending_steering_continuation_id = 36;
   google.protobuf.Timestamp pending_steering_continuation_expires_at = 37;
-  // Exact admission last sent to the turn actor for the pending plan gate.
-  // This is internal transport state and is never projected publicly.
-  NyxIdChatTurnPlanGateAdmissionState active_turn_plan_gate_admission = 38;
-  // Durable revoke outbox retained until the turn actor confirms its committed
-  // revoked fence. Dispatch admission alone never clears this fact.
-  NyxIdChatPlanGateAdmissionRevocationOutbox pending_plan_gate_admission_revocation = 39;
-  // Full, secret-free delivery command retained until the turn actor confirms
-  // that the exact admission has committed. This closes the commit-before-send
-  // activation gap and makes lost acknowledgements recoverable.
-  NyxIdChatTurnPlanGateAdmissionCommand pending_plan_gate_admission_delivery = 40;
   // Secret-free delivery barrier retained when operation inbox admission is
   // ambiguous. Recovery cannot start until the turn actor proves that this
   // exact operation committed or durably fences it against late delivery.
@@ -1242,11 +1177,6 @@ message NyxIdChatConversationGAgentState {
   // terminal identity plus a SHA-256 digest); correctness must not depend on
   // evicting an older receipt from a long-lived conversation actor.
   repeated NyxIdChatOperationResultAcknowledgementFence result_acknowledgement_fences = 43;
-  // Secret-vault pointer for a plan resolution that committed before the turn
-  // actor acknowledged its exact gate admission. The bearer-bearing command
-  // remains outside actor state until that admission barrier is satisfied.
-  aevatar.credentials.DurableCallerCredentialRef pending_plan_gate_continuation = 44;
-  NyxIdChatOperationKey pending_plan_gate_continuation_key = 45;
   // Authoritative actor-owned deletion tombstone. The current-state
   // projection copies this fact; query paths must not infer deletion by
   // joining the registry or replaying events.
@@ -1257,11 +1187,6 @@ message NyxIdChatConversationGAgentState {
 message NyxIdChatOperationResultAcknowledgementFence {
   NyxIdChatOperationKey key = 1;
   bytes result_sha256 = 2;
-}
-
-message NyxIdChatPlanGateAdmissionRevocationOutbox {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-  string reason_code = 2;
 }
 
 message NyxIdChatHistoryInitializationOutbox {
@@ -1365,6 +1290,10 @@ message NyxIdChatHistoryTerminalOutbox {
   string error_code = 7;
   google.protobuf.Timestamp observed_at = 8;
   int32 attempt = 9;
+  // The turn's operation ledger, snapshotted once when this outbox is first
+  // prepared. Retries reuse the committed snapshot so the idempotency guard
+  // keeps comparing the same bytes.
+  repeated NyxIdChatTurnOperationSnapshot operations = 10;
 }
 
 // Typed self-continuation and durable retry payload. Full terminal content is
@@ -1399,6 +1328,8 @@ message NyxIdChatTurnStartedEvent {
 // identity and safe terminal evidence; provider credentials, raw responses,
 // tool arguments, and execution capabilities are never persisted here.
 message NyxIdChatTurnGAgentState {
+  reserved 19, 25;
+  reserved "plan_gate_admission", "revoked_plan_gate_admissions";
   NyxIdChatOperationKey admitted_operation = 1;
   NyxIdChatStepKind operation_kind = 2;
   NyxIdChatOperationPhase phase = 3;
@@ -1419,19 +1350,11 @@ message NyxIdChatTurnGAgentState {
   string idempotency_key = 16;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 17;
   google.protobuf.Timestamp reconciliation_started_at = 18;
-  NyxIdChatTurnPlanGateAdmissionState plan_gate_admission = 19;
   string provider_resource_id = 20;
   aevatar.ai.AgentToolRecoveryContextPayload recovery_context = 21;
   aevatar.credentials.DurableCallerCredentialRef recovery_credential = 22;
   aevatar.ai.tool_providers.AgentToolOperationReadBackPayload recovery_read_back = 23;
   string recovery_effect_step_id = 24;
-  // Last exact admission revoked by the conversation actor. Retaining this
-  // fence makes revoke redelivery idempotent and prevents a delayed admission
-  // command from resurrecting a rejected plan.
-  // Bounded exact revocation fences. A turn can admit more than one plan-gated
-  // operation over its lifetime, so a singular last-revoked value would make
-  // later admissions impossible to revoke safely.
-  repeated NyxIdChatTurnPlanGateAdmissionState revoked_plan_gate_admissions = 25;
   // Bounded tombstones committed by delivery probes before reporting that an
   // operation was not admitted. A delayed exact command cannot execute after
   // the conversation actor has relied on that negative result.
@@ -1461,6 +1384,8 @@ message NyxIdChatTurnGAgentState {
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
+  reserved 9;
+  reserved "consumes_plan_gate_admission";
   NyxIdChatOperationKey key = 1;
   NyxIdChatStepKind operation_kind = 2;
   google.protobuf.Timestamp admitted_at = 3;
@@ -1469,7 +1394,6 @@ message NyxIdChatTurnOperationAdmittedEvent {
   bool idempotent = 6;
   string idempotency_key = 7;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 8;
-  bool consumes_plan_gate_admission = 9;
   aevatar.ai.AgentToolRecoveryContextPayload recovery_context = 10;
   aevatar.credentials.DurableCallerCredentialRef recovery_credential = 11;
   aevatar.ai.tool_providers.AgentToolOperationReadBackPayload recovery_read_back = 12;
@@ -1478,59 +1402,6 @@ message NyxIdChatTurnOperationAdmittedEvent {
   string canary_effect_fault_tool_call_id = 15;
   string canary_effect_fault_tool_name = 16;
   NyxIdChatExactServiceRecoveryStage exact_service_recovery_stage = 17;
-}
-
-message NyxIdChatTurnPlanGateAdmissionCommand {
-  NyxIdChatOperationKey source_operation_key = 1;
-  NyxIdChatTurnPlanGateAdmissionState admission = 2;
-}
-
-message NyxIdChatTurnPlanGateAdmissionCommittedEvent {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-}
-
-message NyxIdChatTurnPlanGateAdmissionCommittedSignal {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-}
-
-message NyxIdChatPlanGateAdmissionDeliveryDispatchRequested {
-  string gate_request_id = 1;
-}
-
-message NyxIdChatPendingPlanGateContinuationDispatchRequested {
-  string credential_ref = 1;
-  NyxIdChatOperationKey key = 2;
-}
-
-message NyxIdChatTurnPlanGateAdmissionExpiredEvent {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-  google.protobuf.Timestamp expired_at = 2;
-}
-
-message NyxIdChatTurnPlanGateAdmissionRevokeCommand {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-  string reason_code = 2;
-}
-
-message NyxIdChatTurnPlanGateAdmissionRevokedEvent {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-  string reason_code = 2;
-  google.protobuf.Timestamp revoked_at = 3;
-}
-
-message NyxIdChatTurnPlanGateAdmissionRevokedSignal {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-  string reason_code = 2;
-}
-
-message NyxIdChatPlanGateAdmissionRevocationDispatchRequested {
-  string gate_request_id = 1;
-}
-
-message NyxIdChatPlanGateCapabilityExpiredSignal {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-  string failure_code = 2;
-  string safe_message = 3;
 }
 
 message NyxIdChatTurnEffectDispatchStartedEvent {
@@ -1604,6 +1475,13 @@ message NyxIdChatLLMOperationInput {
   aevatar.ai.AgentProfileSnapshot agent_profile = 3;
   aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 4;
   NyxIdChatTurnIntent intent = 5;
+  // Rebuild the request-local catalog before resuming the existing provider
+  // session. This is used only after a verified browser-owned authorization
+  // action may have made new exact NyxID operations available.
+  bool rematerialize_turn_catalog = 6;
+  // Safe typed fact for one verified browser-authorization continuation.
+  // Runtime credentials remain exclusively in the transient request context.
+  NyxIdChatVerifiedAuthorizationContinuation verified_authorization_continuation = 7;
 }
 
 message NyxIdChatToolOperationInput {
@@ -1624,6 +1502,7 @@ message NyxIdChatToolOperationInput {
   NyxIdChatOperationKey retry_authorization_source_key = 12;
   NyxIdChatTurnIntent intent = 13;
   aevatar.foundation.tools.ToolPresentationDescriptor presentation = 14;
+  NyxIdChatCanaryEffectFaultDirective canary_effect_fault = 15;
 }
 
 message NyxIdChatToolVerificationInput {
@@ -1645,6 +1524,10 @@ message NyxIdChatActionPostconditionInput {
   // Authoritative action-request time captured by the conversation actor.
   // Provider evidence predating this value cannot prove the requested effect.
   google.protobuf.Timestamp requested_at = 9;
+  // Transient credentials supplied by the browser after an interactive NyxID
+  // authorization change. The executor refreshes only its in-memory turn
+  // session from this value; actors never copy it into committed state.
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
 }
 
 // Transient continuation payloads. Raw user input and credentials are carried
@@ -1662,14 +1545,6 @@ message NyxIdChatConditionContinuationInput {
   NyxIdChatNumericConditionState condition = 2;
 }
 
-message NyxIdChatDomainContinuationInput {
-  string tool_call_id = 1;
-  oneof evidence {
-    NyxIdChatReimbursementEvidence reimbursement = 2;
-    NyxIdChatCandidateScreeningEvidence candidate_screening = 3;
-  }
-}
-
 message NyxIdChatToolApprovalContinuationInput {
   string approval_request_id = 1;
   bool approved = 2;
@@ -1683,31 +1558,9 @@ message NyxIdChatToolApprovalContinuationInput {
   aevatar.foundation.tools.ToolPresentationDescriptor presentation = 10;
 }
 
-// Initial plan confirmation carries no raw tool arguments and matches the
-// transient authorized call. A confirmed retry may additionally carry the
-// credential-free typed arguments already owned by the conversation actor so
-// a fresh turn activation can re-match the current exact tool definition.
-message NyxIdChatPlanGateContinuationInput {
-  string gate_request_id = 1;
-  string task_id = 2;
-  int32 plan_revision = 3;
-  string tool_call_id = 4;
-  string tool_name = 5;
-  bytes arguments_sha256 = 6;
-  aevatar.ai.AgentToolExecutionContextPayload tool_context = 7;
-  bool may_change_external_state = 8;
-  string plan_id = 9;
-  string idempotency_key = 10;
-  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 11;
-  google.protobuf.Struct retry_arguments = 12;
-  aevatar.ai.AgentProfileSnapshot agent_profile = 13;
-  aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 14;
-  bool rematerialize_durable_authorization = 15;
-  NyxIdChatCanaryEffectFaultDirective canary_effect_fault = 16;
-  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 17;
-}
-
 message NyxIdChatOperationDispatchCommand {
+  reserved 15, 18;
+  reserved "plan_gate_continuation", "domain_continuation";
   NyxIdChatOperationKey key = 1;
   oneof input {
     NyxIdChatLLMOperationInput llm = 10;
@@ -1715,10 +1568,8 @@ message NyxIdChatOperationDispatchCommand {
     NyxIdChatActionPostconditionInput action_postcondition = 12;
     NyxIdChatInputContinuationInput input_continuation = 13;
     NyxIdChatToolApprovalContinuationInput tool_approval_continuation = 14;
-    NyxIdChatPlanGateContinuationInput plan_gate_continuation = 15;
     NyxIdChatToolVerificationInput tool_verification = 16;
     NyxIdChatConditionContinuationInput condition_continuation = 17;
-    NyxIdChatDomainContinuationInput domain_continuation = 18;
   }
 }
 
@@ -1770,6 +1621,8 @@ message NyxIdChatLLMOperationResult {
   repeated NyxIdChatToolCall tool_calls = 4;
   aevatar.ai.TokenUsagePayload usage = 5;
   string finish_reason = 6;
+  repeated string available_tool_names = 7;
+  bool tool_catalog_captured = 8;
 }
 
 message NyxIdChatToolOperationResult {
@@ -1890,6 +1743,27 @@ message NyxIdChatToolProgress {
   aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
 }
 
+message NyxIdChatModelStartedProgress {
+  string operation_id = 1;
+  int32 round = 2;
+  string model = 3;
+  string provider = 4;
+  string input_summary = 5;
+  repeated string available_tool_names = 6;
+}
+
+message NyxIdChatModelCompletedProgress {
+  string operation_id = 1;
+  int32 round = 2;
+  string model = 3;
+  string content = 4;
+  string reasoning_content = 5;
+  aevatar.ai.TokenUsagePayload usage = 6;
+  string finish_reason = 7;
+  bool success = 8;
+  string error = 9;
+}
+
 // Presentation-only phase evidence authored by the executor. A phase cannot
 // carry an operation key, effect evidence, actions, or another nested phase;
 // those authoritative facts remain on the owning task step and operation.
@@ -1908,6 +1782,8 @@ message NyxIdChatOperationProgressSignal {
     NyxIdChatToolProgress tool_started = 12;
     NyxIdChatOperationPhaseProgress phase = 13;
     NyxIdChatStreamingProgressBatch streaming_batch = 14;
+    NyxIdChatModelStartedProgress model_started = 15;
+    NyxIdChatModelCompletedProgress model_completed = 16;
   }
 }
 
@@ -1952,14 +1828,14 @@ message NyxIdChatSteeringInputResolutionFact {
 }
 
 message NyxIdChatSteeringExecutionContext {
+  reserved 7, 8;
+  reserved "gate_mode", "gate_reason";
   string origin_turn_id = 1;
   string origin_prompt = 2;
   string task_id = 3;
   string plan_id = 4;
   int32 plan_revision = 5;
   string task_title = 6;
-  NyxIdChatPlanGateMode gate_mode = 7;
-  string gate_reason = 8;
   repeated NyxIdChatSteeringCompletedStepFact completed_steps = 9;
   repeated NyxIdChatSteeringInputResolutionFact input_resolutions = 10;
 }
@@ -2088,36 +1964,20 @@ message NyxIdChatApprovalResolveCommand {
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
 }
 
-message NyxIdChatPlanResolveCommand {
-  string scope_id = 1;
-  string conversation_actor_id = 2;
-  string task_id = 3;
-  int32 plan_revision = 4;
-  string request_id = 5;
-  string client_request_id = 6;
-  bool confirmed = 7;
-  int64 expected_state_version = 8;
-  string command_id = 9;
-  string correlation_id = 10;
-  aevatar.ai.AgentToolExecutionContextPayload tool_context = 11;
-  string plan_id = 12;
-  string owner_subject = 13;
-}
-
 message NyxIdChatCanaryEffectFaultArmCommand {
-  reserved 7;
-  reserved "catalog_digest";
+  reserved 5, 7;
+  reserved "key", "catalog_digest";
   string scope_id = 1;
   string conversation_actor_id = 2;
   string arm_id = 3;
   string client_request_id = 4;
-  NyxIdChatOperationKey key = 5;
   string service_instance_id = 6;
   string owner_subject = 8;
   google.protobuf.Timestamp expires_at = 9;
   int64 expected_state_version = 10;
   string command_id = 11;
   string correlation_id = 12;
+  NyxIdChatOperationKey source_operation_key = 13;
 }
 
 message NyxIdChatActionContinueCommand {
@@ -2134,6 +1994,9 @@ message NyxIdChatActionContinueCommand {
   // Authenticated NyxID subject used only to select the typed read-model
   // authority. It is an identity, not a credential or bearer token.
   string owner_subject = 9;
+  // Current authenticated browser capability used only by the transient
+  // postcondition dispatch and resumed turn session.
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
 }
 
 message NyxIdChatOperationRequestedEvent {
@@ -2312,34 +2175,12 @@ message NyxIdChatApprovalResolutionCommittedEvent {
   NyxIdChatConversationGAgentState state = 2;
 }
 
-message NyxIdChatPlanResolutionCommittedEvent {
-  NyxIdChatPlanResolutionState resolution = 1;
-  NyxIdChatConversationGAgentState state = 2;
-}
-
 message NyxIdChatCanaryEffectFaultArmedCommittedEvent {
   NyxIdChatConversationGAgentState state = 1;
 }
 
 message NyxIdChatCanaryEffectFaultConsumedCommittedEvent {
   NyxIdChatConversationGAgentState state = 1;
-}
-
-message NyxIdChatPlanGateCapabilityExpiredCommittedEvent {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-  string failure_code = 2;
-  string safe_message = 3;
-  NyxIdChatConversationGAgentState state = 4;
-}
-
-message NyxIdChatPlanGateAdmissionRevocationAcknowledgedEvent {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-  google.protobuf.Timestamp acknowledged_at = 2;
-}
-
-message NyxIdChatPlanGateAdmissionDeliveryAcknowledgedEvent {
-  NyxIdChatTurnPlanGateAdmissionState admission = 1;
-  google.protobuf.Timestamp acknowledged_at = 2;
 }
 
 message NyxIdChatTransitionDecisionFact {

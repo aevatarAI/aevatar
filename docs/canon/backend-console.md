@@ -24,6 +24,7 @@ Backend console 只使用一种页面承载方式：
 |---|---|---|
 | `/admin` | `src/Aevatar.Mainnet.Host.Api/BackendConsole/admin.html` | Mainnet Host |
 | `/auto/callback` | `src/Aevatar.Mainnet.Host.Api/BackendConsole/auto-callback.html` | Mainnet Host |
+| `/delivery` | `src/Aevatar.Mainnet.Host.Api/BackendConsole/delivery.html` | Mainnet Host |
 | `/status` | `src/Aevatar.Mainnet.Host.Api/Status/status.html` | Mainnet Host |
 | `/cqrs` | `src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html` | Mainnet Host |
 | `/voice` | `src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html` | Mainnet Host |
@@ -78,6 +79,21 @@ Studio's `/api/auth/nyxid/config` still returns an actor-backed snapshot so auth
 Backend console page endpoints are static shells. They may be anonymous because the browser page performs OIDC PKCE login and all data endpoints enforce authorization server-side.
 
 Static shell endpoint files must not introduce mutating data APIs. Data surfaces stay in their existing API endpoint files, with their existing authorization and audit rules. Adding a new console page means adding the asset, declaring it as an embedded resource, mapping a GET shell route, and extending the guard inventory.
+
+`/delivery` is the standalone Workflow Delivery Center shell, parallel to `/admin`. It shares the
+console OIDC PKCE token and `/auto/callback` contract, while preserving a safe `/delivery#/...` return
+route. The page determines administrator/customer capabilities only from `GET /api/delivery/session`.
+Administrators can select only server-returned allowlisted workflow package versions and create a
+delivery request for an explicit target scope. Customers can read only requests authorized for their
+NyxID scope, select a server-returned Team, submit only `variableSchema` fields, and observe the durable
+installation read model. The page never treats HTTP `202` as completion: only an installation whose
+server status is `ready` is rendered as successfully installed. For a personal scope, a customer may
+create a hosted NyxID connect link and explicitly re-check its server status. The transient
+`connectUrl` stays only in the current page memory; connection references are resolved by the server
+and are never submitted by the browser. External-service credentials, connection tokens, and secrets
+never enter the page or browser storage; the console's own OIDC login session continues to use the
+shared Backend Console storage contract. Organization-scope connection remains an explicit unsupported state until
+the NyxID connect-link contract supports an organization target.
 
 Workflow Observatory data endpoints are read-only. Normal run detail reads remain scope-bound under
 `GET /api/workflow/observatory/runs/{runId}` and `GET /api/workflow/observatory/runs/{runId}/graph`.
@@ -155,15 +171,38 @@ Admin Studio exposes conversation and request-trajectory views over the same liv
 Each top-level text request creates a trace container keyed by its `clientRequestId`; a later `runId` or
 `turnId` is attached as a server fact and never replaces that key. SSE frames incrementally create or
 settle the container's ordered Input/Model/Tool operations. Each model response and each tool call is a
-separate selectable ledger record rather than another top-level trace. The fixed three-lane overview
-and the ledger project the same operation identities, so selecting a bar or row opens that operation's
-own detail. Selecting an older container changes only the inspector data; Actor controls remain scoped
-to the current task. Studio consumes the live typed Model/Tool lifecycle frames, but its trajectory
-index is explicitly page-local: reopening a stored transcript does not hydrate the prior request ledger
-from the durable Observatory operation read model. Durable Model/Tool inspection is available in
-Observatory, but Studio does not yet join it back to stored conversation/request identity. The Input
-record likewise has no independent start/completion pair. Missing operation timing remains unavailable
-rather than being calculated from browser receipt time.
+separate selectable ledger record rather than another top-level trace. One continuous ledger carries
+every container in the conversation: a request is a numbered section boundary inside that ledger, not a
+separate navigation rail. The fixed three-lane overview and the ledger project the same operation
+identities onto one shared time domain across every container, so selecting a bar or row opens that
+operation's own detail in the trajectory's resizable details pane. Overview drag selects a time
+interval and dims records outside it, wheel zooms the domain, and right-button drag pans a zoomed
+viewport; toolbar controls switch recorded-duration against equal-width projection, fold requests and
+fold a model record's tool calls, and search the loaded ledger. Selecting an older container changes
+only inspection; Actor controls remain scoped to the current task.
+
+NyxID chat publishes typed `MODEL_CALL_START` / `MODEL_CALL_END` SSE frames for each provider
+invocation. `MODEL_CALL_START.availableToolNames` is copied from the server-authorized request catalog
+actually supplied to that model round; it is not inferred from tools the model later chose to call.
+The Model row shows a compact loaded-tool summary, search includes those names, and the Input detail tab
+lists the complete captured set. A round with an empty catalog remains an honest zero-tools invocation.
+The durable `toolCatalogCaptured` fact distinguishes that exact empty catalog from a legacy operation
+whose model-visible catalog was never recorded; the latter remains `未上报` after reload.
+
+The trajectory survives a reload from two committed sources, and neither infers a record it did not
+read. A terminal turn appends its Model/Tool operation ledger together with its chat history turn, so
+`GET /api/chat/conversations/{id}` returns those operations beside the stored messages; the in-flight
+turn is rebuilt from the conversation actor's current-state step ledger. Recovered containers are keyed
+by the server's `turnId` because `clientRequestId` is a browser identity that does not survive the
+reload, and a live container already owning that turn is never replaced. Persisted operation content is
+a sanitized, size-bounded preview: a truncated preview is labelled as an archived fragment and never
+presented as the complete payload. Tool result bodies are deliberately not archived, because untrusted
+external text must not be retained by a conversation actor whose state is re-read when rebuilding model
+input; a restored Tool record therefore carries identity, status and timing but reports its output as
+uncaptured. The Input record has no independent start/completion pair. Missing operation timing remains
+unavailable rather than being calculated from browser receipt time. The terminal operation ledger also
+persists each model round's `availableToolNames`, so reopening the conversation restores the same loaded
+tool set shown by the live SSE path, together with whether that catalog was captured.
 
 Fleet links carry exact `scope + run`, and schedule links carry `schedule` while clearing an unrelated selected
 run. The embedded page writes canonical route changes back to the parent hash without reloading its iframe.

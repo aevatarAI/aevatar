@@ -95,6 +95,9 @@ message NeedsLlmReplyEvent {
   // Durable handle to the encrypted, TTL-bound NyxID user access token used by
   // the LLM gateway. The raw access token is never persisted in actor state.
   aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 16;
+  // Conversation-owned immutable profile pin. Unlike target_ref this is durable business
+  // authority and may be persisted; it contains no request credential or runtime tool object.
+  aevatar.ai.AgentProfileSnapshot agent_profile = 17;
 }
 
 enum ChannelWorkflowDraftRunSourceKind {
@@ -226,6 +229,9 @@ message LlmReplyReadyEvent {
   // invoking a channel runner. WorkflowRunDeliveryGAgent exclusively owns the
   // approval card and terminal workflow result for this run.
   aevatar.ai.WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 17;
+  // Profile used by the producing AgentRun. ConversationGAgent pins the first value and rejects
+  // a later non-equivalent snapshot instead of hot-replacing an active conversation.
+  aevatar.ai.AgentProfileSnapshot agent_profile = 18;
 }
 
 enum ConversationReplyLifecycleMode {
@@ -382,6 +388,15 @@ message LarkCardDeliveryCompletedEvent {
   repeated ConversationHistoryEntry appended_history = 7;
   LlmReplyDeliveryFailedEvent delivery_failure = 8;
   int64 completed_at_unix_ms = 9;
+  aevatar.ai.AgentProfileSnapshot agent_profile = 10;
+}
+
+// Committed exactly once for a profiled conversation. A changed scope/system binding affects new
+// conversations only; an active conversation never hot-replaces this immutable snapshot.
+message ConversationAgentProfilePinnedEvent {
+  aevatar.ai.AgentProfileSnapshot profile = 1;
+  string source_run_id = 2;
+  int64 pinned_at_unix_ms = 3;
 }
 
 // Refactor (iter57/cluster-065-lark-card-signal-only):

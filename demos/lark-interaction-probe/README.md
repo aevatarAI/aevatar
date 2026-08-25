@@ -4,7 +4,7 @@ This directory contains the Phase 1 probe artifacts for migrating n8n form pages
 
 ## Files
 
-- `cn-reimbursement-shadow.yaml`: 18-field reimbursement review fixture.
+- `structured-review-shadow.yaml`: 18-field domain-neutral record review fixture.
 
 ## How To Use
 

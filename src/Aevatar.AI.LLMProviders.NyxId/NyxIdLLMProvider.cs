@@ -1,6 +1,7 @@
 using System.ClientModel.Primitives;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.LLMProviders.MEAI;
@@ -19,8 +20,10 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 {
     private const string GatewayRoute = "/api/v1/llm/gateway/v1";
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1/";
+    private const string CatalogProxyRoutePrefix = "/api/v1/proxy/";
     private const string ServiceProxyRoutePrefix = "/api/v1/proxy/s/";
-    private const int MaximumServiceSlugLength = 80;
+    private const string ExactUserServiceQueryName = "_nyxid_via";
+    private const int MaximumServiceIdentityLength = 256;
     private static readonly LLMProviderCapabilities ProviderCapabilities = new()
     {
         SupportedInputModalities = new HashSet<ContentPartKind>
@@ -99,7 +102,12 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         [EnumeratorCancellation] CancellationToken ct)
     {
         var route = await ResolveRouteAsync(request, ct);
-        var provider = CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken);
+        var provider = CreateDelegateProvider(
+            route.Request,
+            route.Endpoint,
+            route.RouteName,
+            route.AccessToken,
+            route.ExactUserServiceId);
 
         await foreach (var chunk in EnrichErrors(provider.ChatStreamAsync(route.Request, ct), route).WithCancellation(ct))
             yield return chunk;
@@ -285,13 +293,23 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         _ = ct;
         var normalizedRequest = NormalizeRequest(request);
         var (accessToken, tokenSource) = ResolveAccessTokenWithSource(normalizedRequest);
+        var routeTarget = ResolveRouteTarget(normalizedRequest);
         var requestedRoutePreference = ResolveRoutePreference(normalizedRequest);
-        var routePreference = NormalizeRoutePreference(requestedRoutePreference);
-        var route = ResolvePreferredRoute(
-            normalizedRequest,
-            accessToken,
-            routePreference,
-            requestedRoutePreference is not null);
+        var normalizedRoutePreference = NormalizeRoutePreference(requestedRoutePreference);
+        if (requestedRoutePreference is { Length: > 0 } &&
+            !string.Equals(requestedRoutePreference.Trim(), "auto", StringComparison.OrdinalIgnoreCase) &&
+            normalizedRoutePreference.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "The explicit NyxID route preference is not canonical.");
+        }
+        var route = routeTarget is null
+            ? ResolvePreferredRoute(
+                normalizedRequest,
+                accessToken,
+                normalizedRoutePreference,
+                requestedRoutePreference is not null)
+            : ResolveTargetRoute(normalizedRequest, accessToken, routeTarget);
 
         // Credential-source probe for the 2026-06-12 empty-reply incident: source + length only.
         _logger.LogInformation(
@@ -305,6 +323,41 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         return Task.FromResult(route);
     }
 
+    private NyxIdResolvedRoute ResolveTargetRoute(
+        LLMRequest request,
+        string accessToken,
+        LLMRouteTarget target)
+    {
+        LLMSelectionPolicy.ValidateRouteTarget(target);
+
+        return target.SourceIdentityCase switch
+        {
+            LLMRouteTarget.SourceIdentityOneofCase.CatalogServiceId => BuildTargetRoute(
+                request,
+                accessToken,
+                CatalogProxyRoutePrefix + Uri.EscapeDataString(target.CatalogServiceId),
+                exactUserServiceId: null),
+            LLMRouteTarget.SourceIdentityOneofCase.UserServiceId => BuildTargetRoute(
+                request,
+                accessToken,
+                ServiceProxyRoutePrefix + target.ServiceSlugSnapshot,
+                target.UserServiceId),
+            _ => throw new InvalidOperationException("LLM route target kind is unsupported."),
+        };
+    }
+
+    private NyxIdResolvedRoute BuildTargetRoute(
+        LLMRequest request,
+        string accessToken,
+        string routePath,
+        string? exactUserServiceId) =>
+        new(
+            routePath,
+            ResolveEndpointWithinAuthority(routePath),
+            request,
+            accessToken,
+            exactUserServiceId);
+
     private NyxIdResolvedRoute ResolvePreferredRoute(
         LLMRequest request,
         string accessToken,
@@ -317,16 +370,22 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             {
                 return new NyxIdResolvedRoute(
                     _defaultRoutePreference,
-                    ResolveEndpointWithinAuthority(_defaultRoutePreference),
+                    ResolveEndpointWithinAuthority(RoutePath(_defaultRoutePreference)),
                     request,
-                    accessToken);
+                    accessToken,
+                    ExactUserServiceId(_defaultRoutePreference));
             }
 
             return new NyxIdResolvedRoute(Name, _defaultNyxEndpoint, request, accessToken);
         }
 
-        var endpoint = ResolveEndpointWithinAuthority(routePreference);
-        return new NyxIdResolvedRoute(routePreference, endpoint, request, accessToken);
+        var endpoint = ResolveEndpointWithinAuthority(RoutePath(routePreference));
+        return new NyxIdResolvedRoute(
+            routePreference,
+            endpoint,
+            request,
+            accessToken,
+            ExactUserServiceId(routePreference));
     }
 
     private Uri ResolveEndpointWithinAuthority(string routePreference)
@@ -345,7 +404,8 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         LLMRequest request,
         Uri endpoint,
         string routeName,
-        string accessToken)
+        string accessToken,
+        string? exactUserServiceId)
     {
         var options = new OpenAI.OpenAIClientOptions
         {
@@ -355,7 +415,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         // Always suppress the OpenAI SDK default User-Agent (e.g. "openai-dotnet/2.0.0")
         // for all NyxID routes. The gateway and proxy both reject requests that look like
         // direct OpenAI SDK connections.
-        options.Transport = new NyxIdProxyTransport();
+        options.Transport = new NyxIdProxyTransport(exactUserServiceId);
 
         var client = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential(accessToken), options);
         var chatClient = client.GetChatClient(request.Model!).AsIChatClient();
@@ -376,6 +436,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             ToolContext = request.ToolContext,
             RoutingContext = request.RoutingContext,
             LlmControl = request.LlmControl,
+            RouteTarget = request.RouteTarget?.Clone(),
             Tools = request.Tools,
             Model = model,
             Temperature = NormalizeTemperatureForModel(model, request.Temperature),
@@ -459,6 +520,11 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         request.LlmControl?.NyxIdRoutePreference
         ?? request.RoutingContext?.NyxIdRoutePreference;
 
+    private static LLMRouteTarget? ResolveRouteTarget(LLMRequest request) =>
+        request.RouteTarget
+        ?? request.LlmControl?.RouteTarget
+        ?? request.RoutingContext?.RouteTarget;
+
     private static string NormalizeRoutePreference(string? value)
     {
         var normalized = value?.Trim() ?? string.Empty;
@@ -481,6 +547,12 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             return GatewayRoute;
         }
 
+        if (TryNormalizeExactProxyRoute(normalized, out var exactRoute))
+            return exactRoute;
+
+        if (TryNormalizeCatalogProxyRoute(normalized, out var catalogRoute))
+            return catalogRoute;
+
         string serviceSlug;
         if (normalized.StartsWith(ServiceProxyRoutePrefix, StringComparison.Ordinal))
         {
@@ -500,24 +572,125 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             : string.Empty;
     }
 
-    private static bool IsCanonicalServiceSlug(string value)
+    private static bool TryNormalizeExactProxyRoute(string value, out string normalized)
     {
-        if (value.Length is < 1 or > MaximumServiceSlugLength ||
-            value[0] == '-' ||
-            value[^1] == '-' ||
-            value.Contains("--", StringComparison.Ordinal))
+        normalized = string.Empty;
+        var queryIndex = value.IndexOf('?', StringComparison.Ordinal);
+        if (queryIndex <= 0 ||
+            queryIndex != value.LastIndexOf('?') ||
+            value.Contains('#', StringComparison.Ordinal))
         {
             return false;
         }
 
-        foreach (var character in value)
+        var path = value[..queryIndex];
+        var query = value[(queryIndex + 1)..];
+        var expectedPrefix = ExactUserServiceQueryName + "=";
+        if (!query.StartsWith(expectedPrefix, StringComparison.Ordinal) ||
+            query.Contains('&', StringComparison.Ordinal) ||
+            query.Contains(';', StringComparison.Ordinal))
         {
-            if (character is not (>= 'a' and <= 'z') and not (>= '0' and <= '9') and not '-')
+            return false;
+        }
+
+        var encodedUserServiceId = query[expectedPrefix.Length..];
+        if (!TryNormalizeOpaquePathIdentity(encodedUserServiceId, out var userServiceId))
+            return false;
+
+        string normalizedPath;
+        if (path.StartsWith(ServiceProxyRoutePrefix, StringComparison.Ordinal))
+        {
+            var slug = path[ServiceProxyRoutePrefix.Length..];
+            if (!IsCanonicalServiceSlug(slug))
                 return false;
+            normalizedPath = ServiceProxyRoutePrefix + slug;
+        }
+        else if (path.StartsWith(CatalogProxyRoutePrefix, StringComparison.Ordinal))
+        {
+            var encodedCatalogServiceId = path[CatalogProxyRoutePrefix.Length..];
+            if (!TryNormalizeOpaquePathIdentity(encodedCatalogServiceId, out var catalogServiceId) ||
+                string.Equals(catalogServiceId, "s", StringComparison.Ordinal))
+            {
+                return false;
+            }
+            normalizedPath = CatalogProxyRoutePrefix + Uri.EscapeDataString(catalogServiceId);
+        }
+        else
+        {
+            return false;
+        }
+
+        normalized = $"{normalizedPath}?{ExactUserServiceQueryName}={Uri.EscapeDataString(userServiceId)}";
+        return true;
+    }
+
+    private static bool TryNormalizeCatalogProxyRoute(string value, out string normalized)
+    {
+        normalized = string.Empty;
+        if (!value.StartsWith(CatalogProxyRoutePrefix, StringComparison.Ordinal) ||
+            value.StartsWith(ServiceProxyRoutePrefix, StringComparison.Ordinal) ||
+            value.Contains('?', StringComparison.Ordinal) ||
+            value.Contains('#', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var encodedCatalogServiceId = value[CatalogProxyRoutePrefix.Length..];
+        if (!TryNormalizeOpaquePathIdentity(encodedCatalogServiceId, out var catalogServiceId) ||
+            string.Equals(catalogServiceId, "s", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        normalized = CatalogProxyRoutePrefix + Uri.EscapeDataString(catalogServiceId);
+        return true;
+    }
+
+    private static bool TryNormalizeOpaquePathIdentity(string encodedValue, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(encodedValue))
+            return false;
+
+        try
+        {
+            normalized = Uri.UnescapeDataString(encodedValue);
+        }
+        catch (UriFormatException)
+        {
+            return false;
+        }
+
+        if (normalized.Length is < 1 or > MaximumServiceIdentityLength ||
+            normalized.Any(static character =>
+                char.IsControl(character) ||
+                char.IsWhiteSpace(character) ||
+                character is '/' or '\\' or '?' or '#' or '&' or '='))
+        {
+            normalized = string.Empty;
+            return false;
         }
 
         return true;
     }
+
+    private static string RoutePath(string routePreference)
+    {
+        var queryIndex = routePreference.IndexOf('?', StringComparison.Ordinal);
+        return queryIndex < 0 ? routePreference : routePreference[..queryIndex];
+    }
+
+    private static string? ExactUserServiceId(string routePreference)
+    {
+        var queryPrefix = "?" + ExactUserServiceQueryName + "=";
+        var queryIndex = routePreference.IndexOf(queryPrefix, StringComparison.Ordinal);
+        return queryIndex < 0
+            ? null
+            : Uri.UnescapeDataString(routePreference[(queryIndex + queryPrefix.Length)..]);
+    }
+
+    private static bool IsCanonicalServiceSlug(string value)
+        => NyxIdServiceSlugPolicy.IsCanonical(value);
 
     private static Uri NormalizeNyxEndpoint(string nyxEndpoint)
     {
@@ -542,11 +715,51 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     private static bool ShouldSuppressDefaultUserAgent(Uri endpoint) =>
         endpoint.AbsolutePath.StartsWith("/api/v1/proxy/", StringComparison.OrdinalIgnoreCase);
 
-    private sealed class NyxIdProxyTransport : HttpClientPipelineTransport
+    internal static Uri ApplyExactUserServiceSelector(Uri requestUri, string? exactUserServiceId)
+    {
+        ArgumentNullException.ThrowIfNull(requestUri);
+        if (string.IsNullOrWhiteSpace(exactUserServiceId))
+            return requestUri;
+
+        var builder = new UriBuilder(requestUri);
+        var queryParts = builder.Query
+            .TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Where(static part => !IsExactUserServiceQueryPart(part))
+            .ToList();
+        queryParts.Add($"{ExactUserServiceQueryName}={Uri.EscapeDataString(exactUserServiceId)}");
+        builder.Query = string.Join('&', queryParts);
+        return builder.Uri;
+    }
+
+    private static bool IsExactUserServiceQueryPart(string part)
+    {
+        var separator = part.IndexOf('=');
+        var encodedName = separator < 0 ? part : part[..separator];
+        try
+        {
+            return string.Equals(
+                Uri.UnescapeDataString(encodedName),
+                ExactUserServiceQueryName,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (UriFormatException)
+        {
+            return false;
+        }
+    }
+
+    private sealed class NyxIdProxyTransport(string? exactUserServiceId) : HttpClientPipelineTransport
     {
         protected override void OnSendingRequest(PipelineMessage message, HttpRequestMessage httpRequest)
         {
             httpRequest.Headers.UserAgent.Clear();
+            if (httpRequest.RequestUri is not null)
+            {
+                httpRequest.RequestUri = ApplyExactUserServiceSelector(
+                    httpRequest.RequestUri,
+                    exactUserServiceId);
+            }
             base.OnSendingRequest(message, httpRequest);
         }
     }
@@ -556,4 +769,5 @@ internal sealed record NyxIdResolvedRoute(
     string RouteName,
     Uri Endpoint,
     LLMRequest Request,
-    string AccessToken);
+    string AccessToken,
+    string? ExactUserServiceId = null);

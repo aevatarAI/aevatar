@@ -220,6 +220,7 @@ public sealed class ServiceRunQueryReader : IServiceRunQueryPort
             readModel.LastOutput,
             readModel.LastError)
         {
+            ScheduleOperationId = readModel.ScheduleOperationId,
             ResultArtifacts = readModel.ResultArtifacts.Select(static artifact => artifact.Clone()).ToArray(),
         };
 }

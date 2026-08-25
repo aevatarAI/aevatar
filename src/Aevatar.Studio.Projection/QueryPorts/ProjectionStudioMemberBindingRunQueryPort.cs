@@ -65,6 +65,13 @@ public sealed class ProjectionStudioMemberBindingRunQueryPort : IStudioMemberBin
             PlatformBindingCommandId = string.IsNullOrEmpty(document.PlatformBindingCommandId)
                 ? null
                 : document.PlatformBindingCommandId,
+            PlatformExecutionStage = string.IsNullOrEmpty(document.PlatformExecutionStage)
+                ? null
+                : document.PlatformExecutionStage,
+            PlatformExecutionAttempt = document.PlatformExecutionAttempt,
+            LastReadinessStatus = string.IsNullOrEmpty(document.LastReadinessStatus)
+                ? null
+                : document.LastReadinessStatus,
             Result = ToResultResponse(document),
         };
     }

@@ -1,5 +1,6 @@
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 
 namespace Aevatar.GAgentService.Tests.Authorization;
@@ -646,5 +647,12 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
             Calls.Add((owner.Clone(), requiredStateVersion));
             return Task.FromResult(Result);
         }
+
+        public Task<NyxIdAuthorizationCatalogVisibilityResult> ResolveRequiredServicesAsync(
+            AuthorizationOwnerIdentity owner,
+            long requiredStateVersion,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+            CancellationToken ct = default) =>
+            ResolveAsync(owner, requiredStateVersion, ct);
     }
 }

@@ -66,6 +66,33 @@ public sealed class AgentProfileContractsTests
     }
 
     [Fact]
+    public void ValidateDraft_ShouldRejectDuplicateIntentIds()
+    {
+        var draft = new AgentProfileDraft
+        {
+            DisplayName = "Research assistant",
+            Instructions = "Use verified sources.",
+            RuntimeProfile = new AgentProfileSnapshot
+            {
+                AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
+                RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
+                MaximumToolPolicy = new AgentProfileToolPolicy(),
+                RecoveryToolPolicy = new AgentProfileToolPolicy(),
+                Members =
+                {
+                    ValidMember("research", "2d05bf2e-88ee-4f76-9998-728ba2f9db10"),
+                    ValidMember("research", "6e32aa43-2035-4b39-a0ae-e8f9b3125392"),
+                },
+            },
+        };
+
+        AgentProfilePolicies.ValidateDraft(draft)
+            .Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "PROFILE_INTENT_ID_DUPLICATE" &&
+                diagnostic.Field == "runtimeProfile.members[1].intentId");
+    }
+
+    [Fact]
     public void CreateProfileId_ShouldBeStableForTheSameOwnerAndIdempotencyKey()
     {
         var owner = AgentProfileOwners.ForScope("scope-alpha");
@@ -112,7 +139,8 @@ public sealed class AgentProfileContractsTests
         systemAdmission.Should().NotBeNull();
         systemAdmission!.Fields.InFieldNumberOrder().Select(x => x.Name).Should().Equal(
             "enabled",
-            "cohort_basis_points");
+            "cohort_basis_points",
+            "previous_reviewed_target");
 
         AgentProfileDefaultBinding.Descriptor.Fields.InFieldNumberOrder()
             .Select(x => x.Name)
@@ -133,4 +161,18 @@ public sealed class AgentProfileContractsTests
         SetAgentProfileDefaultBindingCommand.Descriptor.Oneofs
             .Should().ContainSingle(x => x.Name == "admission");
     }
+
+    private static AgentProfileSkillMember ValidMember(string intentId, string skillGuid) => new()
+    {
+        IntentId = intentId,
+        RoutingDescription = "Find verified sources",
+        SkillRef = new ExactRemoteSkillRef
+        {
+            Guid = skillGuid,
+            LiteralVersion = "1.4",
+        },
+        ExpectedSkillName = $"skill-{intentId}",
+        ReviewedPublisherId = "publisher-alpha",
+        TaskToolPolicy = new AgentProfileToolPolicy(),
+    };
 }

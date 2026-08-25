@@ -2,15 +2,18 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Projection.DependencyInjection;
+using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -104,7 +107,10 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
                 SourceVersion: 7,
                 SourceEventId: "event-alpha",
                 SourceKind: "builtin",
-                CapabilityAdmissionPlan: plan.Clone())));
+                CapabilityAdmissionPlan: plan.Clone(),
+                CatalogPublicationContractVersion: WorkflowCatalogPublicationContracts.CurrentVersion)));
+        services.AddSingleton<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>(
+            new StaticWorkflowCatalogDocumentReader(BuildCatalogDocument(actorId, workflowName, 7)));
         services.AddWorkflowDefinitionFileSource();
         using var provider = services.BuildServiceProvider();
 
@@ -123,11 +129,150 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
     }
 
     [Theory]
+    [InlineData("")]
+    [InlineData("workflow-catalog-publication/v0")]
+    public async Task MaterializeAsync_ShouldRebind_WhenCommittedDefinitionBindingCatalogContractIsOld(
+        string catalogPublicationContractVersion)
+    {
+        const string actorId = "workflow-definition:catalog-contract-alpha";
+        const string workflowName = "catalog-contract-alpha";
+        const string workflowYaml = "name: catalog-contract-alpha";
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var runtime = new RecordingActorRuntime();
+        var observations = new RecordingWorkflowDefinitionBindObservationRuntime();
+        var dispatch = new RecordingActorDispatchPort(observations);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatch);
+        services.AddSingleton<IWorkflowDefinitionBindObservationScopeLeasePreparationPort>(observations);
+        services.AddSingleton<IWorkflowDefinitionBindObservationProjectionPort>(observations);
+        services.AddSingleton<IWorkflowExternalCapabilityAdmissionService>(
+            new RecordingWorkflowCapabilityAdmissionService(responsePlan: plan));
+        services.AddSingleton<IWorkflowActorBindingReader>(new StaticWorkflowActorBindingReader(
+            new WorkflowActorBinding(
+                WorkflowActorKind.Definition,
+                actorId,
+                actorId,
+                string.Empty,
+                workflowName,
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                SourceVersion: 7,
+                SourceEventId: "event-alpha",
+                SourceKind: "builtin",
+                CapabilityAdmissionPlan: plan.Clone(),
+                CatalogPublicationContractVersion: catalogPublicationContractVersion)));
+        services.AddSingleton<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>(
+            new StaticWorkflowCatalogDocumentReader(BuildCatalogDocument(actorId, workflowName, 7)));
+        services.AddWorkflowDefinitionFileSource();
+        using var provider = services.BuildServiceProvider();
+
+        await provider.GetRequiredService<FileBackedWorkflowCatalogPort>().MaterializeAsync(
+        [
+            new WorkflowDefinitionRegistration(
+                workflowName,
+                workflowYaml,
+                actorId,
+                ExternalCapabilityExecutionMode.Interactive,
+                "builtin"),
+        ]);
+
+        runtime.Created.Should().ContainSingle(item => item.ActorId == actorId);
+        dispatch.Envelopes.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("stale-version")]
+    [InlineData("future-version")]
+    [InlineData("old-contract")]
+    [InlineData("actor-id")]
+    [InlineData("workflow-name")]
+    public async Task MaterializeAsync_ShouldRebind_WhenPublicCatalogReadModelIsMissingOrStale(string mismatch)
+    {
+        const string actorId = "workflow-definition:catalog-stale-alpha";
+        const string workflowName = "catalog-stale-alpha";
+        const string workflowYaml = "name: catalog-stale-alpha";
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var catalog = mismatch == "missing"
+            ? null
+            : BuildCatalogDocument(
+                mismatch == "actor-id" ? "workflow-definition:other" : actorId,
+                mismatch == "workflow-name" ? "other-template" : workflowName,
+                mismatch switch
+                {
+                    "stale-version" => 6,
+                    "future-version" => 8,
+                    _ => 7,
+                },
+                mismatch == "old-contract"
+                    ? WorkflowCatalogPublicationContracts.LegacyV0
+                    : WorkflowCatalogPublicationContracts.CurrentVersion,
+                workflowName);
+        var runtime = new RecordingActorRuntime();
+        var observations = new RecordingWorkflowDefinitionBindObservationRuntime();
+        var dispatch = new RecordingActorDispatchPort(observations);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatch);
+        services.AddSingleton<IWorkflowDefinitionBindObservationScopeLeasePreparationPort>(observations);
+        services.AddSingleton<IWorkflowDefinitionBindObservationProjectionPort>(observations);
+        services.AddSingleton<IWorkflowExternalCapabilityAdmissionService>(
+            new RecordingWorkflowCapabilityAdmissionService(responsePlan: plan));
+        services.AddSingleton<IWorkflowActorBindingReader>(new StaticWorkflowActorBindingReader(
+            new WorkflowActorBinding(
+                WorkflowActorKind.Definition,
+                actorId,
+                actorId,
+                string.Empty,
+                workflowName,
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                SourceVersion: 7,
+                SourceEventId: "event-alpha",
+                SourceKind: "builtin",
+                CapabilityAdmissionPlan: plan.Clone(),
+                CatalogPublicationContractVersion: WorkflowCatalogPublicationContracts.CurrentVersion)));
+        services.AddSingleton<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>(
+            new StaticWorkflowCatalogDocumentReader(catalog));
+        services.AddWorkflowDefinitionFileSource();
+        using var provider = services.BuildServiceProvider();
+
+        await provider.GetRequiredService<FileBackedWorkflowCatalogPort>().MaterializeAsync(
+        [
+            new WorkflowDefinitionRegistration(
+                workflowName,
+                workflowYaml,
+                actorId,
+                ExternalCapabilityExecutionMode.Interactive,
+                "builtin"),
+        ]);
+
+        runtime.Created.Should().ContainSingle(item => item.ActorId == actorId);
+        dispatch.Envelopes.Should().ContainSingle();
+    }
+
+    [Theory]
     [InlineData("definition-actor-id")]
     [InlineData("workflow-yaml")]
     [InlineData("execution-mode")]
     [InlineData("source-kind")]
     [InlineData("admission-digest")]
+    [InlineData("tool-catalog-policy")]
     public async Task MaterializeAsync_ShouldRebind_WhenCommittedDefinitionBindingDiffers(string mismatch)
     {
         const string actorId = "workflow-definition:committed-beta";
@@ -161,7 +306,11 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             SourceVersion: 8,
             SourceEventId: "event-beta",
             SourceKind: mismatch == "source-kind" ? "repo" : "builtin",
-            CapabilityAdmissionPlan: persistedPlan);
+            CapabilityAdmissionPlan: persistedPlan,
+            ToolCatalogPolicyVersion: mismatch == "tool-catalog-policy"
+                ? WorkflowToolCatalogPolicies.LegacyV0
+                : WorkflowToolCatalogPolicies.CurrentVersion,
+            CatalogPublicationContractVersion: WorkflowCatalogPublicationContracts.CurrentVersion);
         var runtime = new RecordingActorRuntime();
         var observations = new RecordingWorkflowDefinitionBindObservationRuntime();
         var dispatch = new RecordingActorDispatchPort(observations);
@@ -174,6 +323,8 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
         services.AddSingleton<IWorkflowExternalCapabilityAdmissionService>(
             new RecordingWorkflowCapabilityAdmissionService(responsePlan: plan));
         services.AddSingleton<IWorkflowActorBindingReader>(new StaticWorkflowActorBindingReader(binding));
+        services.AddSingleton<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>(
+            new StaticWorkflowCatalogDocumentReader(BuildCatalogDocument(actorId, workflowName, 8)));
         services.AddWorkflowDefinitionFileSource();
         using var provider = services.BuildServiceProvider();
 
@@ -300,6 +451,7 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             roles:
               - id: assistant
                 name: Assistant
+                allowed_tools: []
             steps:
               - id: reply
                 type: llm_call
@@ -340,6 +492,113 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_WithLocalRuntime_ShouldRepublishUnchangedDefinitionBindWithoutAppendingEvent()
+    {
+        const string actorId = "workflow-definition:studio-republish";
+        const string workflowYaml = """
+            name: studio
+            roles:
+              - id: assistant
+                name: Assistant
+                allowed_tools: []
+            steps:
+              - id: reply
+                type: llm_call
+                role: assistant
+                parameters: {}
+            """;
+        using var provider = CreateLocalRuntimeProvider(TimeSpan.FromSeconds(2));
+        var runtime = provider.GetRequiredService<IActorRuntime>();
+
+        try
+        {
+            var port = provider.GetRequiredService<FileBackedWorkflowCatalogPort>();
+            var definition = new WorkflowDefinitionRegistration(
+                "studio",
+                workflowYaml,
+                actorId,
+                ExternalCapabilityExecutionMode.Interactive,
+                "builtin");
+
+            await port.MaterializeAsync([definition]);
+            await port.MaterializeAsync([definition]);
+
+            var actor = await runtime.GetAsync(actorId);
+            var definitionAgent = actor!.Agent.Should().BeOfType<WorkflowGAgent>().Subject;
+            definitionAgent.State.Version.Should().Be(1);
+            var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+            events.Should().ContainSingle();
+            events[0].EventData.Unpack<BindWorkflowDefinitionEvent>().CatalogPublicationContractVersion.Should()
+                .Be(WorkflowCatalogPublicationContracts.CurrentVersion);
+        }
+        finally
+        {
+            await runtime.DestroyAsync(actorId);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowGAgent_ShouldRepublishCommittedScopeWhenIncomingNoOpOmitsScope()
+    {
+        const string actorId = "workflow-definition:studio-scoped-republish";
+        const string workflowYaml = """
+            name: studio
+            roles:
+              - id: assistant
+                name: Assistant
+                allowed_tools: []
+            steps:
+              - id: reply
+                type: llm_call
+                role: assistant
+                parameters: {}
+            """;
+        using var provider = CreateLocalRuntimeProvider(TimeSpan.FromSeconds(2));
+        var runtime = provider.GetRequiredService<IActorRuntime>();
+        await SeedDefinitionBindingAsync(
+            provider,
+            actorId,
+            workflowYaml,
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Interactive,
+            scopeId: "scope-a");
+
+        try
+        {
+            var actor = await runtime.CreateAsync<WorkflowGAgent>(actorId);
+            var definitionAgent = actor.Agent.Should().BeOfType<WorkflowGAgent>().Subject;
+            var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                [],
+                []);
+
+            await definitionAgent.BindWorkflowDefinitionAsync(
+                workflowYaml,
+                "studio",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                scopeId: null,
+                sourceKind: "builtin",
+                capabilityAdmissionPlan: plan,
+                workflowId: null,
+                revisionId: null,
+                expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                toolCatalogPolicyVersion: WorkflowToolCatalogPolicies.CurrentVersion,
+                catalogPublicationContractVersion: WorkflowCatalogPublicationContracts.CurrentVersion);
+
+            definitionAgent.State.Version.Should().Be(1);
+            definitionAgent.State.ScopeId.Should().Be("scope-a");
+            var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+            events.Should().ContainSingle();
+        }
+        finally
+        {
+            await runtime.DestroyAsync(actorId);
+        }
+    }
+
+    [Fact]
     public async Task MaterializeAsync_WithLegacyUnspecifiedBinding_ShouldCommitForwardRepair()
     {
         const string actorId = "workflow-definition:studio-legacy";
@@ -348,6 +607,7 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             roles:
               - id: assistant
                 name: Assistant
+                allowed_tools: []
             steps:
               - id: reply
                 type: llm_call
@@ -403,6 +663,7 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             roles:
               - id: assistant
                 name: Assistant
+                allowed_tools: []
             steps:
               - id: reply
                 type: llm_call
@@ -611,7 +872,8 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
         string actorId,
         string workflowYaml,
         ExternalCapabilityExecutionMode persistedMode,
-        ExternalCapabilityExecutionMode admissionMode)
+        ExternalCapabilityExecutionMode admissionMode,
+        string scopeId = "")
     {
         var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             workflowYaml,
@@ -619,15 +881,20 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             admissionMode,
             [],
             []);
+        var workflow = new WorkflowParser().Parse(workflowYaml);
         var bind = new BindWorkflowDefinitionEvent
         {
             WorkflowName = "studio",
             WorkflowYaml = workflowYaml,
-            ScopeId = string.Empty,
             SourceKind = "builtin",
+            AuthorizationDependencies = WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow),
             CapabilityAdmissionPlan = plan,
             ExpectedExecutionMode = persistedMode,
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+            CatalogPublicationContractVersion = WorkflowCatalogPublicationContracts.CurrentVersion,
         };
+        if (!string.IsNullOrWhiteSpace(scopeId))
+            bind.ScopeId = scopeId;
         return provider.GetRequiredService<IEventStore>().AppendAsync(
             actorId,
             [
@@ -643,6 +910,21 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             ],
             expectedVersion: 0);
     }
+
+    private static WorkflowCatalogCurrentStateDocument BuildCatalogDocument(
+        string actorId,
+        string workflowName,
+        long stateVersion,
+        string catalogPublicationContractVersion = WorkflowCatalogPublicationContracts.CurrentVersion,
+        string? documentId = null) =>
+        new()
+        {
+            Id = documentId ?? workflowName,
+            ActorId = actorId,
+            WorkflowName = workflowName,
+            StateVersion = stateVersion,
+            CatalogPublicationContractVersion = catalogPublicationContractVersion,
+        };
 
     private sealed class IntegrityWorkflowCapabilityAdmissionService :
         IWorkflowExternalCapabilityAdmissionService
@@ -736,6 +1018,30 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<WorkflowActorBinding?>(
                 string.Equals(actorId, binding.ActorId, StringComparison.Ordinal) ? binding : null);
+        }
+    }
+
+    private sealed class StaticWorkflowCatalogDocumentReader(WorkflowCatalogCurrentStateDocument? document)
+        : IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>
+    {
+        public Task<WorkflowCatalogCurrentStateDocument?> GetAsync(string key, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<WorkflowCatalogCurrentStateDocument?>(
+                string.Equals(key, document?.Id, StringComparison.Ordinal) ? document : null);
+        }
+
+        public Task<ProjectionDocumentQueryResult<WorkflowCatalogCurrentStateDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(document == null
+                ? ProjectionDocumentQueryResult<WorkflowCatalogCurrentStateDocument>.Empty
+                : new ProjectionDocumentQueryResult<WorkflowCatalogCurrentStateDocument>
+                {
+                    Items = [document],
+                });
         }
     }
 

@@ -80,6 +80,20 @@ public sealed record ScopeWorkflowLookupResult(
     public bool IsRunnable => Status == ScopeWorkflowLookupStatus.Runnable && Workflow != null;
 }
 
+public enum ScopeWorkflowCatalogueLookupStatus
+{
+    NotFound = 0,
+    Ambiguous = 1,
+    Found = 2,
+}
+
+public sealed record ScopeWorkflowCatalogueLookupResult(
+    ScopeWorkflowCatalogueLookupStatus Status,
+    ScopeWorkflowSummary? Workflow)
+{
+    public bool IsFound => Status == ScopeWorkflowCatalogueLookupStatus.Found && Workflow != null;
+}
+
 public sealed record ScopeWorkflowSource(
     string WorkflowYaml,
     string DefinitionActorId,

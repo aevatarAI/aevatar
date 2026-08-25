@@ -65,6 +65,7 @@ message WorkflowServiceRevisionSpec {
   aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 5;
   aevatar.workflow.ExternalCapabilityExecutionMode expected_execution_mode = 6;
   string workflow_id = 7;
+  string tool_catalog_policy_version = 8;
 }
 
 message ServiceRevisionSpec {
@@ -103,6 +104,7 @@ message WorkflowServiceDeploymentPlan {
   string workflow_id = 7;
   string revision_id = 8;
   aevatar.workflow.ExternalCapabilityExecutionMode execution_mode = 9;
+  string tool_catalog_policy_version = 10;
 }
 
 message ServiceDeploymentPlan {
@@ -150,11 +152,13 @@ message CreateServiceRevisionCommand {
 message PrepareServiceRevisionCommand {
   ServiceIdentity identity = 1;
   string revision_id = 2;
+  ServiceRevisionSpec preparation_spec = 3;
 }
 
 message PublishServiceRevisionCommand {
   ServiceIdentity identity = 1;
   string revision_id = 2;
+  ServiceRevisionSpec publication_spec = 3;
 }
 
 message RetireServiceRevisionCommand {
@@ -165,6 +169,15 @@ message RetireServiceRevisionCommand {
 message ServiceRevisionCreatedEvent {
   ServiceRevisionSpec spec = 1;
   google.protobuf.Timestamp created_at = 2;
+}
+
+message ServiceRevisionAdmissionEvidenceRefreshedEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  ServiceRevisionSpec spec = 3;
+  PreparedServiceRevisionArtifact prepared_artifact = 4;
+  string previous_artifact_hash = 5;
+  google.protobuf.Timestamp refreshed_at = 6;
 }
 
 message ServiceRevisionPreparedEvent {

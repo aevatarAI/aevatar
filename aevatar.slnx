@@ -23,6 +23,7 @@
     <Project Path="agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
     <Project Path="agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
     <Project Path="agents/Aevatar.GAgents.WorkOrder/Aevatar.GAgents.WorkOrder.csproj" />
+    <Project Path="agents/Aevatar.GAgents.WorkflowDelivery/Aevatar.GAgents.WorkflowDelivery.csproj" />
     <Project Path="agents/Aevatar.GAgents.ContentArtifacts/Aevatar.GAgents.ContentArtifacts.csproj" />
     <Project Path="agents/Aevatar.GAgents.ChatRouting/Aevatar.GAgents.ChatRouting.csproj" />
   </Folder>
@@ -44,6 +45,8 @@
     <Project Path="tools/secret-store/Aevatar.SecretStore.Tools.csproj" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Aevatar.AIWorkspace.Application.Abstractions/Aevatar.AIWorkspace.Application.Abstractions.csproj" />
+    <Project Path="src/Aevatar.AIWorkspace.Application/Aevatar.AIWorkspace.Application.csproj" />
     <Project Path="src/Aevatar.ContentArtifacts.Abstractions/Aevatar.ContentArtifacts.Abstractions.csproj" />
     <Project Path="src/Aevatar.Audit.Abstractions/Aevatar.Audit.Abstractions.csproj" />
     <Project Path="src/Aevatar.Audit.Core/Aevatar.Audit.Core.csproj" />

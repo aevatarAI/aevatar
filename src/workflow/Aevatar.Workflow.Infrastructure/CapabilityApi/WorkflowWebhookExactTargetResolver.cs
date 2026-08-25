@@ -106,7 +106,8 @@ internal static class WorkflowWebhookExactTargetResolver
             CapabilityAdmissionPlan: target.CapabilityAdmissionPlan?.Clone(),
             WorkflowId: target.WorkflowId,
             RevisionId: expectedRevisionId,
-            DefinitionVersion: Math.Max(0, target.SourceVersion)));
+            DefinitionVersion: Math.Max(0, target.SourceVersion),
+            ToolCatalogPolicyVersion: target.ToolCatalogPolicyVersion));
     }
 
     private static string? Normalize(string? value) =>

@@ -72,9 +72,10 @@ public sealed class WorkflowCallerAccessTokenResolverTests
                 OwnerScopeKey = "scope-1",
                 SubjectId = "owner-alpha",
                 SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+                ProviderCredentialId = "provider-key-1",
             },
             NyxIdAuthority = CreateAuthority(),
-            Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+            Kind = NyxIdCallerCredentialKind.AgentKey,
         };
 
         var resolved = await WorkflowCallerAccessTokenResolver.ResolveAsync(
@@ -84,6 +85,96 @@ public sealed class WorkflowCallerAccessTokenResolverTests
 
         resolved.Should().BeSameAs(credential);
         resolved.BearerToken.Should().Be("nyxid_ag_exact_service_secret");
+        provider.IssueCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithScheduledInvocationAgentKey_ShouldPreserveExactBearer()
+    {
+        var provider = new RecordingAccessTokenProvider();
+        var credential = new WorkflowCallerCredential
+        {
+            BearerToken = "nyxid_ag_scheduled_service_secret",
+            DurableCallerCredential = new DurableCallerCredentialRef
+            {
+                Ref = "sec-scheduled-agent-key",
+                Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                OwnerScopeKey = "scope-scheduled",
+                SubjectId = "agent-key-scheduled",
+                SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+            },
+            NyxIdAuthority = CreateAuthority(),
+            Kind = NyxIdCallerCredentialKind.AgentKey,
+        };
+
+        var resolved = await WorkflowCallerAccessTokenResolver.ResolveAsync(
+            credential,
+            provider,
+            CancellationToken.None);
+
+        resolved.Should().BeSameAs(credential);
+        resolved.BearerToken.Should().Be("nyxid_ag_scheduled_service_secret");
+        resolved.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
+        provider.IssueCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithMismatchedAgentKeyReference_ShouldFailClosed()
+    {
+        var provider = new RecordingAccessTokenProvider();
+        var credential = new WorkflowCallerCredential
+        {
+            BearerToken = "nyxid_ag_mismatched_secret",
+            DurableCallerCredential = new DurableCallerCredentialRef
+            {
+                Ref = "sec-scheduled-bearer",
+                Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                OwnerScopeKey = "scope-scheduled",
+                SubjectId = "scheduled-user",
+                SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+            },
+            NyxIdAuthority = CreateAuthority(),
+            Kind = NyxIdCallerCredentialKind.AgentKey,
+        };
+
+        var act = () => WorkflowCallerAccessTokenResolver.ResolveAsync(
+            credential,
+            provider,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*does not match a supported durable vault reference*");
+        provider.IssueCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("nyxid_ag_channel_agent_key")]
+    [InlineData("")]
+    public async Task ResolveAsync_WithChannelAgentKey_ShouldNeverIssueUserToken(string agentKey)
+    {
+        var provider = new RecordingAccessTokenProvider();
+        var credential = new WorkflowCallerCredential
+        {
+            BearerToken = agentKey,
+            DurableCallerCredential = new DurableCallerCredentialRef
+            {
+                Ref = "sec-channel-agent-key",
+                Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                OwnerScopeKey = "scope-channel",
+                SubjectId = "agent-key-channel",
+                SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+            },
+            NyxIdAuthority = CreateAuthority(),
+            Kind = NyxIdCallerCredentialKind.AgentKey,
+        };
+
+        var resolved = await WorkflowCallerAccessTokenResolver.ResolveAsync(
+            credential,
+            provider,
+            CancellationToken.None);
+
+        resolved.Should().BeSameAs(credential);
+        resolved.BearerToken.Should().Be(agentKey);
         provider.IssueCount.Should().Be(0);
     }
 

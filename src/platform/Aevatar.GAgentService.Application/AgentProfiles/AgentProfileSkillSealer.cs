@@ -137,6 +137,22 @@ public sealed class AgentProfileSkillSealer : IAgentProfileSkillSealer
                     "The resolved Ornn skill digest does not match the reviewed digest."));
             }
 
+            if (package.SkillMarkdownUtf8Bytes <= 0)
+            {
+                diagnostics.Add(new AgentProfileSealingDiagnostic(
+                    "ORNN_SKILL_BODY_INVALID",
+                    $"runtimeProfile.members[{member.IntentId}].skillRef",
+                    "The resolved Ornn skill body must have a positive UTF-8 byte count."));
+            }
+            else if (package.SkillMarkdownUtf8Bytes > normalizedDraft.RuntimeProfile.MaxSelectedSkillBytes)
+            {
+                diagnostics.Add(new AgentProfileSealingDiagnostic(
+                    "ORNN_SKILL_BODY_TOO_LARGE",
+                    $"runtimeProfile.members[{member.IntentId}].skillRef",
+                    $"The resolved Ornn skill body is {package.SkillMarkdownUtf8Bytes} UTF-8 bytes; " +
+                    $"the Profile limit is {normalizedDraft.RuntimeProfile.MaxSelectedSkillBytes} bytes."));
+            }
+
             var declaredTools = package.DeclaredToolNames;
             if (declaredTools.Any(static name => string.IsNullOrWhiteSpace(name) || name != name.Trim()) ||
                 declaredTools.Distinct(StringComparer.Ordinal).Count() != declaredTools.Count)
@@ -183,7 +199,25 @@ public sealed class AgentProfileSkillSealer : IAgentProfileSkillSealer
         var maximumToolSetRefs = maximum?.ToolSetRefs.ToHashSet(StringComparer.Ordinal) ?? [];
         var toolNames = policy?.ToolNames.ToHashSet(StringComparer.Ordinal) ?? [];
         var toolSetRefs = policy?.ToolSetRefs.ToHashSet(StringComparer.Ordinal) ?? [];
-        return toolNames.IsSubsetOf(maximumToolNames) && toolSetRefs.IsSubsetOf(maximumToolSetRefs)
+        var selectorsWithinMaximum = policy?.ConnectedServiceSelectors.All(selector =>
+            maximum?.ConnectedServiceSelectors.Any(maximumSelector =>
+                string.Equals(
+                    selector.CatalogServiceSlug,
+                    maximumSelector.CatalogServiceSlug,
+                    StringComparison.Ordinal) &&
+                (string.IsNullOrEmpty(maximumSelector.EndpointId) ||
+                 string.Equals(
+                     selector.EndpointId,
+                     maximumSelector.EndpointId,
+                     StringComparison.Ordinal)) &&
+                selector.AllowedRisks.All(maximumSelector.AllowedRisks.Contains) &&
+                (selector.Readiness is null ||
+                 maximumSelector.Readiness is not null &&
+                 selector.Readiness.RequestedScopes.All(
+                     maximumSelector.Readiness.RequestedScopes.Contains))) == true) ?? true;
+        return toolNames.IsSubsetOf(maximumToolNames) &&
+               toolSetRefs.IsSubsetOf(maximumToolSetRefs) &&
+               selectorsWithinMaximum
             ? []
             : [new AgentProfileSealingDiagnostic(
                 "PROFILE_TOOL_POLICY_EXCEEDS_MAXIMUM",

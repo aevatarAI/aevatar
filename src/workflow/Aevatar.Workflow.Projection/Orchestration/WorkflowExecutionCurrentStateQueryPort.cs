@@ -154,11 +154,13 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
         var filters = new List<ProjectionDocumentFilter>();
         if (query.SagaStatus is { } sagaStatus && sagaStatus != WorkflowSagaStatus.Unspecified)
         {
+            // saga_status is persisted in its protobuf-JSON form (WORKFLOW_SAGA_STATUS_*) and mapped
+            // as an explicit keyword; the filter value must carry that same form, not the C# name.
             filters.Add(new ProjectionDocumentFilter
             {
                 FieldPath = nameof(WorkflowExecutionCurrentStateDocument.SagaStatus),
                 Operator = ProjectionDocumentFilterOperator.Eq,
-                Value = ProjectionDocumentValue.FromString(sagaStatus.ToString()),
+                Value = ProjectionDocumentValue.FromProtoEnum(sagaStatus),
             });
         }
 
@@ -203,6 +205,16 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
                 FieldPath = nameof(WorkflowExecutionCurrentStateDocument.Status),
                 Operator = ProjectionDocumentFilterOperator.Eq,
                 Value = ProjectionDocumentValue.FromString(query.Status.Trim()),
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.RunId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.RunId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.RunId.Trim()),
             });
         }
 

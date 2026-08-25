@@ -255,6 +255,87 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
         agent.State.RequestFingerprint.Should().Be("fingerprint-original");
     }
 
+    [Fact]
+    public async Task SourceTerminal_ShouldAppendTheObservedOperationLedgerWithTheTurn()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateAgentAsync(new RecordingActorRuntime(), dispatch);
+        await agent.HandleEventAsync(Envelope(SourceReserve(), "chat-history-command-port"));
+        var terminal = SourceTerminal(ChatTurnTerminalStatus.Completed, "done", string.Empty);
+        terminal.Operations.Add(new ChatTurnOperation
+        {
+            OperationId = "op-model-1",
+            Order = 1,
+            Kind = ChatTurnOperationKind.Model,
+            Title = "deepseek-v4-pro",
+            Status = "done",
+            TotalTokens = 512,
+            OutputPreview = "plan",
+            PreviewsTruncated = true,
+            AvailableToolNames = { "github.get_issue", "nyxid.require_service" },
+            ToolCatalogCaptured = true,
+        });
+        terminal.Operations.Add(new ChatTurnOperation
+        {
+            OperationId = "op-tool-1",
+            Order = 2,
+            Kind = ChatTurnOperationKind.Tool,
+            Title = "service.reconnect",
+            Status = "done",
+        });
+
+        await agent.HandleEventAsync(Envelope(terminal, SourceActorId));
+
+        agent.State.TerminalOperations.Should().HaveCount(2);
+        var append = dispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<AppendChatTurnCommand>();
+        append.Turn.Operations.Select(operation => operation.OperationId)
+            .Should().Equal("op-model-1", "op-tool-1");
+        append.Turn.Operations[0].PreviewsTruncated.Should().BeTrue();
+        append.Turn.Operations[0].TotalTokens.Should().Be(512);
+        append.Turn.Operations[0].AvailableToolNames.Should()
+            .Equal("github.get_issue", "nyxid.require_service");
+        append.Turn.Operations[0].ToolCatalogCaptured.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task SourceTerminal_WhenReconciledWithoutOperations_ShouldKeepTheObservedLedger()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateAgentAsync(new RecordingActorRuntime(), dispatch);
+        await agent.HandleEventAsync(Envelope(SourceReserve(), "chat-history-command-port"));
+        var terminal = SourceTerminal(
+            ChatTurnTerminalStatus.OutcomeUncertain,
+            "The outcome could not be confirmed.",
+            "SESSION_OUTCOME_UNCERTAIN");
+        terminal.Operations.Add(new ChatTurnOperation
+        {
+            OperationId = "op-tool-1",
+            Order = 1,
+            Kind = ChatTurnOperationKind.Tool,
+            Title = "service.reconnect",
+            Status = "uncertain",
+        });
+        await agent.HandleEventAsync(Envelope(terminal, SourceActorId));
+        await agent.HandleEventAsync(Envelope(AppendResult(accepted: true), "chat-conversation"));
+
+        // A later reconciliation that carries no ledger must not erase the one the
+        // source already reported.
+        await agent.HandleEventAsync(Envelope(
+            SourceTerminal(ChatTurnTerminalStatus.Completed, "done", string.Empty),
+            SourceActorId));
+
+        agent.State.TerminalOperations.Select(operation => operation.OperationId)
+            .Should().Equal("op-tool-1");
+        dispatch.Calls
+            .Select(call => call.Envelope.Payload)
+            .Where(payload => payload.Is(AppendChatTurnCommand.Descriptor))
+            .Select(payload => payload.Unpack<AppendChatTurnCommand>())
+            .Last()
+            .Turn.Operations.Should().ContainSingle()
+            .Which.OperationId.Should().Be("op-tool-1");
+    }
+
     private static ChatTurnHistoryDeliveryReserveRequested Reserve(
         bool createConversationIfMissing,
         string workflowActorId = WorkflowActorId,

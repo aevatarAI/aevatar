@@ -12,7 +12,7 @@ The ownership and retention distinction between execution state, derived prompt 
 conversation transcript, and cross-conversation user memory is canonical in
 [conversation-context-and-memory.md](conversation-context-and-memory.md).
 
-The canonical client surface is Mainnet `POST /api/chat` plus `/api/chat/conversations/**`. Assistant commands are selected only by one of the nine explicit `type` discriminators: `text`, `plan.resolve`, `input.resolve`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. The public routes never accept `scopeId`; they derive one unambiguous scope from the authenticated principal and fail closed otherwise.
+The canonical client surface is Mainnet `POST /api/chat` plus `/api/chat/conversations/**`. Assistant commands are selected only by one of the eight explicit `type` discriminators: `text`, `input.resolve`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. The public routes never accept `scopeId`; they derive one unambiguous scope from the authenticated principal and fail closed otherwise.
 
 The authoritative runtime is one durable conversation-controller actor plus a run-scoped turn actor that executes one authorized operation at a time. The controller's committed protobuf state is the task authority. AGUI and the current-state query are two consumers of the same committed Projection Pipeline; neither endpoint nor projector reconstructs task truth.
 
@@ -68,7 +68,6 @@ The HTTP endpoint owns only authentication/protocol adaptation, serialized SSE w
 | `turnId` | Server-created, one normal submission or continuation | One observed run. It is not the conversation actor ID. |
 | `taskId` | Conversation actor, one task plan | Actor-owned task identity. It is distinct from `turnId`. |
 | `planId` | Conversation actor, one frozen semantic plan | Exact plan identity. It is not `taskId`, a revision, or a route-derived value. |
-| plan gate `requestId` | Conversation actor, one local admission decision | Selects the exact pending Aevatar plan gate. It is not an approval or browser-action identity. |
 | `stepId` | Conversation actor, one task step | Selects a typed step inside `taskId`. |
 | `operationId` | Conversation actor, one logical operation | Correlates one LLM, tool, or postcondition operation. |
 | `operationGeneration` | Conversation actor, monotonically renewed for a step | Rejects stale progress/results and fences retries. |
@@ -261,10 +260,9 @@ step decoder for initial SSE, reconnect/reload, and step-change reduction. They
 must not rename fields, infer identities, or maintain a second lifecycle model.
 The checked-in v1 convergence fixtures compare these shapes field-for-field.
 
-Plan-gate delivery and revocation are committed actor protocols rather than
-transport assumptions. The conversation actor retains secret-free delivery or
-revoke outboxes until the turn actor acknowledges the corresponding committed
-admission or exact revocation fence. If operation delivery becomes ambiguous,
+Typed operation delivery is a committed actor protocol rather than a transport
+assumption. The conversation actor commits the exact requested operation and
+dispatches its normal typed command directly. If delivery becomes ambiguous,
 the conversation commits a pending exact delivery probe and cannot start
 reconciliation, read-back, or a later generation. The turn actor answers only
 after it has either committed that operation or committed a tombstone that
@@ -418,31 +416,15 @@ Steering is serialized by the actor. If an operation is physically in flight, th
 
 Retry and skip validate the body `conversationId`, `turnId`, `taskId`, `stepId`, expected generation, expected actor version, and current actor-computed availability. Replaying the same request and content is idempotent. Reusing an identity with different content fails closed.
 
-## Plan admission gate
+## Plan progress and operation authorization
 
-The Aevatar plan gate is actor-owned local admission, independent of NyxID authorization. `auto` means the disclosed operation may enter the next Aevatar execution step without a separate local decision. `confirm / pending` requires an exact `plan.resolve` before the bound operation can advance. Confirming an Aevatar plan does not grant NyxID access, approve an Aevatar tool request, complete a browser journey, or prove an external effect. Those authorities retain their own typed requests and postconditions.
+The task plan is an actor-owned read-only progress model. It exposes `taskId`, `planId`, `planRevision`, revision provenance, ordered steps, dependencies, estimates, operation phases, effect evidence, failures, and available controls. It contains no user authorization state or decision request.
 
-The pending gate binds `requestId + taskId + planId + planRevision` and exactly one operation admission. A tool admission also binds the full operation key, `toolCallId`, `toolName`, and SHA-256 of the exact arguments. A browser-action admission binds `actionRequestId`, the typed action kind, and SHA-256 of the typed protobuf action parameters. Arguments and action parameters are not copied into the gate. Reload restores these same actor facts from the current-state projection; the query path never reconstructs them.
+When the actor admits an LLM tool call, the lifecycle creates and activates the typed step and returns a normal operation dispatch command immediately. The command binds the complete operation key, `toolCallId`, `toolName`, frozen arguments, exact `AgentToolOperationAdmission`, and `operationId`-derived idempotency key. Reload observes these facts through the current-state projection; the query path never reconstructs execution authority.
 
-Resolve the observed gate through the public command surface:
+Authorization remains attached to the boundary that owns it. A typed browser action waits for the NyxID/OAuth journey and then dispatches its declared postcondition automatically. A tool invocation that returns `ApprovalRequired` waits only for `approval.resolve` carrying its exact approval and operation identity. Neither boundary is inferred from plan content or assistant prose.
 
-```json
-{
-  "type": "plan.resolve",
-  "conversationId": "conversation-alpha",
-  "taskId": "task-alpha",
-  "planId": "plan-alpha",
-  "requestId": "plan-gate-alpha",
-  "clientRequestId": "client-plan-alpha",
-  "planRevision": 3,
-  "confirmed": true,
-  "expectedStateVersion": 23
-}
-```
-
-All identities, the actor version, decision, and operation admission must match. A stale version, wrong plan ID or revision, changed digest, unknown request, or conflicting replay fails closed without dispatch. Confirmation marks only that exact gate `satisfied`; rejection marks it `rejected`, cancels its not-started operation, and terminalizes the task without external dispatch. `action.continue`, steering, approval, reload, and duplicate delivery never satisfy a pending gate and never increase `planRevision` merely because control state changed.
-
-`202 Accepted` means only that the typed command was accepted for dispatch with a stable `commandId`. It does not mean the gate was committed, the operation started, NyxID authorized it, or the read model observed the result. Observe `nyxid.task.snapshot` / `nyxid.task.step.changed` or the current-state resource and use its authoritative `stateVersion`.
+`202 Accepted` means only that the typed command was accepted for dispatch with a stable `commandId`. It does not mean the operation started, NyxID authorized it, an external effect occurred, or the read model observed the result. Observe `nyxid.task.snapshot` / `nyxid.task.step.changed` or the current-state resource and use its authoritative `stateVersion`.
 
 ## Pending input and tool approval
 
@@ -510,11 +492,11 @@ Expiry always fails closed as denial, never as approval. At or after `expiresAt`
 
 Aevatar owns action intent, task correlation, safe parameter references, and the decision to continue. NyxID owns the browser card and journey, consent copy, auth modality, mutation, credential storage, and final authorization.
 
-Aevatar snapshots `GET /api/v1/assistant/actions` at startup and accepts schema version `4` with registry revision `nyxid-assistant-actions.v4`, `nyxid-assistant-actions.v5`, `nyxid-assistant-actions.v6`, or `nyxid-assistant-actions.v7` during the bounded rollout transition. Revision v4 recognizes only `service.connect`. Revision v5 pins `service.connect`, `service.reauthorize`, `key.create`, and `key.rotate` but keeps the three new actions non-executable. Revision v6 is the immutable least-scope contract containing `service.connect` and `key.create`; its `allowedServiceIds` schema requires 1 to 64 unique string identities. Revision v7 retains that least-scope contract and adds executable `key.rotate` with one exact predecessor key ID. Each revision validates every present descriptor's exact parameter schema and registry-owned risk/remember policy. The registry's `risk` and `remember_eligible` values are advisory inputs to Aevatar presentation/planning. The caller cannot submit or lower them, and NyxID recomputes and enforces authorization at execution time.
+Aevatar snapshots `GET /api/v1/assistant/actions` at startup and accepts schema version `4`; `schema_version` is the only registry-wide compatibility gate. The `revision` string is an observability label that passes through into definition snapshots and never gates loading or executability, so NyxID's additive action list deploys independently of Aevatar. Each known descriptor is validated on its own against a pinned per-action contract (exact parameter schema plus registry-owned risk/remember policy): `service.connect` (catalog/custom variants), least-scope `key.create` (`allowedServiceIds` requires 1 to 64 unique string identities), `key.rotate` (one exact predecessor key ID), and `service.reauthorize` (`userServiceId` plus `requestedScopes`, risk `grant`, never remember-eligible). A descriptor that is unknown, malformed, duplicated, or divergent from its pinned contract is skipped and logged individually; the remaining actions stay enabled and a skipped or absent action fails closed per request with `NYXID_ACTION_UNSUPPORTED`. The registry's `risk` and `remember_eligible` values are advisory inputs to Aevatar presentation/planning. The caller cannot submit or lower them, and NyxID recomputes and enforces authorization at execution time.
 
-This startup dependency is active only when `Aevatar:NyxId:AssistantActions:Enabled=true`. The reusable NyxIdChat composition default is `false`: a host that does not opt in does not call the registry endpoint and injects an immutable registry with no executable actions, so browser-action requests fail closed with `NYXID_ACTION_UNSUPPORTED` without preventing unrelated capabilities from starting. Mainnet explicitly enables assistant actions and fetches the registry from the public `Aevatar:NyxId:ApiBaseUrl`, never from `InternalApiBaseUrl`. A fetch, timeout, read, JSON, schema, or revision failure initializes the same immutable disabled registry and emits a scrubbed error, allowing ordinary chat and the Host to start. Host cancellation still aborts startup. The registry remains a one-shot process snapshot, so a degraded process does not enable browser actions until its next successful start.
+This startup dependency is active only when `Aevatar:NyxId:AssistantActions:Enabled=true`. The reusable NyxIdChat composition default is `false`: a host that does not opt in does not call the registry endpoint and injects an immutable registry with no executable actions, so browser-action requests fail closed with `NYXID_ACTION_UNSUPPORTED` without preventing unrelated capabilities from starting. Mainnet explicitly enables assistant actions and fetches the registry from the public `Aevatar:NyxId:ApiBaseUrl`, never from `InternalApiBaseUrl`. The startup fetch retries transient failures a bounded number of times; if every attempt fails (fetch, timeout, read, JSON, or schema), the snapshot pins an immutable disabled fallback with a scrubbed error, ordinary chat and the Host still start, and a background recovery loop keeps refetching with capped backoff. Recovery upgrades the disabled fallback to the first successfully served registry exactly once; a served registry is never replaced or downgraded for the life of the process. Host cancellation still aborts startup.
 
-The typed registry recognizes closed action schemas, but executable handoff is narrower: an action must also have an Aevatar producer, wire mapper, and typed postcondition reader. Revisions v4 and v5 execute only `service.connect`. Revision v6 executes `service.connect` and least-scope `key.create`; the key-create parser rejects missing, empty, over-limit, or duplicate service identities, and the producer emits only exact nonempty owner-visible UserService IDs. Revision v7 additionally executes `key.rotate`: the producer first resolves one exact owner-visible active key, emits only its safe ID, and completion is verified only after an owner-scoped exact replacement-key read proves the reported successor ID, the requested predecessor ID, a positive authority version, and immutable `created_at` plus authoritative `updated_at` no earlier than the committed action request. A later update to an older successor cannot satisfy the immutable creation-time fence. The AG-UI mapper carries these typed requests without key material. `service.reauthorize` remains fail closed at the executable gate. A browser completion report or permitted service access value alone is never effect proof. Catalog and custom connection are distinct variants; a boolean such as `custom: true` never changes the meaning of one shared field set.
+The typed registry recognizes closed action schemas, but executable handoff is narrower: an action must also have an Aevatar producer, wire mapper, and typed postcondition reader, and this build-level executable set (`service.connect`, `key.create`, `key.rotate`) is independent of the served revision label. The key-create parser rejects missing, empty, over-limit, or duplicate service identities, and the producer emits only exact nonempty owner-visible UserService IDs. Postcondition evidence is read exclusively from NyxID's secret-free authorization evidence projections (`GET /api/v1/keys/{id}/authorization`, `GET /api/v1/api-keys/{id}/authorization`), never from the full detail routes: the projections carry only identity, lifecycle, and a monotonic `state_version`, so user-controlled display text cannot poison or fail an evidence read. The api-key projection's retained display `name` is the documented irreducible remainder — it is never compared as evidence and only its top-level value is exempt from the secret-shape scan. For `key.rotate`: the producer first resolves one exact owner-visible active key, emits only its safe ID, and completion is verified only after the replacement key's authorization projection proves the reported successor ID, the requested predecessor ID, and a positive monotonic `state_version`; immutable `created_at` plus, when the projection serializes one, authoritative `updated_at` must be no earlier than the committed action request. A later update to an older successor cannot satisfy the immutable creation-time fence. The AG-UI mapper carries these typed requests without key material. `service.reauthorize` remains fail closed at the executable gate. A browser completion report or permitted service access value alone is never effect proof. Catalog and custom connection are distinct variants; a boolean such as `custom: true` never changes the meaning of one shared field set.
 
 ### Request wire frame
 
@@ -588,6 +570,26 @@ Safe resource variants are `userService`, `key`, `node`, `serviceAccount`, `deve
 The continuation is archived as a separate transcript turn, but its user-side transcript input is a fixed disposition-only summary such as `NyxID action update: completed.` It never copies action resource IDs, request payloads, credentials, tool arguments, or raw results into chat history.
 
 Multiple reports are reconciled independently; a batch is not a transaction. Duplicate exact reports are idempotent, while conflicting or cross-scope/conversation/origin reports fail closed.
+
+### Verified authorization continuation
+
+A verified browser action does not resume the original service request through assistant prose. After the exact typed postcondition commits `done / confirmed`, the conversation actor may dispatch a credential-free `NyxIdChatVerifiedAuthorizationContinuation`. The closed protobuf payload carries only `action_request_id`, `origin_turn_id`, optional `source_tool_step_id`, `postcondition_step_id`, the safe verified resource reference, the frozen `service_slug`, `verified_at`, and one typed `resume_requirement`. It has no token, credential, or generic metadata field. The durable LLM step source retains only the exact action request identity and frozen resume requirement needed for replay-safe lifecycle decisions.
+
+The cross-turn continuation is accepted only when one actor-owned correlation matches all of the following facts:
+
+- the continuation admission is an accepted Action admission whose `originTurnId` is the operation-key turn and whose `continuationTurnId` is the active continuation turn;
+- the operation-key conversation matches the authoritative actor, the operation-key task matches both the active task and active turn, and the complete operation key identifies exactly one continuation step;
+- exactly one LLM continuation step references the action request and depends, directly or transitively, on exactly one matching postcondition step;
+- exactly one matching action request exists in either `pendingActions` or `recentActions`; and
+- that action has a completed verified result, while its matching postcondition is `done / confirmed`.
+
+Any identity, dependency, disposition, or evidence mismatch rejects the continuation. Live reconciliation, pre-persist validation, reducer replay, and recovery use the same correlation policy, so moving a verified action from `pendingActions` to `recentActions` cannot strand an otherwise valid continuation.
+
+The actor freezes one of two obligations. `COMPLETE_ORIGINAL_SERVICE_REQUEST` applies when authorization interrupted an ordinary connected-service request. The resumed LLM request rematerializes the current request-local catalog, then exposes only operations whose typed admission matches both the verified `UserServiceId` and frozen `ServiceSlug`. An unprofiled turn discovers the current NyxID Chat route toolset; a profiled turn requires the committed profile identity to be present and exact, then applies the current `MaximumToolPolicy` as its upper bound. The OAuth-before turn/task authority ceiling is not reused because it cannot contain a capability that the verified action has only just established. Missing or mismatched exact capability fails before LLM execution with `NYXID_AUTHORIZATION_CONTINUATION_CAPABILITY_UNAVAILABLE`; unrelated route tools and global tools are not fallback authority. `COMMUNICATE_AUTHORIZATION_COMPLETION` applies to a dedicated authorization request, forces the request-local catalog empty, and may end only with text communicating the verified authorization result. Missing typed UserService identity, frozen slug, recognized resume requirement, or required committed profile identity fails before LLM execution.
+
+For `COMPLETE_ORIGINAL_SERVICE_REQUEST`, ordinary text is not completion evidence. The first text-only LLM result is reconciled and produces one `failure_recovery` LLM step carrying the same action request, postcondition dependency, resume requirement, and typed verified-authorization payload. If that corrective step is also text-only, the task fails closed with `NYXID_AUTHORIZATION_CONTINUATION_TOOL_REQUIRED`. A matching typed tool call instead continues through the existing tool lifecycle.
+
+The executor appends the server-authored continuation instruction only to the request-local `AgentRunReplyStepState.Messages` after rebuilding the transient session. It is excluded from pending/appended history, actor state, committed events, read models, projections, generic metadata, and logs. Runtime credentials are resolved separately for the current request and are excluded from the typed continuation and every durable or observable artifact.
 
 An out-of-band change can wake the conversation without claiming that any action completed:
 
@@ -795,15 +797,14 @@ Callers must:
 3. send `clientRequestId` only for transport idempotency;
 4. use `type=task.steer` rather than a normal text turn while work is active;
 5. preserve the exact task/step/generation/version when invoking retry or skip;
-6. resolve a pending plan gate with its exact `requestId / taskId / planId / planRevision` and observed `stateVersion`;
-7. preserve approval `requestId` separately from browser `actionRequestId`;
-8. resolve pending input and approval with their exact actor-owned `requestId`, a stable `clientRequestId`, and the observed `stateVersion`;
-9. send schema v4 action reports with `actionRequestId`, `originTurnId`, `disposition`, and typed resource refs, or send `actions=[]` as a signal-only wake-up;
-10. treat browser `completed` and empty wake-up as signals pending typed postcondition proof;
-11. query `/api/chat/conversations/{conversationId}/state` with `stateVersion` and obey `reload_required`;
-12. use `/api/chat/conversations`, not Workflow `create-recovery`, to confirm creation;
-13. tolerate eventual transcript/current-state materialization after admission;
-14. never send `scopeId`, a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
+6. preserve approval `requestId` separately from browser `actionRequestId`;
+7. resolve pending input and approval with their exact actor-owned `requestId`, a stable `clientRequestId`, and the observed `stateVersion`;
+8. send schema v4 action reports with `actionRequestId`, `originTurnId`, `disposition`, and typed resource refs, or send `actions=[]` as a signal-only wake-up;
+9. treat browser `completed` and empty wake-up as signals pending typed postcondition proof;
+10. query `/api/chat/conversations/{conversationId}/state` with `stateVersion` and obey `reload_required`;
+11. use `/api/chat/conversations`, not Workflow `create-recovery`, to confirm creation;
+12. tolerate eventual transcript/current-state materialization after admission;
+13. never send `scopeId`, a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
 
 Earlier schema v3 drafts that use action `id`, inner `payload`, only `completed/declined`, or a device user-code action are obsolete and must not be used to implement or test this contract.
 

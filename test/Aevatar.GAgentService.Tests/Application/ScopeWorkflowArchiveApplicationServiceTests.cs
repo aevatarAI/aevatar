@@ -230,10 +230,6 @@ public sealed class ScopeWorkflowArchiveApplicationServiceTests
             RetireServiceRevisionCommand command,
             CancellationToken ct = default) => throw new NotSupportedException();
 
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(
-            SetDefaultServingRevisionCommand command,
-            CancellationToken ct = default) => throw new NotSupportedException();
-
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(
             ActivateServiceRevisionCommand command,
             CancellationToken ct = default) => throw new NotSupportedException();

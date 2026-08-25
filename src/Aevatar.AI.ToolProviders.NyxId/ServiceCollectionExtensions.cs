@@ -76,8 +76,9 @@ public static class ServiceCollectionExtensions
                     sp.GetRequiredService<IFileArtifactIngressPort>()));
         }
 
-        services.TryAddEnumerable(
-            ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
+        services.TryAddTransient<NyxIdAgentToolSource>();
+        services.TryAddTransient<NyxIdExecutionAgentToolSource>();
+        services.TryAddTransient<NyxIdWorkflowAgentToolSource>();
         services.TryAddTransient<NyxIdConnectedServiceInventoryToolSource>();
         services.TryAddTransient<INyxIdAdmittedOperationToolFactory,
             NyxIdAdmittedOperationToolFactory>();
@@ -200,8 +201,16 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<NyxIdApiAccessRegistrationMarker>();
         }
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<NyxIdMcpOperationCatalogReader>();
+        services.TryAddSingleton<INyxIdActionEvidenceReadPort>(provider =>
+            new NyxIdActionEvidenceReadPort(
+                provider.GetRequiredService<INyxIdApiClientFactory>(),
+                provider.GetRequiredService<NyxIdMcpOperationCatalogReader>()));
+        services.TryAddSingleton<INyxIdActionContinuationCredentialVisibilityPort>(provider =>
+            new NyxIdActionContinuationCredentialVisibilityPort(
+                provider.GetRequiredService<NyxIdMcpOperationCatalogReader>()));
         services.TryAddTransient<INyxIdUserReadApi>(static sp => sp.GetRequiredService<NyxIdApiClient>());
-        services.TryAddSingleton<INyxIdActionEvidenceReadPort, NyxIdActionEvidenceReadPort>();
         return services;
     }
 

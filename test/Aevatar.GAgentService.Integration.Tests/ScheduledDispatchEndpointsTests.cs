@@ -15,6 +15,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -426,7 +427,19 @@ public sealed class ScheduledDispatchEndpointsTests
     [Fact]
     public async Task Update_ShouldRejectServiceInvocationTargetOutsideAuthenticatedScope()
     {
-        var service = new RecordingScheduledDispatchApplicationService();
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateDetail(
+                "schedule-alpha",
+                new ServiceIdentity
+                {
+                    TenantId = "scope-alpha",
+                    AppId = "old-app",
+                    Namespace = "old-namespace",
+                    ServiceId = "old-service",
+                },
+                "old-endpoint"),
+        };
         var result = await UpdateAsync(
             "schedule-alpha",
             CreateServiceInvocationRequest("schedule-alpha", "scope-beta"),
@@ -438,6 +451,73 @@ public sealed class ScheduledDispatchEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
         service.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Update_ShouldRejectCurrentTargetOutsideAuthenticatedScope()
+    {
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateDetail(
+                "schedule-alpha",
+                new ServiceIdentity
+                {
+                    TenantId = "scope-beta",
+                    AppId = "old-app",
+                    Namespace = "old-namespace",
+                    ServiceId = "old-service",
+                },
+                "old-endpoint"),
+        };
+        var result = await UpdateAsync(
+            "schedule-alpha",
+            CreateServiceInvocationRequest("schedule-alpha", "scope-alpha"),
+            service,
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true));
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.LastScheduleGet.Should().Be("schedule-alpha");
+        service.Updated.Should().BeEmpty();
+        service.UpdateContexts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Update_ShouldPassCurrentServiceTargetAsMutationPrecondition()
+    {
+        var currentIdentity = new ServiceIdentity
+        {
+            TenantId = "scope-alpha",
+            AppId = "old-app",
+            Namespace = "old-namespace",
+            ServiceId = "old-service",
+        };
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateDetail(
+                "schedule-alpha",
+                currentIdentity,
+                "old-endpoint",
+                ScheduledDispatchScheduleKind.Workflow),
+        };
+        var result = await UpdateAsync(
+            "schedule-alpha",
+            CreateServiceInvocationRequest("schedule-alpha", "scope-alpha"),
+            service,
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true));
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.UpdateContexts.Should().ContainSingle().Which!.ExpectedServiceTarget.Should().BeEquivalentTo(
+            new ScheduledDispatchExpectedServiceTarget(
+                ScheduledDispatchScheduleKind.Workflow,
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                currentIdentity,
+                "old-endpoint"));
     }
 
     [Fact]
@@ -591,10 +671,26 @@ public sealed class ScheduledDispatchEndpointsTests
             OwnerScope.NyxIdPlatform,
             string.Empty,
             "owner-user-1"));
-        service.UpdateContexts.Should().ContainSingle().Which.Should().BeEquivalentTo(
-            new ScheduledDispatchMutationContext(
-                "scope-1",
-                new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-user-1")));
+        var context = service.UpdateContexts.Should().ContainSingle().Which;
+        context.Should().NotBeNull();
+        context!.AuthenticatedScopeId.Should().Be("scope-1");
+        context.AuthenticatedNyxIdOwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef(
+                OwnerScope.NyxIdPlatform,
+                string.Empty,
+                "owner-user-1"));
+        context.ExpectedServiceTarget.Should().BeEquivalentTo(
+            new ScheduledDispatchExpectedServiceTarget(
+                ScheduledDispatchScheduleKind.Generic,
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                new ServiceIdentity
+                {
+                    TenantId = "tenant",
+                    AppId = "app",
+                    Namespace = "default",
+                    ServiceId = "svc",
+                },
+                "run"));
     }
 
     [Fact]
@@ -882,12 +978,9 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Enable_ShouldMapNotFound()
+    public async Task Enable_WhenProjectedScheduleIsMissing_ShouldReturnNotFoundWithoutMutation()
     {
-        var service = new RecordingScheduledDispatchApplicationService
-        {
-            EnableException = new ScheduledDispatchNotFoundException("missing"),
-        };
+        var service = new RecordingScheduledDispatchApplicationService();
 
         var result = await ScheduledDispatchEndpoints.Enable(
             CreateHttpContext(),
@@ -899,7 +992,8 @@ public sealed class ScheduledDispatchEndpointsTests
         await result.ExecuteAsync(http);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        service.Enabled.Should().ContainSingle().Which.Should().Be(("missing", "resume"));
+        service.Enabled.Should().BeEmpty();
+        service.EnableContexts.Should().BeEmpty();
     }
 
     [Fact]
@@ -907,6 +1001,7 @@ public sealed class ScheduledDispatchEndpointsTests
     {
         var service = new RecordingScheduledDispatchApplicationService
         {
+            Detail = CreateDetail("invalid/id"),
             EnableException = new ArgumentException("invalid id"),
         };
 
@@ -955,13 +1050,10 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Delete_ShouldAcceptReasonFromQueryAndMapNotFound()
+    public async Task Delete_ShouldAcceptReasonAndAvoidMutationWhenProjectedScheduleIsMissing()
     {
         var acceptedService = new RecordingScheduledDispatchApplicationService();
-        var notFoundService = new RecordingScheduledDispatchApplicationService
-        {
-            DeleteException = new ScheduledDispatchNotFoundException("missing"),
-        };
+        var notFoundService = new RecordingScheduledDispatchApplicationService();
 
         var accepted = await ScheduledDispatchEndpoints.Delete(
             CreateHttpContext(),
@@ -984,7 +1076,112 @@ public sealed class ScheduledDispatchEndpointsTests
         acceptedHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         notFoundHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         acceptedService.Deleted.Should().ContainSingle().Which.Should().Be(("schedule-1", "cleanup"));
-        notFoundService.Deleted.Should().ContainSingle().Which.Should().Be(("missing", "body"));
+        notFoundService.Deleted.Should().BeEmpty();
+        notFoundService.DeleteContexts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenericActions_ShouldRejectCurrentTargetOutsideAuthenticatedScopeWithoutMutation()
+    {
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateDetail(
+                "schedule-alpha",
+                new ServiceIdentity
+                {
+                    TenantId = "scope-beta",
+                    AppId = "app-alpha",
+                    Namespace = "namespace-alpha",
+                    ServiceId = "service-alpha",
+                },
+                "endpoint-alpha"),
+        };
+        var requestHttp = CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true);
+
+        var enable = await ScheduledDispatchEndpoints.Enable(requestHttp, "schedule-alpha", null, service);
+        var disable = await ScheduledDispatchEndpoints.Disable(requestHttp, "schedule-alpha", null, service);
+        var delete = await ScheduledDispatchEndpoints.Delete(requestHttp, "schedule-alpha", null, null, service);
+        var runNow = await ScheduledDispatchEndpoints.RunNow(requestHttp, "schedule-alpha", null, service);
+
+        var enableHttp = CreateHttpContext();
+        await enable.ExecuteAsync(enableHttp);
+        var disableHttp = CreateHttpContext();
+        await disable.ExecuteAsync(disableHttp);
+        var deleteHttp = CreateHttpContext();
+        await delete.ExecuteAsync(deleteHttp);
+        var runNowHttp = CreateHttpContext();
+        await runNow.ExecuteAsync(runNowHttp);
+
+        enableHttp.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        disableHttp.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        deleteHttp.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        runNowHttp.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.Enabled.Should().BeEmpty();
+        service.Disabled.Should().BeEmpty();
+        service.Deleted.Should().BeEmpty();
+        service.RunNowScheduleIds.Should().BeEmpty();
+        service.EnableContexts.Should().BeEmpty();
+        service.DisableContexts.Should().BeEmpty();
+        service.DeleteContexts.Should().BeEmpty();
+        service.RunNowContexts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenericActions_ShouldPassCurrentServiceTargetAsMutationPrecondition()
+    {
+        var currentIdentity = new ServiceIdentity
+        {
+            TenantId = "scope-alpha",
+            AppId = "app-alpha",
+            Namespace = "namespace-alpha",
+            ServiceId = "service-alpha",
+        };
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateDetail(
+                "schedule-alpha",
+                currentIdentity,
+                "endpoint-alpha",
+                ScheduledDispatchScheduleKind.Workflow),
+        };
+        var requestHttp = CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true);
+
+        var enable = await ScheduledDispatchEndpoints.Enable(requestHttp, "schedule-alpha", null, service);
+        var disable = await ScheduledDispatchEndpoints.Disable(requestHttp, "schedule-alpha", null, service);
+        var delete = await ScheduledDispatchEndpoints.Delete(requestHttp, "schedule-alpha", null, null, service);
+        var runNow = await ScheduledDispatchEndpoints.RunNow(requestHttp, "schedule-alpha", null, service);
+
+        var enableHttp = CreateHttpContext();
+        await enable.ExecuteAsync(enableHttp);
+        var disableHttp = CreateHttpContext();
+        await disable.ExecuteAsync(disableHttp);
+        var deleteHttp = CreateHttpContext();
+        await delete.ExecuteAsync(deleteHttp);
+        var runNowHttp = CreateHttpContext();
+        await runNow.ExecuteAsync(runNowHttp);
+
+        enableHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        disableHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        deleteHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        runNowHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var expectedTarget = new ScheduledDispatchExpectedServiceTarget(
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            currentIdentity,
+            "endpoint-alpha");
+        var contexts = new[]
+        {
+            service.EnableContexts.Should().ContainSingle().Which,
+            service.DisableContexts.Should().ContainSingle().Which,
+            service.DeleteContexts.Should().ContainSingle().Which,
+            service.RunNowContexts.Should().ContainSingle().Which,
+        };
+        foreach (var context in contexts)
+        {
+            context.Should().NotBeNull();
+            context!.AuthenticatedScopeId.Should().Be("scope-alpha");
+            context.ExpectedServiceTarget.Should().BeEquivalentTo(expectedTarget);
+        }
     }
 
     [Fact]
@@ -1533,6 +1730,8 @@ public sealed class ScheduledDispatchEndpointsTests
         service.Enabled.Should().BeEmpty();
         service.Disabled.Should().BeEmpty();
         service.Deleted.Should().BeEmpty();
+        service.RunNowScheduleIds.Should().BeEmpty();
+        service.LastScheduleGet.Should().BeNull();
     }
 
     [Fact]
@@ -1928,6 +2127,161 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Get_GenericScheduleWithinAuthenticatedScope_ShouldReturnOk()
+    {
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateDetail(
+                "schedule-alpha",
+                new ServiceIdentity
+                {
+                    TenantId = "scope-alpha",
+                    AppId = "app-alpha",
+                    Namespace = "namespace-alpha",
+                    ServiceId = "service-alpha",
+                },
+                "endpoint-alpha"),
+        };
+
+        var result = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
+            "schedule-alpha",
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        service.LastScheduleGet.Should().Be("schedule-alpha");
+    }
+
+    [Fact]
+    public async Task Get_GenericScheduleOutsideAuthenticatedScope_ShouldReturnForbidden()
+    {
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateDetail(
+                "schedule-alpha",
+                new ServiceIdentity
+                {
+                    TenantId = "scope-beta",
+                    AppId = "app-alpha",
+                    Namespace = "namespace-alpha",
+                    ServiceId = "service-alpha",
+                },
+                "endpoint-alpha"),
+        };
+
+        var result = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
+            "schedule-alpha",
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.LastScheduleGet.Should().Be("schedule-alpha");
+    }
+
+    [Fact]
+    public async Task Get_GenericScheduleWithLegacyMissingServiceIdentity_ShouldRequirePlatformAdmin()
+    {
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateLegacyGenericDetail("schedule-alpha"),
+        };
+
+        var denied = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(
+                scopeId: "scope-alpha",
+                authenticationEnabled: true,
+                adminAuthorizer: new StaticPlatformAdminAuthorizer(isElevated: false),
+                authorizationHeader: "Bearer user-token"),
+            "schedule-alpha",
+            service);
+        var allowed = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(
+                scopeId: "scope-alpha",
+                authenticationEnabled: true,
+                adminAuthorizer: new StaticPlatformAdminAuthorizer(isElevated: true),
+                authorizationHeader: "Bearer admin-token"),
+            "schedule-alpha",
+            service);
+
+        var deniedHttp = CreateHttpContext();
+        await denied.ExecuteAsync(deniedHttp);
+        var allowedHttp = CreateHttpContext();
+        await allowed.ExecuteAsync(allowedHttp);
+
+        deniedHttp.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        allowedHttp.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        service.LastScheduleGet.Should().Be("schedule-alpha");
+    }
+
+    [Fact]
+    public async Task GenericActions_WithLegacyProjection_ShouldAllowOnlyPlatformAdmin()
+    {
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateLegacyGenericDetail("schedule-alpha"),
+        };
+        var requestHttp = CreateHttpContext(
+            scopeId: "scope-alpha",
+            authenticationEnabled: true,
+            adminAuthorizer: new StaticPlatformAdminAuthorizer(isElevated: true),
+            authorizationHeader: "Bearer admin-token");
+
+        var enable = await ScheduledDispatchEndpoints.Enable(requestHttp, "schedule-alpha", null, service);
+        var disable = await ScheduledDispatchEndpoints.Disable(requestHttp, "schedule-alpha", null, service);
+        var delete = await ScheduledDispatchEndpoints.Delete(requestHttp, "schedule-alpha", null, null, service);
+        var runNow = await ScheduledDispatchEndpoints.RunNow(requestHttp, "schedule-alpha", null, service);
+
+        foreach (var result in new[] { enable, disable, delete, runNow })
+        {
+            var responseHttp = CreateHttpContext();
+            await result.ExecuteAsync(responseHttp);
+            responseHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        }
+
+        var contexts = new[]
+        {
+            service.EnableContexts.Should().ContainSingle().Which,
+            service.DisableContexts.Should().ContainSingle().Which,
+            service.DeleteContexts.Should().ContainSingle().Which,
+            service.RunNowContexts.Should().ContainSingle().Which,
+        };
+        foreach (var context in contexts)
+        {
+            context.Should().NotBeNull();
+            context!.ExpectedServiceTarget.Should().BeNull();
+        }
+    }
+
+    [Fact]
+    public async Task Get_GenericScheduleWithIncompleteLegacyProjection_ShouldReturnNotFound()
+    {
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateDetail("schedule-alpha", new ServiceIdentity()),
+        };
+
+        var result = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(
+                scopeId: "scope-alpha",
+                authenticationEnabled: true,
+                adminAuthorizer: new StaticPlatformAdminAuthorizer(isElevated: true),
+                authorizationHeader: "Bearer admin-token"),
+            "schedule-alpha",
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
     public async Task Get_ShouldSerializeOwnerLLMRuntimeEvidenceWithoutSensitiveAuthorityMaterial()
     {
         var detail = CreateDetail("schedule-owner-llm");
@@ -2044,21 +2398,20 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task RunNow_ShouldAcceptAndMapNotFound()
+    public async Task RunNow_ShouldAcceptAndAvoidMutationWhenProjectedScheduleIsMissing()
     {
+        var acceptedService = new RecordingScheduledDispatchApplicationService();
+        var notFoundService = new RecordingScheduledDispatchApplicationService();
         var accepted = await ScheduledDispatchEndpoints.RunNow(
             CreateHttpContext(),
             "schedule-1",
             null,
-            new RecordingScheduledDispatchApplicationService());
+            acceptedService);
         var notFound = await ScheduledDispatchEndpoints.RunNow(
             CreateHttpContext(),
             "missing",
             null,
-            new RecordingScheduledDispatchApplicationService
-            {
-                RunNowException = new ScheduledDispatchNotFoundException("missing"),
-            });
+            notFoundService);
 
         var acceptedHttp = CreateHttpContext();
         await accepted.ExecuteAsync(acceptedHttp);
@@ -2067,6 +2420,9 @@ public sealed class ScheduledDispatchEndpointsTests
 
         acceptedHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         notFoundHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        acceptedService.RunNowScheduleIds.Should().ContainSingle().Which.Should().Be("schedule-1");
+        notFoundService.RunNowScheduleIds.Should().BeEmpty();
+        notFoundService.RunNowContexts.Should().BeEmpty();
     }
 
     [Fact]
@@ -2491,7 +2847,7 @@ public sealed class ScheduledDispatchEndpointsTests
         host.RevisionCatalog.UpsertRevision(
             "tenant:app:default:workflow",
             "rev-active",
-            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+            BuildWorkflowPreparedArtifact("rev-active"));
 
         var response = await host.Client.PostAsJsonAsync("/api/schedules", new
         {
@@ -2865,14 +3221,19 @@ public sealed class ScheduledDispatchEndpointsTests
         string scheduleId,
         ScheduledDispatchConfigurationHttpRequest request,
         RecordingScheduledDispatchApplicationService service,
-        HttpContext? http = null) =>
-        ScheduledDispatchEndpoints.Update(
+        HttpContext? http = null)
+    {
+        if (service.Detail?.Schedule.ScheduleId != scheduleId)
+            service.Detail = CreateDetail(scheduleId);
+
+        return ScheduledDispatchEndpoints.Update(
             http ?? CreateHttpContext(),
             scheduleId,
             request,
             service,
             new FakeServiceCatalogQueryReader(),
             new FakeServiceRevisionCatalogQueryReader());
+    }
 
     private static ServiceCatalogSnapshot CreateServiceCatalog(
         string activeRevisionId,
@@ -2913,6 +3274,44 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         };
 
+    private static PreparedServiceRevisionArtifact BuildWorkflowPreparedArtifact(string revisionId)
+    {
+        const string workflowYaml = "name: workflow\nsteps: []";
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        return WorkflowServiceRevisionArtifactBuilder.Build(
+            new ServiceRevisionSpec
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "tenant",
+                    AppId = "app",
+                    Namespace = "default",
+                    ServiceId = "workflow",
+                },
+                RevisionId = revisionId,
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                    WorkflowId = revisionId,
+                    WorkflowName = "workflow",
+                    WorkflowYaml = workflowYaml,
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                },
+            },
+            "workflow",
+            new WorkflowAuthorizationDependencies
+            {
+                ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+            },
+            capabilityAdmissionPlan);
+    }
+
     private static ByteString BuildProtocolDescriptorSetFor(MessageDescriptor descriptor)
     {
         var fds = new FileDescriptorSet();
@@ -2939,17 +3338,31 @@ public sealed class ScheduledDispatchEndpointsTests
         property!.SetValue(target, value);
     }
 
-    private static ScheduledDispatchDetail CreateDetail(string scheduleId) =>
-        new(
+    private static ScheduledDispatchDetail CreateDetail(
+        string scheduleId,
+        ServiceIdentity? serviceIdentity = null,
+        string serviceEndpointId = "run",
+        ScheduledDispatchScheduleKind scheduleKind = ScheduledDispatchScheduleKind.Generic,
+        ScheduledDispatchTargetKind targetKind = ScheduledDispatchTargetKind.ServiceInvocation)
+    {
+        serviceIdentity ??= new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+
+        return new ScheduledDispatchDetail(
             new ScheduledDispatchSummary(
                 scheduleId,
                 "Daily",
-                ScheduledDispatchTargetKind.Envelope,
-                "actor-1",
+                targetKind,
+                string.Empty,
                 Any.Pack(new StringValue { Value = "run" }).TypeUrl,
-                string.Empty,
-                string.Empty,
-                string.Empty,
+                $"{serviceIdentity.TenantId}:{serviceIdentity.AppId}:{serviceIdentity.Namespace}:{serviceIdentity.ServiceId}",
+                serviceIdentity.ServiceId,
+                serviceEndpointId,
                 "0 9 * * *",
                 "UTC",
                 true,
@@ -2965,9 +3378,27 @@ public sealed class ScheduledDispatchEndpointsTests
                 0,
                 0,
                 new Dictionary<string, string>(),
-                "actor:schedule-1",
-                string.Empty),
+                $"actor:{scheduleId}",
+                string.Empty,
+                scheduleKind)
+            {
+                ServiceIdentity = serviceIdentity.Clone(),
+            },
             []);
+    }
+
+    private static ScheduledDispatchDetail CreateLegacyGenericDetail(string scheduleId)
+    {
+        var detail = CreateDetail(scheduleId, new ServiceIdentity());
+        return detail with
+        {
+            Schedule = detail.Schedule with
+            {
+                ServiceKey = "scope-alpha:app-alpha:namespace-alpha:service-alpha",
+                ServiceId = "service-alpha",
+            },
+        };
+    }
 
     private static DefaultHttpContext CreateHttpContext(
         string? scopeId = null,
@@ -3081,7 +3512,20 @@ public sealed class ScheduledDispatchEndpointsTests
             });
             builder.WebHost.UseUrls("http://127.0.0.1:0");
 
-            var schedules = new RecordingScheduledDispatchApplicationService();
+            var schedules = new RecordingScheduledDispatchApplicationService
+            {
+                Detail = CreateDetail(
+                    "schedule-chat",
+                    new ServiceIdentity
+                    {
+                        TenantId = "tenant",
+                        AppId = "app",
+                        Namespace = "default",
+                        ServiceId = "workflow",
+                    },
+                    "chat",
+                    ScheduledDispatchScheduleKind.Workflow),
+            };
             var catalogReader = new FakeServiceCatalogQueryReader();
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
             var bindingQuery = new FakeExternalIdentityBindingQueryPort();
@@ -3201,8 +3645,13 @@ public sealed class ScheduledDispatchEndpointsTests
         public List<(string ScheduleId, ScheduledDispatchConfiguration Configuration)> Updated { get; } = [];
         public List<ScheduledDispatchMutationContext?> UpdateContexts { get; } = [];
         public List<(string ScheduleId, string Reason)> Enabled { get; } = [];
+        public List<ScheduledDispatchMutationContext?> EnableContexts { get; } = [];
         public List<(string ScheduleId, string Reason)> Disabled { get; } = [];
+        public List<ScheduledDispatchMutationContext?> DisableContexts { get; } = [];
         public List<(string ScheduleId, string Reason)> Deleted { get; } = [];
+        public List<ScheduledDispatchMutationContext?> DeleteContexts { get; } = [];
+        public List<string> RunNowScheduleIds { get; } = [];
+        public List<ScheduledDispatchMutationContext?> RunNowContexts { get; } = [];
         public List<(string ScheduleId, TeamMemberAutomationOwner Owner, string Reason)> TeamEnabled { get; } = [];
         public List<(string ScheduleId, TeamMemberAutomationOwner Owner, string Reason)> TeamDisabled { get; } = [];
         public List<(string ScheduleId, TeamMemberAutomationOwner Owner, string Reason)> TeamDeleted { get; } = [];
@@ -3216,7 +3665,7 @@ public sealed class ScheduledDispatchEndpointsTests
         public (string ScheduleId, TeamMemberAutomationOwner Owner)? LastTeamAutomationGet { get; private set; }
         public int? LastPreviewCount { get; private set; }
         public DateTimeOffset? LastPreviewFromUtc { get; private set; }
-        public ScheduledDispatchDetail? Detail { get; set; }
+        public ScheduledDispatchDetail? Detail { get; set; } = CreateDetail("schedule-1");
         public Exception? CreateException { get; set; }
         public Exception? UpdateException { get; set; }
         public Exception? EnableException { get; set; }
@@ -3290,9 +3739,11 @@ public sealed class ScheduledDispatchEndpointsTests
         public Task<ScheduledDispatchMutationReceipt> EnableAsync(
             string scheduleId,
             string reason,
+            ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default)
         {
             Enabled.Add((scheduleId, reason));
+            EnableContexts.Add(context);
             if (EnableException != null)
                 throw EnableException;
 
@@ -3309,9 +3760,11 @@ public sealed class ScheduledDispatchEndpointsTests
         public Task<ScheduledDispatchMutationReceipt> DisableAsync(
             string scheduleId,
             string reason,
+            ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default)
         {
             Disabled.Add((scheduleId, reason));
+            DisableContexts.Add(context);
             if (DisableException != null)
                 throw DisableException;
 
@@ -3328,9 +3781,11 @@ public sealed class ScheduledDispatchEndpointsTests
         public Task<ScheduledDispatchMutationReceipt> DeleteAsync(
             string scheduleId,
             string reason,
+            ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default)
         {
             Deleted.Add((scheduleId, reason));
+            DeleteContexts.Add(context);
             if (DeleteException != null)
                 throw DeleteException;
 
@@ -3480,8 +3935,13 @@ public sealed class ScheduledDispatchEndpointsTests
                 [new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)]));
         }
 
-        public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(string scheduleId, CancellationToken ct = default)
+        public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
+            string scheduleId,
+            ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default)
         {
+            RunNowScheduleIds.Add(scheduleId);
+            RunNowContexts.Add(context);
             if (RunNowException != null)
                 throw RunNowException;
 

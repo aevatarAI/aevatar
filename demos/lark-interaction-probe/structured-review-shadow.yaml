@@ -1,0 +1,59 @@
+name: structured_review_shadow_probe
+description: Phase 1 shadow probe for migrating a structured review form to a Lark card interaction.
+roles: []
+steps:
+  - id: structured_review
+    type: notify
+    presentation:
+      delivery_target_id: "${input}"
+      interaction_spec:
+        title: "Structured Review"
+        body: "Review the structured fields and submit the decision."
+        disposition: normal
+        fields:
+          - title: "Record Name"
+            text: "Sample Record"
+          - title: "Record ID"
+            text: "REC-10086"
+          - title: "Group"
+            text: "Platform Validation"
+          - title: "Category"
+            text: "Card Interaction"
+          - title: "Effective Date"
+            text: "2026-06-10"
+          - title: "Review Type"
+            text: "Migration Probe"
+          - title: "Source Name"
+            text: "Example Source"
+          - title: "Source Title"
+            text: "Structured Interaction"
+          - title: "Source Reference"
+            text: "SRC-20260610-001"
+          - title: "Locale"
+            text: "en-SG"
+          - title: "Quantity"
+            text: "12"
+          - title: "Secondary Quantity"
+            text: "3"
+          - title: "Project Reference"
+            text: "N8N-MIGRATION"
+          - title: "Delivery Method"
+            text: "Interactive Card"
+          - title: "Review Owner"
+            text: "Test Operator"
+          - title: "Risk Level"
+            text: "Normal"
+          - title: "Comments"
+            text: "Prefilled comment, editable in the target Lark form implementation."
+          - title: "Attachment Note"
+            text: "File upload is migrated to stable Lark/NyxID document references."
+        actions:
+          - kind: form_submit
+            action_id: review_submit
+            label: "Submit"
+            value: "submit"
+          - kind: button
+            action_id: review_reject
+            label: "Reject"
+            value: "reject"
+            style: danger

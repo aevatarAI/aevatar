@@ -17,7 +17,7 @@ public sealed class MainnetChatEndpointsTests
     [InlineData("{\"type\":\"text\",\"workflow\":\"studio\"}", "Assistant")]
     [InlineData("{\"type\":\"action.continue\"}", "Assistant")]
     [InlineData("{\"type\":\"approval.resolve\"}", "Assistant")]
-    [InlineData("{\"type\":\"plan.resolve\"}", "Assistant")]
+    [InlineData("{\"type\":\"plan.resolve\"}", "Unsupported")]
     [InlineData("{\"type\":\"task.stop\"}", "Assistant")]
     [InlineData("{\"type\":\"task.steer\"}", "Assistant")]
     [InlineData("{\"type\":\"step.retry\"}", "Assistant")]

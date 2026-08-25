@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Workflow.Abstractions;
@@ -17,6 +18,8 @@ public sealed class WorkflowArtifactFactBuilderOperationTests
     [Fact]
     public void TryBuild_ModelStarted_ShouldPreserveProviderInputToolsSequenceAndSourceTime()
     {
+        var toolCatalogProof = AgentTurnToolCatalogProof.RestrictedEmpty(
+            AgentTurnToolCatalogBudget.WorkflowOrAdmin);
         var progress = new RoleChatSessionProgressedEvent
         {
             SessionId = "session-alpha",
@@ -28,6 +31,8 @@ public sealed class WorkflowArtifactFactBuilderOperationTests
                 Model = "deepseek-chat",
                 Provider = "deepseek",
                 InputSummary = "Summarize the deployment status.",
+                ToolCatalogProof = toolCatalogProof.ToPayload(),
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                 AvailableToolNames = { "search", "status" },
             },
         };
@@ -44,6 +49,15 @@ public sealed class WorkflowArtifactFactBuilderOperationTests
         fact.Provider.Should().Be("deepseek");
         fact.InputSummary.Should().Be("Summarize the deployment status.");
         fact.AvailableToolNames.Should().Equal("search", "status");
+        fact.ToolCatalogPolicyVersion.Should().Be(WorkflowToolCatalogPolicies.CurrentVersion);
+        fact.ToolCatalogProof.Should().NotBeNull();
+        fact.ToolCatalogProof.ToolCount.Should().Be(0);
+        fact.ToolCatalogProof.SchemaBytes.Should().Be(0);
+        fact.ToolCatalogProof.CatalogDigest.Should().Be(toolCatalogProof.CatalogDigest);
+        fact.ToolCatalogProof.Budget.MaximumToolCount.Should()
+            .Be(WorkflowToolCatalogPolicies.MaximumWorkflowToolCount);
+        fact.ToolCatalogProof.Budget.MaximumSchemaBytes.Should()
+            .Be(WorkflowToolCatalogPolicies.MaximumWorkflowSchemaBytes);
         fact.ProgressSequence.Should().Be(11);
         fact.EventTime.ToDateTimeOffset().Should().Be(SourceTime);
         fact.Source.PublisherActorId.Should().Be("role-actor-alpha");

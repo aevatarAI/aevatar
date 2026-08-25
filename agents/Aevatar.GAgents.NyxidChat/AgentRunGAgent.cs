@@ -309,7 +309,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleReplyGenerationFailedAsync(AgentRunReplyGenerationFailed command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -1095,8 +1095,12 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         // re-supply it so the executor's uniform per-step credential re-supply uses the bot-owner
         // token on the owner-fallback step.
         var inboundControl = request.LlmControl;
+        var relayOwnerAccessToken = NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
         request.Activity = ClearRuntimeUserAccessToken(request.Activity);
-        request.LlmControl = ReSupplyOwnerFallbackToken(ResolveOwnerFallbackControl(currentStep), inboundControl).ToPayload();
+        request.LlmControl = ReSupplyOwnerFallbackToken(
+            ResolveOwnerFallbackControl(currentStep),
+            inboundControl,
+            relayOwnerAccessToken).ToPayload();
         request.ToolContext = ResolveOwnerFallbackToolContext(currentStep).ToPayload();
         StripServerDefaultFallbackMetadata(request.Metadata);
 
@@ -1900,14 +1904,16 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     // bot owner; the executor picks this up through its per-step credential re-supply.
     private static LLMControlContext ReSupplyOwnerFallbackToken(
         LLMControlContext fallbackControl,
-        Aevatar.AI.Abstractions.LLMControlContextPayload? inboundControl)
+        Aevatar.AI.Abstractions.LLMControlContextPayload? inboundControl,
+        string? relayOwnerAccessToken)
     {
-        if (inboundControl is null)
-            return fallbackControl;
+        var accessToken = NormalizeOptional(inboundControl?.NyxIdAccessToken) ??
+                          NormalizeOptional(relayOwnerAccessToken);
+        var orgToken = NormalizeOptional(inboundControl?.NyxIdOrgToken) ?? accessToken;
         return fallbackControl with
         {
-            NyxIdAccessToken = NormalizeOptional(inboundControl.NyxIdAccessToken),
-            NyxIdOrgToken = NormalizeOptional(inboundControl.NyxIdOrgToken),
+            NyxIdAccessToken = accessToken,
+            NyxIdOrgToken = orgToken,
         };
     }
 
@@ -2448,6 +2454,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             RunId = runId,
             UseSourceActivityDeliveryContext = State.ProducedUseSourceActivityDeliveryContext,
         };
+        if (State.GenerationStep?.AgentProfileSnapshot is not null)
+            ready.AgentProfile = State.GenerationStep.AgentProfileSnapshot.Clone();
         if (workflowRunDelivery is not null)
             ready.WorkflowRunDelivery = workflowRunDelivery.Clone();
         ready.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));

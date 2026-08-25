@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Workflow.Abstractions;
@@ -168,6 +169,20 @@ internal static class WorkflowArtifactFactBuilder
                 evt.Provider = progress.ModelStarted.Provider ?? string.Empty;
                 evt.InputSummary = SanitizeArtifactText(progress.ModelStarted.InputSummary);
                 evt.AvailableToolNames.Add(progress.ModelStarted.AvailableToolNames);
+                evt.ToolCatalogPolicyVersion = progress.ModelStarted.ToolCatalogPolicyVersion ?? string.Empty;
+                if (progress.ModelStarted.ToolCatalogProof != null)
+                {
+                    try
+                    {
+                        evt.ToolCatalogProof = ToWorkflowToolCatalogProof(
+                            AgentTurnToolCatalogProofPayloadMapper.FromPayload(
+                                progress.ModelStarted.ToolCatalogProof));
+                    }
+                    catch (AgentTurnToolCatalogException)
+                    {
+                        return false;
+                    }
+                }
                 evt.Kind = WorkflowRuntimeOperationKind.Model;
                 evt.Phase = WorkflowRuntimeOperationPhase.Started;
                 break;
@@ -233,6 +248,50 @@ internal static class WorkflowArtifactFactBuilder
             TotalTokens = Math.Max(0, usage.TotalTokens),
             Model = model ?? string.Empty,
         };
+
+    private static WorkflowAgentTurnToolCatalogProof ToWorkflowToolCatalogProof(
+        AgentTurnToolCatalogProof proof)
+    {
+        var result = new WorkflowAgentTurnToolCatalogProof
+        {
+            Budget = new WorkflowAgentTurnToolCatalogBudgetProof
+            {
+                MaximumToolCount = proof.Budget.MaximumToolCount,
+                MaximumSchemaBytes = proof.Budget.MaximumSchemaBytes,
+                MaximumConnectedReadToolCount = proof.Budget.MaximumConnectedReadToolCount,
+                MaximumConnectedWriteToolCount = proof.Budget.MaximumConnectedWriteToolCount,
+            },
+            ToolCount = proof.ToolCount,
+            SchemaBytes = proof.SchemaBytes,
+            ConnectedReadToolCount = proof.ConnectedReadToolCount,
+            ConnectedWriteToolCount = proof.ConnectedWriteToolCount,
+            CatalogDigest = proof.CatalogDigest,
+        };
+        result.ToolDescriptors.AddRange(proof.ToolDescriptors.Select(static descriptor =>
+            new WorkflowAgentTurnToolDescriptorProof
+            {
+                Name = descriptor.Name,
+                Description = descriptor.Description,
+                CanonicalSchemaJson = ByteString.CopyFrom(descriptor.CanonicalSchemaBytes.Span),
+                SchemaSha256 = descriptor.SchemaSha256,
+                Origin = ToWorkflowToolOrigin(descriptor.Origin),
+                SelectorDigest = descriptor.SelectorDigest,
+            }));
+        return result;
+    }
+
+    private static WorkflowAgentTurnToolOrigin ToWorkflowToolOrigin(AgentTurnToolOrigin origin) => origin switch
+    {
+        AgentTurnToolOrigin.AgentRuntime => WorkflowAgentTurnToolOrigin.AgentRuntime,
+        AgentTurnToolOrigin.RouteToolSet => WorkflowAgentTurnToolOrigin.RouteToolSet,
+        AgentTurnToolOrigin.AgentProfile => WorkflowAgentTurnToolOrigin.AgentProfile,
+        AgentTurnToolOrigin.ConnectedService => WorkflowAgentTurnToolOrigin.ConnectedService,
+        AgentTurnToolOrigin.ResponsesState => WorkflowAgentTurnToolOrigin.ResponsesState,
+        AgentTurnToolOrigin.CallerForwarded => WorkflowAgentTurnToolOrigin.CallerForwarded,
+        AgentTurnToolOrigin.Workflow => WorkflowAgentTurnToolOrigin.Workflow,
+        AgentTurnToolOrigin.Voice => WorkflowAgentTurnToolOrigin.Voice,
+        _ => WorkflowAgentTurnToolOrigin.Unspecified,
+    };
 
     private static bool TryBuildWorkflowRoleReplyRecordedEvent(
         EventEnvelope envelope,

@@ -162,7 +162,7 @@ public sealed class AgentProfileNamespaceGAgentTests
             System = new AgentProfileSystemBindingAdmission
             {
                 Enabled = true,
-                CohortBasisPoints = 5_000,
+                CohortBasisPoints = AgentProfilePolicies.ExpandedCohortBasisPoints,
             },
             ExpectedAuthorityStateVersion = 0,
             Operation = Operation("op-bind-rollout", "bind-rollout"),
@@ -170,6 +170,32 @@ public sealed class AgentProfileNamespaceGAgentTests
 
         actor.State.DefaultBindings.Should().BeEmpty();
         actor.State.LastMutation.Code.Should().Be("BINDING_ADMISSION_INVALID");
+    }
+
+    [Fact]
+    public async Task SystemRollout_ShouldKeepPreviousReviewedTargetAcrossFiveTwentyFiveFullAndRollback()
+    {
+        var owner = AgentProfileOwners.ForSystem();
+        var actor = CreateActor(owner);
+        await AddPublishedProfileAsync(actor, owner, "prof-a", "profile-a", 0x11);
+        await AddPublishedProfileAsync(actor, owner, "prof-b", "profile-b", 0x22);
+        var targetA = Target(owner, "prof-a", 1, 0x11);
+        var targetB = Target(owner, "prof-b", 1, 0x22);
+
+        await SetSystemBindingAsync(actor, owner, targetA, 6, 10_000, "baseline");
+        await SetSystemBindingAsync(actor, owner, targetB, 7, 500, "canary");
+        actor.State.DefaultBindings.Single().System.PreviousReviewedTarget.Should().BeEquivalentTo(targetA);
+
+        await SetSystemBindingAsync(actor, owner, targetB, 8, 2_500, "expanded");
+        actor.State.DefaultBindings.Single().System.PreviousReviewedTarget.Should().BeEquivalentTo(targetA);
+
+        await SetSystemBindingAsync(actor, owner, targetB, 9, 10_000, "full");
+        actor.State.DefaultBindings.Single().System.PreviousReviewedTarget.Should().BeEquivalentTo(targetA);
+
+        await SetSystemBindingAsync(actor, owner, targetA, 10, 10_000, "rollback");
+        var rolledBack = actor.State.DefaultBindings.Single();
+        rolledBack.Target.Should().BeEquivalentTo(targetA);
+        rolledBack.System.PreviousReviewedTarget.Should().BeEquivalentTo(targetB);
     }
 
     [Fact]
@@ -343,6 +369,64 @@ public sealed class AgentProfileNamespaceGAgentTests
 
     private static Task HandleInitializedAsync(AgentProfileNamespaceGAgent actor, AgentProfileInitialized initialized) =>
         actor.HandleEventAsync(Envelope(initialized, initialized.SourceProfileActorId, actor.Id));
+
+    private static async Task AddPublishedProfileAsync(
+        AgentProfileNamespaceGAgent actor,
+        AgentProfileOwner owner,
+        string profileId,
+        string profileSlug,
+        byte digestByte)
+    {
+        var operation = Operation($"op-create-{profileId}", profileId);
+        await actor.HandleCreateAsync(new CreateAgentProfileCommand
+        {
+            Owner = owner.Clone(),
+            ProfileId = profileId,
+            ProfileSlug = profileSlug,
+            Operation = operation.Clone(),
+        });
+        await HandleInitializedAsync(actor, new AgentProfileInitialized
+        {
+            Identity = Identity(owner, profileId, profileSlug),
+            Operation = operation.Clone(),
+            SourceProfileActorId = AgentProfileActorIds.Profile(profileId),
+            SourceAuthorityStateVersion = 1,
+            ProvisioningOperationId = operation.OperationId,
+        });
+        var published = new ObserveAgentProfilePublishedCommand
+        {
+            Identity = Identity(owner, profileId, profileSlug),
+            PublishedRevision = 1,
+            SnapshotSha256 = ByteString.CopyFrom(Enumerable.Repeat(digestByte, 32).ToArray()),
+            DisplayName = profileSlug,
+            Purpose = profileSlug,
+            SourceProfileActorId = AgentProfileActorIds.Profile(profileId),
+            SourceAuthorityStateVersion = 2,
+            SourceOperationId = $"op-publish-{profileId}",
+        };
+        await actor.HandleEventAsync(Envelope(published, published.SourceProfileActorId, actor.Id));
+    }
+
+    private static Task SetSystemBindingAsync(
+        AgentProfileNamespaceGAgent actor,
+        AgentProfileOwner owner,
+        AgentProfileBindingTarget target,
+        long expectedVersion,
+        int cohortBasisPoints,
+        string suffix) =>
+        actor.HandleSetDefaultBindingAsync(new SetAgentProfileDefaultBindingCommand
+        {
+            Owner = owner.Clone(),
+            AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
+            Target = target.Clone(),
+            System = new AgentProfileSystemBindingAdmission
+            {
+                Enabled = true,
+                CohortBasisPoints = cohortBasisPoints,
+            },
+            ExpectedAuthorityStateVersion = expectedVersion,
+            Operation = Operation($"op-bind-{suffix}", suffix),
+        });
 
     private static AgentProfileIdentity Identity(
         AgentProfileOwner owner,

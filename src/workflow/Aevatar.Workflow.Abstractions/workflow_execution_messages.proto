@@ -185,6 +185,7 @@ enum NyxIdCallerCredentialKind {
   NYX_ID_CALLER_CREDENTIAL_KIND_UNSPECIFIED = 0;
   NYX_ID_CALLER_CREDENTIAL_KIND_SOURCE_READABLE_USER_BEARER = 1;
   NYX_ID_CALLER_CREDENTIAL_KIND_PROXY_DELEGATION = 2;
+  NYX_ID_CALLER_CREDENTIAL_KIND_AGENT_KEY = 3;
 }
 
 message WorkflowCallerCredential {
@@ -343,6 +344,151 @@ message WorkflowRunForkSeed
   int32 attempt = 4;
   WorkflowStepIdempotencyState start_step_idempotency = 5;
   string original_run_id = 6;
+  // Typed source snapshot for normalized runs. Legacy sources leave this absent
+  // and continue to use variables.
+  WorkflowNormalizedExecutionSeed normalized_values = 7;
+  // Request-level overlay applied after the source snapshot. Keeping overrides
+  // separate prevents a fork command from destroying canonical provenance.
+  map<string, string> variable_overrides = 8;
+}
+
+// Author-owned release policy for large intermediate workflow values. The
+// runtime resolves every name through its typed canonical binding; this is not
+// an open parameter bag.
+message WorkflowStepValueLifecycle
+{
+  repeated string release_variables_after_success = 1;
+}
+
+// Actor-authoritative replay evidence for a value whose raw UTF-8 payload no
+// longer belongs in current state.
+message WorkflowValueDigest
+{
+  bytes sha256 = 1;
+  uint64 utf8_size = 2;
+  bool redacted = 3;
+}
+
+message WorkflowReleasedValueTombstone
+{
+  WorkflowValueDigest digest = 1;
+  string released_after_step_id = 2;
+  string released_after_execution_id = 3;
+  // Canonical value id that was released. A later step may re-bind the same
+  // variable name to a new value (per-iteration release); the tombstone then
+  // covers only this value id and the re-bound value stays readable and
+  // releasable. Empty for tombstones written before value identity was
+  // recorded; those names have no live binding by construction.
+  string value_id = 4;
+}
+
+enum WorkflowValueLifecycleFailureKind
+{
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_RELEASED_VALUE_ACCESSED = 1;
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_RELEASE_TARGET_MISSING = 2;
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_RELEASE_TARGET_LIVE = 3;
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_RELEASE_TARGET_PINNED_FOR_COMPENSATION = 4;
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_SCHEMA_UNAVAILABLE = 5;
+}
+
+message WorkflowCanonicalValueSeed
+{
+  string value_id = 1;
+  string value = 2;
+  string producer_step_id = 3;
+  string producer_execution_id = 4;
+  WorkflowCanonicalValueSourceKind source_kind = 5;
+  WorkflowReleasedValueTombstone released = 6;
+}
+
+enum WorkflowValueBindingSeedKind
+{
+  WORKFLOW_VALUE_BINDING_SEED_KIND_UNSPECIFIED = 0;
+  WORKFLOW_VALUE_BINDING_SEED_KIND_STEP_OUTPUT = 1;
+  WORKFLOW_VALUE_BINDING_SEED_KIND_CURRENT_INPUT = 2;
+  WORKFLOW_VALUE_BINDING_SEED_KIND_ASSIGNED_VALUE = 3;
+  WORKFLOW_VALUE_BINDING_SEED_KIND_INTERNAL_OUTPUT = 4;
+  WORKFLOW_VALUE_BINDING_SEED_KIND_REQUEST_OVERRIDE = 5;
+}
+
+message WorkflowValueBindingSeed
+{
+  string value_id = 1;
+  WorkflowValueBindingSeedKind binding_kind = 2;
+}
+
+message WorkflowNormalizedUsageMetricsSeed
+{
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+  string model = 4;
+  double cost = 5;
+  int64 latency_ms = 6;
+}
+
+message WorkflowJsonValueBindingSeed
+{
+  string output_value_id = 1;
+}
+
+message WorkflowCompletedStepSeed
+{
+  string step_id = 1;
+  string output_value_id = 2;
+  bool success = 3;
+  string error = 4;
+  string branch_key = 5;
+  string next_step_id = 6;
+  string assigned_variable = 7;
+  string assigned_value_id = 8;
+  map<string, string> annotations = 9;
+  WorkflowNormalizedUsageMetricsSeed usage = 10;
+  bool has_usage = 11;
+  map<string, WorkflowJsonValueBindingSeed> json_value_bindings = 12;
+  bool emit_legacy_mirrors = 13;
+  string execution_id = 14;
+  WorkflowStepOutputProvenance output_provenance = 15;
+  WorkflowStepAssignedValueProvenance assigned_value_provenance = 16;
+  string output_source_step_id = 17;
+  string output_source_execution_id = 18;
+  string output_source_value_id = 19;
+  string output_reference_id = 20;
+  WorkflowStepFailureOutcome failure_outcome = 21;
+  WorkflowStepRetryDisposition retry_disposition = 22;
+  WorkflowStepCompletionOutcome outcome = 23;
+  string assigned_mirror_value_id = 24;
+  WorkflowValueDigest output_digest = 25;
+  WorkflowValueDigest assigned_value_digest = 26;
+  WorkflowValueDigest assigned_mirror_digest = 27;
+}
+
+message WorkflowPendingOutputReferenceSeed
+{
+  string reference_id = 1;
+  string source_step_id = 2;
+  string source_execution_id = 3;
+  string source_value_id = 4;
+  string target_step_id = 5;
+  string target_execution_id = 6;
+}
+
+message WorkflowNormalizedExecutionSeed
+{
+  map<string, WorkflowCanonicalValueSeed> canonical_values = 1;
+  map<string, WorkflowValueBindingSeed> bindings = 2;
+  map<string, WorkflowCompletedStepSeed> completed_steps = 3;
+  uint64 next_value_sequence = 4;
+  string current_step_input_value_id = 5;
+  map<string, string> variables = 6;
+  map<string, WorkflowPendingOutputReferenceSeed> pending_output_references = 7;
+  // Source-run physical completions retained only to validate historical
+  // aliases/provenance in this immutable fork seed. Restore must never copy
+  // these identities into the target run's live acceptance ledger.
+  map<string, string> source_completion_value_ids = 8;
+  map<string, WorkflowCompletedStepSeed> source_completions = 9;
+  map<string, WorkflowReleasedValueTombstone> released_bindings = 10;
 }
 
 message WorkflowStepIdempotencyState
@@ -439,6 +585,14 @@ message StartWorkflowEvent
   // single-run actors use zero. The execution boundary rejects a Start whose
   // generation does not match the actor's committed binding.
   int64 binding_generation = 8;
+  WorkflowExecutionValueRepresentation value_representation = 9;
+}
+
+// Actor-owned activation continuation. It does not start a new logical run;
+// it only drains a dispatch intent already committed in kernel state.
+message WorkflowExecutionRecoveryRequestedEvent
+{
+  string run_id = 1;
 }
 
 enum WorkflowRunActorReusePolicy
@@ -453,8 +607,20 @@ enum WorkflowRunActorReusePolicy
   WORKFLOW_RUN_ACTOR_REUSE_POLICY_SERIAL_SINGLETON = 2;
 }
 
+// Representation selected at the logical run admission boundary. A plain
+// new run may fall back to LEGACY when the normalized-state fleet gate is
+// unavailable; normalized forks are never silently downgraded.
+enum WorkflowExecutionValueRepresentation
+{
+  WORKFLOW_EXECUTION_VALUE_REPRESENTATION_UNSPECIFIED = 0;
+  WORKFLOW_EXECUTION_VALUE_REPRESENTATION_LEGACY = 1;
+  WORKFLOW_EXECUTION_VALUE_REPRESENTATION_NORMALIZED = 2;
+}
+
 message BindWorkflowRunDefinitionEvent
 {
+  reserved 18;
+  reserved "normalized_state_fleet_capability";
   string definition_actor_id = 1;
   string workflow_name = 2;
   string workflow_yaml = 3;
@@ -485,6 +651,8 @@ message BindWorkflowRunDefinitionEvent
   // Parent WorkflowRunGAgent that owns singleton reuse. Empty for single-run
   // actors. The live bind handler verifies this against the envelope publisher.
   string reuse_authority_actor_id = 17;
+  // Empty only on committed legacy v0 runs. Every new bind uses the current reviewed policy.
+  string tool_catalog_policy_version = 19;
 }
 
 // Idempotent provisioning command for a stable Run actor identity. The first
@@ -509,6 +677,8 @@ message BindWorkflowDefinitionEvent
   string workflow_id = 8;
   string revision_id = 9;
   ExternalCapabilityExecutionMode expected_execution_mode = 10;
+  string tool_catalog_policy_version = 11;
+  string catalog_publication_contract_version = 12;
 }
 
 enum WorkflowServiceGrantPolicy {
@@ -542,6 +712,10 @@ message WorkflowRunExecutionStartedEvent
   string workflow_correlation_id = 12;
   string current_turn_id = 13;
   WorkflowRunLineage lineage = 14;
+  // Actor-owned outbox intent for the self StartWorkflowEvent. It is committed
+  // atomically with the run-start fact and cleared by the first kernel state
+  // checkpoint, so activation can recover the persist-before-publish crash gap.
+  StartWorkflowEvent pending_start_workflow = 15;
 }
 message WorkflowRunExecutionContextDelta
 {
@@ -572,10 +746,27 @@ message WorkflowRunExecutionContextUpdatedEvent
 }
 message WorkflowRunExecutionContextClearedEvent { string run_id = 1; }
 message WorkflowCommandObservedEvent { string command_id = 1; }
+message WorkflowToolCallAttemptPersistenceFact
+{
+  string scope_id = 1;
+  string run_id = 2;
+  string step_id = 3;
+  string call_id = 4;
+  string execution_id = 5;
+  string continuation_id = 6;
+  int32 attempt = 7;
+  // Captured when the event payload is assembled before commit. This is not
+  // the commit-completion time; committed_event_id/state_version prove the
+  // durable boundary on the emitted timing observation.
+  google.protobuf.Timestamp observed_at_utc = 8;
+  int64 preparation_elapsed_ms = 9;
+}
+
 message WorkflowExecutionStateUpsertedEvent
 {
   string scope_key = 1;
   google.protobuf.Any state = 2;
+  repeated WorkflowToolCallAttemptPersistenceFact tool_call_attempt_persistence_facts = 3;
 }
 message WorkflowExecutionStateClearedEvent  { string scope_key = 1; }
 message WorkflowStoppedEvent {
@@ -599,6 +790,26 @@ message WorkflowCompletedEvent {
   string run_id = 5;
   google.protobuf.Timestamp completed_at_utc = 6;
   WorkflowRecoveryFailureKind recovery_failure_kind = 7;
+  WorkflowValueLifecycleFailureKind value_lifecycle_failure_kind = 8;
+}
+
+// Requests the authoritative workflow run actor to reconcile a stale running
+// read-model observation against its committed state. The actor alone decides
+// whether a terminal transition is required.
+message ReconcileWorkflowTerminalStateCommand {
+  string run_id = 1;
+  int64 observed_state_version = 2;
+}
+
+// Requests a workflow role actor to redeliver the terminal LLM completion
+// already committed for one exact parent run/step/session. This is a recovery
+// signal only; it must never create or infer a new LLM outcome.
+message ReconcileWorkflowLlmCompletionCommand {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string execution_id = 4;
+  int64 observed_parent_state_version = 5;
 }
 
 message WorkflowRunTerminalTimingRecordedEvent {
@@ -697,6 +908,10 @@ message VoteAgreementDecision {
   string output = 4;
   string reason = 5;
   map<string, int32> label_counts = 6;
+  // True when this message retains only a bounded head/tail representation of output.
+  bool output_truncated = 7;
+  // True when this message retains only a bounded head/tail representation of reason.
+  bool reason_truncated = 8;
 }
 
 enum TransformOperationKind {
@@ -788,6 +1003,10 @@ message StepRequestEvent
   // Effective authored step timeout after runtime normalization. Modules that own an
   // eventized external-operation watchdog use this instead of creating a second timeout policy.
   int32 timeout_ms = 13;
+  // Exact canonical input instance owned by the run actor. Nested dispatchers
+  // propagate this id for pass-through inputs; synthesized inputs are assigned
+  // a new canonical identity by the execution bridge before executor entry.
+  string input_value_id = 14;
 }
 message WorkflowUsageMetrics {
   int32 prompt_tokens = 1;
@@ -803,9 +1022,18 @@ message WorkflowFileItemResult {
   bool success = 3;
   string output = 4;
   string error = 5;
+  // True when this message retains only a bounded head/tail representation of output.
+  bool output_truncated = 6;
+  // True when this message retains only a bounded head/tail representation of error.
+  bool error_truncated = 7;
 }
 message WorkflowFileItemResultSet {
   repeated WorkflowFileItemResult results = 1;
+  // Number of results produced before any projection or transport-level bounding.
+  // Zero means unknown when results_truncated is true.
+  int32 source_result_count = 2;
+  // True when results contains only a bounded subset of the source results.
+  bool results_truncated = 3;
 }
 
 enum WorkflowStepCompletionOutcome {
@@ -814,6 +1042,43 @@ enum WorkflowStepCompletionOutcome {
   WORKFLOW_STEP_COMPLETION_OUTCOME_FAILED = 2;
   WORKFLOW_STEP_COMPLETION_OUTCOME_SKIPPED = 3;
 }
+
+enum WorkflowStepOutputProvenance {
+  WORKFLOW_STEP_OUTPUT_PROVENANCE_UNSPECIFIED = 0;
+  // The completion produced a new logical value instance.
+  WORKFLOW_STEP_OUTPUT_PROVENANCE_PRODUCED = 1;
+  // The completion intentionally forwards the current step input. The kernel
+  // preserves dataflow while binding aliases to the existing canonical value.
+  WORKFLOW_STEP_OUTPUT_PROVENANCE_FORWARDED_INPUT = 2;
+  // The completion forwards the canonical output of another completed step in
+  // the same logical run. output_source_step_id identifies that exact source;
+  // content equality alone never establishes this relationship.
+  WORKFLOW_STEP_OUTPUT_PROVENANCE_REFERENCED_STEP_OUTPUT = 3;
+}
+
+enum WorkflowStepAssignedValueProvenance {
+  WORKFLOW_STEP_ASSIGNED_VALUE_PROVENANCE_UNSPECIFIED = 0;
+  // The assigned value is a distinct logical value, even when its bytes happen
+  // to equal the step output.
+  WORKFLOW_STEP_ASSIGNED_VALUE_PROVENANCE_PRODUCED = 1;
+  // The assigned-value mirror explicitly aliases this completion's output.
+  WORKFLOW_STEP_ASSIGNED_VALUE_PROVENANCE_REFERENCES_OUTPUT = 2;
+}
+
+// Identifies the semantic origin of a canonical value. Initial/request values
+// intentionally have no producer step identity; they remain distinguishable
+// from a produced step output without inventing a fake producer.
+enum WorkflowCanonicalValueSourceKind {
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_INITIAL_INPUT = 1;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_REQUEST_OVERRIDE = 2;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_STEP_OUTPUT = 3;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_ASSIGNED_VALUE = 4;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_INTERNAL_OUTPUT = 5;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_ERROR_POLICY = 6;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_INTERNAL_INPUT = 7;
+}
+
 
 message StepCompletedEvent {
   string step_id = 1;
@@ -835,6 +1100,12 @@ message StepCompletedEvent {
   WorkflowRecoveryFailureKind recovery_failure_kind = 17;
   WorkflowStepCompletionOutcome outcome = 18;
   WorkflowStepRetryDisposition retry_disposition = 19;
+  WorkflowStepOutputProvenance output_provenance = 20;
+  WorkflowStepAssignedValueProvenance assigned_value_provenance = 21;
+  string output_source_step_id = 22;
+  string output_source_execution_id = 23;
+  string output_source_value_id = 24;
+  string output_reference_id = 25;
 }
 message SubWorkflowInvokeRequestedEvent
 {
@@ -848,6 +1119,8 @@ message SubWorkflowInvokeRequestedEvent
   string root_run_id = 8;
   int32 requested_depth = 9;
   repeated WorkflowFileRef input_file_refs = 10;
+  string parent_execution_id = 11;
+  WorkflowExecutionValueRepresentation value_representation = 12;
 }
 message WorkflowDefinitionSnapshot
 {
@@ -858,6 +1131,7 @@ message WorkflowDefinitionSnapshot
   string scope_id = 5;
   int32 definition_version = 6;
   string revision_id = 7;
+  string tool_catalog_policy_version = 8;
 }
 message SubWorkflowDefinitionResolveRequestedEvent
 {
@@ -908,6 +1182,8 @@ message SubWorkflowDefinitionResolutionRegisteredEvent
   string root_run_id = 14;
   int32 requested_depth = 15;
   repeated WorkflowFileRef input_file_refs = 16;
+  string parent_execution_id = 17;
+  WorkflowExecutionValueRepresentation value_representation = 18;
 }
 message SubWorkflowDefinitionResolutionClearedEvent
 {
@@ -942,6 +1218,8 @@ message SubWorkflowInvocationRegisteredEvent
   int32 depth = 16;
   repeated WorkflowFileRef input_file_refs = 17;
   int64 binding_generation = 18;
+  string parent_execution_id = 19;
+  WorkflowExecutionValueRepresentation value_representation = 20;
 }
 message SubWorkflowInvocationHandoffAdvancedEvent
 {
@@ -1129,6 +1407,8 @@ message WorkflowRuntimeOperationRecordedEvent
   WorkflowArtifactSourceIdentity source = 22;
   int64 progress_sequence = 23;
   string reasoning_content = 24;
+  string tool_catalog_policy_version = 25;
+  WorkflowAgentTurnToolCatalogProof tool_catalog_proof = 26;
 }
 
 message WorkflowLlmExecutionIntent
@@ -1158,6 +1438,7 @@ message WorkflowLlmExecutionIntent
   string scope_id = 18;
   // Per-schedule correlation id threaded from the owning workflow run for tool audit identity.
   string schedule_id = 19;
+  string tool_catalog_policy_version = 20;
 }
 
 message WorkflowToolRuntimeContextPayload
@@ -1175,6 +1456,48 @@ message WorkflowAgentToolScope
   repeated string tool_set_refs = 2;
   bool restrict_allowed_tool_names = 3;
   bool restrict_tool_sets = 4;
+}
+
+enum WorkflowAgentTurnToolOrigin
+{
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_UNSPECIFIED = 0;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_AGENT_RUNTIME = 1;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_ROUTE_TOOL_SET = 2;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_AGENT_PROFILE = 3;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_CONNECTED_SERVICE = 4;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_RESPONSES_STATE = 5;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_CALLER_FORWARDED = 6;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_WORKFLOW = 7;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_VOICE = 8;
+}
+
+message WorkflowAgentTurnToolDescriptorProof
+{
+  string name = 1;
+  string description = 2;
+  bytes canonical_schema_json = 3;
+  string schema_sha256 = 4;
+  WorkflowAgentTurnToolOrigin origin = 5;
+  string selector_digest = 6;
+}
+
+message WorkflowAgentTurnToolCatalogBudgetProof
+{
+  int32 maximum_tool_count = 1;
+  int32 maximum_schema_bytes = 2;
+  int32 maximum_connected_read_tool_count = 3;
+  int32 maximum_connected_write_tool_count = 4;
+}
+
+message WorkflowAgentTurnToolCatalogProof
+{
+  repeated WorkflowAgentTurnToolDescriptorProof tool_descriptors = 1;
+  WorkflowAgentTurnToolCatalogBudgetProof budget = 2;
+  int32 tool_count = 3;
+  int32 schema_bytes = 4;
+  int32 connected_read_tool_count = 5;
+  int32 connected_write_tool_count = 6;
+  string catalog_digest = 7;
 }
 
 message WorkflowLlmInvocationStartedEvent
@@ -1324,6 +1647,157 @@ message WorkflowToolCallAttemptFailureOutcome
   string error_message = 3;
   bool terminal_invoked = 4;
   bool retryable = 5;
+  WorkflowStepFailureOutcome failure_outcome = 6;
+}
+
+enum WorkflowToolCallAttemptPendingOperationStatus
+{
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_SUBMISSION_UNCERTAIN = 1;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_QUEUED = 2;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_PROVISIONING = 3;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_PREPARING = 4;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_RUNNING = 5;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_COLLECTING = 6;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_SUCCEEDED = 7;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_FAILED = 8;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_CANCELLED = 9;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_OUTCOME_UNCERTAIN = 10;
+}
+
+enum WorkflowToolCallAttemptPendingOperationRouteIdentitySource
+{
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_CODE_EXECUTION_CONTRACT = 1;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_NYX_ID_USER_SERVICE_CATALOG = 2;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_WORKFLOW_CAPABILITY_ADMISSION = 3;
+}
+
+message WorkflowToolCallAttemptPendingOperationOutcome
+{
+  string operation_id = 1;
+  string provider_operation_id = 2;
+  string status_path = 3;
+  string result_path = 4;
+  string cancel_path = 5;
+  WorkflowToolCallAttemptPendingOperationStatus status = 6;
+  string etag = 7;
+  int64 retry_after_milliseconds = 8;
+  int64 expires_at_unix_ms = 9;
+  string service_slug = 10;
+  string user_service_id = 11;
+  WorkflowToolCallAttemptPendingOperationRouteIdentitySource route_identity_source = 12;
+  WorkflowToolCallAttemptCancellationRecoveryIntent cancellation_recovery_intent = 13;
+}
+
+message WorkflowToolCallAttemptCancellationRecoveryIntent
+{
+  string result_json = 1;
+  bool has_failure = 2;
+  string failure_code = 3;
+  string safe_message = 4;
+  bool terminal_invoked = 5;
+  bool retryable = 6;
+  google.protobuf.Any tool_owned_audit_intent = 7;
+  WorkflowStepFailureOutcome failure_outcome = 8;
+  string arguments_sha256 = 9;
+}
+
+enum WorkflowToolCallAttemptWaterline
+{
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_PENDING_STATE_PERSISTED = 1;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_EXTERNAL_DISPATCH_STARTED = 2;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_PROVIDER_RETURNED = 3;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_COMPLETION_DELIVERY_PRODUCER_CONFIRMED = 4;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_TIMEOUT_SIGNAL_ACCEPTED = 5;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_ACTOR_RECONCILIATION_COMPLETED = 6;
+}
+
+enum WorkflowToolCallProviderDisposition
+{
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_SUCCEEDED = 1;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_FAILED = 2;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_APPROVAL_REQUIRED = 3;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_PENDING_OPERATION = 4;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_THREW = 5;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_CANCELLED = 6;
+}
+
+enum WorkflowToolCallCompletionDeliveryMethod
+{
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_METHOD_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_METHOD_SELF_PUBLISH = 1;
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_METHOD_DURABLE_CALLBACK = 2;
+}
+
+enum WorkflowToolCallCompletionDeliveryAcceptance
+{
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_ACCEPTANCE_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_ACCEPTANCE_CONFIRMED = 1;
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_ACCEPTANCE_UNKNOWN = 2;
+}
+
+enum WorkflowToolCallReconciliationDisposition
+{
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_SUCCEEDED = 1;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_PROVIDER_FAILED = 2;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_APPROVAL_SUSPENDED = 3;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_PENDING_OPERATION = 4;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_RETRY_SCHEDULED = 5;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_TIMEOUT_OUTCOME_UNKNOWN = 6;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_RETRY_DEADLINE_EXCEEDED = 7;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_DUPLICATE = 8;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_STALE = 9;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_UNTRUSTED = 10;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_NO_PENDING_EXECUTION = 11;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_PROTECTED_MATERIAL_UNAVAILABLE = 12;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_APPROVAL_DEADLINE_EXCEEDED = 13;
+  // The attempt was terminalized inside the actor before any external dispatch
+  // (watchdog unavailable, tool missing, admission or request build failure).
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_PRE_DISPATCH_FAILED = 14;
+  // Actor recovery could not prove or redispatch the external execution and
+  // settled the attempt with an unknown outcome (non-deadline cause).
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_RECOVERY_OUTCOME_UNKNOWN = 15;
+}
+
+message WorkflowToolCallProviderTiming
+{
+  string dispatch_id = 1;
+  google.protobuf.Timestamp dispatch_started_at_utc = 2;
+  google.protobuf.Timestamp provider_returned_at_utc = 3;
+  int64 external_execution_elapsed_ms = 4;
+  WorkflowToolCallProviderDisposition disposition = 5;
+}
+
+message WorkflowToolCallAttemptTimingObservation
+{
+  string scope_id = 1;
+  string run_id = 2;
+  string step_id = 3;
+  string call_id = 4;
+  string execution_id = 5;
+  string continuation_id = 6;
+  int32 attempt = 7;
+  string dispatch_id = 8;
+  WorkflowToolCallAttemptWaterline waterline = 9;
+  google.protobuf.Timestamp observed_at_utc = 10;
+  int32 transport_attempt = 11;
+  WorkflowToolCallProviderDisposition provider_disposition = 12;
+  WorkflowToolCallCompletionDeliveryMethod delivery_method = 13;
+  WorkflowToolCallCompletionDeliveryAcceptance delivery_acceptance = 14;
+  WorkflowToolCallReconciliationDisposition reconciliation_disposition = 15;
+  oneof elapsed
+  {
+    int64 preparation_elapsed_ms = 16;
+    int64 external_execution_elapsed_ms = 17;
+    int64 completion_delivery_elapsed_ms = 18;
+    int64 actor_reconciliation_elapsed_ms = 19;
+  }
+  string committed_event_id = 20;
+  int64 committed_state_version = 21;
 }
 
 // Internal self-signal emitted only after the provider response has crossed its
@@ -1340,8 +1814,10 @@ message WorkflowToolCallAttemptCompletedEvent
     WorkflowToolCallAttemptSuccessOutcome success = 6;
     WorkflowToolCallAttemptApprovalRequiredOutcome approval_required = 7;
     WorkflowToolCallAttemptFailureOutcome failure = 8;
+    WorkflowToolCallAttemptPendingOperationOutcome pending_operation = 10;
   }
   string continuation_id = 9;
+  WorkflowToolCallProviderTiming provider_timing = 11;
 }
 
 enum WorkflowLeaseConflictPolicy {
@@ -1525,6 +2001,7 @@ message WorkflowToolCallTimeoutFiredEvent
   string call_id = 4;
   int32 timeout_ms = 5;
   string continuation_id = 6;
+  int32 attempt = 7;
 }
 message WorkflowToolCallRetryFiredEvent
 {
@@ -1592,6 +2069,27 @@ message CompensableStepDispatchedEvent
   string compensation_step_id = 3;
   string idempotency_key = 4;
   int64 dispatched_at_unix_ms = 5;
+  string captured_output_value_id = 6;
+  string captured_output_producer_step_id = 7;
+  string captured_output_producer_execution_id = 8;
+  WorkflowCanonicalValueSourceKind captured_output_source_kind = 9;
+}
+
+// Confirms the exact canonical value that a compensable execution committed.
+// Normalized runs carry identity only; captured_output remains a legacy-only
+// field on the ledger/request contracts.
+message CompensableStepOutputCapturedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string compensation_step_id = 3;
+  string idempotency_key = 4;
+  string captured_output_value_id = 5;
+  string captured_output_producer_step_id = 6;
+  string captured_output_producer_execution_id = 7;
+  WorkflowCanonicalValueSourceKind captured_output_source_kind = 8;
+  bool success = 9;
+  WorkflowStepFailureOutcome failure_outcome = 10;
 }
 
 message CompensationRequestEvent
@@ -1602,6 +2100,10 @@ message CompensationRequestEvent
   string idempotency_key = 4;
   string captured_output = 5;
   string execution_id = 6;
+  string captured_output_value_id = 7;
+  string captured_output_producer_step_id = 8;
+  string captured_output_producer_execution_id = 9;
+  WorkflowCanonicalValueSourceKind captured_output_source_kind = 10;
 }
 
 message WorkflowCompensationRetryRequestedEvent

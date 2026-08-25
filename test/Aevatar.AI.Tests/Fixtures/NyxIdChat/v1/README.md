@@ -43,20 +43,6 @@ field-for-field identical, while the step-changed frame carries the complete
 `taskId / planRevision / step / changeKind` envelope. The fixture covers every
 v1 step source, including producer-authored tool readiness, approval, reserved
 web, and the postcondition `check` contract.
-
-`uc3-uc4-domain-journeys.json` freezes the support-contract target journeys at
-spec revision `f45febb057a7182dab2495d4c739d2bb8d7026f5` and TaskPlan schema v6.
-Each terminal `nyxid.task.snapshot` is field-for-field identical to reload's
-current-state `activeTask`. UC3 records three normalized invoices, the exact
-`3 -> 1` duplicate, retained ordinals `[1, 2]`, retry generation 2, and the
-verified approval instance. UC4 records both the user-overridden threshold's
-false no-write branch and true exact-Bitable-record branch with typed domain,
-condition, guard, and artifact facts.
-
-Additional domain-journey contract evidence:
-
-- [Aevatar issue #3369](https://github.com/aevatarAI/aevatar/issues/3369)
-
 `uc2-research-journey.json` freezes target journey UC2 from support-spec gist
 revision `f45febb057a7182dab2495d4c739d2bb8d7026f5`. It keeps `task-uc2` stable
 across steering while changing the continuation turn, preserves the completed

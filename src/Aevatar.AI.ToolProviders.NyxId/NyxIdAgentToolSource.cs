@@ -1,6 +1,4 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Abstractions.CodexExecution;
-using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Logging;
@@ -18,22 +16,16 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
     private readonly NyxIdApiClient _client;
     private readonly ILogger _logger;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
-    private readonly IReadOnlyList<ICodexExecutionPort> _codexExecutionPorts;
-    private readonly IReadOnlyList<ICodeExecutionPort> _codeExecutionPorts;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
         INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
-        IEnumerable<ICodexExecutionPort>? codexExecutionPorts = null,
-        IEnumerable<ICodeExecutionPort>? codeExecutionPorts = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
         _fileArtifactIngress = fileArtifactIngress;
-        _codexExecutionPorts = codexExecutionPorts?.ToArray() ?? [];
-        _codeExecutionPorts = codeExecutionPorts?.ToArray() ?? [];
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
 
@@ -80,67 +72,11 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdRequestKeyRotateTool(_client),
         };
 
-        if (_options.EnableSshExecTool)
-        {
-            var sshExecutor = new NyxIdSshCommandExecutor(_client, _logger);
-            tools.Add(new NyxIdSshExecTool(sshExecutor, _options));
-        }
-
-        AddCodeExecutionTool(tools);
-        AddCodexExecutionTool(tools);
-
         _logger.LogInformation(
-            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled}, managed_codex_exec={ManagedCodexEnabled}, code_execute={CodeExecuteRegistered}, codex_exec={CodexExecRegistered})",
+            "NyxID privileged tools registered ({Count} tools, base URL: {BaseUrl})",
             tools.Count,
-            _options.EffectiveTransportBaseUrl,
-            _options.EnableSshExecTool,
-            _options.EnableManagedCodexExecTool,
-            tools.Any(static tool => tool is NyxIdCodeExecuteTool),
-            tools.Any(static tool => tool is NyxIdCodexExecTool));
+            _options.EffectiveTransportBaseUrl);
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
-    }
-
-    private void AddCodeExecutionTool(List<IAgentTool> tools)
-    {
-        if (_codeExecutionPorts.Count == 0)
-            return;
-        if (_codeExecutionPorts.Count != 1)
-        {
-            throw new InvalidOperationException(
-                "code_execute requires exactly one ICodeExecutionPort registration.");
-        }
-
-        tools.Add(new NyxIdCodeExecuteTool(_codeExecutionPorts[0]));
-    }
-
-    private void AddCodexExecutionTool(List<IAgentTool> tools)
-    {
-        var ports = new List<ICodexExecutionPort>();
-        if (_options.EnableSshExecTool)
-        {
-            ports.Add(new PrivateSshCodexExecutionAdapter(
-                new NyxIdSshCommandExecutor(_client, _logger)));
-        }
-
-        if (_options.EnableManagedCodexExecTool)
-        {
-            var managedPorts = _codexExecutionPorts
-                .Where(static port => port.TargetKind ==
-                    CodexExecutionTarget.TargetOneofCase.ManagedSandbox)
-                .ToArray();
-            if (managedPorts.Length != 1)
-            {
-                throw new InvalidOperationException(
-                    "Managed codex_exec requires exactly one managed-sandbox ICodexExecutionPort registration.");
-            }
-
-            ports.Add(managedPorts[0]);
-        }
-
-        if (ports.Count > 0)
-        {
-            tools.Add(new NyxIdCodexExecTool(ports, _options));
-        }
     }
 }

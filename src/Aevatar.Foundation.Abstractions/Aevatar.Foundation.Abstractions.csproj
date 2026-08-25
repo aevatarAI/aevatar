@@ -26,6 +26,8 @@
         <Protobuf Include="Interactions/interaction_spec.proto" GrpcServices="None" />
         <Protobuf Include="Tools/tool_presentation.proto" GrpcServices="None" />
         <Protobuf Include="runtime_actor_identity.proto" GrpcServices="None" />
+        <Protobuf Include="runtime_fleet_capability.proto" GrpcServices="None" />
+        <Protobuf Include="runtime_fleet_capability_authority.proto" GrpcServices="None" />
     </ItemGroup>
 
 </Project>

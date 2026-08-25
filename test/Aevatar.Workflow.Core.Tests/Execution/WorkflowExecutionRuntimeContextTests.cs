@@ -427,6 +427,43 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldResolveExactChannelAgentKeyHandle()
+    {
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            "scope-channel",
+            "key-channel",
+            "channel-agent-key",
+            "test"));
+        var handle = new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = stored.Reference.Purpose,
+            OwnerScopeKey = stored.Reference.OwnerScopeKey,
+            SubjectId = "key-channel",
+            SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+            SecretReference = stored.Reference.Clone(),
+        };
+        var host = new RecordingStateHost(secretVault: vault);
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential
+            {
+                DurableCallerCredential = handle,
+                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+            });
+
+        var resolved = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+
+        resolved.Found.Should().BeTrue();
+        resolved.Credential.BearerToken.Should().Be("channel-agent-key");
+        resolved.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        resolved.Credential.NyxIdAuthority.Should().BeNull();
+        resolved.Credential.DurableCallerCredential.Should().Be(handle);
+    }
+
+    [Fact]
     public async Task WorkflowCallerCredentialRuntimeAccess_ShouldFailClosedForRevokedOrMismatchedBorrowedHandle()
     {
         var vault = new InMemorySecretVault();
@@ -617,6 +654,54 @@ public sealed class WorkflowExecutionRuntimeContextTests
         stateRoot.ExecutionContext.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
         stateRoot.ExecutionContext.CallerCredential.DurableCallerCredential.Should().BeNull();
         stateRoot.ExecutionContext.CallerCredential.NyxIdAuthority.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowRunCommittedStateRedactionHook_ShouldHidePendingWorkflowStartFromProjection()
+    {
+        var pendingStart = new StartWorkflowEvent
+        {
+            RunId = "run-1",
+            WorkflowName = "invoice",
+            Input = "private-input",
+            ValueRepresentation = WorkflowExecutionValueRepresentation.Legacy,
+        };
+        var published = new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = "evt-start-1",
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Version = 1,
+                AgentId = "run-1",
+                EventType = nameof(WorkflowRunExecutionStartedEvent),
+                EventData = Any.Pack(new WorkflowRunExecutionStartedEvent
+                {
+                    RunId = "run-1",
+                    WorkflowName = "invoice",
+                    PendingStartWorkflow = pendingStart.Clone(),
+                }),
+            },
+            StateRoot = Any.Pack(new WorkflowRunState
+            {
+                RunId = "run-1",
+                PendingStartWorkflow = pendingStart.Clone(),
+            }),
+        };
+        var hook = new WorkflowRunCommittedStateRedactionHook();
+
+        await hook.BeforePublishAsync(new CommittedStatePublicationContext
+        {
+            ActorId = "run-1",
+            ActorType = typeof(WorkflowRunGAgent),
+            Published = published,
+        }, CancellationToken.None);
+
+        published.StateEvent.EventData
+            .Unpack<WorkflowRunExecutionStartedEvent>()
+            .PendingStartWorkflow.Should().BeNull();
+        published.StateRoot.Unpack<WorkflowRunState>()
+            .PendingStartWorkflow.Should().BeNull();
     }
 
     [Fact]

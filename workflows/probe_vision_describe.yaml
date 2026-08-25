@@ -22,6 +22,7 @@ roles:
       "<comma-separated>", "text_in_image": "<any legible text, else empty>"}. If you received
       no image at all, output {"saw_image": false, "description": "no image received", ...} and
       never invent image content.
+    allowed_tools: []
 
 steps:
   - id: describe

@@ -216,7 +216,9 @@ public sealed record NyxIdUserServiceAuthority(
             : Execution.NodeStatus == NyxIdUserServiceNodeStatus.Online);
 
     public bool CanManageRoute =>
-        IsExecutionReady && Route.CredentialSource.Kind switch
+        Execution.AutoConnected == false &&
+        IsExecutionReady &&
+        Route.CredentialSource.Kind switch
         {
             NyxIdUserServiceCredentialSourceKind.Personal => true,
             NyxIdUserServiceCredentialSourceKind.Organization =>
@@ -240,6 +242,7 @@ public sealed record NyxIdUserServiceAuthority(
             Execution.CatalogServiceSlug,
             other.Execution.CatalogServiceSlug,
             StringComparison.Ordinal) &&
+        Execution.AutoConnected == other.Execution.AutoConnected &&
         SameAuthority(Execution.CredentialSource, other.Execution.CredentialSource);
 
     private static bool SameAuthority(
@@ -290,9 +293,29 @@ public sealed class NyxIdUserServiceAuthorityReader(INyxIdApiClientFactory clien
                 bearerToken.Trim(),
                 cancellationToken)
             .ConfigureAwait(false);
+        var routes = NyxIdApiAccessResponseParser.ParseUserServiceRoutes(routeResponse);
+        var executionInventory = NyxIdApiAccessResponseParser.ParseUserServiceKeys(executionResponse);
         return new NyxIdUserServiceAuthoritySnapshot(
-            NyxIdApiAccessResponseParser.ParseUserServiceRoutes(routeResponse),
-            NyxIdApiAccessResponseParser.ParseUserServiceKeys(executionResponse));
+            ApplyExecutionProvenance(routes, executionInventory),
+            executionInventory);
+    }
+
+    private static NyxIdApiAccessResult<NyxIdUserServices> ApplyExecutionProvenance(
+        NyxIdApiAccessResult<NyxIdUserServices> routes,
+        NyxIdApiAccessResult<NyxIdUserServiceKeys> executionInventory)
+    {
+        if (!routes.Succeeded || !executionInventory.Succeeded)
+            return routes;
+
+        var executionById = executionInventory.Value!.Services
+            .ToDictionary(static service => service.Id, StringComparer.Ordinal);
+        var normalizedRoutes = routes.Value!.Services
+            .Select(route => executionById.TryGetValue(route.Id, out var execution)
+                ? route with { AutoConnected = execution.AutoConnected == true }
+                : route)
+            .ToArray();
+        return NyxIdApiAccessResult<NyxIdUserServices>.Success(
+            new NyxIdUserServices(normalizedRoutes));
     }
 }
 
@@ -305,6 +328,7 @@ public enum NyxIdUserServiceRouteConvergenceFailureKind
     RouteNotWritable = 4,
     UpdateException = 5,
     PostconditionMismatch = 6,
+    MutationRejected = 7,
 }
 
 public sealed record NyxIdUserServiceRouteConvergence(
@@ -312,7 +336,8 @@ public sealed record NyxIdUserServiceRouteConvergence(
     bool Attempted,
     bool Verified,
     NyxIdUserServiceRouteConvergenceFailureKind FailureKind =
-        NyxIdUserServiceRouteConvergenceFailureKind.None);
+        NyxIdUserServiceRouteConvergenceFailureKind.None,
+    int HttpStatus = 0);
 
 /// <summary>
 /// Converges one exact caller-visible UserService route and verifies the postcondition against
@@ -376,16 +401,22 @@ public sealed class NyxIdUserServiceRouteConverger(INyxIdApiClientFactory client
 
         var plan = contract.Plan(current.Route);
         var updateFailure = NyxIdUserServiceRouteConvergenceFailureKind.None;
+        var updateHttpStatus = 0;
         try
         {
             var body = NyxIdUserServiceRouteUpdateAdapter.Serialize(plan.Patch);
-            _ = await clientFactory.CreateClient()
-                .UpdateServiceRouteAsync(
+            var response = await clientFactory.CreateClient()
+                .UpdateServiceRouteResponseAsync(
                     authority.BearerToken,
                     current.Route.Id,
                     body,
                     cancellationToken)
                 .ConfigureAwait(false);
+            if (!response.Succeeded)
+            {
+                updateFailure = NyxIdUserServiceRouteConvergenceFailureKind.MutationRejected;
+                updateHttpStatus = response.HttpStatus;
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -411,7 +442,8 @@ public sealed class NyxIdUserServiceRouteConverger(INyxIdApiClientFactory client
                 ? NyxIdUserServiceRouteConvergenceFailureKind.None
                 : updateFailure == NyxIdUserServiceRouteConvergenceFailureKind.None
                     ? NyxIdUserServiceRouteConvergenceFailureKind.PostconditionMismatch
-                    : updateFailure);
+                    : updateFailure,
+            HttpStatus: verified ? 0 : updateHttpStatus);
     }
 
     private static NyxIdUserServiceRouteConvergence Failure(

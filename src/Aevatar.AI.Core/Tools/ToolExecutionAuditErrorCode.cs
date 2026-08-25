@@ -6,7 +6,10 @@ internal static class ToolExecutionAuditErrorCode
 
     private static readonly HashSet<string> TimeoutCodes = new(StringComparer.Ordinal)
     {
+        "code_execution_submit_recovery_expired",
         "code_execution_timed_out",
+        "codex_execution_timed_out",
+        "OPERATION_EXPIRED",
         "SANDBOX_TIMEOUT",
         "managed_proxy_timeout",
         "managed_upstream_codex_command_timeout",
@@ -17,6 +20,8 @@ internal static class ToolExecutionAuditErrorCode
 
     private static readonly HashSet<string> CancelledCodes = new(StringComparer.Ordinal)
     {
+        "code_execution_cancelled",
+        "EXECUTION_CANCELLED",
         "managed_execution_cancelled",
     };
 
@@ -113,7 +118,31 @@ internal static class ToolExecutionAuditErrorCode
 
     private static readonly HashSet<string> CodeExecuteOnlyCodes = new(StringComparer.Ordinal)
     {
+        "code_execution_cancel_outcome_uncertain",
+        "code_execution_cancelled",
+        "code_execution_cancellation_requested",
+        "code_execution_cancellation_unconfirmed",
+        "code_execution_durable_context_invalid",
+        "code_execution_durable_transport_unavailable",
+        "code_execution_outcome_uncertain",
+        "code_execution_route_not_ready",
+        "code_execution_submit_recovery_expired",
+        "durable_code_execution_operation_not_found",
+        "durable_code_execution_operation_request_invalid",
+        "durable_code_execution_public_api_not_configured",
+        "durable_code_execution_response_too_large",
+        "durable_code_execution_result_invalid",
+        "durable_code_execution_status_etag_missing",
+        "durable_code_execution_status_invalid",
+        "durable_code_execution_target_not_found",
+        "EXECUTION_CANCELLED",
+        "EXECUTION_PAYLOAD_TOO_LARGE",
+        "EXECUTION_RESULT_TOO_LARGE",
+        "EXECUTION_STORED_DATA_INVALID",
         "FORBIDDEN",
+        "IDEMPOTENCY_KEY_REUSE",
+        "OPERATION_EXPIRED",
+        "OUTCOME_UNCERTAIN",
         "UNAUTHENTICATED",
     };
 

@@ -29,7 +29,6 @@ public static partial class ServiceEndpoints
         group.MapPost("/{serviceId}/revisions/{revisionId}:prepare", HandlePrepareRevisionAsync);
         group.MapPost("/{serviceId}/revisions/{revisionId}:publish", HandlePublishRevisionAsync);
         group.MapPost("/{serviceId}/revisions/{revisionId}:retire", HandleRetireRevisionAsync);
-        group.MapPost("/{serviceId}:default-serving", HandleSetDefaultServingRevisionAsync);
         group.MapPost("/{serviceId}:activate", HandleActivateAsync);
         group.MapGet(string.Empty, HandleListServicesAsync);
         group.MapGet("/{serviceId}", HandleGetServiceAsync);
@@ -153,6 +152,7 @@ public static partial class ServiceEndpoints
                     WorkflowName = workflowRequest?.WorkflowName ?? string.Empty,
                     WorkflowYaml = workflowRequest?.WorkflowYaml ?? string.Empty,
                     DefinitionActorId = workflowRequest?.DefinitionActorId ?? string.Empty,
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                 };
                 if (workflowRequest?.InlineWorkflowYamls != null)
                 {
@@ -317,34 +317,6 @@ public static partial class ServiceEndpoints
             RevisionId = revisionId,
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}/revisions/{revisionId}", receipt);
-    }
-
-    private static async Task<IResult> HandleSetDefaultServingRevisionAsync(
-        HttpContext http,
-        string serviceId,
-        SetDefaultServingRevisionHttpRequest request,
-        [FromServices] IServiceIdentityContextResolver identityResolver,
-        [FromServices] IServiceCommandPort commandPort,
-        CancellationToken ct)
-    {
-        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
-                identityResolver,
-                request.TenantId,
-                request.AppId,
-                request.Namespace,
-                serviceId,
-                out var identity,
-                out var denied))
-        {
-            return denied;
-        }
-
-        var receipt = await commandPort.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
-        {
-            Identity = identity,
-            RevisionId = request.RevisionId ?? string.Empty,
-        }, ct);
-        return Results.Accepted($"/api/services/{serviceId}", receipt);
     }
 
     private static async Task<IResult> HandleActivateAsync(
@@ -833,12 +805,6 @@ public static partial class ServiceEndpoints
         ScriptingRevisionHttpRequest? Scripting,
         WorkflowRevisionHttpRequest? Workflow,
         IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
-
-    public sealed record SetDefaultServingRevisionHttpRequest(
-        string TenantId,
-        string AppId,
-        string Namespace,
-        string RevisionId);
 
     public sealed record ActivateServiceRevisionHttpRequest(
         string TenantId,

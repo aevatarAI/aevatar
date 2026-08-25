@@ -87,6 +87,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             OverdueFireDetectedCount = state.OverdueFireDetectedCount,
             ServiceKey = BuildServiceKey(serviceIdentity),
             ServiceId = serviceIdentity?.ServiceId ?? string.Empty,
+            ServiceIdentity = serviceIdentity?.Clone() ?? new ServiceIdentity(),
             ServiceEndpointId = target.ServiceInvocation?.EndpointId ?? string.Empty,
             ServiceRevisionId = target.ServiceInvocation?.RevisionId ?? string.Empty,
             Prompt = ExtractPrompt(target.ServiceInvocation?.Payload, state.TriggerEnvelope),

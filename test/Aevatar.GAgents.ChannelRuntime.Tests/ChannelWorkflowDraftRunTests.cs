@@ -9,6 +9,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
@@ -78,7 +79,8 @@ public sealed class ChannelWorkflowDraftRunTests
             : null;
         var admission = new ChannelWorkflowDraftRunAdmission(
             new ChannelWorkflowDraftRunIntentParser(BuildWorkflowSlashRegistry()),
-            registerQueryPort ? new StubScopeWorkflowQueryPort(workflow) : null);
+            registerQueryPort ? new StubScopeWorkflowQueryPort(workflow) : null,
+            AuthorizedScopeResolver(scopeId ?? "scope-1"));
         var activity = BuildWorkflowActivity(scopeId, userToken);
         var runtimeContext = string.IsNullOrWhiteSpace(userToken)
             ? ConversationTurnRuntimeContext.Empty
@@ -95,6 +97,7 @@ public sealed class ChannelWorkflowDraftRunTests
                 ConversationId = "oc_group_chat_1",
             },
             runtimeContext,
+            WorkflowSenderSubject(),
             CancellationToken.None);
 
         result.Matched.Should().BeTrue();
@@ -112,7 +115,8 @@ public sealed class ChannelWorkflowDraftRunTests
             actorId: "scope-workflow-definition-actor-1");
         var admission = new ChannelWorkflowDraftRunAdmission(
             new ChannelWorkflowDraftRunIntentParser(BuildWorkflowSlashRegistry()),
-            new StubScopeWorkflowQueryPort(workflow));
+            new StubScopeWorkflowQueryPort(workflow),
+            AuthorizedScopeResolver("scope-1"));
 
         var result = await admission.TryAdmitAsync(
             BuildWorkflowActivity("scope-1", "user-token-1"),
@@ -125,6 +129,7 @@ public sealed class ChannelWorkflowDraftRunTests
                 ConversationId = "oc_group_chat_1",
             },
             new ConversationTurnRuntimeContext(null, "user-token-1"),
+            WorkflowSenderSubject(),
             CancellationToken.None);
 
         result.Matched.Should().BeTrue();
@@ -137,6 +142,39 @@ public sealed class ChannelWorkflowDraftRunTests
         result.Request.WorkflowSource.DefinitionActorId.Should().Be("scope-workflow-definition-actor-1");
         result.Request.Headers.Should().Contain("workflow_id", "daily-greeting");
         result.Request.NyxUserAccessToken.Should().Be("user-token-1");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("owner-other")]
+    public async Task Admission_WhenSenderDoesNotOwnTheRegistrationScope_ShouldDenyWithoutWorkflowLookup(
+        string? ownerScopeId)
+    {
+        var workflowQueryPort = new StubScopeWorkflowQueryPort(
+            BuildWorkflowSummary("scope-1", "daily-greeting", "actor-daily-greeting"));
+        var admission = new ChannelWorkflowDraftRunAdmission(
+            new ChannelWorkflowDraftRunIntentParser(BuildWorkflowSlashRegistry()),
+            workflowQueryPort,
+            AuthorizedScopeResolver(ownerScopeId));
+
+        var result = await admission.TryAdmitAsync(
+            BuildWorkflowActivity("scope-1", "bot-owner-relay-token"),
+            new ChannelBotRegistrationEntry { Id = "reg-1", ScopeId = "scope-1" },
+            new ChannelInboundEvent
+            {
+                Text = "/workflow run daily-greeting",
+                Platform = "lark",
+                MessageId = "msg-1",
+                ConversationId = "oc_group_chat_1",
+            },
+            new ConversationTurnRuntimeContext(null, "bot-owner-relay-token"),
+            WorkflowSenderSubject(),
+            CancellationToken.None);
+
+        result.Matched.Should().BeTrue();
+        result.Request.Should().BeNull();
+        result.Rejection.Should().NotBeNull();
+        workflowQueryPort.LookupRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -1443,6 +1481,17 @@ public sealed class ChannelWorkflowDraftRunTests
     private static ChannelSlashCommandRegistry BuildWorkflowSlashRegistry() =>
         new([new ChannelWorkflowDraftRunSlashCommandHandler()]);
 
+    private static ExternalSubjectRef WorkflowSenderSubject() =>
+        new()
+        {
+            Platform = "lark",
+            Tenant = "tenant-alpha",
+            ExternalUserId = "sender-alpha",
+        };
+
+    private static IChannelWorkflowAuthorizedScopeResolver AuthorizedScopeResolver(string? ownerScopeId) =>
+        new ChannelWorkflowAuthorizedScopeResolver(new StubOwnerScopeResolver(ownerScopeId));
+
     private sealed class RecordingWorkflowDraftRunInteractionPort : IChannelWorkflowDraftRunInteractionPort
     {
         public List<NeedsWorkflowDraftRunEvent> Dispatched { get; } = [];
@@ -1542,6 +1591,8 @@ public sealed class ChannelWorkflowDraftRunTests
 
     private sealed class StubScopeWorkflowQueryPort(ScopeWorkflowSummary? workflow) : Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort
     {
+        public List<(string ScopeId, string WorkflowId)> LookupRequests { get; } = [];
+
         public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(workflow is null ? [] : [workflow]);
 
@@ -1550,6 +1601,7 @@ public sealed class ChannelWorkflowDraftRunTests
             string workflowId,
             CancellationToken ct = default)
         {
+            LookupRequests.Add((scopeId, workflowId));
             var summary = workflow is not null &&
                           string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
                           string.Equals(workflow.WorkflowId, workflowId, StringComparison.Ordinal)
@@ -1582,6 +1634,16 @@ public sealed class ChannelWorkflowDraftRunTests
                             string.Equals(workflow.ActorId, actorId, StringComparison.Ordinal)
                 ? workflow
                 : null);
+    }
+
+    private sealed class StubOwnerScopeResolver(string? ownerScopeId) : IOwnerScopeResolver
+    {
+        public Task<OwnerScopeId?> ResolveAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) =>
+            Task.FromResult(string.IsNullOrWhiteSpace(ownerScopeId)
+                ? null
+                : new OwnerScopeId { Value = ownerScopeId });
     }
 
     private sealed class RecordingActorRuntime : IActorRuntime

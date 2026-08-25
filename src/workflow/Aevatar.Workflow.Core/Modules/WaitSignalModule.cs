@@ -75,8 +75,12 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = stepId,
                     RunId = runId,
+                    ExecutionId = request.ExecutionId,
                     Success = true,
                     Output = string.IsNullOrEmpty(buffered.Payload) ? request.Input ?? string.Empty : buffered.Payload,
+                    OutputProvenance = string.IsNullOrEmpty(buffered.Payload)
+                        ? WorkflowStepOutputProvenance.ForwardedInput
+                        : WorkflowStepOutputProvenance.Produced,
                 }, TopologyAudience.Self, ct);
                 return;
             }
@@ -93,7 +97,11 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = stepId,
                 RunId = runId,
-                Input = request.Input ?? string.Empty,
+                Input = string.IsNullOrWhiteSpace(request.InputValueId)
+                    ? request.Input ?? string.Empty
+                    : string.Empty,
+                InputValueId = request.InputValueId,
+                ExecutionId = request.ExecutionId,
                 SignalName = signalName,
                 TimeoutLease = null,
                 TimeoutCallbackId = timeoutMs > 0
@@ -169,8 +177,10 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = stepId,
                 RunId = runId,
+                ExecutionId = pending.ExecutionId,
                 Success = false,
                 Error = $"signal '{signalName}' timed out after {timeout.TimeoutMs}ms",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
 
             state.Pending.Remove(BuildPendingKey(pendingKey));
@@ -214,12 +224,17 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             pendingStateForSignal.RunId,
             pendingStateForSignal.SignalName);
 
+        var pendingInput = ResolvePendingInput(pendingStateForSignal, ctx);
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = pendingStateForSignal.StepId,
             RunId = pendingStateForSignal.RunId,
+            ExecutionId = pendingStateForSignal.ExecutionId,
             Success = true,
-            Output = string.IsNullOrEmpty(signal.Payload) ? pendingStateForSignal.Input : signal.Payload,
+            Output = string.IsNullOrEmpty(signal.Payload) ? pendingInput : signal.Payload,
+            OutputProvenance = string.IsNullOrEmpty(signal.Payload)
+                ? WorkflowStepOutputProvenance.ForwardedInput
+                : WorkflowStepOutputProvenance.Produced,
         }, TopologyAudience.Self, ct);
 
         stateForSignal.Pending.Remove(BuildPendingKey(resolvedKey));
@@ -234,6 +249,19 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 $"WaitSignal timeout cleanup run={pendingStateForSignal.RunId} step={pendingStateForSignal.StepId} signal={pendingStateForSignal.SignalName}",
                 CancellationToken.None);
         }
+    }
+
+    private static string ResolvePendingInput(
+        PendingSignalState pending,
+        IWorkflowExecutionContext ctx)
+    {
+        if (string.IsNullOrWhiteSpace(pending.InputValueId))
+            return pending.Input ?? string.Empty;
+
+        var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+            ctx,
+            WorkflowExecutionKernel.ModuleStateKey);
+        return WorkflowExecutionValueStore.GetCanonicalValue(kernelState, pending.InputValueId).Value;
     }
 
     private bool TryResolvePending(

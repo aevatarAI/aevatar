@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260814-m46-nyxid-api-routing";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260823-m62-studio-redesign";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};
@@ -16,7 +16,18 @@ const config = Object.freeze({
 });
 
 const TOKEN_KEY = `${config.storageKey}:token`;
+const SERVICE_ACCESS_REVIEW_TOKEN_KEY = `${config.storageKey}:service-access-review:token`;
 const PKCE_KEY = `${config.storageKey}:pkce`;
+const SERVICE_ACCESS_REVIEW_FLOW = "service-access-review";
+const SERVICE_ACCESS_REVIEW_MESSAGE_SOURCE = "aevatar-service-access-review-auth";
+const SERVICE_ACCESS_REVIEW_POPUP_PREFIX = "aevatar-nyxid-service-review-";
+const ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED_CODE =
+  "NYXID_ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED";
+
+const serviceAccessReviewListeners = new Set();
+let serviceAccessReviewPopup = null;
+let serviceAccessReviewRequestId = "";
+let serviceAccessReviewPopupTimer = null;
 
 function trimBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
@@ -52,6 +63,102 @@ function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+function getServiceAccessReviewToken() {
+  try {
+    const value = JSON.parse(localStorage.getItem(SERVICE_ACCESS_REVIEW_TOKEN_KEY) || "null");
+    return value?.access_token ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function setServiceAccessReviewToken(token) {
+  localStorage.setItem(SERVICE_ACCESS_REVIEW_TOKEN_KEY, JSON.stringify(token));
+}
+
+function clearServiceAccessReviewToken() {
+  localStorage.removeItem(SERVICE_ACCESS_REVIEW_TOKEN_KEY);
+}
+
+function emitServiceAccessReviewResult(result) {
+  for (const listener of serviceAccessReviewListeners) {
+    try {
+      listener(result);
+    } catch {
+      // One UI listener must not prevent the remaining subscribers from resuming.
+    }
+  }
+}
+
+function clearServiceAccessReviewPopupTracking() {
+  if (serviceAccessReviewPopupTimer !== null) {
+    clearInterval(serviceAccessReviewPopupTimer);
+    serviceAccessReviewPopupTimer = null;
+  }
+  serviceAccessReviewPopup = null;
+  serviceAccessReviewRequestId = "";
+}
+
+function trackServiceAccessReviewPopup(popup, requestId) {
+  if (serviceAccessReviewPopup && serviceAccessReviewPopup !== popup &&
+      !serviceAccessReviewPopup.closed) {
+    try {
+      serviceAccessReviewPopup.close();
+    } catch {
+      // The new review supersedes the previous transient window either way.
+    }
+  }
+  clearServiceAccessReviewPopupTracking();
+  serviceAccessReviewPopup = popup;
+  serviceAccessReviewRequestId = requestId;
+  serviceAccessReviewPopupTimer = setInterval(() => {
+    if (serviceAccessReviewPopup && !serviceAccessReviewPopup.closed) return;
+    const closedRequestId = serviceAccessReviewRequestId;
+    clearServiceAccessReviewPopupTracking();
+    notifyAdminShellAuth("service-access-review-finished", "", "", {
+      authRequestId: closedRequestId,
+    });
+    emitServiceAccessReviewResult({
+      status: "failed",
+      requestId: closedRequestId,
+      message: "NyxID 授权窗口已关闭；原 action 与会话仍然保留。",
+    });
+  }, 500);
+}
+
+function onServiceAccessReviewResult(listener) {
+  if (typeof listener !== "function") return () => {};
+  serviceAccessReviewListeners.add(listener);
+  return () => serviceAccessReviewListeners.delete(listener);
+}
+
+function handleServiceAccessReviewMessage(event) {
+  const message = event.data || {};
+  const trustedSource = event.source === serviceAccessReviewPopup ||
+    (isEmbeddedInAdmin() && event.source === window.parent);
+  if (event.origin !== location.origin ||
+      !trustedSource ||
+      message.source !== SERVICE_ACCESS_REVIEW_MESSAGE_SOURCE ||
+      message.type !== "service-access-review-result" ||
+      !serviceAccessReviewRequestId ||
+      message.requestId !== serviceAccessReviewRequestId) {
+    return;
+  }
+  const status = message.status === "succeeded" ? "succeeded" : "failed";
+  const requestId = serviceAccessReviewRequestId;
+  clearServiceAccessReviewPopupTracking();
+  notifyAdminShellAuth("service-access-review-finished", "", "", {
+    authRequestId: requestId,
+  });
+  emitServiceAccessReviewResult({
+    status,
+    requestId,
+    message: String(message.message || ""),
+  });
+}
+
+window.addEventListener("message", handleServiceAccessReviewMessage);
+
 function isEmbeddedInAdmin() {
   try {
     return window.parent !== window &&
@@ -61,13 +168,14 @@ function isEmbeddedInAdmin() {
   }
 }
 
-function notifyAdminShellAuth(type, reason = "", rejectedAccessToken = "") {
+function notifyAdminShellAuth(type, reason = "", rejectedAccessToken = "", details = {}) {
   if (!isEmbeddedInAdmin()) return false;
   window.parent.postMessage({
     source: "aevatar-backend-console-suite",
     type,
     reason,
     rejectedAccessToken,
+    ...details,
   }, location.origin);
   return true;
 }
@@ -122,6 +230,16 @@ async function authorizedFetch(input, init = {}) {
   let token = getToken();
   if (!token) return jsonResponse({ code: "AUTH_REQUIRED", message: "NyxID login is required." }, 401);
 
+  const requiresServiceAccessReview = async (response) => {
+    if (response.status !== 401) return false;
+    try {
+      const payload = await response.clone().json();
+      return payload?.code === ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED_CODE;
+    } catch {
+      return false;
+    }
+  };
+
   const request = (activeToken) => nativeFetch(input, {
     ...init,
     headers: {
@@ -130,7 +248,7 @@ async function authorizedFetch(input, init = {}) {
     },
   });
   let response = await request(token);
-  if (response.status !== 401) return response;
+  if (response.status !== 401 || await requiresServiceAccessReview(response)) return response;
 
   const currentReplacement = replacementToken(token.access_token);
   const refreshResult = currentReplacement
@@ -140,7 +258,7 @@ async function authorizedFetch(input, init = {}) {
   if (replacement?.access_token && replacement.access_token !== token.access_token) {
     token = replacement;
     response = await request(token);
-    if (response.status !== 401) return response;
+    if (response.status !== 401 || await requiresServiceAccessReview(response)) return response;
   }
 
   clearToken();
@@ -152,6 +270,25 @@ async function authorizedFetch(input, init = {}) {
     token.access_token,
   );
   return jsonResponse({ code: errorCode, message: reason }, 401);
+}
+
+async function serviceAccessReviewAuthorizedFetch(input, init = {}) {
+  const token = getServiceAccessReviewToken();
+  if (!token) {
+    return jsonResponse({
+      code: "NYXID_SERVICE_ACCESS_REVIEW_REQUIRED",
+      message: "NyxID service access review is required.",
+    }, 401);
+  }
+  const response = await nativeFetch(input, {
+    ...init,
+    headers: {
+      ...(init.headers || {}),
+      Authorization: `Bearer ${token.access_token}`,
+    },
+  });
+  if (response.status === 401) clearServiceAccessReviewToken();
+  return response;
 }
 
 function b64url(buffer) {
@@ -167,8 +304,47 @@ function randomString(length) {
   return b64url(bytes.buffer).slice(0, length);
 }
 
-async function beginLogin() {
-  if (notifyAdminShellAuth("login-request")) return;
+function decodeJwtPayload(value) {
+  try {
+    const encoded = String(value || "").split(".")[1];
+    if (!encoded) return null;
+    const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/") +
+      "=".repeat((4 - encoded.length % 4) % 4);
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+function tokenResponseResources(token) {
+  const claims = decodeJwtPayload(token?.access_token);
+  const groups = [token?.resource, claims?.resources];
+  const explicit = groups.some((group) => typeof group === "string" || Array.isArray(group));
+  if (!explicit) return null;
+  return uniqueStrings(groups.flatMap((group) => typeof group === "string" ? [group] : group || []));
+}
+
+function resourcesCover(granted, requested) {
+  return Array.isArray(granted) && requested.every((resource) => granted.includes(resource));
+}
+
+async function beginLogin(options = {}) {
+  const authFlow = options?.authFlow === SERVICE_ACCESS_REVIEW_FLOW
+    ? SERVICE_ACCESS_REVIEW_FLOW
+    : "";
+  const resources = authFlow
+    ? uniqueStrings([...config.resources, ...(Array.isArray(options?.resources) ? options.resources : [])])
+    : [];
+  const popupName = authFlow && typeof options?.popupName === "string"
+    ? options.popupName
+    : "";
+  const authRequestId = authFlow && typeof options?.authRequestId === "string"
+    ? options.authRequestId
+    : "";
+  if (notifyAdminShellAuth("login-request", "", "", authFlow
+    ? { authFlow, resources, popupName, authRequestId }
+    : {})) return;
   if (!config.authority || !config.clientId) {
     throw new Error("NyxID OIDC is not configured for this host.");
   }
@@ -178,15 +354,20 @@ async function beginLogin() {
     "SHA-256",
     new TextEncoder().encode(verifier),
   ));
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({
+  const pending = {
     verifier,
     state,
     returnTo: "/workflow/studio",
-  }));
-  // ADR-0018: the session login never sends explicit `resource` parameters —
+    resources,
+    authFlow,
+    authRequestId,
+  };
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify(pending));
+  // ADR-0018: ordinary session login never sends explicit `resource` parameters —
   // NyxID would narrow the grant to exactly that list (RFC 8707 intersection)
   // and the token could no longer reach other consented services such as the
-  // deployment's default LLM route. The consent page owns the granted set.
+  // deployment's default LLM route. Service-access review is the controlled
+  // exception: it requests the complete resource union with fresh consent.
   const url = new URL(`${config.authority}/oauth/authorize`);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", config.clientId);
@@ -195,7 +376,57 @@ async function beginLogin() {
   url.searchParams.set("state", state);
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
+  if (authFlow) {
+    resources.forEach((resource) => url.searchParams.append("resource", resource));
+    url.searchParams.set("prompt", "consent");
+  }
+  if (authFlow && popupName && serviceAccessReviewPopup && !serviceAccessReviewPopup.closed) {
+    try {
+      serviceAccessReviewPopup.sessionStorage.setItem(PKCE_KEY, JSON.stringify(pending));
+      serviceAccessReviewPopup.location.replace(url.toString());
+      serviceAccessReviewPopup.focus?.();
+      return;
+    } catch {
+      try {
+        serviceAccessReviewPopup.close();
+      } catch {
+        // Fall through to the full-page fallback when the popup cannot be navigated.
+      }
+      clearServiceAccessReviewPopupTracking();
+    }
+  }
   location.assign(url.toString());
+}
+
+async function beginServiceAccessReview(resources) {
+  const authRequestId = `${Date.now().toString(36)}-${randomString(16)}`;
+  const popupName = `${SERVICE_ACCESS_REVIEW_POPUP_PREFIX}${authRequestId}`;
+  let popup = null;
+  try {
+    popup = window.open(
+      "",
+      popupName,
+      "popup=yes,width=560,height=720,resizable=yes,scrollbars=yes",
+    );
+  } catch {
+    popup = null;
+  }
+  if (popup) {
+    trackServiceAccessReviewPopup(popup, authRequestId);
+    popup.focus?.();
+  }
+  try {
+    return await beginLogin({
+      authFlow: SERVICE_ACCESS_REVIEW_FLOW,
+      resources,
+      popupName: popup ? popupName : "",
+      authRequestId: popup ? authRequestId : "",
+    });
+  } catch (error) {
+    if (popup && !popup.closed) popup.close();
+    clearServiceAccessReviewPopupTracking();
+    throw error;
+  }
 }
 
 async function completeLoginIfCallback() {
@@ -217,6 +448,10 @@ async function completeLoginIfCallback() {
   form.set("redirect_uri", config.redirectUri);
   form.set("client_id", config.clientId);
   form.set("code_verifier", pending.verifier);
+  const requestedResources = pending.authFlow === SERVICE_ACCESS_REVIEW_FLOW
+    ? uniqueStrings(pending.resources)
+    : [];
+  requestedResources.forEach((resource) => form.append("resource", resource));
   const response = await nativeFetch(`${config.authority}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -225,8 +460,18 @@ async function completeLoginIfCallback() {
   sessionStorage.removeItem(PKCE_KEY);
   if (!response.ok) return;
   const token = await response.json();
+  if (requestedResources.length &&
+      !resourcesCover(tokenResponseResources(token), requestedResources)) {
+    return;
+  }
   token.obtained_at = Date.now();
+  token.oauth_resources = requestedResources;
+  if (pending.authFlow === SERVICE_ACCESS_REVIEW_FLOW) {
+    setServiceAccessReviewToken(token);
+    return;
+  }
   setToken(token);
+  return;
 }
 
 async function userSessionResponse() {
@@ -287,6 +532,45 @@ export function normalizeServices(payload, coreResources = config.resources) {
       Number(right.core) - Number(left.core) ||
       Number(right.authorized) - Number(left.authorized) ||
       left.label.localeCompare(right.label));
+}
+
+function proxyCatalogResourceUri(proxyBaseUrl, serviceSlug) {
+  const baseUrl = trimBaseUrl(proxyBaseUrl);
+  const slug = String(serviceSlug || "").trim();
+  return baseUrl && slug ? `${baseUrl}/s/${encodeURIComponent(slug)}` : "";
+}
+
+export function normalizeProxyCatalog(payload, coreResources = config.resources) {
+  const proxyBaseUrl = trimBaseUrl(payload?.proxy_base_url);
+  const services = (Array.isArray(payload?.services) ? payload.services : [])
+    .map((service) => {
+      const serviceSlug = String(service?.service_slug || "").trim();
+      return {
+        userServiceId: String(service?.service_id || "").trim(),
+        serviceSlug,
+        serviceName: String(service?.service_name || serviceSlug).trim(),
+        resourceUri: proxyCatalogResourceUri(proxyBaseUrl, serviceSlug),
+        isUserService: service?.is_user_service === true,
+      };
+    })
+    .filter((service) => service.userServiceId && service.serviceSlug && service.resourceUri);
+  return {
+    proxyBaseUrl,
+    services,
+    resources: uniqueStrings([
+      ...uniqueStrings(coreResources),
+      ...services.map((service) => service.resourceUri),
+    ]),
+  };
+}
+
+async function fetchServiceAccessReviewCatalog() {
+  const response = await serviceAccessReviewAuthorizedFetch(
+    `${config.nyxidApi}/api/v1/mcp/config`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) return response;
+  return jsonResponse(normalizeProxyCatalog(await response.json()), response.status);
 }
 
 function catalogAuthKind(entry) {
@@ -423,6 +707,28 @@ async function forwardAssistant(body, init) {
   });
 }
 
+async function continueServiceAccessReview(body, init = {}) {
+  const request = canonicalAssistantRequest(body);
+  if (request.type !== "action.continue") {
+    return jsonResponse({
+      code: "NYXID_SERVICE_ACCESS_REVIEW_REQUEST_INVALID",
+      message: "The service access review bearer may only continue a typed NyxID action.",
+    }, 400);
+  }
+  const clientRequestId = request.clientRequestId || crypto.randomUUID();
+  return await serviceAccessReviewAuthorizedFetch("/api/chat", {
+    ...init,
+    method: "POST",
+    headers: {
+      ...(init.headers || {}),
+      Accept: "text/event-stream, application/json",
+      "Content-Type": "application/json",
+      "Idempotency-Key": clientRequestId,
+    },
+    body: JSON.stringify(request),
+  });
+}
+
 async function forwardConversation(url, init) {
   const suffix = url.pathname.slice("/api/demo/conversations".length);
   const directPath = `/api/chat/conversations${suffix}`;
@@ -458,6 +764,12 @@ async function studioFetch(input, init = {}) {
     const result = await nyxidJson("/api/v1/user-services", { cache: "no-store" });
     return result.response.ok
       ? jsonResponse({ services: normalizeServices(result.payload) })
+      : result.response;
+  }
+  if (url.pathname === "/api/nyxid/proxy-catalog") {
+    const result = await nyxidJson("/api/v1/mcp/config", { cache: "no-store" });
+    return result.response.ok
+      ? jsonResponse(normalizeProxyCatalog(result.payload))
       : result.response;
   }
   if (url.pathname === "/api/nyxid/readiness") {
@@ -515,6 +827,7 @@ async function studioFetch(input, init = {}) {
   }
   if (url.pathname === "/api/auth/logout") {
     clearToken();
+    clearServiceAccessReviewToken();
     return jsonResponse({ ok: true });
   }
   if (url.pathname === "/api/demo/health") {
@@ -534,9 +847,15 @@ async function studioFetch(input, init = {}) {
 
 globalThis.AevatarStudioAuth = Object.freeze({
   beginLogin,
+  beginServiceAccessReview,
+  clearServiceAccessReviewToken,
   clearToken,
+  continueServiceAccessReview,
+  fetchServiceAccessReviewCatalog,
   getToken,
   notifyAdminShellAuth,
+  onServiceAccessReviewResult,
+  serviceResourceUri: proxyResourceForSlug,
 });
 
 await completeLoginIfCallback();

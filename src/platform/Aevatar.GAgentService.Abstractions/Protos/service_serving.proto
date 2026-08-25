@@ -24,6 +24,19 @@ enum ServiceRolloutStatus {
   SERVICE_ROLLOUT_STATUS_FAILED = 5;
 }
 
+enum ServiceServingTargetRemovalDisposition {
+  SERVICE_SERVING_TARGET_REMOVAL_DISPOSITION_UNSPECIFIED = 0;
+  SERVICE_SERVING_TARGET_REMOVAL_DISPOSITION_REMOVED = 1;
+  SERVICE_SERVING_TARGET_REMOVAL_DISPOSITION_ALREADY_ABSENT = 2;
+  SERVICE_SERVING_TARGET_REMOVAL_DISPOSITION_SUPERSEDED = 3;
+}
+
+enum ServiceServingTargetsApplyDisposition {
+  SERVICE_SERVING_TARGETS_APPLY_DISPOSITION_UNSPECIFIED = 0;
+  SERVICE_SERVING_TARGETS_APPLY_DISPOSITION_APPLIED = 1;
+  SERVICE_SERVING_TARGETS_APPLY_DISPOSITION_SUPERSEDED = 2;
+}
+
 message ServiceServingTargetSpec {
   string deployment_id = 1;
   string revision_id = 2;
@@ -31,6 +44,8 @@ message ServiceServingTargetSpec {
   int32 allocation_weight = 4;
   ServiceServingState serving_state = 5;
   repeated string enabled_endpoint_ids = 6;
+  string serving_target_operation_id = 7;
+  string activation_attempt_id = 8;
 }
 
 message ServiceServingSetState {
@@ -41,6 +56,26 @@ message ServiceServingSetState {
   google.protobuf.Timestamp updated_at = 5;
   int64 last_applied_event_version = 6;
   string last_event_id = 7;
+  string last_resolved_operation_id = 8;
+  string last_resolved_activation_attempt_id = 9;
+  string last_resolved_reply_actor_id = 10;
+  string last_resolved_deployment_id = 11;
+  string last_resolved_revision_id = 12;
+  google.protobuf.Timestamp last_resolved_applied_at = 13;
+  map<string, ServiceServingResolvedOperationRecord> resolved_operations = 14;
+  int64 last_resolved_operation_sequence = 15;
+}
+
+message ServiceServingResolvedOperationRecord {
+  string operation_id = 1;
+  string activation_attempt_id = 2;
+  string reply_actor_id = 3;
+  string deployment_id = 4;
+  string revision_id = 5;
+  int64 serving_generation = 6;
+  google.protobuf.Timestamp applied_at = 7;
+  ServiceServingTargetSpec target = 8;
+  int64 operation_sequence = 9;
 }
 
 message ReplaceServiceServingTargetsCommand {
@@ -55,6 +90,38 @@ message ReplaceResolvedServiceServingTargetsCommand {
   repeated ServiceServingTargetSpec targets = 2;
   string rollout_id = 3;
   string reason = 4;
+  string activation_attempt_id = 5;
+  string operation_id = 6;
+  string reply_actor_id = 7;
+  int64 operation_sequence = 8;
+}
+
+message RemoveDeploymentFromServiceServingTargetsCommand {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string reason = 3;
+  string revision_id = 4;
+  string primary_actor_id = 5;
+  string serving_target_operation_id = 6;
+  string activation_attempt_id = 7;
+  string reply_actor_id = 8;
+  string deactivation_operation_id = 9;
+}
+
+message ServiceServingTargetsRemovedAck {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string revision_id = 3;
+  string primary_actor_id = 4;
+  string serving_target_operation_id = 5;
+  string activation_attempt_id = 6;
+  google.protobuf.Timestamp removed_at = 7;
+  string deactivation_operation_id = 8;
+  ServiceServingTargetRemovalDisposition disposition = 9;
+  string actual_revision_id = 10;
+  string actual_primary_actor_id = 11;
+  string actual_serving_target_operation_id = 12;
+  string actual_activation_attempt_id = 13;
 }
 
 message ServiceServingSetUpdatedEvent {
@@ -64,6 +131,25 @@ message ServiceServingSetUpdatedEvent {
   string rollout_id = 4;
   string reason = 5;
   google.protobuf.Timestamp updated_at = 6;
+  string resolved_operation_id = 7;
+  string resolved_activation_attempt_id = 8;
+  string resolved_reply_actor_id = 9;
+  string resolved_deployment_id = 10;
+  string resolved_revision_id = 11;
+  int64 resolved_operation_sequence = 12;
+}
+
+message ServiceServingTargetsAppliedAck {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  string deployment_id = 3;
+  string activation_attempt_id = 4;
+  string operation_id = 5;
+  int64 serving_generation = 6;
+  google.protobuf.Timestamp applied_at = 7;
+  int64 operation_sequence = 8;
+  ServiceServingTargetsApplyDisposition disposition = 9;
+  int64 superseded_by_operation_sequence = 10;
 }
 
 message ServiceRolloutStageSpec {

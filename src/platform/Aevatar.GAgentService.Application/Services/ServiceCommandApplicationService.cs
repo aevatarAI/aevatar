@@ -93,15 +93,6 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
     }
 
-    public async Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(
-        SetDefaultServingRevisionCommand command,
-        CancellationToken ct = default)
-    {
-        var actorId = await _targetProvisioner.EnsureDefinitionTargetAsync(command.Identity, ct);
-        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
-        return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
-    }
-
     public async Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(
         ActivateServiceRevisionCommand command,
         CancellationToken ct = default)

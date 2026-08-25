@@ -14,6 +14,8 @@ public sealed record StepModel
 
     public List<string>? AllowedTools { get; init; }
 
+    public List<string>? ToolSets { get; init; }
+
     public StepCapability? Capability { get; init; }
 
     public StudioStepParameters Parameters { get; init; } = new();

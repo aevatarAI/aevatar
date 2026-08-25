@@ -285,7 +285,11 @@ public sealed class NyxIdChatSessionEventProjector
         if (payload.Is(NyxIdChatOperationProgressedEvent.Descriptor))
         {
             var progressed = payload.Unpack<NyxIdChatOperationProgressedEvent>();
-            if (!MatchesControllerKey(context, progressed.Progress?.Key))
+            if (!MatchesOperationSession(
+                    context,
+                    progressed.Progress?.Key,
+                    progressed.State,
+                    requireDirectStateMatch: false))
                 return EmptyEntries;
             return Entries(
                 context,
@@ -297,8 +301,7 @@ public sealed class NyxIdChatSessionEventProjector
         if (payload.Is(NyxIdChatOperationStepChangedCommittedEvent.Descriptor))
         {
             var committed = payload.Unpack<NyxIdChatOperationStepChangedCommittedEvent>();
-            if (!MatchesControllerKey(context, committed.Key) ||
-                !MatchesControllerState(context, committed.State))
+            if (!MatchesOperationSession(context, committed.Key, committed.State))
             {
                 return EmptyEntries;
             }
@@ -310,8 +313,7 @@ public sealed class NyxIdChatSessionEventProjector
         if (payload.Is(NyxIdChatOperationStalledEvent.Descriptor))
         {
             var stalled = payload.Unpack<NyxIdChatOperationStalledEvent>();
-            if (!MatchesControllerKey(context, stalled.Key) ||
-                !MatchesControllerState(context, stalled.State))
+            if (!MatchesOperationSession(context, stalled.Key, stalled.State))
             {
                 return EmptyEntries;
             }
@@ -323,8 +325,12 @@ public sealed class NyxIdChatSessionEventProjector
         if (payload.Is(NyxIdChatOperationReconciledEvent.Descriptor))
         {
             var reconciled = payload.Unpack<NyxIdChatOperationReconciledEvent>();
-            if (!MatchesControllerKey(context, reconciled.Result?.Key) ||
-                !MatchesControllerState(context, reconciled.State))
+            if (!MatchesOperationSession(
+                    context,
+                    reconciled.Result?.Key,
+                    reconciled.State,
+                    reconciled.Task,
+                    reconciled.Turn))
             {
                 return EmptyEntries;
             }
@@ -339,8 +345,7 @@ public sealed class NyxIdChatSessionEventProjector
         if (payload.Is(NyxIdChatLateOperationEvidenceCommittedEvent.Descriptor))
         {
             var committed = payload.Unpack<NyxIdChatLateOperationEvidenceCommittedEvent>();
-            if (!MatchesControllerKey(context, committed.Key) ||
-                !MatchesControllerState(context, committed.State))
+            if (!MatchesOperationSession(context, committed.Key, committed.State))
             {
                 return EmptyEntries;
             }
@@ -416,26 +421,6 @@ public sealed class NyxIdChatSessionEventProjector
             return Entries(
                 context,
                 NyxIdChatConversationAguiFrameBuilder.BuildApprovalChanged(committed));
-        }
-
-        if (payload.Is(NyxIdChatPlanResolutionCommittedEvent.Descriptor))
-        {
-            var committed = payload.Unpack<NyxIdChatPlanResolutionCommittedEvent>();
-            if (!MatchesControllerState(context, committed.State))
-                return EmptyEntries;
-            return Entries(
-                context,
-                NyxIdChatConversationAguiFrameBuilder.BuildPlanResolutionChanged(committed));
-        }
-
-        if (payload.Is(NyxIdChatPlanGateCapabilityExpiredCommittedEvent.Descriptor))
-        {
-            var committed = payload.Unpack<NyxIdChatPlanGateCapabilityExpiredCommittedEvent>();
-            if (!MatchesControllerState(context, committed.State))
-                return EmptyEntries;
-            return Entries(
-                context,
-                NyxIdChatConversationAguiFrameBuilder.BuildPlanGateCapabilityExpired(committed));
         }
 
         if (payload.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
@@ -563,6 +548,37 @@ public sealed class NyxIdChatSessionEventProjector
         key is not null &&
         string.Equals(key.ConversationActorId, context.RootActorId, StringComparison.Ordinal) &&
         string.Equals(key.TurnId, context.SessionId, StringComparison.Ordinal);
+
+    private static bool MatchesOperationSession(
+        NyxIdChatSessionProjectionContext context,
+        NyxIdChatOperationKey? key,
+        NyxIdChatConversationGAgentState? state,
+        NyxIdChatTaskState? candidateTask = null,
+        NyxIdChatTurnState? candidateTurn = null,
+        bool requireDirectStateMatch = true)
+    {
+        if (MatchesControllerKey(context, key) &&
+            (!requireDirectStateMatch || MatchesControllerState(context, state)))
+        {
+            return true;
+        }
+
+        return state is not null &&
+               string.Equals(
+                   state.ConversationActorId,
+                   context.RootActorId,
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   state.ContinuationAdmission?.ContinuationTurnId,
+                   context.SessionId,
+                   StringComparison.Ordinal) &&
+               NyxIdChatActionContinuationCorrelation.TryMatch(
+                   state,
+                   candidateTask ?? state.ActiveTask,
+                   candidateTurn ?? state.ActiveTurn,
+                   key,
+                   out _);
+    }
 
     private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> Entries(
         NyxIdChatSessionProjectionContext context,
@@ -740,6 +756,43 @@ public sealed class NyxIdChatSessionEventProjector
                         },
                     },
                 ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ModelStarted:
+                return
+                [
+                    new AGUIEvent
+                    {
+                        ModelCallStart = new ModelCallStartEvent
+                        {
+                            OperationId = progress.ModelStarted.OperationId,
+                            SessionId = progress.SessionId,
+                            Round = progress.ModelStarted.Round,
+                            Model = progress.ModelStarted.Model,
+                            Provider = progress.ModelStarted.Provider,
+                            InputSummary = progress.ModelStarted.InputSummary,
+                            AvailableToolNames = { progress.ModelStarted.AvailableToolNames },
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ModelCompleted:
+                return
+                [
+                    new AGUIEvent
+                    {
+                        ModelCallEnd = new ModelCallEndEvent
+                        {
+                            OperationId = progress.ModelCompleted.OperationId,
+                            SessionId = progress.SessionId,
+                            Round = progress.ModelCompleted.Round,
+                            Model = progress.ModelCompleted.Model,
+                            Content = progress.ModelCompleted.Content,
+                            ReasoningContent = progress.ModelCompleted.ReasoningContent,
+                            Usage = ToUsage(progress.ModelCompleted.Usage, progress.ModelCompleted.Model),
+                            FinishReason = progress.ModelCompleted.FinishReason,
+                            Success = progress.ModelCompleted.Success,
+                            Error = progress.ModelCompleted.Error,
+                        },
+                    },
+                ];
             case RoleChatSessionProgressedEvent.PayloadOneofCase.AuthorizationRequired:
                 if (progress.AuthorizationRequired.AuthorizationRequired == null)
                     return Array.Empty<AGUIEvent>();
@@ -769,6 +822,21 @@ public sealed class NyxIdChatSessionEventProjector
             default:
                 return Array.Empty<AGUIEvent>();
         }
+    }
+
+    private static UsageEvent? ToUsage(TokenUsagePayload? usage, string? model)
+    {
+        if (usage is null)
+            return null;
+
+        return new UsageEvent
+        {
+            Available = true,
+            PromptTokens = usage.PromptTokens,
+            CompletionTokens = usage.CompletionTokens,
+            TotalTokens = usage.TotalTokens,
+            Model = string.IsNullOrWhiteSpace(model) ? null : model,
+        };
     }
 
     private static AGUIEvent BuildTerminalFrame(

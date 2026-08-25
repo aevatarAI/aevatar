@@ -40,6 +40,18 @@ internal static class NyxIdChatAguiSseEventWriter
                     aguiEvent.Sequence,
                     ct);
                 return null;
+            case AGUIEvent.EventOneofCase.ModelCallStart:
+                await writer.WriteModelCallStartAsync(
+                    aguiEvent.ModelCallStart,
+                    aguiEvent.Sequence,
+                    ct);
+                return null;
+            case AGUIEvent.EventOneofCase.ModelCallEnd:
+                await writer.WriteModelCallEndAsync(
+                    aguiEvent.ModelCallEnd,
+                    aguiEvent.Sequence,
+                    ct);
+                return null;
             case AGUIEvent.EventOneofCase.ToolCallStart:
                 await writer.WriteToolCallStartAsync(
                     aguiEvent.ToolCallStart.ToolName,

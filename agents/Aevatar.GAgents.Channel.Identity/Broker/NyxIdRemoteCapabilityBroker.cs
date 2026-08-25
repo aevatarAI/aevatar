@@ -98,6 +98,13 @@ public sealed class NyxIdRemoteCapabilityBroker :
             _options.RequiredLlmServiceSlug,
             _options.AdditionalRequiredServiceSlugs);
 
+    private static string[] NormalizeResourceUris(IReadOnlyList<string>? resourceUris) =>
+        (resourceUris ?? [])
+            .Select(static resourceUri => resourceUri?.Trim() ?? string.Empty)
+            .Where(static resourceUri => !string.IsNullOrWhiteSpace(resourceUri))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
     public async Task<BindingChallenge> StartExternalBindingAsync(
         ExternalSubjectRef externalSubject,
         CancellationToken ct = default)
@@ -364,6 +371,7 @@ public sealed class NyxIdRemoteCapabilityBroker :
             codeVerifier,
             ResolveRedirectUri(),
             requireProvisionedRedirectUri: true,
+            resourceUris: null,
             ct);
     }
 
@@ -377,11 +385,31 @@ public sealed class NyxIdRemoteCapabilityBroker :
         ArgumentException.ThrowIfNullOrWhiteSpace(codeVerifier);
         ArgumentException.ThrowIfNullOrWhiteSpace(redirectUri);
 
+        return ExchangeAuthorizationCodeAsync(
+            authorizationCode,
+            codeVerifier,
+            redirectUri,
+            resourceUris: null,
+            ct);
+    }
+
+    public Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
+        string authorizationCode,
+        string codeVerifier,
+        string redirectUri,
+        IReadOnlyList<string>? resourceUris,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(authorizationCode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(codeVerifier);
+        ArgumentException.ThrowIfNullOrWhiteSpace(redirectUri);
+
         return ExchangeAuthorizationCodeCoreAsync(
             authorizationCode,
             codeVerifier,
             redirectUri.Trim(),
             requireProvisionedRedirectUri: false,
+            resourceUris,
             ct);
     }
 
@@ -434,14 +462,13 @@ public sealed class NyxIdRemoteCapabilityBroker :
         string codeVerifier,
         string redirectUri,
         bool requireProvisionedRedirectUri,
+        IReadOnlyList<string>? resourceUris,
         CancellationToken ct)
     {
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         if (requireProvisionedRedirectUri)
             EnsureClientCurrent(snapshot, redirectUri);
 
-        // The authorization code already carries the user's finalized Consent selection.
-        // Repeating resource here would narrow that grant to Aevatar's minimum runtime set.
         var form = new List<KeyValuePair<string, string>>
         {
             new("grant_type", "authorization_code"),
@@ -450,6 +477,8 @@ public sealed class NyxIdRemoteCapabilityBroker :
             new("redirect_uri", redirectUri),
             new("client_id", snapshot.ClientId),
         };
+        foreach (var resourceUri in NormalizeResourceUris(resourceUris))
+            form.Add(new KeyValuePair<string, string>("resource", resourceUri));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,

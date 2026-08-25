@@ -183,11 +183,12 @@ Orleans 的 `LinkAsync(parentId, childId)` 必须区分当前 grain 与其他 pa
   - `ProjectionSessionScopeReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionSessionScopeGAgent>` 负责 session scope actor 释放
   - `ProjectionMaterializationScopeActivationService<WorkflowExecutionMaterializationRuntimeLease, WorkflowExecutionMaterializationContext, WorkflowExecutionMaterializationScopeGAgent>` 负责 durable scope actor 激活
   - `ProjectionMaterializationScopeReleaseService<WorkflowExecutionMaterializationRuntimeLease, WorkflowExecutionMaterializationScopeGAgent>` 负责 durable scope actor 释放
+  - `WorkflowExecutionMaterializationScopeGAgent` 保持既有 durable scope kind；schema v1 adoption 只在 `ProjectionIncrementalGraphV1` fleet proof 有效时开放，durable in-flight observation recovery 只由 runtime-owned exact adoption receipt 解锁。adoption 本身不选择 route；scope actor 在持久化的 cutover saga 中以隔离 v2 namespace 完成 candidate backfill、golden/source 校验与 fresh fleet proof 后，才通过 committed event 切换单调 route epoch。显式 rollback 仍走同一 saga，只能切到紧邻下一 epoch 的不同 versioned namespace，并在激活前重新追平 authoritative report
   - `ProjectionSessionEventHub<WorkflowRunEventEnvelope>` 负责 session stream 分发
   - `WorkflowExecutionCurrentStateQueryPort` 负责 authority current-state 查询映射
-  - `WorkflowExecutionArtifactQueryPort` 负责 artifact 查询映射
+  - `WorkflowExecutionArtifactQueryPort` 负责 artifact 查询映射；graph export 采用 `status route -> atomic owner snapshot -> status route`，任何 route/provenance 不一致都 fail closed，不回退 legacy graph
   - `WorkflowExecutionCurrentStateProjector` 负责 authority current-state replica
-  - `WorkflowRunInsightReportArtifactProjector` / `WorkflowRunTimelineArtifactProjector` / `WorkflowRunGraphArtifactProjector` 负责 derived durable artifacts
+  - `WorkflowRunInsightReportArtifactProjector` 保持 report 每版本物化，并按 scope actor 传入的 active route 选择 legacy full graph 或 v2 owner-scoped atomic delta；report/graph 各自幂等，只有两者都到达该 source coordinate 后 scope 才推进 watermark
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
   - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责完整交互路径（dispatch + sink consume + finalize）
   - `DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>` 负责 accepted-only 路径（只返回 accepted receipt，不持有 live sink）

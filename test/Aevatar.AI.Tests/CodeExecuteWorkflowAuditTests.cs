@@ -20,11 +20,12 @@ public sealed class CodeExecuteWorkflowAuditTests
     [Fact]
     public async Task NonZeroExit_ShouldPreserveOneFailureAcrossWorkflowReceiptAndAudit()
     {
-        var port = new CompletedFailureCodeExecutionPort();
-        var tool = new NyxIdCodeExecuteTool(port);
+        var legacyPort = new CompletedFailureCodeExecutionPort();
+        var durablePort = new CompletedFailureDurableCodeExecutionPort();
+        var tool = new NyxIdCodeExecuteTool(legacyPort, durablePort);
         var auditTrail = new RecordingAuditTrailAppender();
         var executor = new RecordingToolExecutionPort(new AdmittedAgentToolExecutor(
-            new StartingAdmissionLedger(),
+            new StartOnceAdmissionLedger(),
             auditTrail,
             new StableAuditIdentityHasher()));
         var source = new AgentWorkflowToolSourceAdapter(
@@ -32,7 +33,7 @@ public sealed class CodeExecuteWorkflowAuditTests
             executor);
         var workflowTool = (await source.GetToolsAsync()).Should().ContainSingle().Subject;
 
-        var workflowResult = await workflowTool.ExecuteAsync(new WorkflowToolExecutionRequest(
+        var request = new WorkflowToolExecutionRequest(
             ArgumentsJson: """{"language":"python","code":"raise RuntimeError()"}""",
             RunId: "run-code-alpha",
             StepId: "step-code-alpha",
@@ -43,16 +44,28 @@ public sealed class CodeExecuteWorkflowAuditTests
             {
                 BearerToken = "source-readable-bearer",
                 Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
-            }));
+            },
+            RuntimeContext: WorkflowToolRuntimeContext.Empty,
+            InvocationAdmission: CodeExecutionAdmission("run-code-alpha/step-code-alpha"));
+        var submitted = await workflowTool.ExecuteAsync(request);
+        var workflowResult = await ((IWorkflowDurableOperationTool)workflowTool).ReconcileAsync(
+            request,
+            submitted.PendingOperation!);
 
-        port.Request.Should().NotBeNull();
-        port.CallCount.Should().Be(1);
-        port.Request!.Caller.ExecutionNyxIdAccessToken.Should().Be("source-readable-bearer");
-        port.Request.Caller.SourceReadableNyxIdAccessToken.Should().Be("source-readable-bearer");
+        submitted.PendingOperation.Should().NotBeNull();
+        legacyPort.Request.Should().BeNull();
+        legacyPort.CallCount.Should().Be(0);
+        durablePort.SubmitCallCount.Should().Be(1);
+        durablePort.StatusCallCount.Should().Be(1);
+        durablePort.ResultCallCount.Should().Be(1);
+        durablePort.SubmitRequest!.Execution.Caller.ExecutionNyxIdCredential
+            .Should().Be("source-readable-bearer");
+        durablePort.SubmitRequest.Execution.Caller.SourceReadableNyxIdAccessToken
+            .Should().Be("source-readable-bearer");
 
         executor.Outcome.Should().NotBeNull();
         var executionOutcome = executor.Outcome!;
-        executionOutcome.TerminalInvoked.Should().BeTrue();
+        executionOutcome.TerminalInvoked.Should().BeFalse();
         executionOutcome.ResultJson.Should().Be(workflowResult.ResultJson);
         executionOutcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
         executionOutcome.Receipt.ErrorCode.Should().Be("EXECUTION_FAILED");
@@ -87,10 +100,11 @@ public sealed class CodeExecuteWorkflowAuditTests
     }
 
     [Fact]
-    public async Task DuplicateWorkflowDelivery_ShouldNotReplayOneShotCodeExecution()
+    public async Task DurableWorkflowRecovery_ShouldNotResubmitKnownOperation()
     {
-        var port = new CompletedFailureCodeExecutionPort();
-        var tool = new NyxIdCodeExecuteTool(port);
+        var legacyPort = new CompletedFailureCodeExecutionPort();
+        var durablePort = new CompletedFailureDurableCodeExecutionPort();
+        var tool = new NyxIdCodeExecuteTool(legacyPort, durablePort);
         var executor = new RecordingToolExecutionPort(new AdmittedAgentToolExecutor(
             new StartOnceAdmissionLedger(),
             new RecordingAuditTrailAppender(),
@@ -110,24 +124,106 @@ public sealed class CodeExecuteWorkflowAuditTests
             {
                 BearerToken = "source-readable-bearer",
                 Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
-            });
+            },
+            RuntimeContext: WorkflowToolRuntimeContext.Empty,
+            InvocationAdmission: CodeExecutionAdmission("run-code-redelivery/step-code-redelivery"));
 
         var first = await workflowTool.ExecuteAsync(request);
-        var redelivery = await workflowTool.ExecuteAsync(request);
+        var recovery = await ((IWorkflowDurableOperationTool)workflowTool).ReconcileAsync(
+            request,
+            first.PendingOperation!);
 
-        first.Failure.Should().NotBeNull();
-        first.Failure!.ErrorCode.Should().Be("EXECUTION_FAILED");
-        redelivery.Failure.Should().Be(new WorkflowToolExecutionFailure(
-            "outcome_uncertain",
-            "OUTCOME_UNCERTAIN: the prior external effect cannot be proven complete or safe to replay.",
-            TerminalInvoked: false,
-            Retryable: false));
-        port.CallCount.Should().Be(1);
-        executor.Requests.Should().HaveCount(3);
+        first.PendingOperation.Should().NotBeNull();
+        recovery.Failure.Should().NotBeNull();
+        recovery.Failure!.ErrorCode.Should().Be("EXECUTION_FAILED");
+        legacyPort.CallCount.Should().Be(0);
+        durablePort.SubmitCallCount.Should().Be(1);
+        durablePort.StatusCallCount.Should().Be(1);
+        durablePort.ResultCallCount.Should().Be(1);
+        executor.Requests.Should().HaveCount(2);
         executor.Requests.Select(static candidate => candidate.ExecutionAttemptKind).Should().Equal(
             AgentToolExecutionAttemptKind.Initial,
-            AgentToolExecutionAttemptKind.Initial,
             AgentToolExecutionAttemptKind.ActorRecovery);
+    }
+
+    [Fact]
+    public async Task ProvisioningTimeout_ShouldCommitOnlyAllowlistedPhaseToWorkflowReceipt()
+    {
+        var legacyPort = new CompletedFailureCodeExecutionPort();
+        var durablePort = new CompletedFailureDurableCodeExecutionPort(
+            new DurableCodeExecutionFailure(
+                DurableCodeExecutionFailureKind.ExecutionFailed,
+                "SANDBOX_TIMEOUT",
+                "Durable code execution failed before producing a result.",
+                DiagnosticId: "diag-provisioning-safe",
+                ProviderPhase: DurableCodeExecutionPhase.SandboxCreate));
+        var tool = new NyxIdCodeExecuteTool(legacyPort, durablePort);
+        var auditTrail = new RecordingAuditTrailAppender();
+        var executor = new RecordingToolExecutionPort(new AdmittedAgentToolExecutor(
+            new StartOnceAdmissionLedger(),
+            auditTrail,
+            new StableAuditIdentityHasher()));
+        var source = new AgentWorkflowToolSourceAdapter(
+            [new SingleToolSource(tool)],
+            executor);
+        var workflowTool = (await source.GetToolsAsync()).Should().ContainSingle().Subject;
+        var request = new WorkflowToolExecutionRequest(
+            ArgumentsJson: """{"language":"javascript","code":"console.log('must-not-escape')"}""",
+            RunId: "run-provisioning-timeout",
+            StepId: "step-provisioning-timeout",
+            ExecutionId: "execution-provisioning-timeout",
+            CallId: "call-provisioning-timeout",
+            ScopeId: "scope-provisioning-timeout",
+            CallerCredential: new WorkflowCallerCredential
+            {
+                BearerToken = "source-readable-bearer",
+                Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
+            },
+            RuntimeContext: WorkflowToolRuntimeContext.Empty,
+            InvocationAdmission: CodeExecutionAdmission(
+                "run-provisioning-timeout/step-provisioning-timeout"));
+
+        var submitted = await workflowTool.ExecuteAsync(request);
+        var workflowResult = await ((IWorkflowDurableOperationTool)workflowTool).ReconcileAsync(
+            request,
+            submitted.PendingOperation!);
+
+        using var document = JsonDocument.Parse(workflowResult.ResultJson);
+        document.RootElement.GetProperty("code").GetString().Should().Be("SANDBOX_TIMEOUT");
+        document.RootElement.GetProperty("provider_phase").GetString().Should().Be("sandbox_create");
+        executor.Outcome!.Receipt.ResultJson.Should().Be(workflowResult.ResultJson);
+        workflowResult.ResultJson.Should().NotContain("must-not-escape");
+        workflowResult.ResultJson.Should().NotContain("source-readable-bearer");
+        workflowResult.ResultJson.Should().NotContain("op_0123456789abcdefghijklmnopqrstuv");
+        workflowResult.ResultJson.Should().NotContain("svc-code-alpha");
+        auditTrail.Records.Should().ContainSingle(record =>
+            record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Terminal &&
+            record.ErrorCode == "SANDBOX_TIMEOUT");
+    }
+
+    private static WorkflowCapabilityInvocationAdmission CodeExecutionAdmission(string callSiteId)
+    {
+        var proof = new CodeExecutionCapabilityRef
+        {
+            UserServiceId = "svc-code-alpha",
+            ServiceSlugSnapshot = CodeExecutionContract.ServiceSlug,
+            CatalogServiceId = "catalog-code-alpha",
+        };
+        proof.ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeCodeExecutionCapabilityDigest(
+                proof.UserServiceId,
+                proof.ServiceSlugSnapshot,
+                proof.CatalogServiceId);
+        proof.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+        proof.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
+        return new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = callSiteId,
+            Capability = new ExternalWorkflowCapabilityRef
+            {
+                CodeExecution = proof,
+            },
+        };
     }
 
     private sealed class CompletedFailureCodeExecutionPort : ICodeExecutionPort
@@ -160,6 +256,118 @@ public sealed class CodeExecuteWorkflowAuditTests
                     "svc-code-alpha",
                     CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog)));
         }
+    }
+
+    private sealed class CompletedFailureDurableCodeExecutionPort : IDurableCodeExecutionPort
+    {
+        private const string ProviderOperationId = "op_0123456789abcdefghijklmnopqrstuv";
+        private readonly DurableCodeExecutionFailure? _terminalFailure;
+
+        public CompletedFailureDurableCodeExecutionPort(
+            DurableCodeExecutionFailure? terminalFailure = null)
+        {
+            _terminalFailure = terminalFailure;
+        }
+
+        public int SubmitCallCount { get; private set; }
+
+        public int StatusCallCount { get; private set; }
+
+        public int ResultCallCount { get; private set; }
+
+        public DurableCodeExecutionSubmitRequest? SubmitRequest { get; private set; }
+
+        public Task<DurableCodeExecutionSubmitOutcome> SubmitAsync(
+            DurableCodeExecutionSubmitRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            SubmitCallCount++;
+            SubmitRequest = request;
+            var now = DateTimeOffset.UtcNow;
+            return Task.FromResult(new DurableCodeExecutionSubmitOutcome(
+                new DurableCodeExecutionReceipt(
+                    ProviderOperationId,
+                    $"/executions/{ProviderOperationId}",
+                    $"/executions/{ProviderOperationId}/result",
+                    $"/executions/{ProviderOperationId}/cancel",
+                    DurableCodeExecutionState.Queued,
+                    request.Execution.Route,
+                    now,
+                    now.AddMinutes(10),
+                    TimeSpan.FromSeconds(1)),
+                null));
+        }
+
+        public Task<DurableCodeExecutionStatusOutcome> GetStatusAsync(
+            DurableCodeExecutionOperationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            StatusCallCount++;
+            var now = DateTimeOffset.UtcNow;
+            return Task.FromResult(new DurableCodeExecutionStatusOutcome(
+                new DurableCodeExecutionSnapshot(
+                    ProviderOperationId,
+                    DurableCodeExecutionState.Failed,
+                    DurableCodeExecutionPhase.Complete,
+                    DurableCodeExecutionCleanupState.Complete,
+                    2,
+                    CancelRequested: false,
+                    ResultAvailable: true,
+                    request.Route,
+                    "\"version-2\"",
+                    now.AddMinutes(-1),
+                    now,
+                    now.AddMinutes(9),
+                    now,
+                    RetryAfter: null,
+                    new DurableCodeExecutionProviderFailure(
+                        _terminalFailure?.Code ?? "EXECUTION_FAILED",
+                        _terminalFailure?.Message ?? "Code execution exited unsuccessfully.")),
+                NotModified: false,
+                ETag: "\"version-2\"",
+                RetryAfter: null,
+                Failure: null));
+        }
+
+        public Task<DurableCodeExecutionResultOutcome> GetResultAsync(
+            DurableCodeExecutionOperationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ResultCallCount++;
+            if (_terminalFailure is not null)
+            {
+                return Task.FromResult(new DurableCodeExecutionResultOutcome(
+                    Outcome: null,
+                    Pending: false,
+                    RetryAfter: null,
+                    Failure: _terminalFailure));
+            }
+            return Task.FromResult(new DurableCodeExecutionResultOutcome(
+                CodeExecutionOutcome.CompletedWithFailure(
+                    new CodeExecutionResult(
+                        "partial output",
+                        "traceback",
+                        7,
+                        "diag-code-alpha",
+                        31),
+                    new CodeExecutionFailure(
+                        CodeExecutionFailureKind.ExecutionFailed,
+                        "EXECUTION_FAILED",
+                        "Code execution exited unsuccessfully.",
+                        "diag-code-alpha"),
+                    request.Route),
+                Pending: false,
+                RetryAfter: null,
+                Failure: null));
+        }
+
+        public Task<DurableCodeExecutionCancelOutcome> CancelAsync(
+            DurableCodeExecutionOperationRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("Cancellation is not expected in this test.");
     }
 
     private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource

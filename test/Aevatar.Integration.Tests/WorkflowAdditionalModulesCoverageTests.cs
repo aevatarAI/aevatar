@@ -73,8 +73,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        ctx.Published.Should().ContainSingle();
+        ctx.Published.Should().HaveCount(2);
         ctx.Published[0].direction.Should().Be(TopologyAudience.ParentAndChildren);
+        ctx.Published[1].direction.Should().Be(TopologyAudience.Self);
         var emitted = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         emitted.Annotations["emit.event_type"].Should().Be("audit");
         emitted.Annotations["emit.payload"].Should().Be("{\"k\":1}");
@@ -90,7 +91,11 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var defaultEmit = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        var defaultEmit = ctx.Published
+            .Where(static publication => publication.direction == TopologyAudience.Self)
+            .Select(static publication => publication.evt)
+            .OfType<StepCompletedEvent>()
+            .Single();
         defaultEmit.Annotations["emit.event_type"].Should().Be("custom");
         defaultEmit.Annotations["emit.payload"].Should().Be("fallback-payload");
     }
@@ -1504,80 +1509,6 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         failed.RunId.Should().Be("run-race-missing");
         failed.Success.Should().BeFalse();
         failed.Error.Should().Contain("race requires parameters.workers");
-    }
-
-    [Fact]
-    public async Task ForEachModule_ShouldSupportEscapedDelimiterAndJsonArrayInput()
-    {
-        var module = new ForEachModule();
-        var ctx = CreateContext();
-
-        await module.HandleAsync(
-            Envelope(new StepRequestEvent
-            {
-                StepId = "foreach-escaped",
-                StepType = "foreach",
-                RunId = "run-foreach",
-                Input = "a\n---\nb",
-                Parameters =
-                {
-                    ["delimiter"] = "\\n---\\n",
-                    ["sub_step_type"] = "assign",
-                },
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var escapedDispatches = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
-        escapedDispatches.Should().HaveCount(2);
-        escapedDispatches[0].Input.Should().Be("a");
-        escapedDispatches[1].Input.Should().Be("b");
-        ctx.Published.Clear();
-
-        await module.HandleAsync(
-            Envelope(new StepCompletedEvent
-            {
-                StepId = "foreach-escaped_item_0",
-                RunId = "run-foreach",
-                Success = true,
-                Output = "A",
-            }),
-            ctx,
-            CancellationToken.None);
-        await module.HandleAsync(
-            Envelope(new StepCompletedEvent
-            {
-                StepId = "foreach-escaped_item_1",
-                RunId = "run-foreach",
-                Success = true,
-                Output = "B",
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var merged = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        merged.StepId.Should().Be("foreach-escaped");
-        merged.RunId.Should().Be("run-foreach");
-        merged.Success.Should().BeTrue();
-        merged.Output.Should().Be("A\n---\nB");
-        ctx.Published.Clear();
-
-        await module.HandleAsync(
-            Envelope(new StepRequestEvent
-            {
-                StepId = "foreach-json",
-                StepType = "foreach",
-                RunId = "run-foreach-json",
-                Input = "[\"x\",\"y\"]",
-                Parameters = { ["sub_step_type"] = "assign" },
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var jsonDispatches = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
-        jsonDispatches.Should().HaveCount(2);
-        jsonDispatches[0].Input.Should().Be("x");
-        jsonDispatches[1].Input.Should().Be("y");
     }
 
     [Fact]

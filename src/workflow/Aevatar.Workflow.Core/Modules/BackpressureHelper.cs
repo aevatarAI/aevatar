@@ -1,3 +1,5 @@
+using Aevatar.Workflow.Core.Execution;
+
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>
@@ -78,6 +80,13 @@ internal static class BackpressureHelper
     }
 
     /// <summary>
+    /// Settles a worker without admitting more queued work. Composite modules use this when a
+    /// definitive child failure has already made the parent attempt terminal.
+    /// </summary>
+    public static void CompleteWithoutTopUp(BackpressureQueueState bp) =>
+        bp.ActiveWorkers = Math.Max(0, bp.ActiveWorkers - 1);
+
+    /// <summary>
     /// Dequeues enough queued work to restore the configured floor/target without exceeding max.
     /// </summary>
     public static IReadOnlyList<BackpressureQueueEntry> TopUpToTarget(BackpressureQueueState bp)
@@ -126,19 +135,67 @@ internal static class BackpressureHelper
 
     /// <summary>Converts a queued entry back to a StepRequestEvent for dispatch.</summary>
     public static StepRequestEvent ToStepRequest(BackpressureQueueEntry entry) =>
-        new()
+        ToStepRequest(entry, kernelState: null);
+
+    /// <summary>
+    /// Rehydrates a normalized queue entry from the actor-owned canonical value
+    /// table. A normalized entry is never allowed to fall back to an inline
+    /// payload after a restart.
+    /// </summary>
+    public static StepRequestEvent ToStepRequest(
+        BackpressureQueueEntry entry,
+        WorkflowExecutionKernelState? kernelState)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        var input = entry.Input ?? string.Empty;
+        var inputValueId = entry.InputValueId?.Trim() ?? string.Empty;
+        if (inputValueId.Length > 0)
+        {
+            if (kernelState?.NormalizedValues == null)
+                throw new InvalidOperationException(
+                    $"Backpressure entry '{entry.StepId}' references canonical input '{inputValueId}' without normalized state.");
+            var canonical = WorkflowExecutionValueStore.GetCanonicalValue(kernelState, inputValueId);
+            if (input.Length > 0 && !string.Equals(input, canonical.Value ?? string.Empty, StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    $"Backpressure entry '{entry.StepId}' inline input conflicts with canonical input '{inputValueId}'.");
+            input = canonical.Value ?? string.Empty;
+        }
+
+        return new StepRequestEvent
         {
             StepId = entry.StepId,
             StepType = entry.StepType,
             RunId = entry.RunId,
-            Input = entry.Input,
+            Input = input,
             TargetRole = entry.TargetRole,
             Parameters = { entry.Parameters },
             InputFileRefs = { entry.InputFileRefs.Select(static fileRef => fileRef.Clone()) },
             ExternalInvocation = entry.ExternalInvocation?.Clone(),
             ExecutionId = entry.ExecutionId,
             IdempotencyKey = entry.IdempotencyKey,
+            InputValueId = inputValueId,
         };
+    }
+
+    /// <summary>Removes the duplicate inline payload after canonical admission.</summary>
+    public static void ClearInlineInputAfterCanonicalAdmission(
+        BackpressureQueueEntry entry,
+        WorkflowExecutionKernelState kernelState)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        ArgumentNullException.ThrowIfNull(kernelState);
+        var inputValueId = entry.InputValueId?.Trim() ?? string.Empty;
+        if (inputValueId.Length == 0 || kernelState.NormalizedValues == null)
+            return;
+        var canonical = WorkflowExecutionValueStore.GetCanonicalValue(kernelState, inputValueId);
+        if (!string.IsNullOrEmpty(entry.Input) &&
+            !string.Equals(entry.Input, canonical.Value ?? string.Empty, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Backpressure entry '{entry.StepId}' inline input conflicts with canonical input '{inputValueId}'.");
+        }
+        entry.Input = string.Empty;
+    }
 
     /// <summary>Creates a queue entry from step request fields.</summary>
     public static BackpressureQueueEntry ToQueueEntry(
@@ -147,19 +204,21 @@ internal static class BackpressureHelper
         IEnumerable<WorkflowFileRef>? inputFileRefs = null,
         ExternalToolInvocationSpec? externalInvocation = null,
         string executionId = "",
-        string idempotencyKey = "") =>
+        string idempotencyKey = "",
+        string inputValueId = "") =>
         new()
         {
             StepId = stepId,
             StepType = stepType,
             RunId = runId,
-            Input = input,
+            Input = string.IsNullOrWhiteSpace(inputValueId) ? input : string.Empty,
             TargetRole = targetRole,
             Parameters = { parameters ?? new Dictionary<string, string>() },
             InputFileRefs = { inputFileRefs?.Select(static fileRef => fileRef.Clone()) ?? [] },
             ExternalInvocation = externalInvocation?.Clone(),
             ExecutionId = executionId,
             IdempotencyKey = idempotencyKey,
+            InputValueId = inputValueId,
         };
 
     /// <summary>Initializes backpressure state with the resolved max/min concurrency.</summary>

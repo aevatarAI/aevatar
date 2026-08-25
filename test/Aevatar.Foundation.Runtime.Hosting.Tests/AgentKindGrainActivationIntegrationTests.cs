@@ -7,9 +7,12 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Orleans;
 using Orleans.Hosting;
+using Orleans.Runtime;
+using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -104,7 +107,48 @@ public sealed class AgentKindGrainActivationIntegrationTests
         }
     }
 
-    private static async Task<IHost> StartSiloHostAsync()
+    [Fact]
+    public async Task InitializeAgentByKindAsync_WhenFirstSelfSubscriptionFails_ShouldRetryBoundInitialization()
+    {
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var streamProvider = new FailFirstSubscriptionStreamProvider();
+        var host = await StartSiloHostAsync(streamProvider);
+
+        try
+        {
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+
+            await FluentActions.Invoking(() =>
+                    grain.InitializeAgentByKindAsync("integrationtests.canonical"))
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("synthetic first self-stream subscription failure");
+            streamProvider.SubscribeAttemptCount.Should().Be(1);
+
+            (await grain.GetAgentKindAsync()).Should().Be("integrationtests.canonical");
+            (await grain.GetDescriptionAsync()).Should()
+                .Be(nameof(IntegrationFixtureCanonicalAgent));
+            streamProvider.SubscribeAttemptCount.Should().Be(1,
+                "reading the bound agent must not hide a subscription retry");
+
+            (await grain.InitializeAgentByKindAsync("integrationtests.canonical"))
+                .Should().BeTrue();
+            streamProvider.SubscribeAttemptCount.Should().Be(2);
+
+            (await grain.InitializeAgentByKindAsync("integrationtests.canonical"))
+                .Should().BeTrue();
+            streamProvider.SubscribeAttemptCount.Should().Be(2,
+                "an established self-stream subscription is idempotent");
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    private static async Task<IHost> StartSiloHostAsync(
+        FailFirstSubscriptionStreamProvider? subscriptionStreamProvider = null)
     {
         var serviceId = $"aevatar-agent-kind-it-service-{Guid.NewGuid():N}";
         var clusterId = $"aevatar-agent-kind-it-cluster-{Guid.NewGuid():N}";
@@ -124,9 +168,133 @@ public sealed class AgentKindGrainActivationIntegrationTests
                     // default registry wired by AddAevatarFoundationRuntimeOrleans.
                     services.AddAevatarAgentKindRegistry(builder =>
                         builder.Register<IntegrationFixtureCanonicalAgent>());
+                    if (subscriptionStreamProvider != null)
+                    {
+                        services.AddKeyedSingleton<global::Orleans.Streams.IStreamProvider>(
+                            subscriptionStreamProvider.Name,
+                            subscriptionStreamProvider);
+                        services.Replace(ServiceDescriptor.Singleton(new AevatarOrleansRuntimeOptions
+                        {
+                            StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendInMemory,
+                            StreamProviderName = subscriptionStreamProvider.Name,
+                            PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendInMemory,
+                        }));
+                        var fleetBootstrap = services.SingleOrDefault(descriptor =>
+                            descriptor.ServiceType == typeof(ILifecycleParticipant<ISiloLifecycle>) &&
+                            descriptor.ImplementationType ==
+                            typeof(RuntimeFleetAuthoritySiloLifecycleParticipant));
+                        if (fleetBootstrap != null)
+                            services.Remove(fleetBootstrap);
+                    }
                 });
             })
             .Build());
+    }
+
+    private sealed class FailFirstSubscriptionStreamProvider
+        : global::Orleans.Streams.IStreamProvider
+    {
+        private readonly SubscriptionAsyncStream _stream;
+
+        public FailFirstSubscriptionStreamProvider()
+        {
+            _stream = new SubscriptionAsyncStream(this);
+        }
+
+        public string Name => "fail-first-self-subscription";
+
+        public bool IsRewindable => false;
+
+        public int SubscribeAttemptCount { get; private set; }
+
+        public IAsyncStream<T> GetStream<T>(StreamId streamId)
+        {
+            _stream.StreamId = streamId;
+            return (IAsyncStream<T>)(object)_stream;
+        }
+
+        private sealed class SubscriptionAsyncStream(FailFirstSubscriptionStreamProvider owner)
+            : IAsyncStream<EventEnvelope>
+        {
+            public bool IsRewindable => false;
+
+            public string ProviderName => owner.Name;
+
+            public StreamId StreamId { get; set; }
+
+            public Task<StreamSubscriptionHandle<EventEnvelope>> SubscribeAsync(
+                IAsyncObserver<EventEnvelope> observer)
+            {
+                _ = observer;
+                owner.SubscribeAttemptCount++;
+                if (owner.SubscribeAttemptCount == 1)
+                {
+                    throw new InvalidOperationException(
+                        "synthetic first self-stream subscription failure");
+                }
+
+                return Task.FromResult<StreamSubscriptionHandle<EventEnvelope>>(
+                    new SubscriptionHandle(StreamId, ProviderName));
+            }
+
+            public Task<StreamSubscriptionHandle<EventEnvelope>> SubscribeAsync(
+                IAsyncObserver<EventEnvelope> observer,
+                StreamSequenceToken? token,
+                string? filterData = null) => SubscribeAsync(observer);
+
+            public Task<StreamSubscriptionHandle<EventEnvelope>> SubscribeAsync(
+                IAsyncBatchObserver<EventEnvelope> observer) => throw new NotSupportedException();
+
+            public Task<StreamSubscriptionHandle<EventEnvelope>> SubscribeAsync(
+                IAsyncBatchObserver<EventEnvelope> observer,
+                StreamSequenceToken? token) => throw new NotSupportedException();
+
+            public Task<IList<StreamSubscriptionHandle<EventEnvelope>>> GetAllSubscriptionHandles() =>
+                Task.FromResult<IList<StreamSubscriptionHandle<EventEnvelope>>>([]);
+
+            public Task OnNextAsync(
+                EventEnvelope item,
+                StreamSequenceToken? token = null) => Task.CompletedTask;
+
+            public Task OnNextBatchAsync(
+                IEnumerable<EventEnvelope> batch,
+                StreamSequenceToken? token = null) => Task.CompletedTask;
+
+            public Task OnCompletedAsync() => Task.CompletedTask;
+
+            public Task OnErrorAsync(Exception ex) => Task.CompletedTask;
+
+            public bool Equals(IAsyncStream<EventEnvelope>? other) =>
+                ReferenceEquals(this, other);
+
+            public int CompareTo(IAsyncStream<EventEnvelope>? other) =>
+                ReferenceEquals(this, other) ? 0 : 1;
+        }
+
+        private sealed class SubscriptionHandle(StreamId streamId, string providerName)
+            : StreamSubscriptionHandle<EventEnvelope>
+        {
+            public override Guid HandleId { get; } = Guid.NewGuid();
+
+            public override StreamId StreamId { get; } = streamId;
+
+            public override string ProviderName { get; } = providerName;
+
+            public override Task UnsubscribeAsync() => Task.CompletedTask;
+
+            public override Task<StreamSubscriptionHandle<EventEnvelope>> ResumeAsync(
+                IAsyncObserver<EventEnvelope> observer,
+                StreamSequenceToken? token = null) =>
+                Task.FromResult<StreamSubscriptionHandle<EventEnvelope>>(this);
+
+            public override Task<StreamSubscriptionHandle<EventEnvelope>> ResumeAsync(
+                IAsyncBatchObserver<EventEnvelope> observer,
+                StreamSequenceToken? token = null) =>
+                Task.FromResult<StreamSubscriptionHandle<EventEnvelope>>(this);
+
+            public override bool Equals(StreamSubscriptionHandle<EventEnvelope>? other) =>
+                other is SubscriptionHandle handle && handle.HandleId == HandleId;
+        }
     }
 }
 

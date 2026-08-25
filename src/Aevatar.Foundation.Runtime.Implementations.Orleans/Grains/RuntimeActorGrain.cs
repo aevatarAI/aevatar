@@ -10,6 +10,7 @@ using Orleans.Runtime;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.Runtime;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Delivery;
@@ -22,6 +23,7 @@ using Orleans.Streams;
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
 [ImplicitStreamSubscription(OrleansRuntimeConstants.ActorEventStreamNamespace)]
+[RuntimeFleetCapabilityManifest]
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
     private readonly IPersistentState<RuntimeActorGrainState> _state;
@@ -36,6 +38,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
     private IRuntimeActorStateBindingAccessor? _stateBindingAccessor;
+    private IRuntimeActorStateSchemaContextBinder? _stateSchemaContextBinder;
+    private IRuntimeFleetReconcileDeliveryVerifier? _fleetReconcileVerifier;
+    private IRuntimeFleetReconcileDeliveryAttestationBinder? _fleetReconcileAttestationBinder;
     private IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
     private IAsyncStream<EventEnvelope>? _selfStream;
@@ -56,6 +61,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
         _stateBindingAccessor = ServiceProvider.GetService<IRuntimeActorStateBindingAccessor>();
+        _stateSchemaContextBinder = ServiceProvider.GetService<IRuntimeActorStateSchemaContextBinder>();
+        _fleetReconcileVerifier = ServiceProvider.GetService<IRuntimeFleetReconcileDeliveryVerifier>();
+        _fleetReconcileAttestationBinder = ServiceProvider.GetService<IRuntimeFleetReconcileDeliveryAttestationBinder>();
         _deactivationHookDispatcher = ServiceProvider.GetService<IActorDeactivationHookDispatcher>();
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
@@ -69,9 +77,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 Environment.GetEnvironmentVariable("AEVATAR_TEST_NODE_VERSION_TAG") ?? "(none)");
         }
 
-        await SubscribeSelfStreamAsync();
-
         await ResumeFromPersistedIdentityAsync(cancellationToken);
+        if (_agent != null)
+            await SubscribeSelfStreamAsync();
     }
 
     /// <summary>
@@ -134,6 +142,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             try
             {
                 using var stateBinding = _stateBindingAccessor?.Bind(_state);
+                using var schemaContext = BindStateSchemaContext();
                 await agent.DeactivateAsync(cancellationToken);
             }
             catch (Exception ex)
@@ -184,17 +193,22 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
 
         if (_agent != null)
-            return KindResolvesToActiveImplementation(kind);
+        {
+            if (!KindResolvesToActiveImplementation(kind))
+                return false;
 
-        var implementation = await BindAgentByKindAsync(kind);
+            // Binding and stream subscription form one initialization boundary. A previous
+            // attempt can bind the implementation and then fail while subscribing; retry must
+            // finish that boundary instead of reporting a sticky false success.
+            await SubscribeSelfStreamAsync();
+            _identityResolutionAttempted = true;
+            return true;
+        }
+
+        var implementation = await BindAgentByKindAsync(kind, establishIdentity: true);
         if (implementation == null)
             return false;
-
-        var canonicalKind = implementation.Metadata.Kind;
-
-        _state.State.AgentId = this.GetPrimaryKeyString();
-        _state.State.Identity = new RuntimeActorIdentity { Kind = canonicalKind };
-        await _state.WriteStateAsync();
+        await SubscribeSelfStreamAsync();
         _identityResolutionAttempted = true;
         return true;
     }
@@ -220,6 +234,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         if (!await EnsureAgentAvailableForEnvelopeAsync(envelope, propagateFailure))
             return;
+
+        await ThrowIfStateSchemaTurnoverAdmittedAsync();
 
         if (await TryHandleCompatibilityRetryAsync(envelope, propagateFailure))
             return;
@@ -331,12 +347,65 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         return false;
     }
 
+    private async Task ThrowIfStateSchemaTurnoverAdmittedAsync()
+    {
+        var identity = _state.State.Identity;
+        if (identity == null || string.IsNullOrWhiteSpace(identity.Kind))
+            return;
+
+        var registry = ServiceProvider?.GetService<IAgentKindRegistry>();
+        if (registry == null)
+            return;
+
+        var implementation = registry.Resolve(identity.Kind);
+        if (identity.StateSchemaVersion >= implementation.Metadata.StateSchemaVersion)
+            return;
+
+        var decision = await RuntimeActorStateMigrationAdmission.EvaluateAsync(
+            identity,
+            _state.State.AgentStateTypeName,
+            _state.State.AgentStateSnapshot,
+            implementation,
+            ServiceProvider?.GetService<IRuntimeFleetCapabilityAdmissionReader>() ??
+                new DenyAllRuntimeFleetCapabilityAdmissionReader(),
+            ServiceProvider?.GetService<IRuntimeLocalMembershipIdentityReader>() ??
+                new UnavailableRuntimeLocalMembershipIdentityReader(),
+            ServiceProvider?.GetService<TimeProvider>(),
+            ServiceProvider?.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
+            CancellationToken.None,
+            ServiceProvider?.GetService<IRuntimeFleetCapabilityQuiescenceReader>());
+        if (!decision.IsAdmitted)
+            return;
+
+        _logger.LogInformation(
+            "Runtime actor is turning over an older active state schema before handling the envelope. actorId={ActorId} kind={Kind} persistedVersion={PersistedVersion} targetVersion={TargetVersion}",
+            SafeGetActorIdForLog(),
+            implementation.Metadata.Kind,
+            identity.StateSchemaVersion,
+            decision.StateSchemaVersion);
+        DeactivateOnIdle();
+        throw new RuntimeActorStateSchemaTurnoverRequiredException(
+            SafeGetActorIdForLog(),
+            implementation.Metadata.Kind,
+            identity.StateSchemaVersion,
+            decision.StateSchemaVersion);
+    }
+
     private async Task HandleAgentEnvelopeAsync(EventEnvelope envelope, bool propagateFailure)
     {
         using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);
         try
         {
+            // Verify asynchronously, but bind the attestation synchronously in this frame:
+            // an AsyncLocal assigned inside an awaited helper does not flow back to the
+            // caller, so the actor handler would observe no attestation and fail closed.
+            var reconcileAttestation = await VerifyFleetReconcileAttestationAsync(
+                envelope);
+            using var reconcileAttestationBinding = reconcileAttestation == null
+                ? null
+                : _fleetReconcileAttestationBinder!.Bind(reconcileAttestation);
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
+            using var schemaContext = BindStateSchemaContext();
             await _agent!.HandleEventAsync(envelope);
         }
         catch (Exception ex)
@@ -470,6 +539,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     {
         if (_agent != null)
         {
+            using var schemaContext = BindStateSchemaContext();
             await _agent.DeactivateAsync();
             _agent = null;
             _activeKind = null;
@@ -480,8 +550,19 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     public async Task PurgeAsync()
     {
+        var actorId = TryGetActorId() ?? _state.State?.AgentId;
+        if (string.Equals(
+                actorId,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet capability authority is runtime-reserved and cannot be purged.");
+        }
+
         if (_agent != null)
         {
+            using var schemaContext = BindStateSchemaContext();
             await _agent.DeactivateAsync();
             _agent = null;
             _activeKind = null;
@@ -498,7 +579,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private async Task<AgentImplementation?> BindAgentByKindAsync(
         string kind,
         CancellationToken ct = default,
-        bool throwOnFailure = false)
+        bool throwOnFailure = false,
+        bool establishIdentity = false)
     {
         var registry = ServiceProvider?.GetService<IAgentKindRegistry>();
         if (registry == null)
@@ -534,8 +616,63 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             return null;
         }
 
+        EnsureReservedFleetAuthorityIdentity(
+            this.GetPrimaryKeyString(),
+            implementation.Metadata.Kind);
+
+        var originalRecordExists = _state.RecordExists;
+        _state.State ??= new RuntimeActorGrainState();
+        var originalState = CloneState(_state.State);
+        var createdIdentity = false;
+        if (_state.State.Identity == null)
+        {
+            if (!establishIdentity)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot bind actor '{SafeGetActorIdForLog()}' without a persisted runtime identity.");
+            }
+
+            _state.State.AgentId = this.GetPrimaryKeyString();
+            _state.State.Identity = new RuntimeActorIdentity
+            {
+                Kind = implementation.Metadata.Kind,
+                StateSchemaVersion = 0,
+            };
+            createdIdentity = true;
+        }
+
+        try
+        {
+            // Admission runs before constructing or activating the agent. A
+            // granted cutover writes snapshot, schema marker, and immutable
+            // receipt in one state row. Without a fresh proof, a new actor is
+            // durably established at the legacy schema-zero baseline.
+            var migrated = await ApplyAdmittedMigrationAsync(implementation, createdIdentity, ct);
+            if (createdIdentity && !migrated)
+                await _state.WriteStateAsync(ct);
+
+        }
+        catch
+        {
+            if (createdIdentity)
+            {
+                _state.State = originalState;
+            }
+            throw;
+        }
+
         if (!await BindAgentAsync(implementation, ct, throwOnFailure))
+        {
+            if (createdIdentity)
+            {
+                _state.State = originalState;
+                if (originalRecordExists)
+                    await _state.WriteStateAsync(ct);
+                else
+                    await _state.ClearStateAsync(ct);
+            }
             return null;
+        }
 
         // Track the *canonical* kind from the registry, not the caller's
         // input. Aliases resolve to the same impl but should not surface as
@@ -544,18 +681,99 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         return implementation;
     }
 
+    private async Task<bool> ApplyAdmittedMigrationAsync(
+        AgentImplementation implementation,
+        bool createdIdentity,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await RuntimeActorStateMigrationPersistence.ApplyAndPersistAsync(
+                _state,
+                implementation,
+                ServiceProvider?.GetService<IRuntimeFleetCapabilityAdmissionReader>() ??
+                    new DenyAllRuntimeFleetCapabilityAdmissionReader(),
+                ServiceProvider?.GetService<IRuntimeLocalMembershipIdentityReader>() ??
+                    new UnavailableRuntimeLocalMembershipIdentityReader(),
+                ServiceProvider?.GetService<TimeProvider>(),
+                ServiceProvider?.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
+                ct,
+                ServiceProvider?.GetService<IRuntimeFleetCapabilityQuiescenceReader>());
+        }
+        catch (RuntimeActorStateMigrationPersistenceException exception)
+        {
+            // Migration write failure leaves the actor unavailable, never partially migrated:
+            // the store may have committed the new schema before the acknowledgement was lost,
+            // so neither the restored in-memory shape nor the target shape is known to match
+            // the durable row. This activation is discarded without constructing, binding or
+            // serving the agent (its inbox is not consumed); the next activation re-reads the
+            // durable state and activates at whichever schema is actually persisted.
+            _logger.LogError(
+                exception,
+                "Runtime actor state schema migration persistence failed or is unknown; the activation is discarded and the actor stays unavailable until durable state is re-read. actorId={ActorId} kind={Kind} persistedVersion={PersistedVersion} targetVersion={TargetVersion}",
+                SafeGetActorIdForLog(),
+                exception.AgentKind,
+                exception.PersistedStateSchemaVersion,
+                exception.TargetStateSchemaVersion);
+            DeactivateOnIdle();
+            throw;
+        }
+    }
+
+    private static void EnsureReservedFleetAuthorityIdentity(
+        string actorId,
+        string agentKind)
+    {
+        var hasReservedId = string.Equals(
+            actorId,
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            StringComparison.Ordinal);
+        var hasReservedKind = string.Equals(
+            agentKind,
+            RuntimeFleetCapabilityAuthorityIdentity.AgentKind,
+            StringComparison.Ordinal);
+        if (hasReservedId != hasReservedKind)
+        {
+            throw new InvalidOperationException(
+                $"Runtime fleet authority identity requires the exact actor id/kind pair " +
+                $"'{RuntimeFleetCapabilityAuthorityIdentity.ActorId}' / " +
+                $"'{RuntimeFleetCapabilityAuthorityIdentity.AgentKind}'.");
+        }
+    }
+
+    private static RuntimeActorGrainState CloneState(RuntimeActorGrainState state)
+    {
+#pragma warning disable CS0612, CS0618
+        return new RuntimeActorGrainState
+        {
+            AgentId = state.AgentId,
+            AgentTypeName = state.AgentTypeName,
+            ParentId = state.ParentId,
+            Children = [.. state.Children],
+            AgentStateTypeName = state.AgentStateTypeName,
+            AgentStateSnapshot = state.AgentStateSnapshot?.ToArray(),
+            AgentStateSnapshotVersion = state.AgentStateSnapshotVersion,
+            Identity = state.Identity?.Clone(),
+            CommittedStatePublicationState = state.CommittedStatePublicationState?.ToArray(),
+        };
+#pragma warning restore CS0612, CS0618
+    }
+
     private string SafeGetActorIdForLog()
+        => TryGetActorId() ?? "(uninitialized)";
+
+    private string? TryGetActorId()
     {
         try
         {
             return this.GetPrimaryKeyString();
         }
-        catch
+        catch (Exception exception)
         {
-            // Bare-grain unit-test scenarios construct RuntimeActorGrain
-            // without a runtime context; logging must degrade rather than
-            // mask the original activation failure with NRE noise.
-            return "(uninitialized)";
+            _logger.LogWarning(
+                exception,
+                "Runtime actor primary key lookup failed before actor identity was available.");
+            return null;
         }
     }
 
@@ -567,6 +785,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         try
         {
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
+            using var schemaContext = BindStateSchemaContext();
             // Pass the grain's activation-time ServiceProvider so the agent's
             // constructor-injected scoped dependencies resolve in the grain's
             // own container, not the silo root.
@@ -613,6 +832,40 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private static bool IsCommittedStatePublicationActivationFailure(Exception exception) =>
         exception is CommittedStatePublicationException
             or CommittedStatePublicationRecoveryException;
+
+    private IDisposable? BindStateSchemaContext()
+    {
+        var identity = _state.State?.Identity;
+        return identity == null ? null : _stateSchemaContextBinder?.Bind(identity);
+    }
+
+    private async Task<RuntimeFleetReconcileDeliveryAttestation?> VerifyFleetReconcileAttestationAsync(
+        EventEnvelope envelope)
+    {
+        if (envelope.Payload?.Is(RuntimeFleetReconcileRequested.Descriptor) != true)
+            return null;
+        if (!string.Equals(
+                this.GetPrimaryKeyString(),
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal) ||
+            _fleetReconcileVerifier == null ||
+            _fleetReconcileAttestationBinder == null)
+        {
+            throw new InvalidOperationException(
+                "Runtime fleet reconcile callback reached an invalid runtime ingress.");
+        }
+
+        var attestation = await _fleetReconcileVerifier.VerifyAsync(
+            envelope,
+            CancellationToken.None);
+        if (attestation == null)
+        {
+            throw new InvalidOperationException(
+                "Runtime fleet reconcile callback delivery is not current in scheduler-owned state.");
+        }
+
+        return attestation;
+    }
 
     private void InjectDependencies(IAgent agent, string actorId)
     {
@@ -773,4 +1026,23 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         propagateFailure
             ? AgentMetrics.FailureDispositionPropagated
             : AgentMetrics.FailureDispositionReturned;
+}
+
+public sealed class RuntimeActorStateSchemaTurnoverRequiredException(
+    string actorId,
+    string agentKind,
+    int persistedStateSchemaVersion,
+    int targetStateSchemaVersion)
+    : InvalidOperationException(
+        $"Actor '{actorId}' of kind '{agentKind}' must turn over from state schema " +
+        $"{persistedStateSchemaVersion} to {targetStateSchemaVersion} before handling the envelope."),
+        IRuntimeEnvelopeRetryableException
+{
+    public string ActorId { get; } = actorId;
+
+    public string AgentKind { get; } = agentKind;
+
+    public int PersistedStateSchemaVersion { get; } = persistedStateSchemaVersion;
+
+    public int TargetStateSchemaVersion { get; } = targetStateSchemaVersion;
 }

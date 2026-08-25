@@ -33,8 +33,10 @@ public sealed class WorkflowYamlValidateModule : IEventModule<IWorkflowExecution
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                ExecutionId = request.ExecutionId,
                 Success = false,
                 Error = "No workflow YAML found in input.",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             return;
         }
@@ -47,6 +49,7 @@ public sealed class WorkflowYamlValidateModule : IEventModule<IWorkflowExecution
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                ExecutionId = request.ExecutionId,
                 Output = $"""
 Previous workflow draft:
 ```yaml
@@ -60,6 +63,7 @@ Return a corrected full workflow YAML only in a single ```yaml fenced block.
 """,
                 Success = false,
                 Error = $"Invalid workflow YAML: {validationDetails}",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             return;
         }
@@ -68,8 +72,10 @@ Return a corrected full workflow YAML only in a single ```yaml fenced block.
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = true,
             Output = $"```yaml\n{yaml}\n```",
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         }, TopologyAudience.Self, ct);
     }
 }

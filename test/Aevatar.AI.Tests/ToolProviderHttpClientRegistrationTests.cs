@@ -127,10 +127,8 @@ public sealed class ToolProviderHttpClientRegistrationTests
             .BeFalse("AddNyxIdTools must not expose deleted catalog/cache services");
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>()
-            .Should()
-            .ContainSingle(toolSource => toolSource is NyxIdAgentToolSource)
-            .Which;
+        provider.GetServices<IAgentToolSource>().Should().BeEmpty();
+        var source = provider.GetRequiredService<NyxIdAgentToolSource>();
 
         var tools = await source.DiscoverToolsAsync();
         var names = tools.Select(tool => tool.Name).ToList();
@@ -450,7 +448,26 @@ public sealed class ToolProviderHttpClientRegistrationTests
     [Fact]
     public async Task NyxIdRequireServiceTool_ShouldCreateSuccessReceipt_WhenServiceIsAlreadyVisible()
     {
-        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "github-personal", "catalog_service_slug": "api-github", "status": "active", "is_active": true, "connected": true, "credential_source": { "type": "personal" } }] }""");
+        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "github-personal", "catalog_service_slug": "api-github", "status": "active", "is_active": true, "connected": true, "credential_source": { "type": "personal" } }] }""")
+        {
+            McpResponseJson = """
+                {
+                  "contract_version": "1.0",
+                  "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "user_id": "nyx-user-alpha",
+                  "services": [
+                    {
+                      "service_id": "us-github-alpha",
+                      "service_name": "GitHub",
+                      "service_slug": "api-github",
+                      "is_user_service": true,
+                      "is_generic_proxy": false,
+                      "endpoints": []
+                    }
+                  ]
+                }
+                """,
+        };
         var tool = CreateRequireServiceTool(handler);
         const string arguments = """{"service_slug":"api-github","requested_scopes":[]}""";
 
@@ -467,6 +484,70 @@ public sealed class ToolProviderHttpClientRegistrationTests
             receipt.ResultJson.Should().Be(result);
             receipt.ProviderResourceId.Should().Be("us-github-alpha");
             receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_WhenConnectedServiceIsExcludedFromCurrentBearer_ShouldRequireServiceAccess()
+    {
+        var handler = new StubUserServiceListHandler("""
+            {
+              "keys": [
+                {
+                  "id": "us-github-alpha",
+                  "slug": "api-github",
+                  "catalog_service_slug": "api-github",
+                  "resource_uri": "https://nyx.test/api/v1/proxy/s/api-github",
+                  "status": "active",
+                  "is_active": true,
+                  "connected": true,
+                  "credential_source": { "type": "personal" }
+                }
+              ]
+            }
+            """)
+        {
+            CatalogResponseJson = """
+                {
+                  "slug": "api-github",
+                  "resource_uri": "https://nyx.test/api/v1/proxy/s/api-github",
+                  "scope_catalog": [{"scope":"repo"}]
+                }
+                """,
+            McpResponseJson = """
+                {
+                  "contract_version": "1.0",
+                  "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "user_id": "nyx-user-alpha",
+                  "services": []
+                }
+                """,
+        };
+        var tool = CreateRequireServiceTool(handler);
+        const string arguments =
+            """{"service_slug":"api-github","requested_scopes":["repo"]}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-access", tool.Name, arguments, result);
+
+            result.Should().Contain("\"readiness_status\":\"ServiceAccessDenied\"");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+            receipt.AuthorizationRequired.Should().NotBeNull();
+            receipt.AuthorizationRequired!.ServiceSlug.Should().Be("api-github");
+            receipt.AuthorizationRequired.UserServiceId.Should().Be("us-github-alpha");
+            receipt.AuthorizationRequired.ResourceUri.Should()
+                .Be("https://nyx.test/api/v1/proxy/s/api-github");
+            receipt.AuthorizationRequired.ReasonCode.Should().Be("USER_SERVICE_ACCESS_REQUIRED");
+            handler.Requests.Should().Contain("/api/v1/mcp/config");
         }
         finally
         {
@@ -985,6 +1066,8 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
         public string? CatalogResponseJson { get; init; }
 
+        public string? McpResponseJson { get; init; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -994,12 +1077,14 @@ public sealed class ToolProviderHttpClientRegistrationTests
             BearerTokens.Add(request.Headers.Authorization?.Parameter);
             Methods.Add(request.Method);
             var isCatalogRequest = path.StartsWith("/api/v1/catalog/", StringComparison.Ordinal);
-            var response = isCatalogRequest
-                ? CatalogResponseJson ?? System.Text.Json.JsonSerializer.Serialize(new
+            var response = path == "/api/v1/mcp/config"
+                ? McpResponseJson ?? responseJson
+                : isCatalogRequest
+                    ? CatalogResponseJson ?? System.Text.Json.JsonSerializer.Serialize(new
                 {
                     slug = Uri.UnescapeDataString(path["/api/v1/catalog/".Length..]),
                 })
-                : responseJson;
+                    : responseJson;
             return Task.FromResult(new HttpResponseMessage(
                 isCatalogRequest ? CatalogStatus : System.Net.HttpStatusCode.OK)
             {
@@ -1099,7 +1184,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var source = provider.GetRequiredService<NyxIdExecutionAgentToolSource>();
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().ContainSingle(tool => tool is NyxIdCodeExecuteTool);
@@ -1119,7 +1204,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         });
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var source = provider.GetRequiredService<NyxIdExecutionAgentToolSource>();
 
         var tools = await source.DiscoverToolsAsync();
         var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
@@ -1150,7 +1235,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         });
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var source = provider.GetRequiredService<NyxIdExecutionAgentToolSource>();
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().NotContain(tool => tool is NyxIdSshExecTool);
@@ -1171,7 +1256,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         });
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var source = provider.GetRequiredService<NyxIdExecutionAgentToolSource>();
 
         var act = () => source.DiscoverToolsAsync();
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -1185,7 +1270,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var source = provider.GetRequiredService<NyxIdExecutionAgentToolSource>();
 
         var tools = await source.DiscoverToolsAsync();
 

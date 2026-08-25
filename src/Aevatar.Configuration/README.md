@@ -5,7 +5,7 @@
 ## 职责
 
 - 加载 `config.json`、`secrets.json`、`mcp.json`、`connectors.json`
-- 管理 `~/.aevatar/agents` 与 `~/.aevatar/workflows` 下的 YAML 文件发现与读取
+- 管理 `~/.aevatar/agents`、`~/.aevatar/workflows` 与 `~/.aevatar/workflow-templates` 下的 YAML 文件发现与读取
 - 提供 `secrets.json` 的读写封装（API Key 等）
 - 提供命名 connector 配置模型与策略字段（MCP/HTTP/CLI）
 - 提供 DI 注册扩展 `AddAevatarConfig()`
@@ -18,7 +18,7 @@
 - `AevatarMCPConfig`：读取 MCP 服务器配置
 - `AevatarConnectorConfig`：读取命名 connector 配置（含 allowlist/timeout/retry）
 - `AevatarAgentYamlLoader`：扫描并读取 Agent/Workflow YAML
-- `AevatarPaths`：统一路径定义与目录初始化；另提供 `RepoRoot` / `RepoRootWorkflows`，宿主（如 Api）会从仓库根目录的 `workflows/` 加载 YAML（若存在），用户无需拷贝到 `~/.aevatar`。
+- `AevatarPaths`：统一路径定义与目录初始化；另提供 `RepoRoot` / `RepoRootWorkflowTemplates`，宿主（如 Api）会从仓库根目录的 `workflow-templates/` 加载可公开索引的模板 YAML（若存在），用户无需拷贝到 `~/.aevatar`。
 
 ### 选择 secrets store
 

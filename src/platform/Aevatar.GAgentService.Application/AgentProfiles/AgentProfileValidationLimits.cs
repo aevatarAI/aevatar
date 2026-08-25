@@ -8,9 +8,11 @@ public sealed class AgentProfileValidationLimits
 {
     public const int RequiredMaxPlanSteps = 4;
     public const int RequiredHandoffTtlSeconds = 900;
-    public const int RequiredClassifierTimeoutMs = 600;
-    public const int RequiredExactSkillFetchTimeoutMs = 1_500;
-    public const int RequiredMaxSelectedSkillBytes = 24_576;
+    public const int RequiredClassifierTimeoutMs = 15_000;
+    public const int RequiredExactSkillFetchTimeoutMs = 15_000;
+    public const int RequiredMaxSelectedSkillBytes = 64 * 1024;
+    public const int MaximumOwnedToolCount = 8;
+    public const int MaximumSchemaBytes = 48 * 1024;
     public const int MaximumMembers = 32;
 
     public IReadOnlyList<AgentProfileSealingDiagnostic> Validate(AgentProfileSnapshot runtimeProfile)
@@ -47,6 +49,23 @@ public sealed class AgentProfileValidationLimits
                 "PROFILE_SELECTED_SKILL_BYTES_INVALID",
                 "runtimeProfile.maxSelectedSkillBytes",
                 $"maxSelectedSkillBytes must be {RequiredMaxSelectedSkillBytes}."));
+        if (!runtimeProfile.HasMaxOwnedToolCount ||
+            runtimeProfile.MaxOwnedToolCount is < 0 or > MaximumOwnedToolCount)
+        {
+            diagnostics.Add(new(
+                "PROFILE_OWNED_TOOL_BUDGET_INVALID",
+                "runtimeProfile.maxOwnedToolCount",
+                $"maxOwnedToolCount must be explicitly set between 0 and {MaximumOwnedToolCount}."));
+        }
+        if (!runtimeProfile.HasMaxSchemaBytes ||
+            runtimeProfile.MaxSchemaBytes is < 0 or > MaximumSchemaBytes ||
+            runtimeProfile.MaxOwnedToolCount > 0 && runtimeProfile.MaxSchemaBytes == 0)
+        {
+            diagnostics.Add(new(
+                "PROFILE_SCHEMA_BUDGET_INVALID",
+                "runtimeProfile.maxSchemaBytes",
+                $"maxSchemaBytes must be explicitly set between 0 and {MaximumSchemaBytes}, and positive when tools are allowed."));
+        }
         if (runtimeProfile.ActivationMode is not (AgentProfileActivationMode.Shadow or AgentProfileActivationMode.Enforced))
             diagnostics.Add(new(
                 "PROFILE_ACTIVATION_MODE_INVALID",

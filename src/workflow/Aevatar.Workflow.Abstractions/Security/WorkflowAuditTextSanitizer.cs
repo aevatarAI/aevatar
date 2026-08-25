@@ -1,12 +1,16 @@
+using System.Buffers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Aevatar.Foundation.Abstractions.Helpers;
 
 namespace Aevatar.Workflow.Abstractions.Security;
 
 public static class WorkflowAuditTextSanitizer
 {
     public const string RedactedValue = "[redacted]";
+    public const string HeadTailTruncationMarker = "\n...[truncated]...\n";
+    public const int MaxDiagnosticEvidenceUtf8Bytes = 64 * 1024;
 
     private static readonly Regex BearerTokenPattern = new(
         @"\bBearer\s+[A-Za-z0-9._~+/=-]+",
@@ -29,11 +33,11 @@ public static class WorkflowAuditTextSanitizer
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex HeaderSecretPattern = new(
-        @"(?im)^(?<prefix>[A-Za-z0-9-]*(?:authorization|token|secret|signature|api-key|apikey)[A-Za-z0-9-]*\s*:\s*).+$",
+        @"(?im)^(?<prefix>[ \t]*[A-Za-z0-9_-]*(?:authorization|cookie|token|api[_-]?key|secret|password|passwd|pwd|credential|signature|private[_-]?key|signing[_-]?key)[A-Za-z0-9_-]*\s*:\s*).+$",
         RegexOptions.CultureInvariant);
 
     private static readonly Regex AssignmentSecretPattern = new(
-        @"(?<prefix>\b(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd|credential|signature|hmac[_-]?secret|client[_-]?secret)\b\s*[:=]\s*)(?:""[^""]*""|'[^']*'|[^,\s;}\]]+)",
+        @"(?<prefix>\b[A-Za-z0-9_-]*(?:authorization|cookie|token|api[_-]?key|secret|password|passwd|pwd|credential|signature|private[_-]?key|signing[_-]?key)\b\s*[:=]\s*)(?!\[redacted\])(?:""[^""]*""|'[^']*'|[^,\s;}\]]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex EmailAddressPattern = new(
@@ -43,6 +47,35 @@ public static class WorkflowAuditTextSanitizer
     private static readonly Regex PrivateKeyPattern = new(
         @"-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly string[] SensitiveKeySuffixes =
+    [
+        "authorization",
+        "cookie",
+        "token",
+        "apikey",
+        "secret",
+        "password",
+        "passwd",
+        "pwd",
+        "credential",
+        "signature",
+        "privatekey",
+        "signingkey",
+    ];
+
+    private static readonly HashSet<string> SensitiveKeyWords = new(StringComparer.Ordinal)
+    {
+        "authorization",
+        "cookie",
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "pwd",
+        "credential",
+        "signature",
+    };
 
     public static string Sanitize(string? value)
     {
@@ -63,16 +96,41 @@ public static class WorkflowAuditTextSanitizer
 
         return IsSensitiveKey(fieldName)
             ? RedactedValue
-            : Sanitize(value);
+            : SanitizeForStorage(value);
     }
 
     public static string SanitizeForDisplay(string? value, int maxLength)
     {
-        var sanitized = Sanitize(value);
+        var sanitized = SanitizeForStorage(value);
         if (maxLength <= 0 || sanitized.Length <= maxLength)
             return maxLength <= 0 ? string.Empty : sanitized;
 
-        return sanitized[..maxLength] + "...";
+        var retainedLength = maxLength;
+        if (char.IsHighSurrogate(sanitized[retainedLength - 1]) &&
+            char.IsLowSurrogate(sanitized[retainedLength]))
+        {
+            retainedLength--;
+        }
+
+        return sanitized[..retainedLength] + "...";
+    }
+
+    /// <summary>
+    /// Scrubs persistence-bound text before retaining a UTF-8 byte-bounded head and tail.
+    /// The returned value is always valid UTF-16 and never exceeds <paramref name="maxUtf8Bytes"/>
+    /// when encoded as UTF-8.
+    /// </summary>
+    public static string SanitizeForStorage(string? value, int maxUtf8Bytes, out bool truncated)
+    {
+        var sanitized = SanitizeForStorage(value);
+        return TruncateUtf8HeadTail(sanitized, maxUtf8Bytes, out truncated);
+    }
+
+    public static string SanitizeForStorage(string? value)
+    {
+        var scrubbed = SecretScrubber.ScrubJson(NormalizeInvalidUtf16(value));
+        return Sanitize(scrubbed)
+            .Replace(SecretScrubber.Marker, RedactedValue, StringComparison.Ordinal);
     }
 
     public static Dictionary<string, string> SanitizeMap(IEnumerable<KeyValuePair<string, string>>? source)
@@ -174,7 +232,7 @@ public static class WorkflowAuditTextSanitizer
             return false;
 
         var normalized = NormalizeKey(key);
-        return normalized is
+        if (normalized is
             "authorization" or
             "cookie" or
             "setcookie" or
@@ -197,6 +255,7 @@ public static class WorkflowAuditTextSanitizer
             "credentials" or
             "signature" or
             "privatekey" or
+            "signingkey" or
             "email" or
             "emails" or
             "emailaddress" or
@@ -218,7 +277,59 @@ public static class WorkflowAuditTextSanitizer
             "rawpayload" or
             "requestbody" or
             "responsebody" or
-            "payloadsnippet";
+            "payloadsnippet")
+        {
+            return true;
+        }
+
+        var words = SplitKeyWords(key);
+        if (words.Any(SensitiveKeyWords.Contains))
+            return true;
+        for (var index = 0; index + 1 < words.Count; index++)
+        {
+            if ((words[index] == "api" || words[index] == "private" || words[index] == "signing") &&
+                words[index + 1] == "key")
+                return true;
+        }
+
+        return SensitiveKeySuffixes.Any(suffix =>
+            normalized.Length > suffix.Length &&
+            normalized.EndsWith(suffix, StringComparison.Ordinal));
+    }
+
+    private static IReadOnlyList<string> SplitKeyWords(string key)
+    {
+        var words = new List<string>();
+        var current = new StringBuilder(key.Length);
+        for (var index = 0; index < key.Length; index++)
+        {
+            var ch = key[index];
+            if (!char.IsLetterOrDigit(ch))
+            {
+                FlushKeyWord(words, current);
+                continue;
+            }
+
+            var startsCamelWord = current.Length > 0 && char.IsUpper(ch) &&
+                                  (char.IsLower(key[index - 1]) ||
+                                   (char.IsUpper(key[index - 1]) && index + 1 < key.Length &&
+                                    char.IsLower(key[index + 1])));
+            if (startsCamelWord)
+                FlushKeyWord(words, current);
+            current.Append(char.ToLowerInvariant(ch));
+        }
+
+        FlushKeyWord(words, current);
+        return words;
+    }
+
+    private static void FlushKeyWord(ICollection<string> words, StringBuilder current)
+    {
+        if (current.Length == 0)
+            return;
+
+        words.Add(current.ToString());
+        current.Clear();
     }
 
     private static string NormalizeKey(string key)
@@ -231,5 +342,112 @@ public static class WorkflowAuditTextSanitizer
         }
 
         return builder.ToString();
+    }
+
+    private static string NormalizeInvalidUtf16(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return value ?? string.Empty;
+
+        StringBuilder? normalized = null;
+        var index = 0;
+        while (index < value.Length)
+        {
+            var status = Rune.DecodeFromUtf16(value.AsSpan(index), out var rune, out var charsConsumed);
+            if (status == OperationStatus.Done)
+            {
+                if (normalized != null)
+                    AppendRune(normalized, rune);
+                index += charsConsumed;
+                continue;
+            }
+
+            normalized ??= new StringBuilder(value.Length).Append(value.AsSpan(0, index));
+            AppendRune(normalized, Rune.ReplacementChar);
+            index++;
+        }
+
+        return normalized?.ToString() ?? value;
+    }
+
+    private static string TruncateUtf8HeadTail(string value, int maxUtf8Bytes, out bool truncated)
+    {
+        var valueByteCount = Encoding.UTF8.GetByteCount(value);
+        truncated = valueByteCount > Math.Max(0, maxUtf8Bytes);
+        if (!truncated)
+            return value;
+        if (maxUtf8Bytes <= 0)
+            return string.Empty;
+
+        var markerByteCount = Encoding.UTF8.GetByteCount(HeadTailTruncationMarker);
+        if (maxUtf8Bytes <= markerByteCount)
+            return TakeUtf8Prefix(HeadTailTruncationMarker, maxUtf8Bytes);
+
+        var retainedByteBudget = maxUtf8Bytes - markerByteCount;
+        var headByteBudget = (retainedByteBudget + 1) / 2;
+        var tailByteBudget = retainedByteBudget - headByteBudget;
+        return TakeUtf8Prefix(value, headByteBudget) +
+               HeadTailTruncationMarker +
+               TakeUtf8Suffix(value, tailByteBudget);
+    }
+
+    private static string TakeUtf8Prefix(string value, int maxUtf8Bytes)
+    {
+        var builder = new StringBuilder();
+        var index = 0;
+        var byteCount = 0;
+        while (index < value.Length)
+        {
+            var status = Rune.DecodeFromUtf16(value.AsSpan(index), out var rune, out var charsConsumed);
+            if (status != OperationStatus.Done)
+            {
+                rune = Rune.ReplacementChar;
+                charsConsumed = 1;
+            }
+
+            if (byteCount + rune.Utf8SequenceLength > maxUtf8Bytes)
+                break;
+
+            byteCount += rune.Utf8SequenceLength;
+            AppendRune(builder, rune);
+            index += charsConsumed;
+        }
+
+        return builder.ToString();
+    }
+
+    private static string TakeUtf8Suffix(string value, int maxUtf8Bytes)
+    {
+        var start = value.Length;
+        var byteCount = 0;
+        var retainedRunes = new List<Rune>();
+        while (start > 0)
+        {
+            var status = Rune.DecodeLastFromUtf16(value.AsSpan(0, start), out var rune, out var charsConsumed);
+            if (status != OperationStatus.Done)
+            {
+                rune = Rune.ReplacementChar;
+                charsConsumed = 1;
+            }
+
+            if (byteCount + rune.Utf8SequenceLength > maxUtf8Bytes)
+                break;
+
+            byteCount += rune.Utf8SequenceLength;
+            retainedRunes.Add(rune);
+            start -= charsConsumed;
+        }
+
+        var builder = new StringBuilder();
+        for (var index = retainedRunes.Count - 1; index >= 0; index--)
+            AppendRune(builder, retainedRunes[index]);
+        return builder.ToString();
+    }
+
+    private static void AppendRune(StringBuilder builder, Rune rune)
+    {
+        Span<char> encoded = stackalloc char[2];
+        var charsWritten = rune.EncodeToUtf16(encoded);
+        builder.Append(encoded[..charsWritten]);
     }
 }

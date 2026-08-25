@@ -483,6 +483,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             SubjectId = "owner-alpha",
             SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
             SecretReference = descriptor,
+            ProviderCredentialId = "provider-key-1",
         };
         var credential = new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(
             NyxIdAuthority: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(

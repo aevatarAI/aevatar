@@ -199,22 +199,6 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        var callerScope = OwnerScope.ForNyxIdNative(command.ScopeId);
-        var snapshot = await _routeQueryPort.LookupForCallerAsync(callerScope, ct);
-        var decision = _routeResolver.Resolve(snapshot, new ChatRouteInput
-        {
-            SourceKind = ChatSourceKind.Direct,
-            CallerScope = callerScope.Clone(),
-            Channel = string.Empty,
-            CommandName = string.Empty,
-            ContentHint = string.Empty,
-            ToolMode = ToolMode.None,
-        });
-
-        if (decision.Action.Reject is not null)
-            return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
-                NyxIdChatLifecycleCommandStartError.RouteRejected);
-
         var actorId = string.IsNullOrWhiteSpace(command.RequestedActorId)
             ? NyxIdChatServiceDefaults.GenerateActorId()
             : command.RequestedActorId.Trim();
@@ -238,9 +222,34 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                 return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
                     NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
             }
+        }
 
+        var callerScope = OwnerScope.ForNyxIdNative(command.ScopeId);
+        var snapshot = await _routeQueryPort.LookupForCallerAsync(callerScope, ct);
+        var implicitRouteToolSetName = profileResolution.IsSelected
+            ? agentProfile!.RouteToolSetRef
+            : null;
+        var decision = _routeResolver.Resolve(
+            snapshot,
+            new ChatRouteInput
+            {
+                SourceKind = ChatSourceKind.Direct,
+                CallerScope = callerScope.Clone(),
+                Channel = string.Empty,
+                CommandName = string.Empty,
+                ContentHint = string.Empty,
+                ToolMode = ToolMode.None,
+            },
+            implicitRouteToolSetName);
+
+        if (decision.Action.Reject is not null)
+            return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                NyxIdChatLifecycleCommandStartError.RouteRejected);
+
+        if (profileResolution.IsSelected)
+        {
             var routeToolSetName = decision.Action.ForwardToModel?.ToolSetRef?.Name;
-            if (!string.Equals(routeToolSetName, agentProfile.RouteToolSetRef, StringComparison.Ordinal))
+            if (!string.Equals(routeToolSetName, agentProfile!.RouteToolSetRef, StringComparison.Ordinal))
             {
                 return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
                     NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);

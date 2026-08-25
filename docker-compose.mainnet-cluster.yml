@@ -48,8 +48,6 @@ services:
         condition: service_started
       elasticsearch:
         condition: service_started
-      neo4j:
-        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
@@ -75,10 +73,7 @@ services:
       Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
       Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
       Projection__Document__Providers__InMemory__Enabled: "false"
-      Projection__Graph__Providers__Neo4j__Enabled: "true"
-      Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
-      Projection__Graph__Providers__Neo4j__Username: neo4j
-      Projection__Graph__Providers__Neo4j__Password: ${NEO4J_PASSWORD}
+      Projection__Graph__Providers__Neo4j__Enabled: "false"
       Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19081:8080"
@@ -95,8 +90,6 @@ services:
       garnet:
         condition: service_started
       elasticsearch:
-        condition: service_started
-      neo4j:
         condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
@@ -123,10 +116,7 @@ services:
       Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
       Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
       Projection__Document__Providers__InMemory__Enabled: "false"
-      Projection__Graph__Providers__Neo4j__Enabled: "true"
-      Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
-      Projection__Graph__Providers__Neo4j__Username: neo4j
-      Projection__Graph__Providers__Neo4j__Password: ${NEO4J_PASSWORD}
+      Projection__Graph__Providers__Neo4j__Enabled: "false"
       Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19082:8080"
@@ -143,8 +133,6 @@ services:
       garnet:
         condition: service_started
       elasticsearch:
-        condition: service_started
-      neo4j:
         condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
@@ -171,10 +159,7 @@ services:
       Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
       Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
       Projection__Document__Providers__InMemory__Enabled: "false"
-      Projection__Graph__Providers__Neo4j__Enabled: "true"
-      Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
-      Projection__Graph__Providers__Neo4j__Username: neo4j
-      Projection__Graph__Providers__Neo4j__Password: ${NEO4J_PASSWORD}
+      Projection__Graph__Providers__Neo4j__Enabled: "false"
       Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19083:8080"

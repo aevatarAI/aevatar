@@ -631,6 +631,13 @@ public sealed class StudioProvisioningEndpointsTests
         public ProvisionWorkflowCallerCredential? ProvisionCaller { get; private set; }
         public ProvisionWorkflowRequest? ProvisionRequest { get; private set; }
 
+        public Task<ProvisionWorkflowPreparation> PrepareAsync(
+            string scopeId,
+            ProvisionWorkflowCallerCredential callerCredential,
+            ProvisionWorkflowRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<ProvisionWorkflowResponse> ProvisionAsync(
             string scopeId,
             ProvisionWorkflowCallerCredential callerCredential,

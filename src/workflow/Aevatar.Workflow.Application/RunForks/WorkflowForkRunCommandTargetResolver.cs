@@ -92,10 +92,13 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                     InlineWorkflowYamls: inlineWorkflowYamls,
                     ExpectedExecutionMode: seedView.ExpectedExecutionMode,
                     ScopeId: scopeId,
-                    CapabilityAdmissionPlan: seedView.CapabilityAdmissionPlan?.Clone(),
+                    CapabilityAdmissionPlan: preservesSourceArtifacts
+                        ? seedView.CapabilityAdmissionPlan?.Clone()
+                        : null,
                     WorkflowId: preservesSourceArtifacts ? seedView.WorkflowId : string.Empty,
                     RevisionId: preservesSourceArtifacts ? seedView.RevisionId : string.Empty,
-                    DefinitionVersion: preservesSourceArtifacts ? Math.Max(0, seedView.DefinitionVersion) : 0),
+                    DefinitionVersion: preservesSourceArtifacts ? Math.Max(0, seedView.DefinitionVersion) : 0,
+                    ToolCatalogPolicyVersion: WorkflowToolCatalogPolicies.CurrentVersion),
                 ct).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -149,7 +152,9 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                     "Workflow YAML is required."));
         }
 
-        var parseResult = await _definitionParser.ParseWorkflowYamlAsync(workflowYaml, ct).ConfigureAwait(false);
+        var parseResult = await _definitionParser
+            .ParseWorkflowYamlForPublicationAsync(workflowYaml, ct)
+            .ConfigureAwait(false);
         if (!parseResult.Succeeded)
         {
             return WorkflowForkRunValidationResult.Failure(
@@ -202,10 +207,16 @@ internal sealed class WorkflowForkRunCommandTargetResolver
             ForkSeed: new WorkflowChatRunForkSeed(
                 sourceRunId,
                 startAtStepId,
-                variables,
+                seedView.NormalizedValues == null
+                    ? variables
+                    : new Dictionary<string, string>(StringComparer.Ordinal),
                 Math.Max(0, command.Attempt),
                 ResolveStartStepIdempotency(seedView, startAtStepId),
-                ResolveOriginalRunId(seedView, sourceRunId)),
+                ResolveOriginalRunId(seedView, sourceRunId),
+                seedView.NormalizedValues?.Clone(),
+                seedView.NormalizedValues == null
+                    ? new Dictionary<string, string>(StringComparer.Ordinal)
+                    : CopyDictionary(command.VariableOverrides)),
             TargetSeed: new WorkflowRunTargetSeed(
                 actorId,
                 workflowName,

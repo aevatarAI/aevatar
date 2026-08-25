@@ -87,9 +87,9 @@ public sealed class ChatStreamContentAggregatorTests
     public void StreamingToolCallAccumulator_ShouldNamespaceAnonymousIdsByRoundCallId()
     {
         var firstRound = new StreamingToolCallAccumulator("request-1:round:0");
-        firstRound.TrackDelta(new ToolCall { Id = string.Empty, Name = "submit_invoice", ArgumentsJson = "{}" });
+        firstRound.TrackDelta(new ToolCall { Id = string.Empty, Name = "submit_record", ArgumentsJson = "{}" });
         var secondRound = new StreamingToolCallAccumulator("request-1:round:1");
-        secondRound.TrackDelta(new ToolCall { Id = string.Empty, Name = "submit_invoice", ArgumentsJson = "{}" });
+        secondRound.TrackDelta(new ToolCall { Id = string.Empty, Name = "submit_record", ArgumentsJson = "{}" });
 
         var firstId = firstRound.BuildToolCalls().Should().ContainSingle().Subject.Id;
         var secondId = secondRound.BuildToolCalls().Should().ContainSingle().Subject.Id;

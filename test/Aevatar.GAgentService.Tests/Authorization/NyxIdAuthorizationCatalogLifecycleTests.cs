@@ -1124,6 +1124,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     [InlineData("direct_with_nodes", "*cannot carry node authorization evidence*")]
     [InlineData("duplicate_nodes", "*node identities must be ordinal-sorted and unique*")]
     [InlineData("unsorted_nodes", "*node identities must be ordinal-sorted and unique*")]
+    [InlineData("partial_authority_stamp", "*service authority evidence is incomplete*")]
     public async Task ObserveHandler_ShouldRejectInvalidTypedPermissionSets(
         string scenario,
         string expectedMessage)
@@ -1165,6 +1166,9 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
                 command.Services[0].NodeIds.Add("node-z");
                 command.Services[0].NodeIds.Add("node-a");
                 break;
+            case "partial_authority_stamp":
+                command.Services[0].ObservedAt = command.ObservedAt.Clone();
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
         }
@@ -1185,6 +1189,30 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         (await eventStore.GetEventsAsync(agent.Id))
             .Count(static evt => evt.EventData.Is(NyxIdAuthorizationCatalogObservedEvent.Descriptor))
             .Should().Be(observedEventCountBefore);
+    }
+
+    [Fact]
+    public async Task ObserveHandler_ShouldAcceptCompleteServiceAuthorityStamp()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        await BeginRefreshAsync(agent, owner, "refresh-stamped", ObservedAt.AddSeconds(1));
+        var command = ObservationCommand(owner, "refresh-stamped", ObservedAt.AddMinutes(1));
+        var service = command.Services[0];
+        service.ObservedAt = command.ObservedAt.Clone();
+        service.FreshUntil = command.FreshUntil.Clone();
+        service.EvaluatedAt = command.EvaluatedAt.Clone();
+        service.AuthorityContractVersion = command.ContractVersion;
+        service.AuthorityPolicyVersion = command.PolicyVersion;
+        command.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            command.Owner,
+            command.Services);
+
+        await agent.HandleObserveAsync(command);
+
+        agent.State.Services.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(service);
+        agent.State.ActiveRefreshId.Should().BeEmpty();
     }
 
     [Fact]
@@ -1587,6 +1615,35 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         service.LlmTarget.Should().NotBeSameAs(observed.Services[0].LlmTarget);
         snapshot.GatewayLLMTarget.Should().BeEquivalentTo(observed.GatewayLlmTarget);
         snapshot.GatewayLLMTarget.Should().NotBeSameAs(observed.GatewayLlmTarget);
+    }
+
+    [Fact]
+    public async Task FirstRequiredServiceSubsetObservation_ShouldEstablishOwnerCatalogStamp()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        await BeginRefreshAsync(agent, owner, "refresh-subset", ObservedAt);
+        agent.State.Activated.Should().BeTrue();
+        agent.State.ObservedAt.Should().BeNull();
+
+        var subsetObservation = ObservationCommand(
+            owner,
+            "refresh-subset",
+            ObservedAt.AddMinutes(1));
+        subsetObservation.CoverageKind =
+            NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset;
+        subsetObservation.CoveredUserServiceIds.Add("svc-alpha");
+        subsetObservation.ContentDigest = string.Empty;
+
+        await agent.HandleObserveAsync(subsetObservation);
+
+        agent.State.ObservedAt.Should().Be(subsetObservation.ObservedAt);
+        agent.State.FreshUntil.Should().Be(subsetObservation.FreshUntil);
+        agent.State.ContractVersion.Should().Be(subsetObservation.ContractVersion);
+        agent.State.PolicyVersion.Should().Be(subsetObservation.PolicyVersion);
+        agent.State.EvaluatedAt.Should().Be(subsetObservation.EvaluatedAt);
+        agent.State.ContentDigest.Should().Be(
+            NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, agent.State.Services));
     }
 
     [Fact]

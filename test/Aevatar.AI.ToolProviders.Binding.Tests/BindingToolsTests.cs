@@ -693,19 +693,22 @@ public class BindingToolsTests
     }
 
     [Fact]
-    public async Task BindingAgentToolSource_RegistersExternalCapabilityToolsConditionally()
+    public async Task WorkflowExternalCapabilityAuthoringToolSource_RegistersOnlyAuthoringReadTools()
     {
-        var source = new BindingAgentToolSource(
-            new BindingToolOptions(),
-            externalCapabilityListPort: new StubExternalWorkflowCapabilityListPort(
+        var source = new WorkflowExternalCapabilityAuthoringToolSource(
+            new WorkflowExternalCapabilityToolOptions(),
+            new StubExternalWorkflowCapabilityListPort(
                 new ExternalWorkflowCapabilityDiscoveryResult()),
-            externalCapabilityReadinessPort: new StubExternalWorkflowCapabilityReadinessPort());
+            new StubExternalWorkflowCapabilityReadinessPort(),
+            new StubWorkflowExplicitRequestPreviewService());
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().HaveCount(2);
+        tools.Should().HaveCount(3);
         tools.Should().ContainSingle(tool => tool is ListExternalWorkflowCapabilitiesTool);
         tools.Should().ContainSingle(tool => tool is InspectExternalWorkflowCapabilityReadinessTool);
+        tools.Should().ContainSingle(tool => tool is PreviewWorkflowExplicitRequestsTool);
+        tools.Should().OnlyContain(static tool => tool.IsReadOnly);
     }
 
     #endregion
@@ -1563,6 +1566,17 @@ public class BindingToolsTests
             };
             return Task.FromResult(readiness);
         }
+    }
+
+    private sealed class StubWorkflowExplicitRequestPreviewService : IWorkflowExplicitRequestPreviewService
+    {
+        public Task<WorkflowExplicitRequestPreviewResult> PreviewAsync(
+            WorkflowExplicitRequestPreviewRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WorkflowExplicitRequestPreviewResult(
+                request.WorkflowId ?? string.Empty,
+                request.RevisionId ?? string.Empty,
+                []));
     }
 
     private static ExternalWorkflowCapabilityDescriptor Descriptor(

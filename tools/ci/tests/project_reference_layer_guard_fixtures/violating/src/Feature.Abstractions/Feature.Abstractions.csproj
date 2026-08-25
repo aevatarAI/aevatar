@@ -4,6 +4,6 @@
     <AssemblyName>Feature.Abstractions</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Feature.Core\Feature.Core.csproj" />
+    <ProjectReference Include='..\Feature.Core\Feature.Core.csproj' />
   </ItemGroup>
 </Project>

@@ -74,41 +74,6 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddNyxIdChat_ShouldBindPlanGateConfirmationThreshold()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Aevatar:NyxId:PlanGate:ConfirmationThresholdSeconds"] = "900",
-            })
-            .Build();
-        var services = new ServiceCollection();
-
-        services.AddNyxIdChat(configuration);
-        using var provider = services.BuildServiceProvider();
-
-        provider.GetRequiredService<NyxIdChatPlanGateOptions>()
-            .ConfirmationThresholdSeconds.Should().Be(900);
-    }
-
-    [Fact]
-    public void AddNyxIdChat_ShouldRejectNonPositivePlanGateThreshold()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Aevatar:NyxId:PlanGate:ConfirmationThresholdSeconds"] = "0",
-            })
-            .Build();
-        var services = new ServiceCollection();
-
-        Action add = () => services.AddNyxIdChat(configuration);
-
-        add.Should().Throw<InvalidOperationException>()
-            .WithMessage("*ConfirmationThresholdSeconds must be positive*");
-    }
-
-    [Fact]
     public void AddNyxIdChat_ShouldRegisterDefaultDisabledAgentProfileResolver()
     {
         var services = new ServiceCollection();
@@ -131,9 +96,12 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IAgentProfileTurnClassifier) &&
             descriptor.ImplementationFactory != null);
         services.Should().ContainSingle(descriptor =>
-            descriptor.ServiceType == typeof(AgentProfileTurnCatalogMaterializer));
+            descriptor.ServiceType == typeof(IAgentProfileConnectedOperationSelector) &&
+            descriptor.ImplementationFactory != null);
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(AgentTurnToolCatalogMaterializer));
         services.Should().NotContain(descriptor =>
-            descriptor.ServiceType == typeof(AgentProfileTurnCatalog));
+            descriptor.ServiceType == typeof(AgentTurnToolCatalog));
     }
 
     [Fact]

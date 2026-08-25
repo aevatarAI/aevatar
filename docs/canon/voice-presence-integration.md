@@ -149,6 +149,15 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   `VoiceClientToolCallTimeoutExpired` self-signal before reusing the same
   provider result delivery path. No process-local pending map or device command
   queue is part of this contract.
+- **Tool catalog proof** — Voice uses the shared request-scoped discovery path
+  and persists one `AgentTurnToolCatalogProof` snapshot for the lease/session.
+  The allowlist has a 6-tool optimization target and a hard 32 KiB canonical
+  schema limit; exceeding the count target neither rejects nor truncates an exact
+  catalog. An empty allowlist is restricted empty, never unrestricted. Readiness, provider schema
+  injection and `IVoiceToolInvoker` validate the same names/schema/digest, and
+  any re-materialization mismatch fails before tool execution. Voice does not
+  inherit the whole `workspace.default` ceiling. See
+  [agent-turn-tool-catalog.md](agent-turn-tool-catalog.md).
 - **Lease** — the host attaches a transport lease (`transport_lease_id`,
   `owner_id`, `lease_epoch`, `lease_expires_at`) the actor owns; the volatile
   media relay is bound to that lease. Host/provider connect paths must carry
@@ -299,6 +308,7 @@ sequenceDiagram
 - ADR-0033 — Voice Provider Credential via NyxID Ephemeral Broker
 - ADR-013 — NyxID pure passthrough (media red line)
 - `docs/canon/nyxid-connected-service-tools.md`
+- `docs/canon/agent-turn-tool-catalog.md`
 - `docs/operations/2026-06-18-aevatar-mode-voice-presence-setup.md`
 - Milestone 23 "Voice Realtime" — foundational slices #1939–#1945 (merged)
 

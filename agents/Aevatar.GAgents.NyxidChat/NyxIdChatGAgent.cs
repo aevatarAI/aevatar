@@ -48,7 +48,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly NyxIdRelayOptions? _relayOptions;
     private readonly TimeProvider _timeProvider;
-    private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
+    private readonly AgentTurnToolCatalogMaterializer? _turnCatalogMaterializer;
     private AgentProfileTelemetryContext? _activeAgentProfileTelemetryContext;
     private int _systemSkillOverlayPromptLogCounter;
 
@@ -66,7 +66,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
         NyxIdRelayOptions? relayOptions = null,
         TimeProvider? timeProvider = null,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer = null,
         RoleChatExecutionOptions? chatExecutionOptions = null,
         ISecretVault? chatToolRecoverySecretVault = null)
         : base(toolExecutionPort, llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources,
@@ -107,7 +107,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
     protected override string DecorateSystemPrompt(
         string basePrompt,
-        AgentProfileTurnCatalog? turnCatalog)
+        AgentTurnToolCatalog? turnCatalog)
     {
         var runtimeFacts = new System.Text.StringBuilder();
         AppendRuntimeFact(
@@ -211,7 +211,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             : preparation;
     }
 
-    protected override async Task<AgentProfileTurnCatalogMaterialization?> MaterializeCommittedAgentProfileTurnCatalogAsync(
+    protected override async Task<AgentTurnToolCatalogMaterialization?> MaterializeCommittedAgentTurnToolCatalogAsync(
         ChatRequestEvent request,
         AgentToolExecutionContext toolContext,
         AgentProfileTurnAuthorityState committedAuthority,
@@ -229,7 +229,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         }
 
         var startedTimestamp = _timeProvider.GetTimestamp();
-        AgentProfileTurnCatalogMaterialization materialization;
+        AgentTurnToolCatalogMaterialization materialization;
         try
         {
             materialization = await _turnCatalogMaterializer.MaterializeCommittedAsync(
@@ -320,7 +320,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
     private void RecordMaterialization(
         AgentProfileTurnAuthorityState committedAuthority,
-        AgentProfileTurnCatalogMaterialization materialization,
+        AgentTurnToolCatalogMaterialization materialization,
         double durationMs)
     {
         if (_activeAgentProfileTelemetryContext is not { } context)
@@ -363,7 +363,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             DegradationReasons = { reason },
         });
 
-    private static AgentProfileTurnCatalogMaterialization CreateFailClosedMaterialization(
+    private static AgentTurnToolCatalogMaterialization CreateFailClosedMaterialization(
         AgentProfileTurnAuthorityState committedAuthority,
         AgentProfileTurnDegradationReason reason)
     {
@@ -377,8 +377,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                 .Where(static degradation => degradation != AgentProfileTurnDegradationReason.Unspecified)
                 .Distinct()
                 .OrderBy(static degradation => (int)degradation));
-        return AgentProfileTurnCatalogMaterialization.Create(
-            new AgentProfileTurnCatalog(
+        return AgentTurnToolCatalogMaterialization.Create(
+            new AgentTurnToolCatalog(
                 [],
                 profilePromptLayer: null,
                 selectedSkillPromptLayer: null,

@@ -1,6 +1,8 @@
 using System.Text.Json.Serialization;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
@@ -79,6 +81,8 @@ public sealed record ProvisionWorkflowRequest(
     string? Timezone = null,
     ProvisionWorkflowCallerCredential? Caller = null)
 {
+    private Struct? _acceptanceInput;
+
     /// <summary>
     /// Additional named workflow definitions referenced by the entry workflow.
     /// Each dictionary key is the stable definition name used by workflow_call.
@@ -89,6 +93,13 @@ public sealed record ProvisionWorkflowRequest(
 
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+
+    [JsonIgnore]
+    public Struct? AcceptanceInput
+    {
+        get => _acceptanceInput?.Clone();
+        init => _acceptanceInput = value?.Clone();
+    }
 
     /// <summary>
     /// Target Studio Team that owns the provisioned workflow member. Required:
@@ -115,6 +126,34 @@ public sealed record ProvisionWorkflowRequest(
     /// persists the exact UTC fire time only after observing the target revision.
     /// </summary>
     public const int DefaultOneShotDelaySeconds = 30;
+}
+
+/// <summary>
+/// Secret-free result of workflow provisioning admission. The plan is suitable
+/// for durable persistence and is cloned at the boundary so callers cannot
+/// mutate the admitted snapshot after it has been accepted.
+/// </summary>
+public sealed class ProvisionWorkflowPreparation
+{
+    private readonly WorkflowCapabilityAdmissionPlan _capabilityAdmissionPlan;
+
+    public ProvisionWorkflowPreparation(
+        string workflowId,
+        string revisionId,
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan)
+    {
+        WorkflowId = workflowId;
+        RevisionId = revisionId;
+        _capabilityAdmissionPlan = capabilityAdmissionPlan?.Clone()
+            ?? throw new ArgumentNullException(nameof(capabilityAdmissionPlan));
+    }
+
+    public string WorkflowId { get; }
+
+    public string RevisionId { get; }
+
+    public WorkflowCapabilityAdmissionPlan CapabilityAdmissionPlan =>
+        _capabilityAdmissionPlan.Clone();
 }
 
 /// <summary>
@@ -149,4 +188,10 @@ public sealed record ProvisionWorkflowResponse(
     public string? ScheduleProvisioningStatus { get; init; }
 
     public string StudioUrl { get; init; } = string.Empty;
+
+    public string WorkflowId { get; init; } = string.Empty;
+
+    public string PublishedServiceId { get; init; } = string.Empty;
+
+    public string RevisionId { get; init; } = string.Empty;
 }

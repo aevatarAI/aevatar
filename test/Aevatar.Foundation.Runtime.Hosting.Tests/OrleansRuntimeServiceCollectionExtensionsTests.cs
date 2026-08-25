@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
@@ -6,6 +7,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -101,6 +103,21 @@ public sealed class OrleansRuntimeServiceCollectionExtensionsTests
         publicationDescriptor.Should().NotBeNull();
         publicationDescriptor!.ImplementationType.Should().Be(
             typeof(RuntimeActorGrainCommittedStatePublicationStateStore));
+    }
+
+    [Fact]
+    public void AddAevatarFoundationRuntimeOrleans_ShouldRegisterActivationSealTurnoverSupport()
+    {
+        var services = new ServiceCollection();
+
+        services.AddAevatarFoundationRuntimeOrleans();
+
+        var descriptor = services.LastOrDefault(service =>
+            service.ServiceType ==
+            typeof(IRuntimeActorStateSchemaActivationSealSupport));
+        descriptor.Should().NotBeNull();
+        descriptor!.ImplementationType.Should().Be(
+            typeof(OrleansRuntimeActorStateSchemaActivationSealSupport));
     }
 
     [Fact]
@@ -219,5 +236,144 @@ public sealed class OrleansRuntimeServiceCollectionExtensionsTests
             .BeOfType<RuntimeCallbackSchedulerStateGrainStorageSerializer>();
         sharedOptions.GrainStorageSerializer.Should()
             .NotBeOfType<RuntimeCallbackSchedulerStateGrainStorageSerializer>();
+    }
+
+    [Fact]
+    public void AddAevatarFoundationRuntimeOrleans_SiloBuilder_ShouldRegisterFleetAuthorityLifecycleOwner()
+    {
+        using var host = new HostBuilder()
+            .UseOrleans(siloBuilder =>
+            {
+                siloBuilder.UseLocalhostClustering(
+                    siloPort: 11115,
+                    gatewayPort: 30015,
+                    serviceId: "aevatar-runtime-fleet-lifecycle-service",
+                    clusterId: "aevatar-runtime-fleet-lifecycle-cluster");
+                siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
+                {
+                    options.PersistenceBackend =
+                        AevatarOrleansRuntimeOptions.PersistenceBackendInMemory;
+                });
+            })
+            .Build();
+
+        host.Services
+            .GetServices<ILifecycleParticipant<ISiloLifecycle>>()
+            .Should()
+            .ContainSingle(participant =>
+                participant is RuntimeFleetAuthoritySiloLifecycleParticipant);
+    }
+
+    [Fact]
+    public async Task FleetAuthorityLifecycleOwner_ShouldProvisionOnlyFixedAuthority()
+    {
+        var runtime = new RecordingActorRuntime();
+        var participant = new RuntimeFleetAuthoritySiloLifecycleParticipant(runtime);
+
+        await participant.ProvisionAsync(CancellationToken.None);
+
+        runtime.Created.Should().ContainSingle().Which.Should().Be(
+            (RuntimeFleetCapabilityAuthorityIdentity.AgentKind,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId));
+    }
+
+    [Fact]
+    public async Task FleetAuthorityLifecycleOwner_WhenFixedIdentityHasWrongKind_ShouldFail()
+    {
+        var runtime = new RecordingActorRuntime
+        {
+            Failure = new InvalidOperationException("fixed actor identity has another kind"),
+        };
+        var participant = new RuntimeFleetAuthoritySiloLifecycleParticipant(runtime);
+
+        await FluentActions.Awaiting(() => participant.ProvisionAsync(CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*another kind*");
+        runtime.Created.Should().ContainSingle().Which.Should().Be(
+            (RuntimeFleetCapabilityAuthorityIdentity.AgentKind,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId));
+    }
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        internal List<(string Kind, string Id)> Created { get; } = [];
+
+        internal Exception? Failure { get; init; }
+
+        public Task<IActor> CreateAsync<TAgent>(
+            string? id = null,
+            CancellationToken ct = default)
+            where TAgent : IAgent => throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(
+            Type agentType,
+            string? id = null,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<IActor> CreateByKindAsync(
+            string agentKind,
+            string? id = null,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Created.Add((agentKind, id ?? string.Empty));
+            return Failure == null
+                ? Task.FromResult<IActor>(new StubActor(id ?? string.Empty))
+                : Task.FromException<IActor>(Failure);
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor?> GetAsync(string id) => throw new NotSupportedException();
+
+        public Task<bool> ExistsAsync(string id) => throw new NotSupportedException();
+
+        public Task LinkAsync(
+            string parentId,
+            string childId,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task UnlinkAsync(
+            string childId,
+            CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private sealed class StubActor(string id) : IActor
+    {
+        public string Id { get; } = id;
+
+        public IAgent Agent { get; } = new StubAgent();
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(
+            EventEnvelope envelope,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class StubAgent : IAgent
+    {
+        public string Id => string.Empty;
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(
+            EventEnvelope envelope,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<Type>>([]);
     }
 }

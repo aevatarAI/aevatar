@@ -61,10 +61,12 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
             if (result.Attempted && !result.Verified)
             {
                 logger.LogWarning(
-                    "Code execution route repair was not verified. failureKind={FailureKind}",
-                    result.FailureKind);
+                    "Code execution route repair was not verified. failureKind={FailureKind} httpStatus={HttpStatus} definitivelyRejected={DefinitivelyRejected}",
+                    result.FailureKind,
+                    result.HttpStatus,
+                    result.MutationDefinitivelyRejected);
                 throw new WorkflowExternalCapabilityAdmissionException(
-                    RepairUnverified(selector, executionMode));
+                    RepairFailure(selector, executionMode, result));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -83,9 +85,10 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
         }
     }
 
-    private static ExternalCapabilityReadiness RepairUnverified(
+    private static ExternalCapabilityReadiness RepairFailure(
         ExternalWorkflowCapabilitySelector selector,
-        ExternalCapabilityExecutionMode executionMode)
+        ExternalCapabilityExecutionMode executionMode,
+        NyxIdCodeExecutionRouteReconciliation result)
     {
         var readiness = new ExternalCapabilityReadiness
         {
@@ -93,11 +96,27 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
             Status = ExternalCapabilityReadinessStatus.ContractDrift,
             SelectedSelector = selector.Clone(),
         };
+        if (result.MutationDefinitivelyRejected)
+        {
+            readiness.Blockers.Add(new ExternalCapabilityBlocker
+            {
+                Status = readiness.Status,
+                Code = "CODE_EXECUTION_ROUTE_REPAIR_REJECTED",
+                SafeMessage = FormatRepairRejectedMessage(result.FailureKind, result.HttpStatus),
+            });
+            readiness.Remediations.Add(new ExternalCapabilityRemediation
+            {
+                ActionKind = ExternalCapabilityRemediationActionKind.RequestAccess,
+                Label = "Ask the platform operator to grant the code execution route contract",
+            });
+            return readiness;
+        }
+
         readiness.Blockers.Add(new ExternalCapabilityBlocker
         {
             Status = readiness.Status,
             Code = "CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED",
-            SafeMessage = "The platform code execution route repair could not be verified.",
+            SafeMessage = FormatRepairUnverifiedMessage(result.FailureKind, result.HttpStatus),
         });
         readiness.Remediations.Add(new ExternalCapabilityRemediation
         {
@@ -106,4 +125,19 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
         });
         return readiness;
     }
+
+    internal static string FormatRepairRejectedMessage(
+        NyxIdCodeExecutionRouteRepairFailureKind failureKind,
+        int httpStatus) =>
+        $"NyxID rejected the platform code route repair. failureKind={failureKind} " +
+        $"httpStatus={httpStatus} The shared route contract is owner-granted: it requires " +
+        "forward_access_token=true, inject_delegation_token=true, and a delegation_token_scope " +
+        "containing proxy:* and sandbox:execute.";
+
+    internal static string FormatRepairUnverifiedMessage(
+        NyxIdCodeExecutionRouteRepairFailureKind failureKind,
+        int httpStatus) =>
+        httpStatus > 0
+            ? $"The platform code execution route repair could not be verified. failureKind={failureKind} httpStatus={httpStatus}"
+            : $"The platform code execution route repair could not be verified. failureKind={failureKind}";
 }

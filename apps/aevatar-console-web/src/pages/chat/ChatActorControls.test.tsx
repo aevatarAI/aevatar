@@ -74,15 +74,6 @@ function planFixture(steps: readonly ChatActorStep[]): ChatTaskPlan {
     title: 'Inspect and verify the repository',
     status: 'active',
     activeStepId: steps[0]?.stepId,
-    gate: {
-      mode: 'confirm',
-      status: 'pending',
-      requestId: 'gate-alpha',
-      taskId: 'task-alpha',
-      planId: 'plan-alpha',
-      planRevision: 3,
-      reason: 'The plan contains an effect-capable operation.',
-    },
     steps,
   };
 }
@@ -109,7 +100,6 @@ function callbacks() {
     onActionRefresh: jest.fn(),
     onActionReport: jest.fn(),
     onInputResolve: jest.fn(),
-    onPlanResolve: jest.fn(),
     onRetry: jest.fn(),
     onSkip: jest.fn(),
     onSteer: jest.fn(),
@@ -127,7 +117,7 @@ describe('ChatActorControls', () => {
     jest.useRealTimers();
   });
 
-  it('renders the complete plan and resolves only the exact actor-owned gate', () => {
+  it('renders the complete actor-owned plan ledger', () => {
     const verify = stepFixture({
       stepId: 'step-verify',
       order: 2,
@@ -155,69 +145,25 @@ describe('ChatActorControls', () => {
     expect(
       screen.getByText('Verified against service.connected'),
     ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm plan' }));
-    expect(handlers.onPlanResolve).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ requestId: 'gate-alpha', planRevision: 3 }),
-    );
-    expect(screen.getAllByRole('button', { name: /plan$/ })).toHaveLength(2);
   });
 
-  it.each([
-    {
-      approvalObservation: undefined,
-      gate: { mode: 'auto' as const, status: 'satisfied' as const },
-      name: 'zero decisions',
-      nyxIdDecision: false,
-      planDecision: false,
-    },
-    {
-      approvalObservation: undefined,
-      gate: { mode: 'confirm' as const, status: 'satisfied' as const },
-      name: 'one plan decision',
-      nyxIdDecision: false,
-      planDecision: true,
-    },
-    {
+  it('renders a committed NyxID approval observation from actor facts', () => {
+    const step = stepFixture({
       approvalObservation: {
         approvalRequestId: 'nyxid-decision-alpha',
-        decisionMode: 'per_request' as const,
-        receiptStatus: 'denied' as const,
+        decisionMode: 'per_request',
+        receiptStatus: 'denied',
         observedAt: '2026-08-08T00:03:00Z',
       },
-      gate: { mode: 'confirm' as const, status: 'satisfied' as const },
-      name: 'two separate decisions',
-      nyxIdDecision: true,
-      planDecision: true,
-    },
-  ])('reconstructs $name from committed gate and NyxID facts', ({
-    approvalObservation,
-    gate,
-    nyxIdDecision,
-    planDecision,
-  }) => {
-    const step = stepFixture({ approvalObservation });
+    });
     const projection = projectionFixture([step]);
-    if (!projection.task) throw new Error('Missing task fixture.');
-    projection.task = { ...projection.task, gate };
     render(<ChatActorControls projection={projection} {...callbacks()} />);
 
     expect(
-      screen.queryByRole('button', { name: 'Confirm plan' }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText(`${gate.mode} · satisfied`)).toBeInTheDocument();
-    expect(screen.queryByText('confirm · satisfied') !== null).toBe(
-      planDecision,
-    );
-    expect(
-      screen.queryByRole('region', { name: 'NyxID approval observation' }) !==
-        null,
-    ).toBe(nyxIdDecision);
-    if (nyxIdDecision) {
-      expect(screen.getByText('nyxid-decision-alpha')).toBeInTheDocument();
-      expect(screen.getAllByText('denied')).toHaveLength(2);
-    }
+      screen.getByRole('region', { name: 'NyxID approval observation' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('nyxid-decision-alpha')).toBeInTheDocument();
+    expect(screen.getAllByText('denied')).toHaveLength(2);
   });
 
   it('submits option identities and directs free text to the shared composer', () => {
@@ -251,7 +197,7 @@ describe('ChatActorControls', () => {
     const projection = projectionFixture();
     projection.pendingInput = {
       requestId: 'input-threshold',
-      prompt: 'Choose the screening threshold',
+      prompt: 'Choose the numeric threshold',
       options: [],
       allowFreeText: true,
       multiSelect: false,
@@ -288,7 +234,7 @@ describe('ChatActorControls', () => {
       order: 1,
       kind: 'condition',
       status: 'done',
-      description: 'Evaluate the candidate score',
+      description: 'Evaluate the observed value',
       source: {
         kind: 'condition',
         label: '80 >= 75',
@@ -301,7 +247,7 @@ describe('ChatActorControls', () => {
           observedValue: 80,
           comparison: 'gte',
           outcome: 'true',
-          guardedToolName: 'bitable_record_create',
+          guardedToolName: 'external_record_create',
         },
       },
       mayChangeExternalState: false,
@@ -315,8 +261,8 @@ describe('ChatActorControls', () => {
       stepId: 'step-write',
       order: 2,
       status: 'planned',
-      description: 'Create the attestation row',
-      source: { kind: 'tool', label: 'bitable_record_create' },
+      description: 'Create the verified record',
+      source: { kind: 'tool', label: 'external_record_create' },
       guard: {
         conditionStepId: 'step-condition',
         requiredOutcome: 'true',
@@ -338,7 +284,7 @@ describe('ChatActorControls', () => {
     expect(facts).toHaveTextContent('80 >= 75');
     expect(facts).toHaveTextContent('true');
     expect(facts).toHaveTextContent('user_override');
-    expect(facts).toHaveTextContent('bitable_record_create');
+    expect(facts).toHaveTextContent('external_record_create');
     expect(
       screen.getByText('Guard step-condition requires true'),
     ).toBeInTheDocument();

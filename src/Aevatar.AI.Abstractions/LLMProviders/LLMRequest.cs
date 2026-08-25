@@ -31,8 +31,17 @@ public sealed class LLMRequest
     /// <summary>Typed NyxID/model/route controls for this LLM call.</summary>
     public LLMControlContext? LlmControl { get; init; }
 
+    /// <summary>Exact NyxID service target resolved from an authoritative policy.</summary>
+    public LLMRouteTarget? RouteTarget { get; init; }
+
     /// <summary>Optional list of tools available for the LLM to invoke.</summary>
     public IReadOnlyList<IAgentTool>? Tools { get; init; }
+
+    /// <summary>
+    /// Frozen proof for the exact Aevatar-owned tools in <see cref="Tools"/>. A non-null proof
+    /// with zero descriptors is a restricted empty catalog, never an unrestricted request.
+    /// </summary>
+    public AgentTurnToolCatalogProof? ToolCatalogProof { get; init; }
 
     /// <summary>Optional model name that overrides the provider default model.</summary>
     public string? Model { get; init; }

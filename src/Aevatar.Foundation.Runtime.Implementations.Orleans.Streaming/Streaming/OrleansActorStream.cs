@@ -61,8 +61,43 @@ internal sealed class OrleansActorStream : IStream
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
 
-        await PublishToStreamAsync(_streamId, envelope);
-        await RelayAsync(_streamId, envelope, ct);
+        try
+        {
+            await PublishToStreamAsync(_streamId, envelope);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (EventPublicationException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new EventPublicationException(
+                IsDefinitelyRejectedBeforeAdmission(ex)
+                    ? EventPublicationFailureOutcome.NotAdmitted
+                    : EventPublicationFailureOutcome.OutcomeUncertain,
+                $"The Orleans stream '{_streamId}' failed while admitting the event.",
+                ex);
+        }
+
+        try
+        {
+            await RelayAsync(_streamId, envelope, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new EventPublicationException(
+                EventPublicationFailureOutcome.OutcomeUncertain,
+                $"The event was admitted to Orleans stream '{_streamId}', but relay publication failed.",
+                ex);
+        }
     }
 
     public async Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
@@ -136,6 +171,15 @@ internal sealed class OrleansActorStream : IStream
     private Task PublishToStreamAsync(string targetStreamId, EventEnvelope envelope) =>
         ResolveStream(targetStreamId).OnNextAsync(envelope);
 
+    private static bool IsDefinitelyRejectedBeforeAdmission(Exception exception) =>
+        exception switch
+        {
+            OrleansMessageRejectionException => true,
+            AggregateException aggregate when aggregate.InnerExceptions.Count > 0 =>
+                aggregate.InnerExceptions.All(IsDefinitelyRejectedBeforeAdmission),
+            _ => false,
+        };
+
     private async Task RelayAsync(string sourceStreamId, EventEnvelope envelope, CancellationToken ct)
     {
         var queue = new Queue<(string SourceStreamId, EventEnvelope Envelope)>();
@@ -208,6 +252,8 @@ internal sealed class OrleansActorStream : IStream
             EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
             Version = binding.Version,
             LeaseId = binding.LeaseId,
+            TargetActorKind = binding.TargetActorKind,
+            ActivationGeneration = binding.ActivationGeneration,
         };
 
     private sealed class OrleansSubscriptionLease : IAsyncDisposable

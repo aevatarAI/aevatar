@@ -53,6 +53,21 @@ Mainnet also exposes the authenticated Assistant resource family:
 
 The transcript endpoint returns every committed terminal turn while the conversation is active. An acknowledged conversation whose transcript actor read model has not materialized yet returns `200` with `messages: []`, `stateVersion: 0`, and `projectionStatus: "pending"`; once materialized, it returns `projectionStatus: "current"` and the authoritative transcript version. `404` remains reserved for a conversation that was never accepted, belongs to another scope, was abandoned before acceptance, or was explicitly deleted. The current contract has no per-turn TTL or silent rolling eviction: the 251st and later turns remain appendable, and only explicit whole-conversation deletion removes query availability. LLM continuation context is independently bounded to the latest 24 nonblank messages; that prompt selection never prunes the durable transcript.
 
+### NyxID Chat 核心与业务扩展边界
+
+Aevatar-owned NyxID Chat 只拥有可跨业务复用的执行机制：typed input、actor-owned condition、
+exact guarded tool、operation admission、typed receipt、read-back、retry，以及 `TaskPlan` / current-state
+projection。核心可以验证这些协议是否被正确推进，但不能解释具体业务的输入规范化、去重、评分、
+业务字段、目标记录或完成策略。
+
+具体业务策略必须由已加载 skill、workflow/domain actor，或 provider-owned typed contract 提供。
+如果某个业务事实需要稳定查询，它必须由自己的 authoritative actor 发布强类型状态并物化到专属
+read model；不得把业务 evidence、artifact 或控制字段塞入通用 NyxID Chat bag，也不得在 Chat actor、
+共享 projection、默认 prompt/overlay、Web tool provider 或前端 Chat contract 中硬编码固定业务路线。
+
+`tools/ci/nyxid_chat_semantics_guard.sh` 对这些生产边界执行静态门禁，防止具体业务类型、字段、
+工具名、策略文案和固定 workflow route 重新进入通用 Chat 主链。
+
 Standalone Workflow Host behavior is unchanged: its own `POST /api/chat` remains Workflow
 JSON/multipart, and `GET /api/ws/chat` remains the Workflow WebSocket surface. Those routes are
 explicit Workflow Host capabilities, not a second Mainnet Chat product. New NyxID clients use only

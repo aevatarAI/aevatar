@@ -3,6 +3,7 @@ syntax = "proto3";
 option csharp_namespace = "Aevatar.CQRS.Projection.Core.Orchestration";
 
 import "agent_messages.proto";
+import "runtime_actor_identity.proto";
 import "google/protobuf/timestamp.proto";
 
 enum ProjectionScopeMode {
@@ -35,6 +36,116 @@ message ProjectionScopeState {
   // Bounded, payload-free diagnostics. Trimming this ring never removes repair facts.
   repeated ProjectionFailureDiagnostic retained_failure_diagnostics = 20;
   int64 failure_diagnostic_dropped_total = 21;
+  int64 activation_generation = 22;
+  // Exact query-facing failure status. The publication hook populates this before
+  // replacing repair payloads with an equal-count, payload-free rolling-upgrade view.
+  ProjectionScopeFailureSummary failure_summary = 23;
+  // Last committed scope state version admitted for automatic recovery.
+  // The actor owns this monotonic fence so multiple host replicas cannot
+  // replay the same observed failure snapshot more than once.
+  int64 last_automatic_recovery_observed_state_version = 24;
+  // Exact committed coordinates are the durable idempotency authority. A
+  // version without its source actor and event id is never treated as proof
+  // of an exact duplicate.
+  map<string, ProjectionSourceCoordinate> last_successful_source_coordinates_by_actor = 25;
+  // Persisted before invoking an external materializer and cleared by the
+  // same watermark transition that records successful materialization.
+  ProjectionScopeInFlightObservation in_flight_observation = 26;
+  // Actor-owned write/query route. Eventual status documents only replicate
+  // this value and must never choose or advance it.
+  ProjectionMaterializationRouteFingerprint active_materialization_route = 27;
+  ProjectionMaterializationCutoverState materialization_cutover = 28;
+  // Actor-owned status write route. Absent means the legacy event-sourced
+  // status shadow scope is the writer; a terminal route names the exact
+  // contract that may write ProjectionScopeStatusDocument for this scope.
+  // Status writers only replicate this decision and never choose it.
+  ProjectionScopeStatusRoute status_route = 29;
+  // Highest source version observed when this scope committed its release. A re-dispatched
+  // status-writer release confirms this durable watermark rather than a later transient value.
+  int64 released_at_observed_version = 30;
+  // Durable Phase-B preparation. A source records its own activation seal before requesting
+  // handled readiness from both status writers; dispatch acceptance is never readiness proof.
+  ProjectionScopeStatusRoutePreparation status_route_preparation = 31;
+}
+
+// Cutover phases of a status route. A route is created WARMING (the new writer observes and
+// reports, the previous writer still writes), becomes BLOCKED once the new writer has caught up
+// (the source stops consuming observations; the previous writer is drained and released;
+// the new writer performs the epoch-fenced same-version takeover) and is flipped to ACTIVE.
+// Routes written before phases existed carry UNSPECIFIED and are treated as ACTIVE.
+enum ProjectionScopeStatusRoutePhase {
+  PROJECTION_SCOPE_STATUS_ROUTE_PHASE_UNSPECIFIED = 0;
+  PROJECTION_SCOPE_STATUS_ROUTE_PHASE_WARMING = 1;
+  PROJECTION_SCOPE_STATUS_ROUTE_PHASE_BLOCKED = 2;
+  PROJECTION_SCOPE_STATUS_ROUTE_PHASE_ACTIVE = 3;
+}
+
+message ProjectionScopeStatusRoute {
+  // Contract of the writer this route selects: the terminal materializer contract, or the
+  // legacy shadow contract after a durable rollback.
+  string contract_id = 1;
+  int64 contract_version = 2;
+  // Monotonic per source scope; a higher epoch is the only way to move the
+  // status writer between routes, and the only way a same-version status
+  // document write may take over an existing one.
+  int64 route_epoch = 3;
+  google.protobuf.Timestamp activated_at_utc = 4;
+  ProjectionMaterializationActivationProof activation_proof = 5;
+  // Set once the previous writer's relay and scope were released for this
+  // route epoch; before that the source actor retries the release on
+  // activation.
+  bool legacy_route_released = 6;
+  ProjectionScopeStatusRoutePhase phase = 7;
+  // Source scope version at which warming started; the new writer must report
+  // an observed version at or above it to be caught up.
+  int64 warm_started_version = 8;
+  // Highest version the new writer reported during warming (0 until reported).
+  int64 caught_up_version = 9;
+  // Source scope version at which the route was flipped to ACTIVE (0 until flipped).
+  int64 flip_version = 10;
+  // Source scope version at which the route was BLOCKED (0 until blocked). The previous
+  // writer confirms its committed release with the highest source version it observed; a
+  // confirmation below this version is recorded as released-before-drained.
+  int64 blocked_version = 11;
+  // Source scope version of the latest receipt-gated WARMING probe. This is distinct from the
+  // original cutover start and fences out caught-up reports queued before bridge quiescence.
+  int64 warming_probe_version = 12;
+  // Source scope version of the first receipt-gated BLOCKED drain probe. Retries reuse this
+  // durable fence so an authenticated delayed release confirmation can still complete cutover.
+  int64 drain_probe_version = 13;
+  // Immutable schema-adoption seals for the source and both possible status writers. A Phase-B
+  // route may start or resume only after all three exact roles are durably bound.
+  repeated ProjectionScopeStatusActorSeal activation_seals = 14;
+}
+
+enum ProjectionScopeStatusActorRole {
+  PROJECTION_SCOPE_STATUS_ACTOR_ROLE_UNSPECIFIED = 0;
+  PROJECTION_SCOPE_STATUS_ACTOR_ROLE_SOURCE = 1;
+  PROJECTION_SCOPE_STATUS_ACTOR_ROLE_LEGACY_WRITER = 2;
+  PROJECTION_SCOPE_STATUS_ACTOR_ROLE_TERMINAL_WRITER = 3;
+}
+
+message ProjectionScopeStatusActorSeal {
+  ProjectionScopeStatusActorRole role = 1;
+  string actor_id = 2;
+  string agent_kind = 3;
+  aevatar.runtime.RuntimeActorStateSchemaAdoptionReceipt adoption_receipt = 4;
+}
+
+message ProjectionScopeStatusRoutePreparation {
+  ProjectionScopeStatusRoute candidate_route = 1;
+  string source_scope_actor_id = 2;
+  string source_agent_kind = 3;
+  string legacy_writer_actor_id = 4;
+  string legacy_writer_agent_kind = 5;
+  string terminal_writer_actor_id = 6;
+  string terminal_writer_agent_kind = 7;
+  repeated ProjectionScopeStatusActorSeal activation_seals = 8;
+  // True when the preparation seals an existing route written before Phase B instead of creating
+  // a new route epoch. ACTIVE/phase-less routes keep serving while seals bind in the background;
+  // WARMING/BLOCKED routes remain frozen until binding completes.
+  bool resumes_persisted_route = 9;
+  google.protobuf.Timestamp prepared_at_utc = 10;
 }
 
 message ProjectionObservedEnvelopeMetadata {
@@ -42,6 +153,58 @@ message ProjectionObservedEnvelopeMetadata {
   string type_url = 2;
   int64 state_version = 3;
   google.protobuf.Timestamp timestamp_utc = 4;
+}
+
+message ProjectionSourceCoordinate {
+  string actor_id = 1;
+  int64 state_version = 2;
+  string event_id = 3;
+}
+
+message ProjectionScopeInFlightObservation {
+  ProjectionSourceCoordinate source = 1;
+  aevatar.EventEnvelope envelope = 2;
+  string event_kind = 3;
+  google.protobuf.Timestamp staged_at_utc = 4;
+}
+
+message ProjectionMaterializationRouteFingerprint {
+  string contract_id = 1;
+  int64 contract_version = 2;
+  string physical_namespace = 3;
+  int64 route_epoch = 4;
+}
+
+enum ProjectionMaterializationCutoverPhase {
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_UNSPECIFIED = 0;
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_REQUESTED = 1;
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_CANDIDATE_BUILT = 2;
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_GOLDEN_VERIFIED = 3;
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_ACTIVATED = 4;
+  // Terminal failure state: the candidate cannot be served within the bounded
+  // mutation budget, so the owner stays on (or rolls back to) the compatibility
+  // route until a cutover is explicitly requested again.
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_ABORTED = 5;
+}
+
+message ProjectionMaterializationCutoverState {
+  ProjectionMaterializationCutoverPhase phase = 1;
+  ProjectionMaterializationRouteFingerprint candidate_route = 2;
+  ProjectionSourceCoordinate candidate_source = 3;
+  string candidate_fingerprint = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+  ProjectionMaterializationActivationProof activation_proof = 6;
+  string abort_reason = 7;
+}
+
+message ProjectionMaterializationActivationProof {
+  int64 authority_state_version = 1;
+  int64 capability_epoch = 2;
+  int64 membership_epoch = 3;
+  string membership_digest = 4;
+  string deployment_revision = 5;
+  google.protobuf.Timestamp validated_at_utc = 6;
+  google.protobuf.Timestamp valid_until_utc = 7;
 }
 
 message ProjectionScopeFailure {
@@ -68,6 +231,12 @@ message ProjectionFailureDiagnostic {
   string source_actor_id = 7;
 }
 
+message ProjectionScopeFailureSummary {
+  int32 unresolved_failure_count = 1;
+  int32 retry_exhausted_failure_count = 2;
+  google.protobuf.Timestamp oldest_unresolved_failure_at_utc = 3;
+}
+
 message EnsureProjectionScopeCommand {
   string root_actor_id = 1;
   string projection_kind = 2;
@@ -80,10 +249,61 @@ message ReleaseProjectionScopeCommand {
   string projection_kind = 2;
   string session_id = 3;
   ProjectionScopeMode mode = 4;
+  // Set (> 0) when the release is the previous-writer release of a status-route cutover
+  // owned by root_actor_id at this route epoch: the released writer confirms its committed
+  // release to root_actor_id with ProjectionScopeStatusWriterReleasedEvent, also when it was
+  // already released (the source re-dispatches until it holds the confirmation).
+  int64 status_route_epoch = 5;
+  // Exact previous writer selected by the source-owned route. A status writer must not release
+  // or confirm when this does not name its own actor identity.
+  string expected_writer_actor_id = 6;
+  // Source BLOCKED commit version that the previous writer must have observed before it may
+  // commit or confirm release. This is a drain fence, not dispatch-acceptance evidence.
+  int64 required_observed_version = 7;
 }
 
 message ReplayProjectionFailuresCommand {
   int32 max_items = 1;
+  bool automatic_recovery = 2;
+  int64 observed_scope_state_version = 3;
+}
+
+message ResumeProjectionInFlightObservationCommand {
+  ProjectionSourceCoordinate expected_source = 1;
+}
+
+message ContinueProjectionMaterializationCutoverCommand {
+  int64 expected_route_epoch = 1;
+}
+
+message RequestProjectionMaterializationCutoverCommand {
+  int64 expected_active_route_epoch = 1;
+  ProjectionMaterializationRouteFingerprint candidate_route = 2;
+}
+
+// Self continuation of a durable scope that stayed on the legacy status route because the
+// terminal fleet gate was not yet open (typically a long-lived scope activated right after a
+// silo boot); bounded, backed-off, delivered through the durable callback scheduler.
+message RetryProjectionScopeStatusRouteAdoptionCommand {
+  int32 attempt = 1;
+}
+
+// Direct request from the source route owner to one exact writer. The writer responds only after
+// its runtime schema context contains the exact V3 OPEN adoption receipt.
+message RequestProjectionScopeStatusActorSealCommand {
+  string source_scope_actor_id = 1;
+  int64 route_epoch = 2;
+  ProjectionScopeStatusActorRole role = 3;
+  string expected_actor_id = 4;
+  string expected_agent_kind = 5;
+}
+
+// Direct handled response from an exact writer to the source route owner.
+message ProjectionScopeStatusActorSealReadyEvent {
+  string source_scope_actor_id = 1;
+  int64 route_epoch = 2;
+  ProjectionScopeStatusActorSeal seal = 3;
+  google.protobuf.Timestamp occurred_at_utc = 4;
 }
 
 message ProjectionScopeStartedEvent {
@@ -92,6 +312,12 @@ message ProjectionScopeStartedEvent {
   string session_id = 3;
   ProjectionScopeMode mode = 4;
   google.protobuf.Timestamp occurred_at_utc = 5;
+  int64 activation_generation = 6;
+}
+
+message ProjectionScopeActivationGenerationMigratedEvent {
+  int64 activation_generation = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
 }
 
 message ProjectionObservationAttachmentUpdatedEvent {
@@ -101,6 +327,8 @@ message ProjectionObservationAttachmentUpdatedEvent {
 
 message ProjectionScopeReleasedEvent {
   google.protobuf.Timestamp occurred_at_utc = 1;
+  // Highest source version observed when release was committed.
+  int64 last_observed_version = 2;
 }
 
 message ProjectionScopeEnvelopeReceivedEvent {
@@ -114,6 +342,10 @@ message ProjectionScopeEnvelopeAttemptedEvent {
   string source_actor_id = 3;
   ProjectionObservedEnvelopeMetadata observed_envelope = 4;
   string event_kind = 5;
+}
+
+message ProjectionScopeObservationStagedEvent {
+  ProjectionScopeInFlightObservation observation = 1;
 }
 
 message ProjectionScopeWatermarkAdvancedEvent {
@@ -141,4 +373,172 @@ message ProjectionScopeFailureReplayedEvent {
   bool succeeded = 2;
   string reason = 3;
   google.protobuf.Timestamp occurred_at_utc = 4;
+}
+
+message ProjectionScopeAutomaticRecoveryRequestedEvent {
+  int64 observed_scope_state_version = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionMaterializationRouteInitializedEvent {
+  ProjectionMaterializationRouteFingerprint route = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionMaterializationCutoverRequestedEvent {
+  ProjectionMaterializationRouteFingerprint candidate_route = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionMaterializationCutoverCandidateBuiltEvent {
+  ProjectionMaterializationRouteFingerprint candidate_route = 1;
+  ProjectionSourceCoordinate candidate_source = 2;
+  string candidate_fingerprint = 3;
+  google.protobuf.Timestamp occurred_at_utc = 4;
+}
+
+message ProjectionMaterializationCutoverGoldenVerifiedEvent {
+  ProjectionMaterializationRouteFingerprint candidate_route = 1;
+  ProjectionSourceCoordinate candidate_source = 2;
+  string candidate_fingerprint = 3;
+  google.protobuf.Timestamp occurred_at_utc = 4;
+}
+
+message ProjectionMaterializationCutoverActivatedEvent {
+  ProjectionMaterializationRouteFingerprint route = 1;
+  ProjectionSourceCoordinate source = 2;
+  string candidate_fingerprint = 3;
+  google.protobuf.Timestamp occurred_at_utc = 4;
+  ProjectionMaterializationActivationProof activation_proof = 5;
+}
+
+// Terminal abort of an in-progress cutover (e.g. the candidate exceeds the
+// bounded mutation budget). The active route is unchanged.
+message ProjectionMaterializationCutoverAbortedEvent {
+  ProjectionMaterializationRouteFingerprint candidate_route = 1;
+  string reason = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Post-activation escape hatch: the active route is rolled back to the
+// compatibility route at an advanced epoch when the incremental route can no
+// longer serve this owner, and the cutover record is closed as aborted.
+message ProjectionMaterializationRouteRolledBackEvent {
+  ProjectionMaterializationRouteFingerprint route = 1;
+  string reason = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Phase 1 of a cutover: the route is committed WARMING at a new epoch.
+message ProjectionScopeStatusRouteWarmingStartedEvent {
+  ProjectionScopeStatusRoute route = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionScopeStatusRoutePreparationStartedEvent {
+  ProjectionScopeStatusRoutePreparation preparation = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionScopeStatusActorSealRecordedEvent {
+  int64 route_epoch = 1;
+  ProjectionScopeStatusActorSeal seal = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Binds Phase-B activation seals to an existing route that predates the preparation protocol. It
+// never changes the route contract, epoch, phase or cutover watermarks.
+message ProjectionScopeStatusRouteActivationSealsBoundEvent {
+  int64 route_epoch = 1;
+  repeated ProjectionScopeStatusActorSeal activation_seals = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Phase 2: the new writer reported an observed version at or above warm_started_version.
+message ProjectionScopeStatusRouteCaughtUpEvent {
+  int64 route_epoch = 1;
+  int64 observed_version = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Phase 3: the route is BLOCKED — the source stops consuming observations until the flip.
+message ProjectionScopeStatusRouteBlockedEvent {
+  int64 route_epoch = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+  // Source scope version of this commit (the last publication the previous writer must have
+  // observed to be drained).
+  int64 blocked_version = 3;
+}
+
+// Phase 5: the route is flipped to ACTIVE at flip_version (route carries the full fingerprint).
+// Routes committed by binaries without phases are ACTIVE by definition.
+message ProjectionScopeStatusRouteActivatedEvent {
+  ProjectionScopeStatusRoute route = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+// Sent by the warming status writer (terminal materializer or legacy shadow) to its source
+// scope: it observed the source at observed_version through the warming route's relay. The
+// source treats an observed version at or above the route's warm_started_version as caught up.
+message ProjectionScopeStatusWriterCaughtUpEvent {
+  string source_scope_actor_id = 1;
+  int64 route_epoch = 2;
+  int64 observed_version = 3;
+  google.protobuf.Timestamp observed_at_utc = 4;
+  // Exact warming writer that observed the source version. The source accepts the report only
+  // from this actor's direct envelope.
+  string writer_actor_id = 5;
+}
+
+// A receipt-gated committed probe the source records while a persisted route is warming. Its
+// publication carries the warming route through the relay so the writer can report caught-up.
+// The first probe establishes required_observed_version; retries preserve that durable fence so
+// a delayed authenticated report can still advance the route.
+message ProjectionScopeStatusRouteWarmingProbedEvent {
+  int64 route_epoch = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+  int64 required_observed_version = 3;
+}
+
+// Receipt-gated recovery probe for an already persisted BLOCKED route. Before this event is
+// committed the source has re-created/re-ensured the exact previous writer and restored its
+// relay. The first probe establishes required_observed_version from its authoritative source
+// commit version; retries preserve that durable fence while re-publishing the probe.
+message ProjectionScopeStatusRouteDrainProbedEvent {
+  int64 route_epoch = 1;
+  int64 required_observed_version = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Phase 4: the previous writer's relay was removed and its scope released for this epoch.
+message ProjectionScopeStatusLegacyRouteReleasedEvent {
+  int64 route_epoch = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+  // Highest source version the released writer confirmed it observed (0 when the previous
+  // writer did not exist, so nothing had to be confirmed).
+  int64 released_writer_observed_version = 3;
+}
+
+// Sent by the previous status writer (legacy shadow or terminal materializer) to its source
+// scope after it COMMITTED its release for a status-route cutover at route_epoch: the typed
+// handled/committed continuation the source waits for before it flips the route to ACTIVE.
+// Re-sent on every re-dispatched release, so a lost confirmation is recovered by the
+// source's durable continuation.
+message ProjectionScopeStatusWriterReleasedEvent {
+  string source_scope_actor_id = 1;
+  int64 route_epoch = 2;
+  // Highest source version the writer observed before it released (0 if unknown).
+  int64 last_observed_version = 3;
+  google.protobuf.Timestamp released_at_utc = 4;
+  // Exact actor that committed the release. The source accepts confirmation only from the
+  // previous writer selected by its durable route.
+  string writer_actor_id = 5;
+}
+
+// The writer of an ACTIVE terminal route is unchanged but the route contract is upgraded in
+// place under a fresh admission of the newer contract (higher route epoch, no cutover: there
+// is no previous writer to release). Applies only over a terminal route in a writing phase.
+message ProjectionScopeStatusRouteContractUpgradedEvent {
+  ProjectionScopeStatusRoute route = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
 }

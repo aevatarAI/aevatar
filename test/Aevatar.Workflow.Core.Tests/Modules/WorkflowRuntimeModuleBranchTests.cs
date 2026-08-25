@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
@@ -20,6 +22,66 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 
 public sealed class WorkflowRuntimeModuleBranchTests
 {
+    [Theory]
+    [InlineData("assign")]
+    [InlineData("checkpoint")]
+    [InlineData("conditional")]
+    [InlineData("connector-skip")]
+    [InlineData("delay")]
+    [InlineData("emit")]
+    [InlineData("guard-pass")]
+    [InlineData("guard-skip")]
+    [InlineData("guard-branch")]
+    [InlineData("switch")]
+    public async Task PassThroughModules_ShouldDeclareForwardedInputProvenance(string scenario)
+    {
+        var (module, request) = CreatePassThroughScenario(scenario);
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(Wrap(request), ctx, CancellationToken.None);
+
+        var completion = ctx.Published
+            .Where(static publication => publication.Direction == TopologyAudience.Self)
+            .Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be(request.Input);
+        completion.OutputProvenance.Should().Be(WorkflowStepOutputProvenance.ForwardedInput);
+    }
+
+    [Fact]
+    public async Task EmitModule_ShouldPublishOutwardAnnouncementBeforeSelfCompletion()
+    {
+        var module = new EmitModule();
+        var request = new StepRequestEvent
+        {
+            StepId = "announce-job",
+            StepType = "emit",
+            RunId = "run-emit",
+            ExecutionId = "execution-emit",
+            Input = "payload",
+            Parameters =
+            {
+                ["event_type"] = "codex.job.requested",
+                ["payload"] = "payload",
+            },
+        };
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(Wrap(request), ctx, CancellationToken.None);
+
+        ctx.Published.Should().HaveCount(2);
+        ctx.Published[0].Direction.Should().Be(TopologyAudience.ParentAndChildren);
+        ctx.Published[1].Direction.Should().Be(TopologyAudience.Self);
+        ctx.Published.Select(static item => item.Event)
+            .Should().AllBeOfType<StepCompletedEvent>();
+        ctx.Published.Select(static item => (StepCompletedEvent)item.Event)
+            .Should().OnlyContain(completion =>
+                completion.ExecutionId == "execution-emit" &&
+                completion.Annotations["emit.event_type"] == "codex.job.requested");
+    }
+
     [Fact]
     public void LlmRuntimeModules_CanHandle_ShouldReturnFalseForEmptyPayload()
     {
@@ -501,6 +563,97 @@ public sealed class WorkflowRuntimeModuleBranchTests
 
         var intent = DispatchedLlmIntent(ctx);
         intent.SenderNyxIdAccessToken.Should().Be("sender-token-llm");
+    }
+
+    [Theory]
+    [InlineData(
+        "llm_call",
+        DurableCallerCredentialSourceKind.ChannelRegistration,
+        CredentialSecretPurposes.ChannelNyxIdAgentKey)]
+    [InlineData(
+        "evaluate",
+        DurableCallerCredentialSourceKind.ChannelRegistration,
+        CredentialSecretPurposes.ChannelNyxIdAgentKey)]
+    [InlineData(
+        "reflect",
+        DurableCallerCredentialSourceKind.ChannelRegistration,
+        CredentialSecretPurposes.ChannelNyxIdAgentKey)]
+    [InlineData(
+        "llm_call",
+        DurableCallerCredentialSourceKind.WebhookBinding,
+        CredentialSecretPurposes.WorkflowWebhookBindingAgentKey)]
+    [InlineData(
+        "evaluate",
+        DurableCallerCredentialSourceKind.WebhookBinding,
+        CredentialSecretPurposes.WorkflowWebhookBindingAgentKey)]
+    [InlineData(
+        "reflect",
+        DurableCallerCredentialSourceKind.WebhookBinding,
+        CredentialSecretPurposes.WorkflowWebhookBindingAgentKey)]
+    [InlineData(
+        "llm_call",
+        DurableCallerCredentialSourceKind.ScheduledDispatch,
+        CredentialSecretPurposes.ScheduledInvocationAgentKey)]
+    [InlineData(
+        "evaluate",
+        DurableCallerCredentialSourceKind.ScheduledDispatch,
+        CredentialSecretPurposes.ScheduledInvocationAgentKey)]
+    [InlineData(
+        "reflect",
+        DurableCallerCredentialSourceKind.ScheduledDispatch,
+        CredentialSecretPurposes.ScheduledInvocationAgentKey)]
+    public async Task NyxIdLlmModules_WithDurableAgentKey_ShouldSuppressUserTokenAndPropagateAgentKeyHandle(
+        string stepType,
+        DurableCallerCredentialSourceKind sourceKind,
+        string purpose)
+    {
+        IEventModule<IWorkflowExecutionContext> module = stepType switch
+        {
+            "llm_call" => new LLMCallModule(),
+            "evaluate" => new EvaluateModule(),
+            "reflect" => new ReflectModule(),
+            _ => throw new ArgumentOutOfRangeException(nameof(stepType)),
+        };
+        var ctx = new RecordingWorkflowContext();
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            DurableCallerCredential = new DurableCallerCredentialRef
+            {
+                Ref = "secret://workflow-agent-key",
+                Purpose = purpose,
+                OwnerScopeKey = "scope-workflow",
+                SubjectId = "agent-key-workflow",
+                SourceKind = sourceKind,
+                ProviderCredentialId = sourceKind == DurableCallerCredentialSourceKind.WebhookBinding
+                    ? "provider-key-workflow"
+                    : string.Empty,
+            },
+            Kind = NyxIdCallerCredentialKind.AgentKey,
+        };
+        ctx.RuntimeContext.ApplySenderNyxIdAccessToken("short-lived-user-token");
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = $"{stepType}-channel-agent-key",
+                StepType = stepType,
+                RunId = "run-channel-agent-key",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var intent = DispatchedLlmIntent(ctx);
+        intent.SenderNyxIdAccessToken.Should().BeEmpty();
+        intent.CallerCredential.Should().NotBeNull();
+        intent.CallerCredential.BearerToken.Should().BeEmpty();
+        intent.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
+        intent.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
+        intent.CallerCredential.DurableCallerCredential.Should().NotBeNull();
+        intent.CallerCredential.DurableCallerCredential.Ref.Should()
+            .Be("secret://workflow-agent-key");
+        intent.CallerCredential.DurableCallerCredential.SourceKind.Should()
+            .Be(sourceKind);
     }
 
     [Fact]
@@ -1357,6 +1510,62 @@ public sealed class WorkflowRuntimeModuleBranchTests
             FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
+    private static (IEventModule<IWorkflowExecutionContext> Module, StepRequestEvent Request)
+        CreatePassThroughScenario(string scenario)
+    {
+        var request = new StepRequestEvent
+        {
+            StepId = $"{scenario}-step",
+            RunId = "run-pass-through",
+            Input = scenario.Contains("guard-skip", StringComparison.Ordinal)
+                || scenario.Contains("guard-branch", StringComparison.Ordinal)
+                    ? string.Empty
+                    : "canonical-payload",
+        };
+
+        IEventModule<IWorkflowExecutionContext> module = scenario switch
+        {
+            "assign" => new AssignModule(),
+            "checkpoint" => new CheckpointModule(),
+            "conditional" => new ConditionalModule(),
+            "connector-skip" => new ConnectorCallModule(new MissingConnectorResolver()),
+            "delay" => new DelayModule(),
+            "emit" => new EmitModule(),
+            "guard-pass" or "guard-skip" or "guard-branch" => new GuardModule(),
+            "switch" => new SwitchModule(),
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
+        };
+
+        request.StepType = scenario switch
+        {
+            "connector-skip" => "connector_call",
+            "guard-pass" or "guard-skip" or "guard-branch" => "guard",
+            _ => scenario,
+        };
+        switch (scenario)
+        {
+            case "assign":
+                request.Parameters["value"] = "$input";
+                break;
+            case "connector-skip":
+                request.Parameters["connector"] = "missing";
+                request.Parameters["on_missing"] = "skip";
+                break;
+            case "delay":
+                request.Parameters["duration_ms"] = "0";
+                break;
+            case "guard-skip":
+                request.Parameters["on_fail"] = "skip";
+                break;
+            case "guard-branch":
+                request.Parameters["on_fail"] = "branch";
+                request.Parameters["branch_target"] = "fallback";
+                break;
+        }
+
+        return (module, request);
+    }
+
     private sealed class RecordingWorkflowContext
         : IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor, IWorkflowExecutionStateHost
     {
@@ -1620,6 +1829,20 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 return _moduleFactory;
 
             return null;
+        }
+    }
+
+    private sealed class MissingConnectorResolver : IWorkflowConnectorResolver
+    {
+        public ValueTask<IConnector?> ResolveAsync(
+            IWorkflowExecutionContext context,
+            string connectorName,
+            CancellationToken ct = default)
+        {
+            _ = context;
+            _ = connectorName;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<IConnector?>(null);
         }
     }
 

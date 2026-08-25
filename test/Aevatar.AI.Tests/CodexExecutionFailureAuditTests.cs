@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
@@ -197,6 +198,11 @@ public sealed class CodexExecutionFailureAuditTests
             null));
 
         outcome.Receipt.ErrorCode.Should().Be(expectedAuditCode);
+        outcome.Receipt.FailureOutcome.Should().Be(
+            expectedCategory == AuditFailureCategory.Timeout ||
+            expectedAuditCode == "tool_execution_exception"
+                ? AgentToolFailureOutcome.OutcomeUncertain
+                : AgentToolFailureOutcome.CalleeConfirmed);
         outcome.Receipt.ErrorMessage.Should().Be(
             expectedAuditCode == providerCode
                 ? "Provider-owned detail must not become audit classification."

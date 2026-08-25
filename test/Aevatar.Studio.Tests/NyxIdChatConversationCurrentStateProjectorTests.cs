@@ -26,7 +26,6 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.Parse("2026-08-08T04:00:00Z")));
         var state = BuildState();
-        state.ActiveTask.Gate = null;
         var pending = state.PendingActions.Single();
         pending.Params = new NyxIdAssistantActionParams
         {
@@ -70,6 +69,44 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldExposeReloadableServiceAccessReviewParameters()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-16T04:00:00Z")));
+        var state = BuildState();
+        var pending = state.PendingActions.Single();
+        pending.Action = NyxIdAssistantActionKind.ServiceAccessReview;
+        pending.Params = new NyxIdAssistantActionParams
+        {
+            ServiceAccessReview = new NyxIdServiceAccessReviewParams
+            {
+                UserServiceId = "user-service-alpha",
+                ServiceSlug = "api-github",
+                ResourceUri = "https://nyx-api.example/s/api-github",
+            },
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatActionRequestedEvent(),
+                state,
+                version: 19,
+                eventId: "event-alpha-19",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-16T04:00:00Z")));
+
+        var request = dispatcher.Upserts.Should().ContainSingle().Which
+            .PendingActions.Should().ContainSingle().Which.Request;
+        request.Action.Should().Be("service.access_review");
+        request.Params.ServiceAccessReview.UserServiceId.Should().Be("user-service-alpha");
+        request.Params.ServiceAccessReview.ServiceSlug.Should().Be("api-github");
+        request.Params.ServiceAccessReview.ResourceUri.Should()
+            .Be("https://nyx-api.example/s/api-github");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldHydrateReloadableKeyActionParameters()
     {
         var dispatcher = new RecordingWriteDispatcher();
@@ -77,7 +114,6 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.Parse("2026-08-12T04:00:00Z")));
         var state = BuildState();
-        state.ActiveTask.Gate = null;
         var keyCreate = state.PendingActions.Single();
         keyCreate.Action = NyxIdAssistantActionKind.KeyCreate;
         keyCreate.Params = new NyxIdAssistantActionParams
@@ -145,6 +181,56 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ArmedCanaryEffectFault_ShouldExposeSourceOperationWithoutTarget()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-25T06:30:00Z")));
+        var state = BuildState();
+        state.CanaryEffectFault = new NyxIdChatCanaryEffectFaultState
+        {
+            ArmIntent = new NyxIdChatCanaryEffectFaultArmIntent
+            {
+                ArmId = "arm-alpha",
+                ClientRequestId = "client-arm-alpha",
+                SourceOperationKey = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = ActorId,
+                    TurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-alpha",
+                    OperationId = "operation-alpha",
+                    OperationGeneration = 1,
+                },
+                ServiceInstanceId = "canary-service-sensitive",
+                OwnerSubject = "canary-owner-sensitive",
+                ExpiresAt = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.Parse("2026-07-25T06:30:00Z")),
+            },
+            Status = NyxIdChatCanaryEffectFaultStatus.Armed,
+            ArmedAt = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-07-25T06:10:00Z")),
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatCanaryEffectFaultArmedCommittedEvent(),
+                state,
+                version: 16,
+                eventId: "event-alpha-16",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-07-25T06:10:00Z")));
+
+        var fault = dispatcher.Upserts.Should().ContainSingle().Subject.CanaryEffectFault;
+        fault.ArmId.Should().Be("arm-alpha");
+        fault.Status.Should().Be("armed");
+        fault.SourceOperation.OperationId.Should().Be("operation-alpha");
+        fault.SourceOperation.OperationGeneration.Should().Be(1);
+        fault.TargetOperation.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldCopySafeQueryStateAndAuthoritativeVersion()
     {
         var dispatcher = new RecordingWriteDispatcher();
@@ -155,6 +241,24 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         state.OwnerSubject = "owner-alpha";
         state.CanaryEffectFault = new NyxIdChatCanaryEffectFaultState
         {
+            ArmIntent = new NyxIdChatCanaryEffectFaultArmIntent
+            {
+                ArmId = "arm-alpha",
+                ClientRequestId = "client-arm-alpha",
+                SourceOperationKey = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = ActorId,
+                    TurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-alpha",
+                    OperationId = "operation-alpha",
+                    OperationGeneration = 1,
+                },
+                ServiceInstanceId = "canary-service-sensitive",
+                OwnerSubject = "canary-owner-sensitive",
+                ExpiresAt = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.Parse("2026-07-25T06:30:00Z")),
+            },
             Directive = new NyxIdChatCanaryEffectFaultDirective
             {
                 ArmId = "arm-alpha",
@@ -211,8 +315,10 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             .Should().Be("retry-alpha");
         document.CanaryEffectFault.ArmId.Should().Be("arm-alpha");
         document.CanaryEffectFault.Status.Should().Be("forwarded");
-        document.CanaryEffectFault.OperationId.Should().Be("operation-beta");
-        document.CanaryEffectFault.OperationGeneration.Should().Be(1);
+        document.CanaryEffectFault.SourceOperation.OperationId.Should().Be("operation-alpha");
+        document.CanaryEffectFault.SourceOperation.OperationGeneration.Should().Be(1);
+        document.CanaryEffectFault.TargetOperation.OperationId.Should().Be("operation-beta");
+        document.CanaryEffectFault.TargetOperation.OperationGeneration.Should().Be(1);
         document.CanaryEffectFault.ArmedAt.ToDateTimeOffset().Should().Be(
             DateTimeOffset.Parse("2026-07-25T06:10:00Z"));
         document.CanaryEffectFault.ForwardedAt.ToDateTimeOffset().Should().Be(
@@ -238,19 +344,6 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.ActiveTask.PlanRevision.Should().Be(3);
         document.ActiveTask.PlanRevisionHistoryStart.Should().Be(1);
         document.ActiveTask.Title.Should().Be("Connect GitHub safely");
-        document.ActiveTask.Gate.Mode.Should().Be("confirm");
-        document.ActiveTask.Gate.Reason.Should().Be("External access will change.");
-        document.ActiveTask.Gate.Status.Should().Be("pending");
-        document.ActiveTask.Gate.RequestId.Should().Be("plan-gate-alpha");
-        document.ActiveTask.Gate.TaskId.Should().Be("task-alpha");
-        document.ActiveTask.Gate.PlanId.Should().Be("plan-alpha");
-        document.ActiveTask.Gate.PlanRevision.Should().Be(3);
-        var gateAdmission = document.ActiveTask.Gate.Admissions.Should()
-            .ContainSingle().Which;
-        gateAdmission.ActionRequestId.Should().Be("action-alpha");
-        gateAdmission.Action.Should().Be("service.connect");
-        gateAdmission.ActionParamsSha256.Should()
-            .Equal(ByteString.CopyFromUtf8("action-params-digest"));
         document.ActiveTask.PlanRevisions.Select(static revision =>
                 (revision.PlanRevision, revision.RevisionCause))
             .Should().Equal(
@@ -317,8 +410,9 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.ContinuationAdmission.ContinuationTurnId.Should().Be("turn-beta");
         document.ContinuationAdmission.Status.Should().Be("accepted_for_later");
 
-        document.PendingActions.Should().BeEmpty(
-            "a pending plan gate must not publish its admitted browser action");
+        var unsafePendingAction = document.PendingActions.Should().ContainSingle().Which;
+        unsafePendingAction.Action.Should().Be("service.connect");
+        unsafePendingAction.Request.Should().BeNull();
 
         var serialized = Encoding.UTF8.GetString(document.ToByteArray());
         serialized.Should().NotContain("prompt-secret-alpha");
@@ -738,26 +832,6 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 PlanRevision = 3,
                 PlanRevisionHistoryStart = 1,
                 Title = "Connect GitHub safely",
-                Gate = new NyxIdChatPlanGate
-                {
-                    Mode = NyxIdChatPlanGateMode.Confirm,
-                    Reason = "External access will change.",
-                    Status = NyxIdChatPlanGateStatus.Pending,
-                    RequestId = "plan-gate-alpha",
-                    TaskId = "task-alpha",
-                    PlanId = "plan-alpha",
-                    PlanRevision = 3,
-                    Admissions =
-                    {
-                        new NyxIdChatPlanOperationAdmission
-                        {
-                            ActionRequestId = "action-alpha",
-                            Action = NyxIdAssistantActionKind.ServiceConnect,
-                            ActionParamsSha256 = ByteString.CopyFromUtf8(
-                                "action-params-digest"),
-                        },
-                    },
-                },
                 PlanRevisions =
                 {
                     new NyxIdChatPlanRevisionRecord

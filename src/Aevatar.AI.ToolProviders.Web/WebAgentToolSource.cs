@@ -6,7 +6,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.AI.ToolProviders.Web;
 
 /// <summary>
-/// Web tool source. Provides web search, fetch, and user interaction tools.
+/// Canonical Web runtime source. User interaction is exposed separately by
+/// <see cref="AskUserAgentToolSource"/>.
 /// </summary>
 public sealed class WebAgentToolSource : IAgentToolSource
 {
@@ -30,7 +31,6 @@ public sealed class WebAgentToolSource : IAgentToolSource
         [
             new WebSearchTool(_client, _options),
             new WebFetchTool(_client),
-            new AskUserTool(),
         ];
 
         _logger.LogInformation("Web tools registered ({Count} tools)", tools.Count);

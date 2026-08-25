@@ -77,6 +77,7 @@ public sealed class ScriptNativeGraphProjectorTests
             CancellationToken.None);
 
         graphWriter.LastUpsert.Should().NotBeNull();
+        graphWriter.LastProjectionKind.Should().Be(context.ProjectionKind);
         var graphReadModel = graphWriter.LastUpsert!;
         var graph = graphMaterializer.Materialize(graphReadModel);
         graphReadModel.SchemaId.Should().Be("claim_case");
@@ -257,6 +258,37 @@ public sealed class ScriptNativeGraphProjectorTests
                     ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
                     "3",
                     "claim-schema")));
+
+        graphWriter.LastUpsert.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WhenGraphProjectionDisabled_ShouldSkipPayloadMaterialization()
+    {
+        var graphWriter = new RecordingNativeGraphWriter();
+        var projector = new ScriptNativeGraphProjector(
+            graphWriter,
+            new StubScriptProjectionPayloadMaterializer(_ =>
+                throw new InvalidOperationException("Payload materialization must be skipped.")),
+            new ScriptNativeGraphMaterializer(),
+            new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+        var context = new ScriptExecutionMaterializationContext
+        {
+            RootActorId = "claim-runtime",
+            ProjectionKind = "script-execution-read-model",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildEnvelope(
+                new ScriptDomainFactCommitted
+                {
+                    ActorId = "claim-runtime",
+                    StateVersion = 4,
+                    OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T01:00:00Z")
+                        .ToUnixTimeMilliseconds(),
+                },
+                new ScriptBehaviorState()));
 
         graphWriter.LastUpsert.Should().BeNull();
     }
@@ -511,10 +543,16 @@ public sealed class ScriptNativeGraphProjectorTests
     {
         public ScriptNativeGraphReadModel? LastUpsert { get; private set; }
 
-        public Task UpsertAsync(ScriptNativeGraphReadModel readModel, CancellationToken ct = default)
+        public string? LastProjectionKind { get; private set; }
+
+        public Task UpsertAsync(
+            ScriptNativeGraphReadModel readModel,
+            string projectionKind,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             LastUpsert = readModel.Clone();
+            LastProjectionKind = projectionKind;
             return Task.CompletedTask;
         }
     }

@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -276,7 +277,9 @@ public sealed class MainnetChatCompletionsEndpointsTests
         command.ToolSelection.ForwardedTools.Select(static tool => tool.ToolName)
             .Should()
             .Contain("get_weather");
-        command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_team");
+        command.ToolSelection.AdditiveToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
         command.ToolSelection.ForwardedTools.Single(static tool => tool.ToolName == "get_weather")
             .ParametersJson.Should().Contain("\"city\"");
     }
@@ -285,9 +288,13 @@ public sealed class MainnetChatCompletionsEndpointsTests
     public async Task PostChatCompletions_WithModelSlug_ShouldResolveNyxRoutePreference()
     {
         var provider = new ChatCompletionsRecordingLLMProvider();
-        var routeResolver = new ChatCompletionsRecordingRouteResolver(new Dictionary<string, string>(StringComparer.Ordinal)
+        var routeResolver = new ChatCompletionsRecordingRouteResolver(new Dictionary<string, LLMRouteTarget>(StringComparer.Ordinal)
         {
-            ["chrono-llm"] = "/api/v1/proxy/s/chrono-llm",
+            ["chrono-llm"] = new()
+            {
+                UserServiceId = "user-chrono-llm",
+                ServiceSlugSnapshot = "chrono-llm",
+            },
         });
         await using var app = await CreateAppAsync(
             provider,
@@ -315,7 +322,9 @@ public sealed class MainnetChatCompletionsEndpointsTests
         var command = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.Model.Should().Be("gpt-5-chat");
-        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        command.RoutePreference.Should().BeEmpty();
+        command.RouteTarget.UserServiceId.Should().Be("user-chrono-llm");
+        command.RouteTarget.ServiceSlugSnapshot.Should().Be("chrono-llm");
     }
 
     [Fact]
@@ -332,7 +341,10 @@ public sealed class MainnetChatCompletionsEndpointsTests
             observationRuntime: ChatCompletionsObservationScenarioBuilder.ForText(string.Empty)
                 .WithToolCallDelta("call_team_1", "aevatar_invoke_team", """{"team_id":"team-1"}""")
                 .WithCompletedToolCall("call_team_1", "aevatar_invoke_team", """{"team_id":"team-1"}""")
-                .Build());
+                .Build(),
+            ownedToolCatalogPlanner: new FixedResponsesOwnedToolCatalogPlanner(
+                ToolSetNames.WorkspaceDefault,
+                new ChatCompletionsStubAgentTool("aevatar_invoke_team", "Invoke a team")));
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
@@ -443,7 +455,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
     }
 
     [Fact]
-    public async Task PostChatCompletions_WhenResponsesToolProviderRegistered_ShouldInjectSharedAevatarTools()
+    public async Task PostChatCompletions_WhenResponsesToolProviderRegisteredWithoutReviewedCatalog_ShouldNotAutoInjectTools()
     {
         var provider = new ChatCompletionsRecordingLLMProvider();
         var toolProvider = new ChatCompletionsRecordingResponsesToolProvider(
@@ -486,9 +498,11 @@ public sealed class MainnetChatCompletionsEndpointsTests
         provider.LastRequest.Should().BeNull();
         var command = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
-        command.ToolSelection.SubstitutedToolNames.Should().Contain("WebSearch");
-        command.ToolSelection.AdditiveToolNames.Should().Contain(["use_skill", "ornn_search_skills", "ornn_publish_skill"]);
-        command.ToolSelection.OwnedToolNames.Should().Contain(["WebSearch", "use_skill", "ornn_search_skills", "ornn_publish_skill"]);
+        command.ToolSelection.ForwardedTools.Should().ContainSingle(tool => tool.ToolName == "WebSearch");
+        command.ToolSelection.SubstitutedToolNames.Should().BeEmpty();
+        command.ToolSelection.AdditiveToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
     }
 
     [Fact]
@@ -514,7 +528,8 @@ public sealed class MainnetChatCompletionsEndpointsTests
         IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
         IResponsesRouteResolver? routeResolver = null,
         IResponsesToolProvider? responsesToolProvider = null,
-        ChatCompletionsObservationRuntime? observationRuntime = null)
+        ChatCompletionsObservationRuntime? observationRuntime = null,
+        IResponsesOwnedToolCatalogPlanner? ownedToolCatalogPlanner = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -551,6 +566,8 @@ public sealed class MainnetChatCompletionsEndpointsTests
         });
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
+        if (ownedToolCatalogPlanner != null)
+            builder.Services.AddSingleton(ownedToolCatalogPlanner);
 
         var app = builder.Build();
         app.MapChatCompletionsApiEndpoints();
@@ -662,19 +679,29 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
     private sealed class ChatCompletionsNoopRouteResolver : IResponsesRouteResolver
     {
-        public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct) =>
-            Task.FromResult<string?>(null);
+        public Task<LLMRouteTarget?> ResolveRouteTargetAsync(
+            string serviceSlug,
+            string upstreamModelId,
+            ResponsesCallerScope callerScope,
+            CancellationToken ct) =>
+            Task.FromResult<LLMRouteTarget?>(null);
     }
 
-    private sealed class ChatCompletionsRecordingRouteResolver(IReadOnlyDictionary<string, string> map)
+    private sealed class ChatCompletionsRecordingRouteResolver(
+        IReadOnlyDictionary<string, LLMRouteTarget> map)
         : IResponsesRouteResolver
     {
         public List<string> ResolvedSlugs { get; } = [];
 
-        public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct)
+        public Task<LLMRouteTarget?> ResolveRouteTargetAsync(
+            string serviceSlug,
+            string upstreamModelId,
+            ResponsesCallerScope callerScope,
+            CancellationToken ct)
         {
-            ResolvedSlugs.Add(slug);
-            return Task.FromResult(map.TryGetValue(slug, out var value) ? value : null);
+            ResolvedSlugs.Add(serviceSlug);
+            return Task.FromResult(
+                map.TryGetValue(serviceSlug, out var value) ? value.Clone() : null);
         }
     }
 

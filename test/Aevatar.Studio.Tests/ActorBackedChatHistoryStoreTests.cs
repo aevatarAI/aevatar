@@ -224,6 +224,19 @@ public sealed class ActorBackedChatHistoryStoreTests
                     UserText = "hi",
                     AssistantText = "Hello.",
                     TerminalStatus = "complete",
+                    Operations =
+                    {
+                        new ChatConversationTurnOperationDocument
+                        {
+                            OperationId = "model-round-0",
+                            Order = 1,
+                            Kind = "model",
+                            Title = "model-a",
+                            Status = "done",
+                            AvailableToolNames = { "github.get_issue", "nyxid.require_service" },
+                            ToolCatalogCaptured = true,
+                        },
+                    },
                 },
             },
         };
@@ -236,6 +249,9 @@ public sealed class ActorBackedChatHistoryStoreTests
         current.Messages.Select(static message => (message.Role, message.Content))
             .Should()
             .Equal(("user", "hi"), ("assistant", "Hello."));
+        current.Operations.Should().ContainSingle().Which.AvailableToolNames.Should()
+            .Equal("github.get_issue", "nyxid.require_service");
+        current.Operations[0].ToolCatalogCaptured.Should().BeTrue();
     }
 
     [Fact]
@@ -554,6 +570,36 @@ public sealed class ActorBackedChatHistoryStoreTests
             .BeOfType<DeleteConversationCommand>().Subject;
         command.ScopeId.Should().Be("scope-a");
         command.ConversationId.Should().Be("conversation-a");
+    }
+
+    [Fact]
+    public async Task GetIndexAsync_ShouldPreserveConversationAuthorityStateVersion()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", "conversation-a");
+        var reader = new InMemoryProjectionDocumentStore<ChatConversationCurrentStateDocument, string>(
+            document => document.ActorId,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt);
+        await reader.UpsertAsync(new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            Title = "Conversation A",
+            StateVersion = 17,
+            UpdatedAtMs = 2,
+            CreatedAtMs = 1,
+        });
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor("unused")),
+            new StudioActorCommandDispatch(new RecordingDispatchService()),
+            reader,
+            new RecordingDeliveryDocumentReader());
+
+        var page = await store.GetIndexAsync(new ChatHistoryIndexPageRequest("scope-a"));
+
+        page.Conversations.Should().ContainSingle().Which.StateVersion.Should().Be(17);
     }
 
     [Fact]

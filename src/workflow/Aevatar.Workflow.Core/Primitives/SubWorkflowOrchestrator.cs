@@ -49,6 +49,8 @@ internal sealed class SubWorkflowOrchestrator
     private readonly Func<string, IMessage, CancellationToken, Task> _sendToAsync;
     private readonly Func<string, TimeSpan, IMessage, CancellationToken, Task<RuntimeCallbackLease>> _scheduleSelfTimeoutAsync;
     private readonly Func<RuntimeCallbackLease, CancellationToken, Task> _cancelDurableCallbackAsync;
+    private readonly Func<WorkflowExecutionValueRepresentation, CancellationToken, Task<WorkflowExecutionValueRepresentation>>
+        _selectValueRepresentationAsync;
 
     public SubWorkflowOrchestrator(
         IActorRuntime runtime,
@@ -60,7 +62,9 @@ internal sealed class SubWorkflowOrchestrator
         Func<IMessage, TopologyAudience, CancellationToken, Task> publishAsync,
         Func<string, IMessage, CancellationToken, Task> sendToAsync,
         Func<string, TimeSpan, IMessage, CancellationToken, Task<RuntimeCallbackLease>> scheduleSelfTimeoutAsync,
-        Func<RuntimeCallbackLease, CancellationToken, Task> cancelDurableCallbackAsync)
+        Func<RuntimeCallbackLease, CancellationToken, Task> cancelDurableCallbackAsync,
+        Func<WorkflowExecutionValueRepresentation, CancellationToken, Task<WorkflowExecutionValueRepresentation>>?
+            selectValueRepresentationAsync = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
@@ -72,6 +76,11 @@ internal sealed class SubWorkflowOrchestrator
         _sendToAsync = sendToAsync ?? throw new ArgumentNullException(nameof(sendToAsync));
         _scheduleSelfTimeoutAsync = scheduleSelfTimeoutAsync ?? throw new ArgumentNullException(nameof(scheduleSelfTimeoutAsync));
         _cancelDurableCallbackAsync = cancelDurableCallbackAsync ?? throw new ArgumentNullException(nameof(cancelDurableCallbackAsync));
+        _selectValueRepresentationAsync = selectValueRepresentationAsync ??
+            ((requested, _) => Task.FromResult(
+                requested == WorkflowExecutionValueRepresentation.Normalized
+                    ? WorkflowExecutionValueRepresentation.Normalized
+                    : WorkflowExecutionValueRepresentation.Legacy));
     }
 
     public async Task HandleInvokeRequestedAsync(
@@ -90,13 +99,23 @@ internal sealed class SubWorkflowOrchestrator
             _loggerAccessor().LogWarning(
                 "workflow_call invocation failed: missing parent step id. parentRun={ParentRunId}",
                 parentRunId);
-            await PublishWorkflowCallFailureAsync(parentStepId, parentRunId, "workflow_call missing parent_step_id", ct);
+            await PublishWorkflowCallFailureAsync(
+                parentStepId,
+                parentRunId,
+                request.ParentExecutionId,
+                "workflow_call missing parent_step_id",
+                ct);
             return;
         }
 
         if (string.IsNullOrWhiteSpace(workflowName))
         {
-            await PublishWorkflowCallFailureAsync(parentStepId, parentRunId, "workflow_call missing workflow parameter", ct);
+            await PublishWorkflowCallFailureAsync(
+                parentStepId,
+                parentRunId,
+                request.ParentExecutionId,
+                "workflow_call missing workflow parameter",
+                ct);
             return;
         }
 
@@ -105,6 +124,7 @@ internal sealed class SubWorkflowOrchestrator
             await PublishWorkflowCallFailureAsync(
                 parentStepId,
                 parentRunId,
+                request.ParentExecutionId,
                 $"workflow_call lifecycle must be {WorkflowCallLifecycle.AllowedValuesText}",
                 ct);
             return;
@@ -126,6 +146,7 @@ internal sealed class SubWorkflowOrchestrator
             await PublishWorkflowCallFailureAsync(
                 parentStepId,
                 parentRunId,
+                request.ParentExecutionId,
                 "workflow_call invocation id must differ from the parent run id",
                 ct);
             return;
@@ -143,6 +164,10 @@ internal sealed class SubWorkflowOrchestrator
                 throw new InvalidOperationException(
                     $"workflow_call invocation '{invocationId}' conflicts with its committed pending handoff.");
             }
+            ValidateRequestedRepresentationMatchesCommitted(
+                request.ValueRepresentation,
+                existingPending.ValueRepresentation,
+                invocationId);
 
             var existingDefinition = TryResolvePendingInvocationDefinitionSnapshot(existingPending, state)
                 ?? throw new InvalidOperationException(
@@ -166,7 +191,12 @@ internal sealed class SubWorkflowOrchestrator
             state.MaxActiveSubWorkflows);
         if (!admission.Accepted)
         {
-            await PublishWorkflowCallFailureAsync(parentStepId, parentRunId, admission.Error, ct);
+            await PublishWorkflowCallFailureAsync(
+                parentStepId,
+                parentRunId,
+                request.ParentExecutionId,
+                admission.Error,
+                ct);
             return;
         }
 
@@ -175,10 +205,18 @@ internal sealed class SubWorkflowOrchestrator
             await PublishWorkflowCallFailureAsync(
                 parentStepId,
                 parentRunId,
+                request.ParentExecutionId,
                 BuildSingletonBusyError(workflowName),
                 ct);
             return;
         }
+
+        // Representation admission is the first side-effecting boundary for a
+        // new child run.  It must complete before a timeout is scheduled, a
+        // pending record is persisted, or a child actor is created/linked.
+        var valueRepresentation = await SelectValueRepresentationAsync(
+            request.ValueRepresentation,
+            ct);
 
         RuntimeCallbackLease? timeoutLease = null;
 
@@ -191,12 +229,14 @@ internal sealed class SubWorkflowOrchestrator
                     invocationId,
                     parentRunId,
                     parentStepId,
+                    request.ParentExecutionId,
                     request.Input ?? string.Empty,
                     lifecycle,
                     inlineSnapshot,
                     rootRunId,
                     requestedDepth,
                     request.InputFileRefs,
+                    valueRepresentation,
                     state,
                     ct);
                 return;
@@ -224,6 +264,7 @@ internal sealed class SubWorkflowOrchestrator
                 InvocationId = invocationId,
                 ParentRunId = parentRunId,
                 ParentStepId = parentStepId,
+                ParentExecutionId = request.ParentExecutionId,
                 WorkflowName = workflowName,
                 DefinitionActorId = definitionActorId,
                 Input = request.Input ?? string.Empty,
@@ -241,6 +282,7 @@ internal sealed class SubWorkflowOrchestrator
                 RootRunId = rootRunId,
                 RequestedDepth = requestedDepth,
                 InputFileRefs = { CloneFileRefs(request.InputFileRefs) },
+                ValueRepresentation = valueRepresentation,
             }, ct);
 
             await _sendToAsync(
@@ -281,6 +323,7 @@ internal sealed class SubWorkflowOrchestrator
             await PublishWorkflowCallFailureAsync(
                 parentStepId,
                 parentRunId,
+                request.ParentExecutionId,
                 $"workflow_call invocation failed: {ex.Message}",
                 ct);
         }
@@ -319,6 +362,7 @@ internal sealed class SubWorkflowOrchestrator
             await PublishWorkflowCallFailureAsync(
                 pending.ParentStepId,
                 pending.ParentRunId,
+                pending.ParentExecutionId,
                 $"workflow_call timed out waiting for definition resolution after {timeout.TimeoutMs}ms.",
                 ct);
     }
@@ -388,12 +432,14 @@ internal sealed class SubWorkflowOrchestrator
                 pending.InvocationId,
                 pending.ParentRunId,
                 pending.ParentStepId,
+                pending.ParentExecutionId,
                 pending.Input ?? string.Empty,
                 pending.Lifecycle,
                 definition,
                 ResolveRootRunId(pending.RootRunId, state, pending.ParentRunId),
                 WorkflowCallLimitPolicy.ResolveChildDepth(pending.RequestedDepth, ResolveParentDepth(state, pending.ParentRunId)),
                 pending.InputFileRefs,
+                NormalizePersistedValueRepresentation(pending.ValueRepresentation),
                 state,
                 ct);
             await TryCancelDefinitionResolutionTimeoutAsync(pending, CancellationToken.None);
@@ -451,6 +497,7 @@ internal sealed class SubWorkflowOrchestrator
         await PublishWorkflowCallFailureAsync(
             pending.ParentStepId,
             pending.ParentRunId,
+            pending.ParentExecutionId,
             error,
             ct);
         await TryCancelDefinitionResolutionTimeoutAsync(pending, CancellationToken.None);
@@ -460,12 +507,14 @@ internal sealed class SubWorkflowOrchestrator
         string invocationId,
         string parentRunId,
         string parentStepId,
+        string parentExecutionId,
         string input,
         string lifecycle,
         WorkflowDefinitionSnapshot definition,
         string rootRunId,
         int depth,
         IReadOnlyList<WorkflowFileRef> inputFileRefs,
+        WorkflowExecutionValueRepresentation valueRepresentation,
         WorkflowRunState state,
         CancellationToken ct)
     {
@@ -485,6 +534,7 @@ internal sealed class SubWorkflowOrchestrator
             await PublishWorkflowCallFailureAsync(
                 parentStepId,
                 parentRunId,
+                parentExecutionId,
                 BuildSingletonBusyError(definition.WorkflowName),
                 ct);
             return;
@@ -494,12 +544,14 @@ internal sealed class SubWorkflowOrchestrator
             invocationId,
             parentRunId,
             parentStepId,
+            parentExecutionId,
             input,
             lifecycle,
             definition,
             rootRunId,
             depth,
             inputFileRefs,
+            valueRepresentation,
             state);
 
         await _persistDomainEventAsync(new SubWorkflowInvocationRegisteredEvent
@@ -507,6 +559,7 @@ internal sealed class SubWorkflowOrchestrator
             InvocationId = registered.InvocationId,
             ParentRunId = registered.ParentRunId,
             ParentStepId = registered.ParentStepId,
+            ParentExecutionId = registered.ParentExecutionId,
             WorkflowName = registered.WorkflowName,
             ChildActorId = registered.ChildActorId,
             ChildRunId = registered.ChildRunId,
@@ -522,6 +575,7 @@ internal sealed class SubWorkflowOrchestrator
             InlineWorkflowYamls = { registered.InlineWorkflowYamls },
             InputFileRefs = { CloneFileRefs(registered.InputFileRefs) },
             BindingGeneration = registered.BindingGeneration,
+            ValueRepresentation = registered.ValueRepresentation,
         }, ct);
 
         await DrivePendingSubWorkflowInvocationHandoffAsync(registered, definition, state, ct);
@@ -764,6 +818,7 @@ internal sealed class SubWorkflowOrchestrator
             InvocationId = invocationId,
             ParentRunId = WorkflowRunIdNormalizer.Normalize(evt.ParentRunId),
             ParentStepId = evt.ParentStepId?.Trim() ?? string.Empty,
+            ParentExecutionId = evt.ParentExecutionId?.Trim() ?? string.Empty,
             WorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(evt.WorkflowName),
             DefinitionActorId = evt.DefinitionActorId?.Trim() ?? string.Empty,
             Input = evt.Input ?? string.Empty,
@@ -785,6 +840,7 @@ internal sealed class SubWorkflowOrchestrator
             RootRunId = ResolveRootRunId(evt.RootRunId, current, evt.ParentRunId),
             RequestedDepth = Math.Max(0, evt.RequestedDepth),
             InputFileRefs = { CloneFileRefs(evt.InputFileRefs) },
+            ValueRepresentation = NormalizePersistedValueRepresentation(evt.ValueRepresentation),
         };
 
         RemovePendingDefinitionResolution(next, invocationId);
@@ -814,6 +870,7 @@ internal sealed class SubWorkflowOrchestrator
             InvocationId = invocationId,
             ParentRunId = WorkflowRunIdNormalizer.Normalize(evt.ParentRunId),
             ParentStepId = evt.ParentStepId?.Trim() ?? string.Empty,
+            ParentExecutionId = evt.ParentExecutionId?.Trim() ?? string.Empty,
             WorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(evt.WorkflowName),
             ChildActorId = evt.ChildActorId?.Trim() ?? string.Empty,
             ChildRunId = childRunId,
@@ -829,6 +886,7 @@ internal sealed class SubWorkflowOrchestrator
             InlineWorkflowYamls = { evt.InlineWorkflowYamls },
             InputFileRefs = { CloneFileRefs(evt.InputFileRefs) },
             BindingGeneration = evt.BindingGeneration,
+            ValueRepresentation = NormalizePersistedValueRepresentation(evt.ValueRepresentation),
         };
         RemovePendingDefinitionResolution(next, invocationId);
         RemovePendingInvocation(next, invocationId, childRunId);
@@ -898,12 +956,14 @@ internal sealed class SubWorkflowOrchestrator
         string invocationId,
         string parentRunId,
         string parentStepId,
+        string parentExecutionId,
         string input,
         string lifecycle,
         WorkflowDefinitionSnapshot definition,
         string rootRunId,
         int depth,
         IReadOnlyList<WorkflowFileRef> inputFileRefs,
+        WorkflowExecutionValueRepresentation valueRepresentation,
         WorkflowRunState state)
     {
         var normalizedLifecycle = WorkflowCallLifecycle.Normalize(lifecycle);
@@ -915,6 +975,7 @@ internal sealed class SubWorkflowOrchestrator
             InvocationId = invocationId,
             ParentRunId = WorkflowRunIdNormalizer.Normalize(parentRunId),
             ParentStepId = parentStepId?.Trim() ?? string.Empty,
+            ParentExecutionId = parentExecutionId?.Trim() ?? string.Empty,
             WorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(definition.WorkflowName),
             ChildActorId = childActorId,
             ChildRunId = childRunId,
@@ -931,6 +992,7 @@ internal sealed class SubWorkflowOrchestrator
             Depth = Math.Max(0, depth),
             InputFileRefs = { CloneFileRefs(inputFileRefs) },
             BindingGeneration = bindingGeneration,
+            ValueRepresentation = valueRepresentation,
         };
 
         foreach (var (inlineWorkflowName, inlineWorkflowYaml) in definition.InlineWorkflowYamls.Count > 0
@@ -1164,6 +1226,7 @@ internal sealed class SubWorkflowOrchestrator
                 Depth = Math.Max(0, pending.Depth),
             },
             BindingGeneration = pending.BindingGeneration,
+            ValueRepresentation = NormalizePersistedValueRepresentation(pending.ValueRepresentation),
         };
         start.InputFileRefs.Add(CloneFileRefs(pending.InputFileRefs));
         start.Parameters[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
@@ -1268,6 +1331,7 @@ internal sealed class SubWorkflowOrchestrator
                 WorkflowYaml = yaml,
                 ScopeId = state.ScopeId ?? string.Empty,
                 DefinitionVersion = 0,
+                ToolCatalogPolicyVersion = state.ToolCatalogPolicyVersion ?? string.Empty,
             };
 
             foreach (var (inlineWorkflowName, inlineWorkflowYaml) in state.InlineWorkflowYamls)
@@ -1303,6 +1367,7 @@ internal sealed class SubWorkflowOrchestrator
                 ? state.ScopeId ?? string.Empty
                 : pending.ScopeId,
             DefinitionVersion = pending.DefinitionVersion,
+            ToolCatalogPolicyVersion = state.ToolCatalogPolicyVersion ?? string.Empty,
         };
 
         foreach (var (inlineWorkflowName, inlineWorkflowYaml) in pending.InlineWorkflowYamls.Count > 0
@@ -1365,6 +1430,7 @@ internal sealed class SubWorkflowOrchestrator
     private async Task PublishWorkflowCallFailureAsync(
         string parentStepId,
         string parentRunId,
+        string parentExecutionId,
         string error,
         CancellationToken ct)
     {
@@ -1372,8 +1438,10 @@ internal sealed class SubWorkflowOrchestrator
         {
             StepId = parentStepId ?? string.Empty,
             RunId = parentRunId ?? string.Empty,
+            ExecutionId = parentExecutionId ?? string.Empty,
             Success = false,
             Error = error ?? "workflow_call invocation failed",
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         }, TopologyAudience.Self, ct);
     }
 
@@ -1430,9 +1498,11 @@ internal sealed class SubWorkflowOrchestrator
         {
             StepId = pending.ParentStepId,
             RunId = pending.ParentRunId,
+            ExecutionId = pending.ParentExecutionId,
             Success = false,
             Output = string.Empty,
             Error = stopError,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
         parentCompleted.Annotations[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
         parentCompleted.Annotations[WorkflowCallWorkflowNameMetadataKey] = pending.WorkflowName;
@@ -1506,9 +1576,11 @@ internal sealed class SubWorkflowOrchestrator
         {
             StepId = pending.ParentStepId,
             RunId = pending.ParentRunId,
+            ExecutionId = pending.ParentExecutionId,
             Success = success,
             Output = output ?? string.Empty,
             Error = error ?? string.Empty,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
         parentCompleted.Annotations[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
         parentCompleted.Annotations[WorkflowCallWorkflowNameMetadataKey] = pending.WorkflowName;
@@ -1634,6 +1706,9 @@ internal sealed class SubWorkflowOrchestrator
             InlineWorkflowYamls = { inlineWorkflowYamls },
             RevisionId = definition.RevisionId ?? string.Empty,
             DefinitionVersion = Math.Max(0, definition.DefinitionVersion),
+            ToolCatalogPolicyVersion = string.IsNullOrWhiteSpace(definition.ToolCatalogPolicyVersion)
+                ? state.ToolCatalogPolicyVersion ?? string.Empty
+                : definition.ToolCatalogPolicyVersion,
             ExpectedExecutionMode = state.ExpectedExecutionMode,
             // Implement (issue #3252):
             //   Behavior: child workflow runs expose their parent/root run lineage as typed bind facts.
@@ -1749,6 +1824,52 @@ internal sealed class SubWorkflowOrchestrator
             WorkflowCallLifecycle.Normalize(pending.Lifecycle),
             WorkflowCallLifecycle.Normalize(lifecycle),
             StringComparison.OrdinalIgnoreCase);
+
+    private async Task<WorkflowExecutionValueRepresentation> SelectValueRepresentationAsync(
+        WorkflowExecutionValueRepresentation requested,
+        CancellationToken ct)
+    {
+        if (!System.Enum.IsDefined(requested))
+            throw new InvalidOperationException("workflow_call declares an unknown value representation.");
+
+        var selected = await _selectValueRepresentationAsync(requested, ct);
+        if (!System.Enum.IsDefined(selected) || selected == WorkflowExecutionValueRepresentation.Unspecified)
+            throw new InvalidOperationException("workflow_call representation admission returned an invalid value.");
+        if (requested != WorkflowExecutionValueRepresentation.Unspecified && requested != selected)
+        {
+            throw new InvalidOperationException(
+                $"workflow_call requested value representation '{requested}' but admission selected '{selected}'.");
+        }
+
+        return selected;
+    }
+
+    private static WorkflowExecutionValueRepresentation NormalizePersistedValueRepresentation(
+        WorkflowExecutionValueRepresentation representation) =>
+        representation switch
+        {
+            WorkflowExecutionValueRepresentation.Unspecified => WorkflowExecutionValueRepresentation.Legacy,
+            WorkflowExecutionValueRepresentation.Legacy => WorkflowExecutionValueRepresentation.Legacy,
+            WorkflowExecutionValueRepresentation.Normalized => WorkflowExecutionValueRepresentation.Normalized,
+            _ => throw new InvalidOperationException(
+                $"workflow_call persisted an unknown value representation '{representation}'."),
+        };
+
+    private static void ValidateRequestedRepresentationMatchesCommitted(
+        WorkflowExecutionValueRepresentation requested,
+        WorkflowExecutionValueRepresentation committed,
+        string invocationId)
+    {
+        if (!System.Enum.IsDefined(requested))
+            throw new InvalidOperationException("workflow_call redelivery declares an unknown value representation.");
+        var normalizedCommitted = NormalizePersistedValueRepresentation(committed);
+        if (requested != WorkflowExecutionValueRepresentation.Unspecified &&
+            requested != normalizedCommitted)
+        {
+            throw new InvalidOperationException(
+                $"workflow_call invocation '{invocationId}' changed its committed value representation.");
+        }
+    }
 
     private static bool IsSingletonBusy(
         WorkflowRunState state,

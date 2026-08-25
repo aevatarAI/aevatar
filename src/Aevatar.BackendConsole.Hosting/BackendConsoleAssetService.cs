@@ -26,7 +26,7 @@ public sealed class BackendConsoleAssetService(IOptions<BackendConsoleOptions> o
         ArgumentNullException.ThrowIfNull(asset);
 
         var rendered = _renderedCache.GetOrAdd(
-            CacheKey(asset.Assembly, asset.ResourceSuffix),
+            CacheKey(asset),
             _ => BackendConsoleRenderedAsset.Create(Render(asset), asset.ContentType));
         return new BackendConsoleAssetResult(rendered);
     }
@@ -42,14 +42,21 @@ public sealed class BackendConsoleAssetService(IOptions<BackendConsoleOptions> o
         if (!asset.InjectHostConfiguration)
             return content;
 
-        if (!content.Contains(BackendConsoleConfigPlaceholder, StringComparison.Ordinal))
-            throw new InvalidOperationException(
-                $"Embedded backend console asset '{asset.LogicalName}' must contain {BackendConsoleConfigPlaceholder}.");
+        if (string.IsNullOrWhiteSpace(asset.ConfigurationPlaceholder))
+            throw new InvalidOperationException("Embedded host asset configuration placeholder is required.");
 
-        return content.Replace(BackendConsoleConfigPlaceholder, BuildConfigJson(_options.Value), StringComparison.Ordinal);
+        if (!content.Contains(asset.ConfigurationPlaceholder, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Embedded host asset '{asset.LogicalName}' must contain {asset.ConfigurationPlaceholder}.");
+
+        return content.Replace(
+            asset.ConfigurationPlaceholder,
+            BuildConfigJson(_options.Value, asset.ConfigurationProfile),
+            StringComparison.Ordinal);
     }
 
-    private const string BackendConsoleConfigPlaceholder = "__BACKEND_CONSOLE_CONFIG__";
+    private static string CacheKey(BackendConsoleAsset asset) =>
+        $"{CacheKey(asset.Assembly, asset.ResourceSuffix)}::{asset.ConfigurationPlaceholder}::{asset.ConfigurationProfile}";
 
     private static string CacheKey(Assembly assembly, string suffix) =>
         assembly.FullName + "::" + suffix;
@@ -69,21 +76,39 @@ public sealed class BackendConsoleAssetService(IOptions<BackendConsoleOptions> o
         return reader.ReadToEnd();
     }
 
-    private static string BuildConfigJson(BackendConsoleOptions options)
+    private static string BuildConfigJson(
+        BackendConsoleOptions options,
+        BackendConsoleAssetConfigurationProfile profile)
     {
-        var normalized = new
+        if (profile == BackendConsoleAssetConfigurationProfile.AIAuthentication)
         {
-            authority = options.OidcAuthority ?? string.Empty,
-            clientId = options.OidcClientId ?? string.Empty,
-            scope = options.OidcScope ?? string.Empty,
-            resources = options.OidcResources ?? [],
-            nyxidApi = options.NyxApiBaseUrl ?? string.Empty,
-            nyxidWeb = options.NyxWebBaseUrl ?? string.Empty,
-            storageKey = options.StorageKey ?? string.Empty,
-            defaultReturnPath = options.DefaultReturnPath ?? string.Empty,
-            enableStudioWireInspector = options.EnableStudioWireInspector,
+            return JsonSerializer.Serialize(new
+            {
+                authority = options.OidcAuthority ?? string.Empty,
+                clientId = options.OidcClientId ?? string.Empty,
+                scope = options.OidcScope ?? string.Empty,
+                storageKey = BuildAIStorageKey(options.StorageKey),
+            }, JsonOptions);
+        }
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["authority"] = options.OidcAuthority ?? string.Empty,
+            ["clientId"] = options.OidcClientId ?? string.Empty,
+            ["scope"] = options.OidcScope ?? string.Empty,
+            ["resources"] = options.OidcResources ?? [],
+            ["nyxidApi"] = options.NyxApiBaseUrl ?? string.Empty,
+            ["nyxidWeb"] = options.NyxWebBaseUrl ?? string.Empty,
+            ["storageKey"] = options.StorageKey ?? string.Empty,
+            ["defaultReturnPath"] = options.DefaultReturnPath ?? string.Empty,
+            ["enableStudioWireInspector"] = options.EnableStudioWireInspector,
         };
+        if (profile == BackendConsoleAssetConfigurationProfile.AuthenticationCallback)
+            normalized["aiStorageKey"] = BuildAIStorageKey(options.StorageKey);
 
         return JsonSerializer.Serialize(normalized, JsonOptions);
     }
+
+    private static string BuildAIStorageKey(string? storageKey) =>
+        (storageKey ?? string.Empty) + ":ai";
 }

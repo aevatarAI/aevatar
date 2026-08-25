@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package aevatar.foundation.projection;
+
+option csharp_namespace = "Aevatar.Foundation.Projection.Runtime";
+
+import "google/protobuf/timestamp.proto";
+import "runtime_fleet_capability.proto";
+import "runtime_fleet_capability_authority.proto";
+
+message RuntimeFleetCapabilityAuthorityCurrentStateDocument {
+  string id = 1;
+  string authority_actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.runtime.RuntimeFleetMembershipSnapshot membership = 6;
+  repeated aevatar.runtime.RuntimeFleetCapabilityGateState gates = 7;
+}

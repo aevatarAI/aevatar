@@ -34,6 +34,7 @@ public sealed record NyxIdCodeExecutionRouteResolution(
 public static class NyxIdCodeExecutionRouteResolver
 {
     private const string CodeDelegationScope = "sandbox:execute";
+    private const string ProxyDelegationScope = "proxy:*";
 
     public static async Task<NyxIdCodeExecutionRouteResolution> ResolveAsync(
         INyxIdApiClientFactory clientFactory,
@@ -85,12 +86,28 @@ public static class NyxIdCodeExecutionRouteResolver
                 inventory.Failure);
         }
 
+        if (executionInventory is not null && !executionInventory.Succeeded)
+        {
+            var denied = executionInventory.Failure?.Kind is
+                NyxIdApiAccessFailureKind.Unauthorized or NyxIdApiAccessFailureKind.Forbidden;
+            return new NyxIdCodeExecutionRouteResolution(
+                denied
+                    ? NyxIdCodeExecutionRouteResolutionKind.AccessDenied
+                    : NyxIdCodeExecutionRouteResolutionKind.SourceUnavailable,
+                null,
+                0,
+                0,
+                0,
+                0,
+                executionInventory.Failure);
+        }
+
         var requestedId = NormalizeOptional(exactUserServiceId);
         var canonical = inventory.Value!.Services
             .Where(service =>
-                string.Equals(service.Slug, CodeExecutionContract.ServiceSlug, StringComparison.Ordinal) &&
                 !string.IsNullOrWhiteSpace(service.CatalogServiceId) &&
-                (requestedId is null || string.Equals(service.Id, requestedId, StringComparison.Ordinal)))
+                (requestedId is null || string.Equals(service.Id, requestedId, StringComparison.Ordinal)) &&
+                IsCanonicalCodeExecutionRoute(inventory, executionInventory, service))
             .ToArray();
         if (canonical.Length == 0)
             return Result(NyxIdCodeExecutionRouteResolutionKind.Missing, canonical, [], [], []);
@@ -112,22 +129,6 @@ public static class NyxIdCodeExecutionRouteResolver
                 accessible,
                 active,
                 []);
-
-        if (executionInventory is not null && !executionInventory.Succeeded)
-        {
-            var denied = executionInventory.Failure?.Kind is
-                NyxIdApiAccessFailureKind.Unauthorized or NyxIdApiAccessFailureKind.Forbidden;
-            return new NyxIdCodeExecutionRouteResolution(
-                denied
-                    ? NyxIdCodeExecutionRouteResolutionKind.AccessDenied
-                    : NyxIdCodeExecutionRouteResolutionKind.SourceUnavailable,
-                null,
-                canonical.Length,
-                accessible.Length,
-                active.Length,
-                0,
-                executionInventory.Failure);
-        }
 
         var executionReady = executionInventory is null
             ? active
@@ -173,20 +174,20 @@ public static class NyxIdCodeExecutionRouteResolver
     }
 
     /// <summary>
-    /// Whether the route delivers a credential the deployed platform runtime accepts. Existing
-    /// forwarding routes remain valid; otherwise NyxID must inject a short-lived token whose
-    /// whitespace scope membership includes <c>sandbox:execute</c>. Command-side reconciliation
-    /// targets the non-forwarding delegated shape without invalidating already-admitted routes.
+    /// Whether the shared route delivers both credentials required by platform code execution.
+    /// The caller's Agent Key is forwarded for sandbox outbound calls, while NyxID's short-lived
+    /// delegation authenticates the Chrono execution boundary and preserves managed Codex's
+    /// <c>proxy:*</c> capability on the same UserService.
     /// </summary>
     public static bool HasUsableExecutionCredential(NyxIdUserService service)
     {
         ArgumentNullException.ThrowIfNull(service);
-        return service.ForwardAccessToken == true ||
-               (service.InjectDelegationToken == true &&
-                GrantsCodeExecutionDelegation(service.DelegationTokenScope));
+        return service.ForwardAccessToken == true &&
+               service.InjectDelegationToken == true &&
+               GrantsRequiredDelegationScopes(service.DelegationTokenScope);
     }
 
-    public static string AddCodeExecutionDelegationScope(string? delegationTokenScope)
+    public static string AddRequiredDelegationScopes(string? delegationTokenScope)
     {
         var scopes = string.IsNullOrWhiteSpace(delegationTokenScope)
             ? []
@@ -196,18 +197,24 @@ public static class NyxIdCodeExecutionRouteResolver
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
+        if (!scopes.Contains(ProxyDelegationScope, StringComparer.Ordinal))
+            scopes.Add(ProxyDelegationScope);
         if (!scopes.Contains(CodeDelegationScope, StringComparer.Ordinal))
             scopes.Add(CodeDelegationScope);
         return string.Join(' ', scopes);
     }
 
-    private static bool GrantsCodeExecutionDelegation(string? delegationTokenScope) =>
-        !string.IsNullOrWhiteSpace(delegationTokenScope) &&
-        delegationTokenScope
-            .Split(
-                (char[]?)null,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Contains(CodeDelegationScope, StringComparer.Ordinal);
+    private static bool GrantsRequiredDelegationScopes(string? delegationTokenScope)
+    {
+        if (string.IsNullOrWhiteSpace(delegationTokenScope))
+            return false;
+
+        var scopes = delegationTokenScope.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return scopes.Contains(CodeDelegationScope, StringComparer.Ordinal) &&
+               scopes.Contains(ProxyDelegationScope, StringComparer.Ordinal);
+    }
 
     private static bool IsAccessible(NyxIdUserService service) =>
         service.CredentialSource.Kind switch
@@ -225,6 +232,33 @@ public static class NyxIdCodeExecutionRouteResolver
         out NyxIdUserServiceAuthority? authority) =>
         new NyxIdUserServiceAuthoritySnapshot(routes, executionInventory)
             .TryGetExact(userServiceId, out authority);
+
+    private static bool IsCanonicalCodeExecutionRoute(
+        NyxIdApiAccessResult<NyxIdUserServices> routes,
+        NyxIdApiAccessResult<NyxIdUserServiceKeys>? executionInventory,
+        NyxIdUserService service)
+    {
+        if (executionInventory is null)
+        {
+            return string.Equals(
+                service.Slug,
+                CodeExecutionContract.ServiceSlug,
+                StringComparison.Ordinal);
+        }
+
+        return executionInventory.Succeeded &&
+               CodeExecutionContract.IsSupportedServiceSlug(service.Slug) &&
+               TryResolveExecutionAuthority(
+                   routes,
+                   executionInventory,
+                   service.Id,
+                   out var authority) &&
+               authority is not null &&
+               string.Equals(
+                   authority.Execution.CatalogServiceSlug,
+                   CodeExecutionContract.ServiceSlug,
+                   StringComparison.Ordinal);
+    }
 
     private static NyxIdCodeExecutionRouteResolution Result(
         NyxIdCodeExecutionRouteResolutionKind kind,

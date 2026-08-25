@@ -1,12 +1,17 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
+using Google.Protobuf;
 using Google.Protobuf.Reflection;
 
 namespace Aevatar.GAgentService.Abstractions.Services;
 
 public static class WorkflowServiceRevisionArtifactBuilder
 {
+    private static readonly ByteString ChatProtocolDescriptorSet = BuildProtocolDescriptorSet(
+        ChatRequestEvent.Descriptor,
+        ChatResponseEvent.Descriptor);
+
     public static PreparedServiceRevisionArtifact Build(
         ServiceRevisionSpec revisionSpec,
         string resolvedWorkflowName,
@@ -20,6 +25,11 @@ public static class WorkflowServiceRevisionArtifactBuilder
             ?? throw new InvalidOperationException("service identity is required.");
         var workflowSpec = revisionSpec.WorkflowSpec
             ?? throw new InvalidOperationException("workflow implementation_spec is required.");
+        if (!WorkflowToolCatalogPolicies.IsCurrent(workflowSpec.ToolCatalogPolicyVersion))
+        {
+            throw new InvalidOperationException(
+                "workflow tool catalog policy version must be the current reviewed policy.");
+        }
         if (authorizationDependencies.ServiceGrantPolicy == WorkflowServiceGrantPolicy.Unspecified ||
             !Enum.IsDefined(authorizationDependencies.ServiceGrantPolicy))
         {
@@ -63,6 +73,7 @@ public static class WorkflowServiceRevisionArtifactBuilder
             AuthorizationEvidence = authorizationEvidence,
             CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
             ExecutionMode = capabilityAdmissionPlan.ExecutionMode,
+            ToolCatalogPolicyVersion = workflowSpec.ToolCatalogPolicyVersion,
         };
         workflowPlan.InlineWorkflowYamls.Add(workflowSpec.InlineWorkflowYamls);
 
@@ -71,6 +82,7 @@ public static class WorkflowServiceRevisionArtifactBuilder
             Identity = identity.Clone(),
             RevisionId = revisionSpec.RevisionId,
             ImplementationKind = ServiceImplementationKind.Workflow,
+            ProtocolDescriptorSet = ChatProtocolDescriptorSet,
             Endpoints =
             {
                 new ServiceEndpointDescriptor
@@ -92,4 +104,30 @@ public static class WorkflowServiceRevisionArtifactBuilder
 
     private static string GetTypeUrl(MessageDescriptor descriptor) =>
         $"type.googleapis.com/{descriptor.FullName}";
+
+    private static ByteString BuildProtocolDescriptorSet(params MessageDescriptor[] descriptors)
+    {
+        var files = new List<FileDescriptorProto>();
+        var addedFiles = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var descriptor in descriptors)
+            AddFile(descriptor.File, addedFiles, files);
+
+        var descriptorSet = new FileDescriptorSet();
+        descriptorSet.File.Add(files);
+        return descriptorSet.ToByteString();
+    }
+
+    private static void AddFile(
+        FileDescriptor file,
+        ISet<string> addedFiles,
+        ICollection<FileDescriptorProto> files)
+    {
+        if (!addedFiles.Add(file.Name))
+            return;
+
+        foreach (var dependency in file.Dependencies)
+            AddFile(dependency, addedFiles, files);
+
+        files.Add(file.ToProto());
+    }
 }

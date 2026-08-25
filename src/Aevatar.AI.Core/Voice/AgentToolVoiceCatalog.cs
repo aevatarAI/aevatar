@@ -2,20 +2,21 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.Core.Voice;
 
 /// <summary>
-/// Adapts <see cref="IAgentToolSource"/> discovery to the narrow
-/// <see cref="IVoiceToolCatalog"/> port used by voice sessions.
+/// Maps the generic immutable turn catalog to the voice transport contract. Discovery, proof
+/// construction, and exact-object selection remain owned by the shared voice materializer.
 /// </summary>
 public sealed class AgentToolVoiceCatalog : IVoiceToolCatalog
 {
-    private readonly IEnumerable<IAgentToolSource> _toolSources;
-    private readonly IReadOnlyList<ICredentialProvider> _credentialProviders;
-    private readonly ILogger _logger;
-    private volatile Lazy<Task<IReadOnlyList<VoiceToolDefinition>>>? _toolDefinitions;
+    private readonly VoiceAgentTurnToolCatalogMaterializer _materializer;
+
+    public AgentToolVoiceCatalog(VoiceAgentTurnToolCatalogMaterializer materializer)
+    {
+        _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
+    }
 
     public AgentToolVoiceCatalog(
         IEnumerable<IAgentToolSource> toolSources,
@@ -31,152 +32,35 @@ public sealed class AgentToolVoiceCatalog : IVoiceToolCatalog
     public AgentToolVoiceCatalog(
         IEnumerable<IAgentToolSource> toolSources,
         IEnumerable<ICredentialProvider> credentialProviders,
-        ILogger<AgentToolVoiceCatalog>? logger = null)
+        ILogger<AgentToolVoiceCatalog>? logger = null,
+        IAgentToolDiscoveryService? toolDiscoveryService = null)
+        : this(new VoiceAgentTurnToolCatalogMaterializer(
+            toolSources,
+            credentialProviders,
+            toolDiscoveryService,
+            logger: null))
     {
-        _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
-        _credentialProviders = credentialProviders?.ToList() ?? [];
-        _logger = logger ?? NullLogger<AgentToolVoiceCatalog>.Instance;
+        _ = logger;
     }
 
-    public async Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+    public async Task<VoiceToolCatalogSnapshot> DiscoverAsync(
         VoiceToolExecutionContext? toolContext = null,
         CancellationToken ct = default)
     {
-        if (toolContext is not null &&
-            VoiceToolExecutionContextMapper.IsUsableCredentialRef(toolContext, DateTimeOffset.UtcNow))
+        var catalog = await _materializer.MaterializeAsync(toolContext, ct).ConfigureAwait(false);
+        var snapshot = new VoiceToolCatalogSnapshot
         {
-            var agentToolContext = await ResolveToolContextAsync(toolContext, ct);
-            if (agentToolContext is null)
-                return [];
-
-            using var scope = AgentToolContextScope.Push(agentToolContext);
-            return FilterVisibleDefinitions(
-                await DiscoverAllToolsAsync(_toolSources, _logger, ct),
-                agentToolContext.ToolVisibility);
-        }
-
-        while (true)
-        {
-            var current = _toolDefinitions;
-            if (TryGetReusableTask(current, out var cached))
-                return await cached;
-
-            // Refactor (iter88/cluster-088):
-            // Old: first-use discovery started before CompareExchange, multiplying source discovery
-            // under parallel callers.
-            // New: publish Lazy<Task<T>> first and let ExecutionAndPublication start discovery once.
-            var candidate = new Lazy<Task<IReadOnlyList<VoiceToolDefinition>>>(
-                () => DiscoverAllToolsAsync(_toolSources, _logger, ct),
-                LazyThreadSafetyMode.ExecutionAndPublication);
-            var winner = Interlocked.CompareExchange(ref _toolDefinitions, candidate, current);
-            if (ReferenceEquals(winner, current))
-                return await candidate.Value;
-        }
-    }
-
-    private async Task<AgentToolExecutionContext?> ResolveToolContextAsync(
-        VoiceToolExecutionContext toolContext,
-        CancellationToken ct)
-    {
-        if (_credentialProviders.Count == 0)
-            return null;
-
-        var credentialRef = VoiceToolExecutionContextMapper.Normalize(toolContext.CredentialRef);
-        if (credentialRef is null)
-            return null;
-
-        var nyxIdAccessToken = await ResolveCredentialRefAsync(credentialRef, ct);
-        if (string.IsNullOrWhiteSpace(nyxIdAccessToken))
-            return null;
-
-        return VoiceToolExecutionContextMapper.ToAgentToolContext(toolContext, nyxIdAccessToken);
-    }
-
-    private async Task<string?> ResolveCredentialRefAsync(string credentialRef, CancellationToken ct)
-    {
-        foreach (var credentialProvider in _credentialProviders)
-        {
-            var credential = await credentialProvider.ResolveAsync(credentialRef, ct);
-            if (!string.IsNullOrWhiteSpace(credential))
-                return credential;
-        }
-
-        return null;
-    }
-
-    private static bool TryGetReusableTask(
-        Lazy<Task<IReadOnlyList<VoiceToolDefinition>>>? current,
-        out Task<IReadOnlyList<VoiceToolDefinition>> task)
-    {
-        task = null!;
-        if (current == null)
-            return false;
-
-        if (!current.IsValueCreated)
-        {
-            task = current.Value;
-            return true;
-        }
-
-        var existing = current.Value;
-        if (existing.IsFaulted || existing.IsCanceled)
-            return false;
-
-        task = existing;
-        return true;
-    }
-
-    private static async Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAllToolsAsync(
-        IEnumerable<IAgentToolSource> toolSources,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        var definitions = new Dictionary<string, VoiceToolDefinition>(StringComparer.OrdinalIgnoreCase);
-        foreach (var source in toolSources)
-        {
-            IReadOnlyList<IAgentTool> tools;
-            try
+            Proof = VoiceAgentTurnToolCatalogProofMapper.ToPayload(catalog.Proof),
+            PolicyVersion = VoiceAgentTurnToolCatalogMaterializer.PolicyVersion,
+        };
+        snapshot.Tools.AddRange(catalog.Proof.ToolDescriptors.Select(descriptor =>
+            new VoiceToolDefinition
             {
-                tools = await source.DiscoverToolsAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Voice tool source discovery failed: {Source}", source.GetType().Name);
-                continue;
-            }
-
-            foreach (var tool in tools)
-            {
-                if (string.IsNullOrWhiteSpace(tool.Name))
-                    continue;
-
-                definitions[tool.Name] = new VoiceToolDefinition
-                {
-                    Name = tool.Name,
-                    Description = tool.Description ?? string.Empty,
-                    ParametersSchema = string.IsNullOrWhiteSpace(tool.ParametersSchema)
-                        ? "{}"
-                        : tool.ParametersSchema,
-                };
-            }
-        }
-
-        return definitions.Values.ToList();
-    }
-
-    private static IReadOnlyList<VoiceToolDefinition> FilterVisibleDefinitions(
-        IReadOnlyList<VoiceToolDefinition> definitions,
-        AgentToolVisibilityScope visibility)
-    {
-        if (!visibility.IsRestricted)
-            return definitions;
-
-        return definitions
-            .Where(definition => visibility.Allows(definition.Name))
-            .ToList();
+                Name = descriptor.Name,
+                Description = descriptor.Description,
+                ParametersSchema = descriptor.CanonicalSchemaJson,
+                Owner = VoiceToolOwner.Actor,
+            }));
+        return snapshot;
     }
 }

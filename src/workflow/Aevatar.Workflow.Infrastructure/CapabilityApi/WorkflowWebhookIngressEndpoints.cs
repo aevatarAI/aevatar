@@ -1,6 +1,7 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
@@ -185,23 +186,24 @@ internal static class WorkflowWebhookIngressEndpoints
                 ScopeId = exactTarget.Definition.ScopeId,
                 ResolvedDefinitionBinding = exactTarget.Definition,
             };
-        if (dynamicRecord != null &&
-            !TryAttachUnattendedCaller(
+        if (dynamicRecord != null)
+        {
+            var attached = TryAttachUnattendedCaller(
                 dynamicRecord,
                 normalizedRoute,
                 exactTarget.Definition,
                 runRequest,
-                out runRequest))
-        {
-            scope.MarkResult(StatusCodes.Status409Conflict);
-            return Results.Json(
-                new
-                {
-                    code = "WEBHOOK_UNATTENDED_AUTHORIZATION_DRIFT",
-                    message = "Webhook unattended authorization no longer matches the pinned workflow definition.",
-                },
-                statusCode: StatusCodes.Status409Conflict);
+                out runRequest,
+                out var attachError);
+            if (!attached)
+            {
+                scope.MarkResult(attachError!.StatusCode);
+                return Results.Json(
+                    new { code = attachError.Code, message = attachError.Message },
+                    statusCode: attachError.StatusCode);
+            }
         }
+
         var admission = await replayStore.AdmitAsync(build.Admission!, ct);
         switch (admission.Status)
         {
@@ -242,18 +244,28 @@ internal static class WorkflowWebhookIngressEndpoints
         string routeKey,
         WorkflowDefinitionBinding? definition,
         WorkflowChatRunRequest source,
-        out WorkflowChatRunRequest result)
+        out WorkflowChatRunRequest result,
+        out WebhookIngressError? error)
     {
         result = source;
+        error = null;
         var authority = record.CallerAuthority;
         var authorization = record.UnattendedEffectAuthorization;
         if (authority is null && authorization is null)
+        {
+            if (record.CallerDurableCredential != null)
+            {
+                error = InvalidDurableCallerCredentialError;
+                return false;
+            }
             return true;
+        }
         if (authority is null || authorization is null || definition is null ||
             definition.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Durable ||
             definition.CapabilityAdmissionPlan is null ||
             string.IsNullOrWhiteSpace(authority.BindingId))
         {
+            error = UnattendedAuthorizationDriftError;
             return false;
         }
 
@@ -272,7 +284,22 @@ internal static class WorkflowWebhookIngressEndpoints
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
+            error = UnattendedAuthorizationDriftError;
             return false;
+        }
+
+        var durableCredential = record.CallerDurableCredential;
+        // Historical unattended bindings carry only authority and authorization.
+        // AgentKey is reserved for bindings with an exact, valid durable handle.
+        var credentialKind = NyxIdCallerCredentialKind.ProxyDelegation;
+        if (durableCredential != null)
+        {
+            if (!IsValidWebhookDurableAgentKey(record, authority, durableCredential))
+            {
+                error = InvalidDurableCallerCredentialError;
+                return false;
+            }
+            credentialKind = NyxIdCallerCredentialKind.AgentKey;
         }
 
         result = source with
@@ -285,13 +312,48 @@ internal static class WorkflowWebhookIngressEndpoints
                     authority.ExternalUserId,
                     authority.Scope,
                     authority.BindingId),
-                Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+                Kind: credentialKind,
                 SourceReadableUserBearerToken: null,
                 UnattendedEffectAuthorization: authorization.Clone(),
-                DurableCallerCredential: record.CallerDurableCredential?.Clone()),
+                DurableCallerCredential: durableCredential?.Clone()),
         };
         return true;
     }
+
+    private static bool IsValidWebhookDurableAgentKey(
+        WorkflowWebhookBindingRecord record,
+        Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority authority,
+        DurableCallerCredentialRef credential)
+    {
+        var descriptor = credential.SecretReference;
+        return credential.SourceKind == DurableCallerCredentialSourceKind.WebhookBinding &&
+               DurableCallerAgentKeyContract.Matches(credential) &&
+               !string.IsNullOrWhiteSpace(credential.Ref) &&
+               !string.IsNullOrWhiteSpace(credential.OwnerScopeKey) &&
+               !string.IsNullOrWhiteSpace(credential.SubjectId) &&
+               string.Equals(credential.OwnerScopeKey, record.ScopeId, StringComparison.Ordinal) &&
+               string.Equals(credential.SubjectId, authority.ExternalUserId, StringComparison.Ordinal) &&
+               descriptor is not null &&
+               !string.IsNullOrWhiteSpace(descriptor.Ref) &&
+               string.Equals(descriptor.Ref, credential.Ref, StringComparison.Ordinal) &&
+               string.Equals(descriptor.Purpose, credential.Purpose, StringComparison.Ordinal) &&
+               string.Equals(descriptor.OwnerScopeKey, credential.OwnerScopeKey, StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(descriptor.Fingerprint) &&
+               descriptor.Version > 0 &&
+               descriptor.CreatedAtUnixMs > 0;
+    }
+
+    private static readonly WebhookIngressError UnattendedAuthorizationDriftError = new(
+        StatusCodes.Status409Conflict,
+        "WEBHOOK_UNATTENDED_AUTHORIZATION_DRIFT",
+        "Webhook unattended authorization no longer matches the pinned workflow definition.");
+
+    private static readonly WebhookIngressError InvalidDurableCallerCredentialError = new(
+        StatusCodes.Status409Conflict,
+        "WEBHOOK_DURABLE_CALLER_CREDENTIAL_INVALID",
+        "Webhook durable caller credential is invalid for this binding.");
+
+    private sealed record WebhookIngressError(int StatusCode, string Code, string Message);
 
     private static async Task<IResult> DispatchAsync(
         HttpContext http,

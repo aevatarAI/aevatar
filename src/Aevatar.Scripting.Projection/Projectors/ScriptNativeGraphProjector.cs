@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Materialization;
 using Aevatar.Scripting.Projection.Orchestration;
@@ -17,15 +18,18 @@ public sealed class ScriptNativeGraphProjector
     private readonly IProjectionGraphWriter<ScriptNativeGraphReadModel> _graphWriter;
     private readonly IScriptProjectionPayloadMaterializer _payloadMaterializer;
     private readonly IScriptNativeGraphMaterializer _materializer;
+    private readonly ProjectionGraphProviderStatus? _graphProviderStatus;
 
     public ScriptNativeGraphProjector(
         IProjectionGraphWriter<ScriptNativeGraphReadModel> graphWriter,
         IScriptProjectionPayloadMaterializer payloadMaterializer,
-        IScriptNativeGraphMaterializer materializer)
+        IScriptNativeGraphMaterializer materializer,
+        ProjectionGraphProviderStatus? graphProviderStatus = null)
     {
         _graphWriter = graphWriter ?? throw new ArgumentNullException(nameof(graphWriter));
         _payloadMaterializer = payloadMaterializer ?? throw new ArgumentNullException(nameof(payloadMaterializer));
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
+        _graphProviderStatus = graphProviderStatus;
     }
 
     public async ValueTask ProjectAsync(
@@ -42,6 +46,9 @@ public sealed class ScriptNativeGraphProjector
         {
             return;
         }
+
+        if (_graphProviderStatus is { Enabled: false })
+            return;
 
         var fact = observedPayload.Unpack<ScriptDomainFactCommitted>();
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(
@@ -67,7 +74,7 @@ public sealed class ScriptNativeGraphProjector
             sourceEventId,
             updatedAt,
             payload.NativeGraph);
-        await _graphWriter.UpsertAsync(graphReadModel, ct);
+        await _graphWriter.UpsertAsync(graphReadModel, context.ProjectionKind, ct);
     }
 
 }

@@ -74,11 +74,15 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = request.StepId,
                 RunId = runId,
-                Input = request.Input ?? string.Empty,
+                Input = string.IsNullOrWhiteSpace(request.InputValueId)
+                    ? request.Input ?? string.Empty
+                    : string.Empty,
                 OnTimeout = request.Parameters.GetValueOrDefault("on_timeout", "fail"),
                 AllowEmpty = requestAllowEmpty,
                 VariableName = requestVariableName,
                 MaskedOutput = requestMaskedOutput,
+                ExecutionId = request.ExecutionId,
+                InputValueId = request.InputValueId,
             };
             await SecureInputStateAccess.SaveAsync(state, ctx, ct);
             await SecureInputRuntimeContextAccess.RemoveCapturedValueAsync(ctx, runId, requestVariableName, ct);
@@ -132,13 +136,18 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
                 pending.RunId,
                 pending.StepId);
 
+            var fallbackInput = ResolvePendingInput(pending, ctx);
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = pending.StepId,
                 RunId = pending.RunId,
+                ExecutionId = pending.ExecutionId,
                 Success = onTimeout != "fail",
-                Output = pending.Input,
+                Output = fallbackInput,
                 Error = onTimeout == "fail" ? "Secure input timed out" : "",
+                OutputProvenance = onTimeout != "fail"
+                    ? WorkflowStepOutputProvenance.ForwardedInput
+                    : WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             return;
         }
@@ -158,8 +167,10 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = pending.StepId,
                 RunId = pending.RunId,
+                ExecutionId = pending.ExecutionId,
                 Success = false,
                 Error = "Secure input is required",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             return;
         }
@@ -194,13 +205,28 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = pending.StepId,
             RunId = pending.RunId,
+            ExecutionId = pending.ExecutionId,
             Success = true,
             Output = maskedOutput,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
         stepCompleted.Annotations["secure.input"] = "true";
         stepCompleted.Annotations["secure.variable"] = variableName;
         stepCompleted.Annotations["secure.redacted_output"] = maskedOutput;
         await ctx.PublishAsync(stepCompleted, TopologyAudience.Self, ct);
+    }
+
+    private static string ResolvePendingInput(
+        PendingSecureInputState pending,
+        IWorkflowExecutionContext ctx)
+    {
+        if (string.IsNullOrWhiteSpace(pending.InputValueId))
+            return pending.Input ?? string.Empty;
+
+        var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+            ctx,
+            WorkflowExecutionKernel.ModuleStateKey);
+        return WorkflowExecutionValueStore.GetCanonicalValue(kernelState, pending.InputValueId).Value;
     }
 
     private static string ResolveMaskedOutput(IReadOnlyDictionary<string, string> parameters) =>

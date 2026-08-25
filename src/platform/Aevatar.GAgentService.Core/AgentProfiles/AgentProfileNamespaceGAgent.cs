@@ -234,21 +234,25 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             return;
         }
 
+        var existingAuthorityBinding = State.DefaultBindings.FirstOrDefault(x => x.AgentKind == command.AgentKind);
+        if (!TryBuildDefaultBinding(
+                namespaceOwner,
+                command,
+                existingAuthorityBinding,
+                out var nextBinding,
+                out var rolloutError))
+        {
+            await PersistRejectedAsync(operation, command.Owner, rolloutError);
+            return;
+        }
+
         var next = State.Clone();
         if (next.Owner is null || next.Owner.OwnerCase == AgentProfileOwner.OwnerOneofCase.None)
             next.Owner = command.Owner.Clone();
         var existingBinding = next.DefaultBindings.FirstOrDefault(x => x.AgentKind == command.AgentKind);
         if (existingBinding is not null)
             next.DefaultBindings.Remove(existingBinding);
-        next.DefaultBindings.Add(new AgentProfileDefaultBinding
-        {
-            AgentKind = command.AgentKind,
-            Target = command.Target.Clone(),
-        });
-        if (command.AdmissionCase == SetAgentProfileDefaultBindingCommand.AdmissionOneofCase.Scope)
-            next.DefaultBindings[^1].Scope = command.Scope.Clone();
-        else
-            next.DefaultBindings[^1].System = command.System.Clone();
+        next.DefaultBindings.Add(nextBinding);
         next.Operations.Add(operation.Clone());
         next.LastMutation = Outcome(operation, AgentProfileMutationStatus.Succeeded,
             "DEFAULT_BINDING_SET", NextVersion());
@@ -291,9 +295,110 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 command.AdmissionCase == SetAgentProfileDefaultBindingCommand.AdmissionOneofCase.Scope,
             AgentProfileOwner.OwnerOneofCase.System =>
                 command.AdmissionCase == SetAgentProfileDefaultBindingCommand.AdmissionOneofCase.System &&
-                command.System.CohortBasisPoints is >= 0 and <= AgentProfilePolicies.FullCohortBasisPoints,
+                AgentProfilePolicies.IsReviewedRolloutCohort(command.System.CohortBasisPoints),
             _ => false,
         };
+
+    private static bool TryBuildDefaultBinding(
+        AgentProfileOwner owner,
+        SetAgentProfileDefaultBindingCommand command,
+        AgentProfileDefaultBinding? existing,
+        out AgentProfileDefaultBinding binding,
+        out string error)
+    {
+        binding = new AgentProfileDefaultBinding
+        {
+            AgentKind = command.AgentKind,
+            Target = command.Target.Clone(),
+        };
+        error = string.Empty;
+        if (owner.OwnerCase == AgentProfileOwner.OwnerOneofCase.Scope)
+        {
+            binding.Scope = new AgentProfileScopeBindingAdmission();
+            return true;
+        }
+
+        var admission = new AgentProfileSystemBindingAdmission
+        {
+            Enabled = command.System.Enabled,
+            CohortBasisPoints = command.System.CohortBasisPoints,
+        };
+        if (existing is null)
+        {
+            if (admission.CohortBasisPoints != AgentProfilePolicies.FullCohortBasisPoints)
+            {
+                error = "ROLLOUT_BASELINE_REQUIRED";
+                return false;
+            }
+
+            binding.System = admission;
+            return true;
+        }
+
+        if (existing.AdmissionCase != AgentProfileDefaultBinding.AdmissionOneofCase.System ||
+            existing.System is null ||
+            !IsValidBindingTarget(existing.Target))
+        {
+            error = "ROLLOUT_STATE_INVALID";
+            return false;
+        }
+
+        if (SameBindingTarget(existing.Target, command.Target))
+        {
+            if (admission.CohortBasisPoints != existing.System.CohortBasisPoints &&
+                !IsNextRolloutStage(existing.System.CohortBasisPoints, admission.CohortBasisPoints))
+            {
+                error = "ROLLOUT_STAGE_INVALID";
+                return false;
+            }
+
+            admission.PreviousReviewedTarget = existing.System.PreviousReviewedTarget?.Clone();
+            if (admission.CohortBasisPoints != AgentProfilePolicies.FullCohortBasisPoints &&
+                !IsValidBindingTarget(admission.PreviousReviewedTarget))
+            {
+                error = "ROLLOUT_BASELINE_REQUIRED";
+                return false;
+            }
+
+            binding.System = admission;
+            return true;
+        }
+
+        if (SameBindingTarget(existing.System.PreviousReviewedTarget, command.Target) &&
+            admission.CohortBasisPoints == AgentProfilePolicies.FullCohortBasisPoints)
+        {
+            admission.PreviousReviewedTarget = existing.Target.Clone();
+            binding.System = admission;
+            return true;
+        }
+
+        if (existing.System.CohortBasisPoints == AgentProfilePolicies.FullCohortBasisPoints &&
+            admission.CohortBasisPoints == AgentProfilePolicies.CanaryCohortBasisPoints)
+        {
+            admission.PreviousReviewedTarget = existing.Target.Clone();
+            binding.System = admission;
+            return true;
+        }
+
+        error = "ROLLOUT_STAGE_INVALID";
+        return false;
+    }
+
+    private static bool IsNextRolloutStage(int current, int next) =>
+        current == AgentProfilePolicies.CanaryCohortBasisPoints &&
+        next == AgentProfilePolicies.ExpandedCohortBasisPoints ||
+        current == AgentProfilePolicies.ExpandedCohortBasisPoints &&
+        next == AgentProfilePolicies.FullCohortBasisPoints;
+
+    private static bool SameBindingTarget(
+        AgentProfileBindingTarget? left,
+        AgentProfileBindingTarget? right) =>
+        IsValidBindingTarget(left) &&
+        IsValidBindingTarget(right) &&
+        AgentProfileDeterminism.SameOwner(left!.Owner, right!.Owner) &&
+        string.Equals(left.ProfileId, right.ProfileId, StringComparison.Ordinal) &&
+        left.PublishedRevision == right.PublishedRevision &&
+        left.SnapshotSha256.Equals(right.SnapshotSha256);
 
     private static bool IsAllowedBindingOwner(AgentProfileOwner namespaceOwner, AgentProfileOwner targetOwner) =>
         AgentProfileDeterminism.SameOwner(namespaceOwner, targetOwner) ||

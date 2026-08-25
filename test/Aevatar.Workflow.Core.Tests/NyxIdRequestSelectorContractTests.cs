@@ -33,7 +33,7 @@ public sealed class NyxIdRequestSelectorContractTests
     }
 
     [Fact]
-    public void IsDurableEligible_ShouldRejectExplicitReadOnlyPost()
+    public void IsDurableEligible_ShouldAcceptExplicitReadOnlyPost()
     {
         var selector = ValidSelector("/api/query");
         selector.Method = NyxIdRequestMethod.Post;
@@ -47,7 +47,7 @@ public sealed class NyxIdRequestSelectorContractTests
             out var effectiveRisk).Should().BeTrue();
         NyxIdRequestSelectorContract.SupportsDurableExecution(
             selector.Method,
-            effectiveRisk).Should().BeFalse();
+            effectiveRisk).Should().BeTrue();
     }
 
     [Fact]

@@ -13,10 +13,15 @@ public static class Neo4jProjectionServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
 
-        services.AddSingleton<IProjectionGraphStore>(provider =>
+        services.AddSingleton<Neo4jProjectionGraphStore>(provider =>
             new Neo4jProjectionGraphStore(
                 optionsFactory(provider),
                 provider.GetService<ILogger<Neo4jProjectionGraphStore>>()));
+        services.AddSingleton<IProjectionGraphStore>(provider =>
+            provider.GetRequiredService<Neo4jProjectionGraphStore>());
+        services.AddSingleton<IVersionedProjectionGraphStore>(provider =>
+            provider.GetRequiredService<Neo4jProjectionGraphStore>());
+        services.AddSingleton(new ProjectionGraphProviderStatus("Neo4j", Enabled: true));
 
         return services;
     }

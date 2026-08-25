@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Abstractions;
@@ -12,87 +15,91 @@ namespace Aevatar.Workflow.Projection.Projectors;
 
 internal static class WorkflowExecutionArtifactMaterializationSupport
 {
+    private const string CurrentReportVersion = "3.1";
+
     private delegate void ObservedPayloadHandler(
         WorkflowRunInsightReportDocument readModel,
         Google.Protobuf.WellKnownTypes.Any payload,
-        DateTimeOffset observedAt);
+        DateTimeOffset observedAt,
+        string sourceEventId);
 
     private static readonly IReadOnlyDictionary<string, ObservedPayloadHandler> ObservedPayloadHandlers =
         new Dictionary<string, ObservedPayloadHandler>(StringComparer.Ordinal)
         {
-            [BuildTypeUrl(WorkflowRunExecutionStartedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+            [BuildTypeUrl(WorkflowRunExecutionStartedEvent.Descriptor)] = static (readModel, payload, observedAt, _) =>
                 ApplyWorkflowRunExecutionStarted(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowRunExecutionStartedEvent>(),
                     observedAt),
-            [BuildTypeUrl(StepRequestEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+            [BuildTypeUrl(StepRequestEvent.Descriptor)] = static (readModel, payload, observedAt, sourceEventId) =>
                 ApplyStepRequest(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<StepRequestEvent>(),
-                    observedAt),
-            [BuildTypeUrl(StepCompletedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                    observedAt,
+                    sourceEventId),
+            [BuildTypeUrl(StepCompletedEvent.Descriptor)] = static (readModel, payload, observedAt, _) =>
                 ApplyStepCompleted(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<StepCompletedEvent>(),
                     observedAt),
-            [BuildTypeUrl(WorkflowSuspendedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+            [BuildTypeUrl(WorkflowSuspendedEvent.Descriptor)] = static (readModel, payload, observedAt, _) =>
                 ApplyWorkflowSuspended(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowSuspendedEvent>(),
                     observedAt),
-            [BuildTypeUrl(WorkflowToolApprovalResumeRejectedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+            [BuildTypeUrl(WorkflowToolApprovalResumeRejectedEvent.Descriptor)] = static (readModel, payload, observedAt, _) =>
                 ApplyWorkflowToolApprovalResumeRejected(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowToolApprovalResumeRejectedEvent>(),
                     observedAt),
-            [BuildTypeUrl(WaitingForSignalEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+            [BuildTypeUrl(WaitingForSignalEvent.Descriptor)] = static (readModel, payload, observedAt, _) =>
                 ApplyWaitingForSignal(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WaitingForSignalEvent>(),
                     observedAt),
-            [BuildTypeUrl(WorkflowSignalBufferedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+            [BuildTypeUrl(WorkflowSignalBufferedEvent.Descriptor)] = static (readModel, payload, observedAt, _) =>
                 ApplyWorkflowSignalBuffered(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowSignalBufferedEvent>(),
                     observedAt),
-            [BuildTypeUrl(WorkflowRoleActorLinkedEvent.Descriptor)] = static (readModel, payload, _) =>
+            [BuildTypeUrl(WorkflowRoleActorLinkedEvent.Descriptor)] = static (readModel, payload, _, _) =>
                 ApplyWorkflowRoleActorLinked(
                     readModel,
                     payload.Unpack<WorkflowRoleActorLinkedEvent>()),
-            [BuildTypeUrl(SubWorkflowBindingUpsertedEvent.Descriptor)] = static (readModel, payload, _) =>
+            [BuildTypeUrl(SubWorkflowBindingUpsertedEvent.Descriptor)] = static (readModel, payload, _, _) =>
                 ApplySubWorkflowBindingUpserted(
                     readModel,
                     payload.Unpack<SubWorkflowBindingUpsertedEvent>()),
-            [BuildTypeUrl(WorkflowRoleReplyRecordedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+            [BuildTypeUrl(WorkflowRoleReplyRecordedEvent.Descriptor)] = static (readModel, payload, observedAt, _) =>
                 ApplyWorkflowRoleReplyRecorded(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowRoleReplyRecordedEvent>(),
                     observedAt),
-            [BuildTypeUrl(WorkflowRuntimeOperationRecordedEvent.Descriptor)] = static (readModel, payload, _) =>
+            [BuildTypeUrl(WorkflowRuntimeOperationRecordedEvent.Descriptor)] = static (readModel, payload, _, _) =>
                 ApplyWorkflowRuntimeOperationRecorded(
                     readModel,
                     payload.Unpack<WorkflowRuntimeOperationRecordedEvent>()),
-            [BuildTypeUrl(WorkflowCompletedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+            [BuildTypeUrl(WorkflowCompletedEvent.Descriptor)] = static (readModel, payload, observedAt, _) =>
                 ApplyWorkflowCompleted(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowCompletedEvent>(),
                     observedAt),
-            [BuildTypeUrl(WorkflowStoppedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+            [BuildTypeUrl(WorkflowStoppedEvent.Descriptor)] = static (readModel, payload, observedAt, _) =>
                 ApplyWorkflowStopped(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowStoppedEvent>(),
                     observedAt),
-            [BuildTypeUrl(WorkflowRunStoppedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+            [BuildTypeUrl(WorkflowRunStoppedEvent.Descriptor)] = static (readModel, payload, observedAt, _) =>
                 ApplyWorkflowRunStopped(
                     readModel,
                     payload.TypeUrl ?? string.Empty,
@@ -141,7 +148,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             Id = context.RootActorId,
             RootActorId = context.RootActorId,
             CommandId = state.LastCommandId ?? string.Empty,
-            ReportVersion = "3.0",
+            ReportVersion = CurrentReportVersion,
             ProjectionScope = WorkflowExecutionProjectionScope.RunIsolated,
             // Refactor (iter33/cluster-035-workflow-report-runtime-topology-sideread):
             //   Old pattern: Workflow report 用 IActorRuntime.GetAsync(...).GetChildrenIdsAsync() 读 runtime children 当 topology 事实,违反 runtime-shape-not-fact + side-read
@@ -166,7 +173,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         readModel.WorkflowName = ResolveWorkflowName(state, readModel.WorkflowName);
         readModel.Input = SanitizeAuditText(state.Input);
         readModel.FinalOutput = SanitizeAuditText(state.FinalOutput);
-        readModel.FinalError = SanitizeAuditText(state.FinalError);
+        readModel.FinalError = WorkflowAuditTextSanitizer.SanitizeForStorage(state.FinalError);
         readModel.Success = ResolveSuccess(state.Status);
         readModel.CompletionStatus = ResolveCompletionStatus(state.Status, readModel.CompletionStatus);
         readModel.StateVersion = stateEvent.Version;
@@ -177,7 +184,10 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             readModel.CreatedAt = observedAt;
         if (readModel.StartedAt == default && string.Equals(state.Status, "running", StringComparison.OrdinalIgnoreCase))
             readModel.StartedAt = observedAt;
-        if (IsTerminalStatus(state.Status))
+        // EndedAt records when the run first reached a terminal status. A duplicate delivery or
+        // a maintenance republish of the terminal outcome must not move it to its own
+        // observation time.
+        if (IsTerminalStatus(state.Status) && readModel.EndedAt == default)
             readModel.EndedAt = observedAt;
     }
 
@@ -194,7 +204,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         }
 
         if (ObservedPayloadHandlers.TryGetValue(payload.TypeUrl ?? string.Empty, out var handler))
-            handler(readModel, payload, observedAt);
+            handler(readModel, payload, observedAt, stateEvent.EventId ?? string.Empty);
 
         RefreshSummary(readModel);
     }
@@ -225,17 +235,41 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         WorkflowRunInsightReportDocument readModel,
         string eventType,
         StepRequestEvent evt,
-        DateTimeOffset observedAt)
+        DateTimeOffset observedAt,
+        string sourceEventId)
     {
-        var step = GetOrCreateStep(readModel.Steps, evt.StepId);
+        var parameters = WorkflowStepParameterProjectionSource.From(evt);
+        var evidenceReference = string.IsNullOrWhiteSpace(evt.ExecutionId)
+            ? null
+            : GetOrAddRequestEvidence(
+                readModel,
+                evt.StepId ?? string.Empty,
+                evt.ExecutionId,
+                sourceEventId,
+                parameters);
+
+        var step = GetOrCreateStep(readModel, evt.StepId);
+        if (step.Outcome == WorkflowExecutionStepOutcomeReadModel.Failed)
+            step.LatestFailedAttempt = SnapshotFailedAttempt(step);
+        ResetCurrentAttempt(step);
         step.StepId = evt.StepId ?? string.Empty;
         step.DisplayName = ResolveStepDisplayName(evt.DisplayName, step.StepId);
         step.StepType = evt.StepType ?? string.Empty;
         step.TargetRole = evt.TargetRole ?? string.Empty;
         step.RequestedAt = observedAt;
         step.Outcome = WorkflowExecutionStepOutcomeReadModel.Waiting;
-        var parameters = WorkflowStepParameterProjectionSource.From(evt);
-        ReplaceMap(step.RequestParameters, parameters);
+        if (evidenceReference == null)
+        {
+            // Legacy events have no immutable attempt identity. Preserve their inline shape rather
+            // than inventing an execution id or binding history to the mutable latest step.
+            ReplaceMap(step.RequestParameters, parameters);
+        }
+        else
+        {
+            step.RequestParameters.Clear();
+            step.RequestEvidenceReference = evidenceReference.Clone();
+        }
+
         AddTimeline(
             readModel.Timeline,
             observedAt,
@@ -245,7 +279,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             evt.StepId,
             evt.StepType,
             eventType,
-            parameters);
+            evidenceReference == null ? parameters : null,
+            evidenceReference);
     }
 
     private static void ApplyStepCompleted(
@@ -254,13 +289,38 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         StepCompletedEvent evt,
         DateTimeOffset observedAt)
     {
-        var step = GetOrCreateStep(readModel.Steps, evt.StepId);
+        var step = GetOrCreateStep(readModel, evt.StepId);
         step.StepId = evt.StepId ?? string.Empty;
         step.CompletedAt = observedAt;
         step.Success = evt.Success;
         step.Outcome = ResolveStepOutcome(evt);
-        step.OutputPreview = SanitizeAuditTextForDisplay(evt.Output, 240);
-        step.Error = SanitizeAuditText(evt.Error);
+        step.LatestFailedAttempt = null;
+        var isFailure = step.Outcome == WorkflowExecutionStepOutcomeReadModel.Failed;
+        step.Error = isFailure
+            ? WorkflowAuditTextSanitizer.SanitizeForStorage(evt.Error)
+            : SanitizeAuditText(evt.Error);
+        var failureOutputTruncated = false;
+        step.FailureOutput = isFailure
+            ? SanitizeAuditTextForStorage(
+                evt.Output,
+                WorkflowAuditTextSanitizer.MaxDiagnosticEvidenceUtf8Bytes,
+                out failureOutputTruncated)
+            : string.Empty;
+        step.FailureOutputTruncated = isFailure && failureOutputTruncated;
+        step.OutputPreview = isFailure
+            ? SanitizeAuditTextForDisplay(step.FailureOutput, 240)
+            : SanitizeAuditTextForDisplay(evt.Output, 240);
+        step.FailureOutcome = isFailure
+            ? evt.FailureOutcome
+            : WorkflowStepFailureOutcome.Unspecified;
+        step.RecoveryFailureKind = isFailure
+            ? evt.RecoveryFailureKind
+            : WorkflowRecoveryFailureKind.Unspecified;
+        step.RetryDisposition = isFailure
+            ? evt.RetryDisposition
+            : WorkflowStepRetryDisposition.Unspecified;
+        step.FileItemResults = SanitizeFileItemResults(evt.FileItemResults);
+        step.VoteAgreementDecision = SanitizeVoteAgreementDecision(evt.VoteAgreementDecision);
         step.WorkerId = evt.WorkerId ?? string.Empty;
         step.NextStepId = evt.NextStepId ?? string.Empty;
         step.BranchKey = evt.BranchKey ?? string.Empty;
@@ -271,13 +331,15 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         AddTimeline(
             readModel.Timeline,
             observedAt,
-            evt.Success ? "step.completed" : "step.failed",
-            $"{evt.StepId} ({(evt.Success ? "success" : "failed")})",
+            isFailure ? "step.failed" : "step.completed",
+            isFailure
+                ? ResolveFailureTimelineMessage(step.Error, $"{evt.StepId} (failed)")
+                : $"{evt.StepId} ({(evt.Success ? "success" : "completed")})",
             evt.WorkerId,
             evt.StepId,
             step.StepType,
             eventType,
-            evt.Annotations);
+            BuildStepCompletionTimelineData(evt, isFailure, step.Error));
     }
 
     private static void ApplyWorkflowSuspended(
@@ -286,7 +348,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         WorkflowSuspendedEvent evt,
         DateTimeOffset observedAt)
     {
-        var step = GetOrCreateStep(readModel.Steps, evt.StepId);
+        var step = GetOrCreateStep(readModel, evt.StepId);
         step.SuspensionType = evt.SuspensionType ?? string.Empty;
         step.SuspensionPrompt = SanitizeAuditText(evt.Prompt);
         step.SuspensionContent = evt.Secure
@@ -531,6 +593,10 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
                     .Select(static name => name.Trim())
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(static name => name, StringComparer.Ordinal));
+            operation.ToolCatalogPolicyVersion = evt.ToolCatalogPolicyVersion ?? string.Empty;
+            operation.ToolCatalogToolCount = Math.Max(0, evt.ToolCatalogProof?.ToolCount ?? 0);
+            operation.ToolCatalogSchemaBytes = Math.Max(0, evt.ToolCatalogProof?.SchemaBytes ?? 0);
+            operation.ToolCatalogDigest = evt.ToolCatalogProof?.CatalogDigest ?? string.Empty;
             operation.ToolCallId = FirstNonEmpty(evt.ToolCallId, operation.ToolCallId);
             operation.ToolName = FirstNonEmpty(evt.ToolName, operation.ToolName);
             if (evt.ProgressSequence > 0 && eventTime.HasValue)
@@ -637,6 +703,28 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         return data;
     }
 
+    private static Dictionary<string, string> BuildStepCompletionTimelineData(
+        StepCompletedEvent evt,
+        bool isFailure,
+        string sanitizedError)
+    {
+        var data = evt.Annotations.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+        if (isFailure && !string.IsNullOrWhiteSpace(sanitizedError))
+            data["error"] = sanitizedError;
+        return data;
+    }
+
+    private static IReadOnlyDictionary<string, string>? BuildFailureTimelineData(string sanitizedError) =>
+        string.IsNullOrWhiteSpace(sanitizedError)
+            ? null
+            : new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["error"] = sanitizedError,
+            };
+
+    private static string ResolveFailureTimelineMessage(string sanitizedError, string fallback) =>
+        string.IsNullOrWhiteSpace(sanitizedError) ? fallback : sanitizedError;
+
     private static void ApplyWorkflowCompleted(
         WorkflowRunInsightReportDocument readModel,
         string eventType,
@@ -648,18 +736,29 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             : WorkflowExecutionCompletionStatus.Failed;
         readModel.Success = evt.Success;
         readModel.FinalOutput = SanitizeAuditText(evt.Output);
-        readModel.FinalError = SanitizeAuditText(evt.Error);
+        readModel.FinalError = evt.Success
+            ? SanitizeAuditText(evt.Error)
+            : WorkflowAuditTextSanitizer.SanitizeForStorage(evt.Error);
+        var terminalStage = evt.Success ? "workflow.completed" : "workflow.failed";
+        // A run reaches its terminal outcome exactly once; a maintenance republish or a
+        // redelivery of the same outcome must not append a second terminal timeline entry
+        // or move EndedAt to the observation time of the duplicate.
+        if (readModel.Timeline.Any(entry => entry.Stage == terminalStage))
+            return;
+
         readModel.EndedAt = observedAt;
         AddTimeline(
             readModel.Timeline,
             observedAt,
-            evt.Success ? "workflow.completed" : "workflow.failed",
-            evt.Success ? "completed" : "failed",
+            terminalStage,
+            evt.Success
+                ? "completed"
+                : ResolveFailureTimelineMessage(readModel.FinalError, "failed"),
             readModel.RootActorId,
             null,
             null,
             eventType,
-            null);
+            evt.Success ? null : BuildFailureTimelineData(readModel.FinalError));
     }
 
     private static void ApplyWorkflowStopped(
@@ -673,6 +772,10 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         readModel.FinalOutput = string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             readModel.FinalError = SanitizeAuditText(evt.Reason);
+        // Same terminal-outcome idempotence as ApplyWorkflowCompleted.
+        if (readModel.Timeline.Any(entry => entry.Stage == "workflow.stopped"))
+            return;
+
         readModel.EndedAt = observedAt;
         AddTimeline(
             readModel.Timeline,
@@ -697,6 +800,10 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         readModel.FinalOutput = string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             readModel.FinalError = SanitizeAuditText(evt.Reason);
+        // Same terminal-outcome idempotence as ApplyWorkflowCompleted.
+        if (readModel.Timeline.Any(entry => entry.Stage == "workflow.stopped"))
+            return;
+
         readModel.EndedAt = observedAt;
         AddTimeline(
             readModel.Timeline,
@@ -711,20 +818,178 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
     }
 
     private static WorkflowExecutionStepTrace GetOrCreateStep(
-        IList<WorkflowExecutionStepTrace> steps,
+        WorkflowRunInsightReportDocument readModel,
         string? stepId)
     {
         var normalizedStepId = stepId ?? string.Empty;
-        var existing = steps.FirstOrDefault(x => string.Equals(x.StepId, normalizedStepId, StringComparison.Ordinal));
-        if (existing != null)
-            return existing;
+        if (TryGetIndexedStep(readModel, normalizedStepId, out var indexed))
+            return indexed;
 
-        existing = new WorkflowExecutionStepTrace
+        if (readModel.StepIndexById.Count == 0 && readModel.Steps.Count > 0)
+            RebuildStepIndex(readModel);
+
+        if (TryGetIndexedStep(readModel, normalizedStepId, out indexed))
+            return indexed;
+
+        var existing = new WorkflowExecutionStepTrace
         {
             StepId = normalizedStepId,
         };
-        steps.Add(existing);
+        readModel.StepIndexById[normalizedStepId] = readModel.Steps.Count;
+        readModel.Steps.Add(existing);
         return existing;
+    }
+
+    internal static bool TryGetIndexedStep(
+        WorkflowRunInsightReportDocument readModel,
+        string? stepId,
+        out WorkflowExecutionStepTrace step)
+    {
+        ArgumentNullException.ThrowIfNull(readModel);
+        var normalizedStepId = stepId ?? string.Empty;
+        if (readModel.StepIndexById.TryGetValue(normalizedStepId, out var index) &&
+            index >= 0 &&
+            index < readModel.Steps.Count &&
+            string.Equals(readModel.Steps[index].StepId, normalizedStepId, StringComparison.Ordinal))
+        {
+            step = readModel.Steps[index];
+            return true;
+        }
+
+        step = null!;
+        return false;
+    }
+
+    private static void RebuildStepIndex(WorkflowRunInsightReportDocument readModel)
+    {
+        readModel.StepIndexById.Clear();
+        for (var index = 0; index < readModel.Steps.Count; index++)
+        {
+            var stepId = readModel.Steps[index].StepId ?? string.Empty;
+            if (!readModel.StepIndexById.ContainsKey(stepId))
+                readModel.StepIndexById[stepId] = index;
+        }
+    }
+
+    private static WorkflowStepRequestEvidenceReference GetOrAddRequestEvidence(
+        WorkflowRunInsightReportDocument readModel,
+        string stepId,
+        string executionId,
+        string sourceEventId,
+        IEnumerable<KeyValuePair<string, string>> sourceParameters)
+    {
+        var normalizedStepId = stepId?.Trim() ?? string.Empty;
+        var normalizedExecutionId = executionId?.Trim() ?? string.Empty;
+        var normalizedSourceEventId = sourceEventId?.Trim() ?? string.Empty;
+        if (normalizedStepId.Length == 0 || normalizedExecutionId.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Workflow request evidence requires non-empty step and execution identities.");
+        }
+
+        var source = sourceParameters.ToArray();
+        var retained = new Dictionary<string, string>(StringComparer.Ordinal);
+        ReplaceMap(retained, source);
+        var evidenceId = BuildRequestEvidenceId(normalizedStepId, normalizedExecutionId);
+        if (readModel.RequestEvidenceById.TryGetValue(evidenceId, out var existing))
+        {
+            EnsureRequestEvidenceMatches(
+                existing,
+                evidenceId,
+                normalizedStepId,
+                normalizedExecutionId,
+                normalizedSourceEventId,
+                retained);
+            return ToRequestEvidenceReference(existing);
+        }
+
+        var evidence = new WorkflowStepRequestEvidence
+        {
+            EvidenceId = evidenceId,
+            StepId = normalizedStepId,
+            ExecutionId = normalizedExecutionId,
+            SourceEventId = normalizedSourceEventId,
+            SourceParameterUtf8Bytes = CalculateParameterUtf8Bytes(source),
+            RetainedParameterUtf8Bytes = CalculateParameterUtf8Bytes(retained),
+            RetainedParameterSha256 = ComputeParameterSha256(retained),
+        };
+        evidence.ParametersMap.Add(retained);
+        readModel.RequestEvidenceById.Add(evidenceId, evidence);
+        return ToRequestEvidenceReference(evidence);
+    }
+
+    private static void EnsureRequestEvidenceMatches(
+        WorkflowStepRequestEvidence evidence,
+        string evidenceId,
+        string stepId,
+        string executionId,
+        string sourceEventId,
+        IReadOnlyDictionary<string, string> retainedParameters)
+    {
+        var identityMatches = string.Equals(evidence.EvidenceId, evidenceId, StringComparison.Ordinal) &&
+                              string.Equals(evidence.StepId, stepId, StringComparison.Ordinal) &&
+                              string.Equals(evidence.ExecutionId, executionId, StringComparison.Ordinal) &&
+                              string.Equals(evidence.SourceEventId, sourceEventId, StringComparison.Ordinal);
+        var parametersMatch = evidence.ParametersMap.Count == retainedParameters.Count &&
+                              retainedParameters.All(parameter =>
+                                  evidence.ParametersMap.TryGetValue(parameter.Key, out var value) &&
+                                  string.Equals(value, parameter.Value, StringComparison.Ordinal));
+        if (identityMatches && parametersMatch)
+            return;
+
+        throw new InvalidOperationException(
+            $"Workflow request evidence '{evidenceId}' is already bound to different immutable content.");
+    }
+
+    private static WorkflowStepRequestEvidenceReference ToRequestEvidenceReference(
+        WorkflowStepRequestEvidence evidence) =>
+        new()
+        {
+            EvidenceId = evidence.EvidenceId,
+            ExecutionId = evidence.ExecutionId,
+            SourceEventId = evidence.SourceEventId,
+        };
+
+    private static string BuildRequestEvidenceId(string stepId, string executionId)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendHashField(hash, "workflow-step-request-evidence.v1");
+        AppendHashField(hash, stepId);
+        AppendHashField(hash, executionId);
+        return "request-" + Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static string ComputeParameterSha256(IReadOnlyDictionary<string, string> parameters)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var parameter in parameters.OrderBy(x => x.Key, StringComparer.Ordinal))
+        {
+            AppendHashField(hash, parameter.Key);
+            AppendHashField(hash, parameter.Value);
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static long CalculateParameterUtf8Bytes(IEnumerable<KeyValuePair<string, string>> parameters)
+    {
+        long result = 0;
+        foreach (var parameter in parameters)
+        {
+            result = checked(result + Encoding.UTF8.GetByteCount(parameter.Key));
+            result = checked(result + Encoding.UTF8.GetByteCount(parameter.Value));
+        }
+
+        return result;
+    }
+
+    private static void AppendHashField(IncrementalHash hash, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32BigEndian(length, bytes.Length);
+        hash.AppendData(length);
+        hash.AppendData(bytes);
     }
 
     private static string BuildTypeUrl(MessageDescriptor descriptor)
@@ -760,7 +1025,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         string? stepId,
         string? stepType,
         string eventType,
-        IEnumerable<KeyValuePair<string, string>>? data)
+        IEnumerable<KeyValuePair<string, string>>? data,
+        WorkflowStepRequestEvidenceReference? requestEvidenceReference = null)
     {
         timeline.Add(new WorkflowExecutionTimelineEvent
         {
@@ -772,6 +1038,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             StepType = stepType ?? string.Empty,
             EventType = eventType ?? string.Empty,
             Data = SanitizeAuditMap(data),
+            RequestEvidenceReference = requestEvidenceReference?.Clone(),
         });
     }
 
@@ -789,6 +1056,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             StepType = source.StepType,
             EventType = source.EventType,
             Data = source.Data.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            RequestEvidenceReference = source.RequestEvidenceReference?.Clone(),
         };
     }
 
@@ -808,7 +1076,16 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             WorkerId = source.WorkerId,
             OutputPreview = source.OutputPreview,
             Error = source.Error,
+            FailureOutput = source.FailureOutput,
+            FailureOutputTruncated = source.FailureOutputTruncated,
+            FailureOutcome = source.FailureOutcome,
+            RecoveryFailureKind = source.RecoveryFailureKind,
+            RetryDisposition = source.RetryDisposition,
+            FileItemResults = source.FileItemResults?.Clone(),
+            VoteAgreementDecision = source.VoteAgreementDecision?.Clone(),
+            LatestFailedAttempt = source.LatestFailedAttempt?.Clone(),
             RequestParameters = source.RequestParameters.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            RequestEvidenceReference = source.RequestEvidenceReference?.Clone(),
             CompletionAnnotations = source.CompletionAnnotations.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
             NextStepId = source.NextStepId,
             BranchKey = source.BranchKey,
@@ -823,6 +1100,75 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             Usage = CloneUsage(source.Usage),
             Outcome = source.Outcome,
         };
+    }
+
+    private static WorkflowExecutionFailedStepAttemptReadModel SnapshotFailedAttempt(
+        WorkflowExecutionStepTrace source)
+    {
+        return new WorkflowExecutionFailedStepAttemptReadModel
+        {
+            DisplayName = source.DisplayName,
+            StepType = source.StepType,
+            TargetRole = source.TargetRole,
+            RequestedAt = source.RequestedAt,
+            CompletedAt = source.CompletedAt,
+            Success = source.Success,
+            WorkerId = source.WorkerId,
+            OutputPreview = source.OutputPreview,
+            Error = source.Error,
+            RequestParameters = source.RequestParameters.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            RequestEvidenceReference = source.RequestEvidenceReference?.Clone(),
+            CompletionAnnotations = source.CompletionAnnotations.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            NextStepId = source.NextStepId,
+            BranchKey = source.BranchKey,
+            AssignedVariable = source.AssignedVariable,
+            AssignedValue = source.AssignedValue,
+            Usage = CloneUsage(source.Usage),
+            FailureOutput = source.FailureOutput,
+            FailureOutputTruncated = source.FailureOutputTruncated,
+            FailureOutcome = source.FailureOutcome,
+            RecoveryFailureKind = source.RecoveryFailureKind,
+            RetryDisposition = source.RetryDisposition,
+            FileItemResults = source.FileItemResults?.Clone(),
+            VoteAgreementDecision = source.VoteAgreementDecision?.Clone(),
+            SuspensionType = source.SuspensionType,
+            SuspensionPrompt = source.SuspensionPrompt,
+            SuspensionTimeoutSeconds = source.SuspensionTimeoutSeconds,
+            RequestedVariableName = source.RequestedVariableName,
+            SuspensionContent = source.SuspensionContent,
+            ToolApprovalValue = source.ToolApprovalValue?.Clone(),
+        };
+    }
+
+    private static void ResetCurrentAttempt(WorkflowExecutionStepTrace step)
+    {
+        step.RequestParameters.Clear();
+        step.RequestEvidenceReference = null;
+        step.CompletedAt = null;
+        step.Success = null;
+        step.WorkerId = string.Empty;
+        step.OutputPreview = string.Empty;
+        step.Error = string.Empty;
+        step.FailureOutput = string.Empty;
+        step.FailureOutputTruncated = false;
+        step.FailureOutcome = WorkflowStepFailureOutcome.Unspecified;
+        step.RecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
+        step.RetryDisposition = WorkflowStepRetryDisposition.Unspecified;
+        step.FileItemResults = null;
+        step.VoteAgreementDecision = null;
+        step.CompletionAnnotations.Clear();
+        step.NextStepId = string.Empty;
+        step.BranchKey = string.Empty;
+        step.AssignedVariable = string.Empty;
+        step.AssignedValue = string.Empty;
+        step.SuspensionType = string.Empty;
+        step.SuspensionPrompt = string.Empty;
+        step.SuspensionContent = string.Empty;
+        step.SuspensionTimeoutSeconds = null;
+        step.RequestedVariableName = string.Empty;
+        step.ToolApprovalValue = null;
+        step.Usage = new WorkflowUsageMetricsReadModel();
+        step.Outcome = WorkflowExecutionStepOutcomeReadModel.Unspecified;
     }
 
     private static string ResolveStepDisplayName(string? displayName, string stepId)
@@ -972,6 +1318,115 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static string SanitizeAuditTextForDisplay(string? value, int maxLen) =>
         WorkflowAuditTextSanitizer.SanitizeForDisplay(value, maxLen);
+
+    private static string SanitizeAuditTextForStorage(
+        string? value,
+        int maxUtf8Bytes,
+        out bool truncated) =>
+        WorkflowAuditTextSanitizer.SanitizeForStorage(value, maxUtf8Bytes, out truncated);
+
+    private static WorkflowFileItemResultSet? SanitizeFileItemResults(WorkflowFileItemResultSet? source)
+    {
+        if (source == null)
+            return null;
+
+        var sourceResultCount = Math.Max(0, source.SourceResultCount);
+        if (!source.ResultsTruncated || sourceResultCount > 0)
+            sourceResultCount = Math.Max(sourceResultCount, source.Results.Count);
+        var resultsTruncated = source.ResultsTruncated || sourceResultCount > source.Results.Count;
+        var retainedResults = SelectFileItemResultHeadTail(source.Results);
+        resultsTruncated |= retainedResults.Count < source.Results.Count;
+
+        var sanitized = new WorkflowFileItemResultSet
+        {
+            SourceResultCount = sourceResultCount,
+            ResultsTruncated = resultsTruncated,
+        };
+        sanitized.Results.Add(retainedResults.Select(SanitizeFileItemResult));
+        return sanitized;
+    }
+
+    private static IReadOnlyList<WorkflowFileItemResult> SelectFileItemResultHeadTail(
+        IList<WorkflowFileItemResult> source)
+    {
+        var maxResults = WorkflowFileItemResultProjectionContract.MaxRetainedResults;
+        if (source.Count <= maxResults)
+            return source.ToList();
+
+        var headCount = maxResults / 2;
+        var tailCount = maxResults - headCount;
+        return source.Take(headCount).Concat(source.Skip(source.Count - tailCount)).ToList();
+    }
+
+    private static WorkflowFileItemResult SanitizeFileItemResult(WorkflowFileItemResult item)
+    {
+        var output = SanitizeAuditTextForStorage(
+            item.Output,
+            WorkflowFileItemResultProjectionContract.MaxEvidenceUtf8Bytes,
+            out var outputTruncated);
+        var error = SanitizeAuditTextForStorage(
+            item.Error,
+            WorkflowFileItemResultProjectionContract.MaxEvidenceUtf8Bytes,
+            out var errorTruncated);
+        return new WorkflowFileItemResult
+        {
+            Index = item.Index,
+            FileRef = SanitizeFileRef(item.FileRef),
+            Success = item.Success,
+            Output = output,
+            Error = error,
+            OutputTruncated = item.OutputTruncated || outputTruncated,
+            ErrorTruncated = item.ErrorTruncated || errorTruncated,
+        };
+    }
+
+    private static WorkflowFileRef? SanitizeFileRef(WorkflowFileRef? source) =>
+        source == null
+            ? null
+            : new WorkflowFileRef
+            {
+                FileId = SanitizeAuditText(source.FileId),
+                ArtifactId = SanitizeAuditText(source.ArtifactId),
+                SourceKind = source.SourceKind,
+                SourceMessageId = SanitizeAuditText(source.SourceMessageId),
+                SourceResourceKey = SanitizeAuditText(source.SourceResourceKey),
+                FileName = SanitizeAuditText(source.FileName),
+                MediaType = SanitizeAuditText(source.MediaType),
+                SizeBytes = source.SizeBytes,
+                Sha256 = SanitizeAuditText(source.Sha256),
+                CreatedAtUnixMs = source.CreatedAtUnixMs,
+                ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+                OwnerRunId = SanitizeAuditText(source.OwnerRunId),
+                OwnerScopeId = SanitizeAuditText(source.OwnerScopeId),
+            };
+
+    private static VoteAgreementDecision? SanitizeVoteAgreementDecision(VoteAgreementDecision? source)
+    {
+        if (source == null)
+            return null;
+
+        var output = SanitizeAuditTextForStorage(
+            source.Output,
+            WorkflowAuditTextSanitizer.MaxDiagnosticEvidenceUtf8Bytes,
+            out var outputTruncated);
+        var reason = SanitizeAuditTextForStorage(
+            source.Reason,
+            WorkflowAuditTextSanitizer.MaxDiagnosticEvidenceUtf8Bytes,
+            out var reasonTruncated);
+        var sanitized = new VoteAgreementDecision
+        {
+            Kind = source.Kind,
+            BranchKey = SanitizeAuditText(source.BranchKey),
+            WinnerCandidateId = SanitizeAuditText(source.WinnerCandidateId),
+            Output = output,
+            Reason = reason,
+            OutputTruncated = source.OutputTruncated || outputTruncated,
+            ReasonTruncated = source.ReasonTruncated || reasonTruncated,
+        };
+        foreach (var (label, count) in source.LabelCounts)
+            sanitized.LabelCounts[SanitizeAuditText(label)] = count;
+        return sanitized;
+    }
 
     private static Dictionary<string, string> SanitizeAuditMap(IEnumerable<KeyValuePair<string, string>>? data) =>
         WorkflowAuditTextSanitizer.SanitizeMap(data);

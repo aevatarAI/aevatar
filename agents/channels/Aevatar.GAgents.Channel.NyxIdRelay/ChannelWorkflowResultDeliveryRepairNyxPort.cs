@@ -72,6 +72,16 @@ internal sealed class ChannelWorkflowResultDeliveryRepairNyxPort
         ArgumentException.ThrowIfNullOrWhiteSpace(accessToken);
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKeyId);
 
+        // Rotation preserves the existing key policy. Historical Lark relay keys were created
+        // with only `read write`; prepare the source key with `proxy` first so the rotated Agent
+        // Key can authorize every NyxID-backed workflow step, not only terminal reply delivery.
+        await ChannelNyxIdAgentKeyScopePolicy.EnsureProxyScopeAsync(
+            _nyxClient,
+            accessToken,
+            apiKeyId,
+            _logger,
+            ct);
+
         var response = await _nyxClient.RotateApiKeyAsync(accessToken, apiKeyId.Trim(), ct);
         if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
             throw Controlled("rotation_failed");

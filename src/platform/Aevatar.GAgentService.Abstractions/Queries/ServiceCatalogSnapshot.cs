@@ -15,7 +15,17 @@ public sealed record ServiceCatalogSnapshot(
     IReadOnlyList<ServiceEndpointSnapshot> Endpoints,
     IReadOnlyList<string> PolicyIds,
     DateTimeOffset UpdatedAt,
-    ServiceExternalExposureSnapshot? ExternalExposure = null);
+    ServiceExternalExposureSnapshot? ExternalExposure = null)
+{
+    /// <summary>
+    /// Committed source version of the service-catalog actor replica.
+    /// Query consumers use this watermark as evidence; they must not invent a
+    /// local projection counter when the producer has not exposed one.
+    /// </summary>
+    public long StateVersion { get; init; }
+
+    public string LastEventId { get; init; } = string.Empty;
+}
 
 public sealed record ServiceEndpointSnapshot(
     string EndpointId,

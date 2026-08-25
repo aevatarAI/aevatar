@@ -15,8 +15,10 @@ public sealed class ChannelWorkflowResultDeliveryRepairNyxPortTests
     {
         const string fullKey = "nyxid_ag_secret_alpha";
         var handler = new RecordingHandler(
+            """{"id":"key-old-alpha","scopes":"read write"}""",
+            """{"id":"key-old-alpha","scopes":"read write proxy"}""",
             """{"id":"key-new-alpha","full_key":"nyxid_ag_secret_alpha","created_at":"2026-07-21T02:00:00Z"}""",
-            """[{"id":"key-new-alpha","name":"aevatar-lark-relay-reg-alpha","is_active":true,"created_at":"2026-07-21T02:00:00Z","scopes":"read write"}]""",
+            """[{"id":"key-new-alpha","name":"aevatar-lark-relay-reg-alpha","is_active":true,"created_at":"2026-07-21T02:00:00Z","scopes":"read write proxy"}]""",
             """{"id":"route-alpha","agent_api_key_id":"key-new-alpha","default_agent":true}""");
         var logger = new RecordingLogger<ChannelWorkflowResultDeliveryRepairNyxPort>();
         var port = CreatePort(handler, logger);
@@ -43,12 +45,16 @@ public sealed class ChannelWorkflowResultDeliveryRepairNyxPortTests
             true,
             new DateTimeOffset(2026, 7, 21, 2, 0, 0, TimeSpan.Zero)));
         handler.Requests.Select(static request => (request.Method, request.Path)).Should().Equal(
+            (HttpMethod.Get, "/api/v1/api-keys/key-old-alpha"),
+            (HttpMethod.Put, "/api/v1/api-keys/key-old-alpha"),
             (HttpMethod.Post, "/api/v1/api-keys/key-old-alpha/rotate"),
             (HttpMethod.Get, "/api/v1/api-keys"),
             (HttpMethod.Put, "/api/v1/channel-conversations/route-alpha"));
         handler.Requests.Should().OnlyContain(request =>
             request.Authorization == "Bearer user-bearer-alpha");
-        using var routeBody = JsonDocument.Parse(handler.Requests[2].Body);
+        using var scopeBody = JsonDocument.Parse(handler.Requests[1].Body);
+        scopeBody.RootElement.GetProperty("scopes").GetString().Should().Be("read write proxy");
+        using var routeBody = JsonDocument.Parse(handler.Requests[4].Body);
         routeBody.RootElement.GetProperty("agent_api_key_id").GetString()
             .Should().Be("key-new-alpha");
         routeBody.RootElement.GetProperty("default_agent").GetBoolean().Should().BeTrue();
@@ -67,7 +73,11 @@ public sealed class ChannelWorkflowResultDeliveryRepairNyxPortTests
         string operation,
         string response)
     {
-        var handler = new RecordingHandler(response);
+        var handler = operation == "rotation"
+            ? new RecordingHandler(
+                """{"id":"key-old-alpha","scopes":"read write proxy"}""",
+                response)
+            : new RecordingHandler(response);
         var logger = new RecordingLogger<ChannelWorkflowResultDeliveryRepairNyxPort>();
         var port = CreatePort(handler, logger);
 

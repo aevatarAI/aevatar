@@ -17,9 +17,9 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
     IExternalWorkflowCapabilitySource
 {
     private const string PolicyMismatchMessage =
-        "The canonical platform code execution route does not deliver an accepted execution " +
-        "credential. Set forward_access_token, or set inject_delegation_token with " +
-        "sandbox:execute in delegation_token_scope.";
+        "The canonical platform code execution route does not deliver the required Agent Key " +
+        "and execution capability. Set forward_access_token=true, inject_delegation_token=true, " +
+        "and include proxy:* and sandbox:execute in delegation_token_scope.";
 
     private static readonly TimeSpan FreshnessWindow = TimeSpan.FromMinutes(5);
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
@@ -168,6 +168,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 service.ForwardAccessToken?.ToString(CultureInfo.InvariantCulture),
                 service.InjectDelegationToken?.ToString(CultureInfo.InvariantCulture),
                 service.DelegationTokenScope,
+                service.AutoConnected.ToString(CultureInfo.InvariantCulture),
             });
         var executionComponents = authority.ExecutionInventory.Value!.Services
             .OrderBy(static service => service.Id, StringComparer.Ordinal)

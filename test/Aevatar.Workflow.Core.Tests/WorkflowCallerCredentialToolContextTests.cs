@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Integration.AI;
@@ -105,6 +106,53 @@ public sealed class WorkflowCallerCredentialToolContextTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenCallerUsesChannelAgentKey_ShouldPreserveDurableHandleForNestedCalls()
+    {
+        var tool = new RecordingAgentTool();
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleToolSource(tool)],
+            new PassThroughExecutionPort());
+        var workflowTool = (await adapter.GetToolsAsync()).Should().ContainSingle().Subject;
+        var descriptor = new SecretReference
+        {
+            Ref = "sec-channel-agent-key",
+            Purpose = CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            OwnerScopeKey = "scope-channel",
+            Fingerprint = "fingerprint-channel",
+            Version = 1,
+            CreatedAtUnixMs = 1_700_000_000_000,
+        };
+
+        await workflowTool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            "{}",
+            "run-alpha",
+            "step-alpha",
+            "execution-alpha",
+            "call-alpha",
+            "scope-alpha",
+            new WorkflowCallerCredential
+            {
+                BearerToken = "channel-agent-key",
+                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+                DurableCallerCredential = new DurableCallerCredentialRef
+                {
+                    Ref = descriptor.Ref,
+                    Purpose = descriptor.Purpose,
+                    OwnerScopeKey = descriptor.OwnerScopeKey,
+                    SubjectId = "key-channel",
+                    SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+                    SecretReference = descriptor.Clone(),
+                },
+            }));
+
+        tool.NyxIdAccessToken.Should().Be("channel-agent-key");
+        tool.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+        tool.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        tool.DurableNyxIdCredential.Should().NotBeNull();
+        tool.DurableNyxIdCredential!.Ref.Should().Be(descriptor.Ref);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenSupplementalSourceBearerIsNotBoundToDelegation_ShouldReject()
     {
         var tool = new RecordingAgentTool();
@@ -162,6 +210,10 @@ public sealed class WorkflowCallerCredentialToolContextTests
 
         public string? OwnerSubject { get; private set; }
 
+        public AgentToolCredentialSource CredentialSource { get; private set; }
+
+        public DurableCallerCredentialRef? DurableNyxIdCredential { get; private set; }
+
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             var senderBinding = AgentToolRequestContext.Current?.SenderBinding;
@@ -174,6 +226,9 @@ public sealed class WorkflowCallerCredentialToolContextTests
             SourceReadableNyxIdAccessToken = AgentToolRequestContext.SourceReadableNyxIdAccessToken;
             OwnerSubject = AgentToolRequestContext.OwnerSubject;
             NyxIdCredentialKind = AgentToolRequestContext.NyxIdCredentialKind;
+            CredentialSource = AgentToolRequestContext.Current?.CredentialSource ??
+                               AgentToolCredentialSource.Unspecified;
+            DurableNyxIdCredential = AgentToolRequestContext.Current?.DurableNyxIdCredential?.Clone();
             return Task.FromResult("{}");
         }
     }

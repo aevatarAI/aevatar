@@ -301,11 +301,16 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
 
         var catalog = await port.ListWorkflowCatalogAsync();
         var detail = await port.GetWorkflowDetailAsync(" alpha ");
+        var publicCatalog = await port.ListPublicWorkflowCatalogAsync();
+        var publicDetail = await port.GetPublicWorkflowDetailAsync(" beta ");
         var blankDetail = await port.GetWorkflowDetailAsync("   ");
+        var publicBlankDetail = await port.GetPublicWorkflowDetailAsync("   ");
         var missingDetail = await port.GetWorkflowDetailAsync("missing");
+        var publicMissingDetail = await port.GetPublicWorkflowDetailAsync("missing");
         var capabilities = await port.GetCapabilitiesAsync();
 
         catalog.Select(item => item.Name).Should().Equal("alpha", "beta");
+        publicCatalog.Select(item => item.Name).Should().Equal("alpha", "beta");
         catalog.Should().OnlyContain(item =>
             item.Source == "builtin" &&
             item.SourceLabel == "Built-in" &&
@@ -315,8 +320,13 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         detail.Should().NotBeNull();
         detail!.Catalog.Name.Should().Be("alpha");
         detail.Yaml.Should().Contain("name: alpha");
+        publicDetail.Should().NotBeNull();
+        publicDetail!.Catalog.Name.Should().Be("beta");
+        publicDetail.Yaml.Should().Contain("name: beta");
         blankDetail.Should().BeNull();
+        publicBlankDetail.Should().BeNull();
         missingDetail.Should().BeNull();
+        publicMissingDetail.Should().BeNull();
         capabilities.SchemaVersion.Should().Be("capabilities.v1");
         capabilities.Workflows.Select(workflow => workflow.Name).Should().Equal("alpha", "beta");
         capabilities.Workflows.Should().OnlyContain(workflow => workflow.Source == "builtin");
@@ -343,6 +353,12 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
             Task.FromResult<IReadOnlyList<WorkflowCatalogItem>>([]);
 
         public Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(string workflowName, CancellationToken ct = default) =>
+            Task.FromResult<WorkflowCatalogItemDetail?>(null);
+
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListPublicWorkflowCatalogAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowCatalogItem>>([]);
+
+        public Task<WorkflowCatalogItemDetail?> GetPublicWorkflowDetailAsync(string templateId, CancellationToken ct = default) =>
             Task.FromResult<WorkflowCatalogItemDetail?>(null);
     }
 
@@ -371,6 +387,21 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
             Calls.Add($"GetWorkflowDetail:{workflowName}");
             CancellationTokens.Add(ct);
             return Task.FromResult(Detail);
+        }
+
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListPublicWorkflowCatalogAsync(CancellationToken ct = default)
+        {
+            Calls.Add("ListPublicWorkflowCatalog");
+            CancellationTokens.Add(ct);
+            IReadOnlyList<WorkflowCatalogItem> publicCatalog = Catalog.Where(static item => item.ShowInLibrary).ToList();
+            return Task.FromResult(publicCatalog);
+        }
+
+        public Task<WorkflowCatalogItemDetail?> GetPublicWorkflowDetailAsync(string templateId, CancellationToken ct = default)
+        {
+            Calls.Add($"GetPublicWorkflowDetail:{templateId}");
+            CancellationTokens.Add(ct);
+            return Task.FromResult(Detail?.Catalog.ShowInLibrary == true ? Detail : null);
         }
     }
 
@@ -427,6 +458,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     private sealed class FakeArtifactQueryPort(List<string> calls) : IWorkflowExecutionArtifactQueryPort
     {
         public bool WorkflowArtifactQueryEnabled { get; set; }
+        public bool WorkflowGraphExportEnabled { get; set; } = true;
         public WorkflowRunReport? Report { get; init; }
         public IReadOnlyList<WorkflowRunTimelineExportItem> Timeline { get; init; } = [];
         public IReadOnlyList<WorkflowRunGraphExportEdge> Edges { get; init; } = [];

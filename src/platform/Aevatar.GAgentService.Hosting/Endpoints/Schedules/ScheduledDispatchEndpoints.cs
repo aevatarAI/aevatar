@@ -143,6 +143,13 @@ public static class ScheduledDispatchEndpoints
                 return denied;
             if (owner != null)
                 context = context with { TeamAutomationOwner = owner };
+            else
+            {
+                var current = await ResolveGenericScheduleAccessAsync(http, scheduleId, schedules, ct);
+                if (current.Result != null)
+                    return current.Result;
+                context = context with { ExpectedServiceTarget = current.ExpectedServiceTarget };
+            }
             configuration = (await input.ToConfigurationAsync(
                 scheduleId,
                 catalogReader,
@@ -185,9 +192,30 @@ public static class ScheduledDispatchEndpoints
             var owner = input?.Owner?.ToTeamMemberAutomationOwner();
             if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
                 return denied;
-            var receipt = owner == null
-                ? await schedules.EnableAsync(scheduleId, input?.Reason ?? string.Empty, ct)
-                : await schedules.EnableTeamAutomationAsync(scheduleId, owner, input?.Reason ?? string.Empty, ct);
+            ScheduledDispatchMutationReceipt receipt;
+            if (owner == null)
+            {
+                var current = await ResolveGenericScheduleAccessAsync(http, scheduleId, schedules, ct);
+                if (current.Result != null)
+                    return current.Result;
+                var context = ResolveMutationContext(http) with
+                {
+                    ExpectedServiceTarget = current.ExpectedServiceTarget,
+                };
+                receipt = await schedules.EnableAsync(
+                    scheduleId,
+                    input?.Reason ?? string.Empty,
+                    context,
+                    ct);
+            }
+            else
+            {
+                receipt = await schedules.EnableTeamAutomationAsync(
+                    scheduleId,
+                    owner,
+                    input?.Reason ?? string.Empty,
+                    ct);
+            }
             return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
@@ -208,9 +236,30 @@ public static class ScheduledDispatchEndpoints
             var owner = input?.Owner?.ToTeamMemberAutomationOwner();
             if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
                 return denied;
-            var receipt = owner == null
-                ? await schedules.DisableAsync(scheduleId, input?.Reason ?? string.Empty, ct)
-                : await schedules.DisableTeamAutomationAsync(scheduleId, owner, input?.Reason ?? string.Empty, ct);
+            ScheduledDispatchMutationReceipt receipt;
+            if (owner == null)
+            {
+                var current = await ResolveGenericScheduleAccessAsync(http, scheduleId, schedules, ct);
+                if (current.Result != null)
+                    return current.Result;
+                var context = ResolveMutationContext(http) with
+                {
+                    ExpectedServiceTarget = current.ExpectedServiceTarget,
+                };
+                receipt = await schedules.DisableAsync(
+                    scheduleId,
+                    input?.Reason ?? string.Empty,
+                    context,
+                    ct);
+            }
+            else
+            {
+                receipt = await schedules.DisableTeamAutomationAsync(
+                    scheduleId,
+                    owner,
+                    input?.Reason ?? string.Empty,
+                    ct);
+            }
             return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
@@ -254,16 +303,30 @@ public static class ScheduledDispatchEndpoints
         {
             try
             {
-                var receipt = owner == null
-                    ? await schedules.DeleteAsync(
+                ScheduledDispatchMutationReceipt receipt;
+                if (owner == null)
+                {
+                    var current = await ResolveGenericScheduleAccessAsync(http, scheduleId, schedules, ct);
+                    if (current.Result != null)
+                        return current.Result;
+                    var context = ResolveMutationContext(http) with
+                    {
+                        ExpectedServiceTarget = current.ExpectedServiceTarget,
+                    };
+                    receipt = await schedules.DeleteAsync(
                         scheduleId,
                         deleteReason,
-                        ct)
-                    : await schedules.DeleteTeamAutomationAsync(
+                        context,
+                        ct);
+                }
+                else
+                {
+                    receipt = await schedules.DeleteTeamAutomationAsync(
                         scheduleId,
                         owner,
                         deleteReason,
                         ct);
+                }
                 return Results.Accepted(
                     BuildScheduleLocation(receipt.ScheduleId, owner),
                     receipt);
@@ -363,7 +426,7 @@ public static class ScheduledDispatchEndpoints
 
             if (queryScopeId == null)
             {
-                var adminDenied = await AuthorizeLegacyGenericListAsync(http, ct);
+                var adminDenied = await AuthorizeLegacyGenericAccessAsync(http, ct);
                 if (adminDenied != null)
                     return adminDenied;
             }
@@ -376,7 +439,7 @@ public static class ScheduledDispatchEndpoints
         return Results.Ok(await schedules.ListAsync(query, ct));
     }
 
-    private static async Task<IResult?> AuthorizeLegacyGenericListAsync(
+    private static async Task<IResult?> AuthorizeLegacyGenericAccessAsync(
         HttpContext http,
         CancellationToken ct)
     {
@@ -398,7 +461,7 @@ public static class ScheduledDispatchEndpoints
             ? authorization[bearerPrefix.Length..].Trim()
             : string.Empty;
         if (bearerToken.Length == 0)
-            return LegacyGenericListForbidden();
+            return LegacyGenericAccessForbidden();
 
         PlatformCaller caller;
         try
@@ -411,18 +474,18 @@ public static class ScheduledDispatchEndpoints
         }
         catch
         {
-            return LegacyGenericListForbidden();
+            return LegacyGenericAccessForbidden();
         }
 
-        return caller.IsElevated ? null : LegacyGenericListForbidden();
+        return caller.IsElevated ? null : LegacyGenericAccessForbidden();
     }
 
-    private static IResult LegacyGenericListForbidden() =>
+    private static IResult LegacyGenericAccessForbidden() =>
         Results.Json(
             new
             {
                 code = "SCHEDULE_ADMIN_ACCESS_REQUIRED",
-                message = "Platform admin access is required to list legacy Generic schedules.",
+                message = "Platform admin access is required to access legacy Generic schedules.",
             },
             statusCode: StatusCodes.Status403Forbidden);
 
@@ -447,9 +510,18 @@ public static class ScheduledDispatchEndpoints
             var owner = ResolveOwnerFromQuery(ownerKind, ownerScopeId, ownerTeamId, ownerMemberId);
             if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
                 return denied;
-            var schedule = owner == null
-                ? await schedules.GetAsync(scheduleId, ct)
-                : await schedules.GetTeamAutomationAsync(scheduleId, owner, ct);
+            ScheduledDispatchDetail? schedule;
+            if (owner == null)
+            {
+                var current = await ResolveGenericScheduleAccessAsync(http, scheduleId, schedules, ct);
+                if (current.Result != null)
+                    return current.Result;
+                schedule = current.Detail;
+            }
+            else
+            {
+                schedule = await schedules.GetTeamAutomationAsync(scheduleId, owner, ct);
+            }
             return schedule == null ? Results.NotFound() : Results.Ok(schedule);
         }
         catch (ArgumentException ex)
@@ -490,15 +562,82 @@ public static class ScheduledDispatchEndpoints
             var owner = input?.Owner?.ToTeamMemberAutomationOwner();
             if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
                 return denied;
-            var receipt = owner == null
-                ? await schedules.RunNowAsync(scheduleId, ct)
-                : await schedules.RunTeamAutomationNowAsync(scheduleId, owner, ct);
+            ScheduledDispatchRunNowReceipt receipt;
+            if (owner == null)
+            {
+                var current = await ResolveGenericScheduleAccessAsync(http, scheduleId, schedules, ct);
+                if (current.Result != null)
+                    return current.Result;
+                var context = ResolveMutationContext(http) with
+                {
+                    ExpectedServiceTarget = current.ExpectedServiceTarget,
+                };
+                receipt = await schedules.RunNowAsync(scheduleId, context, ct);
+            }
+            else
+            {
+                receipt = await schedules.RunTeamAutomationNowAsync(scheduleId, owner, ct);
+            }
             return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
             return result;
         }
+    }
+
+    private static async Task<GenericScheduleAccessResult> ResolveGenericScheduleAccessAsync(
+        HttpContext http,
+        string scheduleId,
+        IScheduledDispatchApplicationService schedules,
+        CancellationToken ct)
+    {
+        var detail = await schedules.GetAsync(scheduleId, ct);
+        if (detail == null)
+            return new GenericScheduleAccessResult(null, null, Results.NotFound());
+
+        var schedule = detail.Schedule;
+        var identity = schedule.ServiceIdentity;
+        if (schedule.TargetKind != ScheduledDispatchTargetKind.ServiceInvocation ||
+            string.IsNullOrWhiteSpace(schedule.ServiceEndpointId))
+        {
+            return new GenericScheduleAccessResult(null, null, Results.NotFound());
+        }
+
+        if (identity == null ||
+            string.IsNullOrWhiteSpace(identity.TenantId) ||
+            string.IsNullOrWhiteSpace(identity.AppId) ||
+            string.IsNullOrWhiteSpace(identity.Namespace) ||
+            string.IsNullOrWhiteSpace(identity.ServiceId))
+        {
+            if (string.IsNullOrWhiteSpace(schedule.ServiceKey) ||
+                string.IsNullOrWhiteSpace(schedule.ServiceId))
+            {
+                return new GenericScheduleAccessResult(null, null, Results.NotFound());
+            }
+
+            var adminDenied = await AuthorizeLegacyGenericAccessAsync(http, ct);
+            return adminDenied == null
+                ? new GenericScheduleAccessResult(detail, null, null)
+                : new GenericScheduleAccessResult(null, null, adminDenied);
+        }
+
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(
+                http,
+                identity.TenantId,
+                out var denied))
+        {
+            return new GenericScheduleAccessResult(null, null, denied);
+        }
+
+        return new GenericScheduleAccessResult(
+            detail,
+            new ScheduledDispatchExpectedServiceTarget(
+                schedule.ScheduleKind,
+                schedule.TargetKind,
+                identity.Clone(),
+                schedule.ServiceEndpointId),
+            null);
     }
 
     private static bool TryCreateOwnerScopeAccessDeniedResult(
@@ -591,6 +730,11 @@ public static class ScheduledDispatchEndpoints
         !string.IsNullOrWhiteSpace(scopeId) ||
         !string.IsNullOrWhiteSpace(teamId) ||
         !string.IsNullOrWhiteSpace(memberId);
+
+    private sealed record GenericScheduleAccessResult(
+        ScheduledDispatchDetail? Detail,
+        ScheduledDispatchExpectedServiceTarget? ExpectedServiceTarget,
+        IResult? Result);
 
     private static ScheduledDispatchListQuery ResolveListQueryFromOwnerQuery(
         string? ownerKind,

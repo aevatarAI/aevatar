@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
@@ -91,6 +92,8 @@ public sealed record AgentToolExecutionContext(
     public IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> InputFileRefs { get; init; } = [];
 
     public AgentToolExecutionOwner ExecutionOwner { get; init; } = new();
+
+    public DurableCallerCredentialRef? DurableNyxIdCredential { get; init; }
 
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
@@ -204,6 +207,13 @@ public enum AgentToolNyxIdCredentialKind
     Unspecified = 0,
     SourceReadableUserBearer = 1,
     ProxyDelegation = 2,
+    AgentKey = 3,
+}
+
+public enum AgentToolNyxIdCredentialAuthority
+{
+    Unspecified = 0,
+    ToolExecutionContext = 1,
 }
 
 public sealed record AgentToolCredentials(
@@ -211,7 +221,9 @@ public sealed record AgentToolCredentials(
     string? NyxIdOrgToken,
     string? SenderNyxIdAccessToken,
     AgentToolNyxIdCredentialKind NyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
-    string? SourceReadableNyxIdAccessToken = null)
+    string? SourceReadableNyxIdAccessToken = null,
+    AgentToolNyxIdCredentialAuthority NyxIdCredentialAuthority =
+        AgentToolNyxIdCredentialAuthority.Unspecified)
 {
     public static AgentToolCredentials Empty { get; } = new(null, null, null);
 }

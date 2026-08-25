@@ -14,6 +14,33 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowDefinitionParserExternalCapabilityTests
 {
+    [Fact]
+    public async Task DefinitionParser_ForPublication_ShouldRejectLlmWithoutExplicitToolScope()
+    {
+        const string workflowYaml =
+            "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant";
+        var parser = new WorkflowDefinitionParser([new WorkflowCoreModulePack()]);
+
+        var legacyResult = await parser.ParseWorkflowYamlAsync(workflowYaml);
+        var publicationResult = await parser.ParseWorkflowYamlForPublicationAsync(workflowYaml);
+
+        legacyResult.Succeeded.Should().BeTrue(legacyResult.Error);
+        publicationResult.Succeeded.Should().BeFalse();
+        publicationResult.Error.Should().Contain("must declare an explicit allowed_tools scope");
+    }
+
+    [Fact]
+    public async Task DefinitionParser_ForPublication_ShouldAcceptExplicitRestrictedEmptyToolScope()
+    {
+        const string workflowYaml =
+            "name: main\nroles:\n  - id: assistant\n    name: Assistant\n    allowed_tools: []\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant";
+        var parser = new WorkflowDefinitionParser([new WorkflowCoreModulePack()]);
+
+        var result = await parser.ParseWorkflowYamlForPublicationAsync(workflowYaml);
+
+        result.Succeeded.Should().BeTrue(result.Error);
+    }
+
     [Theory]
     [MemberData(nameof(InvalidNyxIdAuthoringCases))]
     public async Task DefinitionParser_ShouldReturnTypedReadiness_ForInvalidNyxIdAuthoring(
@@ -173,8 +200,8 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
         };
 
     [Theory]
-    [InlineData("finance-budget-nosend-explicit-request.yaml", "finance-budget-nosend", "/v1/budget/status", NyxIdRequestResponseMode.Text, null)]
-    [InlineData("finance-invoice-file-artifact-explicit-request.yaml", "finance-invoice-file-artifact", "/v1/invoices/{invoice_id}/file", NyxIdRequestResponseMode.FileArtifact, "invoice_id")]
+    [InlineData("resource-status-explicit-request.yaml", "resource-status-read", "/v1/resources/status", NyxIdRequestResponseMode.Text, null)]
+    [InlineData("document-file-artifact-explicit-request.yaml", "document-file-artifact", "/v1/documents/{document_id}/file", NyxIdRequestResponseMode.FileArtifact, "document_id")]
     public async Task ExplicitRequestFixture_ShouldParseAdmitBindAndPreserveTheGrantedRequestContract(
         string fixtureName,
         string expectedWorkflowName,
@@ -219,7 +246,7 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
         {
             arguments.RootElement.GetProperty("path_params")
                 .GetProperty(requiredPathParameter).GetString().Should()
-                .Be("${input.invoice_id}");
+                .Be($"${{input.{requiredPathParameter}}}");
         }
 
         var requestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity

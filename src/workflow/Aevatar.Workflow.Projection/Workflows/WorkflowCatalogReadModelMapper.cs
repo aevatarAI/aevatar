@@ -23,6 +23,8 @@ public sealed class WorkflowCatalogReadModelMapper
             IsPrimitiveExample = document.IsPrimitiveExample,
             RequiresLlmProvider = document.RequiresLlmProvider,
             Primitives = document.Primitives.ToList(),
+            RequiredConnectors = document.RequiredConnectors.ToList(),
+            StepCount = document.Steps.Count,
             AuthorityStateVersion = document.StateVersion,
             ProjectionWatermark = document.UpdatedAt,
             LastEventId = document.LastEventId,

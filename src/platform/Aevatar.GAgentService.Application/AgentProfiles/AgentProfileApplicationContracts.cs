@@ -4,13 +4,6 @@ using Aevatar.GAgentService.Abstractions.AgentProfiles;
 
 namespace Aevatar.GAgentService.Application.AgentProfiles;
 
-public sealed record AgentProfileListPage(
-    IReadOnlyList<AgentProfileCatalogEntry> Items,
-    string? NextCursor,
-    long AuthorityStateVersion,
-    DateTimeOffset UpdatedAt,
-    AgentProfileMutationOutcome? LastMutation = null);
-
 public sealed record AgentProfileManagementDetail(
     AgentProfileManagementSnapshot Snapshot,
     string StrongETag,
@@ -92,5 +85,3 @@ public sealed class AgentProfileSealingException(
 {
     public IReadOnlyList<AgentProfileSealingDiagnostic> Diagnostics { get; } = diagnostics.ToArray();
 }
-
-public sealed class AgentProfileInvalidCursorException(string message) : ArgumentException(message);

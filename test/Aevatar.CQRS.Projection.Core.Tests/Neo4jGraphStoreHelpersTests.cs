@@ -7,6 +7,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Neo4j.Driver;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
@@ -24,7 +25,7 @@ public class Neo4jGraphStoreHelpersTests
         options.Password.Should().Be("");
         options.Database.Should().Be("");
         options.RequestTimeoutMs.Should().Be(5000);
-        options.AutoCreateConstraints.Should().BeTrue();
+        options.AutoCreateSchema.Should().BeTrue();
         options.NodeLabel.Should().Be("ProjectionGraphNode");
         options.EdgeType.Should().Be("PROJECTION_REL");
         options.MaxTraversalDepth.Should().Be(4);
@@ -49,6 +50,19 @@ public class Neo4jGraphStoreHelpersTests
         var subgraphBoth = (string)Invoke(type, "BuildSubgraphEdgesCypher", "NodeLabel", "EDGE_TYPE", ProjectionGraphDirection.Both, 3)!;
         var getNodes = (string)Invoke(type, "BuildGetNodesByIdsCypher", "NodeLabel")!;
         var createConstraint = (string)Invoke(type, "BuildCreateNodeConstraintCypher", "NodeLabel", "constraint_name")!;
+        var createNodeOwnerIndex = (string)Invoke(
+            type,
+            "BuildCreateNodeOwnerIndexCypher",
+            "NodeLabel",
+            "node_owner_index")!;
+        var createRelationshipOwnerIndex = (string)Invoke(
+            type,
+            "BuildCreateRelationshipOwnerIndexCypher",
+            "EDGE_TYPE",
+            "relationship_owner_index")!;
+        var awaitIndex = (string)Invoke(type, "BuildAwaitIndexCypher")!;
+        var showIndexes = (string)Invoke(type, "BuildShowIndexesCypher")!;
+        var showIndexByName = (string)Invoke(type, "BuildShowIndexByNameCypher")!;
 
         upsertNode.Should().Contain("MERGE (n:NodeLabel");
         upsertNode.Should().Contain("projectionOwnerId");
@@ -66,6 +80,39 @@ public class Neo4jGraphStoreHelpersTests
         subgraphBoth.Should().Contain("(root)-[:EDGE_TYPE*1..3]-()");
         getNodes.Should().Contain("WHERE n.nodeId IN $nodeIds");
         createConstraint.Should().Contain("CREATE CONSTRAINT constraint_name IF NOT EXISTS");
+        createNodeOwnerIndex.Should().Be(
+            "CREATE RANGE INDEX node_owner_index IF NOT EXISTS " +
+            "FOR (n:NodeLabel) ON (n.scope, n.projectionOwnerId)");
+        createRelationshipOwnerIndex.Should().Be(
+            "CREATE RANGE INDEX relationship_owner_index IF NOT EXISTS " +
+            "FOR ()-[r:EDGE_TYPE]-() ON (r.scope, r.projectionOwnerId)");
+        awaitIndex.Should().Be("CALL db.awaitIndex($indexName, $timeoutSeconds)");
+        showIndexes.Should().Contain(
+            "YIELD name, type, entityType, labelsOrTypes, properties, state, failureMessage");
+        showIndexByName.Should().Contain("WHERE name = $indexName");
+    }
+
+    [Fact]
+    public void CypherSupport_ReplaceOwnerGraph_ShouldCollapseDeletedEdgesBeforeWritingReplacement()
+    {
+        var type = GetStoreType("Neo4jProjectionGraphStoreCypherSupport");
+
+        var cypher = (string)Invoke(
+            type,
+            "BuildReplaceOwnerGraphCypher",
+            "NodeLabel",
+            "EDGE_TYPE")!;
+
+        const string expectedBarrier =
+            "DELETE old " +
+            "WITH count(old) AS deletedEdgeCount " +
+            "WITH $scope AS scope, $ownerId AS ownerId, $nodes AS nodes, $edges AS edges, $targetNodeIds AS targetNodeIds " +
+            "FOREACH (node IN nodes";
+        cypher.Should().Contain(expectedBarrier);
+        cypher.Should().NotContain("DISTINCT $nodes");
+        cypher.Should().NotContain("DISTINCT nodes");
+        cypher.Should().Contain("WITH edges, targetNodeIds, scope, ownerId FOREACH (edge IN edges");
+        cypher.Should().Contain("WITH targetNodeIds, scope, ownerId MATCH (n:NodeLabel");
     }
 
     [Fact]
@@ -94,8 +141,8 @@ public class Neo4jGraphStoreHelpersTests
         var missingOwner = (string)Invoke(type, "ResolveProjectionOwnerId", (IReadOnlyDictionary<string, string>)new Dictionary<string, string>(StringComparer.Ordinal))!;
         var labelFallback = (string)Invoke(type, "NormalizeLabel", "  ", "Fallback_1")!;
         var labelDigits = (string)Invoke(type, "NormalizeLabel", " 123 bad-label ", "fallback")!;
-        var constraintFallback = (string)Invoke(type, "NormalizeConstraintName", "")!;
-        var constraintDigits = (string)Invoke(type, "NormalizeConstraintName", "123-ABC")!;
+        var schemaFallback = (string)Invoke(type, "NormalizeSchemaName", "")!;
+        var schemaDigits = (string)Invoke(type, "NormalizeSchemaName", "123-ABC")!;
 
         defaultTimestamp.Should().BeGreaterThan(0);
         concreteTimestamp.Should().Be(new DateTimeOffset(2026, 2, 26, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds());
@@ -109,8 +156,62 @@ public class Neo4jGraphStoreHelpersTests
         missingOwner.Should().Be("");
         labelFallback.Should().Be("Fallback_1");
         labelDigits.Should().Be("N_123_bad_label");
-        constraintFallback.Should().Be("projection_graph_constraint");
-        constraintDigits.Should().Be("c_123_abc");
+        schemaFallback.Should().Be("projection_graph_schema");
+        schemaDigits.Should().Be("s_123_abc");
+    }
+
+    [Fact]
+    public async Task SchemaWaitSupport_WhenCancelledBetweenCycles_ShouldStopBeforeAnotherWait()
+    {
+        var type = GetStoreType("Neo4jProjectionGraphStoreSchemaWaitSupport");
+        using var cts = new CancellationTokenSource();
+        var cycles = 0;
+        var observedCycleSeconds = 0L;
+        Func<long, CancellationToken, Task<bool>> tryWaitCycle = (cycleSeconds, _) =>
+        {
+            cycles++;
+            observedCycleSeconds = cycleSeconds;
+            cts.Cancel();
+            return Task.FromResult(false);
+        };
+
+        var waitTask = (Task)Invoke(
+            type,
+            "WaitAsync",
+            tryWaitCycle,
+            TimeSpan.FromMinutes(5),
+            5L,
+            TimeProvider.System,
+            cts.Token)!;
+
+        Func<Task> act = () => waitTask;
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        cycles.Should().Be(1);
+        observedCycleSeconds.Should().Be(5);
+    }
+
+    [Fact]
+    public void SchemaWaitSupport_ShouldRetryOnlyExplicitAwaitTimeouts()
+    {
+        var type = GetStoreType("Neo4jProjectionGraphStore");
+        var procedureCode = "Neo.ClientError.Procedure.ProcedureCallFailed";
+        var timeout = new ClientException(
+            procedureCode,
+            "Index 'owner_idx' did not come online within 5 seconds.");
+        var missing = new ClientException(
+            procedureCode,
+            "There is no index with the name 'owner_idx'.");
+        var failed = new ClientException(
+            "Neo.ClientError.Schema.IndexNotFound",
+            "Index 'owner_idx' did not come online within 5 seconds.");
+
+        var retryTimeout = (bool)Invoke(type, "IsIndexAwaitTimeout", timeout)!;
+        var retryMissing = (bool)Invoke(type, "IsIndexAwaitTimeout", missing)!;
+        var retryFailed = (bool)Invoke(type, "IsIndexAwaitTimeout", failed)!;
+
+        retryTimeout.Should().BeTrue();
+        retryMissing.Should().BeFalse();
+        retryFailed.Should().BeFalse();
     }
 
     [Fact]

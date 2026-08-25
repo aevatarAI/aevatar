@@ -94,6 +94,7 @@ internal static class AgentToolReceiptFactory
         receipt.ResultJson = resultJson ?? string.Empty;
         receipt.ErrorCode = errorCode ?? string.Empty;
         receipt.ErrorMessage = errorMessage ?? string.Empty;
+        receipt.FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed;
         return receipt;
     }
 
@@ -125,6 +126,7 @@ internal static class AgentToolReceiptFactory
         receipt.ApprovalRequestId = approvalRequestId ?? string.Empty;
         receipt.ErrorCode = "approval_denied";
         receipt.ErrorMessage = reason ?? string.Empty;
+        receipt.FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed;
         return receipt;
     }
 
@@ -143,6 +145,7 @@ internal static class AgentToolReceiptFactory
         receipt.ApprovalRequestId = approvalRequestId ?? string.Empty;
         receipt.ErrorCode = errorCode ?? string.Empty;
         receipt.ErrorMessage = errorMessage ?? string.Empty;
+        receipt.FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed;
         return receipt;
     }
 
@@ -161,6 +164,7 @@ internal static class AgentToolReceiptFactory
         receipt.ApprovalRequestId = approvalRequestId ?? string.Empty;
         receipt.ErrorCode = errorCode ?? string.Empty;
         receipt.ErrorMessage = errorMessage ?? string.Empty;
+        receipt.FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed;
         return receipt;
     }
 
@@ -208,6 +212,7 @@ internal static class AgentToolReceiptFactory
         receipt.ResultJson = UnknownResultJson;
         receipt.ErrorCode = UnknownErrorCode;
         receipt.ErrorMessage = UnknownErrorMessage;
+        receipt.FailureOutcome = AgentToolFailureOutcome.OutcomeUncertain;
         return receipt;
     }
 
@@ -235,7 +240,15 @@ internal static class AgentToolReceiptFactory
             normalized.ResultJson = UnknownResultJson;
             normalized.ErrorCode = UnknownErrorCode;
             normalized.ErrorMessage = UnknownErrorMessage;
+            normalized.FailureOutcome = AgentToolFailureOutcome.OutcomeUncertain;
             return normalized;
+        }
+        if (normalized.Status is AgentToolReceiptStatus.Error or
+                AgentToolReceiptStatus.Denied or
+                AgentToolReceiptStatus.AuthorizationRequired &&
+            normalized.FailureOutcome == AgentToolFailureOutcome.Unspecified)
+        {
+            normalized.FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed;
         }
         if (normalized.Status == AgentToolReceiptStatus.Success &&
             string.IsNullOrWhiteSpace(normalized.ResultJson))

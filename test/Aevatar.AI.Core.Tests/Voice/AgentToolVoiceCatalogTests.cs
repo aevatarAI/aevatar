@@ -12,38 +12,46 @@ public class AgentToolVoiceCatalogTests
     [Fact]
     public async Task DiscoverAsync_ShouldProjectStructuredDefinitions()
     {
+        var credentials = new StubCredentialProvider(("voice-tool:ref-1", "caller-token"));
         var catalog = new AgentToolVoiceCatalog([
             new StubToolSource(new FakeAgentTool(
                 "door.open",
                 "opens the front door",
                 """{"type":"object","properties":{"door":{"type":"string"}}}""")),
-        ]);
+        ], credentials);
 
-        var definitions = await catalog.DiscoverAsync();
+        var snapshot = await catalog.DiscoverAsync(CreateToolContext("voice-tool:ref-1", "door.open"));
 
-        definitions.Should().ContainSingle();
-        definitions[0].Name.Should().Be("door.open");
-        definitions[0].Description.Should().Be("opens the front door");
-        definitions[0].ParametersSchema.Should().Contain("\"door\"");
+        VoiceToolCatalogSnapshotValidator.Validate(snapshot);
+        snapshot.Tools.Should().ContainSingle();
+        snapshot.Tools[0].Name.Should().Be("door.open");
+        snapshot.Tools[0].Description.Should().Be("opens the front door");
+        snapshot.Tools[0].ParametersSchema.Should().Contain("\"door\"");
+        snapshot.Proof.ToolCount.Should().Be(1);
+        snapshot.PolicyVersion.Should().Be(VoiceAgentTurnToolCatalogMaterializer.PolicyVersion);
     }
 
     [Fact]
-    public async Task DiscoverAsync_ShouldCacheDiscoveredTools()
+    public async Task DiscoverAsync_ShouldRediscoverForEachSessionSnapshot()
     {
         var source = new CountingToolSource(new FakeAgentTool("door.open", "fake", "{}"));
-        var catalog = new AgentToolVoiceCatalog([source]);
+        var credentials = new StubCredentialProvider(("voice-tool:ref-1", "caller-token"));
+        var catalog = new AgentToolVoiceCatalog([source], credentials);
+        var context = CreateToolContext("voice-tool:ref-1", "door.open");
 
-        await catalog.DiscoverAsync();
-        await catalog.DiscoverAsync();
+        await catalog.DiscoverAsync(context);
+        await catalog.DiscoverAsync(context);
 
-        source.DiscoverCalls.Should().Be(1);
+        source.DiscoverCalls.Should().Be(2);
     }
 
     [Fact]
-    public async Task DiscoverAsync_ConcurrentFirstUse_ShouldStartSourceDiscoveryOnce()
+    public async Task DiscoverAsync_ConcurrentSessions_ShouldUseRequestScopedDiscovery()
     {
         using var source = new BlockingCountingToolSource(new FakeAgentTool("door.open", "fake", "{}"));
-        var catalog = new AgentToolVoiceCatalog([source]);
+        var credentials = new StubCredentialProvider(("voice-tool:ref-1", "caller-token"));
+        var catalog = new AgentToolVoiceCatalog([source], credentials);
+        var context = CreateToolContext("voice-tool:ref-1", "door.open");
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var readyCount = 0;
@@ -55,7 +63,7 @@ public class AgentToolVoiceCatalogTests
                     ready.TrySetResult(true);
 
                 await start.Task;
-                return await catalog.DiscoverAsync();
+                return await catalog.DiscoverAsync(context);
             }))
             .ToArray();
 
@@ -66,8 +74,9 @@ public class AgentToolVoiceCatalogTests
 
         var results = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
 
-        source.DiscoverCalls.Should().Be(1);
-        results.Should().OnlyContain(result => result.Count == 1 && result[0].Name == "door.open");
+        source.DiscoverCalls.Should().Be(32);
+        results.Should().OnlyContain(result =>
+            result.Tools.Count == 1 && result.Tools[0].Name == "door.open");
     }
 
     [Fact]
@@ -81,15 +90,17 @@ public class AgentToolVoiceCatalogTests
             CredentialRef = "voice-tool:ref-1",
             ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
         };
+        toolContext.AllowedToolNames.Add("caller.only");
 
-        var callerDefinitions = await catalog.DiscoverAsync(toolContext);
-        var anonymousDefinitions = await catalog.DiscoverAsync();
+        var callerSnapshot = await catalog.DiscoverAsync(toolContext);
+        var anonymousSnapshot = await catalog.DiscoverAsync();
 
-        callerDefinitions.Should().ContainSingle(definition => definition.Name == "caller.only");
-        anonymousDefinitions.Should().ContainSingle(definition => definition.Name == "anonymous.only");
-        source.CapturedNyxIdAccessTokens.Should().BeEquivalentTo(["caller-token-123", null]);
+        callerSnapshot.Tools.Should().ContainSingle(definition => definition.Name == "caller.only");
+        anonymousSnapshot.Tools.Should().BeEmpty();
+        anonymousSnapshot.Proof.ToolCount.Should().Be(0);
+        source.CapturedNyxIdAccessTokens.Should().Equal("caller-token-123");
         credentials.RequestedRefs.Should().ContainSingle().Which.Should().Be("voice-tool:ref-1");
-        source.DiscoverCalls.Should().Be(2);
+        source.DiscoverCalls.Should().Be(1);
     }
 
     [Fact]
@@ -101,11 +112,15 @@ public class AgentToolVoiceCatalogTests
             ("voice-tool:ref-2", "caller-token-456"));
         var catalog = new AgentToolVoiceCatalog([source], credentials);
 
-        var firstDefinitions = await catalog.DiscoverAsync(CreateToolContext("voice-tool:ref-1"));
-        var secondDefinitions = await catalog.DiscoverAsync(CreateToolContext("voice-tool:ref-2"));
+        var firstSnapshot = await catalog.DiscoverAsync(CreateToolContext(
+            "voice-tool:ref-1",
+            "caller-token-123.only"));
+        var secondSnapshot = await catalog.DiscoverAsync(CreateToolContext(
+            "voice-tool:ref-2",
+            "caller-token-456.only"));
 
-        firstDefinitions.Should().ContainSingle(definition => definition.Name == "caller-token-123.only");
-        secondDefinitions.Should().ContainSingle(definition => definition.Name == "caller-token-456.only");
+        firstSnapshot.Tools.Should().ContainSingle(definition => definition.Name == "caller-token-123.only");
+        secondSnapshot.Tools.Should().ContainSingle(definition => definition.Name == "caller-token-456.only");
         credentials.RequestedRefs.Should().Equal("voice-tool:ref-1", "voice-tool:ref-2");
         source.CapturedNyxIdAccessTokens.Should().Equal("caller-token-123", "caller-token-456");
         source.DiscoverCalls.Should().Be(2);
@@ -121,9 +136,9 @@ public class AgentToolVoiceCatalogTests
         var catalog = new AgentToolVoiceCatalog([source], credentials);
         var toolContext = CreateFullToolContext("voice-tool:ref-2");
 
-        var definitions = await catalog.DiscoverAsync(toolContext);
+        var snapshot = await catalog.DiscoverAsync(toolContext);
 
-        definitions.Should().ContainSingle().Which.Name.Should().Be("door.open");
+        snapshot.Tools.Should().ContainSingle().Which.Name.Should().Be("door.open");
         var captured = source.CapturedContexts.Should().ContainSingle().Which;
         captured.Credentials.NyxIdAccessToken.Should().Be("caller-token-456");
         captured.Caller.ScopeId.Should().Be("caller-scope-1");
@@ -141,6 +156,58 @@ public class AgentToolVoiceCatalogTests
         captured.ToolVisibility.IsRestricted.Should().BeTrue();
         captured.ToolVisibility.Allows("door.open").Should().BeTrue();
         captured.ToolVisibility.Allows("lights.toggle").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_WithEmptyAllowlist_ShouldFreezeRestrictedEmptyWithoutDiscovery()
+    {
+        var source = new CountingToolSource(new FakeAgentTool("door.open", "fake", "{}"));
+        var catalog = new AgentToolVoiceCatalog([source]);
+
+        var snapshot = await catalog.DiscoverAsync(new VoiceToolExecutionContext());
+
+        VoiceToolCatalogSnapshotValidator.Validate(snapshot);
+        snapshot.Tools.Should().BeEmpty();
+        snapshot.Proof.ToolCount.Should().Be(0);
+        snapshot.Proof.MaximumToolCount.Should().Be(6);
+        source.DiscoverCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_WithMoreThanSixAllowedTools_ShouldKeepEveryExactTool()
+    {
+        var tools = Enumerable.Range(1, 7)
+            .Select(index => (IAgentTool)new FakeAgentTool($"tool-{index}", "fake", "{}"))
+            .ToArray();
+        var source = new CountingToolSource(tools);
+        var credentials = new StubCredentialProvider(("voice-tool:ref-1", "caller-token"));
+        var catalog = new AgentToolVoiceCatalog([source], credentials);
+        var context = CreateToolContext(
+            "voice-tool:ref-1",
+            tools.Select(static tool => tool.Name).ToArray());
+
+        var snapshot = await catalog.DiscoverAsync(context);
+
+        VoiceToolCatalogSnapshotValidator.Validate(snapshot);
+        snapshot.Tools.Should().HaveCount(7);
+        snapshot.Proof.ToolCount.Should().Be(7);
+        snapshot.Proof.MaximumToolCount.Should().Be(6);
+        source.DiscoverCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_WhenSourcesPublishSameName_ShouldFailClosed()
+    {
+        var credentials = new StubCredentialProvider(("voice-tool:ref-1", "caller-token"));
+        var catalog = new AgentToolVoiceCatalog(
+        [
+            new StubToolSource(new FakeAgentTool("door.open", "first", "{}")),
+            new StubToolSource(new FakeAgentTool("door.open", "second", "{}")),
+        ], credentials);
+
+        var act = () => catalog.DiscoverAsync(CreateToolContext("voice-tool:ref-1", "door.open"));
+
+        await act.Should().ThrowAsync<AgentToolDiscoveryException>();
     }
 
     private static VoiceToolExecutionContext CreateFullToolContext(string credentialRef)
@@ -162,12 +229,18 @@ public class AgentToolVoiceCatalogTests
         return toolContext;
     }
 
-    private static VoiceToolExecutionContext CreateToolContext(string credentialRef) =>
-        new()
+    private static VoiceToolExecutionContext CreateToolContext(
+        string credentialRef,
+        params string[] allowedToolNames)
+    {
+        var context = new VoiceToolExecutionContext
         {
             CredentialRef = credentialRef,
             ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
         };
+        context.AllowedToolNames.AddRange(allowedToolNames);
+        return context;
+    }
 
     private sealed class StubToolSource(params IAgentTool[] tools) : IAgentToolSource
     {

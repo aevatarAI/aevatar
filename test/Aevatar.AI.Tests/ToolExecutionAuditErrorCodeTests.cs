@@ -19,9 +19,15 @@ public sealed class ToolExecutionAuditErrorCodeTests
     }
 
     [Theory]
+    [InlineData("code_execution_cancel_outcome_uncertain")]
+    [InlineData("code_execution_cancelled")]
+    [InlineData("code_execution_cancellation_requested")]
+    [InlineData("code_execution_cancellation_unconfirmed")]
+    [InlineData("code_execution_submit_recovery_expired")]
+    [InlineData("OPERATION_EXPIRED")]
     [InlineData("FORBIDDEN")]
     [InlineData("UNAUTHENTICATED")]
-    public void ResolveForTool_CodeExecuteAuthorizationCode_ShouldPreserveExactCode(
+    public void ResolveForTool_CodeExecuteStableCode_ShouldPreserveExactCode(
         string failureCode)
     {
         ToolExecutionAuditErrorCode.ResolveForTool("code_execute", failureCode)

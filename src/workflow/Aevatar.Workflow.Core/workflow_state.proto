@@ -41,6 +41,8 @@ message WorkflowState
     int32 depth = 16;
     repeated WorkflowFileRef input_file_refs = 17;
     int64 binding_generation = 18;
+    string parent_execution_id = 19;
+    WorkflowExecutionValueRepresentation value_representation = 20;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -58,6 +60,8 @@ message WorkflowState
     string root_run_id = 11;
     int32 requested_depth = 12;
     repeated WorkflowFileRef input_file_refs = 13;
+    string parent_execution_id = 14;
+    WorkflowExecutionValueRepresentation value_representation = 15;
   }
 
   message ChildRunIdSet
@@ -88,10 +92,14 @@ message WorkflowState
   string workflow_id = 20;
   string revision_id = 21;
   ExternalCapabilityExecutionMode expected_execution_mode = 22;
+  string tool_catalog_policy_version = 23;
+  string catalog_publication_contract_version = 24;
 }
 
 message WorkflowRunState
 {
+  reserved 62;
+  reserved "normalized_state_fleet_capability";
   message SubWorkflowBinding
   {
     string workflow_name = 1;
@@ -122,6 +130,8 @@ message WorkflowRunState
     int32 depth = 16;
     repeated WorkflowFileRef input_file_refs = 17;
     int64 binding_generation = 18;
+    string parent_execution_id = 19;
+    WorkflowExecutionValueRepresentation value_representation = 20;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -139,6 +149,8 @@ message WorkflowRunState
     string root_run_id = 11;
     int32 requested_depth = 12;
     repeated WorkflowFileRef input_file_refs = 13;
+    string parent_execution_id = 14;
+    WorkflowExecutionValueRepresentation value_representation = 15;
   }
 
   message ChildRunIdSet
@@ -216,6 +228,22 @@ message WorkflowRunState
   int64 binding_generation = 58;
   string reuse_authority_actor_id = 59;
   WorkflowRunDefinitionBindingContinuationState pending_definition_binding_continuation = 60;
+  // Exact run-owned identities for committed StepCompleted artifact facts that carry an
+  // execution id. Tool-call step completion publication is at-least-once, so entries are
+  // retained for the run lifetime.
+  map<string, bool> processed_step_completion_keys = 61;
+  // A compensation completion is committed before the actor commits either the next
+  // compensation request or the terminal compensation fact. Retain that exact outcome so
+  // activation can finish the interrupted actor-owned continuation without re-running the
+  // compensation step.
+  CompensationStepCompletedEvent pending_compensation_completion = 63;
+  aevatar.workflow.WorkflowValueLifecycleFailureKind terminal_value_lifecycle_failure_kind = 64;
+  // Internal durable self-publication intent. Projection publication redacts
+  // this execution-only payload; the authoritative actor clears it after the
+  // workflow kernel commits its first state checkpoint.
+  aevatar.workflow.StartWorkflowEvent pending_start_workflow = 65;
+  string tool_catalog_policy_version = 66;
+  aevatar.workflow.WorkflowAgentTurnToolCatalogProof last_tool_catalog_proof = 67;
 }
 
 message WorkflowRunDefinitionBindingContinuationState
@@ -226,6 +254,7 @@ message WorkflowRunDefinitionBindingContinuationState
   bool execute_after_bind = 4;
   string execution_input = 5;
   bool cleanup_completed = 6;
+  WorkflowExecutionValueRepresentation value_representation = 7;
 }
 
 message WorkflowRunDefinitionBindingContinuationRegisteredEvent
@@ -385,6 +414,8 @@ message PendingWorkflowLeaseOperationState
   string action = 6;
   string input = 7;
   string holder_token_variable = 8;
+  string execution_id = 9;
+  string input_value_id = 10;
 }
 
 message WorkflowLeaseModuleState
@@ -422,6 +453,154 @@ message WorkflowExecutionKernelState
   WorkflowRuntimeCallbackLeaseState compensation_phase_deadline_lease = 17;
   string compensation_phase_deadline_callback_id = 18;
   aevatar.workflow.WorkflowRecoveryFailureKind compensation_terminal_recovery_failure_kind = 19;
+  WorkflowCompletedEvent pending_workflow_completion = 20;
+  // Present only for runs admitted to the normalized value representation.
+  // Absence is the complete legacy discriminator; no business-state schema
+  // version is duplicated here because RuntimeActorIdentity owns that axis.
+  WorkflowNormalizedExecutionValuesState normalized_values = 21;
+  WorkflowPendingCompensationOutcomeState pending_compensation_outcome = 22;
+}
+
+// Durable handoff from the execution kernel to the run actor's compensation ledger. The
+// completed physical execution is never dispatched again while this continuation is present.
+message WorkflowPendingCompensationOutcomeState
+{
+  StepCompletedEvent completion = 1;
+  string compensation_execution_id = 2;
+  oneof continuation
+  {
+    CompensationRequestEvent next_compensation_request = 3;
+    WorkflowCompletedEvent terminal_completion = 4;
+    bool completed_without_continuation = 5;
+  }
+}
+
+// One logical engine-produced value. Values are never coalesced by content:
+// value_id identifies the accepted production instance and provenance records
+// which execution produced it.
+message WorkflowCanonicalValueState
+{
+  string value_id = 1;
+  string value = 2;
+  string producer_step_id = 3;
+  string producer_execution_id = 4;
+  aevatar.workflow.WorkflowCanonicalValueSourceKind source_kind = 5;
+  aevatar.workflow.WorkflowReleasedValueTombstone released = 6;
+}
+
+enum WorkflowValueBindingKind
+{
+  WORKFLOW_VALUE_BINDING_KIND_UNSPECIFIED = 0;
+  WORKFLOW_VALUE_BINDING_KIND_STEP_OUTPUT = 1;
+  WORKFLOW_VALUE_BINDING_KIND_CURRENT_INPUT = 2;
+  WORKFLOW_VALUE_BINDING_KIND_ASSIGNED_VALUE = 3;
+  WORKFLOW_VALUE_BINDING_KIND_INTERNAL_OUTPUT = 4;
+  WORKFLOW_VALUE_BINDING_KIND_REQUEST_OVERRIDE = 5;
+}
+
+// Typed alias from an expression-visible key to a canonical value. Reference
+// identity is never encoded into the legacy string map.
+message WorkflowValueBindingState
+{
+  string value_id = 1;
+  WorkflowValueBindingKind binding_kind = 2;
+}
+
+// Explicit completion facts replace the legacy inference that every
+// non-reserved top-level variable key is a completed step.
+message WorkflowCompletedStepState
+{
+  string step_id = 1;
+  string output_value_id = 2;
+  bool success = 3;
+  string error = 4;
+  string branch_key = 5;
+  string next_step_id = 6;
+  string assigned_variable = 7;
+  string assigned_value_id = 8;
+  map<string, string> annotations = 9;
+  WorkflowUsageMetricsState usage = 10;
+  // Legacy mirrors only expose step usage when the completion carried usage.
+  bool has_usage = 11;
+  // Each alias points at the output instance that last supplied that JSON
+  // property. This preserves per-key last-write semantics across retries.
+  map<string, WorkflowJsonValueBindingState> json_value_bindings = 12;
+  // Internal and foreach child completions participate in the completion
+  // ledger without publishing steps.<id> compatibility mirrors.
+  bool emit_legacy_mirrors = 13;
+  string execution_id = 14;
+  WorkflowStepOutputProvenance output_provenance = 15;
+  WorkflowStepAssignedValueProvenance assigned_value_provenance = 16;
+  string output_source_step_id = 17;
+  string output_source_execution_id = 18;
+  string output_source_value_id = 19;
+  string output_reference_id = 20;
+  WorkflowStepFailureOutcome failure_outcome = 21;
+  WorkflowStepRetryDisposition retry_disposition = 22;
+  WorkflowStepCompletionOutcome outcome = 23;
+  // Exact raw assigned_value compatibility mirror. The authored assignment
+  // target may fall back to output while this mirror retains an empty/blank
+  // value, so it cannot share assigned_value_id in that case.
+  string assigned_mirror_value_id = 24;
+  aevatar.workflow.WorkflowValueDigest output_digest = 25;
+  aevatar.workflow.WorkflowValueDigest assigned_value_digest = 26;
+  aevatar.workflow.WorkflowValueDigest assigned_mirror_digest = 27;
+}
+
+message WorkflowJsonValueBindingState
+{
+  string output_value_id = 1;
+}
+
+message WorkflowPendingOutputReferenceState
+{
+  string reference_id = 1;
+  string source_step_id = 2;
+  string source_execution_id = 3;
+  string source_value_id = 4;
+  string target_step_id = 5;
+  string target_execution_id = 6;
+}
+
+// Actor-owned authority for one nested executor dispatch. Unknown child
+// completions cannot become workflow facts unless they match this exact lease.
+message WorkflowPendingInternalDispatchState
+{
+  string dispatch_key = 1;
+  string run_id = 2;
+  string step_id = 3;
+  string execution_id = 4;
+  string input_value_id = 5;
+  string origin_envelope_id = 6;
+}
+
+message WorkflowNormalizedExecutionValuesState
+{
+  map<string, WorkflowCanonicalValueState> canonical_values = 1;
+  map<string, WorkflowValueBindingState> bindings = 2;
+  map<string, WorkflowCompletedStepState> completed_steps = 3;
+  uint64 next_value_sequence = 4;
+  // Empty means current_step_input remains an inline legacy/start value.
+  string current_step_input_value_id = 5;
+  map<string, WorkflowPendingOutputReferenceState> pending_output_references = 6;
+  map<string, WorkflowPendingInternalDispatchState> pending_internal_dispatches = 7;
+  // Completion acceptance ledger keyed by step id and execution id.  The
+  // bridge and artifact observer use this to reject stale or forged events
+  // after the kernel has committed the corresponding canonical value.
+  map<string, string> accepted_completion_value_ids = 8;
+  // Immutable semantic snapshot for each accepted physical completion. Legacy
+  // mirrors in completed_steps intentionally retain per-key values across
+  // retries and therefore cannot serve as an exact replay comparator.
+  map<string, WorkflowCompletedStepState> accepted_completions = 9;
+  // Source-run provenance restored from a fork seed. These entries validate
+  // inherited aliases and survive fork-of-fork capture, but are never used to
+  // accept or recover a target-run physical completion.
+  map<string, string> inherited_completion_value_ids = 10;
+  map<string, WorkflowCompletedStepState> inherited_completions = 11;
+  // Alias tombstones preserve the difference between "never existed" and
+  // "author explicitly released this exact canonical value". Enumeration
+  // omits them and request overrides may bind the same name to a new identity.
+  map<string, aevatar.workflow.WorkflowReleasedValueTombstone> released_bindings = 12;
 }
 
 message WorkflowUsageMetricsState
@@ -440,6 +619,8 @@ message PendingDelayState
   string input = 2;
   string callback_id = 3;
   string step_id = 4;
+  string execution_id = 5;
+  string input_value_id = 6;
 }
 
 message DelayModuleState
@@ -456,6 +637,8 @@ message PendingSignalState
   WorkflowRuntimeCallbackLeaseState timeout_lease = 5;
   string timeout_callback_id = 6;
   PendingExternalApprovalContinuationState external_approval = 7;
+  string execution_id = 8;
+  string input_value_id = 9;
 }
 
 message PendingExternalApprovalContinuationState
@@ -486,6 +669,8 @@ message PendingHumanInputState
   string run_id = 2;
   string input = 3;
   string on_timeout = 4;
+  string execution_id = 5;
+  string input_value_id = 6;
 }
 
 message HumanInputModuleState
@@ -502,6 +687,8 @@ message PendingSecureInputState
   bool allow_empty = 5;
   string variable_name = 6;
   string masked_output = 7;
+  string execution_id = 8;
+  string input_value_id = 9;
 }
 
 message CapturedSecureInputState
@@ -594,6 +781,11 @@ message WorkflowToolCallCompletionOutboxEntry
   // Cleanup ownership moves here before pending execution is removed. The handle is retained
   // until revocation (or confirmed absence) is durably checkpointed.
   aevatar.credentials.RuntimeSecretReference protected_material_reference = 11;
+  // A terminal durable operation retains the exact poll provenance that observed its outcome.
+  // Only a trusted redelivery of that poll may use this outbox entry as a recovery trigger.
+  string operation_id = 12;
+  int32 operation_poll_attempt = 13;
+  string operation_poll_callback_id = 14;
 }
 
 message WorkflowToolCallCompletionTombstone
@@ -629,6 +821,68 @@ message WorkflowToolCallTerminalCleanupRetryFiredEvent
   string run_id = 1;
 }
 
+enum WorkflowToolPendingOperationStatus
+{
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_SUBMISSION_UNCERTAIN = 1;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_QUEUED = 2;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_PROVISIONING = 3;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_PREPARING = 4;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_RUNNING = 5;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_COLLECTING = 6;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_SUCCEEDED = 7;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_FAILED = 8;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_CANCELLED = 9;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_OUTCOME_UNCERTAIN = 10;
+}
+
+enum WorkflowToolPendingOperationRouteIdentitySource
+{
+  WORKFLOW_TOOL_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_CODE_EXECUTION_CONTRACT = 1;
+  WORKFLOW_TOOL_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_NYX_ID_USER_SERVICE_CATALOG = 2;
+  WORKFLOW_TOOL_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_WORKFLOW_CAPABILITY_ADMISSION = 3;
+}
+
+enum WorkflowToolStopKind
+{
+  WORKFLOW_TOOL_STOP_KIND_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_STOP_KIND_WORKFLOW_STOPPED = 1;
+  WORKFLOW_TOOL_STOP_KIND_WORKFLOW_RUN_STOPPED = 2;
+}
+
+enum WorkflowToolStopCancellationPhase
+{
+  WORKFLOW_TOOL_STOP_CANCELLATION_PHASE_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_STOP_CANCELLATION_PHASE_REQUESTED = 1;
+  WORKFLOW_TOOL_STOP_CANCELLATION_PHASE_FINALIZING_AUDIT = 2;
+}
+
+message PendingWorkflowToolStopCancellation
+{
+  WorkflowToolStopKind stop_kind = 1;
+  string run_id = 2;
+  string workflow_name = 3;
+  string reason = 4;
+  google.protobuf.Timestamp completed_at_utc = 5;
+  int64 expires_at_unix_ms = 6;
+}
+
+message WorkflowToolCancellationTerminalIntent
+{
+  string result_json = 1;
+  bool has_failure = 2;
+  string failure_code = 3;
+  string safe_message = 4;
+  bool terminal_invoked = 5;
+  bool retryable = 6;
+  // The tool adapter owns this typed payload. Workflow state persists and returns it
+  // without interpreting provider- or audit-specific fields.
+  google.protobuf.Any tool_owned_audit_intent = 7;
+  WorkflowStepFailureOutcome failure_outcome = 8;
+  string arguments_sha256 = 9;
+}
+
 message PendingToolCallExecutionState
 {
   string run_id = 1;
@@ -656,6 +910,70 @@ message PendingToolCallExecutionState
   aevatar.credentials.RuntimeSecretReference protected_material_reference = 23;
   string protected_material_digest_sha256 = 24;
   WorkflowToolCallExecutionPhase execution_phase = 25;
+  google.protobuf.Timestamp attempt_preparation_started_at_utc = 26;
+}
+
+message PendingToolCallOperationState
+{
+  reserved 6, 7, 8, 9, 11;
+  reserved "arguments_json", "input_file_refs", "idempotency_key", "external_invocation", "display_name";
+
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string tool_name = 4;
+  string tool_call_id = 5;
+  int64 issued_at_unix_ms = 10;
+  string operation_id = 12;
+  string status_path = 13;
+  string result_path = 14;
+  string cancel_path = 15;
+  WorkflowToolPendingOperationStatus status = 16;
+  string etag = 17;
+  int64 retry_after_ms = 18;
+  int64 expires_at_unix_ms = 19;
+  int32 poll_attempt = 20;
+  int64 next_poll_unix_ms = 21;
+  string poll_callback_id = 22;
+  string approval_request_id = 23;
+  WorkflowToolCallTerminalDecision terminal_decision = 24;
+  string provider_operation_id = 25;
+  string service_slug = 26;
+  string user_service_id = 27;
+  WorkflowToolPendingOperationRouteIdentitySource route_identity_source = 28;
+  WorkflowToolStopCancellationPhase stop_cancellation_phase = 29;
+  int32 stop_cancellation_attempt = 30;
+  int64 next_stop_cancellation_unix_ms = 31;
+  string stop_cancellation_callback_id = 32;
+  WorkflowToolCancellationTerminalIntent stop_cancellation_terminal_intent = 33;
+  aevatar.credentials.RuntimeSecretReference protected_material_reference = 34;
+  string protected_material_digest_sha256 = 35;
+  bool stop_cancellation_settled = 36;
+  // Frozen at initial admission so a definitive protected-material loss can still
+  // converge the terminal cancellation audit after the stop deadline.
+  WorkflowToolCancellationTerminalIntent stop_cancellation_recovery_intent = 37;
+}
+
+message WorkflowToolCallOperationPollFiredEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string call_id = 4;
+  string operation_id = 5;
+  int32 poll_attempt = 6;
+  string callback_id = 7;
+}
+
+message WorkflowToolCallStopCancellationFiredEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string call_id = 4;
+  string operation_id = 5;
+  int32 attempt = 6;
+  string callback_id = 7;
 }
 
 message ToolCallModuleState
@@ -664,6 +982,8 @@ message ToolCallModuleState
   repeated WorkflowToolCallCompletionOutboxEntry completions = 2;
   map<string, WorkflowToolCallCompletionTombstone> completion_tombstones = 3;
   map<string, PendingToolCallExecutionState> pending_executions = 4;
+  map<string, PendingToolCallOperationState> pending_operations = 5;
+  PendingWorkflowToolStopCancellation stop_cancellation = 6;
 }
 
 message PendingApprovalState
@@ -677,6 +997,8 @@ message PendingApprovalState
   int32 timeout_seconds = 7;
   WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
   string timeout_callback_id = 9;
+  string execution_id = 10;
+  string input_value_id = 11;
 }
 
 message HumanApprovalModuleState
@@ -695,11 +1017,17 @@ message WhileRuntimeState
   int32 max_iterations = 7;
   string condition_expression = 8;
   ExternalToolInvocationSpec sub_external_invocation = 9;
+  string parent_execution_id = 10;
+  string input_value_id = 11;
+  StepCompletedEvent pending_completion = 12;
+  string expected_child_step_id = 13;
+  string expected_child_execution_id = 14;
 }
 
 message WhileModuleState
 {
   map<string, WhileRuntimeState> loops = 1;
+  map<string, string> child_to_loop_key = 2;
 }
 
 message ParallelItemResult
@@ -713,6 +1041,9 @@ message ParallelItemResult
   string branch_key = 7;
   string assigned_variable = 8;
   string assigned_value = 9;
+  string step_id = 10;
+  string execution_id = 11;
+  string output_value_id = 12;
 }
 
 message VoteConfigState
@@ -728,6 +1059,11 @@ message ParallelParentState
   repeated ParallelItemResult collected = 2;
   VoteConfigState vote_config = 3;
   repeated string collected_step_ids = 4;
+  string parent_run_id = 5;
+  string parent_step_id = 6;
+  string parent_execution_id = 7;
+  StepCompletedEvent pending_completion = 8;
+  map<string, string> child_execution_ids = 9;
 }
 
 message ParallelFanOutModuleState
@@ -736,6 +1072,7 @@ message ParallelFanOutModuleState
   map<string, string> vote_step_to_parent = 2;
   map<string, bool> parent_worker_success = 3;
   BackpressureQueueState backpressure = 4;
+  map<string, string> child_to_parent_key = 5;
 }
 
 message ForEachItemResult
@@ -745,6 +1082,23 @@ message ForEachItemResult
   int32 index = 3;
   WorkflowFileRef file_ref = 4;
   string error = 5;
+  string step_id = 6;
+  WorkflowStepFailureOutcome failure_outcome = 7;
+  WorkflowRecoveryFailureKind recovery_failure_kind = 8;
+  WorkflowStepRetryDisposition retry_disposition = 9;
+  WorkflowStepCompletionOutcome outcome = 10;
+  string execution_id = 11;
+  string output_value_id = 12;
+}
+
+message ForEachCompletedParentAttemptState
+{
+  string parent_run_id = 1;
+  string parent_step_id = 2;
+  string parent_execution_id = 3;
+  map<string, string> child_execution_ids = 4;
+  map<string, string> outstanding_child_execution_ids = 5;
+  bool outstanding_workers_accounted = 6;
 }
 
 message ForEachParentState
@@ -763,6 +1117,7 @@ message ForEachParentState
   string parent_execution_id = 12;
   string parent_idempotency_key = 13;
   map<string, string> child_execution_ids = 14;
+  repeated string outstanding_worker_step_ids = 15;
 }
 
 message ForEachModuleState
@@ -772,6 +1127,9 @@ message ForEachModuleState
   map<string, ForEachParentState> parents = 1;
   BackpressureQueueState backpressure = 2;
   map<string, bool> completion_tombstones = 3;
+  map<string, string> completed_child_outputs = 5;
+  string completed_child_outputs_run_id = 6;
+  map<string, ForEachCompletedParentAttemptState> completed_parent_attempts = 7;
 }
 
 message ForEachPublicationRetryFiredEvent
@@ -779,10 +1137,20 @@ message ForEachPublicationRetryFiredEvent
   string parent_key = 1;
 }
 
+enum WorkflowChildPublicationFailureOutcome
+{
+  WORKFLOW_CHILD_PUBLICATION_FAILURE_OUTCOME_UNSPECIFIED = 0;
+  WORKFLOW_CHILD_PUBLICATION_FAILURE_OUTCOME_NOT_ADMITTED = 1;
+  WORKFLOW_CHILD_PUBLICATION_FAILURE_OUTCOME_OUTCOME_UNCERTAIN = 2;
+}
+
 message MapReduceItemResult
 {
   bool success = 1;
   string output = 2;
+  string step_id = 3;
+  string execution_id = 4;
+  string output_value_id = 5;
 }
 
 message ActorSendState
@@ -799,6 +1167,11 @@ message MapReduceParentState
   string reduce_role = 4;
   string reduce_prompt_prefix = 5;
   repeated string collected_step_ids = 6;
+  string parent_run_id = 7;
+  string parent_step_id = 8;
+  string parent_execution_id = 9;
+  StepCompletedEvent pending_completion = 10;
+  map<string, string> child_execution_ids = 11;
 }
 
 message MapReduceModuleState
@@ -806,6 +1179,7 @@ message MapReduceModuleState
   map<string, MapReduceParentState> parents = 1;
   map<string, string> reduce_step_to_parent = 2;
   BackpressureQueueState backpressure = 3;
+  map<string, string> child_to_parent_key = 4;
 }
 
 message RaceState
@@ -813,11 +1187,21 @@ message RaceState
   int32 total = 1;
   int32 received = 2;
   bool resolved = 3;
+  string parent_run_id = 4;
+  string parent_step_id = 5;
+  string parent_execution_id = 6;
+  StepCompletedEvent pending_completion = 7;
+  repeated string settled_execution_ids = 8;
+  map<string, string> child_execution_ids = 9;
+  string winner_step_id = 10;
+  string winner_execution_id = 11;
+  string winner_output_value_id = 12;
 }
 
 message RaceModuleState
 {
   map<string, RaceState> races = 1;
+  map<string, string> child_to_race_key = 2;
 }
 
 message PendingLlmCallState
@@ -829,6 +1213,8 @@ message PendingLlmCallState
   bool request_dispatched = 5;
   string watchdog_callback_id = 6;
   string dispatch_operation_id = 7;
+  string execution_id = 8;
+  string input_value_id = 9;
 }
 
 message LLMCallModuleState
@@ -927,6 +1313,8 @@ message EvalContextState
   string original_input = 3;
   double threshold = 4;
   string on_below = 5;
+  string execution_id = 6;
+  string input_value_id = 7;
 }
 
 message EvaluateModuleState
@@ -947,6 +1335,8 @@ message ReflectState
   ReflectPhaseState phase = 8;
   string target_actor_id = 9;
   map<string, string> chat_metadata_parameters = 10;
+  string execution_id = 11;
+  string input_value_id = 12;
 }
 
 message ReflectModuleState
@@ -964,12 +1354,16 @@ message CacheWaiterState
 {
   string run_id = 1;
   string parent_step_id = 2;
+  string parent_execution_id = 3;
 }
 
 message PendingCacheCallState
 {
   int32 ttl_seconds = 1;
   repeated CacheWaiterState waiters = 2;
+  repeated StepCompletedEvent pending_completions = 3;
+  string child_step_id = 4;
+  string child_execution_id = 5;
 }
 
 message CacheModuleState
@@ -995,6 +1389,10 @@ message BackpressureQueueEntry
   ExternalToolInvocationSpec external_invocation = 8;
   string execution_id = 9;
   string idempotency_key = 10;
+  string input_value_id = 11;
+  WorkflowChildPublicationFailureOutcome publication_failure_outcome = 12;
+  bool publication_attempted = 13;
+  bool publication_attempt_state_known = 14;
 }
 
 message BackpressureQueueState
@@ -1015,4 +1413,8 @@ message CompletedStepLedgerEntry
   string idempotency_key = 3;
   string captured_output = 4;
   CompensableLedgerEntryStatus ledger_status = 6;
+  string captured_output_value_id = 7;
+  string captured_output_producer_step_id = 8;
+  string captured_output_producer_execution_id = 9;
+  aevatar.workflow.WorkflowCanonicalValueSourceKind captured_output_source_kind = 10;
 }

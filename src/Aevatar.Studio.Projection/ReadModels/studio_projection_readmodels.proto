@@ -5,6 +5,8 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "llm_selection.proto";
+import "llm_model_catalog_policy_messages.proto";
+import "workflow_delivery_messages.proto";
 import "Tools/tool_presentation.proto";
 
 message ContentArtifactCitationDocument {
@@ -165,6 +167,31 @@ message WorkOrderCurrentStateDocument {
   string terminal_reason = 76;
 }
 
+// Actor-scoped current-state replica for WorkflowDeliveryGAgent. The immutable
+// package source remains available to the application boundary, while public
+// delivery responses are responsible for selecting the fields they expose.
+message WorkflowDeliveryCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string delivery_id = 20;
+  aevatar.gagents.workflow_delivery.WorkflowPackageVersionSnapshot package = 21;
+  string target_scope_id = 22;
+  google.protobuf.Timestamp expires_at_utc = 23;
+  string note = 24;
+  aevatar.gagents.workflow_delivery.WorkflowDeliveryLifecycleStatus lifecycle_status = 25;
+  string created_by = 26;
+  google.protobuf.Timestamp created_at_utc = 27;
+  google.protobuf.Timestamp accessed_at_utc = 28;
+  string revoked_by = 29;
+  google.protobuf.Timestamp revoked_at_utc = 30;
+  repeated aevatar.gagents.workflow_delivery.WorkflowDeliveryConnectionState connections = 31;
+  aevatar.gagents.workflow_delivery.WorkflowInstallationState installation = 32;
+}
+
 // ─── Workflow Board Execution Materialized View ───
 //
 // Studio owns the workflow board product surface. The authoritative facts
@@ -293,6 +320,22 @@ message UserConfigCurrentStateDocument {
   aevatar.ai.LLMSelection llm_selection = 17;
 }
 
+// Actor-scoped current-state replica for LLMModelCatalogPolicyGAgent.
+// The committed actor version is the sole state_version authority.
+message LLMModelCatalogPolicyCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  aevatar.gagents.user_config.LLMModelCatalogPolicyOwnerType owner_type = 20;
+  string scope_id = 21;
+  aevatar.gagents.user_config.LLMModelCatalogPolicyMode mode = 22;
+  repeated aevatar.gagents.user_config.LLMModelCatalogPolicySource sources = 23;
+  string last_mutation_id = 24;
+}
+
 // ─── GAgentRegistry Current State ReadModel ───
 
 message GAgentRegistryCurrentStateDocument {
@@ -349,6 +392,34 @@ message ChatConversationTurnDocument {
   int64 terminal_time_ms = 7;
   string llm_route = 8;
   string llm_model = 9;
+  repeated ChatConversationTurnOperationDocument operations = 10;
+}
+
+// Query copy of one committed turn operation. Timing stays absent when the
+// operation never reported it; previews stay marked as truncated fragments.
+message ChatConversationTurnOperationDocument {
+  reserved 17;
+  reserved "result_preview";
+  string operation_id = 1;
+  int32 order = 2;
+  string kind = 3;
+  string title = 4;
+  string status = 5;
+  int64 started_at_ms = 6;
+  int64 completed_at_ms = 7;
+  string model = 8;
+  string provider = 9;
+  string finish_reason = 10;
+  int32 prompt_tokens = 11;
+  int32 completion_tokens = 12;
+  int32 total_tokens = 13;
+  string input_preview = 14;
+  string output_preview = 15;
+  string arguments_preview = 16;
+  bool previews_truncated = 18;
+  string safe_message = 19;
+  repeated string available_tool_names = 20;
+  bool tool_catalog_captured = 21;
 }
 
 message ChatConversationCurrentStateDocument {
@@ -534,33 +605,6 @@ message NyxIdChatConversationStepDocument {
   NyxIdChatConversationStepGuardDocument guard = 25;
 }
 
-message NyxIdChatConversationPlanGateDocument {
-  string mode = 1;
-  string reason = 2;
-  string status = 3;
-  string request_id = 4;
-  string task_id = 5;
-  int32 plan_revision = 6;
-  google.protobuf.Timestamp decided_at = 7;
-  repeated NyxIdChatConversationPlanOperationAdmissionDocument admissions = 8;
-  string plan_id = 9;
-}
-
-message NyxIdChatConversationPlanOperationAdmissionDocument {
-  string conversation_actor_id = 1;
-  string turn_id = 2;
-  string task_id = 3;
-  string step_id = 4;
-  string operation_id = 5;
-  int64 operation_generation = 6;
-  string tool_call_id = 7;
-  string tool_name = 8;
-  bytes arguments_sha256 = 9;
-  string action_request_id = 10;
-  string action = 11;
-  bytes action_params_sha256 = 12;
-}
-
 message NyxIdChatConversationPlanRevisionDocument {
   int32 plan_revision = 1;
   string revision_cause = 2;
@@ -569,99 +613,9 @@ message NyxIdChatConversationPlanRevisionDocument {
   repeated string cancelled_step_ids = 5;
 }
 
-message NyxIdChatMoneyValueDocument {
-  string currency_code = 1;
-  int64 minor_units = 2;
-  uint32 fraction_digits = 3;
-}
-
-message NyxIdChatInvoiceEvidenceDocument {
-  int32 source_ordinal = 1;
-  string vendor = 2;
-  string invoice_number = 3;
-  string invoice_date = 4;
-  NyxIdChatMoneyValueDocument amount = 5;
-}
-
-message NyxIdChatInvoiceDuplicateEvidenceDocument {
-  int32 duplicate_source_ordinal = 1;
-  int32 retained_source_ordinal = 2;
-}
-
-message NyxIdChatReimbursementEvidenceDocument {
-  string evidence_id = 1;
-  string source_input_request_id = 2;
-  string expense_category = 3;
-  string cost_center = 4;
-  string reimbursement_currency_instruction = 5;
-  repeated NyxIdChatInvoiceEvidenceDocument source_invoices = 6;
-  repeated int32 retained_source_ordinals = 7;
-  repeated NyxIdChatInvoiceDuplicateEvidenceDocument duplicate_invoices = 8;
-  google.protobuf.Timestamp committed_at = 9;
-  string guarded_tool_name = 10;
-}
-
-message NyxIdChatCandidateRubricCriterionDocument {
-  string criterion_id = 1;
-  string title = 2;
-  int32 maximum_points = 3;
-}
-
-message NyxIdChatCandidateCriterionScoreDocument {
-  string criterion_id = 1;
-  int32 awarded_points = 2;
-  string evidence = 3;
-}
-
-message NyxIdChatCandidateScreeningEvidenceDocument {
-  string evidence_id = 1;
-  string source_input_request_id = 2;
-  string candidate_name = 3;
-  string role_title = 4;
-  repeated NyxIdChatCandidateRubricCriterionDocument rubric = 5;
-  repeated NyxIdChatCandidateCriterionScoreDocument scores = 6;
-  int32 total_score = 7;
-  string tracker_table = 8;
-  string tracker_table_id = 9;
-  string stage = 10;
-  string guarded_tool_name = 11;
-  google.protobuf.Timestamp committed_at = 12;
-}
-
-message NyxIdChatTaskDomainDocument {
-  oneof domain {
-    NyxIdChatReimbursementEvidenceDocument reimbursement = 1;
-    NyxIdChatCandidateScreeningEvidenceDocument candidate_screening = 2;
-  }
-}
-
-message NyxIdChatReimbursementArtifactDocument {
-  string provider_instance_id = 1;
-  string cost_center = 2;
-  int32 retained_item_count = 3;
-  int32 duplicate_item_count = 4;
-}
-
-message NyxIdChatCandidateTrackerArtifactDocument {
-  string provider_record_id = 1;
-  string candidate_name = 2;
-  int32 score = 3;
-  int64 threshold = 4;
-  string tracker_table = 5;
-  string tracker_table_id = 6;
-  string stage = 7;
-}
-
-message NyxIdChatVerifiedArtifactDocument {
-  string check_name = 1;
-  google.protobuf.Timestamp verified_at = 2;
-  oneof artifact {
-    NyxIdChatReimbursementArtifactDocument reimbursement = 3;
-    NyxIdChatCandidateTrackerArtifactDocument candidate_tracker = 4;
-  }
-}
-
 message NyxIdChatConversationTaskDocument {
+  reserved 16, 19, 20;
+  reserved "gate", "domain", "artifact";
   string task_id = 1;
   string turn_id = 2;
   string status = 3;
@@ -677,11 +631,8 @@ message NyxIdChatConversationTaskDocument {
   string plan_id = 13;
   int32 plan_revision = 14;
   string title = 15;
-  NyxIdChatConversationPlanGateDocument gate = 16;
   repeated NyxIdChatConversationPlanRevisionDocument plan_revisions = 17;
   int32 plan_revision_history_start = 18;
-  NyxIdChatTaskDomainDocument domain = 19;
-  NyxIdChatVerifiedArtifactDocument artifact = 20;
 }
 
 message NyxIdChatConversationPendingApprovalDocument {
@@ -863,6 +814,7 @@ message NyxIdChatConversationActionParamsDocument {
     NyxIdChatConversationCustomServiceConnectDocument custom_service = 2;
     NyxIdChatConversationKeyCreateDocument key_create = 3;
     NyxIdChatConversationKeyRotateDocument key_rotate = 4;
+    NyxIdChatConversationServiceAccessReviewDocument service_access_review = 5;
   }
 }
 
@@ -890,6 +842,12 @@ message NyxIdChatConversationKeyCreateDocument {
 
 message NyxIdChatConversationKeyRotateDocument {
   string key_id = 1;
+}
+
+message NyxIdChatConversationServiceAccessReviewDocument {
+  string user_service_id = 1;
+  string service_slug = 2;
+  string resource_uri = 3;
 }
 
 message NyxIdChatConversationCurrentStateDocument {
@@ -929,15 +887,23 @@ message NyxIdChatConversationCurrentStateDocument {
 message NyxIdChatConversationCanaryEffectFaultDocument {
   string arm_id = 1;
   string status = 2;
-  string turn_id = 3;
-  string task_id = 4;
-  string step_id = 5;
-  string operation_id = 6;
-  int64 operation_generation = 7;
+  reserved 3, 4, 5, 6, 7;
+  reserved "turn_id", "task_id", "step_id", "operation_id", "operation_generation";
   google.protobuf.Timestamp expires_at = 8;
   google.protobuf.Timestamp consumed_at = 9;
   google.protobuf.Timestamp forwarded_at = 10;
   google.protobuf.Timestamp armed_at = 11;
+  NyxIdChatConversationCanaryOperationDocument source_operation = 12;
+  NyxIdChatConversationCanaryOperationDocument target_operation = 13;
+}
+
+message NyxIdChatConversationCanaryOperationDocument {
+  string conversation_actor_id = 1;
+  string turn_id = 2;
+  string task_id = 3;
+  string step_id = 4;
+  string operation_id = 5;
+  int64 operation_generation = 6;
 }
 
 // ─── Chat History Create Recovery Current State ReadModel ───
@@ -1032,6 +998,11 @@ message StudioMemberCurrentStateDocument {
   string schedule_provisioning_failure_code = 76;
   string schedule_provisioning_failure_message = 77;
   google.protobuf.Timestamp schedule_provisioning_updated_at = 78;
+
+  // Actor-owned version of authorization-relevant member facts. This is
+  // intentionally distinct from state_version, which also advances for
+  // provisioning attempts and other non-authority bookkeeping.
+  int64 authorization_revision = 80;
 }
 
 // ─── StudioMemberBindingRun Current State ReadModel ───
@@ -1056,6 +1027,9 @@ message StudioMemberBindingRunCurrentStateDocument {
   string status = 24;
   string platform_binding_command_id = 25;
   int32 attempt_count = 26;
+  string platform_execution_stage = 27;
+  int32 platform_execution_attempt = 28;
+  string last_readiness_status = 29;
 
   string failure_code = 30;
   string failure_message = 31;

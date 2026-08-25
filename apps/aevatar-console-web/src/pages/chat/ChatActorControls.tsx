@@ -1,6 +1,4 @@
 import {
-  CheckOutlined,
-  CloseOutlined,
   PauseCircleOutlined,
   RedoOutlined,
   StopOutlined,
@@ -13,17 +11,14 @@ import type {
   ChatActorProjection,
   ChatActorStep,
   ChatPendingInput,
-  ChatServiceConnectActionRequest,
+  ChatNyxIdActionRequest,
 } from './chatActorState';
 import { chatActionIdentityKey } from './chatActorState';
 import type { ChatInputAnswer } from './chatApi';
 import type {
   ChatApprovalObservation,
   ChatExternalEffect,
-  ChatPlanGate,
-  ChatTaskDomain,
   ChatTaskStepSource,
-  ChatVerifiedArtifact,
 } from './chatTaskPlan';
 
 type ActionReport = {
@@ -47,19 +42,18 @@ type Props = {
   diagnosticWire?: unknown;
   wireInspectorEnabled?: boolean;
   onInputResolve: (answer: ChatInputAnswer, input: ChatPendingInput) => void;
-  onPlanResolve: (confirmed: boolean, gate: ChatPlanGate) => void;
   onStop: () => void;
   onSteer: (instruction: string) => void;
   onRetry: (step: ChatActorStep) => void;
   onSkip: (step: ChatActorStep) => void;
-  onActionOpen: (request: ChatServiceConnectActionRequest) => void;
-  onActionRefresh: (request: ChatServiceConnectActionRequest) => void;
+  onActionOpen: (request: ChatNyxIdActionRequest) => void;
+  onActionRefresh: (request: ChatNyxIdActionRequest) => void;
   onActionConnectCredential: (
-    request: ChatServiceConnectActionRequest,
+    request: ChatNyxIdActionRequest,
     credential: string,
   ) => Promise<void>;
   onActionReport: (
-    request: ChatServiceConnectActionRequest,
+    request: ChatNyxIdActionRequest,
     disposition: ActionReport['disposition'],
   ) => void;
 };
@@ -81,7 +75,6 @@ export function ChatActorControls({
   diagnosticWire,
   wireInspectorEnabled = false,
   onInputResolve,
-  onPlanResolve,
   onStop,
   onRetry,
   onSkip,
@@ -123,11 +116,7 @@ export function ChatActorControls({
       style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
     >
       {projection.task ? (
-        <TaskPlanLedger
-          disabled={disabled}
-          onPlanResolve={onPlanResolve}
-          projection={projection}
-        />
+        <TaskPlanLedger projection={projection} />
       ) : null}
 
       <CommittedResults projection={projection} />
@@ -331,18 +320,12 @@ export function ChatActorControls({
 }
 
 function TaskPlanLedger({
-  disabled,
-  onPlanResolve,
   projection,
 }: {
-  disabled: boolean;
-  onPlanResolve: Props['onPlanResolve'];
   projection: ChatActorProjection;
 }): React.ReactElement | null {
   const plan = projection.task;
   if (!plan) return null;
-  const gate = plan.gate;
-  const pendingGate = gate?.mode === 'confirm' && gate.status === 'pending';
   const statusCounts = plan.steps.reduce<Record<string, number>>(
     (counts, step) => {
       counts[step.status] = (counts[step.status] ?? 0) + 1;
@@ -395,65 +378,11 @@ function TaskPlanLedger({
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           <StatusTag status={plan.status} />
-          {gate ? (
-            <Tag>{`${gate.mode} · ${gate.status || 'ready'}`}</Tag>
-          ) : null}
           {Object.entries(statusCounts).map(([status, count]) => (
             <Tag key={status}>{`${status} ${count}`}</Tag>
           ))}
         </div>
       </div>
-      {gate?.reason ? (
-        <div
-          style={{
-            borderBottom: '1px solid #eef2f7',
-            color: '#475569',
-            fontSize: 12,
-            padding: '9px 14px',
-          }}
-        >
-          {gate.reason}
-        </div>
-      ) : null}
-      {pendingGate ? (
-        <div
-          style={{
-            alignItems: 'center',
-            borderBottom: '1px solid #eef2f7',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 8,
-            padding: '10px 14px',
-          }}
-        >
-          <strong style={{ color: '#0f172a', fontSize: 12 }}>
-            {t(
-              'pages.chat.actorControls.planDecision',
-              'Confirm this disclosed plan',
-            )}
-          </strong>
-          <Button
-            disabled={disabled}
-            icon={<CheckOutlined />}
-            onClick={() => onPlanResolve(true, gate)}
-            size="small"
-            type="primary"
-          >
-            {t('pages.chat.actorControls.confirmPlan', 'Confirm plan')}
-          </Button>
-          <Button
-            danger
-            disabled={disabled}
-            icon={<CloseOutlined />}
-            onClick={() => onPlanResolve(false, gate)}
-            size="small"
-          >
-            {t('pages.chat.actorControls.rejectPlan', 'Reject plan')}
-          </Button>
-        </div>
-      ) : null}
-      {plan.domain ? <DomainEvidenceBand domain={plan.domain} /> : null}
-      {plan.artifact ? <VerifiedArtifactBand artifact={plan.artifact} /> : null}
       <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {plan.steps.map((step) => {
           const stalled = isActorReportedStalled(step);
@@ -683,168 +612,6 @@ function TaskPlanLedger({
       </ol>
     </section>
   );
-}
-
-function DomainEvidenceBand({
-  domain,
-}: {
-  domain: ChatTaskDomain;
-}): React.ReactElement {
-  return (
-    <section
-      aria-label={t(
-        'pages.chat.actorControls.domainEvidence',
-        'Committed domain evidence',
-      )}
-      style={{
-        borderBottom: '1px solid #eef2f7',
-        color: '#475569',
-        display: 'grid',
-        fontSize: 11,
-        gap: 7,
-        padding: '10px 14px',
-      }}
-    >
-      <strong style={{ color: '#334155', textTransform: 'uppercase' }}>
-        {t(
-          'pages.chat.actorControls.domainEvidence',
-          'Committed domain evidence',
-        )}
-      </strong>
-      {domain.kind === 'reimbursement' ? (
-        <>
-          <EvidenceFacts
-            facts={[
-              domain.evidenceId,
-              domain.expenseCategory,
-              domain.costCenter,
-              domain.reimbursementCurrencyInstruction,
-              `${domain.sourceInvoices.length} source invoices`,
-              `${domain.retainedSourceOrdinals.length} retained`,
-              `${domain.duplicateInvoices.length} duplicate`,
-              domain.guardedToolName,
-            ]}
-          />
-          {domain.sourceInvoices.map((invoice) => (
-            <div
-              key={invoice.sourceOrdinal}
-              style={{ overflowWrap: 'anywhere' }}
-            >
-              {`#${invoice.sourceOrdinal} · ${invoice.vendor} · ${invoice.invoiceNumber} · ${invoice.invoiceDate} · ${formatMoney(invoice.amount)}`}
-            </div>
-          ))}
-          {domain.duplicateInvoices.map((duplicate) => (
-            <div
-              key={duplicate.duplicateSourceOrdinal}
-              style={{ overflowWrap: 'anywhere' }}
-            >
-              {`duplicate #${duplicate.duplicateSourceOrdinal} = retained #${duplicate.retainedSourceOrdinal}`}
-            </div>
-          ))}
-        </>
-      ) : (
-        <>
-          <EvidenceFacts
-            facts={[
-              domain.evidenceId,
-              domain.candidateName,
-              domain.roleTitle,
-              `score ${domain.totalScore}`,
-              `${domain.trackerTable} · ${domain.trackerTableId}`,
-              domain.stage,
-              domain.guardedToolName,
-            ]}
-          />
-          {domain.rubric.map((criterion) => {
-            const score = domain.scores.find(
-              (item) => item.criterionId === criterion.criterionId,
-            );
-            return (
-              <div
-                key={criterion.criterionId}
-                style={{ overflowWrap: 'anywhere' }}
-              >
-                {`${criterion.title}: ${score?.awardedPoints ?? 0}/${criterion.maximumPoints}`}
-                {score?.evidence ? ` · ${score.evidence}` : ''}
-              </div>
-            );
-          })}
-        </>
-      )}
-    </section>
-  );
-}
-
-function VerifiedArtifactBand({
-  artifact,
-}: {
-  artifact: ChatVerifiedArtifact;
-}): React.ReactElement {
-  const facts =
-    artifact.kind === 'reimbursement'
-      ? [
-          artifact.checkName,
-          artifact.providerInstanceId,
-          artifact.costCenter,
-          `${artifact.retainedItemCount} retained`,
-          `${artifact.duplicateItemCount} duplicate`,
-        ]
-      : [
-          artifact.checkName,
-          artifact.providerRecordId,
-          artifact.candidateName,
-          `score ${artifact.score}`,
-          `threshold ${artifact.threshold}`,
-          `${artifact.trackerTable} · ${artifact.trackerTableId}`,
-          artifact.stage,
-        ];
-  return (
-    <section
-      aria-label={t(
-        'pages.chat.actorControls.verifiedArtifact',
-        'Verified artifact',
-      )}
-      style={{
-        borderBottom: '1px solid #eef2f7',
-        color: '#047857',
-        display: 'grid',
-        fontSize: 11,
-        gap: 7,
-        padding: '10px 14px',
-      }}
-    >
-      <strong style={{ textTransform: 'uppercase' }}>
-        {t('pages.chat.actorControls.verifiedArtifact', 'Verified artifact')}
-      </strong>
-      <EvidenceFacts facts={facts} />
-    </section>
-  );
-}
-
-function EvidenceFacts({
-  facts,
-}: {
-  facts: readonly string[];
-}): React.ReactElement {
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px' }}>
-      {facts.map((fact) => (
-        <span key={fact} style={{ overflowWrap: 'anywhere' }}>
-          {fact}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function formatMoney(amount: {
-  currencyCode: string;
-  minorUnits: number;
-  fractionDigits: number;
-}): string {
-  return `${amount.currencyCode} ${(
-    amount.minorUnits / 10 ** amount.fractionDigits
-  ).toFixed(amount.fractionDigits)}`;
 }
 
 function CommittedResults({
@@ -1251,19 +1018,36 @@ function ActionCard({
   const terminalWithoutPostcondition = Boolean(
     report && report.disposition !== 'completed',
   );
-  const serviceName =
-    'catalogService' in request.params
+  const isAccessReview = request.action === 'service.access_review';
+  const serviceName = isAccessReview
+    ? request.params.serviceAccessReview.serviceSlug
+    : 'catalogService' in request.params
       ? request.params.catalogService.serviceSlug
       : request.params.customService.name;
   return (
     <ControlCard
       title={
         presentationTitle ||
-        t('pages.chat.actorControls.connectService', 'Connect {service}', {
-          service: serviceName,
-        })
+        (isAccessReview
+          ? t(
+              'pages.chat.actorControls.authorizeServiceAccess',
+              'Authorize {service} access',
+              { service: serviceName },
+            )
+          : t('pages.chat.actorControls.connectService', 'Connect {service}', {
+              service: serviceName,
+            }))
       }
     >
+      {isAccessReview && !verified && !report ? (
+        <div style={{ color: '#475569', fontSize: 12 }}>
+          {t(
+            'pages.chat.actorControls.accessReviewExplainer',
+            '{service} is already connected to your NyxID. This chat session just needs a one-time authorization to use it.',
+            { service: serviceName },
+          )}
+        </div>
+      ) : null}
       {'catalogService' in request.params &&
       request.params.catalogService.requestedScopes?.length ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -1333,21 +1117,31 @@ function ActionCard({
               style={buttonStyle}
               type="button"
             >
-              {t('pages.chat.actorControls.openNyxId', 'Open NyxID connection')}
+              {isAccessReview
+                ? t(
+                    'pages.chat.actorControls.authorizeAccess',
+                    'Authorize access',
+                  )
+                : t(
+                    'pages.chat.actorControls.openNyxId',
+                    'Open NyxID connection',
+                  )}
             </button>
           ) : null}
-          <button
-            aria-label={t(
-              'pages.chat.actorControls.refreshConnection',
-              'Refresh connection',
-            )}
-            disabled={disabled || journey?.busy}
-            onClick={() => onRefresh(request)}
-            style={buttonStyle}
-            type="button"
-          >
-            {t('pages.chat.actorControls.refresh', 'Refresh')}
-          </button>
+          {!isAccessReview ? (
+            <button
+              aria-label={t(
+                'pages.chat.actorControls.refreshConnection',
+                'Refresh connection',
+              )}
+              disabled={disabled || journey?.busy}
+              onClick={() => onRefresh(request)}
+              style={buttonStyle}
+              type="button"
+            >
+              {t('pages.chat.actorControls.refresh', 'Refresh')}
+            </button>
+          ) : null}
           {!report ? (
             <>
               <button
@@ -1436,7 +1230,7 @@ function redactWire(input: unknown): unknown {
 
 function reportMatchesRequest(
   input: unknown,
-  request: ChatServiceConnectActionRequest,
+  request: ChatNyxIdActionRequest,
 ): input is Record<string, unknown> {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
   const report = input as Record<string, unknown>;

@@ -8,6 +8,8 @@
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.AIWorkspace.Application\Aevatar.AIWorkspace.Application.csproj" />
+    <ProjectReference Include="..\Aevatar.AIWorkspace.Application.Abstractions\Aevatar.AIWorkspace.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
     <ProjectReference Include="..\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
@@ -62,11 +64,16 @@
     <ProjectReference Include="..\Aevatar.AI.Infrastructure.ToolExecution\Aevatar.AI.Infrastructure.ToolExecution.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="AI\ai.html" />
     <EmbeddedResource Include="BackendConsole\admin.html" />
     <EmbeddedResource Include="BackendConsole\auto-callback.html" />
+    <EmbeddedResource Include="BackendConsole\delivery.html" />
     <EmbeddedResource Include="Status\status.html" />
     <EmbeddedResource Include="Cqrs\cqrs-observatory.html" />
     <EmbeddedResource Include="Voice\voice-console.html" />
     <EmbeddedResource Include="Skills\workflow-skills.html" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\workflow-templates\**\*.yaml" Link="workflow-templates\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

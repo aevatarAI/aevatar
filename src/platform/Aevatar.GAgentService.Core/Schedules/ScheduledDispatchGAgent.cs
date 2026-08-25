@@ -141,6 +141,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.ScheduleMode,
             command.OneShotFireAt,
             command.TeamAutomationOwner,
+            expectedServiceTarget: null,
             isCreate: true);
 
     [EventHandler]
@@ -160,6 +161,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.ScheduleMode,
             command.OneShotFireAt,
             command.TeamAutomationOwner,
+            command.ExpectedServiceTarget,
             isCreate: false);
 
     [EventHandler]
@@ -183,6 +185,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 command.ScheduleMode,
                 command.OneShotFireAt,
                 command.TeamAutomationOwner,
+                expectedServiceTarget: null,
                 isCreate: true);
             return;
         }
@@ -214,6 +217,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.ScheduleMode,
             command.OneShotFireAt,
             command.TeamAutomationOwner,
+            expectedServiceTarget: null,
             isCreate: false);
     }
 
@@ -232,6 +236,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         ScheduledDispatchScheduleModeState scheduleMode,
         Timestamp? oneShotFireAt,
         TeamMemberAutomationOwnerState? teamAutomationOwner,
+        ScheduledDispatchExpectedServiceTargetState? expectedServiceTarget,
         bool isCreate)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -241,6 +246,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' already exists.");
         if (!isCreate && !IsConfigured())
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is not configured.");
+        if (!isCreate)
+            EnsureExpectedServiceTargetAccess(expectedServiceTarget);
         EnsureTeamAutomationOwnerAccess(teamAutomationOwner, "configure", allowUnconfiguredOwner: isCreate);
         if (!isCreate &&
             State.TeamAutomationOwner != null &&
@@ -311,6 +318,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     public async Task HandleEnableAsync(ScheduledDispatchEnableCommand command)
     {
         EnsureConfiguredForWrite("enable");
+        EnsureExpectedServiceTargetAccess(command.ExpectedServiceTarget);
         EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "enable");
         if (HasTeamCredentialLifecycle() &&
             State.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatusState.Active)
@@ -332,6 +340,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     public async Task HandleDisableAsync(ScheduledDispatchDisableCommand command)
     {
         EnsureConfiguredForWrite("disable");
+        EnsureExpectedServiceTargetAccess(command.ExpectedServiceTarget);
         EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "disable");
         var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         await PersistDomainEventAsync(new ScheduledDispatchDisabledEvent
@@ -359,6 +368,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private async Task HandleDeleteCoreAsync(ScheduledDispatchDeleteCommand command)
     {
+        EnsureExpectedServiceTargetAccess(command.ExpectedServiceTarget);
         var normalizedReason = NormalizeOptional(command.Reason);
         var exactDeleteReplayState =
             State.TeamAutomationOperationKind ==
@@ -1006,11 +1016,15 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         EnsureConfiguredForWrite(command.Manual ? "manual fire" : "fire");
+        if (command.Manual)
+            EnsureExpectedServiceTargetAccess(command.ExpectedServiceTarget);
         if (await RetireUnmarkedEnvelopeTargetAsync(ct, rejectManualFire: command.Manual))
             return;
 
         if (command.Manual)
+        {
             EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "manual fire");
+        }
 
         var scheduledFireAt = ResolveScheduledFireAt(command);
         var callbackFiredAt = command.Manual ? (DateTimeOffset?)null : ResolveCallbackFiredAt(inboundEnvelope);
@@ -1273,7 +1287,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     AuthorizationFact: ToRuntimeAuthorizationFact(effectiveAuthorizationFact),
                     FireContext: new ScheduledDispatchFireContext(
                         scheduledFireAt,
-                        State.Timezone)),
+                        State.Timezone),
+                    ScheduleOperationId: State.TeamAutomationOperationId),
                 ct);
             return new ScheduledDispatchReceipt(
                 receipt.Accepted,
@@ -2120,6 +2135,29 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (!IsConfigured())
             throw new InvalidOperationException(
                 $"Scheduled dispatch '{ResolveScheduleId()}' cannot {operation} because it is not configured.");
+    }
+
+    private void EnsureExpectedServiceTargetAccess(
+        ScheduledDispatchExpectedServiceTargetState? expected)
+    {
+        if (expected == null)
+            return;
+
+        var currentInvocation = State.Target?.ServiceInvocation;
+        var expectedIdentity = expected.ServiceIdentity;
+        var currentIdentity = currentInvocation?.Identity;
+        if (State.ScheduleKind != expected.ScheduleKind ||
+            State.Target?.Kind != expected.TargetKind ||
+            currentIdentity == null ||
+            expectedIdentity == null ||
+            !string.Equals(currentInvocation?.EndpointId, expected.ServiceEndpointId, StringComparison.Ordinal) ||
+            !string.Equals(currentIdentity.TenantId, expectedIdentity.TenantId, StringComparison.Ordinal) ||
+            !string.Equals(currentIdentity.AppId, expectedIdentity.AppId, StringComparison.Ordinal) ||
+            !string.Equals(currentIdentity.Namespace, expectedIdentity.Namespace, StringComparison.Ordinal) ||
+            !string.Equals(currentIdentity.ServiceId, expectedIdentity.ServiceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("scheduled_dispatch_expected_service_target_mismatch");
+        }
     }
 
     private void EnsureTeamAutomationOwnerAccess(

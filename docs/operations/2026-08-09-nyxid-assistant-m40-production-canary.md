@@ -26,7 +26,7 @@ runbook is completed.
 | UC1b | Accepted | `origin/feature/integrate@4c3b33ad272807430ca3ba6bc753f849f8c8fe5b` | A connected-ready start produced one confirmed actor-owned `service.connected` postcondition, preserved it across reload, and cleaned up the conversation and disposable OAuth service. |
 | UC2 | Accepted | `origin/feature/integrate@87daa99e641533f25ea0ddc67396e1a0dc52bd59` | Steer, authoritative stop, new task, reload, and deletion were committed on one exact healthy image with no external effect. |
 | UC3 | Accepted | `origin/feature/integrate@b5f32cbbeb09f150b9d32ba8684926f61d40bfc9` | Rejection, uncertainty, exact reconciliation, fresh approved retry, provider verification, reload, cancel, and cleanup were proved with no grant. |
-| UC4 | Accepted | `origin/feature/integrate@4c3b33ad272807430ca3ba6bc753f849f8c8fe5b` | Both condition branches were proved; only score 80 wrote a row, and the exact row, conversations, grants, and service overlay were cleaned up. |
+| UC4 | Accepted | `origin/feature/integrate@4c3b33ad272807430ca3ba6bc753f849f8c8fe5b` | Both condition branches were proved; only observed value 80 wrote a row, and the exact row, conversations, grants, and service overlay were cleaned up. |
 
 ### UC1a: Disconnected Start
 
@@ -158,16 +158,16 @@ runbook is completed.
   `9/9`.
 - Bounded UTC evidence: started `2026-08-09T23:57:26Z`; finished
   `2026-08-10T00:12:49Z`.
-- Score `72`: conversation `nyxid-chat-9370f82e717b838564fcb28226dbb046`;
+- Observed value `72`: conversation `nyxid-chat-9370f82e717b838564fcb28226dbb046`;
   turn `turn-f84c89859c65d5acbeca67a176eb7e2c`; task
   `task-6d77eaf37a14049f69e98573edcf121b`; StateVersion `19`; plan revision `4`.
-  Threshold `75` observed score `72`, so the condition committed false. The
+  Threshold `75` compared with observed value `72`, so the condition committed false. The
   guarded write and postcondition were skipped, no approval was created, and no
   effect was applied. The conversation was deleted.
-- Score `80`: conversation `nyxid-chat-25d486381c0bb02db188e214e424fcdd`;
+- Observed value `80`: conversation `nyxid-chat-25d486381c0bb02db188e214e424fcdd`;
   turn `turn-6524bd6133728a1ab4cf82927100c275`; task
   `task-8e8d96ffd4aa5f90fd6aa2d45da22b68`; StateVersion `28`; plan revision `5`;
-  gate `satisfied`. Threshold `75` observed score `80`, so the condition
+  gate `satisfied`. Threshold `75` compared with observed value `80`, so the condition
   committed true.
 - The create used NyxID approval request
   `33ecb863-8118-405f-9158-626e0e30eb1f`; provider record
@@ -224,13 +224,13 @@ Canary key field:              Attestation Key
 Canary control field:          Control
 Canary owner field:            Owner
 Canary status field:           Status
-Candidate score field:         Sequence
+Observed value field:          Sequence
 Canary timestamp field:        Reviewed At
 ```
 
 The Bitable row uses a unique `Attestation Key` beginning with `m40-canary-`.
-`Control` is `candidate-screening`, `Owner` is `eancuznaivy@gmail.com`, `Status` is
-`accepted`, `Sequence` carries the candidate score, and `Reviewed At` carries
+`Control` is `conditional-write`, `Owner` is `eancuznaivy@gmail.com`, `Status` is
+`accepted`, `Sequence` carries the observed value, and `Reviewed At` carries
 the run timestamp. Do not write to any other table or Approval definition.
 
 The organization-owned UserService
@@ -430,13 +430,12 @@ Kubernetes use is read-only: `get`, `describe`, and `logs`. Do not `exec`,
 2. Assert a fresh service inventory still reports no personal GitHub binding.
 3. Start a new Studio conversation requesting GitHub connection and a read-only
    repository inspection.
-4. Read the committed state, record the exact task and plan revision, resolve
-   its plan gate exactly once, and require both the accepted resolution receipt
-   and the committed satisfied resolution before continuing.
+4. Read the committed state and record the exact task and plan revision. Require
+   the typed browser action to publish directly without a local plan decision.
 5. Require one `service.connect` action with a real `actionRequestId`, waiting
    step, exact requested scopes, and exactly one terminal frame.
-6. Reload before continuing. The same task, step, action identity, gate, and
-   waiting state must rehydrate without duplication.
+6. Reload before continuing. The same task, step, action identity, and waiting
+   state must rehydrate without duplication.
 7. Stop and delete the disposable Aevatar conversation. Re-read state and
    transcript until both are `404 not_found`.
 
@@ -450,9 +449,9 @@ UC1a does not depend on a prior UC and does not connect GitHub.
 2. Assert the exact personal UserService is active and the required read scope
    is present before opening Studio.
 3. Start a new Studio conversation requesting GitHub connection verification.
-4. Read the committed state, record the exact task and plan revision, resolve
-   its plan gate exactly once, and require both the accepted resolution receipt
-   and the committed satisfied resolution before continuing.
+4. Read the committed state and record the exact task and plan revision. Require
+   the typed postcondition operation to dispatch directly without a local plan
+   decision.
 5. Require the actor-owned postcondition `service.connected`, a verified
    resource identity, succeeded task, and exactly one terminal frame.
 6. Reload and require the same terminal task and action/postcondition identity
@@ -466,9 +465,9 @@ UC1b does not rely on UC1a having created or continued an action.
 ## UC3: Reconcile Before Retry
 
 Use only the fixed Approval definition. Generate a unique non-secret canary key
-and include it in both fixed form fields. The first generation must pass the
-plan gate and a real NyxID per-request decision, then encounter the reviewed
-one-shot fault after the effect dispatch waterline. The fault must be scoped to
+and include it in both fixed form fields. The first generation must enter its
+direct typed Tool dispatch and a real NyxID per-request decision, then encounter
+the reviewed one-shot fault after the effect dispatch waterline. The fault must be scoped to
 the exact conversation, turn, task, step, operation, generation, UserService,
 and operation digest. A process-wide timeout, workload restart, network outage,
 or ambiguous request mutation is forbidden.
@@ -491,8 +490,8 @@ Acceptance sequence:
    `GET /open-apis/approval/v4/instances/{instance_id}` with the caller UUID
    supplied to create. Only Lark provider code `1390003` proves `not_applied`;
    a timeout, malformed response, or any other miss is `unavailable`.
-5. The actor exposes `retry`; retry passes the plan gate again and enters
-   generation 2.
+5. The actor exposes `retry`; retry creates and directly dispatches generation 2
+   with the exact `not_applied` source-operation proof.
 6. Generation 2 produces a fresh NyxID approval request. Record its exact ID
    from the NyxID decision surface, prove it differs from generation 1, and
    approve it there. No Aevatar pre-return approval card is permitted. Under
@@ -513,31 +512,35 @@ Do not run UC3 until the narrow one-shot fault mechanism is present on the exact
 deployed image and reviewed as disabled by default. Fixture-only failure
 injection does not satisfy this production step.
 
-Before resolving the generation-1 plan gate, read the exact conversation
-`/state` document. Select its single planned effect step and record the
-conversation actor ID, active turn ID, task ID, step ID, operation ID,
-`operationGeneration=1`, admitted UserService ID, and
-top-level `stateVersion`. Do not derive, edit, or reuse any of these values.
-Using only the authenticated canonical subject above, POST those exact values
-plus a fresh `armId`, `clientRequestId`, and an expiry no more than 15 minutes
-ahead to:
+Before the source LLM operation completes, read the exact conversation `/state`
+document. Select its single active running LLM step and record the conversation
+actor ID, active turn ID, task ID, source step ID, source operation ID, source
+`operationGeneration=1`, and top-level `stateVersion`. Separately use the exact
+disposable UserService ID established by the UC setup. Do not derive, edit, or
+reuse any of these values. Using only the authenticated canonical subject above,
+POST those exact source-operation values plus the exact UserService ID, a fresh
+`armId`, `clientRequestId`, and an expiry no more than 15 minutes ahead to:
 
 ```text
 /api/scopes/{scopeId}/nyxid-chat/conversations/{conversationActorId}:arm-effect-fault-canary
 ```
 
-The request does not carry `catalogDigest`. The conversation actor must read the
-exact committed step admission, validate its digest, and seal that digest into
-the private one-shot directive atomically with the arm transition.
+The request does not carry `catalogDigest` or a target Tool operation identity,
+because neither exists at arm time. The conversation actor validates that the
+source LLM operation is still active and commits the owner-bound arm intent.
+When that exact LLM result materializes one generation-1 effect Tool operation,
+the actor reads its committed admission, validates the UserService and digest,
+then atomically seals the target operation key and digest into the private
+one-shot directive before direct dispatch.
 
 The accepted receipt is only dispatch evidence. Poll `/state` and require the
-same `armId`, exact operation key, and increasing actor `stateVersion` while the
-typed canary status progresses `armed -> forwarded -> consumed`; do not expose
-or record owner subject, UserService ID, catalog digest, or client request ID
-from the canary snapshot. Resolve the plan gate only after `armed` is visible.
-`forwarded` must appear after the exact plan resolution and `consumed` must
-appear before accepting the generation-1 uncertain result. Any other owner,
-default/non-Mainnet composition, disabled configuration, identity mismatch,
+same `armId`, exact `sourceOperation`, and increasing actor `stateVersion` while
+the typed canary status progresses `armed -> forwarded -> consumed`.
+`targetOperation` must be absent while `armed`, then match the directly
+dispatched effect Tool when `forwarded`. Do not expose or record owner subject,
+UserService ID, catalog digest, or client request ID from the canary snapshot.
+`consumed` must appear before accepting the generation-1 uncertain result. Any
+other owner, default/non-Mainnet composition, disabled configuration, identity mismatch,
 duplicate matching step, stale version, generation other than 1, or expired arm
 must fail closed; a non-allowlisted caller must receive `404` before scope
 admission or actor dispatch. Stop if any status, identity, or version transition
@@ -547,13 +550,13 @@ cannot be proved from the typed read model.
 
 Run two independent conversations with unique canary keys:
 
-1. Score 72 with threshold 75. The condition is committed false; write and
+1. Observed value 72 with threshold 75. The condition is committed false; write and
    read-back steps are `skipped/not_applied`; no NyxID approval request and no
    Bitable row may exist.
-2. Score 80 with threshold 75. The condition is committed true; the exact
+2. Observed value 80 with threshold 75. The condition is committed true; the exact
    Bitable create operation receives a fresh per-request NyxID decision, returns
    a provider-generated record ID, and an exact read/search verifies the unique
-   `Attestation Key`, score, owner, status, control, and timestamp.
+   `Attestation Key`, observed value, owner, status, control, and timestamp.
 3. Reload preserves the threshold override, branch choice, provider-generated
    record identity, verification, and exactly one terminal. Under Tier B, the
    successful synchronous operation's exact approval ID remains NyxID decision

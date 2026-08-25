@@ -27,7 +27,7 @@ internal static class SkillDirectWorkflowYamlSynthesizer
         builder.Append("steps:\n");
         builder.Append("  - id: answer\n");
         builder.Append("    type: llm_call\n");
-        builder.Append("    role: assistant\n");
+        builder.Append("    target_role: assistant\n");
         return builder.ToString();
     }
 

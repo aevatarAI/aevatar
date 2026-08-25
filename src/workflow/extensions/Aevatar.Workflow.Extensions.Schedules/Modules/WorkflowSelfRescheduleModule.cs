@@ -45,8 +45,10 @@ public sealed class WorkflowSelfRescheduleModule : IEventModule<IWorkflowExecuti
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                ExecutionId = request.ExecutionId,
                 Success = receipt.Accepted,
                 Output = receipt.ScheduleId,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             };
             completed.Annotations["schedule_id"] = receipt.ScheduleId;
             completed.Annotations["schedule_actor_id"] = receipt.ScheduleActorId;
@@ -248,7 +250,9 @@ public sealed class WorkflowSelfRescheduleModule : IEventModule<IWorkflowExecuti
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = false,
             Error = string.IsNullOrWhiteSpace(error) ? "Workflow schedule ensure failed." : error,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         }, TopologyAudience.Self, ct);
 }

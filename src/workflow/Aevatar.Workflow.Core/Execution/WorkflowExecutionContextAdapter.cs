@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Aevatar.Workflow.Core.Primitives;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -35,6 +36,8 @@ internal sealed class WorkflowExecutionContextAdapter :
     public string ScopeId => _stateHost.ScopeId;
 
     public string ScheduleId => _stateHost.ScheduleId;
+
+    public string ToolCatalogPolicyVersion => _stateHost.ToolCatalogPolicyVersion;
 
     public WorkflowCallerNyxIdAuthority? CallerNyxIdAuthority
     {
@@ -134,8 +137,25 @@ internal sealed class WorkflowExecutionContextAdapter :
         TopologyAudience direction = TopologyAudience.Children,
         CancellationToken ct = default,
         EventEnvelopePublishOptions? options = null)
-        where TEvent : IMessage =>
-        _inner.PublishAsync(evt, direction, ct, options);
+        where TEvent : IMessage
+    {
+        if (evt is StepCompletedEvent completion &&
+            string.IsNullOrWhiteSpace(completion.ExecutionId) &&
+            _inner.InboundEnvelope.Payload?.Is(StepRequestEvent.Descriptor) == true)
+        {
+            var request = _inner.InboundEnvelope.Payload.Unpack<StepRequestEvent>();
+            if (string.Equals(completion.StepId, request.StepId, StringComparison.Ordinal) &&
+                string.Equals(
+                    WorkflowRunIdNormalizer.Normalize(completion.RunId),
+                    WorkflowRunIdNormalizer.Normalize(request.RunId),
+                    StringComparison.Ordinal))
+            {
+                completion.ExecutionId = request.ExecutionId;
+            }
+        }
+
+        return _inner.PublishAsync(evt, direction, ct, options);
+    }
 
     public Task SendToAsync<TEvent>(
         string targetActorId,

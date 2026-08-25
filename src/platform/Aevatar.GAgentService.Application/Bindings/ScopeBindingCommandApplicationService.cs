@@ -77,6 +77,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             ? ScopeWorkflowCapabilityConventions.BuildDefaultServiceIdentity(_options, normalizedScopeId, request.AppId)
             : ScopeWorkflowCapabilityConventions.BuildServiceIdentity(_options, normalizedScopeId, request.ServiceId.Trim(), request.AppId);
         var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
+        var activationAttemptId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.ActivationAttemptId);
         var explicitRequestConfirmations = request.CapabilityAdmission?.ExplicitRequestConfirmations;
         var desiredBinding = await ResolveDesiredBindingAsync(
             request,
@@ -113,7 +114,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
 
         var revisionSpec = desiredBinding.BuildRevision(identity, revisionId);
 
-        if (await ShouldCreateRevisionAsync(request, revisionSpec, ct))
+        var revisionDispatchPlan = await ResolveRevisionDispatchPlanAsync(request, revisionSpec, ct);
+        if (revisionDispatchPlan.ShouldCreate)
         {
             await _serviceCommandPort.CreateRevisionAsync(new CreateServiceRevisionCommand
             {
@@ -124,28 +126,30 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             Identity = identity.Clone(),
             RevisionId = revisionId,
+            PreparationSpec = revisionSpec.Clone(),
         }, ct);
         await _serviceCommandPort.PublishRevisionAsync(new PublishServiceRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = revisionId,
-        }, ct);
-        await _serviceCommandPort.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
-        {
-            Identity = identity.Clone(),
-            RevisionId = revisionId,
+            PublicationSpec = revisionSpec.Clone(),
         }, ct);
         await _serviceCommandPort.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = revisionId,
+            ActivationAttemptId = activationAttemptId,
+            ExpectedArtifactHash = revisionDispatchPlan.ExpectedArtifactHash,
         }, ct);
         await DispatchExternalExposureIntentAsync(request, identity, desiredBinding.ServiceDefinition, existingService, ct);
 
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
         // TODO(iter2/cluster-006): If callers need "invoke safe now", add an explicit read/projection
         // observation path in a separate PR rather than blocking this command path on readmodels.
-        return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
+        return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId) with
+        {
+            ActivationAttemptId = activationAttemptId,
+        };
     }
 
     private static void ApplyExternalExposureIntent(
@@ -180,14 +184,18 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             ct);
     }
 
-    private async Task<bool> ShouldCreateRevisionAsync(
+    private async Task<RevisionDispatchPlan> ResolveRevisionDispatchPlanAsync(
         ScopeBindingUpsertRequest request,
         ServiceRevisionSpec revisionSpec,
         CancellationToken ct)
     {
         var requestedRevisionId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.RevisionId);
         if (string.IsNullOrWhiteSpace(requestedRevisionId))
-            return true;
+        {
+            return new RevisionDispatchPlan(
+                ShouldCreate: true,
+                await ComputeExpectedArtifactHashAsync(revisionSpec, ct));
+        }
 
         var identity = revisionSpec.Identity
             ?? throw new InvalidOperationException("service identity is required.");
@@ -196,7 +204,11 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var existingRevision = revisions?.Revisions.FirstOrDefault(x =>
             string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
         if (existingRevision == null)
-            return !MatchesAcceptedRevisionCreation(request, identity, revisionId);
+        {
+            return new RevisionDispatchPlan(
+                ShouldCreate: !MatchesAcceptedRevisionCreation(request, identity, revisionId),
+                await ComputeExpectedArtifactHashAsync(revisionSpec, ct));
+        }
 
         if (!string.Equals(existingRevision.ImplementationKind, revisionSpec.ImplementationKind.ToString(), StringComparison.OrdinalIgnoreCase))
         {
@@ -213,13 +225,21 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (request.ImplementationKind == ScopeBindingImplementationKind.Scripting)
         {
             var expectedScriptingArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);
+            if (IsAwaitingPreparation(existingRevision.Status) &&
+                string.IsNullOrWhiteSpace(existingRevision.ArtifactHash))
+            {
+                return new RevisionDispatchPlan(
+                    ShouldCreate: false,
+                    expectedScriptingArtifactHash);
+            }
+
             if (!string.Equals(existingRevision.ArtifactHash, expectedScriptingArtifactHash, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
                     $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different scripting artifact.");
             }
 
-            return false;
+            return new RevisionDispatchPlan(ShouldCreate: false, expectedScriptingArtifactHash);
         }
 
         if (!request.AllowExistingRevisionReplay ||
@@ -230,15 +250,92 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         }
 
         if (request.ImplementationKind == ScopeBindingImplementationKind.Workflow &&
-            existingRevision.PreparedArtifact != null &&
-            WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(existingRevision.PreparedArtifact))
+            IsAwaitingPreparation(existingRevision.Status))
         {
-            throw new InvalidOperationException(
-                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but its workflow capability admission plan requires rebind; publish a new revision id.");
+            return new RevisionDispatchPlan(
+                ShouldCreate: false,
+                await ComputeNonScriptingArtifactHashAsync(revisionSpec, ct));
+        }
+
+        if (request.ImplementationKind == ScopeBindingImplementationKind.Workflow &&
+            existingRevision.PreparedArtifact != null)
+        {
+            if (string.IsNullOrWhiteSpace(existingRevision.ArtifactHash) ||
+                !string.Equals(
+                    existingRevision.ArtifactHash,
+                    existingRevision.PreparedArtifact.ArtifactHash,
+                    StringComparison.Ordinal) ||
+                !WorkflowServiceRevisionEquivalence.HasValidArtifactHash(
+                    existingRevision.PreparedArtifact))
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but its prepared artifact hash is inconsistent.");
+            }
+
+            if (WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(
+                    existingRevision.PreparedArtifact))
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but its workflow capability admission plan requires rebind; publish a new revision id.");
+            }
+
+            var expectedWorkflowArtifact = await BuildWorkflowArtifactAsync(revisionSpec, ct);
+            var expectedWorkflowArtifactHash = ComputeArtifactHash(expectedWorkflowArtifact);
+            expectedWorkflowArtifact.ArtifactHash = expectedWorkflowArtifactHash;
+            if (string.Equals(
+                    existingRevision.ArtifactHash,
+                    expectedWorkflowArtifactHash,
+                    StringComparison.Ordinal))
+            {
+                return new RevisionDispatchPlan(
+                    ShouldCreate: false,
+                    expectedWorkflowArtifactHash);
+            }
+
+            if (!WorkflowServiceRevisionEquivalence.AreEquivalent(
+                    existingRevision.PreparedArtifact,
+                    expectedWorkflowArtifact))
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different Workflow artifact.");
+            }
+
+            var currentPlan = existingRevision.PreparedArtifact.DeploymentPlan?.WorkflowPlan?
+                .CapabilityAdmissionPlan
+                ?? throw new InvalidOperationException(
+                    $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but has no prepared workflow capability admission plan.");
+            var refreshedPlan = expectedWorkflowArtifact.DeploymentPlan?.WorkflowPlan?
+                .CapabilityAdmissionPlan
+                ?? throw new InvalidOperationException(
+                    $"Revision '{revisionId}' replay produced no workflow capability admission plan.");
+            WorkflowServiceRevisionEquivalence.EnsureRenewableAdmissionEvidenceMovesForward(
+                currentPlan,
+                refreshedPlan);
+
+            if (!string.Equals(
+                    existingRevision.Status,
+                    ServiceRevisionStatus.Prepared.ToString(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                // Published revisions are immutable. Renewable admission evidence may be
+                // revalidated by the caller, but activation must remain fenced to the
+                // artifact that was actually published.
+                return new RevisionDispatchPlan(
+                    ShouldCreate: false,
+                    existingRevision.ArtifactHash);
+            }
+
+            return new RevisionDispatchPlan(
+                ShouldCreate: false,
+                expectedWorkflowArtifactHash);
         }
 
         if (string.IsNullOrWhiteSpace(existingRevision.ArtifactHash))
-            return false;
+        {
+            return new RevisionDispatchPlan(
+                ShouldCreate: false,
+                await ComputeNonScriptingArtifactHashAsync(revisionSpec, ct));
+        }
 
         var expectedArtifactHash = await ComputeNonScriptingArtifactHashAsync(revisionSpec, ct);
         if (!string.Equals(existingRevision.ArtifactHash, expectedArtifactHash, StringComparison.Ordinal))
@@ -247,8 +344,26 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different {request.ImplementationKind} artifact.");
         }
 
-        return false;
+        return new RevisionDispatchPlan(ShouldCreate: false, expectedArtifactHash);
     }
+
+    private Task<string> ComputeExpectedArtifactHashAsync(
+        ServiceRevisionSpec revisionSpec,
+        CancellationToken ct) =>
+        revisionSpec.ImplementationSpecCase ==
+        ServiceRevisionSpec.ImplementationSpecOneofCase.ScriptingSpec
+            ? ComputeScriptingArtifactHashAsync(revisionSpec, ct)
+            : ComputeNonScriptingArtifactHashAsync(revisionSpec, ct);
+
+    private static bool IsAwaitingPreparation(string? status) =>
+        string.Equals(
+            status,
+            ServiceRevisionStatus.Created.ToString(),
+            StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(
+            status,
+            ServiceRevisionStatus.PreparationFailed.ToString(),
+            StringComparison.OrdinalIgnoreCase);
 
     private static bool MatchesAcceptedRevisionCreation(
         ScopeBindingUpsertRequest request,
@@ -329,7 +444,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     {
         var workflowSpec = revisionSpec.WorkflowSpec
             ?? throw new InvalidOperationException("workflow implementation_spec is required.");
-        var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowSpec.WorkflowYaml, ct);
+        var parse = await _workflowDefinitionParser.ParseWorkflowYamlForPublicationAsync(workflowSpec.WorkflowYaml, ct);
         if (!parse.Succeeded)
             throw new InvalidOperationException(parse.Error);
         var resolvedWorkflowName = string.IsNullOrWhiteSpace(workflowSpec.WorkflowName)
@@ -380,6 +495,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         normalizedArtifact.ArtifactHash = string.Empty;
         return Convert.ToHexString(SHA256.HashData(normalizedArtifact.ToByteArray()));
     }
+
+    private sealed record RevisionDispatchPlan(bool ShouldCreate, string ExpectedArtifactHash);
 
     private async Task<DesiredScopeBinding> ResolveDesiredBindingAsync(
         ScopeBindingUpsertRequest request,
@@ -496,6 +613,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                         DefinitionActorId = definitionActorIdPrefix,
                         CapabilityAdmissionPlan = capabilityAdmissionPlan,
                         ExpectedExecutionMode = executionMode,
+                        ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     },
                 };
                 ScopeWorkflowCapabilityConventions.AddInlineWorkflowYamls(
@@ -692,7 +810,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             if (string.IsNullOrWhiteSpace(workflowYaml))
                 throw new InvalidOperationException("workflowYamls must not contain empty YAML entries.");
 
-            var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
+            var parse = await _workflowDefinitionParser.ParseWorkflowYamlForPublicationAsync(workflowYaml, ct);
             if (!parse.Succeeded)
                 throw new InvalidOperationException(parse.Error);
 

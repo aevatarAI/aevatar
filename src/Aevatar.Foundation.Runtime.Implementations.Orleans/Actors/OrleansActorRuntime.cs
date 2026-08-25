@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Helpers;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -48,6 +49,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
             throw new InvalidOperationException($"Agent type {agentType.FullName} is not registered with a primary [GAgent] kind.");
 
         var actorId = id ?? $"{agentKind}:{Guid.NewGuid():N}";
+        EnsureReservedFleetAuthorityIdentity(actorId, agentKind);
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
 
         var initialized = await grain.InitializeAgentByKindAsync(agentKind);
@@ -65,6 +67,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
         ct.ThrowIfCancellationRequested();
 
         var actorId = id ?? $"{agentKind.Trim()}:{Guid.NewGuid():N}";
+        EnsureReservedFleetAuthorityIdentity(actorId, agentKind.Trim());
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
         var initialized = await grain.InitializeAgentByKindAsync(agentKind.Trim());
         if (!initialized)
@@ -77,6 +80,15 @@ public sealed class OrleansActorRuntime : IActorRuntime
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        if (string.Equals(
+                id,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet capability authority is runtime-reserved and cannot be destroyed.");
+        }
+
         await _callbackScheduler.PurgeActorAsync(id, ct);
         using var reentrancyScope = RequestContext.AllowCallChainReentrancy();
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(id);
@@ -105,6 +117,27 @@ public sealed class OrleansActorRuntime : IActorRuntime
         _logger.LogInformation("Actor {Id} destroyed via Orleans runtime", id);
     }
 
+    private static void EnsureReservedFleetAuthorityIdentity(
+        string actorId,
+        string agentKind)
+    {
+        var hasReservedId = string.Equals(
+            actorId,
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            StringComparison.Ordinal);
+        var hasReservedKind = string.Equals(
+            agentKind,
+            RuntimeFleetCapabilityAuthorityIdentity.AgentKind,
+            StringComparison.Ordinal);
+        if (hasReservedId != hasReservedKind)
+        {
+            throw new InvalidOperationException(
+                $"Runtime fleet authority identity requires the exact actor id/kind pair " +
+                $"'{RuntimeFleetCapabilityAuthorityIdentity.ActorId}' / " +
+                $"'{RuntimeFleetCapabilityAuthorityIdentity.AgentKind}'.");
+        }
+    }
+
     public async Task<IActor?> GetAsync(string id)
     {
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(id);
@@ -120,6 +153,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
     public async Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        ThrowIfFleetAuthorityTopologyEndpoint(parentId, childId);
         var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
         var child = _grainFactory.GetGrain<IRuntimeActorGrain>(childId);
         if (!await child.IsInitializedAsync())
@@ -139,6 +173,22 @@ public sealed class OrleansActorRuntime : IActorRuntime
             StreamForwardingRules.CreateCommittedObservationBinding(childId, parentId),
             ct);
         _logger.LogInformation("Link: {Parent} -> {Child}", parentId, childId);
+    }
+
+    private static void ThrowIfFleetAuthorityTopologyEndpoint(string parentId, string childId)
+    {
+        if (string.Equals(
+                parentId,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal) ||
+            string.Equals(
+                childId,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet capability authority cannot participate in actor hierarchy links.");
+        }
     }
 
     public async Task UnlinkAsync(string childId, CancellationToken ct = default)

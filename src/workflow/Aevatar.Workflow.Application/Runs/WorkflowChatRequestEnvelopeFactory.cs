@@ -228,7 +228,20 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             };
         }
 
-        AppendVariables(payload.Variables, source.Variables);
+        if (source.NormalizedValues != null)
+        {
+            if (source.Variables.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "A normalized workflow fork seed cannot also carry expanded legacy variables.");
+            }
+            payload.NormalizedValues = source.NormalizedValues.Clone();
+        }
+        else
+        {
+            AppendVariables(payload.Variables, source.Variables);
+        }
+        AppendVariables(payload.VariableOverrides, source.VariableOverrides);
         return payload;
     }
 

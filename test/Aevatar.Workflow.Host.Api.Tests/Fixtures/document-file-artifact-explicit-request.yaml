@@ -1,0 +1,16 @@
+# Isolated Studio identities: memberId=m-alpha, workflowId=wf-alpha,
+# publishedServiceId=svc-alpha. They are not aliases for user_service_id=usvc-alpha.
+name: document-file-artifact
+steps:
+  - id: download_document_file
+    type: tool_call
+    capability:
+      nyxid_request:
+        user_service_id: usvc-alpha
+        method: GET
+        path_template: /v1/documents/{document_id}/file
+        body_mode: none
+        response_mode: file_artifact
+    parameters:
+      tool: nyxid_proxy
+      arguments: '{"path_params":{"document_id":"${input.document_id}"}}'

@@ -68,6 +68,28 @@ export interface ScopeServiceEndpointContract {
   readonly fetchExample: string | null;
 }
 
+export interface ScopeMemberInvocationReadiness {
+  readonly canInvoke: boolean;
+  readonly status: string;
+  readonly reasonCode: string;
+  readonly message: string;
+  readonly revisionId: string | null;
+  readonly deploymentId: string | null;
+  readonly observedAtUtc: string | null;
+}
+
+export interface ScopeMemberEndpointContract
+  extends Omit<
+    ScopeServiceEndpointContract,
+    "serviceId" | "memberId" | "publishedServiceId"
+  > {
+  readonly memberId: string;
+  readonly publishedServiceId: string;
+  readonly invocationReadiness: ScopeMemberInvocationReadiness;
+  readonly publishedServiceStateVersion: number;
+  readonly boundRevisionStateVersion: number;
+}
+
 export interface ScopeServiceRunSummary {
   readonly scopeId: string;
   readonly serviceId: string;

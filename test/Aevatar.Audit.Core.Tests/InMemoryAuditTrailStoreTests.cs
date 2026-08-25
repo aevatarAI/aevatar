@@ -47,6 +47,46 @@ public sealed class InMemoryAuditTrailStoreTests
     }
 
     [Fact]
+    public async Task AppendAsync_WhenRetryOnlyChangesTransportTrace_ShouldReturnDuplicate()
+    {
+        var store = new InMemoryAuditTrailStore();
+        var original = CreateRecord("audit-1", "scope-a", "actor-a", "api.call", AuditOutcome.Success);
+        original.Correlation.TraceId = "0123456789abcdef0123456789abcdef";
+        original.Correlation.SpanId = "0123456789abcdef";
+        original.Correlation.Traceparent =
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+        original.Correlation.Tracestate = "vendor=attempt-1";
+        var retry = original.Clone();
+        retry.Correlation.TraceId = "fedcba9876543210fedcba9876543210";
+        retry.Correlation.SpanId = "fedcba9876543210";
+        retry.Correlation.Traceparent =
+            "00-fedcba9876543210fedcba9876543210-fedcba9876543210-01";
+        retry.Correlation.Tracestate = "vendor=attempt-2";
+
+        var first = await store.AppendAsync(original);
+        var second = await store.AppendAsync(retry);
+        var page = await store.QueryAsync(new AuditTrailQuery { Take = 10 });
+
+        first.Status.ShouldBe(AuditTrailAppendStatus.Appended);
+        second.Status.ShouldBe(AuditTrailAppendStatus.Duplicate);
+        page.Records.ShouldHaveSingleItem().Correlation.TraceId.ShouldBe(original.Correlation.TraceId);
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenRetryChangesBusinessCorrelation_ShouldReturnConflict()
+    {
+        var store = new InMemoryAuditTrailStore();
+        var original = CreateRecord("audit-1", "scope-a", "actor-a", "api.call", AuditOutcome.Success);
+        var conflicting = original.Clone();
+        conflicting.Correlation.RequestId = "different-request";
+
+        await store.AppendAsync(original);
+        var result = await store.AppendAsync(conflicting);
+
+        result.Status.ShouldBe(AuditTrailAppendStatus.Conflict);
+    }
+
+    [Fact]
     public async Task AppendAsync_WhenSameAuditAndDifferentContentExists_ShouldReturnConflictWithoutReplacingRecord()
     {
         var store = new InMemoryAuditTrailStore();

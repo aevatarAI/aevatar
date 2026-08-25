@@ -189,6 +189,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 MaxToolRounds = ReadInteger(roleNode, "max_tool_rounds", findings, path),
                 MaxHistoryMessages = ReadInteger(roleNode, "max_history_messages", findings, path),
                 AllowedTools = ParseAllowedTools(roleNode, path, findings),
+                ToolSets = ParseToolSets(roleNode, path, findings),
                 EventModules = eventModules,
                 EventRoutes = eventRoutes,
                 Connectors = ParseConnectors(roleNode, path, findings),
@@ -249,6 +250,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
             TargetRole = ReadScalar(stepNode, "target_role") ?? ReadScalar(stepNode, "role"),
             UsedRoleAlias = GetNode(stepNode, "target_role") is null && GetNode(stepNode, "role") is not null,
             AllowedTools = ParseAllowedTools(stepNode, path, findings),
+            ToolSets = ParseToolSets(stepNode, path, findings),
             Capability = ParseCapability(stepNode, path, findings),
             Parameters = parameters,
             Next = ReadScalar(stepNode, "next"),
@@ -557,44 +559,57 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
     private static List<string>? ParseAllowedTools(
         YamlMappingNode node,
         string path,
+        ICollection<ValidationFinding> findings) =>
+        ParseDelimitedStringList(node, "allowed_tools", path, findings);
+
+    private static List<string>? ParseToolSets(
+        YamlMappingNode node,
+        string path,
+        ICollection<ValidationFinding> findings) =>
+        ParseDelimitedStringList(node, "tool_sets", path, findings);
+
+    private static List<string>? ParseDelimitedStringList(
+        YamlMappingNode node,
+        string fieldName,
+        string path,
         ICollection<ValidationFinding> findings)
     {
-        var allowedToolsNode = GetNode(node, "allowed_tools");
-        if (allowedToolsNode is null)
+        var nodeValue = GetNode(node, fieldName);
+        if (nodeValue is null)
         {
             return null;
         }
 
-        if (allowedToolsNode is YamlSequenceNode sequenceNode)
+        if (nodeValue is YamlSequenceNode sequenceNode)
         {
-            var tools = new List<string>();
+            var items = new List<string>();
             for (var index = 0; index < sequenceNode.Children.Count; index++)
             {
                 if (sequenceNode.Children[index] is not YamlScalarNode scalarNode)
                 {
                     findings.Add(ValidationFinding.Error(
-                        $"{path}/allowed_tools/{index}",
-                        "Each `allowed_tools` entry must be a string."));
+                        $"{path}/{fieldName}/{index}",
+                        $"Each `{fieldName}` entry must be a string."));
                     continue;
                 }
 
                 if (!string.IsNullOrWhiteSpace(scalarNode.Value))
                 {
-                    tools.Add(scalarNode.Value.Trim());
+                    items.Add(scalarNode.Value.Trim());
                 }
             }
 
-            return tools;
+            return items;
         }
 
-        if (allowedToolsNode is YamlScalarNode scalar)
+        if (nodeValue is YamlScalarNode scalar)
         {
             return (scalar.Value ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToList();
         }
 
-        findings.Add(ValidationFinding.Error($"{path}/allowed_tools", "`allowed_tools` must be a list or comma-delimited string."));
+        findings.Add(ValidationFinding.Error($"{path}/{fieldName}", $"`{fieldName}` must be a list or comma-delimited string."));
         return [];
     }
 
@@ -625,6 +640,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         AddIfNotNull(result, "max_tool_rounds", role.MaxToolRounds);
         AddIfNotNull(result, "max_history_messages", role.MaxHistoryMessages);
         AddIfPresent(result, "allowed_tools", role.AllowedTools);
+        AddIfPresent(result, "tool_sets", role.ToolSets);
         AddIfNotNull(result, "event_modules", role.EventModules);
         AddIfNotNull(result, "event_routes", role.EventRoutes);
 
@@ -650,6 +666,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         }
 
         AddIfPresent(result, "allowed_tools", step.AllowedTools);
+        AddIfPresent(result, "tool_sets", step.ToolSets);
         AddIfNotNull(result, "capability", SerializeCapability(step.Capability));
 
         if (step.Parameters.Count > 0)

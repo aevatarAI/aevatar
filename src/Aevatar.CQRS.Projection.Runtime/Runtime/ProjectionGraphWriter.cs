@@ -1,58 +1,233 @@
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
 public sealed class ProjectionGraphWriter<TReadModel>
     : IProjectionGraphWriter<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
+    private const string ConstructionOperation = "construct_owner_graph";
+    private const string CompletedResult = "completed";
+    private const string FailedResult = "failed";
+    private const string CancelledResult = "cancelled";
+
     private readonly IProjectionGraphStore _graphStore;
     private readonly IProjectionGraphMaterializer<TReadModel> _materializer;
+    private readonly IProjectionGraphOwnerIdentityResolver _ownerIdentityResolver;
+    private readonly ProjectionGraphProviderStatus? _providerStatus;
+    private readonly ILogger<ProjectionGraphWriter<TReadModel>> _logger;
+    private readonly Func<long> _getTimestamp;
+    private readonly Func<long, TimeSpan> _getElapsedTime;
 
     public ProjectionGraphWriter(
         IProjectionGraphStore graphStore,
-        IProjectionGraphMaterializer<TReadModel> materializer)
+        IProjectionGraphMaterializer<TReadModel> materializer,
+        ILogger<ProjectionGraphWriter<TReadModel>>? logger = null,
+        IProjectionGraphOwnerIdentityResolver? ownerIdentityResolver = null,
+        ProjectionGraphProviderStatus? providerStatus = null)
+        : this(
+            graphStore,
+            materializer,
+            logger,
+            Stopwatch.GetTimestamp,
+            Stopwatch.GetElapsedTime,
+            ownerIdentityResolver,
+            providerStatus)
+    {
+    }
+
+    internal ProjectionGraphWriter(
+        IProjectionGraphStore graphStore,
+        IProjectionGraphMaterializer<TReadModel> materializer,
+        ILogger<ProjectionGraphWriter<TReadModel>>? logger,
+        Func<long> getTimestamp,
+        Func<long, TimeSpan> getElapsedTime)
+        : this(
+            graphStore,
+            materializer,
+            logger,
+            getTimestamp,
+            getElapsedTime,
+            ownerIdentityResolver: null,
+            providerStatus: null)
+    {
+    }
+
+    private ProjectionGraphWriter(
+        IProjectionGraphStore graphStore,
+        IProjectionGraphMaterializer<TReadModel> materializer,
+        ILogger<ProjectionGraphWriter<TReadModel>>? logger,
+        Func<long> getTimestamp,
+        Func<long, TimeSpan> getElapsedTime,
+        IProjectionGraphOwnerIdentityResolver? ownerIdentityResolver,
+        ProjectionGraphProviderStatus? providerStatus)
     {
         _graphStore = graphStore ?? throw new ArgumentNullException(nameof(graphStore));
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
+        _ownerIdentityResolver = ownerIdentityResolver ?? ProjectionGraphOwnerIdentityResolver.Instance;
+        _providerStatus = providerStatus;
+        _logger = logger ?? NullLogger<ProjectionGraphWriter<TReadModel>>.Instance;
+        _getTimestamp = getTimestamp ?? throw new ArgumentNullException(nameof(getTimestamp));
+        _getElapsedTime = getElapsedTime ?? throw new ArgumentNullException(nameof(getElapsedTime));
     }
 
-    public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+    public Task UpsertAsync(
+        TReadModel readModel,
+        string projectionKind,
+        CancellationToken ct = default)
     {
+        var normalizedProjectionKind = NormalizeToken(projectionKind);
         ArgumentNullException.ThrowIfNull(readModel);
-        ct.ThrowIfCancellationRequested();
-
-        var materialized = _materializer.Materialize(readModel);
-        var scope = NormalizeToken(materialized.Scope);
-        if (scope.Length == 0)
+        var stateVersion = readModel.StateVersion;
+        if (normalizedProjectionKind.Length == 0)
         {
             throw new InvalidOperationException(
-                $"Graph scope is required for read model '{typeof(TReadModel).FullName}'.");
+                $"Projection kind is required for graph read model '{typeof(TReadModel).FullName}'.");
         }
 
-        var ownerId = BuildOwnerId(readModel);
-        return _graphStore.ReplaceOwnerGraphAsync(
-            new ProjectionOwnedGraph
+        ct.ThrowIfCancellationRequested();
+        if (_providerStatus is { Enabled: false })
+            return Task.CompletedTask;
+
+        var elapsed = TimeSpan.Zero;
+        var scope = string.Empty;
+        var ownerId = string.Empty;
+        IReadOnlyList<ProjectionGraphNode> nodes = [];
+        IReadOnlyList<ProjectionGraphEdge> edges = [];
+        int? nodeCount = null;
+        int? edgeCount = null;
+        ProjectionOwnedGraph graph;
+        ProjectionGraphMaterialization materialized;
+
+        var startedAt = _getTimestamp();
+        try
+        {
+            try
             {
+                materialized = _materializer.Materialize(readModel);
+            }
+            finally
+            {
+                elapsed = _getElapsedTime(startedAt);
+            }
+
+            scope = NormalizeToken(materialized.Scope);
+            if (scope.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"Graph scope is required for read model '{typeof(TReadModel).FullName}'.");
+            }
+
+            ownerId = _ownerIdentityResolver.Resolve(readModel.GetType(), readModel.Id).Value;
+            nodes = NormalizeNodes(materialized.Nodes, scope, ownerId);
+            edges = NormalizeEdges(materialized.Edges, scope, ownerId);
+            nodeCount = nodes.Count;
+            edgeCount = edges.Count;
+            graph = new ProjectionOwnedGraph
+            {
+                ProjectionKind = normalizedProjectionKind,
+                StateVersion = stateVersion,
                 Scope = scope,
                 OwnerId = ownerId,
-                Nodes = NormalizeNodes(materialized.Nodes, scope, ownerId),
-                Edges = NormalizeEdges(materialized.Edges, scope, ownerId),
-            },
-            ct);
-    }
+                Nodes = nodes,
+                Edges = edges,
+            };
 
-    private static string BuildOwnerId(TReadModel readModel)
-    {
-        var readModelId = NormalizeToken(readModel.Id);
-        if (readModelId.Length == 0)
+            LogConstruction(
+                elapsed,
+                normalizedProjectionKind,
+                stateVersion,
+                scope,
+                ownerId,
+                nodeCount,
+                edgeCount,
+                CompletedResult,
+                errorType: null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            throw new InvalidOperationException(
-                $"Graph read model '{readModel.GetType().FullName}' requires a non-empty Id for owner lifecycle management.");
+            LogConstruction(
+                elapsed,
+                normalizedProjectionKind,
+                stateVersion,
+                scope,
+                ownerId,
+                nodeCount,
+                edgeCount,
+                CancelledResult,
+                errorType: null);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogConstruction(
+                elapsed,
+                normalizedProjectionKind,
+                stateVersion,
+                scope,
+                ownerId,
+                nodeCount,
+                edgeCount,
+                FailedResult,
+                ex.GetType().Name);
+            throw;
         }
 
-        var readModelType = NormalizeToken(readModel.GetType().FullName);
-        return readModelType.Length == 0
-            ? readModelId
-            : $"{readModelType}:{readModelId}";
+        return _graphStore.ReplaceOwnerGraphAsync(graph, ct);
+    }
+
+    private void LogConstruction(
+        TimeSpan elapsed,
+        string projectionKind,
+        long? stateVersion,
+        string scope,
+        string ownerId,
+        int? nodeCount,
+        int? edgeCount,
+        string result,
+        string? errorType)
+    {
+        try
+        {
+            _logger.Log(
+                string.Equals(result, FailedResult, StringComparison.Ordinal)
+                    ? LogLevel.Error
+                    : LogLevel.Information,
+                "Projection graph construction finished: operation={Operation} result={Result} " +
+                "elapsedMs={ElapsedMs} projectionKind={ProjectionKind} stateVersion={StateVersion} " +
+                "scope={Scope} ownerId={OwnerId} nodeCount={NodeCount} edgeCount={EdgeCount} " +
+                "errorType={ErrorType}",
+                ConstructionOperation,
+                result,
+                Math.Max(0, elapsed.TotalMilliseconds),
+                projectionKind,
+                stateVersion,
+                scope,
+                ownerId,
+                nodeCount,
+                edgeCount,
+                errorType);
+        }
+        catch (Exception ex)
+        {
+            TraceLoggingFailure(ex);
+        }
+    }
+
+    private static void TraceLoggingFailure(Exception exception)
+    {
+        try
+        {
+            Trace.TraceWarning(
+                "Projection graph construction log emission failed: {0}",
+                exception.GetType().FullName);
+        }
+        catch (Exception)
+        {
+            return;
+        }
     }
 
     private static IReadOnlyList<ProjectionGraphNode> NormalizeNodes(

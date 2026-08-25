@@ -31,6 +31,8 @@ public sealed class WorkflowExecutionReadModelMapperTests
             Status = status,
             FinalOutput = "done",
             FinalError = "err",
+            TerminalValueLifecycleFailureKind =
+                WorkflowValueLifecycleFailureKind.ReleaseTargetMissing,
             SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
             DeadLetterFailedCompensationStepId = "refund_payment",
             DeadLetterRemainingUncompensated = 2,
@@ -41,6 +43,8 @@ public sealed class WorkflowExecutionReadModelMapperTests
         snapshot.CompletionStatus.Should().Be(expected);
         snapshot.LastOutput.Should().Be("done");
         snapshot.LastError.Should().Be("err");
+        snapshot.TerminalValueLifecycleFailureKind.Should().Be(
+            WorkflowValueLifecycleFailureKind.ReleaseTargetMissing);
         snapshot.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
         snapshot.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
         snapshot.DeadLetterRemainingUncompensated.Should().Be(2);

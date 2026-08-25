@@ -740,12 +740,12 @@
             <article class="run-card focus">
               <div class="row">
                 <div>
-                  <div class="run-name">Risk Review</div>
-                  <div class="run-team">RiskOps · Reviewer Member</div>
+                  <div class="run-name">Workflow Alpha</div>
+                  <div class="run-team">Team Alpha · Member Alpha</div>
                 </div>
                 <div class="pill wait">Wait</div>
               </div>
-              <div class="run-stage">release_gate · waiting for approval</div>
+              <div class="run-stage">approval_gate · waiting for human approval</div>
               <div class="run-meta">
                 <span>12 / 24 steps</span>
                 <span>05:12</span>
@@ -756,8 +756,8 @@
             <article class="run-card running">
               <div class="row">
                 <div>
-                  <div class="run-name">Customer Onboarding</div>
-                  <div class="run-team">Growth Team · Intake Member</div>
+                  <div class="run-name">Workflow Beta</div>
+                  <div class="run-team">Team Beta · Member Beta</div>
                 </div>
                 <div class="pill live">Live</div>
               </div>
@@ -772,12 +772,12 @@
             <article class="run-card retrying">
               <div class="row">
                 <div>
-                  <div class="run-name">Billing Reconciliation</div>
-                  <div class="run-team">Finance Ops · Connector Member</div>
+                  <div class="run-name">Workflow Gamma</div>
+                  <div class="run-team">Team Gamma · Member Gamma</div>
                 </div>
                 <div class="pill retry">Retry</div>
               </div>
-              <div class="run-stage">crm_lookup · retry 2 of 3</div>
+              <div class="run-stage">connector_lookup · retry 2 of 3</div>
               <div class="run-meta">
                 <span>4 / 11 steps</span>
                 <span>03:49</span>
@@ -788,8 +788,8 @@
             <article class="run-card done">
               <div class="row">
                 <div>
-                  <div class="run-name">Invoice Classifier</div>
-                  <div class="run-team">Finance Ops · Document Member</div>
+                  <div class="run-name">Workflow Delta</div>
+                  <div class="run-team">Team Delta · Member Delta</div>
                 </div>
                 <div class="pill done">Done</div>
               </div>
@@ -806,8 +806,8 @@
         <section class="panel graph-panel">
           <header class="graph-head">
             <div>
-              <div class="graph-title">Risk Review · Workflow Step Replay</div>
-              <div class="graph-subtitle">Team RiskOps · Reviewer Member · selected published run</div>
+              <div class="graph-title">Workflow Alpha · Workflow Step Replay</div>
+              <div class="graph-subtitle">Team Alpha · Member Alpha · selected published run</div>
             </div>
             <div class="graph-badges">
               <div class="graph-badge focus">Focus: waiting approval · 2m</div>
@@ -851,13 +851,13 @@
                   <div class="node-top">
                     <div class="icon ai">AI</div>
                     <div class="node-label">
-                      <div class="step-id">risk_review</div>
+                      <div class="step-id">evaluate_result</div>
                       <div class="step-subtitle">llm_call</div>
                     </div>
                     <div class="status active">active</div>
                   </div>
                   <div class="node-body">
-                    <div><strong>role:</strong> reviewer</div>
+                    <div><strong>role:</strong> worker</div>
                     <div>evaluating evidence summary</div>
                   </div>
                 </section>
@@ -883,13 +883,13 @@
                   <div class="node-top">
                     <div class="icon human">HM</div>
                     <div class="node-label">
-                      <div class="step-id">release_gate</div>
+                      <div class="step-id">approval_gate</div>
                       <div class="step-subtitle">human_approval</div>
                     </div>
                     <div class="status waiting">waiting</div>
                   </div>
                   <div class="node-body">
-                    <div><strong>gate:</strong> release approval</div>
+                    <div><strong>gate:</strong> human approval</div>
                     <div>safe summary only</div>
                   </div>
                 </section>

@@ -2,6 +2,7 @@ using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
@@ -32,6 +33,12 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
             WorkflowRunCommittedStateRedactionHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            WorkflowToolCallAttemptPersistenceTelemetryHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IRuntimeFleetCapabilityAdvertisement,
+            WorkflowNormalizedStateCapabilityAdvertisement>());
         return services;
     }
 
@@ -41,4 +48,17 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModulePack, TModulePack>());
         return services;
     }
+}
+
+internal sealed class WorkflowNormalizedStateCapabilityAdvertisement
+    : IRuntimeFleetCapabilityAdvertisement
+{
+    public RuntimeFleetMemberCapability GetCapability() =>
+        new()
+        {
+            Capability = RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            ReaderContractVersion =
+                WorkflowNormalizedStateWriteAdmission.ValueLifecycleRequiredReaderContractVersion,
+            ContractId = WorkflowNormalizedStateWriteAdmission.ContractId,
+        };
 }

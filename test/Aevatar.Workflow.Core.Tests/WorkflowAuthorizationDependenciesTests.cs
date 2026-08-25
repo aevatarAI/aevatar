@@ -302,6 +302,109 @@ public sealed class WorkflowAuthorizationDependenciesTests
     }
 
     [Fact]
+    public async Task BindWorkflowDefinition_CurrentPolicyParameterizedLlmCall_ShouldCommit()
+    {
+        const string yaml = """
+            name: codex_long_running_handoff
+            description: "Dispatch long-running Codex work, wait for an external callback, then review shards with a concurrency floor."
+            roles:
+              - id: reviewer
+                name: Reviewer
+                agent_kind: workflow.role-agent
+                system_prompt: "Review worker output for correctness and actionable issues."
+                allowed_tools: []
+            steps:
+              - id: announce_job
+                type: emit
+                parameters:
+                  event_type: "codex.job.requested"
+                  payload: "$input"
+                next: wait_for_codex_worker
+              - id: wait_for_codex_worker
+                type: wait_signal
+                parameters:
+                  signal_name: "codex_worker_done"
+                  prompt: "Waiting for Codex worker callback"
+                  timeout_ms: "5400000"
+                next: review_worker_output
+              - id: review_worker_output
+                type: foreach
+                target_role: reviewer
+                parameters:
+                  delimiter: "\n---\n"
+                  sub_step_type: "llm_call"
+                  sub_param_prompt_prefix: "Review this worker shard and flag anything unsafe or incomplete:"
+                  min_concurrent_workers: "4"
+                  max_concurrent_workers: "12"
+            """;
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            invocationAdmissions: [],
+            sourceStamps: []);
+        var agent = NewAgent();
+
+        await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
+        {
+            WorkflowName = "codex_long_running_handoff",
+            WorkflowYaml = yaml,
+            SourceKind = "file",
+            CapabilityAdmissionPlan = plan,
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+        });
+
+        agent.State.Compiled.Should().BeTrue();
+        agent.State.Version.Should().Be(1);
+        agent.State.ToolCatalogPolicyVersion.Should().Be(WorkflowToolCatalogPolicies.CurrentVersion);
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinition_WhenCanonicalStateIsUnchanged_ShouldNotAppendOrAdvanceVersion()
+    {
+        const string rootYaml = "name: root-workflow\nroles: []\nsteps: []\n";
+        const string childYaml = "name: child-workflow\nroles: []\nsteps: []\n";
+        var behaviorFactory = new InMemoryWorkflowEventSourcingBehaviorFactory();
+        var agent = new WorkflowGAgent
+        {
+            EventSourcingBehaviorFactory = behaviorFactory,
+        };
+
+        await agent.BindWorkflowDefinitionAsync(
+            rootYaml,
+            " root-workflow ",
+            new Dictionary<string, string> { [" child-workflow "] = childYaml },
+            scopeId: null,
+            sourceKind: null,
+            capabilityAdmissionPlan: null,
+            workflowId: null,
+            revisionId: null,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
+
+        agent.State.Version.Should().Be(1);
+        behaviorFactory.CommittedEvents.Should().ContainSingle()
+            .Which.Should().BeOfType<BindWorkflowDefinitionEvent>();
+
+        await agent.BindWorkflowDefinitionAsync(
+            rootYaml,
+            "root-workflow",
+            new Dictionary<string, string> { ["child-workflow"] = childYaml },
+            scopeId: string.Empty,
+            sourceKind: " builtin ",
+            capabilityAdmissionPlan: null,
+            workflowId: string.Empty,
+            revisionId: string.Empty,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
+
+        agent.State.Version.Should().Be(1);
+        agent.State.InlineWorkflowYamls.Keys.Should().Equal("child-workflow");
+        agent.State.ScopeId.Should().BeEmpty();
+        agent.State.SourceKind.Should().Be("builtin");
+        behaviorFactory.CommittedEvents.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task BindWorkflowDefinition_WhenExplicitIdentityChanges_ShouldRejectAndPreserveAuthority()
     {
         var yaml = ExactNyxIdRequestWorkflowYaml();
@@ -493,6 +596,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
     [InlineData("foreach_llm", "sub_step_type")]
     [InlineData("while", "step")]
     [InlineData("loop", "step")]
+    [InlineData("cache", "child_step_type")]
     public void EvaluateAuthorizationDependencies_IndirectNyxIdProxy_ShouldNeverBypassAdmission(
         string primitive,
         string subStepTypeKey)

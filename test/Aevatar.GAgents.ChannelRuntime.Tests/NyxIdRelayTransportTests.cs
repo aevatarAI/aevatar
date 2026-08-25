@@ -321,6 +321,88 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldUseTypedLarkImageAttachmentHandles_WhenRawPlatformDataIsUnavailable()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-typed-image-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": {
+                "type": "image",
+                "attachments": [
+                  {
+                    "content_type": "image",
+                    "url": "https://open.larksuite.com/open-apis/im/v1/messages/om_typed_image_1/resources/img_typed_1?type=image",
+                    "platform_message_id": "om_typed_image_1",
+                    "image_key": "img_typed_1",
+                    "filename": "invoice.png",
+                    "mime_type": "image/png",
+                    "size_bytes": 42
+                  }
+                ]
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.TransportExtras.NyxPlatformMessageId.Should().Be("om_typed_image_1");
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().Be("img_typed_1");
+        attachment.Kind.Should().Be(AttachmentKind.Image);
+        attachment.Name.Should().Be("invoice.png");
+        attachment.ContentType.Should().Be("image/png");
+        attachment.ExternalUrl.Should().Be(
+            "https://open.larksuite.com/open-apis/im/v1/messages/om_typed_image_1/resources/img_typed_1?type=image");
+        attachment.SizeBytes.Should().Be(42);
+    }
+
+    [Fact]
+    public void Parse_ShouldUseTypedLarkFileAttachmentHandles_WhenRawPlatformDataIsUnavailable()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-typed-file-1",
+              "platform": "feishu",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": {
+                "type": "file",
+                "attachments": [
+                  {
+                    "content_type": "file",
+                    "url": "https://open.feishu.cn/open-apis/im/v1/messages/om_typed_file_1/resources/file_typed_1?type=file",
+                    "platform_message_id": "om_typed_file_1",
+                    "file_key": "file_typed_1",
+                    "filename": "invoice.pdf",
+                    "mime_type": "application/pdf",
+                    "size_bytes": 2048
+                  }
+                ]
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.TransportExtras.NyxPlatformMessageId.Should().Be("om_typed_file_1");
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().Be("file_typed_1");
+        attachment.Kind.Should().Be(AttachmentKind.File);
+        attachment.Name.Should().Be("invoice.pdf");
+        attachment.ContentType.Should().Be("application/pdf");
+        attachment.SizeBytes.Should().Be(2048);
+    }
+
+    [Fact]
     public void Parse_ShouldAcceptTextlessLarkFileKey_FromRawMessageContentObject()
     {
         var body = """

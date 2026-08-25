@@ -36,8 +36,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<OrnnUpdateSkillTool>();
         services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
         services.TryAddSingleton<OrnnSearchAgentToolSource>();
-        services.TryAddSingleton<OrnnAgentToolSource>();
-        services.TryAddAgentToolSourceAlias<OrnnAgentToolSource>(GetOrnnAgentToolSource);
+        services.TryAddSingleton<OrnnPublishAgentToolSource>();
+        services.TryAddSingleton<OrnnAuthoringAgentToolSource>();
         return services;
     }
 
@@ -97,23 +97,4 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static IAgentToolSource GetOrnnAgentToolSource(IServiceProvider sp) =>
-        sp.GetRequiredService<OrnnAgentToolSource>();
-
-    private static void TryAddAgentToolSourceAlias<TSource>(
-        this IServiceCollection services,
-        Func<IServiceProvider, IAgentToolSource> factory)
-        where TSource : class, IAgentToolSource
-    {
-        if (services.Any(descriptor =>
-                descriptor.ServiceType == typeof(IAgentToolSource) &&
-                (descriptor.ImplementationType == typeof(TSource) ||
-                 descriptor.ImplementationInstance is TSource ||
-                 descriptor.ImplementationFactory?.Method == factory.Method)))
-        {
-            return;
-        }
-
-        services.Add(ServiceDescriptor.Singleton(factory));
-    }
 }

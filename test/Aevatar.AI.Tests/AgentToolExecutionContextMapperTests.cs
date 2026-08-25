@@ -2,6 +2,7 @@ using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -206,6 +207,36 @@ public sealed class AgentToolExecutionContextMapperTests
         payload.NyxIdAuthority.Platform.Should().Be("nyxid");
         payload.NyxIdAuthority.ExternalUserId.Should().Be("user-alpha");
         restored.NyxIdAuthority.Should().BeEquivalentTo(context.NyxIdAuthority);
+    }
+
+    [Fact]
+    public void ToPayloadAndFromPayload_ShouldPreserveDurableNyxIdCredentialHandle()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            DurableNyxIdCredential = new DurableCallerCredentialRef
+            {
+                Ref = "sec-channel-agent-key",
+                Purpose = CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                OwnerScopeKey = "scope-channel",
+                SubjectId = "key-channel",
+                SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+                SecretReference = new SecretReference
+                {
+                    Ref = "sec-channel-agent-key",
+                    Purpose = CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                    OwnerScopeKey = "scope-channel",
+                    Fingerprint = "fingerprint-channel",
+                    Version = 1,
+                    CreatedAtUnixMs = 1_700_000_000_000,
+                },
+            },
+        };
+
+        var payload = AgentToolExecutionContextMapper.ToPayload(context);
+        var restored = AgentToolExecutionContextMapper.FromPayload(payload);
+
+        restored.DurableNyxIdCredential.Should().Be(context.DurableNyxIdCredential);
     }
 
     [Fact]
@@ -433,7 +464,7 @@ public sealed class AgentToolExecutionContextMapperTests
                 " access-1 ",
                 " org-1 ",
                 " sender-access-1 ",
-                AgentToolNyxIdCredentialKind.ProxyDelegation),
+                AgentToolNyxIdCredentialKind.AgentKey),
             new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
             new AgentToolChannelContext(
                 " telegram ",
@@ -484,7 +515,7 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Credentials.NyxIdAccessToken.Should().Be("access-1");
         copy.Credentials.NyxIdOrgToken.Should().Be("org-1");
         copy.Credentials.SenderNyxIdAccessToken.Should().Be("sender-access-1");
-        copy.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+        copy.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
         copy.Caller.ScopeId.Should().Be("scope-1");
         copy.Caller.OwnerSubject.Should().Be("owner-1");
         copy.Caller.ResponseId.Should().Be("response-1");

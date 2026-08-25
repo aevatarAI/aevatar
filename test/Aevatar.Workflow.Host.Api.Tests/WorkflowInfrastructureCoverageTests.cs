@@ -7,7 +7,9 @@ using Aevatar.Configuration;
 using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -245,7 +247,13 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddLogging();
         services.AddSingleton<IActorRuntime, RecordingActorRuntime>();
         services.AddSingleton<IActorDispatchPort, RecordingActorDispatchPort>();
+        var forwardingRegistry = new InMemoryStreamForwardingRegistry();
+        services.AddSingleton<IStreamForwardingRegistry>(forwardingRegistry);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(forwardingRegistry);
         services.AddSingleton<Aevatar.Foundation.Abstractions.IStreamProvider, InMemoryStreamProvider>();
+        services.AddSingleton<IStreamForwardingRegistry, InMemoryStreamForwardingRegistry>();
+        services.AddSingleton<IStreamForwardingBindingAuthority>(sp =>
+            (InMemoryStreamForwardingRegistry)sp.GetRequiredService<IStreamForwardingRegistry>());
         services.AddSingleton<IScriptRuntimeCommandPort, RecordingScriptRuntimeCommandPort>();
         services.AddSingleton<IWorkflowRunProvisioningPort, RecordingWorkflowRunProvisioningPort>();
 
@@ -1004,12 +1012,27 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         options.DuplicatePolicy.Should().Be(WorkflowDefinitionDuplicatePolicy.Override);
         options.WorkflowDirectories.Should().Contain(AevatarPaths.RepoRootWorkflows);
-        options.WorkflowDirectories.Should().NotContain(
-            Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
+        options.WorkflowDirectories.Should().NotContain(AevatarPaths.RepoRootWorkflowTemplates);
+        options.WorkflowDirectories.Should().NotContain(Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
     }
 
     [Fact]
-    public void AddWorkflowCapabilityServices_ShouldNotLoadRemovedRepositoryExamplesIntoGenericHost()
+    public void AddWorkflowCapabilityServices_ShouldKeepStartupSourceCredentialSkippingDisabledByDefault()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddWorkflowCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<WorkflowDefinitionFileSourceOptions>>().Value;
+
+        options.SkipSourceCredentialRequiredDefinitionsOnStartup.Should().BeFalse();
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityServices_ShouldLoadRepositoryWorkflowsFromWorkflowSource()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -1028,9 +1051,10 @@ public sealed class WorkflowInfrastructureCoverageTests
             NullLogger.Instance,
             options.DuplicatePolicy);
 
-        registry.GetYaml("direct").Should().NotBeNull();
+        registry.GetYaml("mission_wall_15_node_probe").Should().NotBeNull();
+        registry.GetYaml("simple_qa").Should().NotBeNull();
+        registry.GetYaml("codex_execute").Should().NotBeNull();
         registry.GetYaml("demo_template").Should().BeNull();
-        registry.GetYaml("host-callback-budget-branch").Should().BeNull();
     }
 
     [Fact]

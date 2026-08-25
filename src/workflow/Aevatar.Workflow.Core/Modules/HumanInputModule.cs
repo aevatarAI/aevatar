@@ -66,8 +66,12 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = request.StepId,
                 RunId = runId,
-                Input = request.Input ?? string.Empty,
+                Input = string.IsNullOrWhiteSpace(request.InputValueId)
+                    ? request.Input ?? string.Empty
+                    : string.Empty,
                 OnTimeout = request.Parameters.GetValueOrDefault("on_timeout", "fail"),
+                ExecutionId = request.ExecutionId,
+                InputValueId = request.InputValueId,
             };
             await SaveStateAsync(state, ctx, ct);
 
@@ -112,13 +116,18 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
                     "HumanInput: run={RunId} step={StepId} timed out or cancelled",
                     pending.RunId,
                     pending.StepId);
+                var fallbackInput = ResolvePendingInput(pending, ctx);
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = pending.StepId,
                     RunId = pending.RunId,
+                    ExecutionId = pending.ExecutionId,
                     Success = onTimeout != "fail",
-                    Output = pending.Input,
+                    Output = fallbackInput,
                     Error = onTimeout == "fail" ? "Human input timed out" : "",
+                    OutputProvenance = onTimeout != "fail"
+                        ? WorkflowStepOutputProvenance.ForwardedInput
+                        : WorkflowStepOutputProvenance.Produced,
                 }, TopologyAudience.Self, ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
@@ -135,8 +144,10 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = pending.StepId,
                 RunId = pending.RunId,
+                ExecutionId = pending.ExecutionId,
                 Success = true,
                 Output = userInput ?? "",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             state.Pending.Remove(pendingKey);
             await SaveStateAsync(state, ctx, ct);
@@ -203,9 +214,23 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
                 Success = false,
                 Error = "human_input does not support interaction_template; use interaction_spec.",
                 ExecutionId = request.ExecutionId,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             },
             TopologyAudience.Self,
             ct);
+
+    private static string ResolvePendingInput(
+        PendingHumanInputState pending,
+        IWorkflowExecutionContext ctx)
+    {
+        if (string.IsNullOrWhiteSpace(pending.InputValueId))
+            return pending.Input ?? string.Empty;
+
+        var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+            ctx,
+            WorkflowExecutionKernel.ModuleStateKey);
+        return WorkflowExecutionValueStore.GetCanonicalValue(kernelState, pending.InputValueId).Value;
+    }
 
     private static Task SaveStateAsync(
         HumanInputModuleState state,

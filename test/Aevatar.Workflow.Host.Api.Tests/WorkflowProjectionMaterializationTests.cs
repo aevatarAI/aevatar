@@ -27,12 +27,10 @@ public sealed class WorkflowProjectionMaterializationTests
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
 
-        Action noReader = () => new WorkflowRunInsightReportArtifactProjector(null!, reportStore, graphWriter);
-        Action noReportWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, null!, graphWriter);
-        Action noGraphWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, null!);
+        Action noReportMutator = () => new WorkflowRunInsightReportArtifactProjector(null!, graphWriter);
+        Action noGraphWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, null!);
 
-        noReader.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("reportReader");
-        noReportWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("reportWriter");
+        noReportMutator.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("reportMutator");
         noGraphWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("graphWriter");
     }
 
@@ -130,6 +128,7 @@ public sealed class WorkflowProjectionMaterializationTests
                     WorkflowYaml = BuildDefinitionYaml("repo_install"),
                     SourceKind = "repo",
                     Compiled = true,
+                    CatalogPublicationContractVersion = WorkflowCatalogPublicationContracts.CurrentVersion,
                 }));
 
         store.UpsertCount.Should().Be(1);
@@ -140,8 +139,87 @@ public sealed class WorkflowProjectionMaterializationTests
         document.LastEventId.Should().Be("definition-evt-7");
         document.UpdatedAt.Should().Be(DateTimeOffset.Parse("2026-03-17T11:07:00+00:00"));
         document.Source.Should().Be("repo");
+        document.CatalogPublicationContractVersion.Should().Be(WorkflowCatalogPublicationContracts.CurrentVersion);
         document.Primitives.Should().Contain("assign");
         document.Steps.Should().ContainSingle(step => step.Id == "bootstrap");
+    }
+
+    [Fact]
+    public async Task WorkflowCatalogCurrentStateProjector_ShouldFullReplaceDeletedYamlFields()
+    {
+        var store = new RecordingDocumentStore<WorkflowCatalogCurrentStateDocument>(x => x.Id);
+        var projector = new WorkflowCatalogCurrentStateProjector(
+            store,
+            new FixedClock(DateTimeOffset.Parse("2026-03-17T10:00:00+00:00")));
+        var context = new WorkflowBindingProjectionContext
+        {
+            RootActorId = "workflow-definition:delete_field",
+            ProjectionKind = "workflow-binding",
+        };
+        const string withDescriptionYaml = """
+            name: delete_field
+            description: Remove this on next startup.
+            roles:
+              - id: operator
+                name: Operator
+                system_prompt: ""
+            steps:
+              - id: bootstrap
+                type: assign
+                parameters:
+                  target: result
+                  value: "ok"
+            """;
+        const string withoutDescriptionYaml = """
+            name: delete_field
+            roles:
+              - id: operator
+                name: Operator
+                system_prompt: ""
+            steps:
+              - id: bootstrap
+                type: assign
+                parameters:
+                  target: result
+                  value: "ok"
+            """;
+
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                13,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "delete_field",
+                    WorkflowYaml = withDescriptionYaml,
+                },
+                new WorkflowState
+                {
+                    WorkflowName = "delete_field",
+                    WorkflowYaml = withDescriptionYaml,
+                    Compiled = true,
+                }));
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                14,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "delete_field",
+                    WorkflowYaml = withoutDescriptionYaml,
+                },
+                new WorkflowState
+                {
+                    WorkflowName = "delete_field",
+                    WorkflowYaml = withoutDescriptionYaml,
+                    Compiled = true,
+                }));
+
+        store.UpsertCount.Should().Be(2);
+        var document = store.Stored["delete_field"];
+        document.StateVersion.Should().Be(14);
+        document.Description.Should().BeEmpty();
+        document.WorkflowYaml.Should().Be(withoutDescriptionYaml);
     }
 
     [Fact]
@@ -286,7 +364,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -388,6 +466,7 @@ public sealed class WorkflowProjectionMaterializationTests
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
         report.Steps.Should().ContainSingle();
         report.Steps[0].StepId.Should().Be("step-1");
+        report.StepIndexById.Should().Contain("step-1", 0);
         report.Steps[0].Success.Should().BeFalse();
         report.Steps[0].OutputPreview.Should().Be("partial");
         report.Steps[0].CompletionAnnotations.Should().ContainKey("token_usage");
@@ -412,7 +491,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -526,7 +605,7 @@ public sealed class WorkflowProjectionMaterializationTests
         });
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -575,7 +654,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -652,7 +731,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -688,11 +767,11 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
-    public async Task WorkflowArtifactProjector_ShouldTrackStepAndTopologyEvents_AndSkipDuplicates()
+    public async Task WorkflowArtifactProjector_ShouldTrackEvents_AndRetryGraphAfterReportDuplicate()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -772,7 +851,8 @@ public sealed class WorkflowProjectionMaterializationTests
                 eventId: "evt-5"));
 
         reportStore.UpsertCount.Should().Be(5);
-        graphWriter.UpsertCount.Should().Be(5);
+        graphWriter.UpsertCount.Should().Be(6);
+        graphWriter.LastProjectionKind.Should().Be(context.ProjectionKind);
         reportStore.Stored["actor-1"].Timeline.Select(x => x.Stage).Should().Contain(["step.request", "step.completed"]);
         graphWriter.Stored["actor-1"].Steps.Should().ContainSingle();
         graphWriter.Stored["actor-1"].Steps[0].TargetRole.Should().Be("assistant");
@@ -782,11 +862,97 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldMutateOnce_AndNotAppendTimelineOnDuplicate()
+    {
+        var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+        var envelope = BuildCommittedEnvelope(
+            1,
+            new StepRequestEvent
+            {
+                RunId = "run-1",
+                StepId = "step-1",
+                StepType = "tool_call",
+            },
+            BuildState("running"));
+
+        await projector.ProjectAsync(context, envelope);
+
+        reportStore.MutationCount.Should().Be(1);
+        reportStore.ReducerCallCount.Should().Be(1);
+        reportStore.UpsertCount.Should().Be(1);
+        graphWriter.UpsertCount.Should().Be(1);
+        reportStore.Stored["actor-1"].Timeline
+            .Should().ContainSingle(entry => entry.Stage == "step.request");
+
+        await projector.ProjectAsync(context, envelope.Clone());
+
+        reportStore.MutationCount.Should().Be(2);
+        reportStore.ReducerCallCount.Should().Be(2);
+        reportStore.UpsertCount.Should().Be(1);
+        graphWriter.UpsertCount.Should().Be(2, "an exact report duplicate must still recover the graph phase");
+        reportStore.Stored["actor-1"].Timeline
+            .Should().ContainSingle(entry => entry.Stage == "step.request");
+    }
+
+    [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldRejectDifferentEventAtSameVersion()
+    {
+        var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                1,
+                new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "step-1",
+                    StepType = "tool_call",
+                },
+                BuildState("running"),
+                eventId: "evt-original"));
+
+        var conflictingProjection = () => projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                1,
+                new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "step-2",
+                    StepType = "assign",
+                },
+                BuildState("running"),
+                eventId: "evt-conflict")).AsTask();
+
+        await conflictingProjection.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already bound to event 'evt-original'*");
+        reportStore.UpsertCount.Should().Be(1);
+        graphWriter.UpsertCount.Should().Be(1);
+        reportStore.Stored["actor-1"].Timeline
+            .Should().ContainSingle(entry => entry.Stage == "step.request");
+    }
+
+    [Fact]
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldMaterializeTypedSkippedOutcome()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -829,7 +995,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -902,6 +1068,50 @@ public sealed class WorkflowProjectionMaterializationTests
         };
         runCodec.Deserialize(runCodec.GetEventType(runEnvelope), runCodec.Serialize(runEnvelope))!.Custom.Name.Should().Be("evt");
         runCodec.Deserialize(string.Empty, ByteString.Empty).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldRebuildLegacyStepIndexOnce()
+    {
+        var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+        var legacy = new WorkflowRunInsightReportDocument
+        {
+            Id = "actor-1",
+            RootActorId = "actor-1",
+            StateVersion = 1,
+            LastEventId = "evt-1",
+        };
+        legacy.Steps.Add(new WorkflowExecutionStepTrace
+        {
+            StepId = "step-1",
+            Outcome = WorkflowExecutionStepOutcomeReadModel.Waiting,
+        });
+        store.Stored[legacy.Id] = legacy;
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                2,
+                new StepCompletedEvent
+                {
+                    RunId = "run-1",
+                    StepId = "step-1",
+                    Success = true,
+                    Output = "done",
+                },
+                BuildState("running")));
+
+        var report = store.Stored["actor-1"];
+        report.Steps.Should().ContainSingle();
+        report.Steps[0].Outcome.Should().Be(WorkflowExecutionStepOutcomeReadModel.Succeeded);
+        report.StepIndexById.Should().Contain("step-1", 0);
     }
 
     private static EventEnvelope BuildCommittedEnvelope(
@@ -1081,8 +1291,9 @@ public sealed class WorkflowProjectionMaterializationTests
 
     private sealed class RecordingDocumentStore<TReadModel>
         : IProjectionDocumentReader<TReadModel, string>,
-          IProjectionWriteDispatcher<TReadModel>
-        where TReadModel : class, IProjectionReadModel
+          IProjectionWriteDispatcher<TReadModel>,
+          IProjectionDocumentMutator<TReadModel, string>
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
         private readonly Func<TReadModel, string> _keySelector;
 
@@ -1094,6 +1305,10 @@ public sealed class WorkflowProjectionMaterializationTests
         public Dictionary<string, TReadModel> Stored { get; } = new(StringComparer.Ordinal);
 
         public int UpsertCount { get; private set; }
+
+        public int MutationCount { get; private set; }
+
+        public int ReducerCallCount { get; private set; }
 
         public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
         {
@@ -1120,6 +1335,30 @@ public sealed class WorkflowProjectionMaterializationTests
             ProjectionDocumentQuery query,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<ProjectionDocumentMutationResult<TReadModel>> MutateAsync(
+            string key,
+            Func<TReadModel?, TReadModel> reducer,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            MutationCount++;
+            Stored.TryGetValue(key, out var existing);
+            var incoming = reducer(existing?.Clone());
+            ReducerCallCount++;
+            if (!string.Equals(_keySelector(incoming), key, StringComparison.Ordinal))
+                throw new InvalidOperationException("Projection mutation changed the document key.");
+
+            var result = ProjectionWriteResultEvaluator.Evaluate(existing, incoming);
+            if (result.IsApplied)
+            {
+                Stored[key] = incoming.Clone();
+                UpsertCount++;
+            }
+
+            Stored.TryGetValue(key, out var committed);
+            return Task.FromResult(new ProjectionDocumentMutationResult<TReadModel>(result, committed?.Clone()));
+        }
     }
 
     private sealed class RecordingGraphWriter<TReadModel> : IProjectionGraphWriter<TReadModel>
@@ -1134,12 +1373,18 @@ public sealed class WorkflowProjectionMaterializationTests
 
         public Dictionary<string, TReadModel> Stored { get; } = new(StringComparer.Ordinal);
 
+        public string? LastProjectionKind { get; private set; }
+
         public int UpsertCount { get; private set; }
 
-        public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+        public Task UpsertAsync(
+            TReadModel readModel,
+            string projectionKind,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Stored[_keySelector(readModel)] = readModel;
+            LastProjectionKind = projectionKind;
             UpsertCount++;
             return Task.CompletedTask;
         }

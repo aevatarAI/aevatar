@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Threading;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -16,6 +17,25 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 public sealed class LocalActorRuntimeCreateTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LinkAsync_WhenFleetAuthorityIsEitherEndpoint_ShouldReject(bool authorityIsParent)
+    {
+        var runtime = CreateRuntime();
+        var parentId = authorityIsParent
+            ? RuntimeFleetCapabilityAuthorityIdentity.ActorId
+            : "ordinary-parent";
+        var childId = authorityIsParent
+            ? "ordinary-child"
+            : RuntimeFleetCapabilityAuthorityIdentity.ActorId;
+
+        var act = () => runtime.LinkAsync(parentId, childId);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot participate in actor hierarchy links*");
+    }
+
     [Fact]
     public async Task CreateAsync_ShouldReturnExistingActor_WhenSameIdAndTypeRequestedAgain()
     {
@@ -184,7 +204,7 @@ public sealed class LocalActorRuntimeCreateTests
             services.AddAevatarAgentKindRegistry(builder => builder
                 .Register<BlockingKindAAgent>()
                 .Register<BlockingKindBAgent>()));
-        using var gate = new ConstructorGate(expectedParticipants: 2);
+        using var gate = new ConstructorGate(expectedParticipants: 1);
         BlockingAgentGate.Current = gate;
 
         try
@@ -250,7 +270,7 @@ public sealed class LocalActorRuntimeCreateTests
     public async Task CreateAsync_WhenConcurrentRequestsUseSameType_ShouldReturnAuthoritativeActor()
     {
         var runtime = CreateRuntime();
-        using var gate = new ConstructorGate(expectedParticipants: 2);
+        using var gate = new ConstructorGate(expectedParticipants: 1);
         BlockingAgentGate.Current = gate;
 
         try
@@ -276,7 +296,7 @@ public sealed class LocalActorRuntimeCreateTests
     public async Task CreateAsync_WhenConcurrentRequestsUseDifferentTypes_ShouldRejectMismatchedWinner()
     {
         var runtime = CreateRuntime();
-        using var gate = new ConstructorGate(expectedParticipants: 2);
+        using var gate = new ConstructorGate(expectedParticipants: 1);
         BlockingAgentGate.Current = gate;
 
         try

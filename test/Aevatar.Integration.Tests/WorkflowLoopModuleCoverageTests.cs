@@ -662,7 +662,7 @@ public sealed class WorkflowLoopModuleCoverageTests
 
         await module.HandleAsync(Envelope(timeoutEvent), ctx, CancellationToken.None);
         ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel").Active.Should().BeFalse();
-        ctx.Published.Clear();
+        await ctx.AcknowledgeTerminalCompletionAsync();
 
         await module.HandleAsync(
             Envelope(new StepCompletedEvent
@@ -889,7 +889,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
         SingleWorkflowCompletion(ctx).Success.Should().BeFalse();
-        ctx.Published.Clear();
+        await ctx.AcknowledgeTerminalCompletionAsync();
 
         await module.HandleAsync(
             Envelope(new StepCompletedEvent

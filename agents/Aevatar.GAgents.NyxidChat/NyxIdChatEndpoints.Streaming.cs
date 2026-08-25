@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -21,6 +22,10 @@ namespace Aevatar.GAgents.NyxidChat;
 public static partial class NyxIdChatEndpoints
 {
     private const int MaxInlineInputPartBytes = 10 * 1024 * 1024;
+    internal const string ActionContinuationCredentialRefreshRequiredCode =
+        "NYXID_ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED";
+    internal const string ActionContinuationCatalogUnavailableCode =
+        "NYXID_ACTION_CONTINUATION_CATALOG_UNAVAILABLE";
 
     internal static TimeSpan StreamKeepAliveInterval { get; set; } = TimeSpan.FromSeconds(15);
     internal static TimeSpan StreamTerminalTimeout { get; set; } = TimeSpan.FromMinutes(5);
@@ -136,6 +141,16 @@ public static partial class NyxIdChatEndpoints
                     ct))
                 return;
 
+            if (string.Equals(streamType, "action.continue", StringComparison.Ordinal) &&
+                !await TryEnsureActionContinuationCredentialVisibilityAsync(
+                    http,
+                    actionReports,
+                    accessToken,
+                    ct))
+            {
+                return;
+            }
+
             if (string.Equals(streamType, "text", StringComparison.Ordinal))
             {
                 var normalizedInput = await MaterializeInlineInputPartsAsync(
@@ -239,7 +254,13 @@ public static partial class NyxIdChatEndpoints
                         clientRequestId!,
                         actionReports,
                         CommandId: commandId,
-                        CorrelationId: commandId),
+                        CorrelationId: commandId,
+                        ToolContext: BuildAuthenticatedOwnerControlToolContext(
+                            scopeId,
+                            actorId,
+                            clientRequestId!,
+                            ownerSubject,
+                            credentials)),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -604,12 +625,15 @@ public static partial class NyxIdChatEndpoints
                 result.Error switch
                 {
                     NyxIdChatStartError.ProjectionUnavailable => "PROJECTION_UNAVAILABLE",
+                    NyxIdChatStartError.AdmissionUnavailable => "ADMISSION_UNAVAILABLE",
                     NyxIdChatStartError.ActorNotFound => "ACTOR_NOT_FOUND",
                     _ => "COMMAND_START_FAILED",
                 },
                 result.Error switch
                 {
                     NyxIdChatStartError.ProjectionUnavailable => "NyxID chat projection pipeline is unavailable.",
+                    NyxIdChatStartError.AdmissionUnavailable =>
+                        "NyxID chat admission is unavailable for the requested Agent Profile or route.",
                     NyxIdChatStartError.ActorNotFound => "NyxID chat conversation was not found.",
                     _ => message,
                 },
@@ -694,6 +718,96 @@ public static partial class NyxIdChatEndpoints
 
         mapped = values;
         return true;
+    }
+
+    private static async Task<bool> TryEnsureActionContinuationCredentialVisibilityAsync(
+        HttpContext http,
+        IReadOnlyList<NyxIdChatActionReport> actionReports,
+        string bearerToken,
+        CancellationToken ct)
+    {
+        var userServiceIds = actionReports
+            .Where(static report =>
+                report.Disposition == NyxIdChatActionDisposition.Completed &&
+                report.Resource?.ResourceCase ==
+                NyxIdChatSafeResourceRef.ResourceOneofCase.UserService)
+            .Select(static report => report.Resource.UserService.UserServiceId)
+            .Where(static userServiceId => !string.IsNullOrWhiteSpace(userServiceId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (userServiceIds.Length == 0)
+            return true;
+
+        var visibilityPort = http.RequestServices.GetService<
+            INyxIdActionContinuationCredentialVisibilityPort>();
+        if (visibilityPort is null)
+        {
+            await WriteActionContinuationVisibilityFailureAsync(
+                http,
+                StatusCodes.Status503ServiceUnavailable,
+                ActionContinuationCatalogUnavailableCode,
+                "The NyxID action continuation catalog is temporarily unavailable.",
+                ct);
+            return false;
+        }
+
+        try
+        {
+            foreach (var userServiceId in userServiceIds)
+            {
+                var visibility = await visibilityPort
+                    .InspectUserServiceAsync(bearerToken, userServiceId, ct)
+                    .ConfigureAwait(false);
+                switch (visibility.Status)
+                {
+                    case NyxIdActionContinuationCredentialVisibilityStatus.Visible:
+                        continue;
+                    case NyxIdActionContinuationCredentialVisibilityStatus.CredentialRefreshRequired:
+                        await WriteActionContinuationVisibilityFailureAsync(
+                            http,
+                            StatusCodes.Status401Unauthorized,
+                            ActionContinuationCredentialRefreshRequiredCode,
+                            "The action continuation requires a refreshed NyxID credential.",
+                            ct);
+                        return false;
+                    default:
+                        await WriteActionContinuationVisibilityFailureAsync(
+                            http,
+                            StatusCodes.Status503ServiceUnavailable,
+                            ActionContinuationCatalogUnavailableCode,
+                            "The NyxID action continuation catalog is temporarily unavailable.",
+                            ct);
+                        return false;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            await WriteActionContinuationVisibilityFailureAsync(
+                http,
+                StatusCodes.Status503ServiceUnavailable,
+                ActionContinuationCatalogUnavailableCode,
+                "The NyxID action continuation catalog is temporarily unavailable.",
+                ct);
+            return false;
+        }
+
+        return true;
+    }
+
+    private static Task WriteActionContinuationVisibilityFailureAsync(
+        HttpContext http,
+        int statusCode,
+        string code,
+        string message,
+        CancellationToken ct)
+    {
+        http.Response.StatusCode = statusCode;
+        return http.Response.WriteAsJsonAsync(new { code, message }, cancellationToken: ct);
     }
 
     private static bool TryParseActionDisposition(

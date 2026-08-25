@@ -265,22 +265,22 @@ public sealed class SkillRecoveryPlannerTests
     public void TryPlanNextDirective_WhenLarkSlashNamesSkill_ShouldSearchBeforeLoadingSkill()
     {
         var parsed = SkillInvocationTriggerParser.TryParse(
-            "/invoice-approval",
+            "/project-summary",
             platform: "lark",
             out var trigger);
 
         parsed.Should().BeTrue();
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
             AgentSkillRecoveryContextBuilder.FromTrigger(trigger),
-            [ChatMessage.User("/invoice-approval")],
+            [ChatMessage.User("/project-summary")],
             finalContent: null,
             recoveryAttempts: 0,
-            callIdPrefix: "req-invoice-approval",
+            callIdPrefix: "req-project-summary",
             out var directive);
 
         forced.Should().BeTrue();
         directive.ToolCall!.Name.Should().Be("ornn_search_skills");
-        directive.ToolCall.ArgumentsJson.Should().Contain("invoice-approval");
+        directive.ToolCall.ArgumentsJson.Should().Contain("project-summary");
     }
 
     [Fact]

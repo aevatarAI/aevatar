@@ -20,8 +20,8 @@ namespace Aevatar.Studio.Tests;
 ///     member's stable <c>publishedServiceId</c>, never the raw memberId.
 ///   - The contract response builds member-first invoke paths, not the
 ///     legacy /services/{serviceId}/ path.
-///   - Activate dispatches both <c>SetDefaultServingRevision</c> and
-///     <c>ActivateServiceRevision</c> against the member's identity.
+///   - Activate dispatches a hash-fenced <c>ActivateServiceRevision</c>
+///     against the member's identity; deployment completion owns default selection.
 ///   - Retired revisions cannot be re-activated.
 ///   - Retire dispatches <c>RetireServiceRevision</c> against the member's
 ///     identity, after verifying the revision exists.
@@ -96,6 +96,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         contract.StreamFrameFormat.Should().Be("workflow-run-event");
         contract.InvocationReadiness.CanInvoke.Should().BeTrue();
         contract.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
+        contract.PublishedServiceStateVersion.Should().Be(41);
+        contract.BoundRevisionStateVersion.Should().Be(42);
     }
 
     [Fact]
@@ -278,7 +280,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
     }
 
     [Fact]
-    public async Task ActivateBindingRevisionAsync_ShouldDispatchSetDefaultAndActivate()
+    public async Task ActivateBindingRevisionAsync_ShouldDispatchHashFencedActivation()
     {
         var detail = NewDetail();
         var queryPort = new InMemoryMemberQueryPort(detail);
@@ -289,7 +291,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
                 ServiceImplementationKind.Workflow,
                 endpoints: [],
                 revisionId: "rev-1",
-                status: ServiceRevisionStatus.Created),
+                status: ServiceRevisionStatus.Published),
         };
         var commandPort = new RecordingServiceCommandPort();
 
@@ -309,15 +311,11 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             "rev-1",
             CancellationToken.None);
 
-        // Both commands must fire in order, both pinned to the member's
-        // publishedServiceId — never the scope-default service.
-        commandPort.OperationsInOrder.Should().Equal("SetDefaultServing", "Activate");
-        commandPort.SetDefaultIdentities.Should().ContainSingle()
-            .Which.ServiceId.Should().Be(PublishedServiceId);
+        commandPort.OperationsInOrder.Should().Equal("Activate");
         commandPort.ActivateIdentities.Should().ContainSingle()
             .Which.ServiceId.Should().Be(PublishedServiceId);
-        commandPort.SetDefaultRevisionIds.Should().ContainSingle().Which.Should().Be("rev-1");
         commandPort.ActivateRevisionIds.Should().ContainSingle().Which.Should().Be("rev-1");
+        commandPort.ActivateArtifactHashes.Should().ContainSingle().Which.Should().Be("h");
 
         response.MemberId.Should().Be(MemberId);
         response.PublishedServiceId.Should().Be(PublishedServiceId);
@@ -496,7 +494,11 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             DeploymentStatus: "Active",
             Endpoints: endpoints,
             PolicyIds: [],
-            UpdatedAt: DateTimeOffset.UtcNow);
+            UpdatedAt: DateTimeOffset.UtcNow)
+        {
+            StateVersion = 41,
+            LastEventId = "service-event-41",
+        };
 
     private static ServiceRevisionCatalogSnapshot NewRevisions(
         ServiceImplementationKind implementationKind,
@@ -520,7 +522,9 @@ public sealed class StudioMemberServiceContractAndRevisionTests
                     PublishedAt: null,
                     RetiredAt: status == ServiceRevisionStatus.Retired ? DateTimeOffset.UtcNow : null),
             ],
-            UpdatedAt: DateTimeOffset.UtcNow);
+            UpdatedAt: DateTimeOffset.UtcNow,
+            StateVersion: 42,
+            LastEventId: "revision-event-42");
     }
 
     private sealed class InMemoryMemberQueryPort : IStudioMemberQueryPort
@@ -678,27 +682,18 @@ public sealed class StudioMemberServiceContractAndRevisionTests
     private sealed class RecordingServiceCommandPort : IServiceCommandPort
     {
         public List<string> OperationsInOrder { get; } = [];
-        public List<ServiceIdentity> SetDefaultIdentities { get; } = [];
-        public List<string> SetDefaultRevisionIds { get; } = [];
         public List<ServiceIdentity> ActivateIdentities { get; } = [];
         public List<string> ActivateRevisionIds { get; } = [];
+        public List<string> ActivateArtifactHashes { get; } = [];
         public List<ServiceIdentity> RetireIdentities { get; } = [];
         public List<string> RetireRevisionIds { get; } = [];
-
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(
-            SetDefaultServingRevisionCommand command, CancellationToken ct = default)
-        {
-            SetDefaultIdentities.Add(command.Identity);
-            SetDefaultRevisionIds.Add(command.RevisionId);
-            OperationsInOrder.Add("SetDefaultServing");
-            return Task.FromResult(NewReceipt());
-        }
 
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(
             ActivateServiceRevisionCommand command, CancellationToken ct = default)
         {
             ActivateIdentities.Add(command.Identity);
             ActivateRevisionIds.Add(command.RevisionId);
+            ActivateArtifactHashes.Add(command.ExpectedArtifactHash);
             OperationsInOrder.Add("Activate");
             return Task.FromResult(NewReceipt());
         }

@@ -44,6 +44,12 @@ export interface LoginRedirectOptions {
   readonly returnTo?: string;
   readonly flow?: AuthFlow;
   readonly prompt?: "none" | "consent" | "login";
+  /**
+   * RFC 8707 resource indicators appended to the authorize request. A
+   * service access review targets the exact proxied service resources the
+   * chat session must be authorized for.
+   */
+  readonly resources?: readonly string[];
 }
 
 export interface AuthCallbackResult {
@@ -106,7 +112,11 @@ function readAuthFlow(value: unknown): AuthFlow {
 
 function resolveReturnToForFlow(flow: AuthFlow, returnTo?: string | null): string {
   if (flow === "serviceAccessReview") {
-    return SERVICE_ACCESS_REVIEW_RETURN_TO;
+    // A review started from the chat returns to the paused conversation;
+    // the settings entry point keeps its account-page default.
+    return returnTo?.trim()
+      ? sanitizeReturnTo(returnTo)
+      : SERVICE_ACCESS_REVIEW_RETURN_TO;
   }
 
   return sanitizeReturnTo(returnTo);
@@ -204,6 +214,11 @@ export class NyxIDAuthClient {
     const prompt = flow === "serviceAccessReview" ? "consent" : options.prompt;
     if (prompt) {
       url.searchParams.set('prompt', prompt);
+    }
+    if (flow === "serviceAccessReview") {
+      for (const resource of options.resources ?? []) {
+        if (resource.trim()) url.searchParams.append('resource', resource);
+      }
     }
 
     window.location.assign(url.toString());

@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260814-m46-nyxid-api-routing";
+import { validateActionRequest } from "./protocol.js?v=20260823-m62-studio-redesign";
 
 const ACTOR_EVENT_TYPES = new Set([
   "task_snapshot",
@@ -207,7 +207,7 @@ export function applyCurrentStateResult(projection, envelope) {
   next.continuation = cloneNullable(snapshot.continuationAdmission);
   next.conflicts = projection.conflicts.map(cloneValue);
   applyTaskSnapshot(next, snapshot.activeTask);
-  applyActionSummaries(next, snapshot.pendingActions);
+  applyActionSummaries(next, snapshot.pendingActions, projection.actions);
   return { projection: next, reloadWithoutCursor: false };
 }
 
@@ -395,7 +395,7 @@ function actionRecordFromRequest(request) {
   };
 }
 
-function applyActionSummaries(projection, input) {
+function applyActionSummaries(projection, input, observedActions = new Map()) {
   projection.actions = new Map();
   if (!Array.isArray(input)) return;
   for (const summary of input) {
@@ -420,7 +420,7 @@ function applyActionSummaries(projection, input) {
       });
       continue;
     }
-    projection.actions.set(summary.actionRequestId, {
+    const item = {
       schemaVersion: summary.schemaVersion,
       actorId: projection.actorId,
       originTurnId: summary.originTurnId,
@@ -435,7 +435,43 @@ function applyActionSummaries(projection, input) {
       executable: false,
       conflicted: false,
       errorCode: null,
-    });
+    };
+
+    let request = null;
+    if (summary.request && typeof summary.request === "object" && !Array.isArray(summary.request)) {
+      try {
+        request = validateActionRequest(summary.request);
+      } catch {
+        request = null;
+      }
+      if (request && !summaryMatchesRequest(item, request)) {
+        item.conflicted = true;
+        item.errorCode = "NYXID_ACTION_ID_CONFLICT";
+        addConflict(projection, "NYXID_ACTION_ID_CONFLICT", {
+          actionRequestId: summary.actionRequestId,
+        });
+        request = null;
+      }
+    }
+
+    const observed = observedActions?.get(summary.actionRequestId);
+    if (!request && !item.conflicted && observed?.request && !observed.conflicted &&
+        summaryMatchesRequest(item, observed.request)) {
+      request = observed.request;
+    }
+    if (request) {
+      projection.actions.set(summary.actionRequestId, {
+        ...item,
+        actorId: request.actorId,
+        schemaVersion: request.schemaVersion,
+        action: request.action,
+        params: request.params,
+        request,
+        executable: true,
+      });
+      continue;
+    }
+    projection.actions.set(summary.actionRequestId, item);
   }
 }
 

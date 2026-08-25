@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.Foundation.Abstractions.Tools;
 
 namespace Aevatar.AI.Abstractions.ToolProviders;
@@ -12,6 +13,60 @@ public sealed record AgentToolTerminalOutcome(
     string ResultJson,
     AgentToolReceipt? Receipt = null);
 
+public enum AgentToolPendingOperationStatus
+{
+    Unspecified = 0,
+    SubmissionUncertain = 1,
+    Queued = 2,
+    Provisioning = 3,
+    Preparing = 4,
+    Running = 5,
+    Collecting = 6,
+    Succeeded = 7,
+    Failed = 8,
+    Cancelled = 9,
+    OutcomeUncertain = 10,
+}
+
+public sealed record AgentToolPendingOperation(
+    string OperationId,
+    string ProviderOperationId,
+    string StatusPath,
+    string ResultPath,
+    string CancelPath,
+    AgentToolPendingOperationStatus Status,
+    string? ETag,
+    long RetryAfterMilliseconds,
+    long ExpiresAtUnixMs,
+    string ServiceSlug,
+    string? UserServiceId,
+    CodeExecutionRouteIdentitySource RouteIdentitySource);
+
+public sealed record AgentToolOperationStartRequest(
+    string OperationId,
+    string CallId,
+    string ToolName,
+    string ArgumentsJson,
+    AgentToolExecutionContext ExecutionContext);
+
+public enum AgentToolOperationStartDisposition
+{
+    Completed = 1,
+    Pending = 2,
+}
+
+public sealed record AgentToolOperationStartResult(
+    AgentToolOperationStartDisposition Disposition,
+    AgentToolTerminalOutcome? CompletedOutcome = null,
+    AgentToolPendingOperation? PendingOperation = null)
+{
+    public static AgentToolOperationStartResult Completed(AgentToolTerminalOutcome outcome) =>
+        new(AgentToolOperationStartDisposition.Completed, CompletedOutcome: outcome);
+
+    public static AgentToolOperationStartResult Pending(AgentToolPendingOperation operation) =>
+        new(AgentToolOperationStartDisposition.Pending, PendingOperation: operation);
+}
+
 public enum AgentToolTurnReusePolicy
 {
     Reusable = 0,
@@ -23,21 +78,88 @@ public enum AgentToolOperationReconciliationDisposition
     Completed = 1,
     NotFound = 2,
     Unknown = 3,
+    Pending = 4,
 }
 
 public sealed record AgentToolOperationReconciliationRequest(
     string OperationId,
     string ArgumentsJson,
-    AgentToolExecutionContext ExecutionContext);
+    AgentToolExecutionContext ExecutionContext,
+    AgentToolPendingOperation? PendingOperation = null);
 
 public sealed record AgentToolOperationReconciliationResult(
     AgentToolOperationReconciliationDisposition Disposition,
-    AgentToolTerminalOutcome? CompletedOutcome = null);
+    AgentToolTerminalOutcome? CompletedOutcome = null,
+    AgentToolPendingOperation? PendingOperation = null)
+{
+    public static AgentToolOperationReconciliationResult Completed(AgentToolTerminalOutcome outcome) =>
+        new(AgentToolOperationReconciliationDisposition.Completed, CompletedOutcome: outcome);
+
+    public static AgentToolOperationReconciliationResult Pending(AgentToolPendingOperation operation) =>
+        new(AgentToolOperationReconciliationDisposition.Pending, PendingOperation: operation);
+
+    public static AgentToolOperationReconciliationResult NotFound() =>
+        new(AgentToolOperationReconciliationDisposition.NotFound);
+
+    public static AgentToolOperationReconciliationResult Unknown() =>
+        new(AgentToolOperationReconciliationDisposition.Unknown);
+}
+
+public enum AgentToolOperationCancellationReason
+{
+    Unspecified = 0,
+    WorkflowStopped = 1,
+}
+
+public sealed record AgentToolOperationCancellationRequest(
+    string OperationId,
+    string ArgumentsJson,
+    AgentToolExecutionContext ExecutionContext,
+    AgentToolPendingOperation PendingOperation,
+    AgentToolOperationCancellationReason Reason,
+    long DeadlineUnixMs);
+
+public enum AgentToolOperationCancellationDisposition
+{
+    Completed = 1,
+    Pending = 2,
+}
+
+public sealed record AgentToolOperationCancellationResult(
+    AgentToolOperationCancellationDisposition Disposition,
+    AgentToolTerminalOutcome? CompletedOutcome = null,
+    AgentToolPendingOperation? PendingOperation = null)
+{
+    public static AgentToolOperationCancellationResult Completed(AgentToolTerminalOutcome outcome) =>
+        new(AgentToolOperationCancellationDisposition.Completed, CompletedOutcome: outcome);
+
+    public static AgentToolOperationCancellationResult Pending(AgentToolPendingOperation operation) =>
+        new(AgentToolOperationCancellationDisposition.Pending, PendingOperation: operation);
+}
 
 public interface IAgentToolOperationReconciler
 {
     Task<AgentToolOperationReconciliationResult> ReconcileOperationAsync(
         AgentToolOperationReconciliationRequest request,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Terminates actor-owned recovery for a previously admitted durable operation. Implementations
+/// must return an honest terminal outcome: provider-confirmed cancellation, an observed competing
+/// terminal outcome, or an explicit cancellation-unconfirmed failure.
+/// </summary>
+public interface IAgentToolOperationCanceller
+{
+    Task<AgentToolOperationCancellationResult> CancelOperationAsync(
+        AgentToolOperationCancellationRequest request,
+        CancellationToken ct = default);
+}
+
+public interface IAgentToolDurableOperation : IAgentToolOperationReconciler, IAgentToolOperationCanceller
+{
+    Task<AgentToolOperationStartResult> StartOperationAsync(
+        AgentToolOperationStartRequest request,
         CancellationToken ct = default);
 }
 

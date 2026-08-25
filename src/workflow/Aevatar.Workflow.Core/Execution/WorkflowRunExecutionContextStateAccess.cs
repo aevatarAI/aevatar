@@ -174,6 +174,27 @@ internal static class WorkflowRunExecutionContextStateAccess
         return TryGetLegacyCallerCredential(callerCredential, out credential);
     }
 
+    public static bool TryGetDurableCallerCredential(
+        IWorkflowExecutionContext ctx,
+        out WorkflowCallerCredential credential)
+    {
+        ArgumentNullException.ThrowIfNull(ctx);
+        var callerCredential = Get(ctx).CallerCredential;
+        if (!HasDurableCallerCredential(callerCredential?.DurableCallerCredential))
+        {
+            credential = new WorkflowCallerCredential();
+            return false;
+        }
+
+        credential = new WorkflowCallerCredential
+        {
+            DurableCallerCredential = callerCredential!.DurableCallerCredential.Clone(),
+            NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
+            Kind = callerCredential.Kind,
+        };
+        return true;
+    }
+
     public static async Task<(bool Found, WorkflowCallerCredential Credential)> TryGetCallerCredentialAsync(
         IWorkflowExecutionContext ctx,
         CancellationToken ct = default)
@@ -342,6 +363,13 @@ internal static class WorkflowRunExecutionContextStateAccess
                  CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
                  StringComparison.Ordinal) ||
              reference.SecretReference == null ||
+             string.IsNullOrWhiteSpace(reference.SecretReference.Ref)) ||
+            reference.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration &&
+            (!string.Equals(
+                 reference.Purpose,
+                 CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                 StringComparison.Ordinal) ||
+             reference.SecretReference == null ||
              string.IsNullOrWhiteSpace(reference.SecretReference.Ref)))
         {
             return (false, string.Empty);
@@ -361,7 +389,9 @@ internal static class WorkflowRunExecutionContextStateAccess
         if (!result.Resolved ||
             parsed.IsInvalid ||
             parsed.IsMissing ||
-            reference.SourceKind == DurableCallerCredentialSourceKind.WebhookBinding &&
+            (reference.SourceKind is
+                DurableCallerCredentialSourceKind.WebhookBinding or
+                DurableCallerCredentialSourceKind.ChannelRegistration) &&
             !MatchesResolvedReference(reference, result.Reference))
             return (false, string.Empty);
 

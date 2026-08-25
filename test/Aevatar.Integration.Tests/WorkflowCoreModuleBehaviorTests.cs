@@ -287,6 +287,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-1",
                 StepType = "foreach",
+                RunId = ctx.RunId,
                 Input = "",
             };
 
@@ -295,6 +296,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             ctx.Published.Should().ContainSingle();
             var completed = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
             completed.StepId.Should().Be("foreach-1");
+            completed.RunId.Should().Be(ctx.RunId);
             completed.Success.Should().BeTrue();
             completed.Output.Should().BeEmpty();
         }
@@ -308,6 +310,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-2",
                 StepType = "foreach",
+                RunId = ctx.RunId,
                 Input = "alpha\n---\nbeta",
                 Parameters =
                 {
@@ -326,15 +329,40 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             subRequests[0].TargetRole.Should().Be("worker_role");
             subRequests[0].Parameters["op"].Should().Be("uppercase");
             subRequests[1].StepId.Should().Be("foreach-2_item_1");
+            subRequests.Should().OnlyContain(child => child.RunId == ctx.RunId);
+            subRequests.Should().OnlyContain(child => !string.IsNullOrWhiteSpace(child.ExecutionId));
+            subRequests.Select(child => child.ExecutionId).Should().OnlyHaveUniqueItems();
 
             var countBeforeCompletions = ctx.Published.Count;
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_0", Success = true, Output = "A" }), ctx, CancellationToken.None);
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_0_sub_1", Success = true, Output = "IGNORED" }), ctx, CancellationToken.None);
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_1", Success = false, Output = "B" }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = subRequests[0].StepId,
+                RunId = subRequests[0].RunId,
+                ExecutionId = subRequests[0].ExecutionId,
+                Success = true,
+                Output = "A",
+            }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = $"{subRequests[0].StepId}_sub_1",
+                RunId = subRequests[0].RunId,
+                ExecutionId = subRequests[0].ExecutionId,
+                Success = true,
+                Output = "IGNORED",
+            }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = subRequests[1].StepId,
+                RunId = subRequests[1].RunId,
+                ExecutionId = subRequests[1].ExecutionId,
+                Success = false,
+                Output = "B",
+            }), ctx, CancellationToken.None);
 
             var delta = ctx.Published.Skip(countBeforeCompletions).Select(x => x.evt).OfType<StepCompletedEvent>().ToList();
             delta.Should().ContainSingle();
             delta[0].StepId.Should().Be("foreach-2");
+            delta[0].RunId.Should().Be(ctx.RunId);
             delta[0].Success.Should().BeFalse();
             delta[0].Output.Should().Be("A\n---\nB");
         }
@@ -348,7 +376,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-arguments",
                 StepType = "foreach",
-                RunId = "run-foreach-arguments",
+                RunId = ctx.RunId,
                 Input = "[\"instance-alpha\",\"instance-beta\"]",
                 Parameters =
                 {
@@ -368,6 +396,9 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
                 .Should().Be("instance-alpha");
             secondArguments.RootElement.GetProperty("path_params").GetProperty("instance_id").GetString()
                 .Should().Be("instance-beta");
+            subRequests.Should().OnlyContain(child => child.RunId == ctx.RunId);
+            subRequests.Should().OnlyContain(child => !string.IsNullOrWhiteSpace(child.ExecutionId));
+            subRequests.Select(child => child.ExecutionId).Should().OnlyHaveUniqueItems();
         }
 
         [Fact]
@@ -743,6 +774,102 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             hitCompletion.Output.Should().Be("cached-output");
             hitCompletion.Annotations["cache.hit"].Should().Be("true");
             hitCompletion.Annotations.Should().ContainKey("cache.key");
+        }
+
+        [Fact]
+        public async Task CacheModule_OnMiss_ShouldForwardSynthesizedChildContract()
+        {
+            var module = new CacheModule();
+            var ctx = CreateContext();
+            var invocation = new ExternalToolInvocationSpec
+            {
+                CallSiteId = "cache-workflow/cached-tool/sub-step",
+                ToolName = "nyxid_proxy",
+            };
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "cached-tool",
+                    StepType = "cache",
+                    RunId = "run-cache-contract",
+                    ExecutionId = "exec-cache-parent",
+                    Input = "input-value",
+                    InputValueId = "value-cache-input",
+                    ExternalInvocation = invocation,
+                    Parameters =
+                    {
+                        ["cache_key"] = "cache-contract-key",
+                        ["child_step_type"] = "tool_call",
+                        ["child_target_role"] = "worker",
+                        ["sub_param_tool"] = "nyxid_proxy",
+                        ["sub_param_arguments"] = "{\"path_params\":{\"item_id\":\"input-value\"}}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var child = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+            child.StepType.Should().Be("tool_call");
+            child.TargetRole.Should().Be("worker");
+            child.ExecutionId.Should().NotBeNullOrWhiteSpace();
+            child.InputValueId.Should().Be("value-cache-input");
+            child.Parameters.Should().Contain("tool", "nyxid_proxy");
+            child.Parameters.Should().Contain(
+                "arguments",
+                "{\"path_params\":{\"item_id\":\"input-value\"}}");
+            child.Parameters.Should().NotContainKey("cache_key");
+            child.ExternalInvocation.Should().NotBeSameAs(invocation);
+            child.ExternalInvocation.Should().BeEquivalentTo(invocation);
+        }
+
+        [Fact]
+        public async Task CacheModule_ToolChild_ShouldExecuteForwardedParametersAndCompleteParent()
+        {
+            var cache = new CacheModule();
+            var tool = new CountingFakeAgentTool("cache_echo", static arguments => arguments);
+            var toolCall = CreateToolCallModule([new CountingToolSource([tool])]);
+            var ctx = CreateContext();
+
+            await cache.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "cache-tool-parent",
+                    StepType = "cache",
+                    RunId = "run-cache-tool",
+                    ExecutionId = "exec-cache-tool-parent",
+                    Input = "ignored-input",
+                    Parameters =
+                    {
+                        ["cache_key"] = "cache-tool-key",
+                        ["child_step_type"] = "tool_call",
+                        ["sub_param_tool"] = "cache_echo",
+                        ["sub_param_arguments"] = "{\"value\":\"from-cache\"}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var child = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+            ctx.Published.Clear();
+
+            await ExecuteToolCallToCompletionAsync(toolCall, child, ctx);
+
+            tool.ExecuteCalls.Should().Be(1);
+            var childCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>()
+                .Single(x => x.StepId == child.StepId);
+            childCompletion.Success.Should().BeTrue();
+            childCompletion.Output.Should().Be("{\"value\":\"from-cache\"}");
+            ctx.Published.Clear();
+
+            await cache.HandleAsync(Envelope(childCompletion), ctx, CancellationToken.None);
+
+            var parentCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            parentCompletion.StepId.Should().Be("cache-tool-parent");
+            parentCompletion.ExecutionId.Should().Be("exec-cache-tool-parent");
+            parentCompletion.Success.Should().BeTrue();
+            parentCompletion.Output.Should().Be("{\"value\":\"from-cache\"}");
+            parentCompletion.Annotations["cache.hit"].Should().Be("false");
         }
 
         [Fact]
@@ -1455,28 +1582,28 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
         }
 
         [Fact]
-        public async Task TransformModule_Template_ShouldProduceBudgetVarianceReport()
+        public async Task TransformModule_Template_ShouldAggregateAndClassifyGroupedValues()
         {
             var module = new TransformModule();
             var ctx = CreateContext();
             const string template =
-                "{{~ actual = {}; budget = {}; seen = {}; rows = [] ~}}" +
-                "{{~ for item in data.actual_items ~}}" +
-                "{{~ actual[item.category] = get(actual, item.category, 0) + number(item.amount) ~}}" +
+                "{{~ observed = {}; baseline = {}; seen = {}; rows = [] ~}}" +
+                "{{~ for item in data.observed_items ~}}" +
+                "{{~ observed[item.group] = get(observed, item.group, 0) + number(item.value) ~}}" +
                 "{{~ end ~}}" +
-                "{{~ for item in data.budget_items ~}}" +
-                "{{~ budget[item.category] = get(budget, item.category, 0) + number(item.amount) ~}}" +
+                "{{~ for item in data.baseline_items ~}}" +
+                "{{~ baseline[item.group] = get(baseline, item.group, 0) + number(item.value) ~}}" +
                 "{{~ end ~}}" +
-                "{{~ for category in keys(actual) ~}}" +
-                "{{~ seen[category] = true; a = get(actual, category, 0); b = get(budget, category, 0) ~}}" +
-                "{{~ if b > 0; pct = round(a / b * 100, 1); else if a > 0; pct = -1; else; pct = 0; end ~}}" +
-                "{{~ if pct == -1 || pct >= 120; level = 'over'; else if pct >= 100; level = 'warning'; else if pct >= 80; level = 'watch'; else; level = 'ok'; end ~}}" +
-                "{{~ rows = append(rows, { category: category, budget: round(b, 2), actual: round(a, 2), pct: pct, level: level }) ~}}" +
+                "{{~ for group in keys(observed) ~}}" +
+                "{{~ seen[group] = true; o = get(observed, group, 0); b = get(baseline, group, 0) ~}}" +
+                "{{~ if b > 0; ratio = round(o / b * 100, 1); else if o > 0; ratio = -1; else; ratio = 0; end ~}}" +
+                "{{~ if ratio == -1 || ratio >= 120; band = 'high'; else if ratio >= 100; band = 'elevated'; else if ratio >= 80; band = 'near'; else; band = 'within'; end ~}}" +
+                "{{~ rows = append(rows, { group: group, baseline: round(b, 2), observed: round(o, 2), ratio: ratio, band: band }) ~}}" +
                 "{{~ end ~}}" +
-                "{{~ for category in keys(budget) ~}}" +
-                "{{~ if !get(seen, category, false) ~}}" +
-                "{{~ b = get(budget, category, 0) ~}}" +
-                "{{~ rows = append(rows, { category: category, budget: round(b, 2), actual: 0, pct: 0, level: 'ok' }) ~}}" +
+                "{{~ for group in keys(baseline) ~}}" +
+                "{{~ if !get(seen, group, false) ~}}" +
+                "{{~ b = get(baseline, group, 0) ~}}" +
+                "{{~ rows = append(rows, { group: group, baseline: round(b, 2), observed: 0, ratio: 0, band: 'within' }) ~}}" +
                 "{{~ end ~}}" +
                 "{{~ end ~}}" +
                 "{{ json({ rows: rows, truncated: data.truncated }) }}";
@@ -1484,19 +1611,19 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             await module.HandleAsync(
                 Envelope(new StepRequestEvent
                 {
-                    StepId = "template-budget-variance",
+                    StepId = "template-grouped-values",
                     StepType = "transform",
                     Input =
                         """
                         {
-                          "actual_items": [
-                            { "category": "ops", "amount": "80" },
-                            { "category": "ops", "amount": "50" },
-                            { "category": "sales", "amount": "20" }
+                          "observed_items": [
+                            { "group": "alpha", "value": "80" },
+                            { "group": "alpha", "value": "50" },
+                            { "group": "beta", "value": "20" }
                           ],
-                          "budget_items": [
-                            { "category": "ops", "amount": "100" },
-                            { "category": "research", "amount": "40" }
+                          "baseline_items": [
+                            { "group": "alpha", "value": "100" },
+                            { "group": "gamma", "value": "40" }
                           ],
                           "truncated": false
                         }
@@ -1515,10 +1642,10 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             using var output = JsonDocument.Parse(completion.Output);
             var rows = output.RootElement.GetProperty("rows");
             rows.GetArrayLength().Should().Be(3);
-            rows[0].GetProperty("category").GetString().Should().Be("ops");
-            rows[0].GetProperty("pct").GetDecimal().Should().Be(130m);
-            rows[0].GetProperty("level").GetString().Should().Be("over");
-            rows[2].GetProperty("category").GetString().Should().Be("research");
+            rows[0].GetProperty("group").GetString().Should().Be("alpha");
+            rows[0].GetProperty("ratio").GetDecimal().Should().Be(130m);
+            rows[0].GetProperty("band").GetString().Should().Be("high");
+            rows[2].GetProperty("group").GetString().Should().Be("gamma");
             output.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
         }
 

@@ -27,7 +27,8 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
 {
     private const string ScopeId = "test-scope";
     private const string WorkflowId = "my-workflow";
-    private const string WorkflowYaml = "name: test\nsteps:\n  - run: echo hello";
+    private const string WorkflowYaml =
+        "name: test\nsteps:\n  - id: hello\n    type: assign\n    parameters:\n      target: output\n      value: hello";
     private static readonly ScopeWorkflowCapabilityOptions DefaultOptions = new();
 
     [Fact]
@@ -42,13 +43,12 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         var result = await service.UpsertAsync(new ScopeWorkflowUpsertRequest(
             ScopeId, WorkflowId, WorkflowYaml));
 
-        commandPort.Calls.Should().HaveCount(6);
+        commandPort.Calls.Should().HaveCount(5);
         commandPort.Calls[0].Method.Should().Be("CreateServiceAsync");
         commandPort.Calls[1].Method.Should().Be("CreateRevisionAsync");
         commandPort.Calls[2].Method.Should().Be("PrepareRevisionAsync");
         commandPort.Calls[3].Method.Should().Be("PublishRevisionAsync");
-        commandPort.Calls[4].Method.Should().Be("SetDefaultServingRevisionAsync");
-        commandPort.Calls[5].Method.Should().Be("ActivateServiceRevisionAsync");
+        commandPort.Calls[4].Method.Should().Be("ActivateServiceRevisionAsync");
         result.ScopeId.Should().Be(ScopeId);
         result.WorkflowId.Should().Be(WorkflowId);
         result.AcceptanceStage.Should().Be("accepted");
@@ -59,7 +59,6 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             "create_revision",
             "prepare_revision",
             "publish_revision",
-            "set_default_serving_revision",
             "activate_service_revision");
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
@@ -69,10 +68,116 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
         revisionCommand.Spec.WorkflowSpec.ExpectedExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Interactive);
+        var prepareCommand = commandPort.Calls[2].Command
+            .Should().BeOfType<PrepareServiceRevisionCommand>().Subject;
+        var publishCommand = commandPort.Calls[3].Command
+            .Should().BeOfType<PublishServiceRevisionCommand>().Subject;
+        prepareCommand.PreparationSpec.Should().BeEquivalentTo(revisionCommand.Spec);
+        publishCommand.PublicationSpec.Should().BeEquivalentTo(revisionCommand.Spec);
+        var activateCommand = commandPort.Calls[4].Command
+            .Should().BeOfType<ActivateServiceRevisionCommand>().Subject;
+        activateCommand.ExpectedArtifactHash.Should().NotBeNullOrWhiteSpace();
         governanceCommandPort.CreateEndpointCatalogCommand.Should().NotBeNull();
         governanceCommandPort.CreateEndpointCatalogCommand!.Spec.Endpoints.Should().ContainSingle();
         governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].EndpointId.Should().Be("chat");
         governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].ExposureKind.Should().Be(ServiceEndpointExposureKind.Internal);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldFencePublishedEvidenceReplayToPersistedArtifact()
+    {
+        const string revisionId = "rev-published-evidence";
+        var originalPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            WorkflowYaml,
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            [CreateSourceStamp(sourceVersion: 3)]);
+        var refreshedPlan = originalPlan.Clone();
+        refreshedPlan.SourceStamps.Clear();
+        refreshedPlan.SourceStamps.Add(CreateSourceStamp(sourceVersion: 4));
+        refreshedPlan.AdmissionDigest =
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(refreshedPlan);
+        var identity = ScopeWorkflowCapabilityConventions.BuildIdentity(
+            DefaultOptions,
+            ScopeId,
+            WorkflowId);
+        var originalSpec = new ServiceRevisionSpec
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            WorkflowSpec = new WorkflowServiceRevisionSpec
+            {
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                WorkflowId = WorkflowId,
+                WorkflowName = "test",
+                WorkflowYaml = WorkflowYaml,
+                DefinitionActorId = DefaultOptions.BuildDefinitionActorIdPrefix(ScopeId, WorkflowId),
+                CapabilityAdmissionPlan = originalPlan,
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            },
+        };
+        var workflow = new WorkflowParser().Parse(WorkflowYaml);
+        var persistedArtifact = WorkflowServiceRevisionArtifactBuilder.Build(
+            originalSpec,
+            workflow.Name,
+            WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow),
+            originalPlan);
+        var normalizedArtifact = persistedArtifact.Clone();
+        normalizedArtifact.ArtifactHash = string.Empty;
+        persistedArtifact.ArtifactHash = Convert.ToHexString(
+            SHA256.HashData(normalizedArtifact.ToByteArray()));
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null)
+        {
+            Revisions = new ServiceRevisionCatalogSnapshot(
+                ServiceKeys.Build(identity),
+                [
+                    new ServiceRevisionSnapshot(
+                        revisionId,
+                        ServiceImplementationKind.Workflow.ToString(),
+                        ServiceRevisionStatus.Published.ToString(),
+                        persistedArtifact.ArtifactHash,
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        null,
+                        null,
+                        persistedArtifact),
+                ],
+                DateTimeOffset.UtcNow),
+        };
+        var commandPort = new RecordingServiceCommandPort();
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new RecordingServiceGovernanceCommandPort(),
+            new FakeServiceGovernanceQueryPort(),
+            DefaultOptions,
+            new FixedPlanAdmissionService(refreshedPlan));
+
+        await service.UpsertAsync(new ScopeWorkflowUpsertRequest(
+            ScopeId,
+            WorkflowId,
+            WorkflowYaml,
+            WorkflowName: "test",
+            RevisionId: revisionId)
+        {
+            CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                "caller-alpha",
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer("test-bearer"),
+                executionMode: ExternalCapabilityExecutionMode.Interactive,
+                existingPlan: originalPlan),
+        });
+
+        var activate = commandPort.Calls.Single(call =>
+                call.Method == "ActivateServiceRevisionAsync")
+            .Command.Should().BeOfType<ActivateServiceRevisionCommand>().Subject;
+        activate.ExpectedArtifactHash.Should().Be(persistedArtifact.ArtifactHash);
+        commandPort.Calls.Should().NotContain(call =>
+            call.Method == "CreateRevisionAsync");
     }
 
     [Fact]
@@ -152,7 +257,7 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         result.WorkflowId.Should().Be(WorkflowId);
         result.DisplayName.Should().Be(WorkflowId);
         result.ReadModelUrl.Should().Be($"/api/scopes/{ScopeId}/workflows/{WorkflowId}");
-        result.CommandHandles.Should().HaveCount(6);
+        result.CommandHandles.Should().HaveCount(5);
         result.CommandHandles.Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x.CommandId));
     }
 
@@ -423,7 +528,23 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             governanceCommandPort,
             governanceQueryPort,
             Options.Create(options),
-            capabilityAdmissionService ?? new PassthroughWorkflowCapabilityAdmissionService());
+            capabilityAdmissionService ?? new PassthroughWorkflowCapabilityAdmissionService(),
+            new ScopeExplicitRequestAdmissionTestFixture.RealWorkflowDefinitionParser());
+
+    private static ExternalCapabilitySourceStamp CreateSourceStamp(long sourceVersion) =>
+        new()
+        {
+            SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+            SourceId = "nyxid-keys:caller-alpha",
+            SourceVersion = sourceVersion,
+            ObservedAt = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 8, 17, 1, 0, 0, TimeSpan.Zero)
+                    .AddMinutes(sourceVersion)),
+            FreshUntil = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 8, 17, 1, 10, 0, TimeSpan.Zero)
+                    .AddMinutes(sourceVersion)),
+            ContentDigest = "catalog-digest-alpha",
+        };
 
     private sealed class PassthroughWorkflowCapabilityAdmissionService : IWorkflowExternalCapabilityAdmissionService
     {
@@ -446,6 +567,25 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             RefreshPersistedWorkflowCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(request.Persisted.Plan.Clone());
+    }
+
+    private sealed class FixedPlanAdmissionService(WorkflowCapabilityAdmissionPlan plan) :
+        IWorkflowExternalCapabilityAdmissionService
+    {
+        public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
+            WorkflowExternalCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(plan.Clone());
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(plan.Clone());
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(plan.Clone());
     }
 
     private static ServiceCatalogSnapshot CreateServiceSnapshot(
@@ -535,12 +675,6 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             return Task.FromResult(DefaultReceipt);
         }
 
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)
-        {
-            Calls.Add(new CommandCall("SetDefaultServingRevisionAsync", command));
-            return Task.FromResult(DefaultReceipt);
-        }
-
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default)
         {
             Calls.Add(new CommandCall("ActivateServiceRevisionAsync", command));
@@ -594,6 +728,8 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
     {
         private readonly ServiceCatalogSnapshot? _getResult;
 
+        public ServiceRevisionCatalogSnapshot? Revisions { get; init; }
+
         public FakeServiceLifecycleQueryPort(ServiceCatalogSnapshot? getResult)
         {
             _getResult = getResult;
@@ -606,7 +742,7 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
 
         public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
+            Task.FromResult(Revisions);
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
@@ -927,7 +1063,7 @@ internal static class ScopeExplicitRequestAdmissionTestFixture
         }
     }
 
-    private sealed class RealWorkflowDefinitionParser : IWorkflowDefinitionParser
+    internal sealed class RealWorkflowDefinitionParser : IWorkflowDefinitionParser
     {
         private readonly WorkflowParser _parser = new();
 

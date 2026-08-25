@@ -148,10 +148,8 @@ public static class AgentProfileDeterminism
         if (normalized.RuntimeProfile is not null)
         {
             normalized.RuntimeProfile.Instructions = normalized.Instructions;
-            SortDistinct(normalized.RuntimeProfile.MaximumToolPolicy?.ToolNames);
-            SortDistinct(normalized.RuntimeProfile.MaximumToolPolicy?.ToolSetRefs);
-            SortDistinct(normalized.RuntimeProfile.RecoveryToolPolicy?.ToolNames);
-            SortDistinct(normalized.RuntimeProfile.RecoveryToolPolicy?.ToolSetRefs);
+            NormalizePolicy(normalized.RuntimeProfile.MaximumToolPolicy);
+            NormalizePolicy(normalized.RuntimeProfile.RecoveryToolPolicy);
             var members = normalized.RuntimeProfile.Members
                 .OrderBy(static x => x.IntentId, StringComparer.Ordinal)
                 .Select(static x => x.Clone())
@@ -161,8 +159,7 @@ public static class AgentProfileDeterminism
             foreach (var member in normalized.RuntimeProfile.Members)
             {
                 SortDistinct(member.ExplicitTriggerAliases);
-                SortDistinct(member.TaskToolPolicy?.ToolNames);
-                SortDistinct(member.TaskToolPolicy?.ToolSetRefs);
+                NormalizePolicy(member.TaskToolPolicy);
             }
             normalized.RuntimeProfile.DeterministicPolicySha256 = ByteString.Empty;
         }
@@ -298,6 +295,38 @@ public static class AgentProfileDeterminism
             .ToArray();
         values.Clear();
         values.Add(normalized);
+    }
+
+    private static void NormalizePolicy(AgentProfileToolPolicy? policy)
+    {
+        if (policy is null)
+            return;
+
+        SortDistinct(policy.ToolNames);
+        SortDistinct(policy.ToolSetRefs);
+        var selectors = policy.ConnectedServiceSelectors
+            .Select(static selector =>
+            {
+                var normalized = selector.Clone();
+                normalized.CatalogServiceSlug = normalized.CatalogServiceSlug?.Trim() ?? string.Empty;
+                normalized.EndpointId = normalized.EndpointId?.Trim() ?? string.Empty;
+                var risks = normalized.AllowedRisks
+                    .Distinct()
+                    .OrderBy(static risk => (int)risk)
+                    .ToArray();
+                normalized.AllowedRisks.Clear();
+                normalized.AllowedRisks.Add(risks);
+                SortDistinct(normalized.Readiness?.RequestedScopes);
+                return normalized;
+            })
+            .OrderBy(static selector => selector.CatalogServiceSlug, StringComparer.Ordinal)
+            .ThenBy(static selector => selector.EndpointId, StringComparer.Ordinal)
+            .ThenBy(
+                static selector => string.Join(",", selector.AllowedRisks.Select(static risk => (int)risk)),
+                StringComparer.Ordinal)
+            .ToArray();
+        policy.ConnectedServiceSelectors.Clear();
+        policy.ConnectedServiceSelectors.Add(selectors);
     }
 
     private static byte[] SerializeDeterministically(IMessage message)

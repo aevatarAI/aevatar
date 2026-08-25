@@ -379,6 +379,7 @@ message ScheduledDispatchUpdateCommand
   ScheduledDispatchScheduleModeState schedule_mode = 12;
   google.protobuf.Timestamp one_shot_fire_at = 13;
   TeamMemberAutomationOwnerState team_automation_owner = 14;
+  ScheduledDispatchExpectedServiceTargetState expected_service_target = 15;
 }
 
 message ScheduledDispatchEnsureCommand
@@ -423,12 +424,22 @@ message ScheduledDispatchEnableCommand
 {
   string reason = 1;
   TeamMemberAutomationOwnerState team_automation_owner = 2;
+  ScheduledDispatchExpectedServiceTargetState expected_service_target = 3;
 }
 
 message ScheduledDispatchDisableCommand
 {
   string reason = 1;
   TeamMemberAutomationOwnerState team_automation_owner = 2;
+  ScheduledDispatchExpectedServiceTargetState expected_service_target = 3;
+}
+
+message ScheduledDispatchExpectedServiceTargetState
+{
+  ScheduledDispatchScheduleKindState schedule_kind = 1;
+  ScheduledDispatchTargetKindState target_kind = 2;
+  aevatar.gagentservice.ServiceIdentity service_identity = 3;
+  string service_endpoint_id = 4;
 }
 
 message ScheduledDispatchEnabledEvent
@@ -456,6 +467,7 @@ message ScheduledDispatchDeleteCommand
   reserved 5;
   ScheduledInvocationAuthorizationOwnerState authenticated_credential_owner = 6;
   string observation_request_id = 7;
+  ScheduledDispatchExpectedServiceTargetState expected_service_target = 8;
 }
 
 message ScheduledDispatchDeletedEvent
@@ -492,6 +504,7 @@ message ScheduledDispatchFireCommand
   TeamMemberAutomationOwnerState team_automation_owner = 3;
   string idempotency_key = 4;
   string operation_id = 5;
+  ScheduledDispatchExpectedServiceTargetState expected_service_target = 6;
 }
 
 message BeginTeamAutomationCredentialOperationCommand

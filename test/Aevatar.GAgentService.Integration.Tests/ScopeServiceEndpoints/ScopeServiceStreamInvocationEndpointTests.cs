@@ -151,6 +151,63 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
     }
 
     [Fact]
+    public async Task ScopeInvokeStreamEndpoint_ShouldFlushFramesBeforeWorkflowCompletes()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        await ConfigureWorkflowStreamServiceAsync(host, serviceId: "default", definitionActorId: "definition-actor-default");
+        var allowCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.InteractionService.ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-streaming", "main", "cmd-streaming", "corr-streaming");
+            await onAcceptedAsync!(receipt, ct);
+            await emitAsync(new WorkflowRunEventEnvelope
+            {
+                TextMessageContent = new WorkflowTextMessageContentEventPayload
+                {
+                    MessageId = "message-streaming",
+                    Delta = "partial delta",
+                },
+            }, ct);
+            await allowCompletion.Task.WaitAsync(ct);
+            return WorkflowChatRunInteractionResult
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/invoke/chat:stream")
+        {
+            Content = JsonContent.Create(new
+            {
+                prompt = "hello",
+            }),
+        };
+
+        using var response = await host.Client.SendAsync(
+            httpRequest,
+            HttpCompletionOption.ResponseHeadersRead,
+            timeout.Token);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("text/event-stream");
+
+        await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+        using var reader = new StreamReader(stream);
+        var runContextFrame = await ReadNextSseDataFrameAsync(reader, timeout.Token);
+        var contentFrame = await ReadNextSseDataFrameAsync(reader, timeout.Token);
+
+        try
+        {
+            runContextFrame.Should().Contain("aevatar.run.context");
+            contentFrame.Should().Contain("textMessageContent");
+            contentFrame.Should().Contain("partial delta");
+            allowCompletion.Task.IsCompleted.Should().BeFalse();
+        }
+        finally
+        {
+            allowCompletion.TrySetResult();
+        }
+    }
+
+    [Fact]
     public async Task ScopeInvokeStreamEndpoint_ShouldRejectEmptyInputForDefaultWorkflowRoute()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -890,6 +947,68 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
         host.InteractionService.LastRequest.Source.ActorId.Should().Be("definition-actor-orders");
         host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle()
             .Which.ImplementationKind.Should().Be(ServiceImplementationKind.Workflow);
+    }
+
+    [Fact]
+    public async Task InvokeStreamEndpoint_ShouldPreserveAcceptedRunContext_WhenServiceRunRegistrationFails()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        await ConfigureWorkflowStreamServiceAsync(host);
+        host.ServiceRunRegistrationPort.RegisterFailure =
+            new InvalidOperationException("synthetic service-run registration failure");
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/scopes/scope-a/services/orders/invoke/chat:stream",
+            new { prompt = "hello" });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("text/event-stream");
+        var frames = body
+            .Split("\n\n", StringSplitOptions.RemoveEmptyEntries)
+            .Where(block => block.StartsWith("data: ", StringComparison.Ordinal))
+            .Select(block => JsonDocument.Parse(block["data: ".Length..]).RootElement.Clone())
+            .ToArray();
+        frames.Should().HaveCount(2);
+        frames[0].GetProperty("custom").GetProperty("name").GetString()
+            .Should().Be("aevatar.run.context");
+        frames[1].GetProperty("runError").GetProperty("code").GetString()
+            .Should().Be("EXECUTION_FAILED");
+        frames[1].GetProperty("runError").GetProperty("message").GetString()
+            .Should().Be("Workflow execution failed.");
+        body.Should().NotContain("synthetic service-run registration failure");
+        host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle()
+            .Which.RunId.Should().Be("run-actor-orders");
+    }
+
+    [Fact]
+    public async Task InvokeStreamEndpoint_ShouldAttemptServiceRunRegistrationBeforeCanceledStreamWrite()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        await ConfigureWorkflowStreamServiceAsync(host);
+        host.InteractionService.ResultFactory = async (_, _, onAcceptedAsync, _) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt(
+                "run-actor-canceled",
+                "orders",
+                "cmd-canceled",
+                "corr-canceled");
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            await onAcceptedAsync!(receipt, cancellation.Token);
+            return WorkflowChatRunInteractionResult.Success(
+                receipt,
+                new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                    WorkflowProjectionCompletionStatus.Completed,
+                    true));
+        };
+
+        using var response = await host.Client.PostAsJsonAsync(
+            "/api/scopes/scope-a/services/orders/invoke/chat:stream",
+            new { prompt = "hello" });
+
+        host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle()
+            .Which.RunId.Should().Be("run-actor-canceled");
     }
 
     [Fact]
@@ -1652,6 +1771,29 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
         };
     }
 
+    private static async Task<string> ReadNextSseDataFrameAsync(
+        StreamReader reader,
+        CancellationToken ct)
+    {
+        var lines = new List<string>();
+        while (true)
+        {
+            var line = await reader.ReadLineAsync(ct);
+            if (line == null)
+                throw new InvalidOperationException("SSE stream ended before a data frame was written.");
+
+            if (line.Length == 0)
+            {
+                if (lines.Count > 0)
+                    return string.Join('\n', lines);
+                continue;
+            }
+
+            if (line.StartsWith("data: ", StringComparison.Ordinal))
+                lines.Add(line["data: ".Length..]);
+        }
+    }
+
     private static async Task ConfigureStaticStreamServiceAsync(ScopeServiceEndpointTestHost host)
     {
         var service = BuildService("scope-a", "static-agent", "definition-actor-static");
@@ -1720,6 +1862,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
         const ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive;
         return new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = workflowName,
             WorkflowYaml = workflowYaml,
             DefinitionActorId = definitionActorId,

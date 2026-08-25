@@ -172,14 +172,15 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
         await observer.WaitForDeleteAsync(actorId, TestTimeout);
 
-        observer.Snapshot(actorId)
+        var observations = observer.Snapshot(actorId);
+        observations
+            .Where(static observation => observation.Operation == nameof(BindingWriteObservation.Upsert))
             .Should()
-            .Equal(
-            [
-                BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1),
-                BindingWriteObservation.Delete(actorId)
-            ],
-                "the revoke delete is an ordered barrier after the duplicate commit turn");
+            .OnlyContain(
+                observation => observation == BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1),
+                "at-least-once projection replay may repeat the first write but must never project the duplicate binding");
+        observations.Should().Contain(BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1));
+        observations.Should().Contain(BindingWriteObservation.Delete(actorId));
 
         var queryPort = host.Services.GetRequiredService<IExternalIdentityBindingQueryPort>();
         var resolved = await queryPort.ResolveAsync(subject);
@@ -248,24 +249,28 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             })
             .Build());
 
-    internal sealed class ObservingStreamForwardingRegistry : IStreamForwardingRegistry
+    internal sealed class ObservingStreamForwardingRegistry :
+        IStreamForwardingRegistry,
+        IStreamForwardingBindingAuthority
     {
         private readonly object _gate = new();
         private readonly HashSet<(string SourceStreamId, string TargetStreamId)> _observedUpserts = [];
         private readonly Dictionary<(string SourceStreamId, string TargetStreamId), TaskCompletionSource<StreamForwardingBinding>>
             _nextUpsertsByKey = new();
 
-        private IStreamForwardingRegistry? _inner;
+        private IStreamForwardingRegistry? _registryInner;
+        private IStreamForwardingBindingAuthority? _authorityInner;
 
-        public void SetInner(IStreamForwardingRegistry inner)
+        public void SetInner(IStreamForwardingRegistry registryInner, IStreamForwardingBindingAuthority authorityInner)
         {
-            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            _registryInner = registryInner ?? throw new ArgumentNullException(nameof(registryInner));
+            _authorityInner = authorityInner ?? throw new ArgumentNullException(nameof(authorityInner));
         }
 
         public async Task UpsertAsync(StreamForwardingBinding binding, CancellationToken ct = default)
         {
             EnsureInner();
-            await _inner!.UpsertAsync(binding, ct);
+            await _registryInner!.UpsertAsync(binding, ct);
 
             TaskCompletionSource<StreamForwardingBinding> completion;
             var key = (binding.SourceStreamId, binding.TargetStreamId);
@@ -281,7 +286,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
         public Task RemoveAsync(string sourceStreamId, string targetStreamId, CancellationToken ct = default)
         {
             EnsureInner();
-            return _inner!.RemoveAsync(sourceStreamId, targetStreamId, ct);
+            return _registryInner!.RemoveAsync(sourceStreamId, targetStreamId, ct);
         }
 
         public Task<IReadOnlyList<StreamForwardingBinding>> ListBySourceAsync(
@@ -289,7 +294,16 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             CancellationToken ct = default)
         {
             EnsureInner();
-            return _inner!.ListBySourceAsync(sourceStreamId, ct);
+            return _registryInner!.ListBySourceAsync(sourceStreamId, ct);
+        }
+
+        public Task<StreamForwardingBinding?> GetAsync(
+            string sourceStreamId,
+            string targetStreamId,
+            CancellationToken ct = default)
+        {
+            EnsureInner();
+            return _authorityInner!.GetAsync(sourceStreamId, targetStreamId, ct);
         }
 
         public Task<StreamForwardingBinding> WaitForUpsertAsync(
@@ -318,7 +332,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
         private void EnsureInner()
         {
-            if (_inner == null)
+            if (_registryInner == null || _authorityInner == null)
                 throw new InvalidOperationException("Inner stream forwarding registry has not been assigned.");
         }
 
@@ -526,19 +540,29 @@ internal static class ChannelIdentityOrleansDispatchProjectionTestServiceCollect
         this IServiceCollection services,
         ChannelIdentityOrleansDispatchProjectionTests.ObservingStreamForwardingRegistry observer)
     {
-        var descriptors = services
+        var registryDescriptors = services
             .Where(static descriptor => descriptor.ServiceType == typeof(IStreamForwardingRegistry))
             .ToArray();
-        descriptors.Should().ContainSingle();
+        var authorityDescriptors = services
+            .Where(static descriptor => descriptor.ServiceType == typeof(IStreamForwardingBindingAuthority))
+            .ToArray();
+        registryDescriptors.Should().ContainSingle();
+        authorityDescriptors.Should().ContainSingle();
 
-        foreach (var descriptor in descriptors)
+        foreach (var descriptor in registryDescriptors.Concat(authorityDescriptors))
             services.Remove(descriptor);
 
+        services.AddSingleton(observer);
         services.AddSingleton<IStreamForwardingRegistry>(provider =>
         {
-            observer.SetInner(ResolveOriginalStreamForwardingRegistry(provider, descriptors[0]));
-            return observer;
+            var registryObserver = provider.GetRequiredService<ChannelIdentityOrleansDispatchProjectionTests.ObservingStreamForwardingRegistry>();
+            registryObserver.SetInner(
+                ResolveOriginalStreamForwardingRegistry(provider, registryDescriptors[0]),
+                ResolveOriginalStreamForwardingBindingAuthority(provider, authorityDescriptors[0]));
+            return registryObserver;
         });
+        services.AddSingleton<IStreamForwardingBindingAuthority>(provider =>
+            provider.GetRequiredService<ChannelIdentityOrleansDispatchProjectionTests.ObservingStreamForwardingRegistry>());
         return services;
     }
 
@@ -579,6 +603,26 @@ internal static class ChannelIdentityOrleansDispatchProjectionTestServiceCollect
         }
 
         throw new InvalidOperationException("Unable to resolve original stream forwarding registry.");
+    }
+
+    private static IStreamForwardingBindingAuthority ResolveOriginalStreamForwardingBindingAuthority(
+        IServiceProvider provider,
+        ServiceDescriptor descriptor)
+    {
+        if (descriptor.ImplementationInstance is IStreamForwardingBindingAuthority instance)
+            return instance;
+
+        if (descriptor.ImplementationFactory is not null)
+            return (IStreamForwardingBindingAuthority)descriptor.ImplementationFactory(provider);
+
+        if (descriptor.ImplementationType is not null)
+        {
+            return (IStreamForwardingBindingAuthority)ActivatorUtilities.CreateInstance(
+                provider,
+                descriptor.ImplementationType);
+        }
+
+        throw new InvalidOperationException("Unable to resolve original stream forwarding binding authority.");
     }
 
     private static IProjectionDocumentWriter<ExternalIdentityBindingDocument> ResolveOriginalWriter(

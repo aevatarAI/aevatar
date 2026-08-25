@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+option csharp_namespace = "Aevatar.CQRS.Projection.Stores.Abstractions";
+
+enum ProjectionGraphDeltaMode {
+  PROJECTION_GRAPH_DELTA_MODE_UNSPECIFIED = 0;
+  // Advances the owner watermark by exactly one source version and applies only the listed
+  // mutations.
+  PROJECTION_GRAPH_DELTA_MODE_NORMAL = 1;
+  // Full replacement of the owner graph at any source version: the upsert sets ARE the desired
+  // owner graph and the store deletes every owned element (node, live edge, pending edge) that
+  // is absent from them, in the same transaction, in addition to any explicit delete list.
+  // Producers must not derive delete lists from a pre-read snapshot: the delta identity
+  // (fingerprint) then depends only on stable inputs, so a replay after a commit whose
+  // acknowledgement was lost is an exact duplicate, never an event id conflict.
+  PROJECTION_GRAPH_DELTA_MODE_REPAIR_OR_CUTOVER = 2;
+}
+
+enum ProjectionGraphDeltaApplyDisposition {
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_UNSPECIFIED = 0;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_APPLIED = 1;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_EXACT_DUPLICATE = 2;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_STALE = 3;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_GAP = 4;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_SAME_VERSION_CONFLICT = 5;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_EVENT_ID_CONFLICT = 6;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_ROUTE_EPOCH_MISMATCH = 7;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_ROUTE_FINGERPRINT_MISMATCH = 8;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_SOURCE_ACTOR_MISMATCH = 9;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_MISSING_ENDPOINT = 10;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_CROSS_OWNER_COLLISION = 11;
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_INVALID_DELTA = 12;
+  // A repair/cutover replacement whose effective mutation count (upserts + explicit deletes +
+  // store-generated stale deletes) exceeds the bounded replacement limit; rejected atomically
+  // before any mutation, watermark and snapshot unchanged.
+  PROJECTION_GRAPH_DELTA_APPLY_DISPOSITION_MUTATION_BOUND_EXCEEDED = 13;
+}
+
+enum ProjectionGraphOwnerSnapshotReadDisposition {
+  PROJECTION_GRAPH_OWNER_SNAPSHOT_READ_DISPOSITION_UNSPECIFIED = 0;
+  PROJECTION_GRAPH_OWNER_SNAPSHOT_READ_DISPOSITION_FOUND = 1;
+  PROJECTION_GRAPH_OWNER_SNAPSHOT_READ_DISPOSITION_NOT_FOUND = 2;
+  PROJECTION_GRAPH_OWNER_SNAPSHOT_READ_DISPOSITION_ROUTE_EPOCH_MISMATCH = 3;
+  PROJECTION_GRAPH_OWNER_SNAPSHOT_READ_DISPOSITION_ROUTE_FINGERPRINT_MISMATCH = 4;
+  PROJECTION_GRAPH_OWNER_SNAPSHOT_READ_DISPOSITION_INVALID_ROUTE = 5;
+}
+
+message ProjectionGraphSourceCoordinate {
+  string actor_id = 1;
+  int64 state_version = 2;
+  string event_id = 3;
+}
+
+message ProjectionGraphRouteFingerprint {
+  string projection_kind = 1;
+  string logical_scope = 2;
+  string owner_id = 3;
+  string physical_namespace = 4;
+  int64 route_epoch = 5;
+  string contract_id = 6;
+  int64 contract_version = 7;
+}
+
+message ProjectionGraphNodeMutation {
+  string node_id = 1;
+  string node_type = 2;
+  map<string, string> properties = 3;
+  int64 updated_at_epoch_ms = 4;
+}
+
+message ProjectionGraphEdgeMutation {
+  string edge_id = 1;
+  string from_node_id = 2;
+  string to_node_id = 3;
+  string edge_type = 4;
+  map<string, string> properties = 5;
+  int64 updated_at_epoch_ms = 6;
+}
+
+message ProjectionGraphDelta {
+  ProjectionGraphRouteFingerprint route = 1;
+  ProjectionGraphSourceCoordinate source = 2;
+  ProjectionGraphDeltaMode mode = 3;
+  repeated ProjectionGraphNodeMutation upsert_nodes = 4;
+  repeated string delete_node_ids = 5;
+  repeated ProjectionGraphEdgeMutation upsert_edges = 6;
+  repeated string delete_edge_ids = 7;
+  repeated ProjectionGraphEdgeMutation upsert_pending_edges = 8;
+  repeated string delete_pending_edge_ids = 9;
+}
+
+message ProjectionGraphDeltaApplyResult {
+  ProjectionGraphDeltaApplyDisposition disposition = 1;
+  ProjectionGraphSourceCoordinate current_source = 2;
+  string detail = 3;
+}
+
+message ProjectionGraphOwnerSnapshot {
+  ProjectionGraphRouteFingerprint route = 1;
+  ProjectionGraphSourceCoordinate source = 2;
+  repeated ProjectionGraphNodeMutation nodes = 3;
+  repeated ProjectionGraphEdgeMutation edges = 4;
+  repeated ProjectionGraphEdgeMutation pending_edges = 5;
+}
+
+message ProjectionGraphOwnerSnapshotReadResult {
+  ProjectionGraphOwnerSnapshotReadDisposition disposition = 1;
+  ProjectionGraphOwnerSnapshot snapshot = 2;
+  string detail = 3;
+}

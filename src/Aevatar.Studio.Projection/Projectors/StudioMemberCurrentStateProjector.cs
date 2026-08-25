@@ -81,6 +81,7 @@ public sealed class StudioMemberCurrentStateProjector
             LifecycleStage = MemberImplementationKindMapper.ToWireName(state.LifecycleStage),
             PublishedServiceId = state.PublishedServiceId,
             CreatedAt = state.CreatedAtUtc,
+            AuthorizationRevision = state.AuthorizationRevision,
         };
 
         ApplyImplementationRef(document, state.ImplementationRef);

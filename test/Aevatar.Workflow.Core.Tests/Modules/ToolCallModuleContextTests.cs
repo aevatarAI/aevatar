@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
@@ -6,6 +7,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Abstractions.Credentials;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
@@ -13,6 +15,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -91,6 +94,7 @@ public sealed class ToolCallModuleContextTests
             CancellationToken.None);
 
         resolved.Resolved.Should().BeTrue();
+        resolved.IsTransientFailure.Should().BeFalse();
         resolved.ErrorCode.Should().BeEmpty();
         resolved.Material.Should().NotBeNull();
         resolved.Material!.ToByteArray().Should().Equal(material.ToByteArray());
@@ -106,6 +110,7 @@ public sealed class ToolCallModuleContextTests
             CancellationToken.None);
 
         tampered.Resolved.Should().BeFalse();
+        tampered.IsTransientFailure.Should().BeFalse();
         tampered.Material.Should().BeNull();
         tampered.ErrorCode.Should().Be(
             ToolCallModule.ToolCallProtectedMaterialErrorCodes.DigestMismatch);
@@ -144,8 +149,42 @@ public sealed class ToolCallModuleContextTests
 
         revoked.Should().BeTrue();
         resolved.Resolved.Should().BeFalse();
+        resolved.IsTransientFailure.Should().BeFalse();
         resolved.ErrorCode.Should().Be(
             ToolCallModule.ToolCallProtectedMaterialErrorCodes.Unavailable);
+    }
+
+    [Fact]
+    public async Task ProtectedMaterial_WhenRuntimeSecretStoreIsUnavailable_ShouldReturnTransientResolutionFailure()
+    {
+        var storeContext = new RecordingWorkflowContext();
+        var request = ToolRequest(storeContext, "tool-alpha", "step-alpha", "exec-alpha");
+        var material = ToolCallModule.BuildProtectedMaterial(
+            request,
+            storeContext.RunId,
+            "tool-alpha",
+            "call-alpha",
+            string.Empty);
+        var reference = await ToolCallModule.StoreProtectedMaterialAsync(
+            material,
+            storeContext,
+            CancellationToken.None);
+        var unavailableContext = new RecordingWorkflowContext { RuntimeSecretStore = null };
+
+        var resolved = await ToolCallModule.ResolveAndVerifyProtectedMaterialAsync(
+            reference,
+            ToolCallModule.ComputeProtectedMaterialDigest(material),
+            unavailableContext.RunId,
+            "step-alpha",
+            "exec-alpha",
+            "call-alpha",
+            unavailableContext,
+            CancellationToken.None);
+
+        resolved.Resolved.Should().BeFalse();
+        resolved.IsTransientFailure.Should().BeTrue();
+        resolved.ErrorCode.Should().Be(
+            ToolCallModule.ToolCallProtectedMaterialErrorCodes.StoreUnavailable);
     }
 
     [Fact]
@@ -172,13 +211,15 @@ public sealed class ToolCallModuleContextTests
     [Fact]
     public async Task ToolCallModule_WhenInitialPendingSaveFailsBeforeCommit_ShouldRevokeUnownedProtectedMaterial()
     {
+        var logger = new RecordingToolCallLogger();
         var tool = new CountingAgentTool("tool-alpha", static _ => "{}");
         var store = new TrackingRuntimeSecretStore();
-        var module = CreateModule(tool);
+        var module = CreateModule(tool, logger: logger);
         var ctx = new RecordingWorkflowContext
         {
             RuntimeSecretStore = store,
             FailStateSavesRemaining = 1,
+            Logger = logger,
         };
         var request = ToolRequest(ctx, tool.Name, "step-alpha", "exec-save-before-commit");
 
@@ -197,18 +238,22 @@ public sealed class ToolCallModuleContextTests
         ctx.LoadState<ToolCallModuleState>("tool_call").PendingExecutions.Should().BeEmpty();
         ctx.Scheduled.Should().BeEmpty();
         tool.ExecuteCalls.Should().Be(0);
+        logger.Entries.Should().NotContain(entry =>
+            Equals(entry.Properties.GetValueOrDefault("Waterline"), "pending_state_persisted"));
     }
 
     [Fact]
     public async Task ToolCallModule_WhenInitialPendingCommitSucceedsButStatePublicationFails_ShouldRetainOwnedProtectedMaterial()
     {
+        var logger = new RecordingToolCallLogger();
         var tool = new CountingAgentTool("tool-alpha", static _ => "{}");
         var store = new TrackingRuntimeSecretStore();
-        var module = CreateModule(tool);
+        var module = CreateModule(tool, logger: logger);
         var ctx = new RecordingWorkflowContext
         {
             RuntimeSecretStore = store,
             FailStatePublicationsAfterCommitRemaining = 1,
+            Logger = logger,
         };
         var request = ToolRequest(ctx, tool.Name, "step-alpha", "exec-save-after-commit");
 
@@ -223,11 +268,16 @@ public sealed class ToolCallModuleContextTests
         var reference = store.LastStoredReference!;
         var pending = ctx.LoadState<ToolCallModuleState>("tool_call")
             .PendingExecutions.Values.Should().ContainSingle().Subject;
+        pending.AttemptPreparationStartedAtUtc.Should().NotBeNull();
         pending.ProtectedMaterialReference.ToByteArray().Should().Equal(reference.ToByteArray());
         var resolved = await store.ResolveAsync(ResolveRequest(reference), CancellationToken.None);
         resolved.Resolved.Should().BeTrue();
         ctx.Scheduled.Should().BeEmpty();
         tool.ExecuteCalls.Should().Be(0);
+        var persisted = logger.Entries.Should().ContainSingle(entry =>
+            Equals(entry.Properties.GetValueOrDefault("Waterline"), "pending_state_persisted")).Subject;
+        persisted.Properties["CommittedEventId"].Should().Be("recording-workflow-state-1");
+        persisted.Properties["CommittedStateVersion"].Should().Be(1L);
     }
 
     [Fact]
@@ -1005,6 +1055,37 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_ShouldRoundTripTypedUncertainFailureThroughAttemptSignal()
+    {
+        var tool = new ScriptedResultWorkflowTool(
+            "uncertain_tool",
+            WorkflowToolExecutionResult.Failed(
+                string.Empty,
+                "code_execution_outcome_uncertain",
+                "The provider outcome is uncertain.",
+                terminalInvoked: true,
+                retryable: false,
+                WorkflowStepFailureOutcome.OutcomeUncertain));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        var request = ToolRequest(ctx, tool.Name, "step-uncertain", "exec-uncertain");
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var attempt = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>();
+        attempt.Failure.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        var completionEnvelope = ctx.PublishedEnvelope(attempt);
+        completionEnvelope.Payload = Any.Pack(
+            WorkflowToolCallAttemptCompletedEvent.Parser.ParseFrom(attempt.ToByteArray()));
+
+        await module.HandleAsync(completionEnvelope, ctx, CancellationToken.None);
+
+        ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle()
+            .Which.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
     public async Task ToolCallModule_WhenCompletionPublishFails_ShouldReplayDurableOutcomeWithoutReexecution()
     {
         var tool = new CountingAgentTool("counting_tool", _ => """{"ok":true}""");
@@ -1035,6 +1116,158 @@ public sealed class ToolCallModuleContextTests
         var published = ctx.LoadState<ToolCallModuleState>("tool_call");
         published.Completions.Should().BeEmpty();
         published.CompletionTombstones.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenToolCompletionPublishesBeforeTransportFailure_ShouldReplayWithStableOperationId()
+    {
+        var tool = new CountingAgentTool("counting_tool", _ => """{"ok":true}""");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            FailAfterNextPublishType = typeof(WorkflowToolCallCompletedEvent),
+        };
+
+        var firstAttempt = () => ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            executionId: "exec-tool-published");
+        await firstAttempt.Should().ThrowAsync<WorkflowDurablePublicationPendingException>()
+            .WithMessage("Durable workflow tool completion remains pending.");
+
+        var retained = ctx.LoadState<ToolCallModuleState>("tool_call");
+        var retainedCompletion = retained.Completions.Should().ContainSingle().Subject;
+        retainedCompletion.ToolCompletionPublished.Should().BeFalse();
+        retainedCompletion.StepCompletionPublished.Should().BeFalse();
+        retained.CompletionTombstones.Should().BeEmpty();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-tool-published");
+
+        tool.ExecuteCalls.Should().Be(1);
+        var toolPublications = ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .ToList();
+        toolPublications.Should().HaveCount(2);
+        toolPublications.Select(ctx.PublishedOperationId).Distinct()
+            .Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
+        ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>().Should().ContainSingle();
+        var settled = ctx.LoadState<ToolCallModuleState>("tool_call");
+        settled.Completions.Should().BeEmpty();
+        settled.CompletionTombstones.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenStepCompletionPublishesBeforeTransportFailure_ShouldReplayWithStableOperationIds()
+    {
+        var tool = new CountingAgentTool("counting_tool", _ => """{"ok":true}""");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            FailAfterNextPublishType = typeof(StepCompletedEvent),
+        };
+
+        var firstAttempt = () => ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            executionId: "exec-step-published");
+        await firstAttempt.Should().ThrowAsync<WorkflowDurablePublicationPendingException>()
+            .WithMessage("Durable workflow step completion remains pending.");
+
+        var retained = ctx.LoadState<ToolCallModuleState>("tool_call");
+        var retainedCompletion = retained.Completions.Should().ContainSingle().Subject;
+        retainedCompletion.ToolCompletionPublished.Should().BeFalse();
+        retainedCompletion.StepCompletionPublished.Should().BeFalse();
+        retainedCompletion.ProtectedMaterialReference.Should().NotBeNull();
+        retained.CompletionTombstones.Should().BeEmpty();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-step-published");
+
+        tool.ExecuteCalls.Should().Be(1);
+        var toolPublications = ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .ToList();
+        var stepPublications = ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .ToList();
+        toolPublications.Should().HaveCount(2);
+        stepPublications.Should().HaveCount(2);
+        toolPublications.Select(ctx.PublishedOperationId).Distinct()
+            .Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
+        stepPublications.Select(ctx.PublishedOperationId).Distinct()
+            .Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
+        var settled = ctx.LoadState<ToolCallModuleState>("tool_call");
+        settled.Completions.Should().BeEmpty();
+        settled.CompletionTombstones.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenCompletionSettles_ShouldUseOnlyOutboxAndTombstoneStateSaves()
+    {
+        var tool = new CountingAgentTool("counting_tool", _ => "{}");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            "missing_tool",
+            executionId: "exec-two-checkpoints");
+
+        tool.ExecuteCalls.Should().Be(0);
+        ctx.StateSaveCalls.Should().Be(2);
+        ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle();
+        ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>().Should().ContainSingle();
+        var settled = ctx.LoadState<ToolCallModuleState>("tool_call");
+        settled.Completions.Should().BeEmpty();
+        settled.CompletionTombstones.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenExecutionIdentityIsMissing_ShouldRetainLegacyPublicationCheckpoints()
+    {
+        var module = CreateModule(new CountingAgentTool("counting_tool", _ => "{}"));
+        var ctx = new RecordingWorkflowContext
+        {
+            FailNextPublishType = typeof(StepCompletedEvent),
+        };
+
+        var firstAttempt = () => ExecuteToolCallAsync(
+            module,
+            ctx,
+            "missing_tool",
+            executionId: string.Empty);
+        await firstAttempt.Should().ThrowAsync<WorkflowDurablePublicationPendingException>()
+            .WithMessage("Durable workflow step completion remains pending.");
+
+        var retained = ctx.LoadState<ToolCallModuleState>("tool_call")
+            .Completions.Should().ContainSingle().Subject;
+        retained.ToolCompletionPublished.Should().BeTrue();
+        retained.StepCompletionPublished.Should().BeFalse();
+        ctx.StateSaveCalls.Should().Be(2);
+        ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle();
+        ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            "missing_tool",
+            executionId: string.Empty);
+
+        ctx.StateSaveCalls.Should().Be(4);
+        ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle();
+        ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>().Should().ContainSingle();
+        var settled = ctx.LoadState<ToolCallModuleState>("tool_call");
+        settled.Completions.Should().BeEmpty();
+        settled.CompletionTombstones.Should().ContainSingle();
     }
 
     [Fact]
@@ -1374,6 +1607,71 @@ public sealed class ToolCallModuleContextTests
         tokenProvider.Authorities.Should().HaveCount(2);
     }
 
+    [Theory]
+    [InlineData(
+        DurableCallerCredentialSourceKind.ChannelRegistration,
+        CredentialSecretPurposes.ChannelNyxIdAgentKey)]
+    [InlineData(
+        DurableCallerCredentialSourceKind.WebhookBinding,
+        CredentialSecretPurposes.WorkflowWebhookBindingAgentKey)]
+    [InlineData(
+        DurableCallerCredentialSourceKind.ScheduledDispatch,
+        CredentialSecretPurposes.ScheduledInvocationAgentKey)]
+    public async Task ToolCallModule_WithDurableAgentKey_ShouldNeverRefreshOrForwardUserToken(
+        DurableCallerCredentialSourceKind sourceKind,
+        string purpose)
+    {
+        const string agentKey = "nyxid_ag_workflow_tool_key";
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            purpose,
+            "scope-workflow",
+            "agent-key-workflow",
+            agentKey,
+            "workflow-tool-test"));
+        var tool = new CapturingWorkflowTool("nyxid_tool");
+        var tokenProvider = new RotatingCallerAccessTokenProvider();
+        var module = CreateModule(tool, tokenProvider);
+        var ctx = new RecordingWorkflowContext
+        {
+            SecretVault = vault,
+        };
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            DurableCallerCredential = new DurableCallerCredentialRef
+            {
+                Ref = stored.Reference.Ref,
+                Purpose = stored.Reference.Purpose,
+                OwnerScopeKey = stored.Reference.OwnerScopeKey,
+                SubjectId = "agent-key-workflow",
+                SourceKind = sourceKind,
+                SecretReference = stored.Reference.Clone(),
+                ProviderCredentialId = sourceKind == DurableCallerCredentialSourceKind.WebhookBinding
+                    ? "provider-key-workflow"
+                    : string.Empty,
+            },
+            NyxIdAuthority = CreateCallerAuthority(),
+            Kind = NyxIdCallerCredentialKind.AgentKey,
+        };
+        ctx.ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
+        {
+            ModelOverride = "channel-agent-model",
+        };
+        ctx.RuntimeContext.ApplySenderNyxIdAccessToken("short-lived-user-token");
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "channel-agent-key-tool");
+
+        tool.LastRequest.Should().NotBeNull();
+        tool.LastRequest!.CallerCredential.BearerToken.Should().Be(agentKey);
+        tool.LastRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
+        tool.LastRequest.CallerCredential.DurableCallerCredential.Should().NotBeNull();
+        tool.LastRequest.CallerCredential.DurableCallerCredential.SourceKind.Should()
+            .Be(sourceKind);
+        tool.LastRequest.LlmControl.Should().NotBeNull();
+        tool.LastRequest.LlmControl!.SenderNyxIdAccessToken.Should().BeEmpty();
+        tokenProvider.Authorities.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task ToolCallModule_ShouldPassCurrentStepInputFileRefsToDirectTool()
     {
@@ -1497,6 +1795,68 @@ public sealed class ToolCallModuleContextTests
             .OfType<StepCompletedEvent>()
             .Should().HaveCount(2)
             .And.OnlyContain(static completion => completion.Success);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldCorrelateProviderDeliveryAndReconciliationWaterlines()
+    {
+        var clock = new FakeTimeProvider(
+            new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero));
+        var logger = new RecordingToolCallLogger();
+        var tool = new BlockingWorkflowTool("timed_tool");
+        var module = CreateModule(tool, logger: logger);
+        var ctx = new RecordingWorkflowContext { Clock = clock, Logger = logger };
+        var request = ToolRequest(ctx, tool.Name, "step-timed", "exec-timed");
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var invocation = await tool.ReadInvocationAsync();
+        clock.Advance(TimeSpan.FromMilliseconds(37));
+        invocation.Completion.SetResult(WorkflowToolExecutionResult.Success("{}"));
+        var completed = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>();
+
+        completed.ProviderTiming.Should().NotBeNull();
+        completed.ProviderTiming.DispatchId.Should().NotBeNullOrWhiteSpace();
+        completed.ProviderTiming.ExternalExecutionElapsedMs.Should().Be(37);
+        completed.ProviderTiming.Disposition.Should().Be(WorkflowToolCallProviderDisposition.Succeeded);
+        completed.ProviderTiming.DispatchStartedAtUtc.ToDateTimeOffset().Should().Be(
+            new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero));
+        completed.ProviderTiming.ProviderReturnedAtUtc.ToDateTimeOffset().Should().Be(
+            new DateTimeOffset(2026, 8, 18, 12, 0, 0, 37, TimeSpan.Zero));
+
+        await module.HandleAsync(ctx.PublishedEnvelope(completed), ctx, CancellationToken.None);
+        // The producer records completion_delivery_producer_confirmed only after its self-publish
+        // returns, so it may land before or after the actor's reconciliation line. Sync on it
+        // (TCS, no polling) AFTER handing the completion to the actor, then assert only the
+        // causally deterministic edges plus the exact waterline set.
+        await logger.WaitForEntryAsync(entry =>
+            Equals(entry.Properties.GetValueOrDefault("Waterline"), "completion_delivery_producer_confirmed") &&
+            Equals(entry.Properties.GetValueOrDefault("DispatchId"), completed.ProviderTiming.DispatchId));
+
+        var observations = logger.Entries
+            .Where(entry => entry.Properties.ContainsKey("Waterline"))
+            .ToList();
+        var waterlines = observations.Select(entry => (string)entry.Properties["Waterline"]!).ToList();
+        waterlines.Should().BeEquivalentTo(
+            "pending_state_persisted",
+            "external_dispatch_started",
+            "provider_returned",
+            "completion_delivery_producer_confirmed",
+            "actor_reconciliation_completed");
+        // Actor persists before the worker dispatches; the worker returns from the provider
+        // before the actor reconciles that dispatch; the worker confirms delivery after it returned.
+        waterlines.IndexOf("pending_state_persisted").Should().BeLessThan(waterlines.IndexOf("external_dispatch_started"));
+        waterlines.IndexOf("external_dispatch_started").Should().BeLessThan(waterlines.IndexOf("provider_returned"));
+        waterlines.IndexOf("provider_returned").Should().BeLessThan(waterlines.IndexOf("actor_reconciliation_completed"));
+        waterlines.IndexOf("provider_returned").Should().BeLessThan(waterlines.IndexOf("completion_delivery_producer_confirmed"));
+        observations.Should().OnlyContain(entry =>
+            Equals(entry.Properties["RunId"], request.RunId) &&
+            Equals(entry.Properties["StepId"], request.StepId) &&
+            Equals(entry.Properties["CallId"], completed.CallId) &&
+            Equals(entry.Properties["ExecutionId"], request.ExecutionId));
+        observations
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.Properties["DispatchId"]?.ToString()))
+            .Select(entry => entry.Properties["DispatchId"])
+            .Should().OnlyContain(dispatchId => Equals(dispatchId, completed.ProviderTiming.DispatchId));
     }
 
     [Fact]
@@ -1837,18 +2197,26 @@ public sealed class ToolCallModuleContextTests
         var pendingCleanup = ctx.LoadState<ToolCallModuleState>("tool_call")
             .Completions.Should().ContainSingle().Subject;
         pendingCleanup.ProtectedMaterialReference.Should().NotBeNull();
-        pendingCleanup.ToolCompletionPublished.Should().BeTrue();
-        pendingCleanup.StepCompletionPublished.Should().BeTrue();
+        pendingCleanup.ToolCompletionPublished.Should().BeFalse();
+        pendingCleanup.StepCompletionPublished.Should().BeFalse();
 
         await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-cleanup");
 
         store.RevokeCalls.Should().Be(2);
         tool.ExecuteCalls.Should().Be(1);
         ctx.LoadState<ToolCallModuleState>("tool_call").CompletionTombstones.Should().ContainSingle();
-        ctx.Published.Select(static item => item.Event)
-            .OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle();
-        ctx.Published.Select(static item => item.Event)
-            .OfType<StepCompletedEvent>().Should().ContainSingle();
+        var toolPublications = ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .ToList();
+        var stepPublications = ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .ToList();
+        toolPublications.Should().HaveCount(2);
+        stepPublications.Should().HaveCount(2);
+        toolPublications.Select(ctx.PublishedOperationId).Distinct()
+            .Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
+        stepPublications.Select(ctx.PublishedOperationId).Distinct()
+            .Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -1991,7 +2359,8 @@ public sealed class ToolCallModuleContextTests
     public async Task ToolCallModule_WhenCompletionTransportsRejectResult_ShouldRetryKnownResultBeforeDeadline()
     {
         var tool = new CountingAgentTool("counting_tool", _ => "{}");
-        var module = CreateModule(tool);
+        var logger = new RecordingToolCallLogger();
+        var module = CreateModule(tool, logger: logger);
         var ctx = new RecordingWorkflowContext
         {
             FailAttemptCompletionPublishesRemaining = 1,
@@ -2015,6 +2384,20 @@ public sealed class ToolCallModuleContextTests
             .Should().ContainSingle()
             .Which.Success.Should().BeTrue();
         ctx.LoadState<ToolCallModuleState>("tool_call").PendingExecutions.Should().BeEmpty();
+        var deliveryObservations = logger.Entries
+            .Where(entry => Equals(
+                entry.Properties.GetValueOrDefault("Waterline"),
+                "completion_delivery_producer_confirmed"))
+            .ToList();
+        deliveryObservations.Select(entry => new
+            {
+                Method = entry.Properties["DeliveryMethod"],
+                Acceptance = entry.Properties["DeliveryAcceptance"],
+            })
+            .Should().ContainInOrder(
+                new { Method = (object?)"self_publish", Acceptance = (object?)"unknown" },
+                new { Method = (object?)"durable_callback", Acceptance = (object?)"unknown" },
+                new { Method = (object?)"self_publish", Acceptance = (object?)"confirmed" });
     }
 
     [Fact]
@@ -2033,7 +2416,6 @@ public sealed class ToolCallModuleContextTests
             new WorkflowToolExecutionResult(string.Empty, PendingApproval: approval));
         var module = CreateModule(tool);
         var ctx = new RecordingWorkflowContext();
-
         await ExecuteToolCallAsync(
             module,
             ctx,
@@ -2067,7 +2449,8 @@ public sealed class ToolCallModuleContextTests
     public async Task ToolCallModule_ShouldSettleTimeoutOnceAndIgnoreLateCompletion()
     {
         var tool = new BlockingWorkflowTool("blocking_tool");
-        var module = CreateModule(tool);
+        var logger = new RecordingToolCallLogger();
+        var module = CreateModule(tool, logger: logger);
         var ctx = new RecordingWorkflowContext();
         var request = ToolRequest(ctx, tool.Name, "step-1", "exec-timeout");
 
@@ -2135,6 +2518,61 @@ public sealed class ToolCallModuleContextTests
             .Should().ContainSingle();
         ctx.LoadState<ToolCallModuleState>("tool_call")
             .CompletionTombstones.Should().ContainSingle();
+        logger.Entries
+            .Where(entry => Equals(
+                entry.Properties.GetValueOrDefault("Waterline"),
+                "actor_reconciliation_completed"))
+            .Select(entry => entry.Properties["ReconciliationDisposition"])
+            .Should().ContainInOrder("timeout_outcome_unknown", "duplicate");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenTrustedCompletionHasNoSuccessor_ShouldReportNoPendingExecution()
+    {
+        var logger = new RecordingToolCallLogger();
+        var module = CreateModule(
+            new CountingAgentTool("unused_tool", _ => "{}"),
+            logger: logger);
+        var ctx = new RecordingWorkflowContext();
+        var completed = new WorkflowToolCallAttemptCompletedEvent
+        {
+            RunId = ctx.RunId,
+            StepId = "step-missing",
+            ExecutionId = "exec-missing",
+            CallId = "call-missing",
+            Attempt = 1,
+            ContinuationId = "continuation-missing",
+            Success = new WorkflowToolCallAttemptSuccessOutcome { ResultJson = "{}" },
+        };
+        var envelope = Envelope(completed);
+        envelope.Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+            ctx.AgentId,
+            TopologyAudience.Self);
+        envelope.Runtime = new EnvelopeRuntime
+        {
+            DeliveryIdentity = new DeliveryIdentity
+            {
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    "workflow-tool-attempt-completed",
+                    completed.RunId,
+                    completed.StepId,
+                    completed.CallId,
+                    completed.ExecutionId,
+                    completed.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    completed.ContinuationId),
+            },
+        };
+
+        await module.HandleAsync(envelope, ctx, CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+        logger.Entries
+            .Where(entry => Equals(
+                entry.Properties.GetValueOrDefault("Waterline"),
+                "actor_reconciliation_completed"))
+            .Select(entry => entry.Properties["ReconciliationDisposition"])
+            .Should().ContainSingle()
+            .Which.Should().Be("no_pending_execution");
     }
 
     [Fact]
@@ -2173,6 +2611,1841 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_WhenToolReturnsPendingOperation_ShouldPersistBeforeSchedulingAndNotResubmit()
+    {
+        const string script = "return 1";
+        const string idempotencyKey = "workflow-idempotency-key";
+        const string bearerToken = "must-not-be-persisted";
+        var operation = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Queued,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: operation));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            BearerToken = bearerToken,
+        };
+        var request = new StepRequestEvent
+        {
+            StepId = "call_proxy",
+            StepType = "tool_call",
+            RunId = ctx.RunId,
+            ExecutionId = "exec-durable",
+            IdempotencyKey = idempotencyKey,
+            Input = $$"""{"script":"{{script}}"}""",
+            Parameters = { ["tool"] = tool.Name },
+        };
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var completed = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>(candidate =>
+            candidate.ExecutionId == request.ExecutionId);
+
+        completed.OutcomeCase.Should().Be(
+            WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.PendingOperation);
+        completed.OutcomeCase.Should().NotBe(
+            WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.Success);
+        completed.Success.Should().BeNull();
+        var executing = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        executing.PendingExecutions.Should().ContainSingle();
+        executing.PendingOperations.Should().BeEmpty();
+
+        await module.HandleAsync(ctx.PublishedEnvelope(completed), ctx, CancellationToken.None);
+
+        var state = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        state.PendingExecutions.Should().BeEmpty();
+        var pending = state.PendingOperations.Should().ContainSingle().Subject.Value;
+        pending.ProtectedMaterialReference.Should().NotBeNull();
+        pending.ProtectedMaterialDigestSha256.Should().MatchRegex("^[0-9a-f]{64}$");
+        state.ToString().Should().NotContain(script);
+        state.ToString().Should().NotContain(idempotencyKey);
+        state.ToString().Should().NotContain(bearerToken);
+
+        pending.OperationId.Should().Be(operation.OperationId);
+        pending.ProviderOperationId.Should().Be(operation.ProviderOperationId);
+        pending.Etag.Should().Be("etag-1");
+        pending.PollAttempt.Should().Be(1);
+        pending.PollCallbackId.Should().StartWith("workflow-tool-operation-poll:");
+        state.ToString().Should().NotContain("must-not-be-persisted");
+        ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle();
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            input: "{\"script\":\"return 1\"}",
+            executionId: "exec-durable",
+            idempotencyKey: "workflow-idempotency-key");
+
+        tool.ExecuteCalls.Should().Be(1);
+        tool.ReconcileCalls.Should().Be(0);
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowToolCallStartedEvent>()
+            .Should().ContainSingle();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenToolReturnsMalformedPendingReceipt_ShouldPreserveUncertainOutcome()
+    {
+        var malformed = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1") with
+        {
+            CancelPath = string.Empty,
+        };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: malformed));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+        var request = ToolRequest(ctx, tool.Name, "call_proxy", "exec-malformed-receipt");
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var attempt = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>();
+
+        attempt.OutcomeCase.Should().Be(WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.Failure);
+        attempt.Failure.ErrorCode.Should().Be("workflow_tool_pending_operation_invalid");
+        attempt.Failure.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+
+        await module.HandleAsync(ctx.PublishedEnvelope(attempt), ctx, CancellationToken.None);
+
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle()
+            .Which.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenMalformedPendingReceiptMeetsSecretStoreOutage_ShouldPreserveUncertainOutcome()
+    {
+        var store = new TrackingRuntimeSecretStore();
+        var malformed = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1") with
+        {
+            CancelPath = string.Empty,
+        };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: malformed));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext { RuntimeSecretStore = store };
+        var request = ToolRequest(ctx, tool.Name, "call_proxy", "exec-malformed-secret-outage");
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var attempt = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>();
+        var attemptEnvelope = ctx.PublishedEnvelope(attempt);
+        attempt.Failure.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        store.ThrowOnResolve = true;
+
+        var outage = await FluentActions.Awaiting(() =>
+                module.HandleAsync(attemptEnvelope, ctx, CancellationToken.None))
+            .Should().ThrowAsync<Exception>();
+
+        outage.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        var pending = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        pending.PendingExecutions.Should().ContainSingle();
+        pending.Completions.Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        store.ThrowOnResolve = false;
+        await module.HandleAsync(attemptEnvelope, ctx, CancellationToken.None);
+
+        var completed = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        completed.PendingExecutions.Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle()
+            .Which.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenAttemptMaterialIsConfirmedUnavailable_ShouldRemainOutcomeUncertain()
+    {
+        var store = new TrackingRuntimeSecretStore();
+        var tool = new CountingAgentTool("counting_tool", _ => "{\"ok\":true}");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext { RuntimeSecretStore = store };
+        var request = ToolRequest(ctx, tool.Name, "call_proxy", "exec-material-unavailable-at-completion");
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var attempt = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>();
+        store.ReturnUnavailableOnResolve = true;
+
+        await module.HandleAsync(ctx.PublishedEnvelope(attempt), ctx, CancellationToken.None);
+
+        var completed = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        completed.PendingExecutions.Should().BeEmpty();
+        var step = ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        step.Success.Should().BeFalse();
+        step.Error.Should().Contain(ToolCallModule.ToolCallProtectedMaterialErrorCodes.Unavailable);
+        step.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenPersistedPendingReceiptDecodesMalformed_ShouldPreserveUncertainOutcome()
+    {
+        var operation = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: operation));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+        var request = ToolRequest(ctx, tool.Name, "call_proxy", "exec-malformed-signal");
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var attempt = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>();
+        attempt.OutcomeCase.Should().Be(
+            WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.PendingOperation);
+        attempt.PendingOperation.CancelPath = string.Empty;
+
+        await module.HandleAsync(ctx.PublishedEnvelope(attempt), ctx, CancellationToken.None);
+
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle()
+            .Which.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenProviderExpiryExceedsSubmitWatchdog_ShouldPreserveProviderDeadline()
+    {
+        var providerDeadlineUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds();
+        var operation = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1") with
+        {
+            ExpiresAtUnixMs = providerDeadlineUnixMs,
+        };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: operation));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+        var request = ToolRequest(ctx, tool.Name, "call_proxy", "exec-600-seconds");
+        request.Input = """{"language":"python","code":"pass","timeout_secs":600}""";
+        request.TimeoutMs = 360_000;
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var executing = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingExecutions.Should().ContainSingle().Subject.Value;
+        executing.TimeoutDeadlineUnixMs.Should().BeLessThan(providerDeadlineUnixMs);
+        var completed = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>(candidate =>
+            candidate.ExecutionId == request.ExecutionId);
+
+        await module.HandleAsync(ctx.PublishedEnvelope(completed), ctx, CancellationToken.None);
+
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value.ExpiresAtUnixMs
+            .Should().Be(providerDeadlineUnixMs);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ResolvePendingOperationDeadlineUnixMs_WhenProviderExpiryIsMissing_ShouldUseFiniteFallback(
+        long providerExpiresAtUnixMs)
+    {
+        var acceptedAt = new DateTimeOffset(2026, 8, 17, 0, 0, 0, TimeSpan.Zero);
+
+        var deadlineUnixMs = ToolCallModule.ResolvePendingOperationDeadlineUnixMs(
+            providerExpiresAtUnixMs,
+            acceptedAt);
+
+        deadlineUnixMs.Should().Be(acceptedAt.AddMinutes(12).ToUnixTimeMilliseconds());
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenRecoveredProviderReceiptOmitsExpiry_ShouldResetFiniteReconciliationWatchdog()
+    {
+        var now = new DateTimeOffset(2026, 8, 17, 0, 0, 0, TimeSpan.Zero);
+        var originalDeadline = now.AddMinutes(12).ToUnixTimeMilliseconds();
+        var providerReceipt = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-2") with
+        {
+            ExpiresAtUnixMs = 0,
+        };
+        var submitted = providerReceipt with
+        {
+            ProviderOperationId = string.Empty,
+            StatusPath = string.Empty,
+            ResultPath = string.Empty,
+            CancelPath = string.Empty,
+            Status = WorkflowToolPendingOperationStatus.SubmissionUncertain,
+            ETag = null,
+            ExpiresAtUnixMs = originalDeadline,
+        };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: providerReceipt));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext { UtcNowOverride = now };
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-missing-provider-expiry");
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.UtcNowOverride = now.AddMinutes(2);
+
+        await module.HandleAsync(OperationPollEnvelope(poll, ctx), ctx, CancellationToken.None);
+
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value.ExpiresAtUnixMs
+            .Should().Be(now.AddMinutes(14).ToUnixTimeMilliseconds());
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenV4SubmissionUncertainRecoversPersonalCatalogRoute_ShouldRefinePendingReceipt()
+    {
+        var now = new DateTimeOffset(2026, 8, 17, 0, 0, 0, TimeSpan.Zero);
+        var providerReceipt = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-catalog") with
+        {
+            ServiceSlug = "chrono-sandbox-aevatar",
+            UserServiceId = "catalog-service",
+            RouteIdentitySource = WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog,
+            ExpiresAtUnixMs = now.AddMinutes(10).ToUnixTimeMilliseconds(),
+        };
+        var submitted = providerReceipt with
+        {
+            ProviderOperationId = string.Empty,
+            StatusPath = string.Empty,
+            ResultPath = string.Empty,
+            CancelPath = string.Empty,
+            Status = WorkflowToolPendingOperationStatus.SubmissionUncertain,
+            ETag = null,
+            ServiceSlug = CodeExecutionContract.ServiceSlug,
+            UserServiceId = null,
+            RouteIdentitySource = WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract,
+            ExpiresAtUnixMs = now.AddMinutes(12).ToUnixTimeMilliseconds(),
+        };
+        var tool = new ScriptedDurableOperationTool(
+            WorkflowAuthorizationDependencyEvaluator.CodeExecuteToolName,
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: providerReceipt));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            UtcNowOverride = now,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.PreviousSchemaVersion,
+            },
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            stepId: "call_code",
+            executionId: "exec-v4-route-refinement",
+            externalInvocation: CodeExecutionInvocation("wf-alpha/call_code"));
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        await module.HandleAsync(OperationPollEnvelope(poll, ctx), ctx, CancellationToken.None);
+
+        var pending = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        pending.ProviderOperationId.Should().Be(providerReceipt.ProviderOperationId);
+        pending.ServiceSlug.Should().Be("chrono-sandbox-aevatar");
+        pending.UserServiceId.Should().Be("catalog-service");
+        pending.RouteIdentitySource.Should()
+            .Be(WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog);
+        tool.ReconcileCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenNonCodeToolAttemptsV4RouteRefinement_ShouldRejectReceipt()
+    {
+        var providerReceipt = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-catalog") with
+        {
+            ServiceSlug = CodeExecutionContract.ServiceSlug,
+            UserServiceId = "catalog-service",
+            RouteIdentitySource = WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog,
+        };
+        var submitted = providerReceipt with
+        {
+            ProviderOperationId = string.Empty,
+            StatusPath = string.Empty,
+            ResultPath = string.Empty,
+            CancelPath = string.Empty,
+            Status = WorkflowToolPendingOperationStatus.SubmissionUncertain,
+            ETag = null,
+            UserServiceId = null,
+            RouteIdentitySource = WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract,
+        };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: providerReceipt));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-non-code-refinement");
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        await module.HandleAsync(OperationPollEnvelope(poll, ctx), ctx, CancellationToken.None);
+
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle()
+            .Which.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenPendingOperationRecoveryIntentIsMalformed_ShouldRejectAttemptSignal()
+    {
+        var operation = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var invalidIntent = new WorkflowToolCancellationTerminalAuditIntent(
+            WorkflowToolExecutionResult.Failed(
+                string.Empty,
+                "code_execution_cancel_outcome_uncertain",
+                "Cancellation outcome is uncertain.",
+                terminalInvoked: true,
+                retryable: false,
+                WorkflowStepFailureOutcome.OutcomeUncertain),
+            ArgumentsSha256: "not-a-sha256-digest");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(
+                string.Empty,
+                PendingOperation: operation,
+                CancellationRecoveryIntent: invalidIntent));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+        var request = ToolRequest(ctx, tool.Name, "call_proxy", "exec-invalid-recovery-intent");
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var attempt = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>();
+
+        attempt.OutcomeCase.Should().Be(
+            WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.Failure);
+        attempt.Failure.ErrorCode.Should().Be("workflow_tool_pending_operation_invalid");
+        await module.HandleAsync(ctx.PublishedEnvelope(attempt), ctx, CancellationToken.None);
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>().Should().ContainSingle()
+            .Which.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenReceiptArrivesDuringSecretStoreOutage_ShouldPersistAndReschedulePoll()
+    {
+        var store = new TrackingRuntimeSecretStore { ThrowOnResolve = true };
+        var operation = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: operation));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext { RuntimeSecretStore = store };
+        var request = ToolRequest(ctx, tool.Name, "call_proxy", "exec-secret-outage");
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var completed = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>(candidate =>
+            candidate.ExecutionId == request.ExecutionId);
+
+        await module.HandleAsync(ctx.PublishedEnvelope(completed), ctx, CancellationToken.None);
+
+        store.ResolveCalls.Should().Be(0);
+        var firstPending = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        firstPending.ProtectedMaterialReference.Should().NotBeNull();
+        firstPending.ProtectedMaterialDigestSha256.Should().MatchRegex("^[0-9a-f]{64}$");
+        var firstPoll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        await module.HandleAsync(OperationPollEnvelope(firstPoll, ctx), ctx, CancellationToken.None);
+
+        store.ResolveCalls.Should().Be(1);
+        tool.ReconcileCalls.Should().Be(0);
+        var rescheduled = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        rescheduled.PollAttempt.Should().Be(2);
+        rescheduled.PollCallbackId.Should().NotBe(firstPending.PollCallbackId);
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenSecretStoreOutageCrossesProviderExpiry_ShouldCompleteOutcomeUncertain()
+    {
+        var now = new DateTimeOffset(2026, 8, 17, 8, 0, 0, TimeSpan.Zero);
+        var store = new TrackingRuntimeSecretStore { ThrowOnResolve = true };
+        var operation = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1") with
+        {
+            ExpiresAtUnixMs = now.AddSeconds(5).ToUnixTimeMilliseconds(),
+        };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: operation));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            RuntimeSecretStore = store,
+            UtcNowOverride = now,
+        };
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-secret-expiry");
+        var firstPoll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(OperationPollEnvelope(firstPoll, ctx), ctx, CancellationToken.None);
+
+        var secondPoll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.Scheduled.Clear();
+        ctx.UtcNowOverride = now.AddSeconds(6);
+
+        await module.HandleAsync(OperationPollEnvelope(secondPoll, ctx), ctx, CancellationToken.None);
+
+        store.ResolveCalls.Should().Be(2);
+        tool.ReconcileCalls.Should().Be(0);
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().BeEmpty();
+        var completion = ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().Contain("expired");
+        completion.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenProtectedMaterialIsConfirmedUnavailable_ShouldFailPendingOperationClosed()
+    {
+        var operation = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: operation));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-material-unavailable");
+        var pending = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+        (await ToolCallModule.RevokeProtectedMaterialAsync(
+                pending.ProtectedMaterialReference,
+                ctx,
+                CancellationToken.None))
+            .Should().BeTrue();
+
+        await module.HandleAsync(OperationPollEnvelope(poll, ctx), ctx, CancellationToken.None);
+
+        var terminal = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        terminal.PendingOperations.Should().BeEmpty();
+        tool.ReconcileCalls.Should().Be(0);
+        var completion = ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        completion.Success.Should().BeFalse();
+        completion.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenPendingOperationSchedulingFails_ShouldPublishTypedSelfContinuation()
+    {
+        var operation = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Queued,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: operation));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+        var request = ToolRequest(ctx, tool.Name, "call_proxy", "exec-durable");
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var completed = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>(candidate =>
+            candidate.ExecutionId == request.ExecutionId);
+        ctx.Scheduled.Clear();
+        ctx.FailNextSchedule = true;
+
+        await module.HandleAsync(ctx.PublishedEnvelope(completed), ctx, CancellationToken.None);
+
+        ctx.Scheduled.Should().BeEmpty();
+        var continuation = ctx.Published.Should().ContainSingle(publication =>
+                publication.Direction == TopologyAudience.Self &&
+                publication.Event is WorkflowToolCallOperationPollFiredEvent)
+            .Subject.Event.Should().BeOfType<WorkflowToolCallOperationPollFiredEvent>().Subject;
+        var pending = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        continuation.OperationId.Should().Be(pending.OperationId);
+        continuation.CallbackId.Should().Be(pending.PollCallbackId);
+        tool.ExecuteCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenPollRescheduleTransportsFail_ShouldRecoverCurrentPollFromOriginalEnvelope()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var running = submitted with { ETag = "etag-2" };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: running));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-poll-redelivery");
+        var originalPoll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.Scheduled.Clear();
+        ctx.FailNextSchedule = true;
+        ctx.FailNextPublishType = typeof(WorkflowToolCallOperationPollFiredEvent);
+
+        var failedReschedule = () => module.HandleAsync(
+            OperationPollEnvelope(originalPoll, ctx),
+            ctx,
+            CancellationToken.None);
+
+        await failedReschedule.Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+        var persisted = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        persisted.PollAttempt.Should().Be(originalPoll.PollAttempt + 1);
+        persisted.PollCallbackId.Should().NotBe(originalPoll.CallbackId);
+        ctx.Scheduled.Should().BeEmpty();
+        tool.ReconcileCalls.Should().Be(1);
+
+        var mismatchedPoll = originalPoll.Clone();
+        mismatchedPoll.OperationId = "different-operation";
+        await module.HandleAsync(OperationPollEnvelope(mismatchedPoll, ctx), ctx, CancellationToken.None);
+        ctx.Scheduled.Should().BeEmpty();
+
+        await module.HandleAsync(OperationPollEnvelope(originalPoll, ctx), ctx, CancellationToken.None);
+
+        var recovered = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+        recovered.PollAttempt.Should().Be(persisted.PollAttempt);
+        recovered.CallbackId.Should().Be(persisted.PollCallbackId);
+        recovered.OperationId.Should().Be(persisted.OperationId);
+        tool.ReconcileCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public void BuildOperationPollDelay_ShouldClampToMaximumAndOperationDeadline()
+    {
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(10_000);
+        var pending = new PendingToolCallOperationState
+        {
+            NextPollUnixMs = now.AddMinutes(5).ToUnixTimeMilliseconds(),
+            ExpiresAtUnixMs = now.AddSeconds(7).ToUnixTimeMilliseconds(),
+        };
+
+        ToolCallModule.BuildOperationPollDelay(pending, now)
+            .Should().Be(TimeSpan.FromSeconds(7));
+
+        pending.ExpiresAtUnixMs = now.AddMinutes(10).ToUnixTimeMilliseconds();
+        ToolCallModule.BuildOperationPollDelay(pending, now)
+            .Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenPendingPollIsRedelivered_ShouldRejectStaleAttemptAndKeepReconciling()
+    {
+        var providerReceipt = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-2");
+        var originalDeadline = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds();
+        var submitted = providerReceipt with
+        {
+            ProviderOperationId = string.Empty,
+            StatusPath = string.Empty,
+            ResultPath = string.Empty,
+            CancelPath = string.Empty,
+            Status = WorkflowToolPendingOperationStatus.SubmissionUncertain,
+            ETag = null,
+            ExpiresAtUnixMs = originalDeadline,
+        };
+        var running = providerReceipt with
+        {
+            Status = WorkflowToolPendingOperationStatus.Running,
+            ETag = "etag-2",
+            RetryAfterMilliseconds = 25,
+            ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeMilliseconds(),
+        };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: running));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        var firstPoll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        await module.HandleAsync(OperationPollEnvelope(firstPoll, ctx), ctx, CancellationToken.None);
+
+        var pending = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        pending.ProviderOperationId.Should().Be(providerReceipt.ProviderOperationId);
+        pending.Status.Should().Be(WorkflowToolPendingOperationStatus.Running);
+        pending.Etag.Should().Be("etag-2");
+        pending.ExpiresAtUnixMs.Should().Be(running.ExpiresAtUnixMs);
+        pending.PollAttempt.Should().Be(2);
+        pending.PollCallbackId.Should().NotBe(firstPoll.CallbackId);
+        tool.ReconcileCalls.Should().Be(1);
+
+        await module.HandleAsync(OperationPollEnvelope(firstPoll, ctx), ctx, CancellationToken.None);
+
+        tool.ReconcileCalls.Should().Be(1);
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenPollDeadlineElapsed_ShouldReconcileBeforeCompleting()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1") with
+        {
+            ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds(),
+        };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            WorkflowToolExecutionResult.Failed(
+                string.Empty,
+                "OPERATION_EXPIRED",
+                "The provider operation expired.",
+                terminalInvoked: true));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        await module.HandleAsync(OperationPollEnvelope(poll, ctx), ctx, CancellationToken.None);
+
+        tool.ReconcileCalls.Should().Be(1);
+        var state = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        state.PendingOperations.Should().BeEmpty();
+        state.Completions.Should().BeEmpty();
+        state.CompletionTombstones.Should().ContainSingle();
+        var completion = ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().Contain("expired");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenPendingPollCompletes_ShouldAtomicallyMoveToCompletionOutbox()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            WorkflowToolExecutionResult.Success("{\"exitCode\":0}"));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+        var savesBeforeTerminal = ctx.StateSaveCalls;
+        ctx.FailNextPublishType = typeof(WorkflowToolCallCompletedEvent);
+
+        var act = () => module.HandleAsync(OperationPollEnvelope(poll, ctx), ctx, CancellationToken.None);
+
+        await act.Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+        var state = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        state.PendingOperations.Should().BeEmpty();
+        state.Completions.Should().ContainSingle();
+        state.Completions[0].StepCompletion.Output.Should().Be("{\"exitCode\":0}");
+        ctx.StateSaveCalls.Should().Be(savesBeforeTerminal + 1);
+        tool.ExecuteCalls.Should().Be(1);
+        tool.ReconcileCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenTerminalPollPublicationWakeupsFail_ShouldRedeliverPollAndDrainCompletion()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            WorkflowToolExecutionResult.Success("{\"exitCode\":0}"));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-terminal-poll-redelivery");
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.FailPublicationRetrySchedulesRemaining = 1;
+        ctx.FailPublicationRetryPublishesRemaining = 1;
+        ctx.FailToolCompletionPublishesRemaining = 1;
+
+        var firstDelivery = () => module.HandleAsync(OperationPollEnvelope(poll, ctx), ctx, CancellationToken.None);
+
+        await firstDelivery.Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+        var persisted = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        persisted.PendingOperations.Should().BeEmpty();
+        persisted.Completions.Should().ContainSingle();
+        persisted.Completions[0].OperationId.Should().Be(poll.OperationId);
+        persisted.Completions[0].OperationPollAttempt.Should().Be(poll.PollAttempt);
+        persisted.Completions[0].OperationPollCallbackId.Should().Be(poll.CallbackId);
+
+        await module.HandleAsync(OperationPollEnvelope(poll, ctx), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        tool.ReconcileCalls.Should().Be(1);
+        var recovered = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        recovered.Completions.Should().BeEmpty();
+        recovered.CompletionTombstones.Should().ContainSingle();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>().Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenTerminalPollRedeliveryEnvelopeIsForged_ShouldNotDrainCompletion()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            WorkflowToolExecutionResult.Success("{\"exitCode\":0}"));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-forged-terminal-poll");
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.FailPublicationRetrySchedulesRemaining = 1;
+        ctx.FailPublicationRetryPublishesRemaining = 1;
+        ctx.FailToolCompletionPublishesRemaining = 1;
+
+        await FluentActions.Awaiting(() => module.HandleAsync(
+                OperationPollEnvelope(poll, ctx),
+                ctx,
+                CancellationToken.None))
+            .Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        var forgedPublisher = OperationPollEnvelope(poll, ctx);
+        forgedPublisher.Route.PublisherActorId = "forged-publisher";
+        await module.HandleAsync(forgedPublisher, ctx, CancellationToken.None);
+
+        var forgedDelivery = OperationPollEnvelope(poll, ctx);
+        forgedDelivery.Runtime.DeliveryIdentity.OperationId = "forged-delivery";
+        await module.HandleAsync(forgedDelivery, ctx, CancellationToken.None);
+
+        var forgedCallback = OperationPollEnvelope(poll, ctx);
+        forgedCallback.Runtime.Callback.CallbackId = "forged-callback";
+        await module.HandleAsync(forgedCallback, ctx, CancellationToken.None);
+
+        var forgedPayload = poll.Clone();
+        forgedPayload.OperationId = "forged-operation";
+        await module.HandleAsync(
+            OperationPollEnvelope(forgedPayload, ctx),
+            ctx,
+            CancellationToken.None);
+
+        var retained = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        retained.Completions.Should().ContainSingle();
+        retained.CompletionTombstones.Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowToolCallCompletedEvent>().Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenTerminalPollProvenanceCannotBeReconstructed_ShouldNotDrainCompletion()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            WorkflowToolExecutionResult.Success("{\"exitCode\":0}"));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-corrupt-terminal-poll");
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.FailPublicationRetrySchedulesRemaining = 1;
+        ctx.FailPublicationRetryPublishesRemaining = 1;
+        ctx.FailToolCompletionPublishesRemaining = 1;
+        await FluentActions.Awaiting(() => module.HandleAsync(
+                OperationPollEnvelope(poll, ctx),
+                ctx,
+                CancellationToken.None))
+            .Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        var corrupted = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        corrupted.Completions.Should().ContainSingle();
+        corrupted.Completions[0].OperationPollCallbackId = "forged-persisted-callback";
+        await ctx.SaveStateAsync(ToolCallModule.ModuleStateKey, corrupted, CancellationToken.None);
+        var forgedPoll = poll.Clone();
+        forgedPoll.CallbackId = corrupted.Completions[0].OperationPollCallbackId;
+
+        await module.HandleAsync(
+            OperationPollEnvelope(forgedPoll, ctx),
+            ctx,
+            CancellationToken.None);
+
+        var retained = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        retained.Completions.Should().ContainSingle();
+        retained.CompletionTombstones.Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowToolCallCompletedEvent>().Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenWorkflowStopsWithPendingOperation_ShouldGateStopUntilCancellationSettles()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var cancelRequested = submitted with
+        {
+            ETag = "etag-2",
+            RetryAfterMilliseconds = 25,
+        };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Pending(cancelRequested));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Completed(
+            WorkflowToolExecutionResult.Failed(
+                string.Empty,
+                "code_execution_cancelled",
+                "Code execution was cancelled.",
+                terminalInvoked: true)));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        ctx.Scheduled.Clear();
+        var stop = new WorkflowStoppedEvent
+        {
+            RunId = ctx.RunId,
+            WorkflowName = "workflow-alpha",
+            Reason = "requested by caller",
+        };
+
+        var gate = () => module.HandleAsync(
+            Envelope(stop, publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+
+        var gated = await gate.Should().ThrowAsync<Exception>();
+        gated.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        var stopping = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        stopping.StopCancellation.Should().NotBeNull();
+        var pending = stopping.PendingOperations.Should().ContainSingle().Subject.Value;
+        pending.StopCancellationPhase.Should().Be(WorkflowToolStopCancellationPhase.Requested);
+        var firstCancel = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        ctx.Scheduled.Clear();
+        await module.HandleAsync(StopCancellationEnvelope(firstCancel, ctx), ctx, CancellationToken.None);
+
+        tool.CancellationRequests.Should().ContainSingle();
+        tool.CancellationRequests[0].DeadlineUnixMs.Should().Be(stopping.StopCancellation.ExpiresAtUnixMs);
+        var afterAccepted = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        afterAccepted.PendingOperations.Should().ContainSingle().Subject.Value.Etag.Should().Be("etag-2");
+        var secondCancel = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        await module.HandleAsync(StopCancellationEnvelope(secondCancel, ctx), ctx, CancellationToken.None);
+
+        var released = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        released.PendingOperations.Should().BeEmpty();
+        released.StopCancellation.Should().NotBeNull();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowStoppedEvent>()
+            .Should().ContainSingle()
+            .Which.Reason.Should().Be(stop.Reason);
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(
+                ctx.Published.Select(static publication => publication.Event)
+                    .OfType<WorkflowStoppedEvent>()
+                    .Single(),
+                publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .StopCancellation.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenStopPublisherIsExternal_ShouldNotStartDurableCancellation()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-forged-stop");
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(
+            Envelope(
+                new WorkflowStoppedEvent
+                {
+                    RunId = ctx.RunId,
+                    WorkflowName = "workflow-alpha",
+                    Reason = "forged external stop",
+                },
+                publisherActorId: "forged-stop-publisher"),
+            ctx,
+            CancellationToken.None);
+
+        var state = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        state.PendingOperations.Should().ContainSingle();
+        state.StopCancellation.Should().BeNull();
+        ctx.Scheduled.Should().BeEmpty();
+        tool.CancellationRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenProtectedMaterialIsDefinitivelyUnavailableAfterStopDeadline_ShouldFinalizeFrozenAudit()
+    {
+        var now = new DateTimeOffset(2026, 8, 17, 10, 0, 0, TimeSpan.Zero);
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var terminal = WorkflowToolExecutionResult.Failed(
+            """{"success":false,"code":"code_execution_cancel_outcome_uncertain"}""",
+            "code_execution_cancel_outcome_uncertain",
+            "The provider terminal outcome could not be confirmed before the workflow stop deadline.",
+            terminalInvoked: true,
+            retryable: false,
+            WorkflowStepFailureOutcome.OutcomeUncertain);
+        var recoveryIntent = new WorkflowToolCancellationTerminalAuditIntent(
+            terminal,
+            ArgumentsSha256: new string('c', 64));
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(
+                string.Empty,
+                PendingOperation: submitted,
+                CancellationRecoveryIntent: recoveryIntent));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Completed(terminal));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext { UtcNowOverride = now };
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-material-lost");
+        ctx.Scheduled.Clear();
+        var persistedRecoveryIntent = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value
+            .StopCancellationRecoveryIntent;
+        persistedRecoveryIntent.Should().NotBeNull();
+        persistedRecoveryIntent.FailureCode.Should().Be("code_execution_cancel_outcome_uncertain");
+        persistedRecoveryIntent.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        persistedRecoveryIntent.ArgumentsSha256.Should().Be(new string('c', 64));
+        var gate = () => module.HandleAsync(
+            Envelope(
+                new WorkflowRunStoppedEvent
+                {
+                    RunId = ctx.RunId,
+                    Reason = "requested by caller",
+                },
+                publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+        await gate.Should().ThrowAsync<Exception>();
+
+        var stopping = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        var pending = stopping.PendingOperations.Should().ContainSingle().Subject.Value;
+        (await ToolCallModule.RevokeProtectedMaterialAsync(
+                pending.ProtectedMaterialReference,
+                ctx,
+                CancellationToken.None))
+            .Should().BeTrue();
+        var cancellation = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.UtcNowOverride = DateTimeOffset.FromUnixTimeMilliseconds(
+            stopping.StopCancellation.ExpiresAtUnixMs + 1);
+
+        await module.HandleAsync(
+            StopCancellationEnvelope(cancellation, ctx),
+            ctx,
+            CancellationToken.None);
+
+        var released = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        released.PendingOperations.Should().BeEmpty();
+        tool.CancellationRequests.Should().ContainSingle();
+        tool.CancellationRequests[0].TerminalIntent.Should().NotBeNull();
+        tool.CancellationRequests[0].TerminalIntent!.ArgumentsSha256.Should().Be(new string('c', 64));
+        tool.CancellationRequests[0].ExecutionRequest.ArgumentsJson.Should().Be("{}");
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowRunStoppedEvent>()
+            .Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenCancellationAuditIsPending_ShouldPersistAndRecoverFrozenTerminalIntent()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var terminal = WorkflowToolExecutionResult.Failed(
+            """{"success":false,"code":"code_execution_cancel_outcome_uncertain"}""",
+            "code_execution_cancel_outcome_uncertain",
+            "Cancellation outcome is uncertain.",
+            terminalInvoked: true,
+            retryable: false,
+            WorkflowStepFailureOutcome.OutcomeUncertain);
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Pending(
+            submitted,
+            terminalIntent: new WorkflowToolCancellationTerminalAuditIntent(
+                terminal,
+                ArgumentsSha256: new string('a', 64))));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Completed(terminal));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        ctx.Scheduled.Clear();
+        var gate = () => module.HandleAsync(
+            Envelope(
+                new WorkflowRunStoppedEvent
+                {
+                    RunId = ctx.RunId,
+                    Reason = "requested by caller",
+                },
+                publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+        await gate.Should().ThrowAsync<Exception>();
+        var firstCancellation = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(StopCancellationEnvelope(firstCancellation, ctx), ctx, CancellationToken.None);
+
+        tool.CancellationRequests.Should().ContainSingle()
+            .Which.TerminalIntent.Should().BeNull();
+        var persisted = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        var pending = persisted.PendingOperations.Should().ContainSingle().Subject.Value;
+        pending.StopCancellationPhase.Should().Be(WorkflowToolStopCancellationPhase.FinalizingAudit);
+        pending.StopCancellationTerminalIntent.Should().NotBeNull();
+        pending.StopCancellationTerminalIntent.FailureCode.Should()
+            .Be("code_execution_cancel_outcome_uncertain");
+        pending.StopCancellationTerminalIntent.FailureOutcome.Should()
+            .Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        ToolCallModule.PreparePendingStopCancellationRecoveries(
+            persisted,
+            DateTimeOffset.UtcNow,
+            out _).Should().ContainSingle()
+            .Which.StopCancellationPhase.Should().Be(WorkflowToolStopCancellationPhase.FinalizingAudit);
+        var retry = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+        var recoveringModule = CreateModule(tool);
+
+        await recoveringModule.HandleAsync(StopCancellationEnvelope(retry, ctx), ctx, CancellationToken.None);
+
+        tool.CancellationRequests.Should().HaveCount(2);
+        tool.CancellationRequests[1].TerminalIntent.Should().NotBeNull();
+        tool.CancellationRequests[1].TerminalIntent!.Result.Failure!.ErrorCode
+            .Should().Be("code_execution_cancel_outcome_uncertain");
+        tool.CancellationRequests[1].TerminalIntent!.Result.Failure!.FailureOutcome
+            .Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenCompletedCancellationConflictsWithFrozenIntent_ShouldKeepStopGated()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var frozen = WorkflowToolExecutionResult.Failed(
+            string.Empty,
+            "code_execution_cancelled",
+            "Code execution was cancelled.",
+            terminalInvoked: true);
+        var conflicting = WorkflowToolExecutionResult.Failed(
+            string.Empty,
+            "code_execution_cancel_outcome_uncertain",
+            "Cancellation outcome is uncertain.",
+            terminalInvoked: true);
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Pending(
+            submitted,
+            terminalIntent: new WorkflowToolCancellationTerminalAuditIntent(
+                frozen,
+                ArgumentsSha256: new string('b', 64))));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Completed(conflicting));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        ctx.Scheduled.Clear();
+        var gate = () => module.HandleAsync(
+            Envelope(
+                new WorkflowRunStoppedEvent { RunId = ctx.RunId, Reason = "requested" },
+                publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+        await gate.Should().ThrowAsync<Exception>();
+        var first = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.Scheduled.Clear();
+        await module.HandleAsync(StopCancellationEnvelope(first, ctx), ctx, CancellationToken.None);
+        var second = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(StopCancellationEnvelope(second, ctx), ctx, CancellationToken.None);
+
+        var state = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        state.PendingOperations.Should().ContainSingle().Subject.Value.StopCancellationPhase
+            .Should().Be(WorkflowToolStopCancellationPhase.FinalizingAudit);
+        state.StopCancellation.Should().NotBeNull();
+        ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowRunStoppedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void BuildStopCancellationDelay_AfterDeadline_ShouldPreserveRecoveryBackoff()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+        var pending = new PendingToolCallOperationState
+        {
+            NextStopCancellationUnixMs = now.AddSeconds(5).ToUnixTimeMilliseconds(),
+        };
+
+        var delay = ToolCallModule.BuildStopCancellationDelay(
+            pending,
+            now,
+            now.AddSeconds(-1).ToUnixTimeMilliseconds());
+
+        delay.Should().Be(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public void BuildStopCancellationDelay_WhenDue_ShouldRemainSchedulable()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+        var pending = new PendingToolCallOperationState
+        {
+            NextStopCancellationUnixMs = now.ToUnixTimeMilliseconds(),
+        };
+
+        var delay = ToolCallModule.BuildStopCancellationDelay(
+            pending,
+            now,
+            now.AddMinutes(1).ToUnixTimeMilliseconds());
+
+        delay.Should().Be(TimeSpan.FromMilliseconds(1));
+    }
+
+    [Fact]
+    public void BuildOperationPollDelay_AfterDeadline_ShouldPreserveRecoveryBackoff()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+        var pending = new PendingToolCallOperationState
+        {
+            NextPollUnixMs = now.AddSeconds(5).ToUnixTimeMilliseconds(),
+            ExpiresAtUnixMs = now.AddSeconds(-1).ToUnixTimeMilliseconds(),
+        };
+
+        var delay = ToolCallModule.BuildOperationPollDelay(pending, now);
+
+        delay.Should().Be(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenCancellationToolIsMissing_ShouldRefreshDiscoveryOnRetry()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Completed(
+            WorkflowToolExecutionResult.Failed(
+                string.Empty,
+                "code_execution_cancelled",
+                "Code execution was cancelled.",
+                terminalInvoked: true)));
+        var initialModule = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(initialModule, ctx, tool.Name, executionId: "exec-durable");
+        ctx.Scheduled.Clear();
+        var stop = new WorkflowStoppedEvent
+        {
+            RunId = ctx.RunId,
+            WorkflowName = "workflow-alpha",
+            Reason = "requested by caller",
+        };
+        var gate = () => initialModule.HandleAsync(
+            Envelope(stop, publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+        await gate.Should().ThrowAsync<Exception>();
+        var firstCancellation = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        var source = new SequencedToolSource([], [tool]);
+        var recoveringModule = new ToolCallModule(
+            [source],
+            NullLogger<ToolCallModule>.Instance);
+        ctx.Scheduled.Clear();
+        await recoveringModule.HandleAsync(StopCancellationEnvelope(firstCancellation, ctx), ctx, CancellationToken.None);
+        var retry = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        ctx.Scheduled.Clear();
+        await recoveringModule.HandleAsync(StopCancellationEnvelope(retry, ctx), ctx, CancellationToken.None);
+
+        source.Calls.Should().Be(2);
+        tool.CancellationRequests.Should().ContainSingle();
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ToolCallModule_WhenCurrentRunStopComesFromExternalPublisher_ShouldGate(
+        bool useRunStoppedEvent)
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        ctx.Scheduled.Clear();
+        IMessage stop = useRunStoppedEvent
+            ? new WorkflowRunStoppedEvent
+            {
+                RunId = ctx.RunId,
+                Reason = "requested by external controller",
+            }
+            : new WorkflowStoppedEvent
+            {
+                RunId = ctx.RunId,
+                WorkflowName = "workflow-alpha",
+                Reason = "requested by external controller",
+            };
+
+        var gate = () => module.HandleAsync(
+            Envelope(stop, publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+
+        var gated = await gate.Should().ThrowAsync<Exception>();
+        gated.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        var state = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        state.StopCancellation.Should().NotBeNull();
+        state.PendingOperations.Should().ContainSingle();
+        ctx.Scheduled.Select(static scheduled => scheduled.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenPersistedStopReleasePublishFails_ShouldDrainOnCallbackRedelivery()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Completed(
+            WorkflowToolExecutionResult.Failed(
+                string.Empty,
+                "code_execution_cancelled",
+                "Code execution was cancelled.",
+                terminalInvoked: true)));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        ctx.Scheduled.Clear();
+        var stop = new WorkflowStoppedEvent
+        {
+            RunId = ctx.RunId,
+            WorkflowName = "workflow-alpha",
+            Reason = "requested by caller",
+        };
+        var gate = () => module.HandleAsync(
+            Envelope(stop, publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+        await gate.Should().ThrowAsync<Exception>();
+        var cancellation = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.FailNextPublishType = typeof(WorkflowStoppedEvent);
+
+        var firstTerminalDelivery = () => module.HandleAsync(
+            StopCancellationEnvelope(cancellation, ctx),
+            ctx,
+            CancellationToken.None);
+
+        var publishFailure = await firstTerminalDelivery.Should().ThrowAsync<Exception>();
+        publishFailure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        var persisted = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        persisted.PendingOperations.Should().BeEmpty();
+        persisted.StopCancellation.Should().NotBeNull();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowStoppedEvent>()
+            .Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(cancellation, publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowStoppedEvent>()
+            .Should().BeEmpty();
+
+        await module.HandleAsync(
+            StopCancellationEnvelope(cancellation, ctx),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowStoppedEvent>()
+            .Should().ContainSingle()
+            .Which.Reason.Should().Be(stop.Reason);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenStopCancellationFailsNonRetryably_ShouldNotSettleWithoutAuditProof()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Failed(
+            "provider_cancel_rejected",
+            "The provider rejected cancellation.",
+            retryable: false));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        ctx.Scheduled.Clear();
+        var gate = () => module.HandleAsync(
+            Envelope(
+                new WorkflowRunStoppedEvent
+                {
+                    RunId = ctx.RunId,
+                    Reason = "requested by caller",
+                },
+                publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+        await gate.Should().ThrowAsync<Exception>();
+        var cancellation = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(
+            StopCancellationEnvelope(cancellation, ctx),
+            ctx,
+            CancellationToken.None);
+
+        var state = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        state.PendingOperations.Should().ContainSingle();
+        state.StopCancellation.Should().NotBeNull();
+        ctx.Scheduled.Select(static scheduled => scheduled.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<WorkflowRunStoppedEvent>()
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenStopRunDoesNotMatch_ShouldNotCancelPendingOperation()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowRunStoppedEvent
+            {
+                RunId = "another-run",
+                Reason = "child stopped",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var state = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        state.PendingOperations.Should().ContainSingle();
+        state.StopCancellation.Should().BeNull();
+        ctx.Scheduled.Should().BeEmpty();
+        tool.CancellationRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenStopCancellationSchedulingFails_ShouldPublishTypedSelfContinuation()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-durable");
+        ctx.Scheduled.Clear();
+        ctx.FailNextSchedule = true;
+
+        var gate = () => module.HandleAsync(
+            Envelope(
+                new WorkflowRunStoppedEvent
+                {
+                    RunId = ctx.RunId,
+                    Reason = "requested by caller",
+                },
+                publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+
+        var gated = await gate.Should().ThrowAsync<Exception>();
+        gated.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        ctx.Scheduled.Should().BeEmpty();
+        ctx.Published.Should().ContainSingle(publication =>
+            publication.Direction == TopologyAudience.Self &&
+            publication.Event is WorkflowToolCallStopCancellationFiredEvent);
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .StopCancellation.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenStopCancellationEnvelopeIsUntrusted_ShouldNotMutateCancellationState()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Completed(
+            WorkflowToolExecutionResult.Failed(
+                string.Empty,
+                "code_execution_cancelled",
+                "Code execution was cancelled.",
+                terminalInvoked: true)));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-untrusted-cancel");
+        ctx.Scheduled.Clear();
+        var gate = () => module.HandleAsync(
+            Envelope(
+                new WorkflowRunStoppedEvent
+                {
+                    RunId = ctx.RunId,
+                    Reason = "requested by caller",
+                },
+                publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+        await gate.Should().ThrowAsync<Exception>();
+        var fired = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.Scheduled.Clear();
+
+        var forgedPublisher = StopCancellationEnvelope(fired, ctx);
+        forgedPublisher.Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+            "forged-agent",
+            TopologyAudience.Self);
+        var nonSelfAudience = StopCancellationEnvelope(fired, ctx);
+        nonSelfAudience.Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+            ctx.AgentId,
+            TopologyAudience.Children);
+        var missingDeliveryIdentity = Envelope(fired, publisherActorId: ctx.AgentId);
+        var mismatchedDeliveryIdentity = StopCancellationEnvelope(fired, ctx);
+        mismatchedDeliveryIdentity.Runtime!.DeliveryIdentity!.OperationId = "forged-callback";
+        var mismatchedCallbackIdentity = StopCancellationEnvelope(fired, ctx);
+        mismatchedCallbackIdentity.Runtime!.Callback!.CallbackId = "forged-callback";
+        var forgedCallback = fired.Clone();
+        forgedCallback.CallbackId = "forged-callback";
+
+        foreach (var untrusted in new[]
+                 {
+                     forgedPublisher,
+                     nonSelfAudience,
+                     missingDeliveryIdentity,
+                     mismatchedDeliveryIdentity,
+                     mismatchedCallbackIdentity,
+                     StopCancellationEnvelope(forgedCallback, ctx),
+                 })
+        {
+            await module.HandleAsync(untrusted, ctx, CancellationToken.None);
+        }
+
+        var retained = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey);
+        retained.PendingOperations.Should().ContainSingle().Subject.Value.StopCancellationAttempt
+            .Should().Be(fired.Attempt);
+        tool.CancellationRequests.Should().BeEmpty();
+        ctx.Scheduled.Should().BeEmpty();
+
+        await module.HandleAsync(
+            StopCancellationEnvelope(fired, ctx),
+            ctx,
+            CancellationToken.None);
+
+        tool.CancellationRequests.Should().ContainSingle();
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ToolCallModule_WhenStopCancellationEnvelopeHasOneTrustedIdentity_ShouldCancel(
+        bool useDeliveryIdentity)
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Completed(
+            WorkflowToolExecutionResult.Failed(
+                string.Empty,
+                "code_execution_cancelled",
+                "Code execution was cancelled.",
+                terminalInvoked: true)));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            executionId: useDeliveryIdentity
+                ? "exec-delivery-only-cancel"
+                : "exec-callback-only-cancel");
+        ctx.Scheduled.Clear();
+        ctx.FailNextSchedule = useDeliveryIdentity;
+        var gate = () => module.HandleAsync(
+            Envelope(
+                new WorkflowRunStoppedEvent
+                {
+                    RunId = ctx.RunId,
+                    Reason = "requested by caller",
+                },
+                publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+        await gate.Should().ThrowAsync<Exception>();
+
+        EventEnvelope trustedEnvelope;
+        if (useDeliveryIdentity)
+        {
+            var published = ctx.Published.Select(static publication => publication.Event)
+                .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+                .Should().ContainSingle().Which;
+            trustedEnvelope = ctx.PublishedEnvelope(published);
+            trustedEnvelope.Runtime!.Callback.Should().BeNull();
+        }
+        else
+        {
+            var scheduled = ctx.Scheduled.Select(static callback => callback.Event)
+                .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+                .Should().ContainSingle().Which;
+            trustedEnvelope = StopCancellationEnvelope(scheduled, ctx);
+            trustedEnvelope.Runtime!.DeliveryIdentity = null;
+        }
+
+        await module.HandleAsync(trustedEnvelope, ctx, CancellationToken.None);
+
+        tool.CancellationRequests.Should().ContainSingle();
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenCancellationRescheduleTransportsFail_ShouldRecoverCurrentCallbackFromOriginalEnvelope()
+    {
+        var submitted = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-1");
+        var cancelling = submitted with { ETag = "etag-2" };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted));
+        tool.CancellationResults.Enqueue(WorkflowToolCancellationResult.Pending(cancelling));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-cancel-redelivery");
+        ctx.Scheduled.Clear();
+        var startStop = () => module.HandleAsync(
+            Envelope(
+                new WorkflowRunStoppedEvent
+                {
+                    RunId = ctx.RunId,
+                    Reason = "requested by caller",
+                },
+                publisherActorId: ctx.AgentId),
+            ctx,
+            CancellationToken.None);
+        await startStop.Should().ThrowAsync<Exception>();
+        var originalCancellation = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+        ctx.Scheduled.Clear();
+        ctx.FailNextSchedule = true;
+        ctx.FailNextPublishType = typeof(WorkflowToolCallStopCancellationFiredEvent);
+
+        var failedReschedule = () => module.HandleAsync(
+            StopCancellationEnvelope(originalCancellation, ctx),
+            ctx,
+            CancellationToken.None);
+
+        var failure = await failedReschedule.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        var persisted = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        persisted.StopCancellationAttempt.Should().Be(originalCancellation.Attempt + 1);
+        persisted.StopCancellationCallbackId.Should().NotBe(originalCancellation.CallbackId);
+        ctx.Scheduled.Should().BeEmpty();
+        tool.CancellationRequests.Should().ContainSingle();
+
+        var mismatchedCancellation = originalCancellation.Clone();
+        mismatchedCancellation.OperationId = "different-operation";
+        await module.HandleAsync(
+            StopCancellationEnvelope(mismatchedCancellation, ctx),
+            ctx,
+            CancellationToken.None);
+        ctx.Scheduled.Should().BeEmpty();
+
+        await module.HandleAsync(
+            StopCancellationEnvelope(originalCancellation, ctx),
+            ctx,
+            CancellationToken.None);
+
+        var recovered = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallStopCancellationFiredEvent>()
+            .Should().ContainSingle().Which;
+        recovered.Attempt.Should().Be(persisted.StopCancellationAttempt);
+        recovered.CallbackId.Should().Be(persisted.StopCancellationCallbackId);
+        recovered.OperationId.Should().Be(persisted.OperationId);
+        tool.CancellationRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public void IWorkflowTool_ShouldExposeOnlyTypedWorkflowExecutionMethod()
     {
         var executeMethods = typeof(IWorkflowTool)
@@ -2185,12 +4458,30 @@ public sealed class ToolCallModuleContextTests
         executeMethods[0].GetParameters().Should().NotContain(parameter => parameter.ParameterType == typeof(string));
     }
 
-    private static ToolCallModule CreateModule(
+    private static WorkflowToolPendingOperation DurableOperation(
+        WorkflowToolPendingOperationStatus status,
+        string? etag) =>
+        new(
+            "tool:v1:operation:" + new string('a', 64),
+            "provider-operation-1",
+            "/executions/provider-operation-1",
+            "/executions/provider-operation-1/result",
+            "/executions/provider-operation-1/cancel",
+            status,
+            etag,
+            10,
+            DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            "chrono-sandbox",
+            "user-service-1",
+            WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract);
+
+    internal static ToolCallModule CreateModule(
         IWorkflowTool tool,
-        IWorkflowCallerAccessTokenProvider? tokenProvider = null) =>
+        IWorkflowCallerAccessTokenProvider? tokenProvider = null,
+        ILogger<ToolCallModule>? logger = null) =>
         new(
             [new SingleToolSource(tool)],
-            NullLogger<ToolCallModule>.Instance,
+            logger ?? NullLogger<ToolCallModule>.Instance,
             tokenProvider);
 
     private static WorkflowCallerNyxIdAuthority CreateCallerAuthority() =>
@@ -2343,7 +4634,7 @@ public sealed class ToolCallModuleContextTests
         await DrainToolCallContinuationsAsync(module, ctx);
     }
 
-    private static StepRequestEvent ToolRequest(
+    internal static StepRequestEvent ToolRequest(
         RecordingWorkflowContext ctx,
         string toolName,
         string stepId,
@@ -2419,18 +4710,23 @@ public sealed class ToolCallModuleContextTests
         pending.DisplayName.Should().BeEmpty();
     }
 
-    private static EventEnvelope Envelope(IMessage evt, DateTimeOffset? issuedAt = null)
+    internal static EventEnvelope Envelope(
+        IMessage evt,
+        DateTimeOffset? issuedAt = null,
+        string publisherActorId = "test")
     {
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(issuedAt ?? DateTimeOffset.UtcNow),
             Payload = Any.Pack(evt),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                publisherActorId,
+                TopologyAudience.Self),
         };
     }
 
-    private static EventEnvelope CallbackEnvelope(ScheduledToolCallback callback)
+    internal static EventEnvelope CallbackEnvelope(ScheduledToolCallback callback)
     {
         var envelope = Envelope(callback.Event);
         envelope.Runtime = new EnvelopeRuntime
@@ -2441,6 +4737,42 @@ public sealed class ToolCallModuleContextTests
                 Generation = callback.Lease.Generation,
                 FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 SlotEpoch = callback.Lease.SlotEpoch,
+            },
+        };
+        return envelope;
+    }
+
+    private static EventEnvelope OperationPollEnvelope(
+        WorkflowToolCallOperationPollFiredEvent poll,
+        RecordingWorkflowContext ctx)
+    {
+        var envelope = Envelope(poll, publisherActorId: ctx.AgentId);
+        envelope.Runtime = new EnvelopeRuntime
+        {
+            DeliveryIdentity = new DeliveryIdentity { OperationId = poll.CallbackId },
+            Callback = new EnvelopeCallbackContext
+            {
+                CallbackId = poll.CallbackId,
+                Generation = 1,
+                FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+        };
+        return envelope;
+    }
+
+    private static EventEnvelope StopCancellationEnvelope(
+        WorkflowToolCallStopCancellationFiredEvent fired,
+        RecordingWorkflowContext ctx)
+    {
+        var envelope = Envelope(fired, publisherActorId: ctx.AgentId);
+        envelope.Runtime = new EnvelopeRuntime
+        {
+            DeliveryIdentity = new DeliveryIdentity { OperationId = fired.CallbackId },
+            Callback = new EnvelopeCallbackContext
+            {
+                CallbackId = fired.CallbackId,
+                Generation = 1,
+                FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             },
         };
         return envelope;
@@ -2489,7 +4821,7 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
-    private sealed class BlockingWorkflowTool(
+    internal sealed class BlockingWorkflowTool(
         string name,
         WorkflowToolRecoverySafety recoverySafety = WorkflowToolRecoverySafety.Unspecified) : IWorkflowTool
     {
@@ -2519,15 +4851,74 @@ public sealed class ToolCallModuleContextTests
             _invocations.Reader.ReadAsync();
     }
 
-    private sealed record BlockingToolInvocation(
+    internal sealed record BlockingToolInvocation(
         WorkflowToolExecutionRequest Request,
         TaskCompletionSource<WorkflowToolExecutionResult> Completion,
         CancellationToken CancellationToken);
 
-    private sealed record ScheduledToolCallback(
+    internal sealed record ScheduledToolCallback(
         TimeSpan DueTime,
         IMessage Event,
         RuntimeCallbackLease Lease);
+
+    private sealed class ScriptedDurableOperationTool : IWorkflowDurableOperationTool
+    {
+        private readonly WorkflowToolExecutionResult _executeResult;
+        private readonly Queue<WorkflowToolExecutionResult> _reconciliationResults;
+
+        public ScriptedDurableOperationTool(
+            string name,
+            WorkflowToolExecutionResult executeResult,
+            params WorkflowToolExecutionResult[] reconciliationResults)
+        {
+            Name = name;
+            _executeResult = executeResult;
+            _reconciliationResults = new Queue<WorkflowToolExecutionResult>(reconciliationResults);
+        }
+
+        public string Name { get; }
+
+        public WorkflowToolRecoverySafety RecoverySafety =>
+            WorkflowToolRecoverySafety.DurableStartOnceRedispatch;
+
+        public int ExecuteCalls { get; private set; }
+
+        public int ReconcileCalls { get; private set; }
+
+        public Queue<WorkflowToolCancellationResult> CancellationResults { get; } = [];
+
+        public List<WorkflowToolCancellationRequest> CancellationRequests { get; } = [];
+
+        public Task<WorkflowToolExecutionResult> ExecuteAsync(
+            WorkflowToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecuteCalls++;
+            return Task.FromResult(_executeResult);
+        }
+
+        public Task<WorkflowToolExecutionResult> ReconcileAsync(
+            WorkflowToolExecutionRequest request,
+            WorkflowToolPendingOperation pendingOperation,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ReconcileCalls++;
+            _reconciliationResults.Should().NotBeEmpty();
+            return Task.FromResult(_reconciliationResults.Dequeue());
+        }
+
+        public Task<WorkflowToolCancellationResult> CancelAsync(
+            WorkflowToolCancellationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            CancellationRequests.Add(request);
+            CancellationResults.Should().NotBeEmpty();
+            return Task.FromResult(CancellationResults.Dequeue());
+        }
+    }
 
     private sealed class RecordingWorkflowTool(string name) : IWorkflowTool
     {
@@ -2597,6 +4988,22 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
+    private sealed class SequencedToolSource(params IReadOnlyList<IWorkflowTool>[] discoveries)
+        : IWorkflowToolSource
+    {
+        private readonly Queue<IReadOnlyList<IWorkflowTool>> _discoveries = new(discoveries);
+
+        public int Calls { get; private set; }
+
+        public Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Calls++;
+            _discoveries.Should().NotBeEmpty();
+            return Task.FromResult(_discoveries.Dequeue());
+        }
+    }
+
     private sealed class RecordingLogger : ILogger
     {
         public List<string> Entries { get; } = [];
@@ -2617,10 +5024,85 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
-    private sealed class RecordingWorkflowContext
+    internal sealed class RecordingToolCallLogger : ILogger<ToolCallModule>
+    {
+        private readonly object _gate = new();
+        private readonly List<LogEntry> _entries = [];
+        private readonly List<(Func<LogEntry, bool> Predicate, TaskCompletionSource<LogEntry> Completion)> _waiters = [];
+
+        public IReadOnlyList<LogEntry> Entries
+        {
+            get
+            {
+                lock (_gate)
+                    return _entries.ToList();
+            }
+        }
+
+        /// <summary>
+        /// Completes when an entry matching <paramref name="predicate"/> has been logged (already
+        /// recorded or arriving later, e.g. from a background tool worker). Deterministic sync
+        /// point; never polls.
+        /// </summary>
+        public Task<LogEntry> WaitForEntryAsync(Func<LogEntry, bool> predicate)
+        {
+            TaskCompletionSource<LogEntry> completion;
+            lock (_gate)
+            {
+                var existing = _entries.FirstOrDefault(predicate);
+                if (existing != null)
+                    return Task.FromResult(existing);
+
+                completion = new TaskCompletionSource<LogEntry>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _waiters.Add((predicate, completion));
+            }
+
+            return completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var properties = state is IEnumerable<KeyValuePair<string, object?>> values
+                ? values
+                    .Where(static value => !string.Equals(value.Key, "{OriginalFormat}", StringComparison.Ordinal))
+                    .ToDictionary(static value => value.Key, static value => value.Value, StringComparer.Ordinal)
+                : new Dictionary<string, object?>(StringComparer.Ordinal);
+            var entry = new LogEntry(logLevel, formatter(state, exception), properties);
+            lock (_gate)
+            {
+                _entries.Add(entry);
+                for (var index = _waiters.Count - 1; index >= 0; index--)
+                {
+                    if (!_waiters[index].Predicate(entry))
+                        continue;
+
+                    _waiters[index].Completion.TrySetResult(entry);
+                    _waiters.RemoveAt(index);
+                }
+            }
+        }
+
+        public sealed record LogEntry(
+            LogLevel Level,
+            string Message,
+            IReadOnlyDictionary<string, object?> Properties);
+    }
+
+    internal sealed class RecordingWorkflowContext
         : IWorkflowExecutionContext,
           IWorkflowExecutionRuntimeContextAccessor,
           IWorkflowExecutionStateHost,
+          ISecretVaultAccessor,
           IRuntimeSecretStoreAccessor
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
@@ -2649,7 +5131,16 @@ public sealed class ToolCallModuleContextTests
         public ILogger Logger { get; init; } = NullLogger.Instance;
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+        public ISecretVault? SecretVault { get; init; }
         public IRuntimeSecretStore? RuntimeSecretStore { get; init; } = new InMemoryRuntimeSecretStore();
+        public DateTimeOffset? UtcNowOverride { get; set; }
+        public TimeProvider Clock { get; init; } = TimeProvider.System;
+        public DateTimeOffset UtcNow => UtcNowOverride ?? Clock.GetUtcNow();
+
+        public long GetTimestamp() => Clock.GetTimestamp();
+
+        public TimeSpan GetElapsedTime(long startingTimestamp) =>
+            Clock.GetElapsedTime(startingTimestamp);
 
         public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
@@ -2665,6 +5156,8 @@ public sealed class ToolCallModuleContextTests
 
         public System.Type? FailNextPublishType { get; set; }
 
+        public System.Type? FailAfterNextPublishType { get; set; }
+
         public int FailPublicationRetrySchedulesRemaining { get; set; }
 
         public int FailPublicationRetryPublishesRemaining { get; set; }
@@ -2678,6 +5171,8 @@ public sealed class ToolCallModuleContextTests
         public int FailStateSavesRemaining { get; set; }
 
         public int FailStatePublicationsAfterCommitRemaining { get; set; }
+
+        public int StateSaveCalls { get; private set; }
 
         public TaskCompletionSource<bool> AttemptCompletionScheduleFailureObserved { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2709,6 +5204,20 @@ public sealed class ToolCallModuleContextTests
             return envelope;
         }
 
+        public string PublishedOperationId(IMessage evt) =>
+            _publishedOptions.GetValueOrDefault(evt)?.Delivery?.OperationId ?? string.Empty;
+
+        public bool FailNextSchedule { get; set; }
+
+        /// <summary>
+        /// When set, every published <see cref="WorkflowToolCallAttemptCompletedEvent"/> is handed
+        /// to this delegate (the actor inbox) BEFORE <see cref="PublishAsync"/> returns to the
+        /// producer, modelling a transport that delivers self-publications synchronously. The
+        /// producer therefore records its delivery waterline only after the actor has already
+        /// reconciled the completion.
+        /// </summary>
+        public Func<EventEnvelope, Task>? InTransportAttemptCompletionDelivery { get; set; }
+
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new()
         {
@@ -2730,13 +5239,51 @@ public sealed class ToolCallModuleContextTests
             where TState : class, IMessage<TState>
         {
             ct.ThrowIfCancellationRequested();
+            StateSaveCalls++;
             if (FailStateSavesRemaining > 0)
             {
                 FailStateSavesRemaining--;
                 throw new InvalidOperationException("simulated state save failure");
             }
 
-            _states[scopeKey] = Any.Pack(state);
+            var packed = Any.Pack(state);
+            WorkflowExecutionStateUpsertedEvent? committedUpsert = null;
+            if (string.Equals(scopeKey, ToolCallModule.ModuleStateKey, StringComparison.Ordinal) &&
+                packed.Is(ToolCallModuleState.Descriptor))
+            {
+                var authoritative = _states.TryGetValue(scopeKey, out var authoritativeState) &&
+                                    authoritativeState.Is(ToolCallModuleState.Descriptor)
+                    ? authoritativeState.Unpack<ToolCallModuleState>()
+                    : null;
+                committedUpsert = new WorkflowExecutionStateUpsertedEvent
+                {
+                    ScopeKey = scopeKey,
+                    State = packed,
+                };
+                committedUpsert.ToolCallAttemptPersistenceFacts.Add(
+                    WorkflowToolCallAttemptPersistence.BuildNewFacts(
+                        authoritative,
+                        packed.Unpack<ToolCallModuleState>(),
+                        ScopeId,
+                        UtcNow));
+            }
+
+            _states[scopeKey] = packed;
+            if (committedUpsert is { ToolCallAttemptPersistenceFacts.Count: > 0 })
+            {
+                var committed = new StateEvent
+                {
+                    AgentId = AgentId,
+                    EventId = $"recording-workflow-state-{StateSaveCalls}",
+                    Timestamp = Timestamp.FromDateTimeOffset(UtcNow),
+                    Version = StateSaveCalls,
+                    EventType = WorkflowExecutionStateUpsertedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(committedUpsert),
+                };
+                foreach (var observation in WorkflowToolCallAttemptPersistence.BuildCommittedObservations(committed))
+                    WorkflowToolCallTelemetry.Record(Logger, observation);
+            }
+
             if (FailStatePublicationsAfterCommitRemaining > 0)
             {
                 FailStatePublicationsAfterCommitRemaining--;
@@ -2896,7 +5443,16 @@ public sealed class ToolCallModuleContextTests
             Published.Add((evt, direction));
             _publishedOptions[evt] = options?.DeepClone();
             _publishedEvents.Writer.TryWrite(evt);
-            return Task.CompletedTask;
+            if (FailAfterNextPublishType?.IsInstanceOfType(evt) == true)
+            {
+                FailAfterNextPublishType = null;
+                throw new InvalidOperationException("simulated post-publication failure");
+            }
+
+            return evt is WorkflowToolCallAttemptCompletedEvent &&
+                   InTransportAttemptCompletionDelivery is { } deliverInTransport
+                ? deliverInTransport(PublishedEnvelope(evt))
+                : Task.CompletedTask;
         }
 
         public Task SendToAsync<TEvent>(
@@ -2922,6 +5478,12 @@ public sealed class ToolCallModuleContextTests
         {
             ct.ThrowIfCancellationRequested();
             _ = options;
+            if (FailNextSchedule)
+            {
+                FailNextSchedule = false;
+                throw new InvalidOperationException("simulated schedule failure");
+            }
+
             if (evt is WorkflowToolCallPublicationRetryFiredEvent &&
                 FailPublicationRetrySchedulesRemaining > 0)
             {
@@ -2987,11 +5549,18 @@ public sealed class ToolCallModuleContextTests
     {
         private readonly InMemoryRuntimeSecretStore _inner = new();
         private int _putCalls;
+        private int _resolveCalls;
         private int _revokeCalls;
 
         public int PutCalls => Volatile.Read(ref _putCalls);
 
+        public int ResolveCalls => Volatile.Read(ref _resolveCalls);
+
         public int RevokeCalls => Volatile.Read(ref _revokeCalls);
+
+        public bool ThrowOnResolve { get; set; }
+
+        public bool ReturnUnavailableOnResolve { get; set; }
 
         public RuntimeSecretReference? LastStoredReference { get; private set; }
 
@@ -3007,8 +5576,17 @@ public sealed class ToolCallModuleContextTests
 
         public Task<ResolveRuntimeSecretResult> ResolveAsync(
             ResolveRuntimeSecretRequest request,
-            CancellationToken ct = default) =>
-            _inner.ResolveAsync(request, ct);
+            CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _resolveCalls);
+            if (ThrowOnResolve)
+                throw new InvalidOperationException("simulated protected material resolve failure");
+
+            if (ReturnUnavailableOnResolve)
+                return Task.FromResult(new ResolveRuntimeSecretResult(null, null));
+
+            return _inner.ResolveAsync(request, ct);
+        }
 
         public Task<ConsumeRuntimeSecretResult> ConsumeAsync(
             ConsumeRuntimeSecretRequest request,

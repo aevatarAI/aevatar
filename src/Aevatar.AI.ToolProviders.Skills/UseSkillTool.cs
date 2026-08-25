@@ -282,18 +282,29 @@ public sealed class UseSkillTool : IAgentTool
 
         if (_remoteFetcher != null)
         {
-            var token = _remoteAccessTokenResolver is null
-                ? AgentToolRequestContext.NyxIdAccessToken
-                : await _remoteAccessTokenResolver.ResolveAsync(skillName, ct).ConfigureAwait(false);
-            if (_remoteAccessTokenResolver is not null && string.IsNullOrWhiteSpace(token))
+            string? token;
+            if (_remoteAccessTokenResolver is null)
             {
-                return BuildLoadResult(
-                    skillName: skillName,
-                    loaded: false,
-                    error: "Remote skill access is unavailable for the current caller.",
-                    status: "access_denied",
-                    text: BuildErrorWithAvailableSkills(
-                        $"Remote skill '{skillName}' could not be loaded for the current caller."));
+                token = AgentToolRequestContext.NyxIdAccessToken;
+            }
+            else
+            {
+                var resolution = await _remoteAccessTokenResolver
+                    .ResolveAsync(skillName, ct)
+                    .ConfigureAwait(false);
+                if (!resolution.Succeeded)
+                {
+                    var guidance = RemoteSkillAccessTokenFailureMessage.Build(resolution.FailureKind);
+                    return BuildLoadResult(
+                        skillName: skillName,
+                        loaded: false,
+                        error: guidance,
+                        status: "access_denied",
+                        text: BuildErrorWithAvailableSkills(
+                            $"Remote skill '{skillName}' could not be loaded for the current caller. {guidance}"));
+                }
+
+                token = resolution.AccessToken;
             }
 
             if (!string.IsNullOrWhiteSpace(token))

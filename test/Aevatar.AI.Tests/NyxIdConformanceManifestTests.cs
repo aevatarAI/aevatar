@@ -22,7 +22,7 @@ public sealed class NyxIdConformanceManifestTests
         "v1");
 
     [Fact]
-    public void TransitionRegistries_ShouldExposeOnlyRevisionExecutableActions()
+    public void TransitionRegistries_ShouldDegradePerActionAcrossServedCompositions()
     {
         var legacy = NyxIdAssistantActionRegistry.Load(
             File.ReadAllText(Path.Combine(ContractRoot, "registry-v4.json")));
@@ -30,29 +30,48 @@ public sealed class NyxIdConformanceManifestTests
             File.ReadAllText(Path.Combine(ContractRoot, "registry-v5.json")));
         var leastScope = NyxIdAssistantActionRegistry.Load(
             File.ReadAllText(Path.Combine(ContractRoot, "registry-v6.json")));
-        var target = NyxIdAssistantActionRegistry.Load(
+        var keyRotation = NyxIdAssistantActionRegistry.Load(
             File.ReadAllText(Path.Combine(ContractRoot, "registry-v7.json")));
+        var target = NyxIdAssistantActionRegistry.Load(
+            File.ReadAllText(Path.Combine(ContractRoot, "registry-v8.json")));
 
         legacy.RegistryRevision.Should().Be("nyxid-assistant-actions.v4");
         draft.RegistryRevision.Should().Be("nyxid-assistant-actions.v5");
         leastScope.RegistryRevision.Should().Be("nyxid-assistant-actions.v6");
-        target.RegistryRevision.Should().Be("nyxid-assistant-actions.v7");
-        foreach (var registry in new[] { legacy, draft })
-        {
-            registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
-            registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-            registry.TryGetDefinition("key.create", out _).Should().BeFalse();
-            registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
-        }
+        keyRotation.RegistryRevision.Should().Be("nyxid-assistant-actions.v7");
+        target.RegistryRevision.Should().Be("nyxid-assistant-actions.v8");
+
+        // v4 served only service.connect; absent actions are simply unavailable.
+        legacy.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        legacy.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        legacy.TryGetDefinition("key.create", out _).Should().BeFalse();
+        legacy.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        legacy.SkippedActions.Should().BeEmpty();
+
+        // v5 served the draft key.create schema, which no longer matches the
+        // pinned least-scope contract: that one action degrades while the
+        // valid descriptors in the same composition stay enabled.
+        draft.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        draft.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+        draft.TryGetDefinition("key.create", out _).Should().BeFalse();
+        draft.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        draft.SkippedActions.Should().ContainSingle(skip =>
+            skip.WireAction == "key.create" &&
+            skip.Code == "NYXID_ACTION_REGISTRY_INVALID");
 
         leastScope.TryGetDefinition("service.connect", out _).Should().BeTrue();
         leastScope.TryGetDefinition("key.create", out _).Should().BeTrue();
         leastScope.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
         leastScope.TryGetDefinition("key.rotate", out _).Should().BeFalse();
-        target.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        target.TryGetDefinition("key.create", out _).Should().BeTrue();
-        target.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-        target.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+        leastScope.SkippedActions.Should().BeEmpty();
+        foreach (var registry in new[] { keyRotation, target })
+        {
+            registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
+            registry.TryGetDefinition("key.create", out _).Should().BeTrue();
+            registry.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+            registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+            registry.SkippedActions.Should().BeEmpty();
+        }
     }
 
     [Fact]
@@ -106,8 +125,10 @@ public sealed class NyxIdConformanceManifestTests
         var mountedTools = (await new NyxIdAssistantToolSource(options, client).DiscoverToolsAsync())
             .Select(static tool => tool.Name)
             .ToHashSet(StringComparer.Ordinal);
-        var registry = NyxIdAssistantActionRegistry.Load(
-            File.ReadAllText(Path.Combine(ContractRoot, "registry-v7.json")));
+        var registries = new[] { "registry-v7.json", "registry-v8.json" }
+            .Select(fileName => NyxIdAssistantActionRegistry.Load(
+                File.ReadAllText(Path.Combine(ContractRoot, fileName))))
+            .ToArray();
 
         var shippedReads = rows.Where(static row =>
             row.GetProperty("operation_class").GetString() == "R" &&
@@ -125,7 +146,8 @@ public sealed class NyxIdConformanceManifestTests
         foreach (var row in shippedActions)
         {
             var operation = row.GetProperty("operation_id").GetString()!;
-            registry.TryGetDefinition(operation, out _).Should().BeTrue();
+            foreach (var registry in registries)
+                registry.TryGetDefinition(operation, out _).Should().BeTrue();
             var artifacts = row.GetProperty("artifacts").EnumerateArray()
                 .Select(static value => value.GetString()!)
                 .ToArray();
@@ -274,7 +296,7 @@ public sealed class NyxIdConformanceManifestTests
     }
 
     [Fact]
-    public void TolerantReaderCorpus_ShouldIgnoreExtensionsAndKeepAllRailsClosed()
+    public void TolerantReaderCorpus_ShouldIgnoreExtensionsAndDegradePerAction()
     {
         using var document = Load("tolerant-reader-fixtures.json");
         foreach (var fixture in document.RootElement.GetProperty("fixtures").EnumerateArray())
@@ -289,8 +311,22 @@ public sealed class NyxIdConformanceManifestTests
             {
                 var registry = action.Should().NotThrow().Subject;
                 registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
+                registry.SkippedActions.Should().BeEmpty();
                 if (fixture.GetProperty("id").GetString() == "unknown-verb")
                     registry.TryGetDefinition("workflow.launch", out _).Should().BeFalse();
+                continue;
+            }
+
+            if (expected == "degraded")
+            {
+                var registry = action.Should().NotThrow().Subject;
+                var skippedAction = fixture.GetProperty("skipped_action").GetString()!;
+                var skipCode = fixture.GetProperty("error_code").GetString();
+                registry.TryGetDefinition(skippedAction, out _).Should().BeFalse();
+                registry.SkippedActions.Should().ContainSingle(skip =>
+                    skip.WireAction == skippedAction && skip.Code == skipCode);
+                registry.TryGetDefinition("key.rotate", out _).Should().BeTrue(
+                    $"{fixture.GetProperty("id").GetString()} must keep valid actions enabled");
                 continue;
             }
 

@@ -62,6 +62,27 @@ message WorkflowRunRecoveryCapabilityReadModel {
   int64 workflow_definition_version = 4;
 }
 
+// Immutable, run-document-local address for one step request attempt. The evidence id is an
+// opaque key derived from the typed (step_id, execution_id) identity; consumers must not parse it.
+message WorkflowStepRequestEvidenceReference {
+  string evidence_id = 1;
+  string execution_id = 2;
+  string source_event_id = 3;
+}
+
+// Sanitized request parameters retained once per immutable step execution. Step summaries,
+// failed-attempt snapshots and timeline entries carry only WorkflowStepRequestEvidenceReference.
+message WorkflowStepRequestEvidence {
+  string evidence_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string source_event_id = 4;
+  map<string, string> parameters_map = 5;
+  int64 source_parameter_utf8_bytes = 6;
+  int64 retained_parameter_utf8_bytes = 7;
+  string retained_parameter_sha256 = 8;
+}
+
 message WorkflowRunInsightReportDocument {
   string id = 1;
   int64 state_version = 2;
@@ -89,6 +110,13 @@ message WorkflowRunInsightReportDocument {
   WorkflowExecutionSummary summary_value = 24;
   WorkflowUsageMetricsReadModel usage_value = 25;
   repeated WorkflowRuntimeOperationReadModel operation_entries = 26;
+  // Stable O(1) lookup for the growing step list. Values are zero-based indexes
+  // into step_entries and are rebuilt once when reading a legacy document.
+  map<string, int32> step_index_by_id = 27;
+  // Immutable evidence store keyed by an opaque digest of (step_id, execution_id). This is a
+  // typed collection, not an extension bag; each full sanitized request parameter map appears
+  // at most once in the report document.
+  map<string, WorkflowStepRequestEvidence> request_evidence_by_id = 28;
 }
 
 message WorkflowExecutionCurrentStateDocument {
@@ -143,6 +171,8 @@ message WorkflowExecutionCurrentStateDocument {
   string revision_id = 45;
   int64 definition_version = 46;
   aevatar.workflow.WorkflowRunLineage lineage = 47;
+  aevatar.workflow.WorkflowNormalizedExecutionSeed normalized_fork_seed = 48;
+  aevatar.workflow.WorkflowValueLifecycleFailureKind terminal_value_lifecycle_failure_kind = 49;
 }
 
 message WorkflowRunActivityInitiatorReadModel {
@@ -229,6 +259,7 @@ message WorkflowExecutionStepTrace {
   string worker_id = 7;
   string output_preview = 8;
   string error = 9;
+  // Legacy inline slot. New requests with a typed execution_id use request_evidence_reference.
   map<string, string> request_parameters_map = 10;
   map<string, string> completion_annotations_map = 11;
   string next_step_id = 12;
@@ -244,6 +275,54 @@ message WorkflowExecutionStepTrace {
   WorkflowToolApprovalReadModel tool_approval_value = 22;
   string display_name = 23;
   WorkflowExecutionStepOutcomeReadModel outcome = 24;
+  // Sanitized diagnostic output from the current failed completion. The projection keeps a bounded
+  // head/tail representation and records whether any source text was omitted.
+  string failure_output = 25;
+  bool failure_output_truncated = 26;
+  aevatar.workflow.WorkflowStepFailureOutcome failure_outcome = 27;
+  aevatar.workflow.WorkflowRecoveryFailureKind recovery_failure_kind = 28;
+  aevatar.workflow.WorkflowStepRetryDisposition retry_disposition = 29;
+  aevatar.workflow.WorkflowFileItemResultSet file_item_results = 30;
+  aevatar.workflow.VoteAgreementDecision vote_agreement_decision = 31;
+  // When a new request replaces a failed current attempt, the complete failed attempt is moved here
+  // before the current-attempt fields are reset. This keeps request identity and failure evidence
+  // from different attempts from being combined.
+  WorkflowExecutionFailedStepAttemptReadModel latest_failed_attempt = 32;
+  WorkflowStepRequestEvidenceReference request_evidence_reference = 33;
+}
+
+message WorkflowExecutionFailedStepAttemptReadModel {
+  string display_name = 1;
+  string step_type = 2;
+  string target_role = 3;
+  google.protobuf.Timestamp requested_at_utc_value = 4;
+  google.protobuf.Timestamp completed_at_utc_value = 5;
+  google.protobuf.BoolValue success_wrapper = 6;
+  string worker_id = 7;
+  string output_preview = 8;
+  string error = 9;
+  // Legacy inline slot. New snapshots retain only request_evidence_reference.
+  map<string, string> request_parameters_map = 10;
+  map<string, string> completion_annotations_map = 11;
+  string next_step_id = 12;
+  string branch_key = 13;
+  string assigned_variable = 14;
+  string assigned_value = 15;
+  WorkflowUsageMetricsReadModel usage_value = 16;
+  string failure_output = 17;
+  bool failure_output_truncated = 18;
+  aevatar.workflow.WorkflowStepFailureOutcome failure_outcome = 19;
+  aevatar.workflow.WorkflowRecoveryFailureKind recovery_failure_kind = 20;
+  aevatar.workflow.WorkflowStepRetryDisposition retry_disposition = 21;
+  aevatar.workflow.WorkflowFileItemResultSet file_item_results = 22;
+  aevatar.workflow.VoteAgreementDecision vote_agreement_decision = 23;
+  string suspension_type = 24;
+  string suspension_prompt = 25;
+  int32 suspension_timeout_seconds_value = 26;
+  string requested_variable_name = 27;
+  string suspension_content = 28;
+  WorkflowToolApprovalReadModel tool_approval_value = 29;
+  WorkflowStepRequestEvidenceReference request_evidence_reference = 30;
 }
 
 message WorkflowToolApprovalReadModel {
@@ -295,6 +374,10 @@ message WorkflowRuntimeOperationReadModel {
   string reasoning_content = 22;
   int64 started_progress_sequence = 23;
   int64 completed_progress_sequence = 24;
+  string tool_catalog_policy_version = 25;
+  int32 tool_catalog_tool_count = 26;
+  int32 tool_catalog_schema_bytes = 27;
+  string tool_catalog_digest = 28;
 }
 
 message WorkflowExecutionTimelineEvent {
@@ -306,6 +389,9 @@ message WorkflowExecutionTimelineEvent {
   string step_type = 6;
   string event_type = 7;
   map<string, string> data_map = 8;
+  // Present for step.request entries with a typed execution_id. Other timeline stages continue
+  // to use data_map for their bounded stage-specific data.
+  WorkflowStepRequestEvidenceReference request_evidence_reference = 9;
 }
 
 message WorkflowExecutionSummary {
@@ -342,6 +428,7 @@ message WorkflowCatalogCurrentStateDocument {
   repeated string required_connector_entries = 23;
   repeated string workflow_call_entries = 24;
   aevatar.workflow.WorkflowAuthorizationDependencies authorization_dependencies = 25;
+  string catalog_publication_contract_version = 26;
 }
 
 message WorkflowCatalogRoleReadModel {

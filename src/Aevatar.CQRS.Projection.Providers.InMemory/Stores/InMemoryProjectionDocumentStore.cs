@@ -10,7 +10,8 @@ namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
 public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
     : IProjectionDocumentReader<TReadModel, TKey>,
-      IProjectionDocumentWriter<TReadModel>
+      IProjectionDocumentWriter<TReadModel>,
+      IProjectionDocumentMutator<TReadModel, TKey>
     where TReadModel : class, IProjectionReadModel<TReadModel>, new()
 {
     private const string ProviderName = "InMemory";
@@ -95,6 +96,62 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
                 "failed",
                 ex.GetType().Name);
             throw;
+        }
+    }
+
+    public Task<ProjectionDocumentMutationResult<TReadModel>> MutateAsync(
+        TKey key,
+        Func<TReadModel?, TReadModel> reducer,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(reducer);
+        ct.ThrowIfCancellationRequested();
+
+        var keyValue = FormatKey(key);
+        if (keyValue.Length == 0)
+            throw new ArgumentException("Projection mutation key must be non-empty.", nameof(key));
+
+        lock (_gate)
+        {
+            _itemsByKey.TryGetValue(keyValue, out var stored);
+            var existing = stored == null ? null : Clone(stored);
+            var incoming = reducer(existing)
+                           ?? throw new InvalidOperationException(
+                               $"Projection mutation reducer returned null for read-model '{typeof(TReadModel).FullName}'.");
+            var incomingKey = ResolveReadModelKey(incoming);
+            if (!string.Equals(incomingKey, keyValue, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Projection mutation for read-model '{typeof(TReadModel).FullName}' changed key '{keyValue}' to '{incomingKey}'.");
+            }
+
+            ProjectionWriteResult writeResult;
+            if (stored != null)
+            {
+                writeResult = ProjectionWriteResultEvaluator.Evaluate(stored, incoming);
+            }
+            else if (_deleteMarkersByKey.TryGetValue(keyValue, out var marker))
+            {
+                writeResult = EvaluateUpsertAgainstDeleteMarker(marker, incoming);
+            }
+            else
+            {
+                writeResult = ProjectionWriteResultEvaluator.Evaluate(null, incoming);
+            }
+
+            if (writeResult.IsApplied)
+            {
+                var committed = Clone(incoming);
+                _itemsByKey[keyValue] = committed;
+                _deleteMarkersByKey.Remove(keyValue);
+                return Task.FromResult(new ProjectionDocumentMutationResult<TReadModel>(
+                    writeResult,
+                    Clone(committed)));
+            }
+
+            return Task.FromResult(new ProjectionDocumentMutationResult<TReadModel>(
+                writeResult,
+                stored == null ? null : Clone(stored)));
         }
     }
 
@@ -310,6 +367,11 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
 
         if (incoming.StateVersion == existing.StateVersion)
         {
+            var maintenancePrecedence = ProjectionWriteResultEvaluator
+                .EvaluateSameVersionMaintenancePrecedence(existing.LastEventId, incoming.LastEventId);
+            if (maintenancePrecedence.HasValue)
+                return maintenancePrecedence.Value;
+
             return string.Equals(existing.LastEventId, incoming.LastEventId, StringComparison.Ordinal)
                 ? ProjectionWriteResult.Duplicate()
                 : ProjectionWriteResult.Conflict();
@@ -454,7 +516,9 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
             null => null,
             DateTime dateTime => dateTime.Kind == DateTimeKind.Utc ? dateTime : dateTime.ToUniversalTime(),
             DateTimeOffset dateTimeOffset => dateTimeOffset.UtcDateTime,
-            Enum enumValue => enumValue.ToString(),
+            // Proto enums compare in their protobuf-JSON form so in-memory and document-store
+            // backed queries agree on the same filter value (see ProjectionDocumentValue.FromProtoEnum).
+            Enum enumValue => ProjectionDocumentValue.ResolveProtoEnumName(enumValue),
             Guid guid => guid.ToString(),
             _ => value,
         };

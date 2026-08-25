@@ -151,6 +151,56 @@ internal sealed class NyxIdChatSseWriter
             },
         }, sequence, ct);
 
+    public ValueTask WriteModelCallStartAsync(
+        ModelCallStartEvent modelCall,
+        long sequence,
+        CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "MODEL_CALL_START",
+            modelCallStart = new
+            {
+                operationId = modelCall.OperationId,
+                sessionId = modelCall.SessionId,
+                round = modelCall.Round,
+                model = modelCall.Model,
+                provider = modelCall.Provider,
+                inputSummary = modelCall.InputSummary,
+                availableToolNames = modelCall.AvailableToolNames,
+            },
+        }, sequence, ct);
+
+    public ValueTask WriteModelCallEndAsync(
+        ModelCallEndEvent modelCall,
+        long sequence,
+        CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "MODEL_CALL_END",
+            modelCallEnd = new
+            {
+                operationId = modelCall.OperationId,
+                sessionId = modelCall.SessionId,
+                round = modelCall.Round,
+                model = modelCall.Model,
+                content = modelCall.Content,
+                reasoningContent = modelCall.ReasoningContent,
+                usage = modelCall.Usage is null
+                    ? null
+                    : new
+                    {
+                        available = modelCall.Usage.Available,
+                        promptTokens = modelCall.Usage.PromptTokens,
+                        completionTokens = modelCall.Usage.CompletionTokens,
+                        totalTokens = modelCall.Usage.TotalTokens,
+                        model = modelCall.Usage.Model,
+                    },
+                finishReason = modelCall.FinishReason,
+                success = modelCall.Success,
+                error = modelCall.Error,
+            },
+        }, sequence, ct);
+
     public ValueTask WriteToolCallStartAsync(
         string toolName,
         string callId,

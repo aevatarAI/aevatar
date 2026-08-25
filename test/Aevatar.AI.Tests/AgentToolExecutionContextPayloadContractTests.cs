@@ -15,18 +15,31 @@ public sealed class AgentToolExecutionContextPayloadContractTests
         ((int)AgentToolCredentialSourcePayload.ScheduledRun).Should().Be(4);
         ((int)AgentToolCredentialSourcePayload.System).Should().Be(5);
         ((int)AgentToolCredentialSourcePayload.ServiceAccount).Should().Be(6);
+        ((int)AgentToolNyxIdCredentialAuthorityPayload.Unspecified).Should().Be(0);
+        ((int)AgentToolNyxIdCredentialAuthorityPayload.ToolExecutionContext).Should().Be(1);
 
         AgentToolExecutionContextPayload.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
             .Contain((12, "credential_source"))
             .And.Contain((13, "schedule"))
-            .And.Contain((17, "chat"));
+            .And.Contain((17, "chat"))
+            .And.Contain((20, "durable_nyx_id_credential"));
 
         AgentToolScheduleContextPayload.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
             .Equal((1, "schedule_id"));
+
+        AgentToolCredentialsPayload.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Contain((6, "nyx_id_credential_authority"));
+
+        AgentToolRecoveryContextPayload.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Contain((22, "nyx_id_credential_authority"));
 
         AgentChatInvocationContextPayload.Descriptor.Fields.InFieldNumberOrder()
             .Select(static field => field.Name)

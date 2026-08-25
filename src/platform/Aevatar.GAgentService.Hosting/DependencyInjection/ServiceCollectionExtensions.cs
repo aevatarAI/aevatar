@@ -9,11 +9,13 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Bindings;
+using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Application.Responses;
@@ -51,6 +53,7 @@ using Aevatar.AGUI.Contracts;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Infrastructure.Serialization;
@@ -171,6 +174,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         services.AddToolSetRegistry();
         services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
+        services.TryAddSingleton<IAgentProfileTurnSnapshotResolver, AgentProfileTurnSnapshotResolver>();
+        services.TryAddSingleton<IResponsesOwnedToolCatalogPlanner>(sp =>
+            new ResponsesOwnedToolCatalogPlanner(
+                sp.GetService<IAgentProfileTurnSnapshotResolver>(),
+                sp.GetService<IAgentProfileTurnToolCatalogPlanner>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ResponsesOwnedToolCatalogPlanner>>()));
         services.TryAddSingleton<IServiceInvocationDispatcher>(sp => new DefaultServiceInvocationDispatcher(
             sp.GetRequiredService<IActorDispatchPort>(),
             sp.GetService<IScriptRuntimeCommandPort>(),

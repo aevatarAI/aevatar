@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -21,6 +22,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -304,11 +306,12 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["get_weather", "aevatar_invoke_gagent", "aevatar_invoke_team", "aevatar_start_workflow"]);
+            .Should().Equal("get_weather");
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.ForwardedTools.Should().ContainSingle(tool => tool.ToolName == "get_weather");
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
         command.ToolSelection.ForwardedTools.Single(tool => tool.ToolName == "get_weather").SchemaHash
             .Should().Be(ResponsesToolSchemaHashes.Compute(parametersJson));
         sessions.ForwardedToolCalls.Should().BeEmpty();
@@ -346,7 +349,15 @@ public sealed class MainnetResponsesEndpointsTests
         var toolProvider = new RecordingResponsesToolProvider(
             [new StubAgentTool("Task", "Aevatar task dispatcher")],
             [new StubAgentTool("aevatar_notes", "Aevatar notes")]);
-        await using var app = await CreateAppAsync(provider, sessions, responsesToolProvider: toolProvider);
+        var catalogPlanner = new FixedResponsesOwnedToolCatalogPlanner(
+            ToolSetNames.WorkspaceDefault,
+            new StubAgentTool("Task", "Aevatar task dispatcher"),
+            new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"));
+        await using var app = await CreateAppAsync(
+            provider,
+            sessions,
+            responsesToolProvider: toolProvider,
+            ownedToolCatalogPlanner: catalogPlanner);
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
@@ -376,8 +387,8 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["Task", "aevatar_notes", "aevatar_invoke_gagent"]);
+            .Should().Contain(["Task", "aevatar_invoke_gagent"])
+            .And.NotContain("aevatar_notes");
         var taskTool = provider.LastRequest.Tools.Single(static tool => tool.Name == "Task");
         taskTool.Description.Should().Be("Task substitute");
         taskTool.ParametersSchema.Should().Be("""{"type":"object","properties":{}}""");
@@ -516,7 +527,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task ResponsesUserSkillsToolProvider_ShouldBridgeOnlySkillMainlineTools()
+    public async Task ResponsesUserSkillsToolProvider_ShouldBridgeOnlySkillRuntimeTools()
     {
         var services = new ServiceCollection();
         services.AddSkills(_ => { });
@@ -539,7 +550,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         tools.Select(static tool => tool.Name)
             .Should()
-            .Equal("use_skill", "ornn_search_skills", "ornn_publish_skill", "ornn_update_skill");
+            .Equal("use_skill", "ornn_search_skills");
     }
 
     [Fact]
@@ -586,7 +597,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenSkillBridgeProviderRegistered_ShouldForwardSkillToolsToLlmRequest()
+    public async Task PostResponses_WhenSkillBridgeProviderRegisteredWithoutReviewedCatalog_ShouldNotAutoInjectTools()
     {
         var provider = new RecordingLLMProvider
         {
@@ -628,10 +639,11 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().NotBeNull();
-        provider.LastRequest.Tools.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["use_skill", "ornn_search_skills", "ornn_publish_skill"]);
+        provider.LastRequest!.Tools.Should().BeNullOrEmpty();
+        var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
+            .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
     }
 
     [Fact]
@@ -1611,6 +1623,7 @@ public sealed class MainnetResponsesEndpointsTests
             DefaultToolSetRoutingOptions()));
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
+        builder.Services.AddSingleton<IResponsesOwnedToolCatalogPlanner>(GAgentOwnedToolCatalogPlanner());
 
         await using var app = builder.Build();
         app.UseAuthentication();
@@ -1684,34 +1697,37 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task GetModels_WithBearer_ShouldReturnAggregatorEntriesInOpenAiSpec()
+    public async Task GetModels_WithBearer_ShouldReturnApplicationEntriesInOpenAiSpec()
     {
-        var aggregator = new RecordingResponsesModelsAggregator
+        var discovery = new RecordingLLMModelDiscoveryApplicationService
         {
             Entries =
             [
-                new ResponsesModelEntry
-                {
-                    Id = "claude-opus-4-7",
-                    Created = 1700000000,
-                    OwnedBy = "anthropic",
-                    Group = "anthropic",
-                    RouteValue = "/api/v1/llm/anthropic/v1",
-                    Status = "ready",
-                },
-                new ResponsesModelEntry
-                {
-                    Id = "chrono-llm/qwen-3",
-                    Created = 1700000001,
-                    OwnedBy = "chrono-llm",
-                    Group = "chrono-llm",
-                    RouteValue = "/api/v1/proxy/s/chrono-llm",
-                    Status = "ready",
-                },
+                new LLMModelDescriptor(
+                    "claude-opus-4-7",
+                    1700000000,
+                    "anthropic",
+                    "anthropic",
+                    null,
+                    null,
+                    null,
+                    null),
+                new LLMModelDescriptor(
+                    "chrono-llm/qwen-3",
+                    1700000001,
+                    "chrono-llm",
+                    "chrono-llm",
+                    null,
+                    null,
+                    null,
+                    null),
             ],
         };
         var provider = new RecordingLLMProvider();
-        await using var app = await CreateAppAsync(provider, modelsAggregator: aggregator);
+        await using var app = await CreateAppAsync(
+            provider,
+            callerScopeResolver: new StubResponsesCallerScopeResolver(scopeId: "scope-1"),
+            modelDiscoveryService: discovery);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/v1/models");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "models-token");
@@ -1727,25 +1743,49 @@ public sealed class MainnetResponsesEndpointsTests
         data[0].GetProperty("object").GetString().Should().Be("model");
         data[0].GetProperty("owned_by").GetString().Should().Be("anthropic");
         data[0].GetProperty("group").GetString().Should().Be("anthropic");
-        data[0].GetProperty("route_value").GetString().Should().Be("/api/v1/llm/anthropic/v1");
+        data[0].TryGetProperty("route_value", out _).Should().BeFalse();
         data[1].GetProperty("id").GetString().Should().Be("chrono-llm/qwen-3");
         data[1].GetProperty("group").GetString().Should().Be("chrono-llm");
-        aggregator.LastBearer.Should().Be("models-token");
-        aggregator.CallCount.Should().Be(1);
+        discovery.LastScopeId.Should().Be("scope-1");
+        discovery.CallCount.Should().Be(1);
     }
 
     [Fact]
     public async Task GetModels_WithoutBearer_ShouldReturnStructured401()
     {
-        var aggregator = new RecordingResponsesModelsAggregator();
+        var discovery = new RecordingLLMModelDiscoveryApplicationService();
         var provider = new RecordingLLMProvider();
-        await using var app = await CreateAppAsync(provider, modelsAggregator: aggregator);
+        await using var app = await CreateAppAsync(provider, modelDiscoveryService: discovery);
 
         var response = await app.GetTestClient().GetAsync("/v1/models");
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         (await response.Content.ReadAsStringAsync()).Should().Contain("authentication_required");
-        aggregator.CallCount.Should().Be(0);
+        discovery.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetModels_WhenNyxIdRejectsCallerAuthentication_ShouldReturnStructured401()
+    {
+        var discovery = new RecordingLLMModelDiscoveryApplicationService
+        {
+            Exception = new LLMModelCatalogApplicationException(
+                LLMModelCatalogApplicationErrorKind.AuthenticationRejected,
+                "NYXID_AUTHENTICATION_REJECTED",
+                "caller token expired"),
+        };
+        var provider = new RecordingLLMProvider();
+        await using var app = await CreateAppAsync(
+            provider,
+            callerScopeResolver: new StubResponsesCallerScopeResolver(scopeId: "scope-1"),
+            modelDiscoveryService: discovery);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/v1/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "models-token");
+
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("authentication_failed");
     }
 
     [Fact]
@@ -1906,11 +1946,11 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        // Built-ins are dropped; function-typed tools and default route tools reach the LLM provider.
+        // Built-ins are dropped; the caller-declared function remains forwarded while the
+        // unprofiled endpoint does not auto-union route tools.
         provider.LastRequest!.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["Bash", "aevatar_invoke_gagent"]);
+            .Should().Equal("Bash");
     }
 
     [Fact]
@@ -1989,12 +2029,8 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WithUnknownVendorPrefix_ShouldFallThroughToGatewayWithModelIntact()
+    public async Task PostResponses_WithUnknownVendorPrefix_ShouldFailClosed()
     {
-        // Catalog miss: slug looks like a slug but isn't in the user's catalog.
-        // Behavior: don't set route preference, pass model string verbatim. Gateway
-        // picks backend by model name OR returns a clear downstream error if it doesn't
-        // recognize the model. Either way, aevatar doesn't silently misroute.
         var provider = new RecordingLLMProvider
         {
             StreamChunks =
@@ -2002,7 +2038,6 @@ public sealed class MainnetResponsesEndpointsTests
                 new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
             ],
         };
-        // Empty route table → every slug is a catalog miss.
         var emptyResolver = new RecordingResponsesRouteResolver();
         await using var app = await CreateAppAsync(provider, routeResolver: emptyResolver);
 
@@ -2012,14 +2047,13 @@ public sealed class MainnetResponsesEndpointsTests
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unknown-vendor-secret");
         var response = await app.GetTestClient().SendAsync(request);
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
 
-        // Resolver consulted (slug looks shaped), but returned null → no route preference,
-        // model passed through verbatim to LLM provider.
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, body);
+        body.Should().Contain("model_not_found");
         emptyResolver.CallCount.Should().Be(1);
         emptyResolver.LastSlug.Should().Be("mistralai");
-        provider.LastRequest!.Model.Should().Be("mistralai/mistral-7b");
-        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        provider.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -2125,8 +2159,7 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest!.Model.Should().Be("routed-tool-model");
         provider.LastRequest.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["do_thing", "aevatar_invoke_gagent", "aevatar_invoke_team", "aevatar_start_workflow"]);
+            .Should().Equal("do_thing");
     }
 
     [Fact]
@@ -2172,7 +2205,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2222,7 +2256,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2278,7 +2313,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2315,7 +2351,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2353,7 +2390,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2390,7 +2428,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2426,7 +2465,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2466,7 +2506,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2502,7 +2543,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: TeamOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2549,7 +2591,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: TeamOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2595,7 +2638,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: TeamOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2646,11 +2690,12 @@ public sealed class MainnetResponsesEndpointsTests
         RecordingResponseSessionStore? responseSessions = null,
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IResponsesToolProvider? responsesToolProvider = null,
-        IResponsesModelsAggregator? modelsAggregator = null,
+        ILLMModelDiscoveryApplicationService? modelDiscoveryService = null,
         IResponsesRouteResolver? routeResolver = null,
         IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
         ILlmSessionRunObservationService? observationService = null,
-        string? ingressDefaultModel = null)
+        string? ingressDefaultModel = null,
+        IResponsesOwnedToolCatalogPlanner? ownedToolCatalogPlanner = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -2699,7 +2744,8 @@ public sealed class MainnetResponsesEndpointsTests
             new StaticChatRouteFallbackProvider(string.Empty),
             DefaultToolSetRoutingOptions()));
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
-        builder.Services.AddSingleton(modelsAggregator ?? new RecordingResponsesModelsAggregator());
+        builder.Services.AddSingleton<ILLMModelDiscoveryApplicationService>(
+            modelDiscoveryService ?? new RecordingLLMModelDiscoveryApplicationService());
         builder.Services.AddSingleton(routeResolver ?? new RecordingResponsesRouteResolver
         {
             Routes =
@@ -2707,12 +2753,15 @@ public sealed class MainnetResponsesEndpointsTests
                 // Default test catalog: chrono-llm is a proxy-plane service,
                 // anthropic is a gateway-plane service. Other tests use this
                 // unless they pass their own RecordingResponsesRouteResolver.
-                ["chrono-llm"] = "/api/v1/proxy/s/chrono-llm",
-                ["anthropic"] = "/api/v1/llm/anthropic/v1",
+                ["chrono-llm"] = UserTarget("user-chrono-llm", "chrono-llm"),
+                ["chrono-llm-public"] = UserTarget("user-chrono-llm-public", "chrono-llm-public"),
+                ["anthropic"] = CatalogTarget("catalog-anthropic", "anthropic"),
             },
         });
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
+        if (ownedToolCatalogPlanner != null)
+            builder.Services.AddSingleton(ownedToolCatalogPlanner);
 
         var app = builder.Build();
         app.MapResponsesApiEndpoints();
@@ -2722,6 +2771,18 @@ public sealed class MainnetResponsesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static LLMRouteTarget CatalogTarget(string catalogServiceId, string serviceSlug) => new()
+    {
+        CatalogServiceId = catalogServiceId,
+        ServiceSlugSnapshot = serviceSlug,
+    };
+
+    private static LLMRouteTarget UserTarget(string userServiceId, string serviceSlug) => new()
+    {
+        UserServiceId = userServiceId,
+        ServiceSlugSnapshot = serviceSlug,
+    };
 
     private sealed class ResponsesRecordingActorDispatchPort(
         RecordingLLMProvider provider,
@@ -3141,38 +3202,43 @@ public sealed class MainnetResponsesEndpointsTests
         }
     }
 
-    private sealed class RecordingResponsesModelsAggregator : IResponsesModelsAggregator
+    private sealed class RecordingLLMModelDiscoveryApplicationService
+        : ILLMModelDiscoveryApplicationService
     {
         public string? LastBearer { get; private set; }
+        public string? LastScopeId { get; private set; }
         public int CallCount { get; private set; }
-        public IReadOnlyList<ResponsesModelEntry> Entries { get; init; } = [];
+        public IReadOnlyList<LLMModelDescriptor> Entries { get; init; } = [];
+        public Exception? Exception { get; init; }
 
-        public Task<IReadOnlyList<ResponsesModelEntry>> AggregateAsync(
-            string bearerToken,
-            CancellationToken ct)
+        public Task<IReadOnlyList<LLMModelDescriptor>> ListModelsAsync(
+            string scopeId,
+            CancellationToken ct = default)
         {
-            LastBearer = bearerToken;
+            LastScopeId = scopeId;
             CallCount++;
-            return Task.FromResult(Entries);
+            return Exception is null
+                ? Task.FromResult(Entries)
+                : Task.FromException<IReadOnlyList<LLMModelDescriptor>>(Exception);
         }
     }
 
     private sealed class RecordingResponsesRouteResolver : IResponsesRouteResolver
     {
-        public Dictionary<string, string> Routes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, LLMRouteTarget> Routes { get; init; } = new(StringComparer.Ordinal);
         public int CallCount { get; private set; }
         public string? LastSlug { get; private set; }
-        public string? LastBearer { get; private set; }
 
-        public Task<string?> ResolveRouteValueAsync(
-            string slug,
-            string bearerToken,
+        public Task<LLMRouteTarget?> ResolveRouteTargetAsync(
+            string serviceSlug,
+            string upstreamModelId,
+            ResponsesCallerScope callerScope,
             CancellationToken ct)
         {
             CallCount++;
-            LastSlug = slug;
-            LastBearer = bearerToken;
-            return Task.FromResult(Routes.TryGetValue(slug, out var route) ? route : null);
+            LastSlug = serviceSlug;
+            return Task.FromResult(
+                Routes.TryGetValue(serviceSlug, out var target) ? target.Clone() : null);
         }
     }
 
@@ -3219,6 +3285,16 @@ public sealed class MainnetResponsesEndpointsTests
                 new("team_id", teamId),
                 new("endpoint_id", endpointId),
             ]);
+
+    private static IResponsesOwnedToolCatalogPlanner GAgentOwnedToolCatalogPlanner() =>
+        new FixedResponsesOwnedToolCatalogPlanner(
+            ToolSetNames.WorkspaceDefault,
+            new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"));
+
+    private static IResponsesOwnedToolCatalogPlanner TeamOwnedToolCatalogPlanner() =>
+        new FixedResponsesOwnedToolCatalogPlanner(
+            ToolSetNames.WorkspaceDefault,
+            new StubAgentTool("aevatar_invoke_team", "Invoke a team"));
 
     private static ChatRouteAction ToolHintAction(
         string toolName,

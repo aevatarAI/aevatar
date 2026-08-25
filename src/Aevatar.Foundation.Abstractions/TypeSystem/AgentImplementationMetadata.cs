@@ -7,4 +7,5 @@ namespace Aevatar.Foundation.Abstractions.TypeSystem;
 /// </summary>
 public sealed record AgentImplementationMetadata(
     string Kind,
-    string ImplementationClrTypeName);
+    string ImplementationClrTypeName,
+    int StateSchemaVersion = 0);

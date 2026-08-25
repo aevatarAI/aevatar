@@ -145,6 +145,11 @@ public sealed class ChatRuntimeStreamingBufferTests
         var tool = new CapturingTool();
         var tools = new ToolManager();
         tools.Register(tool);
+        var routeTarget = new LLMRouteTarget
+        {
+            UserServiceId = "user-service-chrono",
+            ServiceSlugSnapshot = "chrono-llm-public",
+        };
         var baseToolContext = AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(null, null, null, 1_785_484_800_000),
@@ -173,6 +178,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                     "response-1",
                     new LLMRequestCallerCredentials("typed-bearer")),
                 ToolContext = baseToolContext,
+                RouteTarget = routeTarget.Clone(),
                 Tools = [tool],
             });
         var executor = runtime.CreateStepExecutor(turnCatalog: null);
@@ -210,6 +216,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         stepRequest.ToolContext.Request.CallId.Should().Be("req-123");
         stepRequest.ToolContext.Routing.ModelOverride.Should().Be("model-a");
         stepRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
+        stepRequest.RouteTarget.Should().BeEquivalentTo(routeTarget);
         stepRequest.Tools.Should().ContainSingle().Which.Name.Should().Be("capture");
 
         var chunks = new List<LLMStreamChunk>();
@@ -241,6 +248,7 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         finalRequest.Tools.Should().BeNull();
         finalRequest.ToolContext!.Request.CallId.Should().Be("req-123:final");
+        finalRequest.RouteTarget.Should().BeEquivalentTo(routeTarget);
 
         var runtimeChunks = new List<LLMStreamChunk>();
         await foreach (var chunk in runtime.ChatStreamAsync(
@@ -261,6 +269,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.Requests[1].Metadata.Should().BeEquivalentTo(stepRequest.Metadata);
         provider.Requests[1].CallerContext.Should().BeEquivalentTo(stepRequest.CallerContext);
         provider.Requests[1].ToolContext.Should().BeEquivalentTo(stepRequest.ToolContext);
+        provider.Requests[1].RouteTarget.Should().BeEquivalentTo(routeTarget);
         provider.Requests[1].Tools.Should().ContainSingle().Which.Name.Should().Be("capture");
         runtimeChunks.Should().ContainSingle(chunk => chunk.DeltaContent == "answer");
 
@@ -1187,7 +1196,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenSingleUseToolSucceeds_ShouldRetireItBeforeTheNextRound()
+    public async Task ChatStreamAsync_WhenSingleUseToolSucceeds_ShouldRejectCaseVariantReuseWithoutMutatingCatalog()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -1205,7 +1214,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                 DeltaToolCall = new ToolCall
                 {
                     Id = "invoke-2",
-                    Name = "aevatar_invoke_member",
+                    Name = "AEVATAR_INVOKE_MEMBER",
                     ArgumentsJson = "{\"member_id\":\"m-alpha\"}",
                 },
             }],
@@ -1227,16 +1236,26 @@ public sealed class ChatRuntimeStreamingBufferTests
             isReadOnly: true));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("run member", maxToolRounds: 3, turnCatalog: null))
+        var catalog = new AgentTurnToolCatalog(
+            ["aevatar_invoke_member", "aevatar_observe_run"],
+            null,
+            null,
+            null,
+            null,
+            exactTools: tools.GetAll());
+
+        await foreach (var _ in runtime.ChatStreamAsync("run member", maxToolRounds: 3, turnCatalog: catalog))
         {
         }
 
         invocationCount.Should().Be(1);
         provider.StreamRequests.Should().HaveCount(3);
-        provider.StreamRequests[1].Tools.Should().NotContain(tool =>
+        provider.StreamRequests[1].Tools.Should().Contain(tool =>
             tool.Name == "aevatar_invoke_member");
         provider.StreamRequests[1].Tools.Should().Contain(tool =>
             tool.Name == "aevatar_observe_run");
+        provider.StreamRequests[1].ToolCatalogProof!.CatalogDigest.Should().Be(
+            provider.StreamRequests[0].ToolCatalogProof!.CatalogDigest);
         provider.StreamRequests[1].Messages.Should().Contain(message =>
             message.Role == "system" &&
             message.Content != null &&
@@ -1805,7 +1824,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         ToolManager? tools = null,
         IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
-        Func<AgentProfileTurnCatalog?, LLMRequest>? requestBuilder = null)
+        Func<AgentTurnToolCatalog?, LLMRequest>? requestBuilder = null)
     {
         var history = new ChatHistory();
         var effectiveTools = tools ?? new ToolManager();

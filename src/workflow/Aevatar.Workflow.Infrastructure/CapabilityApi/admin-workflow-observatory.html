@@ -570,6 +570,7 @@
     overflow: hidden;
   }
   .diagnostic-strip.has-error { border-color: color-mix(in oklab, var(--err) 42%, var(--border)); background: var(--err-soft); }
+  .diagnostic-strip.has-warning { border-color: color-mix(in oklab, var(--warn) 42%, var(--border)); background: var(--warn-soft); }
   .diag-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 11px 14px; border-bottom: 1px solid var(--border-soft); }
   .diag-title { font-weight: 700; color: var(--fg-strong); }
   .diag-sub { font-size: 12px; color: var(--muted); }
@@ -581,6 +582,28 @@
   .diag-code { font-weight: 700; color: var(--fg); }
   .diag-msg { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
   .diag-hint { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+  .failure-evidence { display: grid; gap: 0; border-top: 1px solid var(--border-soft); }
+  .failure-evidence:first-child { border-top: 0; }
+  .failure-evidence-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    padding: 9px 14px; background: color-mix(in oklab, var(--err-soft) 55%, var(--panel));
+  }
+  .failure-evidence-title { color: var(--err); font-size: 12.5px; font-weight: 700; }
+  .failure-evidence-count { color: var(--muted-2); font-family: var(--mono); font-size: 11px; }
+  .failure-evidence-item { display: grid; gap: 5px; padding: 10px 14px; border-top: 1px solid var(--border-soft); }
+  .failure-evidence-item:first-of-type { border-top: 0; }
+  .failure-evidence-label { color: var(--fg-strong); font-size: 12px; font-weight: 700; }
+  .failure-evidence-meta { color: var(--muted); font-family: var(--mono); font-size: 11.5px; word-break: break-word; }
+  .failure-evidence-text {
+    margin: 0; padding: 9px 10px; max-height: 360px; overflow: auto;
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    color: var(--fg); background: var(--bg); border-left: 2px solid var(--err);
+    font-family: var(--mono); font-size: 12px; line-height: 1.55;
+  }
+  .failure-evidence-fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; font-size: 12px; }
+  .failure-evidence-fields .k { color: var(--muted-2); }
+  .failure-evidence-fields .v { color: var(--fg); font-family: var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .failure-truncated { color: var(--warn); font-size: 11.5px; font-weight: 650; }
   .diag-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
   .issue-pre {
     margin: 0; padding: 12px 13px; max-height: 300px; overflow: auto;
@@ -1696,6 +1719,10 @@ function requestTraceCoverageLabel(feed, shown){
 }
 function requestTracePreview(run){
   const source=run||{},input=String(source.inputSummary||"").trim();
+  const failure=source.firstFailure&&typeof source.firstFailure==="object"?source.firstFailure:{};
+  const failureMessage=String(failure.message||"").trim(),failureStep=String(failure.stepId||"").trim();
+  if((source.status==="failed"||source.status==="timed_out")&&failureMessage)
+    return "失败 · "+(failureStep?failureStep+" · ":"")+failureMessage;
   if(input) return "输入 · "+input;
   const step=source.currentStep||{},stepInput=String(step.inputSummary||"").trim(),stepId=String(step.stepId||"").trim();
   if(stepInput) return "当前步骤 · "+stepInput;
@@ -2281,49 +2308,332 @@ function renderRunHeader(detail){
   return head;
 }
 
+function evidenceHasValue(value){
+  if(value==null) return false;
+  if(typeof value==="string") return value.trim()!=="";
+  if(typeof value==="boolean") return true;
+  if(typeof value==="number") return Number.isFinite(value);
+  if(Array.isArray(value)) return value.some(evidenceHasValue);
+  if(typeof value==="object") return Object.values(value).some(evidenceHasValue);
+  return true;
+}
+function evidenceText(value){
+  if(value==null) return "";
+  if(typeof value==="string") return value;
+  try { return JSON.stringify(value,null,2); } catch(e){ return String(value); }
+}
+const OPERATION_EVIDENCE_SUMMARY_MAX_CHARS=360;
+const OPERATION_EVIDENCE_DETAIL_MAX_CHARS=8192;
+const OPERATION_EVIDENCE_FIELDS=["error","output","resultJson","reasoningContent","argumentsJson","inputSummary"];
+const OPERATION_EVIDENCE_OMISSION_MARKER="\n...[浏览器有界片段：中间内容已省略]...\n";
+function boundedOperationEvidenceValue(value,maxChars){
+  const source=evidenceText(value),limit=Math.max(0,Math.floor(Number(maxChars)||0));
+  if(source.length<=limit)return {text:source,sourceLength:source.length,truncated:false};
+  if(limit===0)return {text:"",sourceLength:source.length,truncated:true};
+  const marker=OPERATION_EVIDENCE_OMISSION_MARKER.length<=limit?OPERATION_EVIDENCE_OMISSION_MARKER:"…";
+  const retained=Math.max(0,limit-marker.length),headLength=Math.ceil(retained*.62),tailLength=retained-headLength;
+  return {
+    text:source.slice(0,headLength)+marker+(tailLength?source.slice(source.length-tailLength):""),
+    sourceLength:source.length,
+    truncated:true
+  };
+}
+function boundedOperationEvidenceSnapshot(operation,maxChars){
+  const snapshot=cloneEvidenceValue(operation)||{},limit=Math.max(0,Math.floor(Number(maxChars)||0));
+  const bounds={maxChars:limit,truncatedFields:[],sourceLengths:{}};
+  OPERATION_EVIDENCE_FIELDS.forEach(field=>{
+    if(!Object.prototype.hasOwnProperty.call(snapshot,field)&&!evidenceHasValue(operation&&operation[field]))return;
+    const bounded=boundedOperationEvidenceValue(operation&&operation[field],limit);
+    snapshot[field]=bounded.text;
+    if(bounded.truncated){bounds.truncatedFields.push(field);bounds.sourceLengths[field]=bounded.sourceLength;}
+  });
+  if(bounds.truncatedFields.length)snapshot.uiEvidenceBounds=bounds;
+  return snapshot;
+}
+function appendOperationEvidenceBoundsNotice(container,snapshot,surfaceLabel){
+  const bounds=snapshot&&snapshot.uiEvidenceBounds;
+  if(!bounds||!Array.isArray(bounds.truncatedFields)||!bounds.truncatedFields.length)return;
+  container.appendChild(el("div",{class:"failure-truncated",role:"note"},`${surfaceLabel}每字段最多显示 ${bounds.maxChars} 字符的首尾片段；已省略：${bounds.truncatedFields.join("、")}。`));
+}
+function cloneEvidenceValue(value){
+  if(value==null) return value;
+  try { return JSON.parse(JSON.stringify(value)); } catch(e){ return evidenceText(value); }
+}
+function activityFirstFailure(detail){
+  const direct=detail&&detail.firstFailure;
+  if(direct&&(evidenceHasValue(direct.message)||evidenceHasValue(direct.stepId))) return direct;
+  const runId=detail&&detail.summary&&detail.summary.runId;
+  const row=runId&&typeof cache!=="undefined"&&Array.isArray(cache.runs)
+    ?cache.runs.find(item=>item&&item.runId===runId):null;
+  return row&&row.firstFailure&&(evidenceHasValue(row.firstFailure.message)||evidenceHasValue(row.firstFailure.stepId))?row.firstFailure:null;
+}
+function sectionDiagnosticIssues(detail){
+  const sections=detail&&detail.sections&&typeof detail.sections==="object"?detail.sections:{};
+  return Object.entries(sections).filter(([,section])=>{
+    const status=String(section&&section.versionStatus||"").toLowerCase();
+    return status==="unavailable"||status==="version_mismatch"||status==="versionmismatch"||status==="2"||status==="3"||evidenceHasValue(section&&section.reason);
+  }).map(([section,source])=>({section,...cloneEvidenceValue(source)}));
+}
+function attemptHasFailureEvidence(attempt){
+  return !!(attempt&&(attempt.success===false||evidenceHasValue(attempt.error)||evidenceHasValue(attempt.failureOutput)||attempt.failureOutputTruncated===true));
+}
+function failureAttemptForStep(step){
+  return isRetryWaitingStep(step)?step.latestFailedAttempt:step;
+}
+function hasStepFailureAttemptEvidence(step){
+  return attemptHasFailureEvidence(step);
+}
+function isRetryWaitingStep(step){
+  const outcome=String(step&&step.outcome||"").toLowerCase();
+  return (outcome==="waiting"||outcome==="3")&&attemptHasFailureEvidence(step&&step.latestFailedAttempt);
+}
+function isFailedStep(step){
+  const outcome=String(step&&step.outcome||"").toLowerCase();
+  if(outcome==="waiting"||outcome==="3")return false;
+  return !!(step&&(hasStepFailureAttemptEvidence(step)||outcome==="failed"||outcome.endsWith("_failed")||outcome==="2"));
+}
+function failedOperationEvidence(detail){
+  return (Array.isArray(detail&&detail.operations)?detail.operations:[])
+    .filter(operation=>operation&&(operation.success===false||evidenceHasValue(operation.error)));
+}
+function timelineFailureEvidence(detail){
+  return (Array.isArray(detail&&detail.timeline)?detail.timeline:[]).flatMap((event,index)=>{
+    if(!event) return [];
+    const dataError=dataLookup(event.data||{},["error"]);
+    const toolError=event.toolCall&&event.toolCall.error||"";
+    const runError=event.kind==="RunError"||event.kind==="RunStopped"?event.message||"":"";
+    const error=toolError||dataError||runError;
+    return evidenceHasValue(error)?[{
+      index,kind:event.kind,stage:event.stage,timestampUtc:event.timestampUtc,
+      stepId:event.stepId,stepType:event.stepType,agentId:event.agentId,error
+    }]:[];
+  });
+}
+function collectFailureEvidence(detail){
+  const source=detail||{},firstFailure=activityFirstFailure(source);
+  const problemStatus=["failed","timed_out","stopped"].includes(String(source.summary&&source.summary.status||"").toLowerCase());
+  const recovery=problemStatus&&source.recoveryCapability&&evidenceHasValue(source.recoveryCapability)
+    ?source.recoveryCapability:null;
+  return {
+    finalError:String(source.finalError||""),
+    compilationError:String(source.compilationError||""),
+    firstFailure,
+    failedSteps:(Array.isArray(source.steps)?source.steps:[]).filter(isFailedStep),
+    retryWaitingSteps:(Array.isArray(source.steps)?source.steps:[]).filter(isRetryWaitingStep),
+    failedOperations:failedOperationEvidence(source),
+    timelineErrors:timelineFailureEvidence(source),
+    recoveryCapability:recovery
+  };
+}
+function failureEvidenceCount(evidence){
+  const source=evidence||{};
+  return (evidenceHasValue(source.finalError)?1:0)+(evidenceHasValue(source.compilationError)?1:0)+
+    (evidenceHasValue(source.firstFailure)?1:0)+
+    (source.failedSteps||[]).length+(source.retryWaitingSteps||[]).length+(source.failedOperations||[]).length+
+    (source.timelineErrors||[]).length+(source.recoveryCapability?1:0);
+}
+function failureEvidenceFields(entries){
+  const meaningful=(entries||[]).filter(([,value])=>evidenceHasValue(value));
+  if(!meaningful.length) return null;
+  const fields=el("div",{class:"failure-evidence-fields"});
+  meaningful.forEach(([key,value])=>{
+    fields.appendChild(el("span",{class:"k"},esc(key)));
+    fields.appendChild(el("span",{class:"v"},esc(evidenceText(value))));
+  });
+  return fields;
+}
+function appendFailureEvidenceItem(wrap,label,meta,text,entries,truncated){
+  const item=el("div",{class:"failure-evidence-item"});
+  item.appendChild(el("div",{class:"failure-evidence-label"},esc(label)));
+  if(meta) item.appendChild(el("div",{class:"failure-evidence-meta"},esc(meta)));
+  if(evidenceHasValue(text)) item.appendChild(el("pre",{class:"failure-evidence-text scroll",tabindex:"0"},esc(text)));
+  const fields=failureEvidenceFields(entries);if(fields)item.appendChild(fields);
+  if(truncated) item.appendChild(el("div",{class:"failure-truncated",role:"note"},"失败输出已在投影端按大小上限截断；当前内容保留首尾片段，中间部分不可用。"));
+  wrap.appendChild(item);
+  return item;
+}
+function nestedFailureEvidenceTruncationPaths(step){
+  const paths=[];
+  const attempt=failureAttemptForStep(step);
+  const results=attempt&&attempt.fileItemResults&&Array.isArray(attempt.fileItemResults.results)
+    ?attempt.fileItemResults.results:[];
+  if(attempt&&attempt.fileItemResults&&attempt.fileItemResults.resultsTruncated===true)paths.push("fileItemResults.results (collection)");
+  results.forEach((item,index)=>{
+    if(item&&item.outputTruncated===true)paths.push(`fileItemResults.results[${index}].output`);
+    if(item&&item.errorTruncated===true)paths.push(`fileItemResults.results[${index}].error`);
+  });
+  const decision=attempt&&attempt.voteAgreementDecision;
+  if(decision&&decision.outputTruncated===true)paths.push("voteAgreementDecision.output");
+  if(decision&&decision.reasonTruncated===true)paths.push("voteAgreementDecision.reason");
+  return paths;
+}
+function fileItemResultCollectionRetention(step){
+  const attempt=failureAttemptForStep(step),resultSet=attempt&&attempt.fileItemResults;
+  if(!resultSet||resultSet.resultsTruncated!==true)return null;
+  const retainedCount=Array.isArray(resultSet.results)?resultSet.results.length:0;
+  const parsedSourceCount=Number(resultSet.sourceResultCount);
+  const sourceCountKnown=Number.isFinite(parsedSourceCount)&&parsedSourceCount>0;
+  return {
+    retainedCount,
+    sourceCount:sourceCountKnown?parsedSourceCount:null,
+    sourceCountKnown,
+    message:sourceCountKnown
+      ?`文件结果集合已截断：当前保留 ${retainedCount}/${parsedSourceCount} 条首尾样本。`
+      :`文件结果集合已截断：源结果总数未知，当前保留 ${retainedCount} 条首尾样本。`
+  };
+}
+function fileItemResultEvidenceSummary(step){
+  const attempt=failureAttemptForStep(step),resultSet=attempt&&attempt.fileItemResults;
+  if(!resultSet)return null;
+  const results=Array.isArray(resultSet.results)?resultSet.results:[];
+  const retention=fileItemResultCollectionRetention(step);
+  return {
+    retainedResultCount:results.length,
+    sourceResultCount:retention&&!retention.sourceCountKnown?"unknown":Number(resultSet.sourceResultCount)||results.length,
+    resultsTruncated:resultSet.resultsTruncated===true,
+    failedResultCount:results.filter(item=>item&&item.success===false).length,
+    outputTruncatedCount:results.filter(item=>item&&item.outputTruncated===true).length,
+    errorTruncatedCount:results.filter(item=>item&&item.errorTruncated===true).length
+  };
+}
+function appendNestedFailureEvidenceTruncationNotice(container,step){
+  const paths=nestedFailureEvidenceTruncationPaths(step);
+  if(!paths.length)return;
+  const retention=fileItemResultCollectionRetention(step);
+  if(retention)container.appendChild(el("div",{class:"failure-truncated",role:"note"},retention.message));
+  const fieldPaths=paths.filter(path=>path!=="fileItemResults.results (collection)");
+  if(fieldPaths.length)container.appendChild(el("div",{class:"failure-truncated",role:"note"},`嵌套失败证据已在投影端按大小上限截断：${fieldPaths.join("、")}。当前内容保留首尾片段，中间部分不可用。`));
+}
+function stepTimingEvidenceFields(step){
+  if(!isRetryWaitingStep(step))return [["requestedAtUtc",step.requestedAtUtc],["completedAtUtc",step.completedAtUtc],["durationMs",step.durationMs]];
+  const attempt=step.latestFailedAttempt;
+  return [
+    ["currentRetryRequestedAtUtc",step.requestedAtUtc],
+    ["latestFailedRequestedAtUtc",attempt.requestedAtUtc],
+    ["latestFailedCompletedAtUtc",attempt.completedAtUtc],
+    ["latestFailedDurationMs",attempt.durationMs]
+  ];
+}
+function currentStepTimingEvidenceFields(step){
+  return isRetryWaitingStep(step)
+    ?[["currentRetryRequestedAtUtc",step.requestedAtUtc]]
+    :[["requestedAtUtc",step.requestedAtUtc],["completedAtUtc",step.completedAtUtc],["durationMs",step.durationMs]];
+}
+function failureAttemptIssueSnapshot(step){
+  const snapshot=cloneEvidenceValue(step)||{};
+  const retention=fileItemResultCollectionRetention(step);
+  if(retention&&snapshot.fileItemResults){
+    snapshot.fileItemResults.retainedResultCount=retention.retainedCount;
+    snapshot.fileItemResults.sourceResultCountKnown=retention.sourceCountKnown;
+  }
+  return snapshot;
+}
+function retryWaitingLatestFailedAttemptSnapshot(step){
+  const attemptSnapshot=failureAttemptIssueSnapshot(step.latestFailedAttempt||{});
+  const retention=fileItemResultCollectionRetention(step);
+  if(retention&&attemptSnapshot.fileItemResults){
+    attemptSnapshot.fileItemResults.retainedResultCount=retention.retainedCount;
+    attemptSnapshot.fileItemResults.sourceResultCountKnown=retention.sourceCountKnown;
+  }
+  return {
+    stepId:step.stepId,
+    currentRetry:{
+      displayName:step.displayName,stepType:step.stepType,targetRole:step.targetRole,
+      requestedAtUtc:step.requestedAtUtc,requestParameters:cloneEvidenceValue(step.requestParameters||{}),
+      suspensionType:step.suspensionType,suspensionPrompt:step.suspensionPrompt,
+      suspensionContent:step.suspensionContent,suspensionTimeoutSeconds:step.suspensionTimeoutSeconds,
+      requestedVariableName:step.requestedVariableName,toolApproval:cloneEvidenceValue(step.toolApproval)
+    },
+    latestFailedAttempt:attemptSnapshot
+  };
+}
+function appendStepAttemptEvidence(wrap,step,label){
+  const attempt=failureAttemptForStep(step);
+  const outputParts=[];
+  if(evidenceHasValue(attempt.error)) outputParts.push("error\n"+evidenceText(attempt.error));
+  if(evidenceHasValue(attempt.failureOutput)) outputParts.push("failureOutput\n"+evidenceText(attempt.failureOutput));
+  else if(evidenceHasValue(attempt.outputPreview)) outputParts.push("legacy outputPreview\n"+evidenceText(attempt.outputPreview));
+  const item=appendFailureEvidenceItem(wrap,label,[step.stepId,attempt.displayName,attempt.stepType,attempt.targetRole&&"@"+attempt.targetRole].filter(Boolean).join(" · "),outputParts.join("\n\n"),[
+    ["currentRetry",isRetryWaitingStep(step)?{displayName:step.displayName,stepType:step.stepType,targetRole:step.targetRole,requestParameters:step.requestParameters}:null],
+    ["workerId",attempt.workerId],["success",attempt.success],["outcome",isRetryWaitingStep(step)?"failed":step.outcome],["failureOutcome",attempt.failureOutcome],
+    ["recoveryFailureKind",attempt.recoveryFailureKind],["retryDisposition",attempt.retryDisposition],
+    ...stepTimingEvidenceFields(step),
+    ["requestParameters",attempt.requestParameters],["completionAnnotations",attempt.completionAnnotations],
+    ["assignedVariable",attempt.assignedVariable],["assignedValue",attempt.assignedValue],
+    ["requestedVariableName",attempt.requestedVariableName],["nextStepId",attempt.nextStepId],["branchKey",attempt.branchKey],
+    ["fileItemResultsSummary",fileItemResultEvidenceSummary(step)],["voteAgreementDecision",attempt.voteAgreementDecision]
+  ],attempt.failureOutputTruncated===true);
+  appendNestedFailureEvidenceTruncationNotice(item,step);
+}
+function renderFailureEvidence(detail){
+  const evidence=collectFailureEvidence(detail),count=failureEvidenceCount(evidence);
+  if(!count) return document.createDocumentFragment();
+  const wrap=el("section",{class:"failure-evidence","aria-label":"已捕获失败证据"});
+  wrap.appendChild(el("div",{class:"failure-evidence-head"},`<span class="failure-evidence-title">已捕获失败证据</span><span class="failure-evidence-count">${count} 条记录</span>`));
+  if(evidence.compilationError) appendFailureEvidenceItem(wrap,"工作流编译错误","compilationError",evidence.compilationError,[],false);
+  if(evidence.finalError) appendFailureEvidenceItem(wrap,"运行最终错误","finalError",evidence.finalError,[],false);
+  if(evidence.firstFailure) appendFailureEvidenceItem(wrap,"Activity 失败摘要",evidence.firstFailure.stepId?"step "+evidence.firstFailure.stepId:"failureSummary",evidence.firstFailure.message||"",[["availability",evidence.firstFailure.availability]],false);
+  evidence.failedSteps.forEach(step=>appendStepAttemptEvidence(wrap,step,"失败步骤"));
+  evidence.retryWaitingSteps.forEach(step=>appendStepAttemptEvidence(wrap,step,"等待重试 · 最近一次失败尝试"));
+  evidence.failedOperations.forEach(operation=>{
+    const summary=boundedOperationEvidenceSnapshot(operation,OPERATION_EVIDENCE_SUMMARY_MAX_CHARS);
+    const outputParts=[];
+    if(evidenceHasValue(summary.error))outputParts.push("error\n"+evidenceText(summary.error));
+    if(evidenceHasValue(summary.resultJson))outputParts.push("resultJson 摘要\n"+evidenceText(summary.resultJson));
+    if(evidenceHasValue(summary.output))outputParts.push("output 摘要\n"+evidenceText(summary.output));
+    const item=appendFailureEvidenceItem(wrap,"失败 Operation",[summary.kind,summary.operationId,summary.toolName||summary.model].filter(Boolean).join(" · "),outputParts.join("\n\n"),[
+    ["sessionId",summary.sessionId],["toolCallId",summary.toolCallId],["roleActorId",summary.roleActorId],
+    ["argumentsJson 摘要",summary.argumentsJson],["reasoningContent 摘要",summary.reasoningContent],
+    ["startedAtUtc",summary.startedAtUtc],["completedAtUtc",summary.completedAtUtc],["durationMs",summary.durationMs]
+    ],false);
+    appendOperationEvidenceBoundsNotice(item,summary,"首屏摘要");
+  });
+  evidence.timelineErrors.forEach(event=>appendFailureEvidenceItem(wrap,"Timeline 错误",[event.kind,event.stage,event.stepId,event.timestampUtc].filter(Boolean).join(" · "),event.error,[],false));
+  if(evidence.recoveryCapability) appendFailureEvidenceItem(wrap,"恢复能力与阻塞原因","recoveryCapability","",[["capability",evidence.recoveryCapability]],false);
+  return wrap;
+}
 function issuePayload(detail){
-  const steps = detail.steps || [];
-  const diagnostics = detail.diagnostics || [];
+  const steps=Array.isArray(detail.steps)?detail.steps:[],evidence=collectFailureEvidence(detail);
+  const lastKnown=steps.slice().reverse().find(step=>step.stepId||step.stepType||step.targetRole)||null;
   return JSON.stringify({
-    runId: detail.summary.runId,
-    scopeId: detail.summary.scopeId,
-    workflow: detail.summary.workflowName,
-    status: detail.summary.status,
-    stateVersion: detail.summary.stateVersion,
-    finalError: detail.finalError || "",
-    diagnostics: diagnostics.map(t => ({
-      severity: t.severity,
-      code: t.code,
-      source: t.source,
-      stepId: t.stepId,
-      stepType: t.stepType,
-      targetRole: t.targetRole,
-      message: t.message,
-      hint: t.hint,
-      timestampUtc: t.timestampUtc
-    })),
-    failedSteps: steps.filter(s => s.success === false || s.error).map(s => ({
-      stepId: s.stepId,
-      stepType: s.stepType,
-      targetRole: s.targetRole,
-      error: s.error,
-      requestedAtUtc: s.requestedAtUtc,
-      completedAtUtc: s.completedAtUtc,
-      nextStepId: s.nextStepId,
-      branchKey: s.branchKey
-    })),
-    lastKnownStep: steps.slice().reverse().find(s => s.stepId || s.stepType || s.targetRole) || null
-  }, null, 2);
+    runId:detail.summary.runId,
+    scopeId:detail.summary.scopeId,
+    workflow:detail.summary.workflowName,
+    status:detail.summary.status,
+    stateVersion:detail.summary.stateVersion,
+    reportVersion:detail.reportVersion||"",
+    compilationError:evidence.compilationError,
+    finalError:evidence.finalError,
+    activityFirstFailure:cloneEvidenceValue(evidence.firstFailure),
+    sections:cloneEvidenceValue(detail.sections||{}),
+    sectionIssues:cloneEvidenceValue(sectionDiagnosticIssues(detail)),
+    recoveryCapability:cloneEvidenceValue(detail.recoveryCapability||{}),
+    diagnostics:cloneEvidenceValue(detail.diagnostics||[]),
+    failedOperations:evidence.failedOperations.map(operation=>boundedOperationEvidenceSnapshot(operation,OPERATION_EVIDENCE_DETAIL_MAX_CHARS)),
+    failedSteps:evidence.failedSteps.map(failureAttemptIssueSnapshot),
+    retryWaitingLatestFailedAttempts:evidence.retryWaitingSteps.map(retryWaitingLatestFailedAttemptSnapshot),
+    timelineErrors:cloneEvidenceValue(evidence.timelineErrors),
+    lastKnownStep:lastKnown?{
+      stepId:lastKnown.stepId,displayName:lastKnown.displayName,stepType:lastKnown.stepType,
+      targetRole:lastKnown.targetRole,outcome:lastKnown.outcome,requestedAtUtc:lastKnown.requestedAtUtc,
+      completedAtUtc:lastKnown.completedAtUtc
+    }:null
+  },null,2);
 }
 
 function renderDiagnosticStrip(detail){
   const diagnostics = detail.diagnostics || [];
-  if(!diagnostics.length && !["failed","timed_out","stopped"].includes(detail.summary.status)) return document.createDocumentFragment();
-  const hasProblem = diagnostics.some(t => t.severity === "error" || t.severity === "warning") || ["failed","timed_out","stopped"].includes(detail.summary.status);
-  const box = el("section", { class:"diagnostic-strip"+(hasProblem?" has-error":""), "aria-label":"失败诊断" });
+  const evidenceCount=failureEvidenceCount(collectFailureEvidence(detail));
+  const problemStatus=["failed","timed_out","stopped"].includes(String(detail.summary.status||"").toLowerCase());
+  if(!diagnostics.length && !evidenceCount && !problemStatus) return document.createDocumentFragment();
+  const hasError = diagnostics.some(t => String(t&&t.severity||"").toLowerCase() === "error") || evidenceCount>0 || problemStatus;
+  const hasWarning = !hasError && diagnostics.some(t => String(t&&t.severity||"").toLowerCase() === "warning");
+  const label=hasError?"失败诊断":hasWarning?"运行警告":"运行诊断";
+  const box = el("section", { class:"diagnostic-strip"+(hasError?" has-error":hasWarning?" has-warning":""), "aria-label":label });
   const head = el("div", { class:"diag-head" });
-  head.innerHTML = `<span class="diag-title">${hasProblem ? "失败诊断" : "当前位置"}</span><span class="diag-sub">${diagnostics.length ? `${diagnostics.length} 条诊断信息` : "暂未收集到更多诊断信息"}</span>`;
+  head.innerHTML = `<span class="diag-title">${label}</span><span class="diag-sub">${evidenceCount?`${evidenceCount} 条原始失败证据 · `:""}${diagnostics.length ? `${diagnostics.length} 条诊断信息` : "暂未收集到更多诊断信息"}</span>`;
   box.appendChild(head);
+  if(evidenceCount) box.appendChild(renderFailureEvidence(detail));
   if(diagnostics.length){
     const body = el("div", { class:"diag-body" });
     diagnostics.slice(0, 3).forEach(t => body.appendChild(renderDiagnosticItem(t)));
@@ -2345,6 +2655,8 @@ function renderDiagnosticItem(t){
       ${t.stepId ? `<span>step ${esc(t.stepId)}</span>` : ""}
       ${t.stepType ? `<span>${esc(t.stepType)}</span>` : ""}
       ${t.targetRole ? `<span>@${esc(t.targetRole)}</span>` : ""}
+      ${t.operationKind ? `<span>${esc(t.operationKind)}</span>` : ""}
+      ${t.operationId ? `<span>operation ${esc(t.operationId)}</span>` : ""}
     </div>
     <div class="diag-msg">${esc(t.message||"—")}</div>
     ${t.hint ? `<div class="diag-hint">${esc(t.hint)}</div>` : ""}`;
@@ -2363,6 +2675,7 @@ function renderDiagnostics(detail){
   });
   actions.appendChild(copy);
   wrap.appendChild(actions);
+  wrap.appendChild(renderFailureEvidence(detail));
   if(diagnostics.length){
     const body = el("div", { class:"diag-body" });
     diagnostics.forEach(t => body.appendChild(renderDiagnosticItem(t)));
@@ -2393,19 +2706,94 @@ function renderSteps(detail){
   detail.steps.forEach((step,index)=>{
     const related=events.filter(event=>event.stepId===step.stepId);
     const card=el("article",{class:"step-card"});
-    card.innerHTML=`<b>${esc(step.stepId||"step "+(index+1))}</b><span class="mono">${esc(step.stepType||"unknown")}${step.targetRole?" · @"+esc(step.targetRole):""}</span>
-      <div>${esc(step.requestedAtUtc||"—")} → ${esc(step.completedAtUtc||"进行中")}</div>
-      ${step.error?`<div class="diag-msg">${esc(step.error)}</div>`:""}${step.outputPreview?`<div>${esc(step.outputPreview)}</div><small>outputPreview 为 240 字预览；完整 role/tool 输出见 Timeline</small>`:""}
-      <small>关联 timeline 事件 ${related.length}</small>`;
+    card.innerHTML=`<b>${esc(step.stepId||"step "+(index+1))}</b><span class="mono">${esc(step.displayName||step.stepType||"unknown")}${step.stepType?" · "+esc(step.stepType):""}${step.targetRole?" · @"+esc(step.targetRole):""}</span>`;
+    const retryWaiting=isRetryWaitingStep(step);
+    if(retryWaiting)card.appendChild(el("div",{class:"failure-truncated",role:"note"},"当前步骤正在等待重试；下方错误和失败输出属于最近一次失败尝试，不代表当前步骤已终止失败。"));
+    const fields=failureEvidenceFields([
+      ["workerId",step.workerId],["success",step.success==null?"":String(step.success)],["outcome",step.outcome],
+      ...currentStepTimingEvidenceFields(step),
+      ["requestParameters",step.requestParameters],["completionAnnotations",step.completionAnnotations],
+      ["assignedVariable",step.assignedVariable],["assignedValue",step.assignedValue],
+      ["requestedVariableName",step.requestedVariableName],["nextStepId",step.nextStepId],["branchKey",step.branchKey],
+      ["suspensionType",step.suspensionType],["suspensionPrompt",step.suspensionPrompt],
+      ["suspensionContent",step.suspensionContent],["suspensionTimeoutSeconds",step.suspensionTimeoutSeconds],
+      ["toolApproval",step.toolApproval],["usage",step.usage],["failureOutcome",step.failureOutcome],
+      ["recoveryFailureKind",step.recoveryFailureKind],["retryDisposition",step.retryDisposition],
+      ["fileItemResults",step.fileItemResults],["voteAgreementDecision",step.voteAgreementDecision]
+    ]);
+    if(fields)card.appendChild(fields);
+    if(retryWaiting){
+      appendStepAttemptEvidence(card,step,"最近一次失败尝试");
+    }else{
+      if(step.error)card.appendChild(el("pre",{class:"failure-evidence-text scroll",tabindex:"0","aria-label":"步骤错误"},esc(step.error)));
+      if(step.failureOutput)card.appendChild(el("pre",{class:"failure-evidence-text scroll",tabindex:"0","aria-label":"步骤失败输出"},esc(step.failureOutput)));
+      if(step.failureOutputTruncated===true)card.appendChild(el("div",{class:"failure-truncated",role:"note"},"失败输出已在投影端按大小上限截断；当前内容保留首尾片段，中间部分不可用。"));
+      appendNestedFailureEvidenceTruncationNotice(card,step);
+      if(step.outputPreview){
+        card.appendChild(el("pre",{class:"failure-evidence-text scroll",tabindex:"0","aria-label":"步骤输出预览"},esc(step.outputPreview)));
+        card.appendChild(el("small",{},"outputPreview 是物化时保留的 240 字预览；它不代表完整步骤输出。"));
+      }
+    }
+    card.appendChild(el("small",{},`关联 timeline 事件 ${related.length}`));
     wrap.appendChild(card);
   });
   return wrap;
+}
+function failureLogLines(detail){
+  const evidence=collectFailureEvidence(detail),lines=[];
+  if(evidence.compilationError)lines.push("COMPILATION ERROR "+evidence.compilationError);
+  if(evidence.finalError)lines.push("FINAL ERROR "+evidence.finalError);
+  if(evidence.firstFailure)lines.push("ACTIVITY FIRST FAILURE "+evidenceText(evidence.firstFailure));
+  evidence.failedOperations.forEach(operation=>lines.push("FAILED OPERATION "+evidenceText(boundedOperationEvidenceSnapshot(operation,OPERATION_EVIDENCE_DETAIL_MAX_CHARS))));
+  evidence.failedSteps.forEach(step=>{
+    lines.push("FAILED STEP "+evidenceText({
+      stepId:step.stepId,displayName:step.displayName,stepType:step.stepType,targetRole:step.targetRole,
+      workerId:step.workerId,success:step.success,outcome:step.outcome,error:step.error,
+      failureOutcome:step.failureOutcome,recoveryFailureKind:step.recoveryFailureKind,
+      retryDisposition:step.retryDisposition,requestedAtUtc:step.requestedAtUtc,
+      completedAtUtc:step.completedAtUtc,durationMs:step.durationMs,
+      requestParameters:step.requestParameters,completionAnnotations:step.completionAnnotations,
+      assignedVariable:step.assignedVariable,assignedValue:step.assignedValue,
+      requestedVariableName:step.requestedVariableName,nextStepId:step.nextStepId,branchKey:step.branchKey,
+      fileItemResults:step.fileItemResults,voteAgreementDecision:step.voteAgreementDecision
+    }));
+    if(step.failureOutput)lines.push("STEP FAILURE OUTPUT ["+(step.stepId||"unknown")+"] "+step.failureOutput);
+    if(step.failureOutputTruncated===true)lines.push("STEP FAILURE OUTPUT TRUNCATED ["+(step.stepId||"unknown")+"] head/tail retained; middle unavailable");
+    const collectionRetention=fileItemResultCollectionRetention(step);
+    if(collectionRetention)lines.push("STEP FILE ITEM COLLECTION ["+(step.stepId||"unknown")+"] "+collectionRetention.message);
+    const nestedTruncationPaths=nestedFailureEvidenceTruncationPaths(step);
+    if(nestedTruncationPaths.length)lines.push("STEP NESTED EVIDENCE TRUNCATED ["+(step.stepId||"unknown")+"] "+nestedTruncationPaths.join(", ")+"; head/tail retained; middle unavailable");
+    if(step.outputPreview)lines.push("STEP OUTPUT PREVIEW ["+(step.stepId||"unknown")+"] "+step.outputPreview);
+  });
+  evidence.retryWaitingSteps.forEach(step=>{
+    const attempt=step.latestFailedAttempt;
+    lines.push("RETRY WAITING CURRENT ATTEMPT "+evidenceText({
+      stepId:step.stepId,displayName:step.displayName,stepType:step.stepType,targetRole:step.targetRole,
+      requestedAtUtc:step.requestedAtUtc,requestParameters:step.requestParameters,
+      suspensionType:step.suspensionType,suspensionPrompt:step.suspensionPrompt,
+      suspensionContent:step.suspensionContent,suspensionTimeoutSeconds:step.suspensionTimeoutSeconds,
+      requestedVariableName:step.requestedVariableName,toolApproval:step.toolApproval
+    }));
+    lines.push("RETRY WAITING LATEST FAILED ATTEMPT "+evidenceText({
+      stepId:step.stepId,...attempt
+    }));
+    if(attempt.failureOutput)lines.push("RETRY WAITING LATEST FAILURE OUTPUT ["+(step.stepId||"unknown")+"] "+attempt.failureOutput);
+    if(attempt.failureOutputTruncated===true)lines.push("RETRY WAITING LATEST FAILURE OUTPUT TRUNCATED ["+(step.stepId||"unknown")+"] head/tail retained; middle unavailable");
+    const collectionRetention=fileItemResultCollectionRetention(step);
+    if(collectionRetention)lines.push("RETRY WAITING LATEST FILE ITEM COLLECTION ["+(step.stepId||"unknown")+"] "+collectionRetention.message);
+    const nestedTruncationPaths=nestedFailureEvidenceTruncationPaths(step);
+    if(nestedTruncationPaths.length)lines.push("RETRY WAITING LATEST NESTED EVIDENCE TRUNCATED ["+(step.stepId||"unknown")+"] "+nestedTruncationPaths.join(", ")+"; head/tail retained; middle unavailable");
+    if(attempt.outputPreview)lines.push("RETRY WAITING LATEST OUTPUT PREVIEW ["+(step.stepId||"unknown")+"] "+attempt.outputPreview);
+  });
+  evidence.timelineErrors.forEach(event=>lines.push("TIMELINE ERROR "+evidenceText(event)));
+  if(evidence.recoveryCapability)lines.push("RECOVERY CAPABILITY "+evidenceText(evidence.recoveryCapability));
+  return lines;
 }
 function renderLogs(detail){
   const lines=[];
   (detail.diagnostics||[]).forEach(d=>lines.push(`${d.timestampUtc||"—"} DIAGNOSTIC ${(d.severity||"info").toUpperCase()} [${d.code||"diagnostic"}] ${d.message||""}`));
   (detail.timeline||[]).forEach(event=>{const message=event.content||event.message||(event.toolCall&&(event.toolCall.error||event.toolCall.toolName));if(message)lines.push(`${event.timestampUtc||"—"} ${event.stage?"["+event.stage+"] ":""}${message}`);});
-  if(detail.finalError) lines.push("FINAL ERROR "+detail.finalError);
+  lines.push(...failureLogLines(detail));
   const wrap=el("div",{}); wrap.appendChild(el("p",{class:"diag-hint"},"派生视图：由 diagnostics + committed timeline 组装；不是独立日志事实源。"));
   wrap.appendChild(el("pre",{class:"issue-pre scroll"},esc(lines.join("\n")||"暂无可派生日志"))); return wrap;
 }
@@ -2741,8 +3129,9 @@ function buildOperationRecords(detail){
   }];
 
   if(operations.length>0){
-    operations.forEach((operation,index)=>{
-      if(!operation||typeof operation!=="object") return;
+    operations.forEach((sourceOperation,index)=>{
+      if(!sourceOperation||typeof sourceOperation!=="object") return;
+      const operation=boundedOperationEvidenceSnapshot(sourceOperation,OPERATION_EVIDENCE_DETAIL_MAX_CHARS);
       const type=String(operation.kind||"").toLowerCase();
       if(type!=="model"&&type!=="tool") return;
       const sessionId=String(operation.sessionId||"");
@@ -2773,12 +3162,12 @@ function buildOperationRecords(detail){
         records.push({
           key:operationRecordKey("model",[sessionId||"session-unavailable",operationId||index].join(":"),timestamp,index),
           type:"model",timestamp,startedAt,completedAt,title:model||(round==null?"Model response":`Model round ${round}`),
-          preview:(content||reasoning||"(tool call only)").replace(/\s+/g," "),content,reasoning,event,data,model,
+          preview:boundedOperationEvidenceValue(content||reasoning||"(tool call only)",OPERATION_EVIDENCE_SUMMARY_MAX_CHARS).text.replace(/\s+/g," "),content,reasoning,event,data,model,
           provider:String(operation.provider||""),sessionId,operationId,round,
           inputSummary:String(operation.inputSummary||""),availableToolNames:tools,usage:operation.usage||{},
           finishReason:String(operation.finishReason||""),error:String(operation.error||""),
           status,statusTone,durationMs,durationSource:durationMs==null?"仅在模型 start 与 completed 时间都已提交后显示 Duration。":"",
-          sourceIndex:index,anchorSequence,typed:true,toolCallOnly
+          sourceIndex:index,anchorSequence,typed:true,toolCallOnly,evidenceBounds:operation.uiEvidenceBounds||null
         });
         return;
       }
@@ -2791,7 +3180,7 @@ function buildOperationRecords(detail){
       records.push({
         key:operationRecordKey("tool",[sessionId||"session-unavailable",operationId||tool.callId||index].join(":"),timestamp,index),
         type:"tool",timestamp,startedAt,completedAt,title:tool.toolName,
-        preview:(tool.error||tool.resultJson||tool.argumentsJson||"等待工具结果").replace(/\s+/g," "),tool,
+        preview:boundedOperationEvidenceValue(tool.error||tool.resultJson||tool.argumentsJson||"等待工具结果",OPERATION_EVIDENCE_SUMMARY_MAX_CHARS).text.replace(/\s+/g," "),tool,
         sessionId,operationId,status,statusTone,durationMs,
         durationSource:durationMs==null?"仅在工具 start 与 completed 时间都已提交后显示 Duration。":"",
         sourceIndex:index,anchorSequence,typed:true
@@ -2805,25 +3194,33 @@ function buildOperationRecords(detail){
         const data=event.data&&typeof event.data==="object"?event.data:{};
         const sessionId=dataLookup(data,["session_id","sessionId"]);
         const role=event.message||event.agentId||event.stepId||"assistant";
-        const content=String(event.content==null?"":event.content);
+        const rawContent=String(event.content==null?"":event.content);
+        const boundedContent=boundedOperationEvidenceValue(rawContent,OPERATION_EVIDENCE_DETAIL_MAX_CHARS);
+        const content=boundedContent.text;
+        const evidenceBounds=boundedContent.truncated?{
+          maxChars:OPERATION_EVIDENCE_DETAIL_MAX_CHARS,
+          truncatedFields:["content"],
+          sourceLengths:{content:boundedContent.sourceLength}
+        }:null;
         records.push({
           key:operationRecordKey("model",[runId,sessionId||"session-unavailable",timestamp||"time-unavailable",index].join(":"),timestamp,index),type:"model",timestamp,
-          title:role,preview:(content||"(tool call only)").replace(/\s+/g," "),content,reasoning:"",event,data,
+          title:role,preview:boundedOperationEvidenceValue(rawContent||"(tool call only)",OPERATION_EVIDENCE_SUMMARY_MAX_CHARS).text.replace(/\s+/g," "),
+          content,reasoning:"",event:{...event,content},data,evidenceBounds,
           model:dataLookup(data,DATA_MODEL_KEYS),sessionId,status:"已提交",statusTone:"ok",durationMs:null,
           durationSource:"历史轨迹只保留 committed 时间点，无法还原真实模型 Duration。",
-          sourceIndex:index,anchorSequence:index,typed:false,toolCallOnly:content.trim()===""
+          sourceIndex:index,anchorSequence:index,typed:false,toolCallOnly:rawContent.trim()===""
         });
         return;
       }
       if(event.kind==="ToolCall"||event.stage==="tool.call"){
-        const tool=event.toolCall||{};
+        const tool=boundedOperationEvidenceSnapshot(event.toolCall||{},OPERATION_EVIDENCE_DETAIL_MAX_CHARS);
         const callId=String(tool.callId||dataLookup(event.data||{},["call_id","callId"]));
         const name=String(tool.toolName||event.message||"unknown tool");
         const error=String(tool.error||"");
         const success=tool.success===true;
         records.push({
           key:operationRecordKey("tool",runId+":"+(callId||[name,timestamp,index].join(":")),timestamp,index),type:"tool",timestamp,title:name,
-          preview:(error||(tool.resultJson||tool.argumentsJson)||"未返回工具详情").replace(/\s+/g," "),tool,event,
+          preview:boundedOperationEvidenceValue(error||(tool.resultJson||tool.argumentsJson)||"未返回工具详情",OPERATION_EVIDENCE_SUMMARY_MAX_CHARS).text.replace(/\s+/g," "),tool,event,
           status:success?"成功":tool.success===false||error?"失败":"结果未确认",statusTone:success?"ok":tool.success===false||error?"bad":"",
           durationMs:null,durationSource:"历史轨迹只保留 committed 时间点，无法还原真实工具 Duration。",
           sourceIndex:index,anchorSequence:index,typed:false
@@ -2927,6 +3324,7 @@ function renderOperationDetail(record){
     if(record.inputSummary) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0","aria-label":"模型输入摘要"},esc(record.inputSummary)));
     if(record.availableToolNames&&record.availableToolNames.length) detail.appendChild(el("div",{class:"op-unavailable"},`Available tools · ${esc(record.availableToolNames.join(", "))}`));
     if(record.error) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0"},esc(record.error)));
+    appendOperationEvidenceBoundsNotice(detail,{uiEvidenceBounds:record.evidenceBounds},"Operation 详情");
     const data=renderDataDetails(record.data);if(data)detail.appendChild(data);
   } else if(record.type==="tool"){
     const tool=record.tool;
@@ -2935,6 +3333,7 @@ function renderOperationDetail(record){
     detail.appendChild(jsonField("参数 · arguments",tool.argumentsJson));
     if(tool.resultJson) detail.appendChild(jsonField("结果 · result",tool.resultJson));
     if(tool.error) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0"},esc(tool.error)));
+    appendOperationEvidenceBoundsNotice(detail,tool,"Operation 详情");
   }
   return detail;
 }
@@ -3020,6 +3419,8 @@ function renderTimeline(detail){
     // carries them — typically llm_call StepFinished / Message events. Skipped for tool-call rows whose
     // detail already lives in the tool-call panel.
     if(ev.kind !== "ToolCall"){
+      const dataError=dataLookup(ev.data||{},["error"]);
+      if(dataError) body.appendChild(el("pre",{class:"failure-evidence-text scroll",tabindex:"0","aria-label":"Timeline data.error"},esc(dataError)));
       const details = renderDataDetails(ev.data);
       if(details) body.appendChild(details);
     }
@@ -3251,6 +3652,8 @@ function renderNodeDetailPanel(detail, g, nodeId){
       }
       // model + token usage from this step's committed data bag
       if(ev.kind !== "ToolCall"){
+        const dataError=dataLookup(ev.data||{},["error"]);
+        if(dataError) row.appendChild(el("pre",{class:"failure-evidence-text scroll",tabindex:"0","aria-label":"Timeline data.error"},esc(dataError)));
         const details = renderDataDetails(ev.data);
         if(details) row.appendChild(details);
       }
@@ -3694,7 +4097,22 @@ function detailSig(d){
     operation.startedAtUtc,operation.completedAtUtc,operation.success,
     String(operation.output||"").length,String(operation.resultJson||"").length
   ].join(":")).join("|");
-  return d.summary.status+":"+d.summary.stateVersion+":"+((d.timeline&&d.timeline.length)||0)+":"+((d.diagnostics&&d.diagnostics.length)||0)+":"+operationWatermark;
+  const stepWatermark=(Array.isArray(d.steps)?d.steps:[]).map(step=>[
+    step.stepId,step.success,step.outcome,String(step.error||"").length,String(step.failureOutput||"").length,
+    step.failureOutputTruncated,step.recoveryFailureKind,step.retryDisposition,
+    step.latestFailedAttempt&&step.latestFailedAttempt.requestedAtUtc,
+    step.latestFailedAttempt&&step.latestFailedAttempt.completedAtUtc,
+    String(step.latestFailedAttempt&&step.latestFailedAttempt.error||"").length,
+    String(step.latestFailedAttempt&&step.latestFailedAttempt.failureOutput||"").length,
+    step.latestFailedAttempt&&step.latestFailedAttempt.failureOutputTruncated
+  ].join(":")).join("|");
+  const sectionWatermark=Object.entries(d.sections||{}).map(([key,section])=>[
+    key,section&&section.versionStatus,section&&section.detailStateVersion,section&&section.sourceStateVersion,section&&section.reason
+  ].join(":")).join("|");
+  const recoveryWatermark=evidenceText(d.recoveryCapability||{});
+  return d.summary.status+":"+d.summary.stateVersion+":"+((d.timeline&&d.timeline.length)||0)+":"+
+    ((d.diagnostics&&d.diagnostics.length)||0)+":"+String(d.compilationError||"").length+":"+
+    operationWatermark+":"+stepWatermark+":"+sectionWatermark+":"+recoveryWatermark;
 }
 let lastRunsSig = "", lastDetailSig = "";
 

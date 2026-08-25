@@ -23,7 +23,7 @@
 <body>
   <main class="card" role="status" aria-live="polite">
     <div class="spinner" id="spin" aria-hidden="true"></div>
-    <h1>Aevatar Backend Console</h1>
+    <h1 id="callback-title">Aevatar Backend Console</h1>
     <p id="msg">正在完成登录…</p>
     <p class="back" id="back"></p>
   </main>
@@ -35,14 +35,24 @@
   var CLIENT_ID = BACKEND_CONSOLE_CONFIG.clientId || "";
   var RESOURCES = Array.isArray(BACKEND_CONSOLE_CONFIG.resources) ? BACKEND_CONSOLE_CONFIG.resources : [];
   var REDIRECT_URI = location.origin + "/auto/callback";
-  var STORAGE_KEY = BACKEND_CONSOLE_CONFIG.storageKey || "";
-  var VOICE_TOKEN_PURPOSE = "voice-realtime";
-  var TOKEN_KEY = STORAGE_KEY + ":token";
-  var VOICE_TOKEN_KEY = STORAGE_KEY + ":voice-realtime:token";
-  var PKCE_KEY  = STORAGE_KEY + ":pkce";
+  var ADMIN_STORAGE_KEY = BACKEND_CONSOLE_CONFIG.storageKey || "";
+  var AI_STORAGE_KEY = BACKEND_CONSOLE_CONFIG.aiStorageKey || "";
   var DEFAULT_RETURN = safePath(BACKEND_CONSOLE_CONFIG.defaultReturnPath, "/admin");
+  var AUTH_STORAGE_CONTEXTS = [
+    { kind: "admin", storageKey: ADMIN_STORAGE_KEY, defaultReturn: DEFAULT_RETURN },
+    { kind: "ai", storageKey: AI_STORAGE_KEY, defaultReturn: "/ai" }
+  ];
+  var VOICE_TOKEN_PURPOSE = "voice-realtime";
+  var SERVICE_ACCESS_REVIEW_FLOW = "service-access-review";
 
-  function safePath(p, fallback){ return (typeof p === "string" && p.charAt(0) === "/" && p.charAt(1) !== "/") ? p : fallback; }
+  function safePath(p, fallback){
+    if(typeof p !== "string") return fallback;
+    try {
+      var parsed = new URL(p, location.origin);
+      if(parsed.origin !== location.origin) return fallback;
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch(e){ return fallback; }
+  }
   function normalizeResources(values){
     var result=[];
     (Array.isArray(values)?values:[]).forEach(function(value){ var resource=typeof value==="string"?value.trim():""; if(resource&&result.indexOf(resource)<0) result.push(resource); });
@@ -72,22 +82,100 @@
   function resourcesCover(granted,requested){ return Array.isArray(granted)&&requested.every(function(resource){return granted.indexOf(resource)>=0;}); }
   function stop(){ var s=document.getElementById("spin"); if(s) s.style.display="none"; }
   function show(t){ var m=document.getElementById("msg"); if(m) m.textContent=t; }
-  function offerBack(to){ stop(); var b=document.getElementById("back"); if(b){ b.innerHTML='<a href="'+to+'">返回控制台</a>'; b.style.display="block"; } }
+  function offerBack(to){
+    stop();
+    var b=document.getElementById("back");
+    if(!b) return;
+    b.textContent="";
+    var link=document.createElement("a");
+    link.href=to;
+    link.textContent=isAiReturn ? "返回 Aevatar AI" : "返回控制台";
+    b.appendChild(link);
+    b.style.display="block";
+  }
 
   var params = new URLSearchParams(location.search);
   var code = params.get("code");
   var oauthError = params.get("error");
-  var pending = null;
-  try { pending = JSON.parse(sessionStorage.getItem(PKCE_KEY) || "null"); } catch(e){ pending = null; }
-  var returnTo = safePath(pending && pending.returnTo, DEFAULT_RETURN);
+  var oauthState = params.get("state");
+  var hasOAuthState = typeof oauthState === "string" && oauthState.length > 0;
+  var matchingContexts = [];
+  AUTH_STORAGE_CONTEXTS.forEach(function(context){
+    var candidate = null;
+    try { candidate = JSON.parse(sessionStorage.getItem(context.storageKey + ":pkce") || "null"); } catch(e){ candidate = null; }
+    var candidateState = candidate && typeof candidate.state === "string" ? candidate.state : "";
+    if(hasOAuthState && candidateState.length > 0 && candidateState === oauthState) matchingContexts.push({ context: context, pending: candidate });
+  });
+  var selected = matchingContexts.length === 1 ? matchingContexts[0] : null;
+  var selectedContext = selected && selected.context;
+  var pending = selected && selected.pending;
+  var STORAGE_KEY = selectedContext ? selectedContext.storageKey : ADMIN_STORAGE_KEY;
+  var TOKEN_KEY = STORAGE_KEY + ":token";
+  var VOICE_TOKEN_KEY = STORAGE_KEY + ":voice-realtime:token";
+  var SERVICE_ACCESS_REVIEW_TOKEN_KEY = STORAGE_KEY + ":service-access-review:token";
+  var PKCE_KEY = STORAGE_KEY + ":pkce";
+  var returnTo = safePath(pending && pending.returnTo, selectedContext ? selectedContext.defaultReturn : DEFAULT_RETURN);
+  var isAiReturn = Boolean(selectedContext && selectedContext.kind === "ai");
+  if(isAiReturn){
+    document.title="登录中 · Aevatar AI";
+    var callbackTitle=document.getElementById("callback-title");
+    if(callbackTitle) callbackTitle.textContent="Aevatar AI";
+  }
   var requestedResources = pending && Array.isArray(pending.resources) ? normalizeResources(pending.resources) : [];
   var rawTokenPurpose = pending && typeof pending.tokenPurpose === "string" ? pending.tokenPurpose : "";
   if(rawTokenPurpose && rawTokenPurpose !== VOICE_TOKEN_PURPOSE){ show("登录状态包含未知的令牌用途，请返回重试。"); offerBack(returnTo); return; }
   var tokenPurpose = rawTokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_PURPOSE : "";
+  var rawAuthFlow = pending && typeof pending.authFlow === "string" ? pending.authFlow : "";
+  if(rawAuthFlow && rawAuthFlow !== SERVICE_ACCESS_REVIEW_FLOW){ show("登录状态包含未知的授权流程，请返回重试。"); offerBack(returnTo); return; }
+  var authFlow = rawAuthFlow === SERVICE_ACCESS_REVIEW_FLOW ? SERVICE_ACCESS_REVIEW_FLOW : "";
+  if(authFlow && tokenPurpose){ show("登录状态包含冲突的授权用途，请返回重试。"); offerBack(returnTo); return; }
 
-  if(oauthError){ show("登录失败：" + oauthError); offerBack(returnTo); return; }
-  if(!code){ location.replace(returnTo); return; }
-  if(!pending || pending.state !== params.get("state")){ show("登录状态校验失败，请返回重试。"); offerBack(returnTo); return; }
+  function finishServiceAccessReview(status, message){
+    if(authFlow !== SERVICE_ACCESS_REVIEW_FLOW ||
+       !pending || typeof pending.authRequestId !== "string" || !pending.authRequestId ||
+       !globalThis.opener || globalThis.opener.closed) return false;
+    try {
+      sessionStorage.removeItem(PKCE_KEY);
+      globalThis.opener.postMessage({
+        source:"aevatar-service-access-review-auth",
+        type:"service-access-review-result",
+        requestId:pending.authRequestId,
+        state:oauthState || "",
+        status:status === "succeeded" ? "succeeded" : "failed",
+        message:String(message || "")
+      }, location.origin);
+      stop();
+      show(message);
+      if(typeof globalThis.close === "function") globalThis.close();
+      return true;
+    } catch(e){ return false; }
+  }
+
+  function failServiceAccessReview(message){
+    if(finishServiceAccessReview("failed", message)) return;
+    show(message);
+    offerBack(returnTo);
+  }
+
+  if(!selected){ show("登录状态校验失败，请返回重试。"); offerBack(returnTo); return; }
+  if(oauthError){ failServiceAccessReview("登录失败：" + oauthError); return; }
+  if(!code){
+    if(finishServiceAccessReview("failed", "NyxID 未返回授权码；原 action 与会话仍然保留。")) return;
+    location.replace(returnTo);
+    return;
+  }
+
+  // Ordinary console login finalizes server-side. That is what commits the NyxID
+  // ExternalIdentityBinding the Studio/Delivery publish path requires; a browser-side
+  // token exchange leaves the account with no binding and publish answers 409. It also
+  // keeps exchange free of `resource`, which ADR-0018 requires — repeating resource here
+  // narrows the grant per RFC 8707 and that narrowing is inherited by the binding.
+  // Purpose-scoped Voice and service-access review tokens are deliberately not
+  // logins. They keep browser-side exchanges and isolated storage keys.
+  if(tokenPurpose !== VOICE_TOKEN_PURPOSE && authFlow !== SERVICE_ACCESS_REVIEW_FLOW){
+    finalizeLogin();
+    return;
+  }
 
   var form = new URLSearchParams();
   form.set("grant_type", "authorization_code");
@@ -100,20 +188,83 @@
   fetch(AUTHORITY + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() })
     .then(function(res){
       try { sessionStorage.removeItem(PKCE_KEY); } catch(e){}
-      if(!res.ok){ show("令牌交换失败（" + res.status + "），请返回重试。"); offerBack(returnTo); return null; }
+      if(!res.ok){ failServiceAccessReview("令牌交换失败（" + res.status + "），原 action 与会话仍然保留。"); return null; }
       return res.json();
     })
     .then(function(token){
       if(!token) return;
       if(requestedResources.length && !resourcesCover(tokenResponseResources(token), requestedResources)){
-        show("令牌未包含本次请求的服务授权，请返回重试。"); offerBack(returnTo); return;
+        failServiceAccessReview("令牌未包含本次请求的服务授权；原 action 与会话仍然保留。"); return;
       }
       token.obtained_at = Date.now();
       token.oauth_resources = requestedResources;
-      localStorage.setItem(tokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_KEY : TOKEN_KEY, JSON.stringify(token));
+      var tokenKey = authFlow === SERVICE_ACCESS_REVIEW_FLOW
+        ? SERVICE_ACCESS_REVIEW_TOKEN_KEY
+        : tokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_KEY : TOKEN_KEY;
+      localStorage.setItem(tokenKey, JSON.stringify(token));
+      if(finishServiceAccessReview("succeeded", "NyxID 授权已更新，正在恢复 Studio 中的原任务…")) return;
       location.replace(returnTo);
     })
-    .catch(function(e){ show("登录出错：" + (e && e.message ? e.message : e)); offerBack(returnTo); });
+    .catch(function(e){ failServiceAccessReview("登录出错：" + (e && e.message ? e.message : e)); });
+
+  function pick(record, names){
+    for(var i=0;i<names.length;i++){
+      var value = record ? record[names[i]] : undefined;
+      if(value !== undefined && value !== null && value !== "") return value;
+    }
+    return undefined;
+  }
+
+  function finalizationErrorMessage(status, body){
+    var errorCode = String(pick(body, ["error"]) || "");
+    if(errorCode === "required_service_access_missing"){
+      return "NyxID 授权缺少必需服务，请返回重新登录并保留授权页默认勾选的服务。";
+    }
+    if(errorCode === "authorization_code_rejected"){
+      return "NyxID 拒绝了本次授权码，请返回重新登录。";
+    }
+    if(errorCode === "broker_capability_disabled"){
+      return "NyxID 未为本客户端返回绑定标识，请联系管理员检查 OAuth 客户端配置。";
+    }
+    var detail = pick(body, ["detail", "title", "message"]);
+    return "登录finalize失败（" + status + "）" + (detail ? "：" + detail : "。");
+  }
+
+  function finalizeLogin(){
+    fetch("/api/auth/nyxid/finalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ code: code, codeVerifier: pending.verifier, redirectUri: REDIRECT_URI })
+    })
+      .then(function(res){
+        try { sessionStorage.removeItem(PKCE_KEY); } catch(e){}
+        return res.json().catch(function(){ return {}; }).then(function(body){
+          return { ok: res.ok, status: res.status, body: body };
+        });
+      })
+      .then(function(result){
+        if(!result.ok){ show(finalizationErrorMessage(result.status, result.body)); offerBack(returnTo); return; }
+        var tokens = result.body ? result.body.tokens : null;
+        var accessToken = pick(tokens, ["accessToken", "access_token"]);
+        if(!accessToken){ show("登录响应缺少 access_token，请返回重试。"); offerBack(returnTo); return; }
+        var expiresIn = Number(pick(tokens, ["expiresIn", "expires_in"]));
+        var token = {
+          access_token: accessToken,
+          refresh_token: pick(tokens, ["refreshToken", "refresh_token"]) || "",
+          token_type: pick(tokens, ["tokenType", "token_type"]) || "Bearer",
+          expires_in: Number.isFinite(expiresIn) ? expiresIn : 0,
+          id_token: pick(tokens, ["idToken", "id_token"]) || "",
+          scope: pick(tokens, ["scope"]) || "",
+          obtained_at: Date.now(),
+          // Finalize deliberately omits `resource`; the grant is whatever the user
+          // confirmed at consent, so no narrowed set is recorded here.
+          oauth_resources: []
+        };
+        localStorage.setItem(TOKEN_KEY, JSON.stringify(token));
+        location.replace(returnTo);
+      })
+      .catch(function(e){ show("登录出错：" + (e && e.message ? e.message : e)); offerBack(returnTo); });
+  }
 })();
 </script>
 </body>

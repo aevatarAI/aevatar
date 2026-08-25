@@ -19,9 +19,9 @@ public sealed class ResponsesToolClassificationTests
     public async Task ClassifyAsync_ShouldSubstituteForwardAndDeduplicateAdditiveTools()
     {
         var substitute = new RecordingTool("web_search", """{"type":"object","properties":{"q":{"type":"string"}}}""", "{}");
-        var duplicateSubstitute = new RecordingTool("web_search", """{"type":"object"}""", "{}");
+        var duplicateSubstitute = substitute;
         var additive = new RecordingTool("aevatar_todo_write", """{"type":"object"}""", "{}");
-        var duplicateAdditive = new RecordingTool("aevatar_todo_write", """{"type":"object"}""", "{}");
+        var duplicateAdditive = additive;
         var customAdditive = new RecordingTool("custom_additive", """{"type":"object"}""", "{}");
         var logger = new RecordingLogger();
 
@@ -50,6 +50,28 @@ public sealed class ResponsesToolClassificationTests
         await ((Func<Task>)(() => result.EffectiveTools.Single(tool => tool.Name == "client_tool").ExecuteAsync("{}")))
             .Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*must be executed by the client*");
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_WhenDifferentExactToolsShareAName_ShouldFailClosed()
+    {
+        var provider = new RecordingResponsesToolProvider(
+            [],
+            [
+                new RecordingTool("use_skill", """{"type":"object"}""", "{}"),
+                new RecordingTool("Use_Skill", """{"type":"object","properties":{"id":{"type":"string"}}}""", "{}"),
+            ]);
+
+        var act = () => ResponsesToolClassifier.ClassifyAsync(
+                [],
+                [provider],
+                ToolProviderContext,
+                new RecordingLogger())
+            .AsTask();
+
+        var exception = await act.Should().ThrowAsync<AgentToolDiscoveryException>();
+        exception.Which.Failure.Code.Should().Be(AgentToolDiscoveryFailureCode.ToolNameCollision);
+        exception.Which.Failure.ToolName.Should().Be("use_skill");
     }
 
     [Fact]
@@ -130,6 +152,85 @@ public sealed class ResponsesToolClassificationTests
     }
 
     [Fact]
+    public async Task ClassifyAsync_WithRestrictedEmptyCatalog_ShouldForwardCallerToolAndIgnoreAdditives()
+    {
+        var result = await ResponsesToolClassifier.ClassifyAsync(
+            [
+                new ResponsesApplicationToolDeclaration(
+                    "client_tool",
+                    "client tool",
+                    "{\"type\":\"object\"}",
+                    "client-hash"),
+            ],
+            [
+                new RecordingResponsesToolProvider(
+                    [],
+                    [new RecordingTool("use_skill", "{}", "{}")]),
+            ],
+            ToolProviderContext,
+            new RecordingLogger(),
+            RestrictedEmptyCatalog());
+
+        result.ForwardedTools.Should().ContainSingle().Which.Name.Should().Be("client_tool");
+        result.OwnedToolNames.Should().BeEmpty();
+        result.AdditiveToolNames.Should().BeEmpty();
+        result.OwnedCatalog.Should().NotBeNull();
+        result.OwnedCatalog!.Proof.ToolCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_WithFrozenCanonicalWebCatalog_ShouldAdaptPascalAliasAtBoundaryOnly()
+    {
+        var canonical = new RecordingTool("web_search", "{\"type\":\"object\"}", "{}");
+        var alias = new RecordingTool("WebSearch", "{\"type\":\"object\"}", "{}");
+        var catalog = Catalog(canonical);
+
+        var result = await ResponsesToolClassifier.ClassifyAsync(
+            [
+                new ResponsesApplicationToolDeclaration(
+                    "WebSearch",
+                    "client search",
+                    "{\"type\":\"object\"}",
+                    ResponsesToolSchemaHasher.Compute(alias.ParametersSchema)),
+            ],
+            [new RecordingResponsesToolProvider([alias], [])],
+            ToolProviderContext,
+            new RecordingLogger(),
+            catalog);
+
+        result.ForwardedTools.Should().BeEmpty();
+        result.SubstitutedToolNames.Should().ContainSingle("WebSearch");
+        result.OwnedToolNames.Should().ContainSingle("WebSearch");
+        result.EffectiveTools.Should().ContainSingle().Which.Should().BeSameAs(alias);
+        result.OwnedCatalog!.Proof.ToolDescriptors.Should().ContainSingle()
+            .Which.Name.Should().Be("websearch");
+        result.OwnedCatalog.Proof.ToolDescriptors[0].Origin
+            .Should().Be(AgentTurnToolOrigin.ResponsesState);
+        result.OwnedCatalog.Proof.AssertMatchesExactTools([alias]);
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_WhenAliasAndCanonicalBothMapToOneOwnedTool_ShouldFailClosed()
+    {
+        var canonical = new RecordingTool("web_search", "{}", "{}");
+        var alias = new RecordingTool("WebSearch", "{}", "{}");
+
+        var act = () => ResponsesToolClassifier.ClassifyAsync(
+                [
+                    new ResponsesApplicationToolDeclaration("WebSearch", "alias", "{}", "hash-a"),
+                    new ResponsesApplicationToolDeclaration("web_search", "canonical", "{}", "hash-b"),
+                ],
+                [new RecordingResponsesToolProvider([alias], [])],
+                ToolProviderContext,
+                new RecordingLogger(),
+                Catalog(canonical))
+            .AsTask();
+
+        var exception = await act.Should().ThrowAsync<AgentTurnToolCatalogException>();
+        exception.Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.ToolNameCollision);
+    }
+
+    [Fact]
     public void ResponsesForwardedTool_ShouldExposeDeclarationAndRejectNull()
     {
         ((Action)(() => new ResponsesForwardedTool(null!)))
@@ -188,6 +289,25 @@ public sealed class ResponsesToolClassificationTests
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(resultJson);
     }
+
+    private static AgentTurnToolCatalog RestrictedEmptyCatalog() =>
+        new(
+            [],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            diagnostics: null);
+
+    private static AgentTurnToolCatalog Catalog(params IAgentTool[] tools) =>
+        new(
+            tools.Select(static tool => tool.Name),
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: "web",
+            candidateIntentId: "web",
+            diagnostics: null,
+            exactTools: tools);
 
     private sealed class RecordingResponsesToolProvider(
         IReadOnlyList<IAgentTool> substituteTools,

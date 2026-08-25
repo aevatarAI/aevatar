@@ -15,6 +15,7 @@ import type {
   ScopeMemberRunAuditSnapshot,
   ScopeMemberRunCatalogSnapshot,
   ScopeMemberRunSummary,
+  ScopeMemberEndpointContract,
   ScopeServiceBindingCatalogSnapshot,
   ScopeServiceBindingInput,
   ScopeServiceEndpointContract,
@@ -96,6 +97,19 @@ function readOptionalString(
   }
 
   return undefined;
+}
+
+function readRequiredString(
+  record: Record<string, unknown>,
+  keys: string[],
+  label: string,
+): string {
+  const normalized = readString(record, keys, label).trim();
+  if (!normalized) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+
+  return normalized;
 }
 
 function readOptionalScalar(
@@ -666,6 +680,87 @@ function decodeScopeServiceEndpointContract(
       record,
       ["fetchExample", "FetchExample"],
       `${label}.fetchExample`,
+    ),
+  };
+}
+
+function decodeScopeMemberEndpointContract(
+  value: unknown,
+  label = "ScopeMemberEndpointContract",
+): ScopeMemberEndpointContract {
+  const record = expectRecord(value, label);
+  const serviceContract = decodeScopeServiceEndpointContract(value, label);
+  const {
+    serviceId: _serviceId,
+    memberId: _memberId,
+    publishedServiceId: _publishedServiceId,
+    ...endpointContract
+  } = serviceContract;
+  const memberId = readRequiredString(
+    record,
+    ["memberId", "MemberId"],
+    `${label}.memberId`,
+  );
+  const publishedServiceId = readRequiredString(
+    record,
+    ["publishedServiceId", "PublishedServiceId"],
+    `${label}.publishedServiceId`,
+  );
+  const readiness = expectRecord(
+    record.invocationReadiness ?? record.InvocationReadiness,
+    `${label}.invocationReadiness`,
+  );
+
+  return {
+    ...endpointContract,
+    memberId,
+    publishedServiceId,
+    invocationReadiness: {
+      canInvoke: readBoolean(
+        readiness,
+        ["canInvoke", "CanInvoke"],
+        `${label}.invocationReadiness.canInvoke`,
+      ),
+      status: readRequiredString(
+        readiness,
+        ["status", "Status"],
+        `${label}.invocationReadiness.status`,
+      ),
+      reasonCode: readRequiredString(
+        readiness,
+        ["reasonCode", "ReasonCode"],
+        `${label}.invocationReadiness.reasonCode`,
+      ),
+      message: readString(
+        readiness,
+        ["message", "Message"],
+        `${label}.invocationReadiness.message`,
+      ),
+      revisionId: readNullableString(
+        readiness,
+        ["revisionId", "RevisionId"],
+        `${label}.invocationReadiness.revisionId`,
+      ),
+      deploymentId: readNullableString(
+        readiness,
+        ["deploymentId", "DeploymentId"],
+        `${label}.invocationReadiness.deploymentId`,
+      ),
+      observedAtUtc: readNullableString(
+        readiness,
+        ["observedAtUtc", "ObservedAtUtc"],
+        `${label}.invocationReadiness.observedAtUtc`,
+      ),
+    },
+    publishedServiceStateVersion: readNumber(
+      record,
+      ["publishedServiceStateVersion", "PublishedServiceStateVersion"],
+      `${label}.publishedServiceStateVersion`,
+    ),
+    boundRevisionStateVersion: readNumber(
+      record,
+      ["boundRevisionStateVersion", "BoundRevisionStateVersion"],
+      `${label}.boundRevisionStateVersion`,
     ),
   };
 }
@@ -1413,10 +1508,11 @@ export const scopeRuntimeApi = {
     scopeId: string,
     memberId: string,
     endpointId: string,
-  ): Promise<ScopeServiceEndpointContract> {
+  ): Promise<ScopeMemberEndpointContract> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/endpoints/${encodeURIComponent(endpointId)}/contract`,
-      decodeScopeServiceEndpointContract,
+      decodeScopeMemberEndpointContract,
+      { cache: "no-store" },
     );
   },
 

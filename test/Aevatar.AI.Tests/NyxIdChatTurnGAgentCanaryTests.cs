@@ -11,18 +11,16 @@ namespace Aevatar.AI.Tests;
 public sealed partial class NyxIdChatTurnGAgentTests
 {
     [Fact]
-    public async Task CanaryEffectFault_ShouldConsumeDeniedPerRequestResultAndCommitAmbiguousWaterline()
+    public async Task CanaryEffectFault_ShouldConsumeDeniedDirectToolResultAndCommitAmbiguousWaterline()
     {
         var executor = new RecordingOperationExecutor(command =>
-            command.InputCase == NyxIdChatOperationDispatchCommand.InputOneofCase.Llm
-                ? new NyxIdChatOperationResultSignal
-                {
-                    Key = command.Key.Clone(),
-                    Llm = new NyxIdChatLLMOperationResult { Content = "Plan ready." },
-                }
-                : DeniedPerRequestResult(command.Key));
+            DeniedPerRequestResult(command.Key));
         var eventStore = new InMemoryEventStoreForTests();
-        var operationDispatch = new RecordingOperationDispatchPort(executor);
+        var command = EligibleCanaryCommand();
+        var operationDispatch = new RecordingOperationDispatchPort(executor)
+        {
+            CapturedToolContext = command.Tool.ToolContext.Clone(),
+        };
         var failFirstConsumedAcknowledgement = true;
         var actorDispatch = new RecordingDispatchPort((_, envelope) =>
         {
@@ -39,66 +37,18 @@ public sealed partial class NyxIdChatTurnGAgentTests
         using var services = BuildEventSourcingServices(eventStore, callbackScheduler);
         var agent = CreateAgent(services, operationDispatch, actorDispatch);
         await agent.ActivateAsync();
-        var initial = new NyxIdChatOperationDispatchCommand
-        {
-            Key = CreateKey(),
-            Llm = new NyxIdChatLLMOperationInput
-            {
-                Request = new ChatRequestEvent
-                {
-                    Prompt = "prepare the exact canary plan",
-                    SessionId = "turn-alpha",
-                },
-            },
-        };
-        await agent.HandleEventAsync(CreateEnvelope("turn-actor-alpha", initial));
-        await operationDispatch.DeliverPendingSignalsAsync(agent);
-
-        var admission = ExactWriteAdmission();
-        admission.ReadBack = new AgentToolOperationReadBackPayload
-        {
-            ReadOperation = ExactReadAdmission(),
-            Arguments = new Struct(),
-            CheckName = "resource-visible",
-            Assertion = new AgentToolReadBackAssertionPayload
-            {
-                Match = AgentToolReadBackMatchPayload.Exists,
-                JsonPointer = "/data",
-            },
-        };
-        admission.ReadBack.ReadOperation.CatalogDigest = admission.CatalogDigest;
-        var continuation = PlanGateContinuation(
-            NyxIdChatPlanGateDecisions.HashArguments("{\"value\":1}"));
-        continuation.PlanGateContinuation.OperationAdmission = admission.Clone();
-        continuation.PlanGateContinuation.ToolContext.Caller =
-            new AgentToolCallerContextPayload
-            {
-                ScopeId = "scope-alpha",
-                OwnerSubject = "owner-alpha",
-                ResponseId = "plan-gate-alpha",
-            };
-        continuation.PlanGateContinuation.CanaryEffectFault = new NyxIdChatCanaryEffectFaultDirective
-        {
-            ArmId = "arm-alpha",
-            ClientRequestId = "client-arm-alpha",
-            Key = continuation.Key.Clone(),
-            ServiceInstanceId = admission.ServiceInstanceId,
-            CatalogDigest = admission.CatalogDigest,
-            OwnerSubject = "owner-alpha",
-            ExpiresAt = Timestamp.FromDateTimeOffset(
-                new DateTimeOffset(2026, 7, 24, 8, 5, 0, TimeSpan.Zero)),
-        };
-        var gateAdmission = CreatePlanGateAdmission(initial.Key, continuation);
-        await agent.HandleEventAsync(CreateEnvelope("turn-actor-alpha", gateAdmission));
         var eventsBeforeCanary = (await eventStore.GetEventsAsync("turn-actor-alpha")).Count;
 
-        await agent.HandleEventAsync(CreateEnvelope("turn-actor-alpha", continuation));
+        await agent.HandleEventAsync(CreateEnvelope("turn-actor-alpha", command));
 
-        executor.Commands.Should().HaveCount(2);
-        executor.Commands.Last().InputCase.Should().Be(
-            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
+        executor.Commands.Should().ContainSingle();
+        executor.Commands.Single().InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+        executor.Commands.Single().Tool.CanaryEffectFault.Should().BeEquivalentTo(
+            command.Tool.CanaryEffectFault);
         agent.State.CanaryEffectFaultConsumed.Should().BeFalse(
             "the directive is consumed only after the typed denial result reaches the actor");
+        agent.State.CanaryEffectFault.Should().BeEquivalentTo(command.Tool.CanaryEffectFault);
         agent.State.EffectDispatchWaterline.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
 
         await operationDispatch.DeliverPendingSignalsAsync(agent);
@@ -111,19 +61,15 @@ public sealed partial class NyxIdChatTurnGAgentTests
             .Skip(eventsBeforeCanary)
             .ToArray();
         committed.Select(static item => item.EventData.TypeUrl).Should().Equal(
-            Google.Protobuf.WellKnownTypes.Any.Pack(
-                new NyxIdChatTurnOperationAdmittedEvent()).TypeUrl,
-            Google.Protobuf.WellKnownTypes.Any.Pack(
-                new NyxIdChatTurnEffectDispatchStartedEvent()).TypeUrl,
-            Google.Protobuf.WellKnownTypes.Any.Pack(
-                new NyxIdChatTurnCanaryEffectFaultTriggeredEvent()).TypeUrl,
-            Google.Protobuf.WellKnownTypes.Any.Pack(
-                new NyxIdChatTurnOperationCompletedEvent()).TypeUrl,
-            Google.Protobuf.WellKnownTypes.Any.Pack(
-                new NyxIdChatTurnOperationDeliveredEvent()).TypeUrl);
+            Any.Pack(new NyxIdChatTurnOperationAdmittedEvent()).TypeUrl,
+            Any.Pack(new NyxIdChatTurnEffectDispatchStartedEvent()).TypeUrl,
+            Any.Pack(new NyxIdChatTurnCanaryEffectFaultTriggeredEvent()).TypeUrl,
+            Any.Pack(new NyxIdChatTurnOperationCompletedEvent()).TypeUrl,
+            Any.Pack(new NyxIdChatTurnOperationDeliveredEvent()).TypeUrl);
         var triggered = committed[2].EventData
             .Unpack<NyxIdChatTurnCanaryEffectFaultTriggeredEvent>();
         triggered.ArmId.Should().Be("arm-alpha");
+        triggered.Key.Should().BeEquivalentTo(command.Key);
         triggered.ApprovalRequestId.Should().Be("approval-real-alpha");
         triggered.ApprovalCallId.Should().Be("call-alpha");
         triggered.ApprovalToolName.Should().Be("tool-alpha");
@@ -151,7 +97,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var retrySignal = retry.TriggerEnvelope.Payload
             .Unpack<NyxIdChatCanaryEffectFaultConsumedRetryRequested>();
         retrySignal.ArmId.Should().Be("arm-alpha");
-        retrySignal.Key.Should().BeEquivalentTo(continuation.Key);
+        retrySignal.Key.Should().BeEquivalentTo(command.Key);
 
         await agent.HandleEventAsync(retry.TriggerEnvelope);
 
@@ -162,7 +108,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
             .Should().HaveCount(2).And.Subject.Last();
         consumed.Should().BeEquivalentTo(firstConsumedAttempt);
         consumed.ArmId.Should().Be("arm-alpha");
-        consumed.Key.Should().BeEquivalentTo(continuation.Key);
+        consumed.Key.Should().BeEquivalentTo(command.Key);
         consumed.TurnActorId.Should().Be("turn-actor-alpha");
         consumed.ConsumedAt.Should().Be(agent.State.CanaryEffectFaultConsumedAt);
         consumed.ApprovalCallId.Should().Be("call-alpha");
@@ -175,13 +121,18 @@ public sealed partial class NyxIdChatTurnGAgentTests
         await recovered.ActivateAsync();
 
         recovered.State.CanaryEffectFaultConsumed.Should().BeTrue();
+        recovered.State.CanaryEffectFault.Should().BeEquivalentTo(command.Tool.CanaryEffectFault);
         recovered.State.ResultDelivered.Should().BeTrue();
         recoveredDispatch.Calls
             .Where(call => call.Envelope.Payload.Is(
                 NyxIdChatCanaryEffectFaultConsumedSignal.Descriptor))
             .Select(call => call.Envelope.Payload.Unpack<NyxIdChatCanaryEffectFaultConsumedSignal>())
             .Should().ContainSingle().Which.Should().BeEquivalentTo(consumed);
-        executor.Commands.Should().HaveCount(2);
+
+        await recovered.HandleEventAsync(CreateEnvelope("turn-actor-alpha", command.Clone()));
+
+        executor.Commands.Should().ContainSingle(
+            "the exact direct Tool replay must not execute the external effect twice");
     }
 
     [Theory]
@@ -191,36 +142,61 @@ public sealed partial class NyxIdChatTurnGAgentTests
         bool fallbackDispatchAlsoFails)
     {
         var command = EligibleCanaryCommand();
+        var sourceLlmCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowSourceLlmCompletionDispatch = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var fallbackAttempted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var actorDispatch = new RecordingDispatchPort((_, envelope) =>
+        var actorDispatch = new RecordingDispatchPort(async (_, envelope) =>
         {
             if (envelope.Payload.Is(NyxIdChatCanaryEffectFaultTriggeredSignal.Descriptor))
                 throw new InvalidOperationException("simulated canary signal outage");
 
             if (envelope.Payload.Is(NyxIdChatTurnOperationExecutionCompletedSignal.Descriptor))
             {
+                var completion = envelope.Payload
+                    .Unpack<NyxIdChatTurnOperationExecutionCompletedSignal>();
+                if (string.Equals(
+                        completion.Result.Key.OperationId,
+                        "operation-llm-source-alpha",
+                        StringComparison.Ordinal))
+                {
+                    sourceLlmCompleted.TrySetResult();
+                    await allowSourceLlmCompletionDispatch.Task;
+                    return;
+                }
+
                 fallbackAttempted.TrySetResult();
                 if (fallbackDispatchAlsoFails)
                     throw new InvalidOperationException("simulated persistent actor dispatch outage");
             }
-
-            return Task.CompletedTask;
         });
         var port = new NyxIdChatTurnOperationDispatchPort(
-            new RecordingOperationExecutor(current => DeniedPerRequestResult(current.Key)),
+            new CanarySessionOperationExecutor(),
             new UnavailableNyxIdChatTurnOperationReconciliationPort(),
             actorDispatch,
             new FixedTimeProvider(new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<
                 NyxIdChatTurnOperationDispatchPort>.Instance);
+        var session = port.OpenSession();
 
-        await port.OpenSession().DispatchExecutionAsync(
+        await session.DispatchExecutionAsync(
+            "turn-actor-alpha",
+            SourceLlmCommand(),
+            "correlation-source-alpha",
+            CancellationToken.None);
+        await sourceLlmCompleted.Task;
+        session.CaptureToolContext().Should().BeEquivalentTo(command.Tool.ToolContext);
+        actorDispatch.Calls.Clear();
+
+        await session.DispatchExecutionAsync(
             "turn-actor-alpha",
             command,
             "correlation-alpha",
             CancellationToken.None);
         await fallbackAttempted.Task;
+        allowSourceLlmCompletionDispatch.TrySetResult();
 
         actorDispatch.Calls.Select(call => call.Envelope.Payload.TypeUrl).Should().Equal(
             Any.Pack(new NyxIdChatCanaryEffectFaultTriggeredSignal()).TypeUrl,
@@ -235,15 +211,32 @@ public sealed partial class NyxIdChatTurnGAgentTests
     public async Task DispatchPort_ShouldSuppressNormalCompletionOnlyForExactCanaryDenialBoundary()
     {
         var command = EligibleCanaryCommand();
-        var executor = new RecordingOperationExecutor(current =>
-            DeniedPerRequestResult(current.Key));
+        var executor = new CanarySessionOperationExecutor();
+        var sourceLlmCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowSourceLlmCompletionDispatch = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var dispatched = new TaskCompletionSource<EventEnvelope>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var actorDispatch = new RecordingDispatchPort((actorId, envelope) =>
+        var actorDispatch = new RecordingDispatchPort(async (actorId, envelope) =>
         {
+            if (envelope.Payload.Is(NyxIdChatTurnOperationExecutionCompletedSignal.Descriptor))
+            {
+                var completion = envelope.Payload
+                    .Unpack<NyxIdChatTurnOperationExecutionCompletedSignal>();
+                if (string.Equals(
+                        completion.Result.Key.OperationId,
+                        "operation-llm-source-alpha",
+                        StringComparison.Ordinal))
+                {
+                    sourceLlmCompleted.TrySetResult();
+                    await allowSourceLlmCompletionDispatch.Task;
+                    return;
+                }
+            }
+
             if (actorId == "turn-actor-alpha")
                 dispatched.TrySetResult(envelope.Clone());
-            return Task.CompletedTask;
         });
         var port = new NyxIdChatTurnOperationDispatchPort(
             executor,
@@ -252,14 +245,25 @@ public sealed partial class NyxIdChatTurnGAgentTests
             new FixedTimeProvider(new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<
                 NyxIdChatTurnOperationDispatchPort>.Instance);
+        var session = port.OpenSession();
 
-        await port.OpenSession().DispatchExecutionAsync(
+        await session.DispatchExecutionAsync(
+            "turn-actor-alpha",
+            SourceLlmCommand(),
+            "correlation-source-alpha",
+            CancellationToken.None);
+        await sourceLlmCompleted.Task;
+        session.CaptureToolContext().Should().BeEquivalentTo(command.Tool.ToolContext);
+        actorDispatch.Calls.Clear();
+
+        await session.DispatchExecutionAsync(
             "turn-actor-alpha",
             command,
             "correlation-alpha",
             CancellationToken.None);
 
         var envelope = await dispatched.Task;
+        allowSourceLlmCompletionDispatch.TrySetResult();
         envelope.Payload.Is(NyxIdChatCanaryEffectFaultTriggeredSignal.Descriptor).Should().BeTrue();
         var fault = envelope.Payload.Unpack<NyxIdChatCanaryEffectFaultTriggeredSignal>();
         fault.ArmId.Should().Be("arm-alpha");
@@ -315,10 +319,10 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 result.Tool.Receipt.ToolName = "tool-beta";
                 break;
             case "key":
-                result.Key.OperationId = "operation-beta";
+                result.Key.OperationId = "operation-tool-beta";
                 break;
             case "directive_service":
-                command.PlanGateContinuation.CanaryEffectFault.ServiceInstanceId =
+                command.Tool.CanaryEffectFault.ServiceInstanceId =
                     "connected-service-beta";
                 break;
         }
@@ -352,8 +356,9 @@ public sealed partial class NyxIdChatTurnGAgentTests
 
     private static NyxIdChatOperationDispatchCommand EligibleCanaryCommand()
     {
-        var command = PlanGateContinuation(
-            NyxIdChatPlanGateDecisions.HashArguments("{\"value\":1}"));
+        var key = CreateKey(
+            stepId: "step-tool-alpha",
+            operationId: "operation-tool-alpha");
         var admission = ExactWriteAdmission();
         admission.ReadBack = new AgentToolOperationReadBackPayload
         {
@@ -367,23 +372,95 @@ public sealed partial class NyxIdChatTurnGAgentTests
             },
         };
         admission.ReadBack.ReadOperation.CatalogDigest = admission.CatalogDigest;
-        command.PlanGateContinuation.OperationAdmission = admission;
-        command.PlanGateContinuation.ToolContext.Caller = new AgentToolCallerContextPayload
+        return new NyxIdChatOperationDispatchCommand
         {
-            ScopeId = "scope-alpha",
-            OwnerSubject = "owner-alpha",
-            ResponseId = "plan-gate-alpha",
+            Key = key,
+            Tool = new NyxIdChatToolOperationInput
+            {
+                CallId = "call-alpha",
+                ToolName = "tool-alpha",
+                ArgumentsJson = "{\"value\":1}",
+                MayChangeExternalState = true,
+                Idempotent = false,
+                IdempotencyKey = key.OperationId,
+                OperationAdmission = admission,
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Caller = new AgentToolCallerContextPayload
+                    {
+                        ScopeId = "scope-alpha",
+                        OwnerSubject = "owner-alpha",
+                        ResponseId = "response-alpha",
+                    },
+                },
+                CanaryEffectFault = new NyxIdChatCanaryEffectFaultDirective
+                {
+                    ArmId = "arm-alpha",
+                    ClientRequestId = "client-arm-alpha",
+                    Key = key.Clone(),
+                    ServiceInstanceId = admission.ServiceInstanceId,
+                    CatalogDigest = admission.CatalogDigest,
+                    OwnerSubject = "owner-alpha",
+                    ExpiresAt = Timestamp.FromDateTimeOffset(
+                        new DateTimeOffset(2026, 7, 24, 8, 5, 0, TimeSpan.Zero)),
+                },
+            },
         };
-        command.PlanGateContinuation.CanaryEffectFault = new NyxIdChatCanaryEffectFaultDirective
+    }
+
+    private static NyxIdChatOperationDispatchCommand SourceLlmCommand() => new()
+    {
+        Key = CreateKey(
+            stepId: "step-llm-source-alpha",
+            operationId: "operation-llm-source-alpha"),
+        Llm = new NyxIdChatLLMOperationInput
         {
-            ArmId = "arm-alpha",
-            Key = command.Key.Clone(),
-            ServiceInstanceId = admission.ServiceInstanceId,
-            CatalogDigest = admission.CatalogDigest,
-            OwnerSubject = "owner-alpha",
-            ExpiresAt = Timestamp.FromDateTimeOffset(
-                new DateTimeOffset(2026, 7, 24, 8, 5, 0, TimeSpan.Zero)),
-        };
-        return command;
+            Request = new ChatRequestEvent
+            {
+                Prompt = "materialize one direct effect Tool command",
+                SessionId = "turn-alpha",
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Caller = new AgentToolCallerContextPayload
+                    {
+                        ScopeId = "scope-alpha",
+                        OwnerSubject = "owner-alpha",
+                        ResponseId = "response-alpha",
+                    },
+                },
+            },
+        },
+    };
+
+    private sealed class CanarySessionOperationExecutor : INyxIdChatTurnOperationExecutor
+    {
+        public Task<NyxIdChatTurnOperationExecution> ExecuteAsync(
+            NyxIdChatOperationDispatchCommand command,
+            NyxIdChatTransientExecutionSession session,
+            Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+            CancellationToken ct)
+        {
+            _ = reportProgressAsync;
+            ct.ThrowIfCancellationRequested();
+            if (command.Llm?.Request?.ToolContext is { } sourceToolContext)
+            {
+                session.StepState = new AgentRunReplyStepState
+                {
+                    ToolContext = sourceToolContext.Clone(),
+                };
+                return Task.FromResult(new NyxIdChatTurnOperationExecution(
+                    new NyxIdChatOperationResultSignal
+                    {
+                        Key = command.Key.Clone(),
+                        Llm = new NyxIdChatLLMOperationResult
+                        {
+                            Content = "Direct Tool ready.",
+                        },
+                    }));
+            }
+
+            return Task.FromResult(new NyxIdChatTurnOperationExecution(
+                DeniedPerRequestResult(command.Key)));
+        }
     }
 }

@@ -127,15 +127,20 @@ public sealed record NyxIdChatConversationStateSnapshot(
 public sealed record NyxIdChatCanaryEffectFaultSnapshot(
     string ArmId,
     string Status,
-    string TurnId,
-    string TaskId,
-    string StepId,
-    string OperationId,
-    long OperationGeneration,
+    NyxIdChatCanaryOperationSnapshot SourceOperation,
+    NyxIdChatCanaryOperationSnapshot? TargetOperation,
     DateTimeOffset? ExpiresAt,
     DateTimeOffset? ArmedAt,
     DateTimeOffset? ForwardedAt,
     DateTimeOffset? ConsumedAt);
+
+public sealed record NyxIdChatCanaryOperationSnapshot(
+    string ConversationActorId,
+    string TurnId,
+    string TaskId,
+    string StepId,
+    string OperationId,
+    long OperationGeneration);
 
 public sealed record NyxIdChatConversationTurnSnapshot(
     string TurnId,
@@ -163,88 +168,8 @@ public sealed record NyxIdChatConversationTaskSnapshot(
     string? PlanId = null,
     int PlanRevision = 1,
     string? Title = null,
-    NyxIdChatConversationPlanGateSnapshot? Gate = null,
     IReadOnlyList<NyxIdChatConversationPlanRevisionSnapshot>? PlanRevisions = null,
-    int PlanRevisionHistoryStart = 0,
-    NyxIdChatTaskDomainSnapshot? Domain = null,
-    NyxIdChatVerifiedArtifactSnapshot? Artifact = null);
-
-public sealed record NyxIdChatMoneyValueSnapshot(
-    string CurrencyCode,
-    long MinorUnits,
-    uint FractionDigits);
-
-public sealed record NyxIdChatInvoiceEvidenceSnapshot(
-    int SourceOrdinal,
-    string Vendor,
-    string InvoiceNumber,
-    string InvoiceDate,
-    NyxIdChatMoneyValueSnapshot Amount);
-
-public sealed record NyxIdChatInvoiceDuplicateEvidenceSnapshot(
-    int DuplicateSourceOrdinal,
-    int RetainedSourceOrdinal);
-
-public sealed record NyxIdChatReimbursementEvidenceSnapshot(
-    string EvidenceId,
-    string SourceInputRequestId,
-    string ExpenseCategory,
-    string CostCenter,
-    string ReimbursementCurrencyInstruction,
-    IReadOnlyList<NyxIdChatInvoiceEvidenceSnapshot> SourceInvoices,
-    IReadOnlyList<int> RetainedSourceOrdinals,
-    IReadOnlyList<NyxIdChatInvoiceDuplicateEvidenceSnapshot> DuplicateInvoices,
-    DateTimeOffset? CommittedAt,
-    string GuardedToolName);
-
-public sealed record NyxIdChatCandidateRubricCriterionSnapshot(
-    string CriterionId,
-    string Title,
-    int MaximumPoints);
-
-public sealed record NyxIdChatCandidateCriterionScoreSnapshot(
-    string CriterionId,
-    int AwardedPoints,
-    string Evidence);
-
-public sealed record NyxIdChatCandidateScreeningEvidenceSnapshot(
-    string EvidenceId,
-    string SourceInputRequestId,
-    string CandidateName,
-    string RoleTitle,
-    IReadOnlyList<NyxIdChatCandidateRubricCriterionSnapshot> Rubric,
-    IReadOnlyList<NyxIdChatCandidateCriterionScoreSnapshot> Scores,
-    int TotalScore,
-    string TrackerTable,
-    string TrackerTableId,
-    string Stage,
-    string GuardedToolName,
-    DateTimeOffset? CommittedAt);
-
-public sealed record NyxIdChatTaskDomainSnapshot(
-    NyxIdChatReimbursementEvidenceSnapshot? Reimbursement,
-    NyxIdChatCandidateScreeningEvidenceSnapshot? CandidateScreening);
-
-public sealed record NyxIdChatReimbursementArtifactSnapshot(
-    string ProviderInstanceId,
-    string CostCenter,
-    int RetainedItemCount,
-    int DuplicateItemCount);
-
-public sealed record NyxIdChatCandidateTrackerArtifactSnapshot(
-    string ProviderRecordId,
-    string CandidateName,
-    int Score,
-    long Threshold,
-    string TrackerTable,
-    string TrackerTableId,
-    string Stage);
-
-public sealed record NyxIdChatVerifiedArtifactSnapshot(
-    string CheckName,
-    DateTimeOffset? VerifiedAt,
-    NyxIdChatReimbursementArtifactSnapshot? Reimbursement,
-    NyxIdChatCandidateTrackerArtifactSnapshot? CandidateTracker);
+    int PlanRevisionHistoryStart = 0);
 
 public sealed record NyxIdChatConversationPlanRevisionSnapshot(
     int PlanRevision,
@@ -252,31 +177,6 @@ public sealed record NyxIdChatConversationPlanRevisionSnapshot(
     DateTimeOffset? CommittedAt,
     IReadOnlyList<string> AddedStepIds,
     IReadOnlyList<string> CancelledStepIds);
-
-public sealed record NyxIdChatConversationPlanGateSnapshot(
-    string Mode,
-    string? Reason,
-    string Status = "",
-    string? RequestId = null,
-    string? TaskId = null,
-    int PlanRevision = 0,
-    DateTimeOffset? DecidedAt = null,
-    string? PlanId = null,
-    IReadOnlyList<NyxIdChatConversationPlanOperationAdmissionSnapshot>? Admissions = null);
-
-public sealed record NyxIdChatConversationPlanOperationAdmissionSnapshot(
-    string? ConversationActorId,
-    string? TurnId,
-    string? TaskId,
-    string? StepId,
-    string? OperationId,
-    long OperationGeneration,
-    string? ToolCallId,
-    string? ToolName,
-    byte[] ArgumentsSha256,
-    string? ActionRequestId,
-    string? Action,
-    byte[] ActionParamsSha256);
 
 public sealed record NyxIdChatConversationStepSnapshot(
     string StepId,
@@ -550,6 +450,8 @@ public sealed record NyxIdChatActionParamsSnapshot(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     NyxIdChatCustomServiceConnectSnapshot? CustomService = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatServiceAccessReviewSnapshot? ServiceAccessReview = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? Name = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? Platform = null,
@@ -561,16 +463,26 @@ public sealed record NyxIdChatActionParamsSnapshot(
 public sealed record NyxIdChatCatalogServiceConnectSnapshot(
     string ServiceSlug,
     IReadOnlyList<string> RequestedScopes,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? ViaNodeId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? TargetOrgId);
 
 public sealed record NyxIdChatCustomServiceConnectSnapshot(
     string Name,
     string EndpointUrl,
     string AuthMethod,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? AuthKeyName,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? ViaNodeId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? TargetOrgId);
+
+public sealed record NyxIdChatServiceAccessReviewSnapshot(
+    string UserServiceId,
+    string ServiceSlug,
+    string ResourceUri);
 
 public sealed record NyxIdChatActionReportSnapshot(
     string ActionRequestId,

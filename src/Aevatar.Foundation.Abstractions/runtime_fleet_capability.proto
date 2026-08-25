@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package aevatar.runtime;
+
+option csharp_namespace = "Aevatar.Foundation.Abstractions.Runtime";
+
+import "google/protobuf/timestamp.proto";
+
+// Capabilities whose rollout requires proof about every active runtime reader.
+// Stable control-flow semantics never use a string-keyed extension bag.
+enum RuntimeFleetCapability
+{
+  RUNTIME_FLEET_CAPABILITY_UNSPECIFIED = 0;
+  RUNTIME_FLEET_CAPABILITY_WORKFLOW_NORMALIZED_STATE_WRITES_V1 = 1;
+  RUNTIME_FLEET_CAPABILITY_PROJECTION_SCOPE_STATUS_TERMINAL_V1 = 2;
+  RUNTIME_FLEET_CAPABILITY_PROJECTION_INCREMENTAL_GRAPH_V1 = 3;
+  // Phased status-route cutover (warming / caught-up / blocked / released / active) with the
+  // epoch-fenced status document. Advertised only by binaries that run the phased source scope.
+  RUNTIME_FLEET_CAPABILITY_PROJECTION_SCOPE_STATUS_TERMINAL_V2 = 4;
+  // Protocol-only Phase-B predeclaration. Phase A neither advertises nor manages this fresh gate;
+  // the later artifact must define its exact contract before using it for OPEN admission.
+  RUNTIME_FLEET_CAPABILITY_PROJECTION_SCOPE_STATUS_TERMINAL_V3 = 5;
+}
+
+enum RuntimeFleetCapabilityGateStatus
+{
+  RUNTIME_FLEET_CAPABILITY_GATE_STATUS_UNSPECIFIED = 0;
+  RUNTIME_FLEET_CAPABILITY_GATE_STATUS_OPEN = 1;
+  RUNTIME_FLEET_CAPABILITY_GATE_STATUS_REVOKED = 2;
+  // Terminal bridge state. New authorities never reopen or revoke a quiesced gate.
+  RUNTIME_FLEET_CAPABILITY_GATE_STATUS_QUIESCED = 3;
+}
+
+message RuntimeFleetMemberCapability
+{
+  RuntimeFleetCapability capability = 1;
+  int32 reader_contract_version = 2;
+  string contract_id = 3;
+}
+
+message RuntimeFleetMember
+{
+  string member_id = 1;
+  string incarnation = 2;
+  string deployment_revision = 3;
+  repeated RuntimeFleetMemberCapability capabilities = 4;
+}
+
+// Exact active membership and per-member code advertisement returned by the
+// trusted runtime membership source. Business callers never construct it.
+message RuntimeFleetMembershipSnapshot
+{
+  int64 membership_epoch = 1;
+  string deployment_revision = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  google.protobuf.Timestamp valid_until = 4;
+  repeated RuntimeFleetMember active_members = 5;
+  string membership_digest = 6;
+}
+
+// Freshness-bearing read-model proof emitted from the single durable fleet
+// authority. Runtime admission consumes it to create an immutable adoption
+// receipt; command/bind payloads are never accepted as capability evidence.
+message RuntimeFleetCapabilityAdmission
+{
+  RuntimeFleetCapability capability = 1;
+  RuntimeFleetCapabilityGateStatus status = 2;
+  string authority_actor_id = 3;
+  int64 authority_state_version = 4;
+  int64 capability_epoch = 5;
+  int64 membership_epoch = 6;
+  string deployment_revision = 7;
+  int32 minimum_reader_contract_version = 8;
+  google.protobuf.Timestamp membership_observed_at = 9;
+  google.protobuf.Timestamp membership_valid_until = 10;
+  int32 active_member_count = 11;
+  int32 confirmed_member_count = 12;
+  string membership_digest = 13;
+  string contract_id = 14;
+  repeated RuntimeFleetAdmittedMember admitted_members = 15;
+}
+
+// Durable evidence that a capability gate reached its typed terminal QUIESCED state. Unlike a
+// live admission, this records the historical fleet proof that closed the gate and deliberately
+// does not claim that the same membership is still current. A later rollout must use a separate
+// fresh OPEN capability gate for its own admission.
+message RuntimeFleetCapabilityQuiescenceEvidence
+{
+  RuntimeFleetCapability capability = 1;
+  string authority_actor_id = 2;
+  int64 authority_state_version = 3;
+  int64 capability_epoch = 4;
+  string contract_id = 5;
+  int32 quiescence_reader_contract_version = 6;
+  int64 quiesced_membership_epoch = 7;
+  string quiesced_membership_digest = 8;
+  string quiesced_deployment_revision = 9;
+  google.protobuf.Timestamp quiesced_at = 10;
+  string quiescence_transition_id = 11;
+}
+
+message RuntimeFleetAdmittedMember
+{
+  string member_id = 1;
+  string incarnation = 2;
+}

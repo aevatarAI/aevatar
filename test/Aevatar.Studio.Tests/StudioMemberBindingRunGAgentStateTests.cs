@@ -22,6 +22,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingCommandsCompleted))]
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingReadinessObservationTimedOut))]
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingExecutionFailed))]
+    [InlineData(nameof(StudioMemberBindingRunGAgent.HandleMemberTerminalNotificationWatchdogFired))]
     public void PlatformBindingContinuationHandlers_ShouldAllowSelfHandling(string handlerName)
     {
         var handler = typeof(StudioMemberBindingRunGAgent).GetMethod(handlerName)
@@ -30,6 +31,19 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         handler.GetCustomAttribute<EventHandlerAttribute>()
             .Should().NotBeNull()
             .And.Match<EventHandlerAttribute>(attribute => attribute.AllowSelfHandling);
+    }
+
+    [Fact]
+    public void MemberTerminalNotificationWatchdogHandler_ShouldOnlyAcceptSelfAudience()
+    {
+        var handler = typeof(StudioMemberBindingRunGAgent).GetMethod(
+            nameof(StudioMemberBindingRunGAgent.HandleMemberTerminalNotificationWatchdogFired))
+            ?? throw new InvalidOperationException("Terminal notification watchdog handler not found.");
+
+        handler.GetCustomAttribute<EventHandlerAttribute>()
+            .Should().NotBeNull()
+            .And.Match<EventHandlerAttribute>(attribute =>
+                attribute.AllowSelfHandling && attribute.OnlySelfHandling);
     }
 
     [Fact]
@@ -85,6 +99,58 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             request.CallbackId == "studio-member-binding-admission-watchdog:bind-1");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActivateAsync_AfterAuthorityTerminationBeforePlatformStart_ShouldResendAndAcceptCanonicalAck(
+        bool admittedBeforeTermination)
+    {
+        var requested = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
+        var beforeTermination = admittedBeforeTermination ? ApplyAdmitted(requested) : requested;
+        var pendingNotification = _agent.Apply(beforeTermination, NewAuthorityTermination());
+        pendingNotification.Status.Should()
+            .Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        pendingNotification.PlatformBindingCommandId.Should().BeEmpty();
+        if (!admittedBeforeTermination)
+            pendingNotification.Admitted.Should().BeNull();
+
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var eventSourcing = new RecordingEventSourcing(pendingNotification);
+        var agent = NewHandlerAgent(
+            pendingNotification,
+            publisher,
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        await agent.ActivateAsync();
+
+        StudioMemberBindingRunStateSetter.Get(agent).MemberNotificationAttempt.Should().Be(1);
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = "canonical-terminal-ack",
+            Payload = Any.Pack(new StudioMemberBindingTerminalAcknowledged
+            {
+                BindingRunId = "bind-1",
+                Status = StudioMemberBindingRunStatus.Failed,
+                AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }),
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                StudioMemberConventions.BuildActorId("scope-1", "m-1"),
+                RootActorId),
+        });
+
+        StudioMemberBindingRunStateSetter.Get(agent).Status.Should()
+            .Be(StudioMemberBindingRunStatus.Failed);
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingTerminalAcknowledged>()
+            .Should().ContainSingle();
+    }
+
     [Fact]
     public async Task HandleRequested_WhenAdmissionPendingIsRedelivered_ShouldRestoreAdmissionWatchdog()
     {
@@ -96,6 +162,42 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         await agent.HandleRequested(requested);
 
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-admission-watchdog:bind-1");
+        publisher.SentMessages.Should().ContainSingle(message =>
+            message.Event is StudioMemberBindAdmissionRequested);
+    }
+
+    [Fact]
+    public async Task HandleRequested_WhenAdmissionScheduleFailsAfterCommit_ShouldRequireRuntimeRedelivery()
+    {
+        var requested = NewRequested();
+        var eventSourcing = new RecordingEventSourcing(new StudioMemberBindingRunState());
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("simulated admission schedule failure"),
+        };
+        var agent = NewHandlerAgent(
+            new StudioMemberBindingRunState(),
+            publisher,
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        Func<Task> firstDelivery = () => agent.HandleRequested(requested);
+        var failure = await firstDelivery.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        failure.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("simulated admission schedule failure");
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingRunRequested>()
+            .Should().ContainSingle();
+        publisher.SentMessages.Should().BeEmpty();
+
+        scheduler.ScheduleException = null;
+        await agent.HandleRequested(requested);
+
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingRunRequested>()
+            .Should().ContainSingle();
         scheduler.Timeouts.Should().ContainSingle(request =>
             request.CallbackId == "studio-member-binding-admission-watchdog:bind-1");
         publisher.SentMessages.Should().ContainSingle(message =>
@@ -162,6 +264,46 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         admitted.Admitted.PublishedServiceId.Should().Be("member-m-1");
         admitted.Admitted.ImplementationKind.Should().Be(StudioMemberImplementationKind.Script);
         admitted.UpdatedAtUtc.Should().Be(admittedAt);
+    }
+
+    [Fact]
+    public async Task HandleAdmitted_WhenSelfContinuationFailsAfterCommit_ShouldRecoverOnRuntimeRedelivery()
+    {
+        var state = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
+        var admitted = new StudioMemberBindingAdmittedEvent
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            DisplayName = "Script member",
+            AdmittedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var eventSourcing = new RecordingEventSourcing(state);
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated self continuation failure"),
+        };
+        var agent = NewHandlerAgent(state, publisher, eventSourcing: eventSourcing);
+
+        Func<Task> firstDelivery = () => agent.HandleAdmitted(admitted);
+        var failure = await firstDelivery.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        failure.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("simulated self continuation failure");
+        StudioMemberBindingRunStateSetter.Get(agent).Status.Should()
+            .Be(StudioMemberBindingRunStatus.Admitted);
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingAdmittedEvent>()
+            .Should().ContainSingle();
+
+        publisher.SendException = null;
+        await agent.HandleEventAsync(RuntimeRetryEnvelope(admitted));
+
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingAdmittedEvent>()
+            .Should().ContainSingle();
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberPlatformBindingExecutionStartRequested>();
     }
 
     [Fact]
@@ -541,6 +683,356 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     [Fact]
+    public async Task MemberBindingAuthorityTerminated_ShouldCommitNotifyAndConvergeAfterAck()
+    {
+        var inFlight = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var eventSourcing = new RecordingEventSourcing(inFlight);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(inFlight, publisher, scheduler, eventSourcing: eventSourcing);
+        var terminated = NewAuthorityTermination();
+
+        await agent.HandleMemberBindingAuthorityTerminated(terminated);
+
+        var state = StudioMemberBindingRunStateSetter.Get(agent);
+        state.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        state.Failure.Should().BeEquivalentTo(terminated.Failure);
+        state.PlatformResult.Should().BeNull();
+        state.PlatformExecutionInFlight.Should().BeFalse();
+        state.PlatformExecutionStartedAtUtc.Should().BeNull();
+        state.PlatformExecutionStage.Should()
+            .Be(StudioMemberPlatformBindingExecutionStage.CommandInFlight);
+        state.PlatformExecutionStageStartedAtUtc.Should().BeNull();
+        state.PlatformExecutionAttempt.Should().Be(1);
+        state.PlatformBindingRecoverySnapshot.Should().BeNull();
+        state.MemberNotificationAttempt.Should().Be(1);
+
+        eventSourcing.CommittedEvents.Should().HaveCount(2);
+        eventSourcing.CommittedEvents[0].Should()
+            .BeOfType<StudioMemberBindingAuthorityTerminated>();
+        eventSourcing.CommittedEvents[1].Should()
+            .BeOfType<StudioMemberBindingTerminalNotificationAttemptStarted>();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        var sent = publisher.SentMessages.Should().ContainSingle().Subject;
+        sent.TargetActorId.Should().Be(StudioMemberConventions.BuildActorId("scope-1", "m-1"));
+        var failed = sent.Event.Should().BeOfType<StudioMemberBindingFailedEvent>().Subject;
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_DELETED");
+
+        await agent.HandleMemberBindingTerminalAcknowledged(new StudioMemberBindingTerminalAcknowledged
+        {
+            BindingRunId = "bind-1",
+            Status = StudioMemberBindingRunStatus.Failed,
+            AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+        await agent.HandleMemberTerminalNotificationWatchdogFired(
+            new StudioMemberBindingTerminalNotificationWatchdogFired
+            {
+                BindingRunId = "bind-1",
+                ExpectedNotificationAttempt = 1,
+            });
+
+        StudioMemberBindingRunStateSetter.Get(agent).Status.Should()
+            .Be(StudioMemberBindingRunStatus.Failed);
+        StudioMemberBindingRunStateSetter.Get(agent).MemberNotificationAttempt.Should().Be(1);
+        publisher.SentMessages.Should().ContainSingle();
+        scheduler.Timeouts.Should().ContainSingle();
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingTerminalNotificationAttemptStarted>()
+            .Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DuplicateMemberBindingAuthorityTermination_WithoutRuntimeRetry_ShouldHaveNoSideEffects()
+    {
+        var inFlight = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var eventSourcing = new RecordingEventSourcing(inFlight);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(inFlight, publisher, scheduler, eventSourcing: eventSourcing);
+        var terminated = NewAuthorityTermination();
+
+        await agent.HandleMemberBindingAuthorityTerminated(terminated);
+        await agent.HandleMemberBindingAuthorityTerminated(terminated.Clone());
+
+        var state = StudioMemberBindingRunStateSetter.Get(agent);
+        state.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        state.Failure.Should().BeEquivalentTo(terminated.Failure);
+        state.MemberNotificationAttempt.Should().Be(1);
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingAuthorityTerminated>()
+            .Should().ContainSingle();
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingTerminalNotificationAttemptStarted>()
+            .Should().ContainSingle().Which.NotificationAttempt.Should().Be(1);
+        publisher.SentMessages.Should().ContainSingle();
+        scheduler.Timeouts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task LatePlatformOutcomes_AfterAuthorityTermination_ShouldNotMutateOrNotify()
+    {
+        var readinessInFlight = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var terminated = _agent.Apply(readinessInFlight, NewAuthorityTermination());
+        var attempted = _agent.Apply(terminated, new StudioMemberBindingTerminalNotificationAttemptStarted
+        {
+            BindingRunId = "bind-1",
+            NotificationAttempt = 1,
+            AttemptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var originalBytes = attempted.ToByteArray();
+        var eventSourcing = new RecordingEventSourcing(attempted);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(attempted, publisher, scheduler, eventSourcing: eventSourcing);
+
+        await agent.HandlePlatformBindingExecutionSucceeded(NewExecutionSucceeded(2));
+        await agent.HandlePlatformBindingExecutionFailed(new StudioMemberPlatformBindingExecutionFailed
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
+            ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "LATE_PLATFORM_FAILURE",
+                Message = "late platform failure",
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+            },
+        });
+
+        StudioMemberBindingRunStateSetter.Get(agent).ToByteArray().Should().Equal(originalBytes);
+        eventSourcing.CommittedEvents.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AuthorityTermination_AfterUnacknowledgedPlatformSuccess_ShouldOverrideAndFenceOldWatchdog()
+    {
+        var successPending = _agent.Apply(
+            NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10)),
+            NewExecutionSucceeded(2));
+        successPending = _agent.Apply(successPending, new StudioMemberBindingTerminalNotificationAttemptStarted
+        {
+            BindingRunId = "bind-1",
+            NotificationAttempt = 1,
+            AttemptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(-2)),
+        });
+        var eventSourcing = new RecordingEventSourcing(successPending);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(successPending, publisher, scheduler, eventSourcing: eventSourcing);
+
+        await agent.HandleMemberBindingAuthorityTerminated(NewAuthorityTermination());
+        await agent.HandleMemberTerminalNotificationWatchdogFired(
+            new StudioMemberBindingTerminalNotificationWatchdogFired
+            {
+                BindingRunId = "bind-1",
+                ExpectedNotificationAttempt = 1,
+            });
+
+        var state = StudioMemberBindingRunStateSetter.Get(agent);
+        state.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        state.PlatformResult.Should().BeNull();
+        state.Failure.Code.Should().Be("STUDIO_MEMBER_DELETED");
+        state.MemberNotificationAttempt.Should().Be(2);
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingTerminalNotificationAttemptStarted>()
+            .Should().ContainSingle().Which.NotificationAttempt.Should().Be(2);
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a2:bind-1");
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+    }
+
+    [Fact]
+    public void AuthorityTermination_AfterUnacknowledgedPlatformFailure_ShouldOverrideWithDeletionFailure()
+    {
+        var failurePending = _agent.Apply(
+            NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10)),
+            new StudioMemberPlatformBindingExecutionFailed
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 1,
+                ExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandInFlight,
+                Failure = new StudioMemberBindingFailure
+                {
+                    Code = "PLATFORM_FAILURE",
+                    Message = "platform failure",
+                    FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(-2)),
+                },
+            });
+        failurePending = _agent.Apply(failurePending, new StudioMemberBindingTerminalNotificationAttemptStarted
+        {
+            BindingRunId = "bind-1",
+            NotificationAttempt = 1,
+            AttemptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(-1)),
+        });
+
+        var terminated = _agent.Apply(failurePending, NewAuthorityTermination());
+
+        terminated.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        terminated.Failure.Code.Should().Be("STUDIO_MEMBER_DELETED");
+        terminated.MemberNotificationAttempt.Should().Be(1);
+        terminated.PlatformExecutionStage.Should()
+            .Be(StudioMemberPlatformBindingExecutionStage.CommandInFlight);
+        terminated.PlatformExecutionAttempt.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task InvalidOrForeignAuthorityTermination_ShouldBeIgnored()
+    {
+        var inFlight = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var eventSourcing = new RecordingEventSourcing(inFlight);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(inFlight, publisher, scheduler, eventSourcing: eventSourcing);
+        var invalid = new List<StudioMemberBindingAuthorityTerminated>();
+
+        var staleRun = NewAuthorityTermination();
+        staleRun.BindingRunId = "bind-stale";
+        invalid.Add(staleRun);
+        var foreignScope = NewAuthorityTermination();
+        foreignScope.ScopeId = "scope-foreign";
+        invalid.Add(foreignScope);
+        var foreignMember = NewAuthorityTermination();
+        foreignMember.MemberId = "member-foreign";
+        invalid.Add(foreignMember);
+        var wrongCode = NewAuthorityTermination();
+        wrongCode.Failure.Code = "PLATFORM_FAILURE";
+        invalid.Add(wrongCode);
+        var missingTimestamp = NewAuthorityTermination();
+        missingTimestamp.Failure.FailedAtUtc = null;
+        invalid.Add(missingTimestamp);
+        var missingFailure = NewAuthorityTermination();
+        missingFailure.Failure = null;
+        invalid.Add(missingFailure);
+
+        foreach (var evt in invalid)
+            await agent.HandleMemberBindingAuthorityTerminated(evt);
+
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = "foreign-authority-termination",
+            Payload = Any.Pack(NewAuthorityTermination()),
+            Route = EnvelopeRouteSemantics.CreateDirect("studio-member:scope-1:foreign", RootActorId),
+        });
+
+        StudioMemberBindingRunStateSetter.Get(agent).ToByteArray().Should().Equal(inFlight.ToByteArray());
+        eventSourcing.CommittedEvents.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CanonicalMemberAuthorityTerminationEnvelope_ShouldCommitAndNotify()
+    {
+        var inFlight = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var eventSourcing = new RecordingEventSourcing(inFlight);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(inFlight, publisher, scheduler, eventSourcing: eventSourcing);
+
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = "canonical-authority-termination",
+            Payload = Any.Pack(NewAuthorityTermination()),
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                StudioMemberConventions.BuildActorId("scope-1", "m-1"),
+                RootActorId),
+        });
+
+        StudioMemberBindingRunStateSetter.Get(agent).Failure.Code.Should()
+            .Be("STUDIO_MEMBER_DELETED");
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingAuthorityTerminated>()
+            .Should().ContainSingle();
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+        scheduler.Timeouts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ForeignMemberTerminalAcknowledgementEnvelope_ShouldNotStopWatchdogRecovery()
+    {
+        var pendingNotification = _agent.Apply(
+            NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10)),
+            NewAuthorityTermination());
+        pendingNotification = _agent.Apply(
+            pendingNotification,
+            new StudioMemberBindingTerminalNotificationAttemptStarted
+            {
+                BindingRunId = "bind-1",
+                NotificationAttempt = 1,
+                AttemptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(-1)),
+            });
+        var eventSourcing = new RecordingEventSourcing(pendingNotification);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(
+            pendingNotification,
+            publisher,
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = "foreign-terminal-ack",
+            Payload = Any.Pack(new StudioMemberBindingTerminalAcknowledged
+            {
+                BindingRunId = "bind-1",
+                Status = StudioMemberBindingRunStatus.Failed,
+                AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }),
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                StudioMemberConventions.BuildActorId("scope-1", "foreign"),
+                RootActorId),
+        });
+
+        StudioMemberBindingRunStateSetter.Get(agent).Status.Should()
+            .Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        eventSourcing.CommittedEvents.Should().BeEmpty();
+
+        await agent.HandleMemberTerminalNotificationWatchdogFired(
+            new StudioMemberBindingTerminalNotificationWatchdogFired
+            {
+                BindingRunId = "bind-1",
+                ExpectedNotificationAttempt = 1,
+            });
+
+        StudioMemberBindingRunStateSetter.Get(agent).MemberNotificationAttempt.Should().Be(2);
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a2:bind-1");
+    }
+
+    [Fact]
+    public async Task AuthorityTermination_AfterRunTerminal_ShouldBeIgnored()
+    {
+        var terminal = _agent.Apply(
+            _agent.Apply(
+                NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10)),
+                NewAuthorityTermination()),
+            new StudioMemberBindingTerminalAcknowledged
+            {
+                BindingRunId = "bind-1",
+                Status = StudioMemberBindingRunStatus.Failed,
+                AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+        var eventSourcing = new RecordingEventSourcing(terminal);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(terminal, publisher, scheduler, eventSourcing: eventSourcing);
+
+        await agent.HandleMemberBindingAuthorityTerminated(NewAuthorityTermination());
+
+        StudioMemberBindingRunStateSetter.Get(agent).ToByteArray().Should().Equal(terminal.ToByteArray());
+        eventSourcing.CommittedEvents.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
+    }
+
+    [Fact]
     public void PlatformExecutionStarted_ShouldRecordTypedTimestampAndLegacyFence()
     {
         var accepted = NewPlatformPendingState();
@@ -606,6 +1098,44 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         scheduler.Timeouts.Should().BeEmpty();
         publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingAccepted_WhenExecuteScheduleFailsAfterCommit_ShouldRecoverOnRedelivery()
+    {
+        var state = NewAcceptancePendingState();
+        var accepted = new StudioMemberPlatformBindingExecutionStartAccepted
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 0,
+        };
+        var eventSourcing = new RecordingEventSourcing(state);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("simulated execute schedule failure"),
+        };
+        var agent = NewHandlerAgent(state, publisher, scheduler, eventSourcing: eventSourcing);
+
+        Func<Task> firstDelivery = () => agent.HandlePlatformBindingAccepted(accepted);
+        var failure = await firstDelivery.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionStartAccepted>()
+            .Should().ContainSingle();
+        publisher.SentMessages.Should().BeEmpty();
+
+        scheduler.ScheduleException = null;
+        await agent.HandleEventAsync(RuntimeRetryEnvelope(accepted));
+
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionStartAccepted>()
+            .Should().ContainSingle();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-execute:v1:a0:bind-1:platform-1");
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingPlatformPendingEvent>();
     }
 
     [Fact]
@@ -686,6 +1216,122 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     [Fact]
+    public async Task HandlePlatformBindingExecuteRequested_WhenWatchdogScheduleFailsAfterExecute_ShouldNotRepeatSideEffectOnRedelivery()
+    {
+        var state = NewPlatformPendingState();
+        var request = new StudioMemberPlatformBindingStageExecuteRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 0,
+        };
+        var eventSourcing = new RecordingEventSourcing(state);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("simulated watchdog schedule failure"),
+        };
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort, eventSourcing);
+
+        Func<Task> firstDelivery = () => agent.HandlePlatformBindingExecuteRequested(request);
+        var failure = await firstDelivery.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        platformPort.ExecuteRequests.Should().ContainSingle();
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingStageStarted>()
+            .Should().ContainSingle();
+
+        scheduler.ScheduleException = null;
+        await agent.HandleEventAsync(RuntimeRetryEnvelope(request));
+
+        platformPort.ExecuteRequests.Should().ContainSingle();
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingStageStarted>()
+            .Should().ContainSingle();
+        scheduler.Timeouts.Should().ContainSingle(timeout =>
+            timeout.CallbackId == "studio-member-binding-watchdog:v1:a1:bind-1:platform-1");
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingExecuteRequested_WhenExecuteThrowsAfterAmbiguousSideEffect_ShouldPreserveFailureAndArmWatchdog()
+    {
+        var state = NewPlatformPendingState();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort
+        {
+            ExecuteException = new InvalidOperationException("ambiguous execute failure"),
+        };
+        var agent = NewHandlerAgent(
+            state,
+            new RecordingEventPublisher(),
+            scheduler,
+            platformPort,
+            new RecordingEventSourcing(state));
+        var request = new StudioMemberPlatformBindingStageExecuteRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 0,
+        };
+
+        Func<Task> delivery = () => agent.HandlePlatformBindingExecuteRequested(request);
+        await delivery.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("ambiguous execute failure");
+
+        platformPort.ExecuteRequests.Should().ContainSingle();
+        scheduler.Timeouts.Should().ContainSingle(timeout =>
+            timeout.CallbackId == "studio-member-binding-watchdog:v1:a1:bind-1:platform-1");
+    }
+
+    [Fact]
+    public async Task ExecuteRedelivery_AfterAttemptCommittedTerminalFailure_ShouldRecoverNotificationAtNextAttemptFence()
+    {
+        var inFlight = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
+        var pendingNotification = _agent.Apply(inFlight, new StudioMemberPlatformBindingExecutionFailed
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 1,
+            ExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandInFlight,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "AMBIGUOUS_EXECUTION_FAILED",
+                Message = "platform execution outcome was ambiguous.",
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var eventSourcing = new RecordingEventSourcing(pendingNotification);
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(
+            pendingNotification,
+            publisher,
+            scheduler,
+            platformPort,
+            eventSourcing);
+
+        await agent.HandleEventAsync(RuntimeRetryEnvelope(
+            new StudioMemberPlatformBindingStageExecuteRequested
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExpectedExecutionAttempt = 0,
+            }));
+
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingTerminalNotificationAttemptStarted>()
+            .Should().ContainSingle().Which.NotificationAttempt.Should().Be(1);
+        scheduler.Timeouts.Should().ContainSingle(timeout =>
+            timeout.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+    }
+
+    [Fact]
     public async Task HandlePlatformBindingReadinessObservationTimedOut_ShouldRemainPendingAndScheduleWatchdog()
     {
         var state = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
@@ -720,10 +1366,227 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         afterTimeout.PlatformExecutionInFlight.Should().BeTrue();
         afterTimeout.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(9999);
         afterTimeout.PlatformBindingRecoverySnapshot.Should().BeEquivalentTo(NewRecoverySnapshot());
+        afterTimeout.LastPlatformReadinessStatus.Should()
+            .Be(StudioMemberPlatformBindingReadinessStatus.ServingSetMissing);
         afterTimeout.UpdatedAtUtc.Should().Be(timedOutAt);
         publisher.SentMessages.Should().BeEmpty();
         scheduler.Timeouts.Should().ContainSingle(request =>
             request.CallbackId == "studio-member-binding-watchdog:v1:a2:bind-1:platform-1");
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingReadinessObservationTimedOut_WhenWatchdogScheduleFailsAfterCommit_ShouldRecoverOnRedelivery()
+    {
+        var state = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var timedOut = new StudioMemberPlatformBindingReadinessObservationTimedOut
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
+            TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
+        };
+        var eventSourcing = new RecordingEventSourcing(state);
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("simulated readiness watchdog schedule failure"),
+        };
+        var agent = NewHandlerAgent(
+            state,
+            new RecordingEventPublisher(),
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        Func<Task> firstDelivery = () =>
+            agent.HandlePlatformBindingReadinessObservationTimedOut(timedOut);
+        var failure = await firstDelivery.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        eventSourcing.CommittedEvents
+            .OfType<StudioMemberPlatformBindingReadinessObservationTimedOut>()
+            .Should().ContainSingle();
+
+        scheduler.ScheduleException = null;
+        await agent.HandleEventAsync(RuntimeRetryEnvelope(timedOut));
+
+        eventSourcing.CommittedEvents
+            .OfType<StudioMemberPlatformBindingReadinessObservationTimedOut>()
+            .Should().ContainSingle();
+        scheduler.Timeouts.Should().ContainSingle(timeout =>
+            timeout.CallbackId == "studio-member-binding-watchdog:v1:a2:bind-1:platform-1");
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingReadinessObservationTimedOut_AfterDeadline_ShouldFailWithStableCode()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var state = NewReadinessInFlightState(now.AddSeconds(-10));
+        state.PlatformReadinessDeadlineAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(-1));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var eventSourcing = new RecordingEventSourcing(state);
+        var agent = NewHandlerAgent(state, publisher, scheduler, eventSourcing: eventSourcing);
+
+        await agent.HandlePlatformBindingReadinessObservationTimedOut(
+            new StudioMemberPlatformBindingReadinessObservationTimedOut
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
+                TimedOutAtUtc = Timestamp.FromDateTimeOffset(now),
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 2,
+            });
+
+        var committed = StudioMemberBindingRunStateSetter.Get(agent);
+        committed.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        committed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT");
+        committed.PlatformExecutionAttempt.Should().Be(2);
+        committed.LastPlatformReadinessStatus.Should()
+            .Be(StudioMemberPlatformBindingReadinessStatus.ServingSetMissing);
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle()
+            .Which.ExecutionAttempt.Should().Be(2);
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        scheduler.Timeouts.Should().NotContain(request =>
+            request.CallbackId.StartsWith("studio-member-binding-watchdog:", StringComparison.Ordinal));
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingExecutionSucceeded_AfterDeadline_ShouldFailInsteadOfWinningRace()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var state = NewReadinessInFlightState(now.AddSeconds(-10));
+        state.PlatformReadinessDeadlineAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(-1));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var eventSourcing = new RecordingEventSourcing(state);
+        var agent = NewHandlerAgent(state, publisher, scheduler, eventSourcing: eventSourcing);
+        var lateSuccess = NewExecutionSucceeded(2);
+        lateSuccess.CompletedAtUtc = Timestamp.FromDateTimeOffset(now.AddMinutes(-1));
+
+        await agent.HandlePlatformBindingExecutionSucceeded(lateSuccess);
+
+        var committed = StudioMemberBindingRunStateSetter.Get(agent);
+        committed.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        committed.PlatformResult.Should().BeNull();
+        committed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT");
+        committed.PlatformExecutionStage.Should()
+            .Be(StudioMemberPlatformBindingExecutionStage.ReadinessInFlight);
+        committed.PlatformExecutionAttempt.Should().Be(2);
+        eventSourcing.CommittedEvents.Should().NotContain(lateSuccess);
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle()
+            .Which.ExecutionAttempt.Should().Be(2);
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+    }
+
+    [Fact]
+    public async Task LateSuccessRedelivery_WhenTerminalWatchdogScheduleFailed_ShouldRecoverGeneratedTimeoutNotification()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var state = NewReadinessInFlightState(now.AddSeconds(-10));
+        state.PlatformReadinessDeadlineAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(-1));
+        var lateSuccess = NewExecutionSucceeded(2);
+        var eventSourcing = new RecordingEventSourcing(state);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("simulated terminal watchdog schedule failure"),
+        };
+        var agent = NewHandlerAgent(state, publisher, scheduler, eventSourcing: eventSourcing);
+
+        Func<Task> firstDelivery = () =>
+            agent.HandlePlatformBindingExecutionSucceeded(lateSuccess);
+        var failure = await firstDelivery.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle().Which.Failure.Code.Should()
+            .Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT");
+        publisher.SentMessages.Should().BeEmpty();
+
+        scheduler.ScheduleException = null;
+        await agent.HandleEventAsync(RuntimeRetryEnvelope(lateSuccess));
+
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle();
+        eventSourcing.CommittedEvents
+            .OfType<StudioMemberBindingTerminalNotificationAttemptStarted>()
+            .Should().ContainSingle().Which.NotificationAttempt.Should().Be(1);
+        scheduler.Timeouts.Should().ContainSingle(timeout =>
+            timeout.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenReadinessDeadlineExpiredAndContinuationWasLost_ShouldFailClosed()
+    {
+        var state = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddMinutes(-3));
+        state.PlatformReadinessDeadlineAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(-1));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var eventSourcing = new RecordingEventSourcing(state);
+        var agent = NewHandlerAgent(state, publisher, scheduler, eventSourcing: eventSourcing);
+
+        await agent.ActivateAsync();
+
+        var watchdog = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberPlatformBindingExecutionWatchdogFired>().Subject;
+        watchdog.ExpectedExecutionAttempt.Should().Be(2);
+        await agent.HandlePlatformBindingWatchdogFired(watchdog);
+
+        var committed = StudioMemberBindingRunStateSetter.Get(agent);
+        committed.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        committed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT");
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle()
+            .Which.ExecutionAttempt.Should().Be(2);
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        publisher.SentMessages.Should().HaveCount(2);
+        publisher.SentMessages.Last().Event.Should().BeOfType<StudioMemberBindingFailedEvent>();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenReadinessStateHasNoCommittedTimes_ShouldFailClosedFromUnixEpoch()
+    {
+        var state = NewReadinessInFlightState(DateTimeOffset.UtcNow);
+        state.PlatformReadinessDeadlineAtUtc = null;
+        state.UpdatedAtUtc = null;
+        state.PlatformExecutionStageStartedAtUtc = null;
+        state.AcceptedAtUtc = null;
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(state);
+        var agent = NewHandlerAgent(
+            state,
+            publisher,
+            scheduler,
+            platformPort,
+            eventSourcing);
+
+        await agent.ActivateAsync();
+
+        var watchdog = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberPlatformBindingExecutionWatchdogFired>().Subject;
+        await agent.HandlePlatformBindingWatchdogFired(watchdog);
+
+        var committed = StudioMemberBindingRunStateSetter.Get(agent);
+        committed.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        committed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT");
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
     }
 
     [Fact]
@@ -756,6 +1619,58 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         retry.PlatformBindingCommandId.Should().Be("platform-1");
         retry.ProtocolVersion.Should().Be(StudioMemberConventions.PlatformBindingProtocolVersion);
         retry.ExpectedExecutionAttempt.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task TerminalActivationFailure_ShouldReachFailedStateAndFenceWatchdogRetry()
+    {
+        var state = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(state);
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort, eventSourcing);
+        var failure = new StudioMemberPlatformBindingExecutionFailed
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
+            ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_PREPARED_ARTIFACT_MISSING",
+                Message = "platform service activation failed because its prepared artifact was unavailable.",
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
+        await agent.HandlePlatformBindingExecutionFailed(failure);
+        StudioMemberBindingRunStateSetter.Get(agent).Status.Should()
+            .Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingExecutionWatchdogFired
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 2,
+        });
+
+        eventSourcing.CommittedEvents.Should().Contain(failure);
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+
+        await agent.HandleMemberBindingTerminalAcknowledged(new StudioMemberBindingTerminalAcknowledged
+        {
+            BindingRunId = "bind-1",
+            Status = StudioMemberBindingRunStatus.Failed,
+            AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        StudioMemberBindingRunStateSetter.Get(agent).Status.Should().Be(StudioMemberBindingRunStatus.Failed);
     }
 
     [Fact]
@@ -845,6 +1760,51 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     [Fact]
+    public async Task ActivationWatchdog_FromPreviousReadinessAttempt_ShouldBeIgnoredAfterRetryStarts()
+    {
+        var state = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(state);
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort, eventSourcing);
+
+        await agent.ActivateAsync();
+
+        var activationWatchdog = scheduler.Timeouts.Should().ContainSingle().Subject
+            .TriggerEnvelope.Payload.Unpack<StudioMemberPlatformBindingExecutionWatchdogFired>();
+        activationWatchdog.ExpectedExecutionAttempt.Should().Be(2);
+
+        var elapsed = StudioMemberBindingRunStateSetter.Get(agent);
+        elapsed.PlatformExecutionStageStartedAtUtc = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.UtcNow.AddMinutes(-3));
+        StudioMemberBindingRunStateSetter.Set(agent, elapsed);
+        await agent.HandlePlatformBindingExecuteRequested(
+            new StudioMemberPlatformBindingStageExecuteRequested
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExpectedExecutionAttempt = 2,
+            });
+
+        StudioMemberBindingRunStateSetter.Get(agent).PlatformExecutionAttempt.Should().Be(3);
+        platformPort.ExecuteRequests.Should().ContainSingle().Which.ExecutionAttempt.Should().Be(3);
+        scheduler.Timeouts.Should().HaveCount(2);
+        scheduler.Timeouts.Last().CallbackId.Should()
+            .Be("studio-member-binding-watchdog:v1:a3:bind-1:platform-1");
+        var committedCount = eventSourcing.CommittedEvents.Count;
+
+        await agent.HandlePlatformBindingWatchdogFired(activationWatchdog);
+
+        StudioMemberBindingRunStateSetter.Get(agent).PlatformExecutionAttempt.Should().Be(3);
+        eventSourcing.CommittedEvents.Should().HaveCount(committedCount);
+        platformPort.ExecuteRequests.Should().ContainSingle();
+        scheduler.Timeouts.Should().HaveCount(2);
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ActivateAsync_WhenCommandInFlightIsStale_ShouldFailClosed()
     {
         var state = NewInFlightState(DateTimeOffset.UtcNow.AddMinutes(-3));
@@ -855,7 +1815,8 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         await agent.ActivateAsync();
 
-        scheduler.Timeouts.Should().BeEmpty();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
         var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
             .Should().ContainSingle().Subject;
         failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
@@ -866,25 +1827,431 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     {
         var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
         var completed = NewCommandsCompleted();
+        completed.CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddYears(1));
+        completed.ReadinessDeadlineAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddYears(2));
         var publisher = new RecordingEventPublisher();
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var platformPort = new RecordingPlatformBindingCommandPort();
         var agent = NewHandlerAgent(state, publisher, scheduler, platformPort);
+        var beforeHandle = DateTimeOffset.UtcNow;
 
         await agent.HandlePlatformBindingCommandsCompleted(completed);
+        var afterHandle = DateTimeOffset.UtcNow;
 
         var committed = StudioMemberBindingRunStateSetter.Get(agent);
         committed.PlatformExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.ReadinessPending);
         committed.PlatformExecutionAttempt.Should().Be(1);
         committed.PlatformBindingRecoverySnapshot.Should().BeEquivalentTo(completed.RecoverySnapshot);
+        committed.PlatformBindingRecoverySnapshot.ActivationAttemptId.Should().Be("platform-1:a1");
         committed.PlatformExecutionInFlight.Should().BeTrue();
         committed.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(9999);
         committed.PlatformExecutionStageStartedAtUtc.Should().BeNull();
+        committed.PlatformReadinessDeadlineAtUtc.Should().NotBeNull();
+        committed.PlatformReadinessDeadlineAtUtc!.ToDateTimeOffset().Should()
+            .BeOnOrAfter(beforeHandle.AddMinutes(6)).And
+            .BeOnOrBefore(afterHandle.AddMinutes(6));
+        committed.PlatformReadinessDeadlineAtUtc.Should().NotBe(completed.ReadinessDeadlineAtUtc);
         platformPort.ExecuteRequests.Should().BeEmpty();
         var execute = scheduler.Timeouts.Should().ContainSingle(request =>
                 request.CallbackId == "studio-member-binding-execute:v1:a1:bind-1:platform-1")
             .Subject.TriggerEnvelope.Payload.Unpack<StudioMemberPlatformBindingStageExecuteRequested>();
         execute.ExpectedExecutionAttempt.Should().Be(1);
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleCommandsCompleted_WhenExecuteScheduleFailsAfterCommit_ShouldRecoverOnRedelivery()
+    {
+        var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
+        var completed = NewCommandsCompleted();
+        var eventSourcing = new RecordingEventSourcing(state);
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("simulated readiness execute schedule failure"),
+        };
+        var agent = NewHandlerAgent(
+            state,
+            new RecordingEventPublisher(),
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        Func<Task> firstDelivery = () => agent.HandlePlatformBindingCommandsCompleted(completed);
+        var failure = await firstDelivery.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingCommandsCompleted>()
+            .Should().ContainSingle();
+
+        scheduler.ScheduleException = null;
+        await agent.HandleEventAsync(RuntimeRetryEnvelope(completed));
+
+        eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingCommandsCompleted>()
+            .Should().ContainSingle();
+        scheduler.Timeouts.Should().ContainSingle(timeout =>
+            timeout.CallbackId == "studio-member-binding-execute:v1:a1:bind-1:platform-1");
+    }
+
+    [Fact]
+    public void CommandsCompletedReducer_WhenEventTimesAreMissing_ShouldUseCommittedStageTimestamp()
+    {
+        var committedStageStartedAt = DateTimeOffset.Parse("2026-08-15T01:02:03Z");
+        var state = NewInFlightState(committedStageStartedAt);
+        var completed = NewCommandsCompleted();
+        completed.CompletedAtUtc = null;
+        completed.ReadinessDeadlineAtUtc = null;
+
+        var replayed = _agent.Apply(state, completed);
+
+        replayed.PlatformReadinessDeadlineAtUtc.Should().NotBeNull();
+        replayed.PlatformReadinessDeadlineAtUtc!.ToDateTimeOffset().Should()
+            .Be(committedStageStartedAt.AddMinutes(6));
+    }
+
+    [Fact]
+    public void CommandsCompletedReducer_WhenAllTimesAreMissing_ShouldReplayIdenticalFailClosedBytes()
+    {
+        var state = new StudioMemberBindingRunState
+        {
+            BindingRunId = "bind-1",
+            Status = StudioMemberBindingRunStatus.PlatformBindingPending,
+            PlatformBindingCommandId = "platform-1",
+            PlatformBindingProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            PlatformExecutionAttempt = 1,
+            PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandInFlight,
+        };
+        var completed = new StudioMemberPlatformBindingCommandsCompleted
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            RecoverySnapshot = NewRecoverySnapshot(),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 1,
+        };
+
+        var firstReplay = _agent.Apply(state, completed);
+        var secondReplay = _agent.Apply(
+            StudioMemberBindingRunState.Parser.ParseFrom(state.ToByteArray()),
+            StudioMemberPlatformBindingCommandsCompleted.Parser.ParseFrom(completed.ToByteArray()));
+
+        firstReplay.PlatformReadinessDeadlineAtUtc.Should().NotBeNull();
+        firstReplay.PlatformReadinessDeadlineAtUtc!.ToDateTimeOffset().Should()
+            .Be(DateTimeOffset.UnixEpoch);
+        firstReplay.ToByteArray().Should().Equal(secondReplay.ToByteArray());
+    }
+
+    [Fact]
+    public async Task MemberTerminalNotificationWatchdog_ShouldRetryWithAttemptFenceUntilAcknowledged()
+    {
+        var pendingNotification = _agent.Apply(
+            NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1)),
+            NewExecutionSucceeded(2));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var eventSourcing = new RecordingEventSourcing(pendingNotification);
+        var agent = NewHandlerAgent(
+            pendingNotification,
+            publisher,
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        await agent.ActivateAsync();
+
+        StudioMemberBindingRunStateSetter.Get(agent).MemberNotificationAttempt.Should().Be(1);
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingCompletedEvent>();
+
+        await agent.HandleMemberTerminalNotificationWatchdogFired(
+            new StudioMemberBindingTerminalNotificationWatchdogFired
+            {
+                BindingRunId = "bind-1",
+                ExpectedNotificationAttempt = 1,
+            });
+
+        StudioMemberBindingRunStateSetter.Get(agent).MemberNotificationAttempt.Should().Be(2);
+        scheduler.Timeouts.Should().Contain(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a2:bind-1");
+        publisher.SentMessages.Should().HaveCount(2);
+
+        await agent.HandleMemberBindingTerminalAcknowledged(new StudioMemberBindingTerminalAcknowledged
+        {
+            BindingRunId = "bind-1",
+            Status = StudioMemberBindingRunStatus.Succeeded,
+            AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        await agent.HandleMemberTerminalNotificationWatchdogFired(
+            new StudioMemberBindingTerminalNotificationWatchdogFired
+            {
+                BindingRunId = "bind-1",
+                ExpectedNotificationAttempt = 2,
+            });
+
+        StudioMemberBindingRunStateSetter.Get(agent).Status.Should().Be(StudioMemberBindingRunStatus.Succeeded);
+        StudioMemberBindingRunStateSetter.Get(agent).MemberNotificationAttempt.Should().Be(2);
+        publisher.SentMessages.Should().HaveCount(2);
+        scheduler.Timeouts.Should().HaveCount(2);
+        eventSourcing.CommittedEvents.OfType<StudioMemberBindingTerminalNotificationAttemptStarted>()
+            .Select(evt => evt.NotificationAttempt).Should().Equal(1, 2);
+    }
+
+    [Fact]
+    public async Task MemberTerminalNotification_WhenScheduleSucceedsButCommitFails_ShouldRecoverScheduledAttempt()
+    {
+        var pendingNotification = _agent.Apply(
+            NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1)),
+            NewExecutionSucceeded(2));
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var eventSourcing = new RecordingEventSourcing(pendingNotification)
+        {
+            ConfirmException = new InvalidOperationException("simulated commit failure"),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(
+            pendingNotification,
+            publisher,
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        var activate = () => agent.ActivateAsync();
+        await activate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated commit failure");
+
+        StudioMemberBindingRunStateSetter.Get(agent).MemberNotificationAttempt.Should().Be(0);
+        eventSourcing.CommittedEvents.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
+        var scheduled = scheduler.Timeouts.Should().ContainSingle().Subject;
+        scheduled.CallbackId.Should()
+            .Be("studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        scheduled.TriggerEnvelope.Payload.Unpack<StudioMemberBindingTerminalNotificationWatchdogFired>()
+            .ExpectedNotificationAttempt.Should().Be(1);
+
+        var recoveredPublisher = new RecordingEventPublisher();
+        var recoveredScheduler = new RecordingRuntimeCallbackScheduler();
+        var recoveredEventSourcing = new RecordingEventSourcing(pendingNotification);
+        var recovered = NewHandlerAgent(
+            pendingNotification,
+            recoveredPublisher,
+            recoveredScheduler,
+            eventSourcing: recoveredEventSourcing);
+
+        await recovered.HandleEventAsync(scheduled.TriggerEnvelope);
+
+        StudioMemberBindingRunStateSetter.Get(recovered).MemberNotificationAttempt.Should().Be(1);
+        recoveredEventSourcing.CommittedEvents
+            .OfType<StudioMemberBindingTerminalNotificationAttemptStarted>()
+            .Should().ContainSingle().Which.NotificationAttempt.Should().Be(1);
+        recoveredScheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        recoveredPublisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingCompletedEvent>();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExactPlatformTerminalOutcomeRedelivery_WhenNotificationScheduleFails_ShouldRecover(
+        bool succeeded)
+    {
+        var state = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
+        IMessage outcome = succeeded
+            ? NewExecutionSucceeded(2)
+            : new StudioMemberPlatformBindingExecutionFailed
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 2,
+                ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+                Failure = new StudioMemberBindingFailure
+                {
+                    Code = "SCOPE_BINDING_FAILED",
+                    Message = "platform binding failed",
+                    FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                },
+            };
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("simulated schedule failure"),
+        };
+        var eventSourcing = new RecordingEventSourcing(state);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(
+            state,
+            publisher,
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        async Task DeliverAsync()
+        {
+            if (outcome is StudioMemberPlatformBindingExecutionSucceeded success)
+                await agent.HandlePlatformBindingExecutionSucceeded(success);
+            else
+                await agent.HandlePlatformBindingExecutionFailed(
+                    (StudioMemberPlatformBindingExecutionFailed)outcome);
+        }
+
+        Func<Task> firstDelivery = DeliverAsync;
+        var failure = await firstDelivery.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        failure.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("simulated schedule failure");
+
+        var pending = StudioMemberBindingRunStateSetter.Get(agent);
+        pending.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        pending.MemberNotificationAttempt.Should().Be(0);
+        eventSourcing.CommittedEvents.Should().ContainSingle();
+        scheduler.Timeouts.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
+
+        scheduler.ScheduleException = null;
+        await agent.HandleEventAsync(RuntimeRetryEnvelope(outcome));
+
+        var recovered = StudioMemberBindingRunStateSetter.Get(agent);
+        recovered.MemberNotificationAttempt.Should().Be(1);
+        eventSourcing.CommittedEvents
+            .OfType<StudioMemberBindingTerminalNotificationAttemptStarted>()
+            .Should().ContainSingle().Which.NotificationAttempt.Should().Be(1);
+        eventSourcing.CommittedEvents.Count(evt =>
+                evt is StudioMemberPlatformBindingExecutionSucceeded
+                    or StudioMemberPlatformBindingExecutionFailed)
+            .Should().Be(1);
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        var notification = publisher.SentMessages.Should().ContainSingle().Subject.Event;
+        if (succeeded)
+            notification.Should().BeOfType<StudioMemberBindingCompletedEvent>();
+        else
+            notification.Should().BeOfType<StudioMemberBindingFailedEvent>();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExactPlatformTerminalOutcomeDuplicate_WithoutRuntimeRetry_ShouldHaveNoSideEffects(
+        bool succeeded)
+    {
+        var state = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
+        IMessage outcome = succeeded
+            ? NewExecutionSucceeded(2)
+            : new StudioMemberPlatformBindingExecutionFailed
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 2,
+                ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+                Failure = new StudioMemberBindingFailure
+                {
+                    Code = "SCOPE_BINDING_FAILED",
+                    Message = "platform binding failed",
+                    FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                },
+            };
+        var committed = _agent.Apply(state, outcome);
+        var eventSourcing = new RecordingEventSourcing(committed);
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(
+            committed,
+            publisher,
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        if (outcome is StudioMemberPlatformBindingExecutionSucceeded success)
+            await agent.HandlePlatformBindingExecutionSucceeded(success);
+        else
+            await agent.HandlePlatformBindingExecutionFailed(
+                (StudioMemberPlatformBindingExecutionFailed)outcome);
+
+        StudioMemberBindingRunStateSetter.Get(agent).ToByteArray()
+            .Should().Equal(committed.ToByteArray());
+        eventSourcing.CommittedEvents.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MemberTerminalNotification_WhenCommitSucceedsButSendFails_ShouldRecoverWithNextAttempt()
+    {
+        var pendingNotification = _agent.Apply(
+            NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1)),
+            NewExecutionSucceeded(2));
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var eventSourcing = new RecordingEventSourcing(pendingNotification);
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated send failure"),
+        };
+        var agent = NewHandlerAgent(
+            pendingNotification,
+            publisher,
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        var activate = () => agent.ActivateAsync();
+        await activate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated send failure");
+
+        var committed = StudioMemberBindingRunStateSetter.Get(agent);
+        committed.MemberNotificationAttempt.Should().Be(1);
+        eventSourcing.CommittedEvents
+            .OfType<StudioMemberBindingTerminalNotificationAttemptStarted>()
+            .Should().ContainSingle().Which.NotificationAttempt.Should().Be(1);
+        publisher.SentMessages.Should().BeEmpty();
+        var scheduled = scheduler.Timeouts.Should().ContainSingle().Subject;
+        scheduled.CallbackId.Should()
+            .Be("studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+
+        var recoveredPublisher = new RecordingEventPublisher();
+        var recoveredScheduler = new RecordingRuntimeCallbackScheduler();
+        var recoveredEventSourcing = new RecordingEventSourcing(committed);
+        var recovered = NewHandlerAgent(
+            committed,
+            recoveredPublisher,
+            recoveredScheduler,
+            eventSourcing: recoveredEventSourcing);
+
+        await recovered.HandleEventAsync(scheduled.TriggerEnvelope);
+
+        StudioMemberBindingRunStateSetter.Get(recovered).MemberNotificationAttempt.Should().Be(2);
+        recoveredEventSourcing.CommittedEvents
+            .OfType<StudioMemberBindingTerminalNotificationAttemptStarted>()
+            .Should().ContainSingle().Which.NotificationAttempt.Should().Be(2);
+        recoveredScheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a2:bind-1");
+        recoveredPublisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingCompletedEvent>();
+    }
+
+    [Fact]
+    public async Task MemberTerminalNotificationWatchdog_FromExternalEnvelope_ShouldBeRejected()
+    {
+        var pendingNotification = _agent.Apply(
+            NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1)),
+            NewExecutionSucceeded(2));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var eventSourcing = new RecordingEventSourcing(pendingNotification);
+        var agent = NewHandlerAgent(
+            pendingNotification,
+            publisher,
+            scheduler,
+            eventSourcing: eventSourcing);
+
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = "external-terminal-watchdog",
+            Payload = Any.Pack(new StudioMemberBindingTerminalNotificationWatchdogFired
+            {
+                BindingRunId = "bind-1",
+                ExpectedNotificationAttempt = 1,
+            }),
+            Route = EnvelopeRouteSemantics.CreateDirect("external-actor", RootActorId),
+        });
+
+        StudioMemberBindingRunStateSetter.Get(agent).MemberNotificationAttempt.Should().Be(0);
+        eventSourcing.CommittedEvents.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
         publisher.SentMessages.Should().BeEmpty();
     }
 
@@ -1092,9 +2459,10 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         platformPort.StartRequests.Should().BeEmpty();
         platformPort.ExecuteRequests.Should().BeEmpty();
-        scheduler.Timeouts.Should().BeEmpty();
-        var failed = eventSourcing.CommittedEvents.Should().ContainSingle().Subject
-            .Should().BeOfType<StudioMemberPlatformBindingFailed>().Subject;
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
+        var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingFailed>()
+            .Should().ContainSingle().Subject;
         failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
         _agent.Apply(legacy, failed).Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
         publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
@@ -1132,8 +2500,8 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         platformPort.StartRequests.Should().BeEmpty();
         platformPort.ExecuteRequests.Should().BeEmpty();
-        var failed = eventSourcing.CommittedEvents.Should().ContainSingle().Subject
-            .Should().BeOfType<StudioMemberPlatformBindingFailed>().Subject;
+        var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingFailed>()
+            .Should().ContainSingle().Subject;
         failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
         events.Add(failed);
         var converted = ReplayWireEvents(events);
@@ -1256,7 +2624,8 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         platformPort.StartRequests.Should().BeEmpty();
         platformPort.ExecuteRequests.Should().BeEmpty();
-        var batch = eventSourcing.CommittedBatches.Should().ContainSingle().Subject;
+        eventSourcing.CommittedBatches.Should().HaveCount(2);
+        var batch = eventSourcing.CommittedBatches[0];
         batch.Should().HaveCount(3);
         batch[0].Should().BeOfType<StudioMemberPlatformBindingStartRequested>();
         batch[1].Should().BeOfType<StudioMemberPlatformBindingExecutionStarted>();
@@ -1305,7 +2674,8 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         await agent.ActivateAsync();
 
         platformPort.ExecuteRequests.Should().BeEmpty();
-        scheduler.Timeouts.Should().BeEmpty();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
         var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
             .Should().ContainSingle().Subject;
         failed.ProtocolVersion.Should().Be(0);
@@ -1330,7 +2700,8 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         platformPort.StartRequests.Should().BeEmpty();
         platformPort.ExecuteRequests.Should().BeEmpty();
-        scheduler.Timeouts.Should().BeEmpty();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
         var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
             .Should().ContainSingle().Subject;
         failed.ProtocolVersion.Should().Be(StudioMemberConventions.PlatformBindingProtocolVersion);
@@ -1356,7 +2727,8 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         platformPort.StartRequests.Should().BeEmpty();
         platformPort.ExecuteRequests.Should().BeEmpty();
-        scheduler.Timeouts.Should().BeEmpty();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-terminal-notification-watchdog:a1:bind-1");
         var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
             .Should().ContainSingle().Subject;
         failed.ProtocolVersion.Should().Be(future.PlatformBindingProtocolVersion);
@@ -1723,6 +3095,23 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         };
     }
 
+    private static EventEnvelope RuntimeRetryEnvelope(IMessage evt)
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = $"retry-{Guid.NewGuid():N}",
+            Payload = Any.Pack(evt),
+            Route = EnvelopeRouteSemantics.CreateDirect("platform-binding-authority", RootActorId),
+        };
+        envelope.EnsureRuntime().Retry = new EnvelopeRetryContext
+        {
+            OriginEventId = "origin-binding-run-event",
+            Attempt = 1,
+            LastErrorType = nameof(IRuntimeEnvelopeRetryableException),
+        };
+        return envelope;
+    }
+
     private static StudioMemberPlatformBindingRecoverySnapshot NewRecoverySnapshot()
     {
         var snapshot = new StudioMemberPlatformBindingRecoverySnapshot
@@ -1743,6 +3132,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
                 },
             },
             ExpectedDeploymentId = "deployment-1",
+            ActivationAttemptId = "platform-1:a1",
         };
         return snapshot;
     }
@@ -1765,6 +3155,19 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         ExecutionAttempt = executionAttempt,
         CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         Result = NewRecoverySnapshot().Result.Clone(),
+    };
+
+    private static StudioMemberBindingAuthorityTerminated NewAuthorityTermination() => new()
+    {
+        BindingRunId = "bind-1",
+        ScopeId = "scope-1",
+        MemberId = "m-1",
+        Failure = new StudioMemberBindingFailure
+        {
+            Code = "STUDIO_MEMBER_DELETED",
+            Message = "member was deleted before binding completed.",
+            FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        },
     };
 
     private static Timestamp NewLegacyExecutionFenceTimestamp() => Timestamp.FromDateTime(
@@ -1938,6 +3341,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     {
         private readonly List<IMessage> _pending = [];
         private readonly StudioMemberBindingRunStateApplier _applier = new();
+        public Exception? ConfirmException { get; init; }
         public long CurrentVersion { get; private set; }
         public List<IMessage> CommittedEvents { get; } = [];
         public List<IReadOnlyList<IMessage>> CommittedBatches { get; } = [];
@@ -1947,6 +3351,9 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
+            if (ConfirmException != null)
+                return Task.FromException<EventStoreCommitResult>(ConfirmException);
+
             var result = EventSourcingTestCommit.From(_pending, CurrentVersion);
             CommittedBatches.Add(_pending.ToArray());
             CommittedEvents.AddRange(_pending);
@@ -1972,6 +3379,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
+        public Exception? SendException { get; set; }
         public List<SentMessage> SentMessages { get; } = [];
 
         public Task PublishAsync<TEvent>(
@@ -1991,6 +3399,9 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
+            if (SendException != null)
+                return Task.FromException(SendException);
+
             SentMessages.Add(new SentMessage(targetActorId, evt));
             return Task.CompletedTask;
         }
@@ -2000,6 +3411,8 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
     private sealed class RecordingPlatformBindingCommandPort : IStudioMemberPlatformBindingCommandPort
     {
+        public Exception? ExecuteException { get; init; }
+
         public List<StudioMemberPlatformBindingExecutionStartRequested> StartRequests { get; } = [];
 
         public List<StudioMemberPlatformBindingExecutionRequest> ExecuteRequests { get; } = [];
@@ -2026,6 +3439,9 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             CancellationToken ct = default)
         {
             ExecuteRequests.Add(request.Clone());
+            if (ExecuteException != null)
+                return Task.FromException<StudioMemberPlatformBindingExecutionAccepted>(ExecuteException);
+
             return Task.FromResult(new StudioMemberPlatformBindingExecutionAccepted(
                 request.BindingRunId,
                 request.PlatformBindingCommandId,
@@ -2036,12 +3452,16 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
     private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
     {
+        public Exception? ScheduleException { get; set; }
         public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
             CancellationToken ct = default)
         {
+            if (ScheduleException != null)
+                return Task.FromException<RuntimeCallbackLease>(ScheduleException);
+
             Timeouts.Add(request);
             return Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,

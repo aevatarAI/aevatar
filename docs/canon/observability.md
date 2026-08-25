@@ -149,6 +149,15 @@ actor 销毁（`DestroyAsync`）或通过 `IActorDeactivationHook` 失活。
 | `aevatar.workflow.run_id` | string | no | 若 `context is IWorkflowProjectionContext`，附 |
 | `aevatar.workflow.step` | string | no | 同上 |
 
+同一个 wrapper 还会在每个具体 materializer 结束时发出一条结构化 terminal log，
+并记录 materializer 级 duration/total。terminal result 只能是
+`completed`、`failed`、`cancelled`；只有调用方 token 已取消时
+`OperationCanceledException` 才归类为 `cancelled`。日志字段为
+`projectionKind / materializerKind / stateVersion / elapsedMs / result`，
+失败时另含 `errorType`。`stateVersion` 没有权威 committed-state 来源时必须为
+`null`，不得伪造为 0。失败日志不得附带异常对象或异常消息，避免 provider 查询、
+连接信息或业务载荷从上层 materializer 日志泄漏。
+
 ### 3.4 Readmodel writes `[experimental]`
 
 decorator 装配点：`src/Aevatar.CQRS.Projection.Runtime/DependencyInjection/ServiceCollectionExtensions.cs:11`
@@ -459,7 +468,26 @@ failure、当前 `retryExhaustedFailureCount`、处理计数和 oldest age，不
 | `aevatar.projection.unresolved_failure.change` | UpDownCounter | count | `projection.kind` |
 | `aevatar.projection.oldest_unresolved_failure.age` | Histogram | s | `projection.kind` |
 | `aevatar.projection.materialization.latency` | Histogram | ms | `projection.kind`, `event.kind` |
+| `aevatar.projection.materializer.duration` | Histogram | ms | `projection.kind`, `materializer.kind`, `result` |
+| `aevatar.projection.materializer.total` | Counter | count | `projection.kind`, `materializer.kind`, `result` |
 | `aevatar.projection.failure_diagnostic.dropped` | Counter | count | `projection.kind` |
+| `aevatar.projection.activation.stage.duration` | Histogram | ms | `stage`, `outcome`, `mode` |
+| `aevatar.projection.activation.result.total` | Counter | count | `path`, `outcome`, `mode` |
+
+`Aevatar.CQRS.Projection.Providers.Neo4j`：
+
+| Instrument | Type | Unit | Allowed labels |
+|------------|------|------|----------------|
+| `aevatar.projection.neo4j.write.duration` | Histogram | ms | `provider`, `operation`, `result` |
+| `aevatar.projection.neo4j.write.total` | Counter | count | `provider`, `operation`, `result` |
+
+Neo4j `operation` 只能是 `replace_owner_graph / upsert_node / upsert_edge /
+delete_node / delete_edge`，`result` 只能是 `completed / failed / cancelled`。
+`projectionKind` 可用于 Core materializer 的低基数 tag，但 `stateVersion`、
+`scope`、`ownerId`、节点/边 id、`nodeCount`、`edgeCount` 只允许作为结构化
+日志字段或 metric value，绝不能成为 tag。graph construction 与
+`replace_owner_graph` 日志必须携带同源 `projectionKind / stateVersion`；直接
+CRUD 没有该上下文时记录 `null`，不得推断或伪造。
 
 `Aevatar.Kafka.Transport`：
 
@@ -492,12 +520,21 @@ pause 期间的定期 `Consume(timeout)` 仅用于推进 librdkafka broker/proto
 Metric label 禁止包含 `actorId`、`sessionId`、`commandId`、failure identity、exception
 message 或其他业务身份。具体 scope/actor failure identity 只通过 readmodel query、日志、
 trace 或 alert payload 获取。Workflow Host 必须注册 `Aevatar.CQRS.Projection` 与
-`Aevatar.Kafka.Transport` 两个 Meter，OTLP exporter 才会采集上述 instrument。
+`Aevatar.CQRS.Projection.Providers.Neo4j`、`Aevatar.Kafka.Transport` 三个 Meter，
+OTLP exporter 才会采集上述 instrument。Projection/Neo4j duration 使用独立的
+`Observability:Metrics:ProjectionLatencyBucketsMs` 配置；默认桶覆盖到 600 秒，
+避免已观测到的 10–40 秒样本全部落入 `+Inf` 而无法计算 p50/p90。
 
 `unresolved_failure.change` 只表示当前进程观测到的 backlog 增减，不是跨 actor 激活或
 进程重启可恢复的权威 current count。`oldest_unresolved_failure.age` 也只在 backlog 变化时
 产生年龄样本。当前 unresolved 数量与最旧发生时间始终读取
 `ProjectionScopeStatusDocument`，不得用 Meter 聚合值反向定义事实。
+
+Projection activation labels are deliberately low-cardinality. `stage` is limited to
+`authority_lookup / existence_lookup / kind_verification / dispatch_admission / relay_readiness / release_readiness`;
+`path` is `warm / cold`; `mode` is `durable / session / unknown`; and `outcome` is limited to
+`hit / miss / mismatch / success / failure / cancelled / timeout`. Actor ids, scope ids and projection
+kinds must remain log fields and must not be added as activation metric labels.
 
 ## 13. 参考
 

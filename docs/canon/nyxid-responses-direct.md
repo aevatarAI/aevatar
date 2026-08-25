@@ -16,7 +16,7 @@ owner: eanzhao
 
 | 入口 | 协议形态 | 状态 | 说明 |
 |---|---|---|---|
-| `GET /v1/models` | OpenAI models list | 已上线 | 聚合调用者在 NyxID 上可达的 LLM 服务模型 |
+| `GET /v1/models` | OpenAI models list | 已上线 | 返回当前 scope effective policy 中显式配置的模型 |
 | `POST /v1/responses` | OpenAI Responses 兼容 | 已上线 | 主入口，支持 streaming、工具声明、`previous_response_id` continuation |
 | `POST /v1/responses/{id}/cancel` | OpenAI Responses cancel | 已上线 | 取消可见的 response session |
 | `POST /v1/messages` | Anthropic Messages facade | 已上线 | 给 Messages-only 客户端使用，共享直连工具分类 |
@@ -62,7 +62,9 @@ Aevatar endpoint 本身标记为 anonymous，不是因为免鉴权，而是因�
 
 ## 3. 模型清单与路由
 
-`GET /v1/models` 会从 NyxID LLM service catalog 取到调用者可见的服务，再 fan-out 到每个服务的 `/models` 平面。Aevatar 返回给客户端的模型 id 统一带服务前缀：
+`GET /v1/models` 先解析 caller scope，再只读该 scope 的 effective model catalog policy
+current-state projection。scope 可以完整替换平台默认，也可以继承平台默认；显式空替换不会回退。
+每个配置来源必须列出至少一个精确模型 ID，Aevatar 返回的 id 统一带服务前缀：
 
 ```text
 <service-slug>/<model-id>
@@ -75,21 +77,30 @@ chrono-llm/gpt-5.5
 llm-anthropic/claude-haiku-4-5
 ```
 
-每个 model entry 还会尽量带上：
+每个 model entry 稳定包含：
 
-- `route_value`：NyxID 真实 route，例如 `/api/v1/proxy/s/chrono-llm`
 - `group` / `owned_by`：服务 slug
-- `context_length`
-- `max_output_tokens`
-- `display_name`
-- `description`
+- `created`：固定为 `0`
+
+当前 policy 不存储 `context_length`、`max_output_tokens`、`display_name` 或 `description`，
+因此这些扩展字段从 JSON 省略。列模型不会调用 NyxID `/api/v1/keys`、`/api/v1/services`
+或任一上游 `/models`，也不会按 URL、display name 或 `llm` 子串推断服务能力。
 
 发起 `/v1/responses` 或 `/v1/messages` 时，客户端应该优先使用 `/v1/models` 返回的完整 id。Aevatar 会解析 `<service-slug>/<model>`：
 
-1. 如果 prefix 像 NyxID service slug，并能在调用者 catalog 中解析到 route，Aevatar 会把 route 写入 `NyxIdRoutePreference`，再把裸 model 传给下游 provider。
-2. 如果 prefix 解析不到，或模型名本来就是裸模型名，Aevatar 走默认 gateway fallback，让 NyxID gateway 自己按 model 名处理。
+1. qualified model 必须在 effective policy 中精确命中同一 slug 和模型 ID，否则返回 `404 model_not_found`。
+2. scope 自定义来源把 exact `userServiceId + serviceSlugSnapshot` 写入 typed `LLMRouteTarget`；平台默认来源写入 exact `catalogServiceId + serviceSlugSnapshot`。
+3. NyxID provider 分别调用 `/api/v1/proxy/s/{slug}?_nyxid_via={userServiceId}` 或 `/api/v1/proxy/{catalogServiceId}`；NyxID 在 proxy 边界最终校验 caller、组织权限和 API-key `allowed_service_ids`。
+4. policy/read model 暂不可读时返回 `503 model_route_unavailable`，不会回退到字符串猜测。
 
-裸模型名仍然保留是为了兼容旧调用方；新客户端不要依赖裸名自动路由。
+这两种 qualified route 都属于 NyxID REST proxy plane，因此调用 bearer 必须具备 `proxy`
+或 `proxy:*` capability。只有 `llm:proxy` 的旧 token 仅覆盖 LLM gateway，不足以调用
+`<service-slug>/<model>`；调用方必须重新签发包含 REST proxy capability 的 token。
+
+裸模型名仍保留 gateway 或 owner UserConfig fallback，供旧调用方兼容；新客户端不要依赖裸名自动路由。
+Admin 的 `/admin#/models` 页面使用 `/api/v1/keys`（scope）和 `/api/v1/services`
+（平台管理员）作为配置候选，但候选 inventory 不是运行时事实。保存配置不会创建 NyxID binding
+或授予权限，所以一个已列出的模型仍可能在调用时被 NyxID 拒绝。
 
 ## 4. Responses 主入口
 
@@ -134,37 +145,54 @@ Responses、Messages 和 Chat Completions 三条直连入口都把模型调用�
 
 ## 5. 直连工具行为
 
-`/v1/responses`、`/v1/messages`、`/v1/chat/completions` 使用同一套 `IResponsesDirectToolPlanService` + `IResponsesToolClassificationService` 抽象组装 tool sources 并做工具分类。三条 create 入口都会合并同一批全局 `IResponsesToolProvider`，并按 chat-route `ForwardToModel.ToolSetRef` 追加同一个 route tool set。Mainnet 的 direct LLM ingress 默认补 `workspace.default`；`lark.self_notify`、`voice.realtime` 也必须组合 `workspace.default`，所以 NyxID/Aevatar workspace tools 是默认可见能力，不依赖调用方显式配置 route tool set。最终工具分成三类：
+`/v1/responses`、`/v1/messages`、`/v1/chat/completions` 在 ownership classification 前共用
+`IResponsesOwnedToolCatalogPlanner`。planner 固定 server-owned published profile snapshot，按本轮 intent 从 route ceiling
+物化小型 exact catalog；普通 no-match 是 restricted empty，不会把 `workspace.default` 直接注入模型。
+`IResponsesDirectToolPlanService` 只解析 route 的 typed tool-set ceiling 和 tool-choice hint，不是 always-on provider fallback。
+三条入口随后用同一个 `IResponsesToolClassificationService` 把工具分成三类：
 
 - Aevatar substitute tools：由服务端接管执行并记录状态。
-- Aevatar additive tools：由服务端额外注入，供模型主动调用。
+- Aevatar exact tools：由本轮 frozen catalog 选择并由服务端执行。
 - forwarded tools：保留给客户端或上游模型继续处理。
 
-前两类是 server-owned tools，最终参数在 caller-owned trusted prefill/hook 完成后冻结，并统一进入 `IAgentToolExecutionPort`。端口内只做一次 safety classification，再执行 credential policy、actor-owned grant、start-once admission ledger 和 `WAITING_APPROVAL/RUNNING/TERMINAL` audit observation；只有 ledger 返回 `Started` 可以进入唯一 raw terminal `AdmittedAgentToolExecutor`。audit append status 不授予执行，terminal 已调用后的 audit failure 保留实际结果且不可重试。Responses 不再拥有单独的 safe-executor wrapper，也不组装第二套 approval/audit middleware。
+Workflow external-capability authoring 使用独立的
+`workflow.external-capability-authoring` tool set，只包含 discovery、readiness 与
+explicit-request preview 三个只读工具。它不进入 `workspace.default` 或普通
+`nyxid.chat.default`；内置 Studio workflow 必须显式选择它，NyxID Chat 则只在 typed
+`WORKFLOW_AUTHORING` 回合意图下从 Agent Profile route ceiling 物化该集合。完整 binding
+source 不会随这个窄集合进入任何 surface。
 
-当前 substitute tools 包括：
+前两类是 server-owned tools，最终参数在 caller-owned trusted prefill/hook 完成后冻结，并统一进入 `IAgentToolExecutionPort`。同一 proof/digest 约束 model schema 与 off-grain executor 的重新物化；端口内只做一次 safety classification，再执行 credential policy、actor-owned grant、start-once admission ledger 和 `WAITING_APPROVAL/RUNNING/TERMINAL` audit observation。只有 ledger 返回 `Started` 可以进入唯一 raw terminal `AdmittedAgentToolExecutor`。audit append status 不授予执行，terminal 已调用后的 audit failure 保留实际结果且不可重试。统一 catalog 契约见 [agent-turn-tool-catalog.md](agent-turn-tool-catalog.md)。
+
+Responses ingress 边界的 substitute compatibility 包括：
 
 | 工具名 | 说明 |
 |---|---|
-| `TodoWrite` | 持久化 agent-scoped todo state |
+| `TodoWrite` | 仅当 profile 显式选择 `responses.state` / coding 能力时持久化 agent-scoped todo state |
 | `WebFetch` / `web_fetch` | 通过 Aevatar 抓取 URL，记录 trace/cache |
 | `WebSearch` / `web_search` | 通过 Aevatar 执行 web search，记录 trace/cache |
 
-旧 `Task` / `task` trace 契约暂留为 dead surface，当前 Mainnet 不再注册 fake Task substitute。需要执行 GAgent、team 或 workflow 时使用下方 workspace additive tools。
+`WebFetch` / `WebSearch` 只是在客户端显式声明别名、且 frozen catalog 已授权 canonical
+`web_fetch` / `web_search` 时做边界替换；内部 catalog 始终只有 snake_case canonical schema。
+`ResponsesAevatarToolProvider` 不再作为 `workspace.default` additive source，作为内部 `responses.state` source 时也只暴露
+`TodoWrite`。旧 `Task` / `task` trace 契约暂留为 dead surface，当前 Mainnet 不注册 fake Task substitute。
 
-当前 additive tools 包括：
+Skill 能力按 profile/intent 分层：
 
 | 工具名 | 说明 |
 |---|---|
 | `use_skill` | 按名称加载本地或 Ornn 远程 skill，并把 skill 指令返回给模型执行 |
 | `ornn_search_skills` | 通过 NyxID proxy 搜索调用者在 Ornn 上可见的 skill |
-| `ornn_publish_skill` | 组装并校验私有 Ornn skill ZIP 后通过 NyxID proxy 发布 |
+| `ornn_publish_skill` / `ornn_update_skill` | 仅 `skill.authoring` profile 可选择的私有 skill 写能力 |
+| `list_external_workflow_capabilities` | 列出当前调用者可见的 exact workflow external-capability descriptors |
+| `inspect_external_workflow_capability_readiness` | 对一个 exact typed selector 做只读 readiness 检查 |
+| `preview_workflow_explicit_requests` | 只读预览 authored request 在 bind 前需要确认的 typed grants |
 
-`use_skill`、`ornn_search_skills` 和 `ornn_publish_skill` 使用当前 `/v1/*` 请求的 bearer token，经 NyxID proxy 访问 Ornn API。也就是说，它们看到和写入的是这个调用者在 NyxID / Ornn 权限下可见的 skill，而不是 Aevatar 服务端的全局技能库。`ornn_publish_skill` v1 只发布 private skill，先在 Aevatar 内完成 workflow/script/package-format 校验，校验失败不会上传。使用受限 NyxID API key 时，`--allowed-services` 需要同时覆盖 `aevatar`、目标 LLM service，以及 Ornn API service（默认 slug 为 `ornn-api`，可通过 `Aevatar:Ornn:NyxIdSlug` 覆盖）。
+这些工具使用当前 `/v1/*` 请求的 bearer token，经 NyxID proxy 访问调用者可见的 Ornn capability，而不是服务端全局 skill 库。普通 skill intent 只允许 `ornn_search_skills` + `use_skill`；publish/update 必须显式进入 `skill.authoring` profile。`ornn_publish_skill` v1 只发布 private skill，并先做 workflow/script/package-format 校验。受限 NyxID API key 的 `--allowed-services` 需要覆盖 `aevatar`、目标 LLM service 与 Ornn API service（默认 slug `ornn-api`）。
 
-chat-route policy 指定 `tool_set_ref` 或 `tool_choice_hint` 时，三条直连入口都会使用同一个 direct tool plan：同一个 tool set 会被注入，同一个 trusted prefilled arguments 合并规则会生效。不要为 `/v1/messages` 或 `/v1/chat/completions` 另建工具白名单。
+chat-route policy 指定 profile、`tool_set_ref` 或 `tool_choice_hint` 时，三条直连入口都会使用同一个 plan；tool set 只是 ceiling，最终只能注入 frozen profile/intent catalog 中的 exact tools。不要为 `/v1/messages` 或 `/v1/chat/completions` 另建工具白名单。
 
-直连工具的失败语义按边界分层处理。客户端声明但不属于 Aevatar substitute 或 additive 的 forwarded tools 仍然由客户端执行；这类工具不会在 Aevatar 内被降级，也不会进入 `IAgentToolExecutionPort`，本地端口调用数恒为 0。只要某个工具名来自 Aevatar-owned substitute/additive discovery，即使客户端也声明了同名工具，该名称也会作为 `owned_tool_names` 写入 run command，并由运行时作为 deny-forward 边界处理，不能被转成 forwarded tool call。Aevatar 本地 direct tools 执行失败时，actor 会把端口 outcome 转成合法 JSON tool output，并继续把结果送回模型，避免一个可选本地工具异常终止整次 response。`RUNNING Duplicate/Conflict` 不会重放；terminal 已执行但 terminal audit 失败时保留真实 result，标记 audit incomplete，且不可重试。错误 JSON 只暴露稳定错误码、工具名和异常类型，不透出 token、请求头或内部路径。调用方取消仍然取消整次 run，不会被转成 tool output。chat-route `tool_set_ref` 解析错误仍然 fail closed 返回配置错误；但已经解析出的 tool source、全局 provider、skills/Ornn discovery 如果单个 source 失败，会记录 warning 并跳过该 source，其他可用工具继续进入本次计划。
+直连工具的失败语义按边界分层处理。客户端声明但不属于 frozen Aevatar-owned catalog 的 forwarded tools 仍由客户端执行，不进入 `IAgentToolExecutionPort`。属于 catalog 的名称会写入 `owned_tool_names` 并成为 deny-forward 边界；同名 alias/canonical 重复、source collision、invalid schema、schema/connected-operation 安全预算超限或执行端 proof mismatch 都 typed fail closed，不调用模型或工具，也不跳过失败 source 后继续。Tool count 只作为优化目标，合法 exact catalog 超目标仍完整进入模型。Aevatar 本地 direct tool 在已经通过准入后的业务执行失败会转换成稳定 JSON tool output；`RUNNING Duplicate/Conflict` 不重放，terminal audit failure 保留真实 result 且不可重试。错误 JSON 不透出 token、请求头或内部路径；调用方取消仍取消整次 run。
 
 ## 6. 显式 Skill 触发
 
@@ -201,7 +229,7 @@ Channel relay 入口也使用同一 parser。默认平台别名为：
 - `max_tokens` 必填。
 - 支持 text、`tool_use`、`tool_result`、`thinking` 的基础映射。
 - 支持 streaming，并输出 Anthropic Messages 事件形态。
-- 与 `/v1/responses` 共享直连 tool-source plan 和工具分类，会注入 `use_skill`、`ornn_search_skills` 等 additive tools，也会用 Aevatar substitute tools 替换同名客户端 declared tools；chat-route 指定的 tool set / tool choice hint 同样生效。
+- 与 `/v1/responses` 共享 profile snapshot、exact catalog planner、proof 校验和 forwarded classification；只有当前 intent 选择 skill/web 等能力时才注入对应 owned tools，chat-route ceiling / tool-choice hint 同样生效。
 
 当前限制：
 
@@ -222,7 +250,7 @@ Channel relay 入口也使用同一 parser。默认平台别名为：
 - 复用 `/v1/responses` / `/v1/messages` 的 caller scope、模型路由和 NyxID bearer 透传。
 - 支持 text `messages`、基础 `tool_calls` / `tool` message、`stream`、`temperature`、`max_tokens` / `max_completion_tokens`、`response_format`。
 - 支持 OpenAI SSE chunk 形态，流结束输出 `data: [DONE]`。
-- 与 `/v1/responses` 共享直连 tool-source plan 和工具分类，会注入 `use_skill`、`ornn_search_skills` 等 additive tools，也会用 Aevatar substitute tools 替换同名客户端 declared tools；chat-route 指定的 tool set / tool choice hint 同样生效。
+- 与 `/v1/responses` 共享 profile snapshot、exact catalog planner、proof 校验和 forwarded classification；只有当前 intent 选择 skill/web 等能力时才注入对应 owned tools，chat-route ceiling / tool-choice hint 同样生效。
 
 当前限制：
 
@@ -250,7 +278,9 @@ Aevatar service catalog 的 `externalExposure` 是 service definition 拥有的 
 
 这个事实不属于 service binding。Binding 只表达本 service 依赖的下游资源；`externalExposure` 表达本 service 自身对外暴露后的可发现信息。Aevatar 不会因为该字段自动向 NyxID 注册服务，也不会把该字段接入 dispatcher 路由。写入仍走 service definition 的窄 external exposure 更新入口，读取走 service catalog readmodel 与现有 service/scope service API 响应。
 
-因此 API key 至少需要 `proxy` scope，或更宽的 proxy scope。生产上可以用 `--allowed-services` 收紧到 Aevatar 与目标 LLM 服务；调试时可以先用 `--allow-all-services` 验证链路。
+因此 API key 至少需要 `proxy` scope，或更宽的 `proxy:*` scope；`llm:proxy` 不能替代这项
+REST proxy capability。生产上可以用 `--allowed-services` 收紧到 Aevatar 与目标 LLM 服务；
+调试时可以先用 `--allow-all-services` 验证链路。
 
 `--allowed-services` 必须填 `nyxid service list --output json` 里的 UserService id，不是 catalog id。填错时常见错误是 `api_key_scope_forbidden_legacy`。
 
@@ -262,9 +292,11 @@ Aevatar service catalog 的 `externalExposure` 是 service definition 拥有的 
 - `src/Aevatar.Mainnet.Host.Api/Messages/MessagesEndpoints.cs`
 - `src/Aevatar.Mainnet.Host.Api/ChatCompletions/ChatCompletionsEndpoints.cs`
 
-模型聚合与路由：
+模型目录与路由：
 
-- `src/Aevatar.Mainnet.Host.Api/Responses/ResponsesModelsAggregator.cs`
+- `src/Aevatar.Mainnet.Host.Api/ModelCatalog/LLMModelCatalogEndpoints.cs`
+- `src/Aevatar.Studio.Application/Studio/Services/LLMModelRouteApplicationService.cs`
+- `src/Aevatar.Studio.Projection/QueryPorts/ProjectionLLMModelCatalogPolicyQueryPort.cs`
 - `src/Aevatar.Mainnet.Host.Api/Responses/ResponsesRouteResolver.cs`
 - `src/Aevatar.Mainnet.Host.Api/Responses/ResponsesApiModels.cs`
 

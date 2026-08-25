@@ -545,10 +545,10 @@ public sealed class VoicePresenceBootstrapTests
     {
         private readonly TaskCompletionSource _entered =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource<IReadOnlyList<VoiceToolDefinition>> _release =
+        private readonly TaskCompletionSource<VoiceToolCatalogSnapshot> _release =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+        public Task<VoiceToolCatalogSnapshot> DiscoverAsync(
             VoiceToolExecutionContext? toolContext = null,
             CancellationToken ct = default)
         {
@@ -561,11 +561,11 @@ public sealed class VoicePresenceBootstrapTests
             _entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         public void Release(IReadOnlyList<VoiceToolDefinition> definitions) =>
-            _release.TrySetResult(definitions);
+            _release.TrySetResult(CreateToolCatalogSnapshot(definitions));
 
         public void Dispose()
         {
-            _release.TrySetResult([]);
+            _release.TrySetResult(CreateToolCatalogSnapshot([]));
         }
     }
 
@@ -573,21 +573,57 @@ public sealed class VoicePresenceBootstrapTests
     {
         public List<VoiceToolExecutionContext?> Contexts { get; } = [];
 
-        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+        public Task<VoiceToolCatalogSnapshot> DiscoverAsync(
             VoiceToolExecutionContext? toolContext = null,
             CancellationToken ct = default)
         {
             _ = ct;
             Contexts.Add(toolContext?.Clone());
-            return Task.FromResult<IReadOnlyList<VoiceToolDefinition>>(
+            return Task.FromResult(CreateToolCatalogSnapshot(
             [
                 new VoiceToolDefinition
                 {
                     Name = "caller.only",
                     Description = "caller",
                     ParametersSchema = "{}",
+                    Owner = VoiceToolOwner.Actor,
                 },
-            ]);
+            ]));
         }
+    }
+
+    private static VoiceToolCatalogSnapshot CreateToolCatalogSnapshot(
+        IReadOnlyList<VoiceToolDefinition> definitions)
+    {
+        foreach (var definition in definitions)
+        {
+            if (definition.Owner == VoiceToolOwner.Unspecified)
+                definition.Owner = VoiceToolOwner.Actor;
+        }
+
+        var snapshot = new VoiceToolCatalogSnapshot
+        {
+            PolicyVersion = "test-voice-policy/v1",
+            Proof = new VoiceAgentTurnToolCatalogProof
+            {
+                ToolCount = definitions.Count,
+                SchemaBytes = definitions.Sum(static definition =>
+                    System.Text.Encoding.UTF8.GetByteCount(definition.ParametersSchema ?? string.Empty)),
+                CatalogDigest = "sha256:test",
+                MaximumToolCount = VoiceToolCatalogSnapshotValidator.MaximumToolCount,
+                MaximumSchemaBytes = VoiceToolCatalogSnapshotValidator.MaximumSchemaBytes,
+            },
+        };
+        snapshot.Tools.AddRange(definitions.Select(static definition => definition.Clone()));
+        snapshot.Proof.ToolDescriptors.AddRange(definitions.Select(static definition =>
+            new VoiceAgentTurnToolDescriptorProof
+            {
+                Name = definition.Name,
+                ExactDescription = definition.Description,
+                CanonicalSchema = Google.Protobuf.ByteString.CopyFromUtf8(definition.ParametersSchema ?? string.Empty),
+                SchemaSha256 = "sha256:test",
+                OriginKind = "Voice",
+            }));
+        return snapshot;
     }
 }

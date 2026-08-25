@@ -206,15 +206,19 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
     [Theory]
     [InlineData("hash-1", AuditTrailArtifactWriteDisposition.Duplicate)]
     [InlineData("hash-2", AuditTrailArtifactWriteDisposition.Conflict)]
-    public async Task UpsertAsync_WhenDocumentAlreadyExists_ShouldReconcileByContentHash(
+    public async Task UpsertAsync_WhenDocumentAlreadyExists_ShouldReconcileByHashOrSemanticContent(
         string incomingContentHash,
         AuditTrailArtifactWriteDisposition expectedDisposition)
     {
+        var incoming = BuildDocument("audit-1", incomingContentHash);
+        if (expectedDisposition == AuditTrailArtifactWriteDisposition.Conflict)
+            incoming.Record.Correlation.RequestId = "different-request";
+
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, BuildHitPayload(BuildDocument("audit-1", "hash-1"))));
         using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
 
-        var write = await store.UpsertAsync(BuildDocument("audit-1", incomingContentHash));
+        var write = await store.UpsertAsync(incoming);
 
         write.Disposition.Should().Be(expectedDisposition);
         handler.CapturedRequests.Should().ContainSingle()
@@ -228,6 +232,10 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         string existingContentHash,
         AuditTrailArtifactWriteDisposition expectedDisposition)
     {
+        var existing = BuildDocument("audit-1", existingContentHash);
+        if (expectedDisposition == AuditTrailArtifactWriteDisposition.Conflict)
+            existing.Record.Correlation.RequestId = "different-request";
+
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"error":"alias_missing"}"""));
@@ -235,7 +243,7 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.Conflict, """{"result":"conflict"}"""));
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, BuildHitPayload(BuildDocument("audit-1", existingContentHash))));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, BuildHitPayload(existing)));
         using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
 
         var write = await store.UpsertAsync(BuildDocument("audit-1", "hash-1"));
@@ -253,6 +261,54 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
             .Should().Equal(
                 "PUT /audit-tests-audit-trail-current/_create/audit-1",
                 "GET /audit-tests-audit-trail-current/_doc/audit-1");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenCreateRaceHasLegacyHashAndTraceOnlyDifference_ShouldReturnDuplicate()
+    {
+        var incoming = BuildDocument("audit-1", "incoming-legacy-hash");
+        incoming.Record.Correlation.TraceId = "fedcba9876543210fedcba9876543210";
+        incoming.Record.Correlation.SpanId = "fedcba9876543210";
+        incoming.Record.Correlation.Traceparent =
+            "00-fedcba9876543210fedcba9876543210-fedcba9876543210-01";
+        incoming.Record.Correlation.Tracestate = "vendor=attempt-2";
+        var raced = incoming.Clone();
+        raced.ContentHash = "stored-legacy-hash";
+        raced.Record.Correlation.TraceId = "0123456789abcdef0123456789abcdef";
+        raced.Record.Correlation.SpanId = "0123456789abcdef";
+        raced.Record.Correlation.Traceparent =
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+        raced.Record.Correlation.Tracestate = "vendor=attempt-1";
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"error":"alias_missing"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.Conflict, """{"result":"conflict"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, BuildHitPayload(raced)));
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
+
+        var write = await store.UpsertAsync(incoming);
+
+        write.Disposition.Should().Be(AuditTrailArtifactWriteDisposition.Duplicate);
+        handler.CapturedRequests.Should().HaveCount(7);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenHashesDifferAndBusinessFieldChanges_ShouldReturnConflict()
+    {
+        var existing = BuildDocument("audit-1", "stored-legacy-hash");
+        var incoming = BuildDocument("audit-1", "incoming-legacy-hash");
+        incoming.Record.Correlation.RequestId = "different-request";
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, BuildHitPayload(existing)));
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
+
+        var write = await store.UpsertAsync(incoming);
+
+        write.Disposition.Should().Be(AuditTrailArtifactWriteDisposition.Conflict);
+        handler.CapturedRequests.Should().ContainSingle();
     }
 
     [Fact]

@@ -89,6 +89,36 @@ message VoiceToolDefinition {
   VoiceToolOwner owner = 4;
 }
 
+// Voice boundary representation of the authoritative AgentTurnToolCatalog proof.
+// The AI adapter owns construction and validation; Foundation only transports the
+// sealed facts with the voice session so provider schema and execution admission
+// can be rematerialized against the same digest.
+message VoiceAgentTurnToolDescriptorProof {
+  string name = 1;
+  string exact_description = 2;
+  bytes canonical_schema = 3;
+  string schema_sha256 = 4;
+  string origin_kind = 5;
+  string selector_digest = 6;
+}
+
+message VoiceAgentTurnToolCatalogProof {
+  repeated VoiceAgentTurnToolDescriptorProof tool_descriptors = 1;
+  int32 tool_count = 2;
+  int32 schema_bytes = 3;
+  string catalog_digest = 4;
+  int32 maximum_tool_count = 5;
+  int32 maximum_schema_bytes = 6;
+  int32 connected_read_tool_count = 7;
+  int32 connected_write_tool_count = 8;
+}
+
+message VoiceToolCatalogSnapshot {
+  repeated VoiceToolDefinition tools = 1;
+  VoiceAgentTurnToolCatalogProof proof = 2;
+  string policy_version = 3;
+}
+
 message VoiceToolExecutionContext {
   string credential_ref = 1;
   google.protobuf.Timestamp expires_at = 2;
@@ -106,6 +136,8 @@ message VoiceToolExecutionContext {
   repeated string allowed_tool_names = 14;
   string nyx_id_route_preference = 15;
   string sender_binding_id = 16;
+  VoiceAgentTurnToolCatalogProof tool_catalog_proof = 17;
+  string tool_catalog_policy_version = 18;
 }
 
 message VoiceConversationEventInjection {

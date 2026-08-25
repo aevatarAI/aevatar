@@ -107,12 +107,16 @@ internal sealed class ProjectionScopeFailureTracker
     public async Task ReplayAsync(
         ProjectionScopeState state,
         int maxItems,
-        Func<EventEnvelope, CancellationToken, Task<ProjectionScopeDispatchResult>> dispatchAsync)
+        Func<EventEnvelope, CancellationToken, Task<ProjectionScopeDispatchResult>> dispatchAsync,
+        bool includeRetryExhausted = true)
     {
         if (state.Failures.Count == 0)
             return;
 
-        var failures = ProjectionScopeFailureLog.GetPendingFailures(state, maxItems);
+        var failures = ProjectionScopeFailureLog.GetPendingFailures(
+            state,
+            maxItems,
+            includeRetryExhausted);
         foreach (var failure in failures)
         {
             if (failure.Envelope == null)
@@ -135,12 +139,49 @@ internal sealed class ProjectionScopeFailureTracker
                     await RecordReplayFailureAsync(
                         failure,
                         "Replay did not produce a materialization result.");
+                    break;
                 }
+            }
+            catch (ProjectionScopeStatusRouteBlockedException)
+            {
+                // The status route is blocked for a cutover: nothing was re-attempted, so the
+                // refusal must not consume the failure's replay budget. The replay is simply
+                // retried after the flip (activation resumes the cutover first).
+                break;
             }
             catch (Exception ex)
             {
                 await RecordReplayFailureAsync(failure, ex.Message);
+                break;
             }
+        }
+    }
+
+    public async Task ResolveMatchingAsync(
+        ProjectionScopeState state,
+        ProjectionSourceCoordinate source)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(source);
+
+        var matchingFailureIds = state.Failures
+            .Where(failure =>
+                failure.SourceVersion == source.StateVersion &&
+                string.Equals(failure.SourceActorId, source.ActorId, StringComparison.Ordinal) &&
+                string.Equals(failure.EventId, source.EventId, StringComparison.Ordinal))
+            .Select(static failure => failure.FailureId)
+            .Where(static failureId => !string.IsNullOrWhiteSpace(failureId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var failureId in matchingFailureIds)
+        {
+            await _persistAsync(
+                ProjectionScopeFailureLog.BuildReplayResultEvent(failureId, true));
+            ProjectionProcessingMetrics.RecordResolved(
+                _scopeKeyResolver().ProjectionKind,
+                _failureCountAccessor(),
+                _oldestFailureAtAccessor());
         }
     }
 

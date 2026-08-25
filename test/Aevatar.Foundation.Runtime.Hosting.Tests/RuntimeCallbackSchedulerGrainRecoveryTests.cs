@@ -1,9 +1,11 @@
 using System.Globalization;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Tests.Shared;
@@ -359,11 +361,60 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         terminal.PendingReminderUnregistrations.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task EnsureRuntimeFleetReconcileTimerAsync_WhenStateExistsWithoutPhysicalReminder_ShouldRepairInPlace()
+    {
+        const long generation = 7;
+        var streamProvider = new RecordingStreamProvider();
+        var storage = new TestRuntimeCallbackSchedulerStateStorage();
+        var reminderTable = new RecordingReminderTable();
+        using var host = await StartSiloHostAsync(
+            streamProvider,
+            storage,
+            reminderTable,
+            disableFleetAuthorityBootstrap: true);
+
+        var grain = host.Services
+            .GetRequiredService<IGrainFactory>()
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId);
+        var grainId = grain.GetGrainId();
+        storage.SeedSchedulerState(grainId, new RuntimeCallbackSchedulerState
+        {
+            ReminderCallbacks =
+            {
+                [RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId] =
+                    CreateFleetReconcileSchedule(generation),
+            },
+            CallbackGenerations =
+            {
+                [RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId] = generation,
+            },
+        });
+
+        var first = await grain.EnsureRuntimeFleetReconcileTimerAsync();
+        var second = await grain.EnsureRuntimeFleetReconcileTimerAsync();
+
+        first.Should().Be(generation);
+        second.Should().Be(generation);
+        reminderTable.Contains(
+            grainId,
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId).Should().BeTrue();
+        var repaired = storage.ReadSchedulerState(grainId);
+        repaired.ReminderCallbacks[
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId].Generation.Should()
+            .Be(generation);
+        repaired.CallbackGenerations[
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId].Should()
+            .Be(generation);
+    }
+
     private static async Task<IHost> StartSiloHostAsync(
         RecordingStreamProvider streamProvider,
         TestRuntimeCallbackSchedulerStateStorage storage,
         RecordingReminderTable? reminderTable = null,
-        GrainContextFailureLoggerProvider? failureLoggerProvider = null) =>
+        GrainContextFailureLoggerProvider? failureLoggerProvider = null,
+        bool disableFleetAuthorityBootstrap = false) =>
         await SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .ConfigureLogging(logging =>
             {
@@ -384,6 +435,16 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                 });
                 siloBuilder.ConfigureServices(services =>
                 {
+                    if (disableFleetAuthorityBootstrap)
+                    {
+                        var bootstrap = services.SingleOrDefault(descriptor =>
+                            descriptor.ServiceType == typeof(ILifecycleParticipant<ISiloLifecycle>) &&
+                            descriptor.ImplementationType ==
+                                typeof(RuntimeFleetAuthoritySiloLifecycleParticipant));
+                        if (bootstrap != null)
+                            services.Remove(bootstrap);
+                    }
+
                     if (reminderTable != null)
                     {
                         services.Replace(
@@ -417,6 +478,30 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         DeliveryMode = RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
         TriggerEnvelope = CreateEnvelope($"evt-{generation}"),
         NextDueAtUnixTimeMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
+    };
+
+    private static RuntimeScheduledCallback CreateFleetReconcileSchedule(long generation) => new()
+    {
+        ActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+        CallbackId = RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+        Generation = generation,
+        SlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+        Periodic = true,
+        DueTimeMillis = 1000,
+        PeriodMillis = checked((int)RuntimeCallbackSchedulerGrain.FleetReconcilePeriod.TotalMilliseconds),
+        FireIndex = 3,
+        DeliveryMode = RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
+        TriggerEnvelope = new EventEnvelope
+        {
+            Id = "fleet-reconcile-trigger",
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                TopologyAudience.Self),
+            Payload = Any.Pack(new RuntimeFleetReconcileRequested()),
+        },
+        NextDueAtUnixTimeMs = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds(),
         OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
     };
 

@@ -331,11 +331,13 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     CorrelationId = "corr-invoke",
                     Payload = Any.Pack(new StringValue { Value = "invoke" }),
                 },
-                ScheduleId: "schedule-invoke"));
+                ScheduleId: "schedule-invoke",
+                ScheduleOperationId: "installation-alpha:provision:a2"));
 
         var invokedRequest = invocationPort.Requests.Should().ContainSingle().Which;
         invokedRequest.Payload.Unpack<StringValue>().Value.Should().Be("invoke");
         invokedRequest.ScheduleId.Should().Be("schedule-invoke");
+        invokedRequest.ScheduleOperationId.Should().Be("installation-alpha:provision:a2");
         credentialExchange.Sources.Should().BeEmpty();
         receipt.Accepted.Should().BeTrue();
         receipt.CommandId.Should().Be("cmd-invoke");

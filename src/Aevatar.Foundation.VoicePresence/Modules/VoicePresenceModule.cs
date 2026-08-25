@@ -1445,10 +1445,11 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         if (_toolCatalog == null)
             return effectiveSession;
 
-        IReadOnlyList<VoiceToolDefinition> discoveredTools;
+        VoiceToolCatalogSnapshot snapshot;
         try
         {
-            discoveredTools = await _toolCatalog.DiscoverAsync(state.ActiveToolContext?.Clone(), ct);
+            snapshot = await _toolCatalog.DiscoverAsync(state.ActiveToolContext?.Clone(), ct);
+            VoiceToolCatalogSnapshotValidator.Validate(snapshot);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1456,33 +1457,24 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Voice tool discovery failed during session initialization.");
+            _logger.LogWarning(ex, "Voice tool catalog materialization failed closed during session initialization.");
+            effectiveSession ??= new VoiceSessionConfig();
+            effectiveSession.ToolNames.Clear();
+            effectiveSession.ToolDefinitions.Clear();
             return effectiveSession;
         }
 
-        if (discoveredTools.Count == 0)
-            return effectiveSession;
-
         effectiveSession ??= new VoiceSessionConfig();
-        var knownNames = new HashSet<string>(
-            effectiveSession.ToolDefinitions
-                .Select(static definition => definition.Name)
-                .Where(static name => !string.IsNullOrWhiteSpace(name)),
-            StringComparer.OrdinalIgnoreCase);
-
-        foreach (var discoveredTool in discoveredTools)
+        effectiveSession.ToolNames.Clear();
+        effectiveSession.ToolDefinitions.Clear();
+        foreach (var discoveredTool in snapshot.Tools)
         {
             var toolName = discoveredTool.Name?.Trim();
-            if (string.IsNullOrWhiteSpace(toolName) || !knownNames.Add(toolName))
-                continue;
-
             effectiveSession.ToolDefinitions.Add(new VoiceToolDefinition
             {
-                Name = toolName,
+                Name = toolName!,
                 Description = discoveredTool.Description ?? string.Empty,
-                ParametersSchema = string.IsNullOrWhiteSpace(discoveredTool.ParametersSchema)
-                    ? "{}"
-                    : discoveredTool.ParametersSchema,
+                ParametersSchema = discoveredTool.ParametersSchema,
                 Owner = discoveredTool.Owner,
             });
         }

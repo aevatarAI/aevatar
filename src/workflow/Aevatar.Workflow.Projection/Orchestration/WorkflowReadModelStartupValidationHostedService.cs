@@ -55,6 +55,15 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
 
         if (_options.ValidateGraphProviderOnStartup)
         {
+            var providerStatus = _serviceProvider.GetService<ProjectionGraphProviderStatus>();
+            if (providerStatus is { Enabled: false })
+            {
+                _logger.LogInformation(
+                    "Workflow read-model graph startup probe skipped because graph projection is disabled. provider={Provider}",
+                    providerStatus.ProviderName);
+                return;
+            }
+
             try
             {
                 var graphStore = _serviceProvider.GetRequiredService<IProjectionGraphStore>();

@@ -121,19 +121,39 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         }
         catch (JsonException) { /* malformed arguments → fall back to an empty (browse-all) query */ }
 
-        var token = _remoteAccessTokenResolver is null
-            ? AgentToolRequestContext.NyxIdAccessToken
-            : await _remoteAccessTokenResolver.ResolveAsync(query, ct).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(token))
+        string? token;
+        if (_remoteAccessTokenResolver is null)
         {
-            return BuildStructuredResult(
-                status: "error",
-                query: query,
-                scope: null,
-                error: "No NyxID access token available. User must be authenticated.",
-                matches: Array.Empty<object>(),
-                httpStatus: null,
-                text: "Error: No NyxID access token available. User must be authenticated.");
+            token = AgentToolRequestContext.NyxIdAccessToken;
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return BuildStructuredResult(
+                    status: "error",
+                    query: query,
+                    scope: null,
+                    error: "No NyxID access token available. User must be authenticated.",
+                    matches: Array.Empty<object>(),
+                    httpStatus: null,
+                    text: "Error: No NyxID access token available. User must be authenticated.");
+            }
+        }
+        else
+        {
+            var resolution = await _remoteAccessTokenResolver.ResolveAsync(query, ct).ConfigureAwait(false);
+            if (!resolution.Succeeded)
+            {
+                var guidance = RemoteSkillAccessTokenFailureMessage.Build(resolution.FailureKind);
+                return BuildStructuredResult(
+                    status: "error",
+                    query: query,
+                    scope: null,
+                    error: guidance,
+                    matches: Array.Empty<object>(),
+                    httpStatus: null,
+                    text: $"Error: {guidance}");
+            }
+
+            token = resolution.AccessToken;
         }
 
         // No model-facing scope knob: a discovery-for-use tool must never let the model narrow

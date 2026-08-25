@@ -19,6 +19,24 @@ bash tools/ci/nyxid_conformance_guard.sh
 
 Commit the resulting `sources.json` update only after the guard passes.
 
+## Registry revision `nyxid-assistant-actions.v8`
+
+NyxID production began serving `nyxid-assistant-actions.v8` on 2026-08-19
+(`registry-v8.json` is the served payload: v7 plus `service.reauthorize`
+`{userServiceId, requestedScopes[]}`, risk `grant`, `remember_eligible: false`).
+Since aevatar#3521 the loader no longer gates on the revision string at all:
+`schema_version` is the only registry-wide compatibility check, the revision is
+recorded as an observability label, and each descriptor validates against its
+pinned per-action contract independently — a divergent or unknown descriptor is
+skipped on its own while `service.connect` / `key.create` / `key.rotate` stay
+executable. `service.reauthorize` remains non-executable, and advertising it
+still requires the typed producer, AG-UI mapper, postcondition reader,
+coverage-manifest row flip, and a fresh semantic evaluation run.
+`assistant_registry.revision` still names v7 because `nyxid.revision` /
+`nyxid_source_sha256` pin the NyxID commit that published v7; re-pinning the
+NyxID source commit (and the CI workflow checkout ref) stays a single-change
+operation when the corpus is refreshed.
+
 `semantic-evaluation.json` is the checked-in release-gate record. The conformance guard fails while its
 status is not `passed`, while results are absent, or when the recorded aggregate cannot be reproduced
 from the case evidence.

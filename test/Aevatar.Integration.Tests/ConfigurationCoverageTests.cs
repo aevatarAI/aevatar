@@ -28,6 +28,7 @@ public sealed class ConfigurationCoverageTests
         AevatarPaths.ConnectorsJson.Should().Be(Path.Combine(expectedRoot, "connectors.json"));
         AevatarPaths.AgentYaml("writer").Should().Be(Path.Combine(expectedRoot, "agents", "writer.yaml"));
         AevatarPaths.WorkflowYaml("pipeline").Should().Be(Path.Combine(expectedRoot, "workflows", "pipeline.yaml"));
+        AevatarPaths.WorkflowTemplates.Should().Be(Path.Combine(expectedRoot, AevatarPaths.WorkflowTemplatesDirectoryName));
     }
 
     [Fact]
@@ -40,7 +41,7 @@ public sealed class ConfigurationCoverageTests
 
         Directory.Exists(AevatarPaths.Root).Should().BeTrue();
         Directory.Exists(AevatarPaths.Agents).Should().BeTrue();
-        Directory.Exists(AevatarPaths.Workflows).Should().BeTrue();
+        new[] { AevatarPaths.Workflows, AevatarPaths.WorkflowTemplates }.Should().OnlyContain(path => Directory.Exists(path));
         Directory.Exists(AevatarPaths.Skills).Should().BeTrue();
         Directory.Exists(AevatarPaths.Tools).Should().BeTrue();
         Directory.Exists(AevatarPaths.Sessions).Should().BeTrue();
@@ -57,7 +58,7 @@ public sealed class ConfigurationCoverageTests
         var repoRoot = AevatarPaths.RepoRoot;
 
         File.Exists(Path.Combine(repoRoot, "aevatar.slnx")).Should().BeTrue();
-        AevatarPaths.RepoRootWorkflows.Should().Be(Path.Combine(repoRoot, "workflows"));
+        AevatarPaths.RepoRootWorkflowTemplates.Should().Be(Path.Combine(repoRoot, AevatarPaths.WorkflowTemplatesDirectoryName));
     }
 
     [Fact]

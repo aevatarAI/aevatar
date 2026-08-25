@@ -77,6 +77,7 @@ public sealed class ServiceDeploymentCatalogProjector
             Status = source.Status.ToString(),
             ActivatedAt = source.ActivatedAt?.ToDateTimeOffset(),
             UpdatedAt = ServiceProjectionMapping.FromTimestamp(source.UpdatedAt, DateTimeOffset.UnixEpoch),
+            ArtifactHash = source.ArtifactHash ?? string.Empty,
         };
 
     private static ServiceDeploymentActivationFailureReadModel MapActivationFailure(
@@ -87,5 +88,6 @@ public sealed class ServiceDeploymentCatalogProjector
             FailureCode = source.FailureCode,
             FailureReason = source.FailureReason ?? string.Empty,
             OccurredAtUtcValue = source.OccurredAt?.Clone(),
+            ActivationAttemptId = source.ActivationAttemptId ?? string.Empty,
         };
 }

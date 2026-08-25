@@ -45,23 +45,6 @@ function taskPlanWithObservation(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function taskPlanWithDomain(domain: unknown, artifact?: unknown) {
-  return {
-    schemaVersion: 6,
-    actorId: 'conversation-domain',
-    taskId: 'task-domain',
-    turnId: 'turn-domain',
-    planId: 'plan-domain',
-    planRevision: 3,
-    planRevisions: [],
-    title: 'Complete the domain journey',
-    status: 'succeeded',
-    domain,
-    ...(artifact === undefined ? {} : { artifact }),
-    steps: [],
-  };
-}
-
 function taskPlanWithCondition(
   conditionOverrides: Record<string, unknown> = {},
 ) {
@@ -73,7 +56,7 @@ function taskPlanWithCondition(
     planId: 'plan-alpha',
     planRevision: 2,
     planRevisions: [],
-    title: 'Screen candidate',
+    title: 'Evaluate threshold',
     status: 'active',
     steps: [
       {
@@ -95,7 +78,7 @@ function taskPlanWithCondition(
               comparison: 'gte',
               outcome: 'true',
               evaluatedAt: '2026-08-09T00:10:00Z',
-              guardedToolName: 'bitable_record_create',
+              guardedToolName: 'external_record_create',
               ...conditionOverrides,
             },
           },
@@ -112,8 +95,8 @@ function taskPlanWithCondition(
         kind: 'tool',
         status: 'planned',
         required: true,
-        description: 'Create the attestation row',
-        source: { tool: { toolName: 'bitable_record_create' } },
+        description: 'Create the verified record',
+        source: { tool: { toolName: 'external_record_create' } },
         mayChangeExternalState: true,
         externalEffect: 'not_started',
         availableActions: {},
@@ -168,7 +151,7 @@ describe('decodeChatTaskPlan', () => {
         comparison: 'gte',
         outcome: 'true',
         evaluatedAt: '2026-08-09T00:10:00Z',
-        guardedToolName: 'bitable_record_create',
+        guardedToolName: 'external_record_create',
       },
     });
     expect(decoded.steps[1]?.guard).toEqual({
@@ -184,163 +167,6 @@ describe('decodeChatTaskPlan', () => {
   ])('rejects an unknown condition %s', (field, value) => {
     expect(() =>
       decodeChatTaskPlan(taskPlanWithCondition({ [field]: value })),
-    ).toThrow(ChatTaskPlanProtocolError);
-  });
-
-  it('preserves normalized reimbursement evidence and exact verified instance', () => {
-    const decoded = decodeChatTaskPlan(
-      taskPlanWithDomain(
-        {
-          reimbursement: {
-            evidenceId: 'reimbursement-evidence-alpha',
-            sourceInputRequestId: 'input-reimbursement-alpha',
-            expenseCategory: 'travel',
-            costCenter: 'cc-42',
-            reimbursementCurrencyInstruction: 'Submit in SGD',
-            guardedToolName: 'approval_instance_create',
-            committedAt: '2026-08-11T12:00:00Z',
-            sourceInvoices: [
-              {
-                sourceOrdinal: 1,
-                vendor: 'Northwind Air',
-                invoiceNumber: 'INV-001',
-                invoiceDate: '2026-08-01',
-                amount: {
-                  currencyCode: 'SGD',
-                  minorUnits: 12500,
-                  fractionDigits: 2,
-                },
-              },
-              {
-                sourceOrdinal: 2,
-                vendor: 'Contoso Hotel',
-                invoiceNumber: 'INV-002',
-                invoiceDate: '2026-08-02',
-                amount: {
-                  currencyCode: 'SGD',
-                  minorUnits: 24000,
-                  fractionDigits: 2,
-                },
-              },
-              {
-                sourceOrdinal: 3,
-                vendor: 'Northwind Air',
-                invoiceNumber: 'INV-001',
-                invoiceDate: '2026-08-01',
-                amount: {
-                  currencyCode: 'SGD',
-                  minorUnits: 12500,
-                  fractionDigits: 2,
-                },
-              },
-            ],
-            retainedSourceOrdinals: [1, 2],
-            duplicateInvoices: [
-              { duplicateSourceOrdinal: 3, retainedSourceOrdinal: 1 },
-            ],
-          },
-        },
-        {
-          checkName: 'approval.instance.exists',
-          verifiedAt: '2026-08-11T12:01:00Z',
-          reimbursement: {
-            providerInstanceId: 'approval-instance-alpha',
-            costCenter: 'cc-42',
-            retainedItemCount: 2,
-            duplicateItemCount: 1,
-          },
-        },
-      ),
-    );
-
-    expect(decoded.domain).toMatchObject({
-      kind: 'reimbursement',
-      retainedSourceOrdinals: [1, 2],
-      duplicateInvoices: [
-        { duplicateSourceOrdinal: 3, retainedSourceOrdinal: 1 },
-      ],
-    });
-    expect(decoded.artifact).toEqual({
-      kind: 'reimbursement',
-      checkName: 'approval.instance.exists',
-      verifiedAt: '2026-08-11T12:01:00Z',
-      providerInstanceId: 'approval-instance-alpha',
-      costCenter: 'cc-42',
-      retainedItemCount: 2,
-      duplicateItemCount: 1,
-    });
-  });
-
-  it('preserves candidate rubric, threshold branch evidence, and exact Bitable row', () => {
-    const decoded = decodeChatTaskPlan(
-      taskPlanWithDomain(
-        {
-          candidateScreening: {
-            evidenceId: 'candidate-evidence-alpha',
-            sourceInputRequestId: 'input-threshold-alpha',
-            candidateName: 'Candidate Alpha',
-            roleTitle: 'Platform Engineer',
-            rubric: [
-              { criterionId: 'systems', title: 'Systems', maximumPoints: 60 },
-              { criterionId: 'delivery', title: 'Delivery', maximumPoints: 40 },
-            ],
-            scores: [
-              {
-                criterionId: 'systems',
-                awardedPoints: 48,
-                evidence: 'Designed actor protocols.',
-              },
-              {
-                criterionId: 'delivery',
-                awardedPoints: 32,
-                evidence: 'Shipped production changes.',
-              },
-            ],
-            totalScore: 80,
-            trackerTable: 'Candidate Tracker',
-            trackerTableId: 'tbl-candidates',
-            stage: 'accepted',
-            guardedToolName: 'bitable_record_create',
-            committedAt: '2026-08-11T13:00:00Z',
-          },
-        },
-        {
-          checkName: 'bitable.record.exists',
-          verifiedAt: '2026-08-11T13:01:00Z',
-          candidateTracker: {
-            providerRecordId: 'rec-candidate-alpha',
-            candidateName: 'Candidate Alpha',
-            score: 80,
-            threshold: 75,
-            trackerTable: 'Candidate Tracker',
-            trackerTableId: 'tbl-candidates',
-            stage: 'accepted',
-          },
-        },
-      ),
-    );
-
-    expect(decoded.domain).toMatchObject({
-      kind: 'candidateScreening',
-      totalScore: 80,
-      guardedToolName: 'bitable_record_create',
-    });
-    expect(decoded.artifact).toMatchObject({
-      kind: 'candidateTracker',
-      providerRecordId: 'rec-candidate-alpha',
-      score: 80,
-      threshold: 75,
-    });
-  });
-
-  it('rejects ambiguous domain and artifact oneofs', () => {
-    expect(() =>
-      decodeChatTaskPlan(
-        taskPlanWithDomain(
-          { reimbursement: {}, candidateScreening: {} },
-          { reimbursement: {}, candidateTracker: {} },
-        ),
-      ),
     ).toThrow(ChatTaskPlanProtocolError);
   });
 });

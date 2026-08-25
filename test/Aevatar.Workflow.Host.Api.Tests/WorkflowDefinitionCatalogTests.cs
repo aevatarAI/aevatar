@@ -6,6 +6,7 @@ using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Validation;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
 using Google.Protobuf;
@@ -16,15 +17,6 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowDefinitionCatalogTests
 {
-    private static readonly string[] StudioManagedRuntimeAevatarInvocationToolNames =
-    [
-        "aevatar_invoke_gagent",
-        "aevatar_invoke_team",
-        "aevatar_invoke_member",
-        "aevatar_observe_run",
-        "aevatar_read_workflow_run_artifact",
-    ];
-
     [Fact]
     public void Register_And_GetYaml()
     {
@@ -234,6 +226,48 @@ public class WorkflowDefinitionCatalogTests
         autoYaml.Should().NotContain("Top-level keys: name, description, roles, steps");
     }
 
+    [Theory]
+    [InlineData("direct")]
+    [InlineData("studio")]
+    [InlineData("auto")]
+    [InlineData("auto_review")]
+    public void BuiltInWorkflow_ShouldSatisfyCurrentToolCatalogPublicationPolicy(string workflowName)
+    {
+        var yaml = workflowName switch
+        {
+            "direct" => WorkflowDefinitionCatalog.BuiltInDirectYaml,
+            "studio" => WorkflowDefinitionCatalog.BuiltInStudioYaml,
+            "auto" => WorkflowDefinitionCatalog.CreateBuiltInAutoYaml(),
+            "auto_review" => WorkflowDefinitionCatalog.CreateBuiltInAutoReviewYaml(),
+            _ => throw new ArgumentOutOfRangeException(nameof(workflowName)),
+        };
+        var workflow = new WorkflowParser().Parse(yaml);
+
+        var errors = WorkflowValidator.Validate(
+            workflow,
+            new WorkflowValidator.WorkflowValidationOptions
+            {
+                RequireExplicitLlmAgentToolScopes = true,
+            },
+            availableWorkflowNames: null);
+
+        errors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void BuiltInYaml_ShouldExportTargetRoleField()
+    {
+        var builtInYaml = string.Join('\n',
+            WorkflowDefinitionCatalog.BuiltInDirectYaml,
+            WorkflowDefinitionCatalog.BuiltInStudioYaml,
+            WorkflowDefinitionCatalog.CreateBuiltInAutoYaml(),
+            WorkflowDefinitionCatalog.CreateBuiltInAutoReviewYaml());
+
+        builtInYaml.Should().Contain("target_role:");
+        builtInYaml.Should().NotContain("\n    role:");
+        builtInYaml.Should().NotContain("\n          role:");
+    }
+
     [Fact]
     public void BuiltInStudioYaml_ShouldParseAsMemberProvisionStudioRoleWithToolAllowlist()
     {
@@ -288,40 +322,15 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().NotContain("workflow_create_def");
         role.SystemPrompt.Should().NotContain("aevatar_start_workflow");
 
-        // The allowlist is the lever that keeps hanging loose-definition and unmanaged workflow-start
-        // tools out of the studio surface, while admitting the direct invocation tools that are safe
-        // under the Studio managed workflow runtime.
+        // Static tools are restricted empty. The compatibility wrapper opts into bounded Studio
+        // and workflow-authoring sets instead of combining every historical capability in one model turn.
         role.AgentToolScope.Should().NotBeNull();
         var allowed = role.AgentToolScope!.AllowedToolNames;
-        allowed.Should().Contain("aevatar_list_teams");
-        allowed.Should().Contain("aevatar_create_team");
-        allowed.Should().Contain("aevatar_get_team");
-        allowed.Should().Contain("aevatar_create_member");
-        allowed.Should().Contain("aevatar_create_member_workflow_draft");
-        allowed.Should().Contain("aevatar_list_members");
-        allowed.Should().Contain("aevatar_get_member");
-        allowed.Should().Contain("aevatar_list_schedules");
-        allowed.Should().Contain("aevatar_get_schedule");
-        allowed.Should().Contain("aevatar_list_workflows");
-        allowed.Should().Contain("aevatar_list_workflow_templates");
-        allowed.Should().Contain("aevatar_get_workflow_template");
-        allowed.Should().NotContain("aevatar_get_workflow");
-        allowed.Should().Contain("aevatar_bind_member_workflow");
-        allowed.Should().Contain("aevatar_schedule_member_workflow");
-        allowed.Should().Contain("aevatar_provision_workflow_schedule");
-        allowed.Should().Contain(StudioManagedRuntimeAevatarInvocationToolNames);
-        allowed.Should().Contain("web_search");
-        allowed.Should().Contain("web_fetch");
-        // The loose-definition path (file-only create + run-by-name) hangs 30s on an unprovisioned
-        // definition actor — it must be absent from the studio surface.
-        allowed.Should().NotContain("workflow_create_def");
-        allowed.Should().NotContain("workflow_update_def");
-        allowed.Should().NotContain("workflow_read_def");
-        allowed.Should().NotContain("workflow_list_defs");
-        allowed.Should().NotContain("aevatar_start_workflow");
-        allowed.Should().NotContain("scheduled_agent_creator");
-        // Studio is workflow-first: publishing a prose skill is not the deliverable.
-        allowed.Should().NotContain("ornn_publish_skill");
+        role.AgentToolScope.RestrictAllowedToolNames.Should().BeTrue();
+        allowed.Should().BeEmpty();
+        role.AgentToolScope.ToolSetRefs.Should().Equal(
+            "studio.local",
+            "workflow.external-capability-authoring");
 
         // The single llm_call step runs under the studio role.
         var step = workflow.Steps.Should().ContainSingle().Subject;
@@ -395,34 +404,11 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().NotContain("Use specialized provider tools only when the user explicitly asks for that provider capability");
 
         role.AgentToolScope.Should().NotBeNull();
-        var allowed = role.AgentToolScope!.AllowedToolNames;
-        allowed.Should().Contain("nyxid_status");
-        allowed.Should().Contain("nyxid_account");
-        allowed.Should().Contain("nyxid_catalog");
-        allowed.Should().Contain("nyxid_llm_status");
-        allowed.Should().Contain("nyxid_services");
-        allowed.Should().NotContain("nyxid_proxy");
-        role.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
-        allowed.Should().Contain("nyxid_require_service");
-        allowed.Should().Contain("list_external_workflow_capabilities");
-        allowed.Should().Contain("inspect_external_workflow_capability_readiness");
-        allowed.Should().Contain("preview_workflow_explicit_requests");
-
-        allowed.Should().NotContain("nyxid_api_keys");
-        allowed.Should().NotContain("nyxid_nodes");
-        allowed.Should().NotContain("nyxid_approvals");
-        allowed.Should().NotContain("nyxid_providers");
-        allowed.Should().NotContain("nyxid_notifications");
-        allowed.Should().NotContain("nyxid_mfa");
-        allowed.Should().NotContain("nyxid_profile");
-        allowed.Should().NotContain("nyxid_endpoints");
-        allowed.Should().NotContain("nyxid_external_keys");
-        allowed.Should().NotContain("nyxid_channel_bots");
-        allowed.Should().NotContain("nyxid_orgs");
-        allowed.Should().NotContain("nyxid_admin");
-        allowed.Should().NotContain("ssh_exec");
-        allowed.Should().NotContain("codex_exec");
-        allowed.Should().NotContain("code_execute");
+        role.AgentToolScope!.RestrictAllowedToolNames.Should().BeTrue();
+        role.AgentToolScope.AllowedToolNames.Should().BeEmpty();
+        role.AgentToolScope.ToolSetRefs.Should().Equal(
+            "studio.local",
+            "workflow.external-capability-authoring");
     }
 
     [Fact]
