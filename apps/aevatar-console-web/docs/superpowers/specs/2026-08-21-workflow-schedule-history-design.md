@@ -81,14 +81,15 @@ The back/close structure and resource context are stable across Overview,
 History, and Edit. The History task uses an explicit task title:
 
 ```text
-[Back]  Schedule history                       [Close]
-        Schedule: Morning digest · Workflow: Weekly Feedback Report
+[Back]  Schedule history · Morning digest · Weekly Feedback Report  [Close]
 ```
 
 - Back returns to the Schedule collection inside the current container.
 - Close exits the entire Schedule management modal or panel.
-- History uses `Schedule history` as the primary title.
-- The selected Schedule and owning Workflow are labeled secondary context.
+- History keeps `Schedule history`, the selected Schedule, and the owning
+  Workflow on one line. Long resource names truncate rather than increasing
+  the header height, while accessible labels and title text retain the full
+  context.
 - Overview and Edit may retain the selected Schedule name as the primary title
   while keeping the Workflow as secondary context.
 - There is no footer-level `Back to schedules` action.
@@ -220,13 +221,15 @@ The primary row must not expose:
 - a guessed Run link when `runActorId` is empty;
 - a frontend-invented error category based on raw string matching.
 
-When `runActorId` is non-empty, the row provides a keyboard-accessible Run link
-and remains clickable as a whole, with a trailing arrow. It opens the existing
-Activity Run detail route and preserves `workflowId + schedule` in the query so
-Back returns to the same filtered Activity context. A successful legacy attempt
-with an empty `runActorId` uses the same interaction treatment but opens the
-Workflow + Schedule filtered Activity list; it must not guess a Run identity.
-A pre-Run failure with an empty `runActorId` remains non-interactive.
+When `runActorId` is non-empty, the completed time and trailing arrow form a
+keyboard-accessible native Run link. The table row itself is not a scripted
+link because it can also contain Technical details. The link opens the existing
+Activity Run detail route in a new tab and preserves `workflowId + schedule` in
+the query so Back returns to the same filtered Activity context. A successful
+legacy attempt with an empty `runActorId` uses the same interaction treatment
+but opens the Workflow + Schedule filtered Activity list in a new tab; it must
+not guess a Run identity. A pre-Run failure with an empty `runActorId` remains
+non-interactive.
 
 ### Activity handoff
 
@@ -236,8 +239,9 @@ The History tab provides one secondary link:
 View related runs in Activity
 ```
 
-The link is deliberately about related Runs, not all attempts. It closes the
-Schedule container and opens:
+The link is deliberately about related Runs, not all attempts. It is a native
+link that opens a new tab and leaves the current Schedule container and History
+state intact. It opens:
 
 ```text
 /scopes/:scopeId/workflow-activity-vnext/activity
@@ -289,8 +293,8 @@ stateDiagram-v2
     Overview --> Edit: Edit schedule
     Edit --> Overview: Cancel
     Edit --> Overview: Save accepted
-    History --> Activity: View related runs or legacy started attempt
-    History --> RunDetail: Select attempt with runActorId
+    History --> Activity: Open related runs or legacy started attempt in new tab
+    History --> RunDetail: Open attempt with runActorId in new tab
     Overview --> ScheduleList: Back
     History --> ScheduleList: Back
     Edit --> ScheduleList: Back
@@ -372,6 +376,9 @@ and History are separate PNGs so each state can be reviewed at readable size.
   Run. A successful legacy attempt without one opens filtered Activity without
   guessing identity; a failed attempt without one remains non-interactive.
 - `View related runs in Activity` uses exact Workflow and Schedule filters.
+- Activity and Run links open in a new tab without closing or navigating the
+  current Schedule surface.
+- The History title and its Schedule/Workflow context stay on one visual line.
 - Schedule is absent from Activity Source filters and no handoff sends
   `origin=schedule`.
 - A single transient Activity handoff request failure is retried once; 4xx

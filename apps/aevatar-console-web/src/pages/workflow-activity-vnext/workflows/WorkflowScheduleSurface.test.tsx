@@ -9,7 +9,6 @@ import {
 } from '@testing-library/react';
 import * as React from 'react';
 import { workflowScheduleApi } from '@/shared/api/workflowScheduleApi';
-import { history } from '@/shared/navigation/history';
 import { workflowActivityVNextCss } from '../styles';
 import WorkflowScheduleSurface from './WorkflowScheduleSurface';
 
@@ -25,10 +24,6 @@ jest.mock('@/shared/api/workflowScheduleApi', () => ({
     runNow: jest.fn(),
     update: jest.fn(),
   },
-}));
-
-jest.mock('@/shared/navigation/history', () => ({
-  history: { push: jest.fn() },
 }));
 
 const mockedWorkflowScheduleApi = jest.mocked(workflowScheduleApi);
@@ -781,17 +776,25 @@ describe('WorkflowScheduleSurface', () => {
       await screen.findByRole('heading', { name: 'Recent attempts' }),
     ).toBeInTheDocument();
     const dialog = screen.getByRole('dialog');
-    await waitFor(() =>
-      expect(
-        within(dialog).getByText('Schedule history', {
-          selector: '.ant-modal-title *',
-        }),
-      ).toBeVisible(),
-    );
+    await waitFor(() => {
+      const historyHeading = dialog.querySelector(
+        '.wa-vnext__schedule-selected-heading--history',
+      );
+      expect(historyHeading).toBeVisible();
+      expect(historyHeading).toHaveTextContent(
+        'Schedule history · Daily workflow run · Weekly review',
+      );
+      expect(historyHeading).toHaveAttribute(
+        'aria-label',
+        'Schedule history for schedule Daily workflow run in workflow Weekly review',
+      );
+    });
     expect(
-      within(dialog).getByText('Schedule: Daily workflow run'),
-    ).toBeVisible();
-    expect(within(dialog).getByText('Workflow: Weekly review')).toBeVisible();
+      within(dialog).queryByText('Schedule: Daily workflow run'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByText('Workflow: Weekly review'),
+    ).not.toBeInTheDocument();
     expect(
       await screen.findByRole('columnheader', { name: 'Scheduled time' }),
     ).toBeVisible();
@@ -827,13 +830,20 @@ describe('WorkflowScheduleSurface', () => {
       screen.getByText('Capability admission rejected the scheduled request.'),
     ).toBeVisible();
 
-    fireEvent.click(
-      screen.getByRole('link', { name: 'View related runs in Activity' }),
-    );
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(history.push).toHaveBeenLastCalledWith(
+    const relatedRunsLink = screen.getByRole('link', {
+      name: 'View related runs in Activity',
+    });
+    expect(relatedRunsLink).toHaveAttribute(
+      'href',
       '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha',
     );
+    expect(relatedRunsLink).toHaveAttribute('target', '_blank');
+    expect(relatedRunsLink).toHaveAttribute('rel', 'noopener noreferrer');
+
+    fireEvent.click(relatedRunsLink);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
   it('opens an authoritative History attempt directly in Activity', async () => {
@@ -864,12 +874,18 @@ describe('WorkflowScheduleSurface', () => {
     );
     fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
 
-    fireEvent.click(await screen.findByRole('link', { name: /Open Run from/ }));
-
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(history.push).toHaveBeenLastCalledWith(
+    const runLink = await screen.findByRole('link', { name: /Open Run from/ });
+    expect(runLink).toHaveAttribute(
+      'href',
       '/scopes/scope-alpha/workflow-activity-vnext/activity/run-alpha?workflowId=wf-alpha&schedule=schedule-alpha',
     );
+    expect(runLink).toHaveAttribute('target', '_blank');
+    expect(runLink).toHaveAttribute('rel', 'noopener noreferrer');
+
+    fireEvent.click(runLink);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
   it('opens a successful legacy attempt in schedule-filtered Activity', async () => {
@@ -900,14 +916,20 @@ describe('WorkflowScheduleSurface', () => {
     );
     fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
 
-    fireEvent.click(
-      await screen.findByRole('link', { name: /View related runs from/ }),
-    );
-
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(history.push).toHaveBeenLastCalledWith(
+    const legacyActivityLink = await screen.findByRole('link', {
+      name: /View related runs from/,
+    });
+    expect(legacyActivityLink).toHaveAttribute(
+      'href',
       '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha',
     );
+    expect(legacyActivityLink).toHaveAttribute('target', '_blank');
+    expect(legacyActivityLink).toHaveAttribute('rel', 'noopener noreferrer');
+
+    fireEvent.click(legacyActivityLink);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
   it('keeps multiple attempts scannable with one table row per attempt', async () => {
