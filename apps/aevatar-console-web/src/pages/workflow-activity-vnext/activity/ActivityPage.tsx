@@ -260,7 +260,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
   const filterContext =
     workflowFilterPresent || schedule || originLabel ? (
-      <Space wrap>
+      <Space className="wa-vnext__activity-filter-context" wrap>
         {workflowFilterPresent ? (
           <Button
             aria-label={t(

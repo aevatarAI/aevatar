@@ -6,6 +6,7 @@ import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from '../../../../tests/reactQueryTestUtils';
+import { workflowActivityVNextCss } from '../styles';
 import ActivityPage from './ActivityPage';
 
 let mockSearch = '';
@@ -221,6 +222,23 @@ describe('Workflow Activity vNext Activity ledger', () => {
         name: 'Remove schedule filter schedule-alpha',
       }),
     ).toBeVisible();
+    const scopeContext = document.querySelector(
+      '.wa-vnext__activity-filter-context',
+    );
+    expect(scopeContext).toBeInTheDocument();
+    expect(scopeContext).toContainElement(
+      screen.getByRole('button', {
+        name: 'Remove workflow filter wf-alpha',
+      }),
+    );
+    expect(scopeContext).toContainElement(
+      screen.getByRole('button', {
+        name: 'Remove schedule filter schedule-alpha',
+      }),
+    );
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__activity-filter-context { margin-bottom: 12px; }',
+    );
     expect(
       screen.queryByRole('button', { name: /Remove source filter/ }),
     ).not.toBeInTheDocument();
