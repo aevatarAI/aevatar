@@ -117,7 +117,8 @@ public sealed record NyxIdUserServiceKey(
     NyxIdUserServiceCredentialSource CredentialSource,
     string? CatalogServiceId,
     string? CatalogServiceSlug,
-    bool Connected);
+    bool Connected,
+    bool? AutoConnected = null);
 
 public sealed record NyxIdUserServiceKeys(IReadOnlyList<NyxIdUserServiceKey> Services);
 
@@ -425,7 +426,8 @@ public static class NyxIdApiAccessResponseParser
                     JsonValueKind.Object)),
                 ReadOptionalNormalizedString(serviceElement, "catalog_service_id"),
                 ReadOptionalNormalizedString(serviceElement, "catalog_service_slug"),
-                RequireBoolean(serviceElement, "connected")));
+                RequireBoolean(serviceElement, "connected"),
+                ReadOptionalBoolean(serviceElement, "auto_connected")));
         }
 
         return new NyxIdUserServiceKeys(services);
