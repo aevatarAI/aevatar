@@ -494,6 +494,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.run.refreshFailed':
     "Some run details couldn't be refreshed",
   'workflowActivityVNext.run.refreshing': 'Refreshing…',
+  'workflowActivityVNext.run.refreshingDetail': 'Refreshing run details…',
   'workflowActivityVNext.run.refreshSucceeded': 'Run details refreshed',
   'workflowActivityVNext.run.relatedRuns': 'Related runs',
   'workflowActivityVNext.run.lineageUnavailable':

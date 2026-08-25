@@ -466,6 +466,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.run.requestParameters': '请求参数',
     'workflowActivityVNext.run.refreshFailed': '部分运行详情刷新失败',
     'workflowActivityVNext.run.refreshing': '正在刷新…',
+    'workflowActivityVNext.run.refreshingDetail': '正在刷新运行详情…',
     'workflowActivityVNext.run.refreshSucceeded': '运行详情已刷新',
     'workflowActivityVNext.run.relatedRuns': '关联运行',
     'workflowActivityVNext.run.lineageUnavailable': '关联运行历史不可用。',

@@ -496,6 +496,27 @@ function toHistoryEntryFromFeedRow(
   };
 }
 
+function RunDetailRefreshOverlay() {
+  const label = t(
+    'workflowActivityVNext.run.refreshingDetail',
+    'Refreshing run details…',
+  );
+
+  return (
+    <div
+      aria-label={label}
+      aria-live="polite"
+      className="wa-vnext-run-detail__refresh-overlay"
+      role="status"
+    >
+      <span className="wa-vnext-run-detail__refresh-indicator">
+        <LoadingOutlined aria-hidden="true" spin />
+        <span>{label}</span>
+      </span>
+    </div>
+  );
+}
+
 function RunDetailLoadingWorkspace() {
   const loadingLabel = t(
     'workflowActivityVNext.run.loadingDescription',
@@ -959,71 +980,80 @@ const RunDetailPage: React.FC<{
           }
           mainClassName="wa-vnext__main--run-detail"
         >
-          <div className="wa-vnext-run-detail wa-vnext-run-detail--bounded">
-            {renderHistoryRail(
-              fallbackHistoryRun.workflowName,
-              historyEntries,
-              fallbackHistoryRun.runId,
-            )}
-            <section className="wa-vnext-run-detail__stage">
-              <header className="wa-vnext-run-detail__stage-header">
-                <div className="wa-vnext-run-detail__stage-title">
-                  <Space wrap size={8}>
-                    <Typography.Title level={4} style={{ margin: 0 }}>
-                      {formatDateTime(fallbackHistoryRun.updatedAtUtc)}
-                    </Typography.Title>
-                    <Tag
-                      className={getRunBadgeClass(fallbackHistoryRun.status)}
-                      style={{ marginInlineEnd: 0 }}
-                    >
-                      {
-                        getRunStatusPresentation(fallbackHistoryRun.status)
-                          .label
-                      }
-                    </Tag>
-                  </Space>
-                  <Typography.Text ellipsis type="secondary">
-                    {fallbackHistoryRun.workflowName ||
-                      t('workflowActivityVNext.common.unknown', 'Unknown')}
-                    {' · '}
-                    {getRunOriginLabel(fallbackHistoryRun.runOrigin)}
-                  </Typography.Text>
-                </div>
-              </header>
-              <Alert
-                showIcon
-                type="warning"
-                message={t(
-                  'workflowActivityVNext.run.detailUnavailableTitle',
-                  'Detailed run data is temporarily unavailable.',
-                )}
-                description={
-                  <>
-                    <p>
-                      {t(
-                        'workflowActivityVNext.run.detailUnavailableDescription',
-                        'The selected run remains highlighted in its workflow history. Retry to load its immutable detail, graph, timeline, and output.',
-                      )}
-                    </p>
-                    {fallbackHistoryRun.context ? (
-                      <Typography.Paragraph>
-                        {fallbackHistoryRun.context}
-                      </Typography.Paragraph>
-                    ) : null}
-                    {detail.error ? (
-                      <TechnicalDetails>
-                        {errorMessage(detail.error)}
-                      </TechnicalDetails>
-                    ) : null}
-                  </>
-                }
-                action={
-                  <Button onClick={() => void detail.refetch()}>
-                    {t('workflowActivityVNext.common.retry', 'Retry')}
-                  </Button>
-                }
-              />
-            </section>
+          <div
+            aria-busy={refreshing}
+            className="wa-vnext-run-detail wa-vnext-run-detail--bounded"
+          >
+            <div
+              className="wa-vnext-run-detail__refresh-content"
+              inert={refreshing}
+            >
+              {renderHistoryRail(
+                fallbackHistoryRun.workflowName,
+                historyEntries,
+                fallbackHistoryRun.runId,
+              )}
+              <section className="wa-vnext-run-detail__stage">
+                <header className="wa-vnext-run-detail__stage-header">
+                  <div className="wa-vnext-run-detail__stage-title">
+                    <Space wrap size={8}>
+                      <Typography.Title level={4} style={{ margin: 0 }}>
+                        {formatDateTime(fallbackHistoryRun.updatedAtUtc)}
+                      </Typography.Title>
+                      <Tag
+                        className={getRunBadgeClass(fallbackHistoryRun.status)}
+                        style={{ marginInlineEnd: 0 }}
+                      >
+                        {
+                          getRunStatusPresentation(fallbackHistoryRun.status)
+                            .label
+                        }
+                      </Tag>
+                    </Space>
+                    <Typography.Text ellipsis type="secondary">
+                      {fallbackHistoryRun.workflowName ||
+                        t('workflowActivityVNext.common.unknown', 'Unknown')}
+                      {' · '}
+                      {getRunOriginLabel(fallbackHistoryRun.runOrigin)}
+                    </Typography.Text>
+                  </div>
+                </header>
+                <Alert
+                  showIcon
+                  type="warning"
+                  message={t(
+                    'workflowActivityVNext.run.detailUnavailableTitle',
+                    'Detailed run data is temporarily unavailable.',
+                  )}
+                  description={
+                    <>
+                      <p>
+                        {t(
+                          'workflowActivityVNext.run.detailUnavailableDescription',
+                          'The selected run remains highlighted in its workflow history. Retry to load its immutable detail, graph, timeline, and output.',
+                        )}
+                      </p>
+                      {fallbackHistoryRun.context ? (
+                        <Typography.Paragraph>
+                          {fallbackHistoryRun.context}
+                        </Typography.Paragraph>
+                      ) : null}
+                      {detail.error ? (
+                        <TechnicalDetails>
+                          {errorMessage(detail.error)}
+                        </TechnicalDetails>
+                      ) : null}
+                    </>
+                  }
+                  action={
+                    <Button onClick={() => void detail.refetch()}>
+                      {t('workflowActivityVNext.common.retry', 'Retry')}
+                    </Button>
+                  }
+                />
+              </section>
+            </div>
+            {refreshing ? <RunDetailRefreshOverlay /> : null}
           </div>
         </WorkflowActivityVNextShell>
       );
@@ -1194,222 +1224,231 @@ const RunDetailPage: React.FC<{
       }
       mainClassName="wa-vnext__main--run-detail"
     >
-      <div className="wa-vnext-run-detail wa-vnext-run-detail--bounded">
-        {renderHistoryRail(
-          run.summary.workflowName,
-          effectiveHistory,
-          selectedHistoryRun.runId,
-        )}
-        <section className="wa-vnext-run-detail__stage">
-          <header className="wa-vnext-run-detail__stage-header">
-            <div className="wa-vnext-run-detail__stage-title">
-              <Space wrap size={8}>
-                <Typography.Title level={4} style={{ margin: 0 }}>
-                  {formatDateTime(run.summary.updatedAtUtc)}
-                </Typography.Title>
-                <Tag
-                  className={getRunBadgeClass(run.summary.status)}
-                  style={{ marginInlineEnd: 0 }}
-                >
-                  {statusPresentation.label}
-                </Tag>
-                <Tag style={{ marginInlineEnd: 0 }}>
-                  {formatDurationMs(runDurationMs)}
-                </Tag>
-              </Space>
-              <Typography.Text ellipsis type="secondary">
-                {run.summary.workflowName ||
-                  t('workflowActivityVNext.common.unknown', 'Unknown')}
-                {' · '}
-                {getRunOriginLabel(run.summary.runOrigin)}
-              </Typography.Text>
-            </div>
-          </header>
-          {receipt ? (
-            <Alert
-              action={
-                <Button
-                  onClick={() =>
-                    history.push(
-                      buildWorkflowActivitySectionHref(scopeId, 'activity'),
-                    )
-                  }
-                >
-                  {t(
-                    'workflowActivityVNext.editor.openActivity',
-                    'Open Activity',
-                  )}
-                </Button>
-              }
-              description={
-                <>
-                  <p>
-                    {t(
-                      'workflowActivityVNext.run.forkAcceptedDescription',
-                      'Open Activity to follow its progress.',
-                    )}
-                  </p>
-                  <TechnicalDetails>
-                    <ul>
-                      <li className="wa-vnext__mono">
-                        {receipt.newRunActorId}
-                      </li>
-                      <li className="wa-vnext__mono">
-                        {receipt.acceptedCommandId}
-                      </li>
-                      <li className="wa-vnext__mono">{receipt.statusUrl}</li>
-                    </ul>
-                  </TechnicalDetails>
-                </>
-              }
-              message={t(
-                'workflowActivityVNext.run.forkAccepted',
-                'New run started',
-              )}
-              showIcon
-              type="success"
-            />
-          ) : null}
-          <div className="wa-vnext-run-detail__graph">{renderGraph()}</div>
-          <div className="wa-vnext-run-detail__details">
-            <section className="wa-vnext-run-detail__logs">
-              <div className="wa-vnext-run-detail__logs-header">
-                <Typography.Text strong>
-                  {t('workflowActivityVNext.run.logs', 'Logs')}
-                </Typography.Text>
-                <Typography.Text type="secondary">
-                  {selectedStepDuration}
-                </Typography.Text>
-              </div>
-              <div className="wa-vnext-run-detail__step-list">
-                {graphView.orderedSteps.length ? (
-                  graphView.orderedSteps.map((step) => {
-                    const selected = selectedStep?.stepId === step.stepId;
-                    return (
-                      <button
-                        aria-current={selected ? 'true' : undefined}
-                        className={`wa-vnext-run-detail__step${selected ? ' wa-vnext-run-detail__step--selected' : ''}`}
-                        key={step.stepId}
-                        onClick={() => setSelectedStepId(step.stepId)}
-                        type="button"
-                      >
-                        {renderStepStatusIcon(step)}
-                        <span style={{ minWidth: 0 }}>
-                          <Typography.Text
-                            ellipsis
-                            style={{ display: 'block' }}
-                          >
-                            {getStepDisplayName(step)}
-                          </Typography.Text>
-                          <Typography.Text ellipsis type="secondary">
-                            {step.stepType ||
-                              t('workflowActivityVNext.run.step', 'Step')}
-                          </Typography.Text>
-                        </span>
-                        <Typography.Text type="secondary">
-                          {formatDurationMs(step.durationMs)}
-                        </Typography.Text>
-                      </button>
-                    );
-                  })
-                ) : (
-                  <div className="wa-vnext__state wa-vnext__state--compact">
-                    <h3>
-                      {t(
-                        'workflowActivityVNext.run.noSteps',
-                        'No steps are available yet.',
-                      )}
-                    </h3>
-                  </div>
-                )}
-              </div>
-            </section>
-            <section className="wa-vnext-run-detail__inspector">
-              <div className="wa-vnext-run-detail__inspector-header">
-                <Space size={8} style={{ minWidth: 0 }}>
-                  <NodeIndexOutlined style={{ color: '#1677ff' }} />
-                  <Typography.Text ellipsis strong style={{ maxWidth: 360 }}>
-                    {selectedStepTitle ||
-                      t('workflowActivityVNext.run.details', 'Details')}
-                  </Typography.Text>
-                  {selectedStep ? (
-                    <Tag
-                      color={getStepStatusTone(selectedStep)}
-                      style={{ marginInlineEnd: 0 }}
-                    >
-                      {getStepStatusLabel(selectedStep)}
-                    </Tag>
-                  ) : null}
+      <div
+        aria-busy={refreshing}
+        className="wa-vnext-run-detail wa-vnext-run-detail--bounded"
+      >
+        <div
+          className="wa-vnext-run-detail__refresh-content"
+          inert={refreshing}
+        >
+          {renderHistoryRail(
+            run.summary.workflowName,
+            effectiveHistory,
+            selectedHistoryRun.runId,
+          )}
+          <section className="wa-vnext-run-detail__stage">
+            <header className="wa-vnext-run-detail__stage-header">
+              <div className="wa-vnext-run-detail__stage-title">
+                <Space wrap size={8}>
+                  <Typography.Title level={4} style={{ margin: 0 }}>
+                    {formatDateTime(run.summary.updatedAtUtc)}
+                  </Typography.Title>
+                  <Tag
+                    className={getRunBadgeClass(run.summary.status)}
+                    style={{ marginInlineEnd: 0 }}
+                  >
+                    {statusPresentation.label}
+                  </Tag>
+                  <Tag style={{ marginInlineEnd: 0 }}>
+                    {formatDurationMs(runDurationMs)}
+                  </Tag>
                 </Space>
-                {selectedStep ? (
-                  <Typography.Text type="secondary">
-                    {formatDateTime(
-                      selectedStep.completedAtUtc ||
-                        selectedStep.requestedAtUtc,
+                <Typography.Text ellipsis type="secondary">
+                  {run.summary.workflowName ||
+                    t('workflowActivityVNext.common.unknown', 'Unknown')}
+                  {' · '}
+                  {getRunOriginLabel(run.summary.runOrigin)}
+                </Typography.Text>
+              </div>
+            </header>
+            {receipt ? (
+              <Alert
+                action={
+                  <Button
+                    onClick={() =>
+                      history.push(
+                        buildWorkflowActivitySectionHref(scopeId, 'activity'),
+                      )
+                    }
+                  >
+                    {t(
+                      'workflowActivityVNext.editor.openActivity',
+                      'Open Activity',
                     )}
+                  </Button>
+                }
+                description={
+                  <>
+                    <p>
+                      {t(
+                        'workflowActivityVNext.run.forkAcceptedDescription',
+                        'Open Activity to follow its progress.',
+                      )}
+                    </p>
+                    <TechnicalDetails>
+                      <ul>
+                        <li className="wa-vnext__mono">
+                          {receipt.newRunActorId}
+                        </li>
+                        <li className="wa-vnext__mono">
+                          {receipt.acceptedCommandId}
+                        </li>
+                        <li className="wa-vnext__mono">{receipt.statusUrl}</li>
+                      </ul>
+                    </TechnicalDetails>
+                  </>
+                }
+                message={t(
+                  'workflowActivityVNext.run.forkAccepted',
+                  'New run started',
+                )}
+                showIcon
+                type="success"
+              />
+            ) : null}
+            <div className="wa-vnext-run-detail__graph">{renderGraph()}</div>
+            <div className="wa-vnext-run-detail__details">
+              <section className="wa-vnext-run-detail__logs">
+                <div className="wa-vnext-run-detail__logs-header">
+                  <Typography.Text strong>
+                    {t('workflowActivityVNext.run.logs', 'Logs')}
                   </Typography.Text>
-                ) : null}
-              </div>
-              <div className="wa-vnext-run-detail__inspector-body">
-                <Tabs
-                  size="small"
-                  items={[
-                    {
-                      key: 'output',
-                      label: t('workflowActivityVNext.run.output', 'Output'),
-                      children: selectedStep
-                        ? renderTextBlock(
-                            selectedStep.error || selectedStep.outputPreview,
-                          )
-                        : renderTextBlock(run.finalError || run.finalOutput),
-                    },
-                    {
-                      key: 'input',
-                      label: t('workflowActivityVNext.run.input', 'Input'),
-                      children: selectedStep
-                        ? renderKeyValueRows(selectedStep.requestParameters)
-                        : renderTextBlock(run.input),
-                    },
-                    {
-                      key: 'timeline',
-                      label: t(
-                        'workflowActivityVNext.run.timeline',
-                        'Timeline',
-                      ),
-                      children: scopedTimeline.length ? (
-                        <div className="wa-vnext-run-detail__timeline">
-                          {scopedTimeline.map((event) => (
-                            <div
-                              className="wa-vnext-run-detail__timeline-row"
-                              key={`${event.timestampUtc}-${event.stage}-${event.kind}-${event.stepId}-${event.agentId}`}
+                  <Typography.Text type="secondary">
+                    {selectedStepDuration}
+                  </Typography.Text>
+                </div>
+                <div className="wa-vnext-run-detail__step-list">
+                  {graphView.orderedSteps.length ? (
+                    graphView.orderedSteps.map((step) => {
+                      const selected = selectedStep?.stepId === step.stepId;
+                      return (
+                        <button
+                          aria-current={selected ? 'true' : undefined}
+                          className={`wa-vnext-run-detail__step${selected ? ' wa-vnext-run-detail__step--selected' : ''}`}
+                          key={step.stepId}
+                          onClick={() => setSelectedStepId(step.stepId)}
+                          type="button"
+                        >
+                          {renderStepStatusIcon(step)}
+                          <span style={{ minWidth: 0 }}>
+                            <Typography.Text
+                              ellipsis
+                              style={{ display: 'block' }}
                             >
-                              <div className="wa-vnext-run-detail__timeline-key">
-                                {formatDateTime(event.timestampUtc)}
+                              {getStepDisplayName(step)}
+                            </Typography.Text>
+                            <Typography.Text ellipsis type="secondary">
+                              {step.stepType ||
+                                t('workflowActivityVNext.run.step', 'Step')}
+                            </Typography.Text>
+                          </span>
+                          <Typography.Text type="secondary">
+                            {formatDurationMs(step.durationMs)}
+                          </Typography.Text>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="wa-vnext__state wa-vnext__state--compact">
+                      <h3>
+                        {t(
+                          'workflowActivityVNext.run.noSteps',
+                          'No steps are available yet.',
+                        )}
+                      </h3>
+                    </div>
+                  )}
+                </div>
+              </section>
+              <section className="wa-vnext-run-detail__inspector">
+                <div className="wa-vnext-run-detail__inspector-header">
+                  <Space size={8} style={{ minWidth: 0 }}>
+                    <NodeIndexOutlined style={{ color: '#1677ff' }} />
+                    <Typography.Text ellipsis strong style={{ maxWidth: 360 }}>
+                      {selectedStepTitle ||
+                        t('workflowActivityVNext.run.details', 'Details')}
+                    </Typography.Text>
+                    {selectedStep ? (
+                      <Tag
+                        color={getStepStatusTone(selectedStep)}
+                        style={{ marginInlineEnd: 0 }}
+                      >
+                        {getStepStatusLabel(selectedStep)}
+                      </Tag>
+                    ) : null}
+                  </Space>
+                  {selectedStep ? (
+                    <Typography.Text type="secondary">
+                      {formatDateTime(
+                        selectedStep.completedAtUtc ||
+                          selectedStep.requestedAtUtc,
+                      )}
+                    </Typography.Text>
+                  ) : null}
+                </div>
+                <div className="wa-vnext-run-detail__inspector-body">
+                  <Tabs
+                    size="small"
+                    items={[
+                      {
+                        key: 'output',
+                        label: t('workflowActivityVNext.run.output', 'Output'),
+                        children: selectedStep
+                          ? renderTextBlock(
+                              selectedStep.error || selectedStep.outputPreview,
+                            )
+                          : renderTextBlock(run.finalError || run.finalOutput),
+                      },
+                      {
+                        key: 'input',
+                        label: t('workflowActivityVNext.run.input', 'Input'),
+                        children: selectedStep
+                          ? renderKeyValueRows(selectedStep.requestParameters)
+                          : renderTextBlock(run.input),
+                      },
+                      {
+                        key: 'timeline',
+                        label: t(
+                          'workflowActivityVNext.run.timeline',
+                          'Timeline',
+                        ),
+                        children: scopedTimeline.length ? (
+                          <div className="wa-vnext-run-detail__timeline">
+                            {scopedTimeline.map((event) => (
+                              <div
+                                className="wa-vnext-run-detail__timeline-row"
+                                key={`${event.timestampUtc}-${event.stage}-${event.kind}-${event.stepId}-${event.agentId}`}
+                              >
+                                <div className="wa-vnext-run-detail__timeline-key">
+                                  {formatDateTime(event.timestampUtc)}
+                                </div>
+                                <div className="wa-vnext-run-detail__timeline-value">
+                                  <Typography.Text strong>
+                                    {event.stage || event.kind || 'event'}
+                                  </Typography.Text>
+                                  <br />
+                                  <Typography.Text type="secondary">
+                                    {trimOptional(event.message) ||
+                                      trimOptional(event.agentId) ||
+                                      'event'}
+                                  </Typography.Text>
+                                </div>
                               </div>
-                              <div className="wa-vnext-run-detail__timeline-value">
-                                <Typography.Text strong>
-                                  {event.stage || event.kind || 'event'}
-                                </Typography.Text>
-                                <br />
-                                <Typography.Text type="secondary">
-                                  {trimOptional(event.message) ||
-                                    trimOptional(event.agentId) ||
-                                    'event'}
-                                </Typography.Text>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                      ),
-                    },
-                  ]}
-                />
-              </div>
-            </section>
-          </div>
-        </section>
+                            ))}
+                          </div>
+                        ) : (
+                          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        ),
+                      },
+                    ]}
+                  />
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+        {refreshing ? <RunDetailRefreshOverlay /> : null}
       </div>
       <Modal
         aria-label={t(

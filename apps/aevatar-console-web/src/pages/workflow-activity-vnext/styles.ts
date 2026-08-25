@@ -400,7 +400,36 @@ export const workflowActivityVNextCss = `
   max-height: 100%;
   min-height: 0;
   overflow: hidden;
+  position: relative;
   width: 100%;
+}
+.wa-vnext-run-detail__refresh-content { display: contents; }
+.wa-vnext-run-detail__refresh-overlay {
+  align-items: center;
+  background: color-mix(in srgb, var(--wa-surface) 64%, transparent);
+  cursor: progress;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: absolute;
+  z-index: 20;
+}
+.wa-vnext-run-detail__refresh-indicator {
+  align-items: center;
+  background: color-mix(in srgb, var(--wa-surface) 94%, transparent);
+  border: 1px solid var(--wa-line);
+  border-radius: 6px;
+  color: var(--wa-ink);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 8px;
+  line-height: 17px;
+  padding: 9px 12px;
+}
+.wa-vnext-run-detail__refresh-indicator > .anticon {
+  color: var(--wa-blue);
+  font-size: 15px;
 }
 .wa-vnext-run-detail__rail {
   background: var(--wa-surface);

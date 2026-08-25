@@ -498,6 +498,22 @@ describe('Workflow Activity vNext run detail console', () => {
     const refreshingButton = refreshingLabel?.closest('button');
     expect(refreshingButton).toBeInstanceOf(HTMLButtonElement);
     expect(refreshingButton).toBeDisabled();
+    const refreshStatus = document.querySelector(
+      '.wa-vnext-run-detail__refresh-overlay',
+    );
+    expect(refreshStatus).toHaveAttribute('role', 'status');
+    expect(refreshStatus).toHaveAttribute(
+      'aria-label',
+      'Refreshing run details…',
+    );
+    expect(refreshStatus).toHaveClass('wa-vnext-run-detail__refresh-overlay');
+    expect(document.querySelector('.wa-vnext-run-detail')).toHaveAttribute(
+      'aria-busy',
+      'true',
+    );
+    expect(
+      document.querySelector('.wa-vnext-run-detail__refresh-content'),
+    ).toHaveAttribute('inert');
     expect(
       screen.getByRole('heading', { name: 'Incident review' }),
     ).toBeInTheDocument();
@@ -548,6 +564,16 @@ describe('Workflow Activity vNext run detail console', () => {
     );
     expect(mockConsoleToast.error).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+    expect(
+      document.querySelector('.wa-vnext-run-detail__refresh-overlay'),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector('.wa-vnext-run-detail')).toHaveAttribute(
+      'aria-busy',
+      'false',
+    );
+    expect(
+      document.querySelector('.wa-vnext-run-detail__refresh-content'),
+    ).not.toHaveAttribute('inert');
   });
 
   it('reports a partial refresh failure without claiming success', async () => {
