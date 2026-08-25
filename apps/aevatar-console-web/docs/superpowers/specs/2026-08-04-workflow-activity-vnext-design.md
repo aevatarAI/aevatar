@@ -709,9 +709,14 @@ hierarchy and density while using production tokens and real data states.
   when those layers are URL-addressable.
 - Manual Run detail refresh preserves the currently committed history, graph,
   logs, and inspector while revalidating all three sources. The Refresh action
-  changes to a disabled `Refreshing…` state immediately, then reports complete
-  success or any partial failure through one toast; unchanged data is still a
-  successful refresh and never causes a blank-state flash.
+  changes to a disabled `Refreshing…` state immediately. The full Run workspace
+  simultaneously enters one accessible busy state that keeps committed content
+  visible beneath a light interaction-blocking overlay and a single centered
+  refresh indicator. It never returns to the initial skeleton, never shifts the
+  page shell, and leaves global navigation available. Completion removes the
+  overlay and reports complete success or any partial failure through one toast;
+  unchanged data is still a successful refresh and never causes a blank-state
+  flash.
 - Copy actions report success or failure without changing layout. Export uses
   structured serialization where available rather than string concatenation.
 
