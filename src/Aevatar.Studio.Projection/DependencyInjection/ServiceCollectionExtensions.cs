@@ -21,6 +21,7 @@ using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.ContentArtifacts;
 using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgents.WorkflowDelivery;
+using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Workspace;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Microsoft.Extensions.Configuration;
@@ -51,6 +52,7 @@ public static class ServiceCollectionExtensions
         services.AddCqrsCore();
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(
             typeof(Aevatar.GAgents.UserConfig.UserConfigGAgent).Assembly,
+            typeof(UserMemoryGAgent).Assembly,
             typeof(Aevatar.GAgents.StudioMember.StudioMemberGAgent).Assembly,
             typeof(Aevatar.GAgents.StudioTeam.StudioTeamGAgent).Assembly,
             typeof(ContentArtifactGAgent).Assembly,
@@ -318,6 +320,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             ILLMModelCatalogPolicyCommandPort,
             ActorDispatchLLMModelCatalogPolicyCommandService>();
+        services.TryAddSingleton<
+            IUserMemoryRetentionPolicyCommandPort,
+            ActorDispatchUserMemoryRetentionPolicyCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
         services.TryAddSingleton<
             IStudioWorkflowScheduleProvisioningCommandPort,
