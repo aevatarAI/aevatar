@@ -312,6 +312,86 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeUnprofiledBaselineAsync_ShouldExposeReviewedClassRReadSurface()
+    {
+        var reviewedNames = new[]
+        {
+            "nyxid_services",
+            "nyxid_api_keys",
+            "nyxid_nodes",
+            "nyxid_account",
+            "nyxid_status",
+            "nyxid_catalog",
+            "nyxid_require_service",
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+        };
+        var tools = reviewedNames
+            .Select(static name => (IAgentTool)new TestTool(name))
+            .Append(new TestTool("nyxid_proxy"))
+            .ToArray();
+        var source = new TokenBoundToolSource("request-token", tools);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(ToolSetNames.NyxIdChatDefault, source);
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeUnprofiledBaselineAsync(
+            ToolContext("request-token"),
+            CancellationToken.None);
+
+        registry.ResolveCalls.Should().Equal(ToolSetNames.NyxIdChatDefault);
+        source.ObservedTokens.Should().Equal("request-token");
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(reviewedNames);
+        catalog.ExactTools.Keys.Should().BeEquivalentTo(reviewedNames);
+        catalog.ExactTools.Keys.Should().NotContain("nyxid_proxy");
+        catalog.SelectedIntentId.Should().Be(
+            AgentTurnToolCatalogMaterializer.UnprofiledBaselineIntentId);
+        catalog.CandidateIntentId.Should().Be(
+            AgentTurnToolCatalogMaterializer.UnprofiledBaselineIntentId);
+    }
+
+    [Fact]
+    public async Task MaterializeUnprofiledBaselineAsync_WithPartialComposition_ShouldDegradePerTool()
+    {
+        var source = new StaticToolSource(
+            [new TestTool("nyxid_services"), new TestTool("ask_user")]);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(ToolSetNames.NyxIdChatDefault, source);
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeUnprofiledBaselineAsync(
+            ToolContext(),
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "ask_user");
+    }
+
+    [Fact]
+    public async Task MaterializeUnprofiledBaselineAsync_WhenToolSetIsUnavailable_ShouldRestrictEmpty()
+    {
+        var materializer = NewMaterializer(
+            new RecordingToolSetRegistry(),
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeUnprofiledBaselineAsync(
+            ToolContext(),
+            CancellationToken.None);
+
+        catalog.ExactTools.Should().BeEmpty();
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task MaterializeBuiltInIntentAsync_WhenAdmissionToolIsMissing_ShouldFailClosed()
     {
         var registry = new RecordingToolSetRegistry();

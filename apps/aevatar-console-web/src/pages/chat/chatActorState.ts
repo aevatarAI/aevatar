@@ -111,6 +111,27 @@ export type ChatServiceConnectActionRequest = {
       };
 };
 
+export type ChatServiceAccessReviewActionRequest = {
+  readonly schemaVersion: 4;
+  readonly actorId: string;
+  readonly originTurnId: string;
+  readonly taskId: string;
+  readonly stepId: string;
+  readonly actionRequestId: string;
+  readonly action: 'service.access_review';
+  readonly params: {
+    readonly serviceAccessReview: {
+      readonly userServiceId: string;
+      readonly serviceSlug: string;
+      readonly resourceUri: string;
+    };
+  };
+};
+
+export type ChatNyxIdActionRequest =
+  | ChatServiceConnectActionRequest
+  | ChatServiceAccessReviewActionRequest;
+
 export type ChatActionSummary = {
   schemaVersion: number;
   actorId: string;
@@ -121,7 +142,7 @@ export type ChatActionSummary = {
   action: string;
   reports?: readonly JsonRecord[];
   postconditionResult?: JsonRecord | null;
-  request?: ChatServiceConnectActionRequest | null;
+  request?: ChatNyxIdActionRequest | null;
   conflicted?: boolean;
 };
 
@@ -167,7 +188,7 @@ export type ChatActorFrame =
   | {
       type: 'action_request';
       sequence: number;
-      request: ChatServiceConnectActionRequest;
+      request: ChatNyxIdActionRequest;
     };
 
 export function createChatActorProjection(
@@ -425,10 +446,14 @@ export function actorCan(
 
 export function validateActionRequest(
   input: unknown,
-): ChatServiceConnectActionRequest {
+): ChatNyxIdActionRequest {
   const value = unpackAny(input);
   assertAllowedKeys(value, ACTION_KEYS);
-  if (value.schemaVersion !== 4 || value.action !== 'service.connect') {
+  if (
+    value.schemaVersion !== 4 ||
+    (value.action !== 'service.connect' &&
+      value.action !== 'service.access_review')
+  ) {
     throw new ChatActorProtocolError(
       'Unsupported NyxID action request.',
       'NYXID_ACTION_UNSUPPORTED',
@@ -437,6 +462,16 @@ export function validateActionRequest(
   const identity = Object.fromEntries(
     ACTION_IDENTITY_KEYS.map((key) => [key, requireIdentity(value[key])]),
   ) as Record<(typeof ACTION_IDENTITY_KEYS)[number], string>;
+  if (value.action === 'service.access_review') {
+    const params = validateServiceAccessReviewParams(value.params);
+    rejectSecretBearingInput({ ...identity, params });
+    return {
+      schemaVersion: 4,
+      ...identity,
+      action: 'service.access_review',
+      params,
+    };
+  }
   const params = validateServiceConnectParams(value.params);
   rejectSecretBearingInput({ ...identity, params });
   return {
@@ -452,6 +487,25 @@ export function chatActionIdentityKey(
   actionRequestId: string,
 ): string {
   return JSON.stringify([actorId, actionRequestId]);
+}
+
+function validateServiceAccessReviewParams(
+  input: unknown,
+): ChatServiceAccessReviewActionRequest['params'] {
+  const value = requireRecord(input, 'NYXID_ACTION_VARIANT_INVALID');
+  assertAllowedKeys(value, ['serviceAccessReview']);
+  const review = requireRecord(
+    value.serviceAccessReview,
+    'NYXID_ACTION_VARIANT_INVALID',
+  );
+  assertAllowedKeys(review, ['userServiceId', 'serviceSlug', 'resourceUri']);
+  return {
+    serviceAccessReview: {
+      userServiceId: requireIdentity(review.userServiceId),
+      serviceSlug: requireIdentity(review.serviceSlug),
+      resourceUri: requireIdentity(review.resourceUri),
+    },
+  };
 }
 
 function validateServiceConnectParams(
@@ -591,7 +645,7 @@ function applyStep(
 
 function applyActionRequest(
   projection: ChatActorProjection,
-  request: ChatServiceConnectActionRequest,
+  request: ChatNyxIdActionRequest,
 ): void {
   if (projection.actorId && projection.actorId !== request.actorId) {
     projection.conflicts = [
@@ -668,9 +722,25 @@ function applyActionSummaries(
         : [],
       postconditionResult: cloneNullableRecord(summary.postconditionResult),
     };
-    const reloadedRequest = optionalRecord(summary.request)
-      ? validateActionRequest(summary.request)
-      : null;
+    // One unknown or malformed action must degrade on its own instead of
+    // voiding the whole projection (issue #3532): the summary stays visible
+    // and the conflict badge reports the unsupported request.
+    let reloadedRequest: ChatNyxIdActionRequest | null = null;
+    if (optionalRecord(summary.request)) {
+      try {
+        reloadedRequest = validateActionRequest(summary.request);
+      } catch (error) {
+        projection.conflicts = [
+          ...projection.conflicts,
+          {
+            code:
+              error instanceof ChatActorProtocolError
+                ? error.code
+                : 'NYXID_ACTION_UNSUPPORTED',
+          },
+        ];
+      }
+    }
     if (reloadedRequest) {
       if (actionIdentityMatches(item, reloadedRequest)) {
         item.request = reloadedRequest;
@@ -746,7 +816,7 @@ function decodePendingInput(input: unknown): ChatPendingInput | null {
 
 function actionIdentityMatches(
   summary: ChatActionSummary,
-  request: ChatServiceConnectActionRequest,
+  request: ChatNyxIdActionRequest,
 ): boolean {
   return (
     summary.schemaVersion === request.schemaVersion &&

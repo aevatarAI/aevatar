@@ -71,6 +71,19 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         "any action was performed. If the request needs a tool, tell the user this turn " +
         "ran degraded without tools and ask them to retry shortly.";
 
+    // Appended when the turn's materialized tool catalog is restricted to zero
+    // tools while prompt layers still document capabilities — the same honesty
+    // gap as the notices above, reached through the catalog path. Without it
+    // the model writes tool-call syntax into the visible reply as plain text.
+    private const string RestrictedEmptyCatalogNotice =
+        "## Tools disabled for this turn\n" +
+        "No tools are attached to this turn: the turn tool catalog restricted this " +
+        "request to zero tools. Any tool or capability documentation above describes " +
+        "tools you cannot invoke right now. Never write tool-call syntax into your " +
+        "reply as text. Do not claim a capability is missing from this deployment, " +
+        "and do not claim any action was performed. If the request needs a tool, say " +
+        "plainly that no tools are available in this turn and ask the user to retry.";
+
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
     private readonly IReadOnlyList<IAgentToolSource> _nyxIdChatToolSources;
@@ -391,7 +404,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 externalMetadata,
                 effectiveToolContext,
                 input.AttachmentVisibilityInstruction,
-                replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null,
+                replyPlan.DisableTools
+                    ? UnboundSenderToolsDisabledNotice
+                    : effectiveTurnCatalog is { ExactTools.Count: 0 }
+                        ? RestrictedEmptyCatalogNotice
+                        : null,
                 effectiveTurnCatalog)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));

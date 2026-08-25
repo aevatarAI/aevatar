@@ -36,6 +36,16 @@ public static class NyxIdChatBrowserActions
 
     private const string BrowserActionBlockedMessage =
         "Complete the requested action in NyxID, then continue this conversation.";
+
+    // A service-access review means the service is already connected and only
+    // this session's authorization is missing; the generic blocked message
+    // reads as "connect the service again" and hides both facts, so the
+    // review action carries its own honest instruction (issue #3532).
+    private const string ServiceAccessReviewBlockedMessage =
+        "This service is already connected to your NyxID; this chat session just " +
+        "is not authorized to use it yet. Approve the service access review to " +
+        "grant it — in NyxID, open Settings → Account → Manage service access — " +
+        "then continue this conversation.";
     private const string ServiceAccessRequiredReasonCode =
         "USER_SERVICE_ACCESS_REQUIRED";
     private const int HistoryLimit = 32;
@@ -248,15 +258,16 @@ public static class NyxIdChatBrowserActions
                 addedSteps,
                 supersededContinuation is null ? null : [supersededContinuation]);
         }
+        var blockedMessage = BlockedMessageForAction(request.Action);
         task.Status = NyxIdChatTaskStatus.Blocked;
         task.ActiveStepId = actionStep.StepId;
         task.ActiveOperationId = string.Empty;
         task.FailureCode = ActionRequested;
-        task.SafeMessage = BrowserActionBlockedMessage;
+        task.SafeMessage = blockedMessage;
         task.UpdatedAt = now.Clone();
         turn.Status = NyxIdChatTurnStatus.Blocked;
         turn.FailureCode = ActionRequested;
-        turn.SafeMessage = BrowserActionBlockedMessage;
+        turn.SafeMessage = blockedMessage;
         turn.TerminalAt = now.Clone();
         next.LatestTurn = turn.Clone();
         next.PendingActions.Add(request.Clone());
@@ -268,12 +279,17 @@ public static class NyxIdChatBrowserActions
             ShouldDispatch: false,
             NyxIdChatTransitionOutcome.Accepted,
             ActionRequested,
-            BrowserActionBlockedMessage,
+            blockedMessage,
             next,
             request.Clone(),
             new NyxIdChatContinuationAdmissionState(),
             NextCommand: null);
     }
+
+    private static string BlockedMessageForAction(NyxIdAssistantActionKind action) =>
+        action == NyxIdAssistantActionKind.ServiceAccessReview
+            ? ServiceAccessReviewBlockedMessage
+            : BrowserActionBlockedMessage;
 
     public static NyxIdChatBrowserActionDecision Continue(
         NyxIdChatConversationGAgentState state,
@@ -944,15 +960,16 @@ public static class NyxIdChatBrowserActions
         var pending = state.PendingActions
             .OrderBy(static request => request.ActionRequestId, StringComparer.Ordinal)
             .First();
+        var pendingBlockedMessage = BlockedMessageForAction(pending.Action);
         task.Status = NyxIdChatTaskStatus.Blocked;
         task.ActiveStepId = pending.StepId;
         task.ActiveOperationId = string.Empty;
         task.FailureCode = ActionRequested;
-        task.SafeMessage = BrowserActionBlockedMessage;
+        task.SafeMessage = pendingBlockedMessage;
         task.UpdatedAt = now.Clone();
         turn.Status = NyxIdChatTurnStatus.Blocked;
         turn.FailureCode = ActionRequested;
-        turn.SafeMessage = BrowserActionBlockedMessage;
+        turn.SafeMessage = pendingBlockedMessage;
         turn.TerminalAt = now.Clone();
         state.LatestTurn = turn.Clone();
         AddTerminalSummary(state, turn);

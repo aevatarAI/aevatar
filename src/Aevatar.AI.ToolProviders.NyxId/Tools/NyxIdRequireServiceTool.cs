@@ -246,13 +246,20 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
                     null);
             }
 
-            if (accessVisibility == ServiceAccessVisibility.NotAuthorized &&
-                !string.IsNullOrWhiteSpace(resourceUri))
+            if (accessVisibility == ServiceAccessVisibility.NotAuthorized)
             {
+                // The catalog read can be degraded while the bearer probe still
+                // proves "connected but not authorized for this session". Derive
+                // the canonical resource indicator from the pinned proxy route
+                // shape so the actionable access-review blocker survives catalog
+                // degradation instead of collapsing into an opaque inventory error.
+                var effectiveResourceUri = string.IsNullOrWhiteSpace(resourceUri)
+                    ? _client.BuildServiceProxyResourceUri(serviceSlug)
+                    : resourceUri;
                 return new ServiceRegistrationReadiness(
                     ExternalCapabilityReadinessStatus.ServiceAccessDenied,
                     userServiceId,
-                    resourceUri,
+                    effectiveResourceUri,
                     new ExternalCapabilityBlocker
                     {
                         Status = ExternalCapabilityReadinessStatus.ServiceAccessDenied,

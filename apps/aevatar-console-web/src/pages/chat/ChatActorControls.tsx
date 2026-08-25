@@ -13,7 +13,7 @@ import type {
   ChatActorProjection,
   ChatActorStep,
   ChatPendingInput,
-  ChatServiceConnectActionRequest,
+  ChatNyxIdActionRequest,
 } from './chatActorState';
 import { chatActionIdentityKey } from './chatActorState';
 import type { ChatInputAnswer } from './chatApi';
@@ -50,14 +50,14 @@ type Props = {
   onSteer: (instruction: string) => void;
   onRetry: (step: ChatActorStep) => void;
   onSkip: (step: ChatActorStep) => void;
-  onActionOpen: (request: ChatServiceConnectActionRequest) => void;
-  onActionRefresh: (request: ChatServiceConnectActionRequest) => void;
+  onActionOpen: (request: ChatNyxIdActionRequest) => void;
+  onActionRefresh: (request: ChatNyxIdActionRequest) => void;
   onActionConnectCredential: (
-    request: ChatServiceConnectActionRequest,
+    request: ChatNyxIdActionRequest,
     credential: string,
   ) => Promise<void>;
   onActionReport: (
-    request: ChatServiceConnectActionRequest,
+    request: ChatNyxIdActionRequest,
     disposition: ActionReport['disposition'],
   ) => void;
 };
@@ -1085,19 +1085,36 @@ function ActionCard({
   const terminalWithoutPostcondition = Boolean(
     report && report.disposition !== 'completed',
   );
-  const serviceName =
-    'catalogService' in request.params
+  const isAccessReview = request.action === 'service.access_review';
+  const serviceName = isAccessReview
+    ? request.params.serviceAccessReview.serviceSlug
+    : 'catalogService' in request.params
       ? request.params.catalogService.serviceSlug
       : request.params.customService.name;
   return (
     <ControlCard
       title={
         presentationTitle ||
-        t('pages.chat.actorControls.connectService', 'Connect {service}', {
-          service: serviceName,
-        })
+        (isAccessReview
+          ? t(
+              'pages.chat.actorControls.authorizeServiceAccess',
+              'Authorize {service} access',
+              { service: serviceName },
+            )
+          : t('pages.chat.actorControls.connectService', 'Connect {service}', {
+              service: serviceName,
+            }))
       }
     >
+      {isAccessReview && !verified && !report ? (
+        <div style={{ color: '#475569', fontSize: 12 }}>
+          {t(
+            'pages.chat.actorControls.accessReviewExplainer',
+            '{service} is already connected to your NyxID. This chat session just needs a one-time authorization to use it.',
+            { service: serviceName },
+          )}
+        </div>
+      ) : null}
       {'catalogService' in request.params &&
       request.params.catalogService.requestedScopes?.length ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -1167,21 +1184,31 @@ function ActionCard({
               style={buttonStyle}
               type="button"
             >
-              {t('pages.chat.actorControls.openNyxId', 'Open NyxID connection')}
+              {isAccessReview
+                ? t(
+                    'pages.chat.actorControls.authorizeAccess',
+                    'Authorize access',
+                  )
+                : t(
+                    'pages.chat.actorControls.openNyxId',
+                    'Open NyxID connection',
+                  )}
             </button>
           ) : null}
-          <button
-            aria-label={t(
-              'pages.chat.actorControls.refreshConnection',
-              'Refresh connection',
-            )}
-            disabled={disabled || journey?.busy}
-            onClick={() => onRefresh(request)}
-            style={buttonStyle}
-            type="button"
-          >
-            {t('pages.chat.actorControls.refresh', 'Refresh')}
-          </button>
+          {!isAccessReview ? (
+            <button
+              aria-label={t(
+                'pages.chat.actorControls.refreshConnection',
+                'Refresh connection',
+              )}
+              disabled={disabled || journey?.busy}
+              onClick={() => onRefresh(request)}
+              style={buttonStyle}
+              type="button"
+            >
+              {t('pages.chat.actorControls.refresh', 'Refresh')}
+            </button>
+          ) : null}
           {!report ? (
             <>
               <button
@@ -1270,7 +1297,7 @@ function redactWire(input: unknown): unknown {
 
 function reportMatchesRequest(
   input: unknown,
-  request: ChatServiceConnectActionRequest,
+  request: ChatNyxIdActionRequest,
 ): input is Record<string, unknown> {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
   const report = input as Record<string, unknown>;

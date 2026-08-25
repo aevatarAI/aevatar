@@ -34,6 +34,8 @@ import {
   buildTeamDetailHref,
   buildTeamMemberWorkflowStudioHref,
 } from '@/shared/navigation/teamRoutes';
+import { NyxIDAuthClient } from '@/shared/auth/client';
+import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { studioApi } from '@/shared/studio/api';
 import { AevatarPageShell } from '@/shared/ui/aevatarPageShells';
 import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
@@ -44,7 +46,7 @@ import {
   type ChatActorProjection,
   type ChatActorStep,
   type ChatPendingInput,
-  type ChatServiceConnectActionRequest,
+  type ChatNyxIdActionRequest,
   chatActionIdentityKey,
   createChatActorProjection,
   decodeActorFrame,
@@ -1247,7 +1249,7 @@ const ChatPage: React.FC = () => {
   const updateJourney = useCallback(
     (
       request: Pick<
-        ChatServiceConnectActionRequest,
+        ChatNyxIdActionRequest,
         'actorId' | 'actionRequestId'
       >,
       patch: Partial<ChatActionJourney>,
@@ -1270,7 +1272,7 @@ const ChatPage: React.FC = () => {
 
   const sendActionReport = useCallback(
     async (
-      request: ChatServiceConnectActionRequest,
+      request: ChatNyxIdActionRequest,
       disposition: ActionDisposition,
       resource?: ChatActionResource,
     ) => {
@@ -1327,7 +1329,26 @@ const ChatPage: React.FC = () => {
   );
 
   const handleActionOpen = useCallback(
-    async (request: ChatServiceConnectActionRequest) => {
+    async (request: ChatNyxIdActionRequest) => {
+      if (request.action === 'service.access_review') {
+        // The service is already connected; only this session's authorization
+        // is missing. Run the consent round-trip against the exact resource
+        // and return to this conversation to submit the completion report.
+        updateJourney(request, { busy: true, error: undefined });
+        try {
+          const client = new NyxIDAuthClient(getNyxIDRuntimeConfig());
+          await client.loginWithRedirect({
+            flow: 'serviceAccessReview',
+            resources: [request.params.serviceAccessReview.resourceUri],
+            returnTo:
+              `/chat?conversationId=${encodeURIComponent(request.actorId)}` +
+              `&accessReview=${encodeURIComponent(request.actionRequestId)}`,
+          });
+        } catch (error) {
+          updateJourney(request, { busy: false, error: errorMessage(error) });
+        }
+        return;
+      }
       updateJourney(request, { busy: true, error: undefined });
       try {
         const connectors = await listNyxIdConnectors();
@@ -1362,7 +1383,8 @@ const ChatPage: React.FC = () => {
   );
 
   const handleActionRefresh = useCallback(
-    async (request: ChatServiceConnectActionRequest) => {
+    async (request: ChatNyxIdActionRequest) => {
+      if (request.action !== 'service.connect') return;
       const journey = actionJourneys.get(
         chatActionIdentityKey(request.actorId, request.actionRequestId),
       );
@@ -1408,7 +1430,7 @@ const ChatPage: React.FC = () => {
   );
 
   const handleActionConnectCredential = useCallback(
-    async (request: ChatServiceConnectActionRequest, credential: string) => {
+    async (request: ChatNyxIdActionRequest, credential: string) => {
       if (!('catalogService' in request.params)) return;
       updateJourney(request, { busy: true, error: undefined });
       try {
@@ -1449,6 +1471,52 @@ const ChatPage: React.FC = () => {
     }
     streamControllerRef.current?.abort();
   }, [handleTaskStop]);
+
+  // Returning from a NyxID service access review: reopen the paused
+  // conversation and report the completed action so the original request
+  // resumes after the server verifies the postcondition.
+  const pendingAccessReviewReturnRef = useRef<{
+    conversationId: string;
+    actionRequestId: string;
+  } | null>(
+    (() => {
+      const conversationId = readChatQueryValue('conversationId');
+      const actionRequestId = readChatQueryValue('accessReview');
+      return conversationId && actionRequestId
+        ? { conversationId, actionRequestId }
+        : null;
+    })(),
+  );
+
+  useEffect(() => {
+    const pending = pendingAccessReviewReturnRef.current;
+    if (!pending || !canStartChat) return;
+    if (activeConversationRef.current?.conversationId === pending.conversationId)
+      return;
+    void restoreConversation(pending.conversationId);
+  }, [canStartChat, restoreConversation]);
+
+  useEffect(() => {
+    const pending = pendingAccessReviewReturnRef.current;
+    if (!pending || projection?.actorId !== pending.conversationId) return;
+    const summary = [...(projection?.actions.values() ?? [])].find(
+      (item) => item.actionRequestId === pending.actionRequestId,
+    );
+    const request = summary?.request;
+    if (request?.action !== 'service.access_review') return;
+    pendingAccessReviewReturnRef.current = null;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('accessReview');
+    url.searchParams.delete('conversationId');
+    window.history.replaceState(null, '', url.toString());
+    if ((summary.reports ?? []).length === 0) {
+      void sendActionReport(request, 'completed', {
+        userService: {
+          userServiceId: request.params.serviceAccessReview.userServiceId,
+        },
+      });
+    }
+  }, [projection, sendActionReport]);
 
   const messageCount = activeConversation?.messages.length ?? 0;
   const activeConversationId = activeConversation?.conversationId;

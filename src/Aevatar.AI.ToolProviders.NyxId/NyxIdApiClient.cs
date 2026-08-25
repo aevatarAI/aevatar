@@ -1828,6 +1828,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         _options.EffectiveApiBaseUrl?.TrimEnd('/') ??
         throw new InvalidOperationException("NyxID public API base URL is not configured.");
 
+    // Canonical RFC 8707 resource indicator for one exact proxied service.
+    // The shape mirrors the proxy transport routes above and the pinned
+    // service-access-review contract (…/api/v1/proxy/s/{slug}).
+    internal string BuildServiceProxyResourceUri(string serviceSlug) =>
+        $"{GetPublicApiBaseUrl()}/api/v1/proxy/s/{Uri.EscapeDataString(serviceSlug)}";
+
     private static bool ApplyExtraHeaders(
         HttpRequestMessage request,
         Dictionary<string, string>? extraHeaders)

@@ -2451,6 +2451,36 @@ public sealed class NyxIdChatTurnOperationExecutor
             exactBothMatchCount);
     }
 
+    // Ordinary, unprofiled turns carry the reviewed nyxid.chat.default
+    // baseline; a materialization failure degrades to restricted empty
+    // instead of failing the turn.
+    private async Task<AgentTurnToolCatalog> MaterializeUnprofiledBaselineCatalogAsync(
+        NeedsLlmReplyEvent request,
+        CancellationToken ct)
+    {
+        if (_turnCatalogMaterializer is null)
+            return RestrictedEmptyCatalog();
+
+        var toolContext = ResolveCatalogToolContext(request);
+        try
+        {
+            return await _turnCatalogMaterializer
+                .MaterializeUnprofiledBaselineAsync(toolContext, ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Unprofiled NyxID chat baseline catalog materialization failed closed.");
+            return RestrictedEmptyCatalog();
+        }
+    }
+
     private async Task<AgentTurnToolCatalog?> MaterializeTurnCatalogAsync(
         NyxIdChatLLMOperationInput input,
         NeedsLlmReplyEvent request,
@@ -2495,9 +2525,11 @@ public sealed class NyxIdChatTurnOperationExecutor
         }
 
         if (profile is null && authority is null)
+        {
             return input.Intent == NyxIdChatTurnIntent.Unspecified
-                ? null
+                ? await MaterializeUnprofiledBaselineCatalogAsync(request, ct).ConfigureAwait(false)
                 : RestrictedEmptyCatalog();
+        }
         if (profile is null || authority is null || _turnCatalogMaterializer is null)
             return RestrictedEmptyCatalog();
 

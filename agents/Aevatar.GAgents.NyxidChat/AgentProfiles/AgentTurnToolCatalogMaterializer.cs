@@ -31,6 +31,28 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             ProfileTaskRouteIntentId,
             ProfileTaskRouteRoutingDescription,
             AgentProfileSideEffectClass.ExternalHandoff);
+    internal const string UnprofiledBaselineIntentId = "nyxid_chat_unprofiled_baseline";
+
+    // The reviewed baseline surface for ordinary, unprofiled NyxID chat turns:
+    // the Class-R management reads (#3298), the service readiness gate, typed
+    // user input, and explicit skill discovery/loading. Request-local
+    // connected operations stay behind the readiness gate's verified
+    // authorization continuation and never enter the unprofiled baseline.
+    private static readonly IReadOnlySet<string> UnprofiledBaselineToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "nyxid_services",
+            "nyxid_api_keys",
+            "nyxid_nodes",
+            "nyxid_account",
+            "nyxid_status",
+            "nyxid_catalog",
+            "nyxid_require_service",
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+        };
+
     private static readonly IReadOnlySet<string> ServiceConnectToolNames =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -552,6 +574,46 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             diagnostics,
             selectedTools.Values,
             budget: AgentTurnToolCatalogBudget.ConnectedOperations);
+    }
+
+    /// <summary>
+    /// Materializes the reviewed baseline catalog for an ordinary, unprofiled
+    /// NyxID chat turn from the nyxid.chat.default route set. The baseline is
+    /// narrowed to the pinned reviewed tool names and the caller's tool
+    /// visibility; tools absent from the composition degrade individually
+    /// instead of failing the whole surface closed.
+    /// </summary>
+    public async Task<AgentTurnToolCatalog> MaterializeUnprofiledBaselineAsync(
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(toolContext);
+        var diagnostics = new List<AgentProfileTurnDiagnostic>();
+        var routeTools = await DiscoverToolSetAsync(
+            ToolSetNames.NyxIdChatDefault,
+            toolContext,
+            AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
+            diagnostics,
+            ct);
+        if (routeTools.HadFailure)
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
+
+        var selectedTools = routeTools.Tools
+            .Where(pair => UnprofiledBaselineToolNames.Contains(pair.Key) &&
+                           toolContext.ToolVisibility.Allows(pair.Key))
+            .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        if (selectedTools.Count == 0)
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
+
+        return new AgentTurnToolCatalog(
+            selectedTools.Keys,
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            UnprofiledBaselineIntentId,
+            UnprofiledBaselineIntentId,
+            diagnostics,
+            selectedTools.Values,
+            budget: AgentTurnToolCatalogBudget.Ordinary);
     }
 
     internal async Task<AgentTurnToolCatalog> MaterializeVerifiedAuthorizationContinuationAsync(
