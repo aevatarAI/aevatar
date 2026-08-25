@@ -27,7 +27,10 @@ public sealed class ContentArtifactPinService : IContentArtifactPinService
     {
         var (normalizedScopeId, normalizedPinKey) = NormalizeIdentity(scopeId, pinKey);
         var current = await GetCurrentAsync(normalizedScopeId, normalizedPinKey, ct);
-        if (current == null || string.IsNullOrWhiteSpace(current.PinnedArtifactId))
+        // Fix (review round 1, F1):
+        //   Empty pointers hid committed pin_version and last-mutation observations behind 404.
+        //   Any existing current-state document is now returned; only a never-mutated pin is absent.
+        if (current == null)
             throw new ContentArtifactPinNotFoundException(normalizedScopeId, normalizedPinKey);
         return current;
     }
@@ -79,10 +82,10 @@ public sealed class ContentArtifactPinService : IContentArtifactPinService
         var mutationId = ContentArtifactConventions.NormalizeRequired(request.MutationId, nameof(request.MutationId));
         ValidateExpectedVersion(request.ExpectedPinVersion);
         var current = await GetCurrentAsync(normalizedScopeId, normalizedPinKey, ct);
-        if (current == null ||
-            string.IsNullOrWhiteSpace(current.PinnedArtifactId) ||
-            current.PinnedBy == null ||
-            !PrincipalEquals(current.PinnedBy, normalizedRequester))
+        // Fix (review round 1, F1):
+        //   Successful clear removed pinned_by, so an identical mutation_id replay never reached the actor.
+        //   Live pointers use pinned_by; empty pointers allow only the last requester's exact mutation replay.
+        if (current == null || !CanClear(current, normalizedRequester, mutationId))
         {
             throw new ContentArtifactPinNotFoundException(normalizedScopeId, normalizedPinKey);
         }
@@ -105,6 +108,19 @@ public sealed class ContentArtifactPinService : IContentArtifactPinService
                string.Equals(current.PinKey, pinKey, StringComparison.Ordinal)
             ? current
             : null;
+    }
+
+    private static bool CanClear(
+        ContentArtifactPinCurrentStateResponse current,
+        ContentArtifactPrincipalContract requester,
+        string mutationId)
+    {
+        if (!string.IsNullOrWhiteSpace(current.PinnedArtifactId))
+            return current.PinnedBy != null && PrincipalEquals(current.PinnedBy, requester);
+
+        return string.Equals(current.LastMutationId, mutationId, StringComparison.Ordinal) &&
+               current.LastMutationRequestedBy != null &&
+               PrincipalEquals(current.LastMutationRequestedBy, requester);
     }
 
     private static (string ScopeId, string PinKey) NormalizeIdentity(string scopeId, string pinKey) =>

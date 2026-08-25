@@ -110,6 +110,8 @@ message ContentArtifactPinCurrentStateDocument {
   string last_mutation_id = 27;
   string last_mutation_status = 28;
   string last_rejection_code = 29;
+  string last_mutation_requested_by_principal_id = 30;
+  string last_mutation_requested_by_principal_kind = 31;
 }
 
 message WorkOrderArtifactReferenceDocument {

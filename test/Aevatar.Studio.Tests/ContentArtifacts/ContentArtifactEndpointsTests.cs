@@ -80,6 +80,29 @@ public sealed class ContentArtifactEndpointsTests
     }
 
     [Fact]
+    public async Task HandleListAsync_ShouldMapIllegalLabelKeyTo400()
+    {
+        var service = new RecordingService(new ArgumentException("labelKey is invalid."));
+
+        var result = await ContentArtifactEndpoints.HandleListAsync(
+            CreateContext("reader-1"),
+            ScopeId,
+            service,
+            pageSize: null,
+            pageToken: null,
+            teamId: null,
+            kind: null,
+            lifecycleStatus: null,
+            workOrderId: null,
+            runId: null,
+            labelKey: "Uppercase",
+            labelValue: "value",
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
     public async Task PinHandlers_ShouldReturnCurrentPointerAndAcceptedMutationReceipts()
     {
         var service = new RecordingPinService();
@@ -107,6 +130,57 @@ public sealed class ContentArtifactEndpointsTests
             "/api/scopes/scope-1/content-artifact-pins/daily-ops-report");
         clear.Should().BeOfType<Accepted<ContentArtifactPinAcceptedReceipt>>();
         service.Requester.Should().Be(new ContentArtifactPrincipalContract("owner-1", "user"));
+    }
+
+    [Fact]
+    public async Task HandleGetPinAsync_ShouldReturnClearedPinDocument()
+    {
+        var cleared = new ContentArtifactPinCurrentStateResponse(
+            ScopeId,
+            "daily-ops-report",
+            null,
+            null,
+            2,
+            5,
+            DateTimeOffset.UnixEpoch,
+            "mutation-clear",
+            "succeeded",
+            LastMutationRequestedBy: new ContentArtifactPrincipalContract("owner-1", "user"));
+        var service = new RecordingPinService(current: cleared);
+
+        var result = await ContentArtifactEndpoints.HandleGetPinAsync(
+            CreateContext("owner-1"), ScopeId, "daily-ops-report", service, CancellationToken.None);
+
+        var response = result.Should().BeOfType<Ok<ContentArtifactPinCurrentStateResponse>>()
+            .Which.Value!;
+        response.PinnedArtifactId.Should().BeNull();
+        response.PinVersion.Should().Be(2);
+        response.StateVersion.Should().Be(5);
+        response.LastMutationStatus.Should().Be("succeeded");
+    }
+
+    [Theory]
+    [InlineData("get")]
+    [InlineData("set")]
+    [InlineData("clear")]
+    public async Task PinHandlers_ShouldMapIllegalPinKeyTo400(string operation)
+    {
+        var service = new RecordingPinService(new ArgumentException("pinKey is invalid."));
+
+        var result = operation switch
+        {
+            "get" => await ContentArtifactEndpoints.HandleGetPinAsync(
+                CreateContext("owner-1"), ScopeId, "Uppercase", service, CancellationToken.None),
+            "set" => await ContentArtifactEndpoints.HandleSetPinAsync(
+                CreateContext("owner-1"), ScopeId, "Uppercase",
+                new SetContentArtifactPinRequest("artifact-1", 0, "mutation-1"), service, CancellationToken.None),
+            "clear" => await ContentArtifactEndpoints.HandleClearPinAsync(
+                CreateContext("owner-1"), ScopeId, "Uppercase",
+                new ClearContentArtifactPinRequest(1, "mutation-2"), service, CancellationToken.None),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
+        };
+
+        StatusCode(result).Should().Be(StatusCodes.Status400BadRequest);
     }
 
     [Fact]
@@ -356,7 +430,9 @@ public sealed class ContentArtifactEndpointsTests
                 [Revision()], DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
     }
 
-    private sealed class RecordingPinService : IContentArtifactPinService
+    private sealed class RecordingPinService(
+        Exception? exception = null,
+        ContentArtifactPinCurrentStateResponse? current = null) : IContentArtifactPinService
     {
         public ContentArtifactPrincipalContract? Requester { get; private set; }
 
@@ -364,7 +440,7 @@ public sealed class ContentArtifactEndpointsTests
             string scopeId,
             string pinKey,
             CancellationToken ct = default) =>
-            Task.FromResult(new ContentArtifactPinCurrentStateResponse(
+            Task.FromResult(Result(current ?? new ContentArtifactPinCurrentStateResponse(
                 scopeId,
                 pinKey,
                 "artifact-1",
@@ -373,7 +449,7 @@ public sealed class ContentArtifactEndpointsTests
                 1,
                 DateTimeOffset.UnixEpoch,
                 "mutation-1",
-                "succeeded"));
+                "succeeded")));
 
         public Task<ContentArtifactPinAcceptedReceipt> SetAsync(
             string scopeId,
@@ -383,7 +459,7 @@ public sealed class ContentArtifactEndpointsTests
             CancellationToken ct = default)
         {
             Requester = requester;
-            return Receipt(scopeId, pinKey);
+            return Task.FromResult(Result(Receipt(scopeId, pinKey)));
         }
 
         public Task<ContentArtifactPinAcceptedReceipt> ClearAsync(
@@ -394,16 +470,23 @@ public sealed class ContentArtifactEndpointsTests
             CancellationToken ct = default)
         {
             Requester = requester;
-            return Receipt(scopeId, pinKey);
+            return Task.FromResult(Result(Receipt(scopeId, pinKey)));
         }
 
-        private static Task<ContentArtifactPinAcceptedReceipt> Receipt(string scopeId, string pinKey) =>
-            Task.FromResult(new ContentArtifactPinAcceptedReceipt(
+        private T Result<T>(T value)
+        {
+            if (exception != null)
+                throw exception;
+            return value;
+        }
+
+        private static ContentArtifactPinAcceptedReceipt Receipt(string scopeId, string pinKey) =>
+            new(
                 scopeId,
                 pinKey,
                 "command-1",
                 "correlation-1",
-                ContentArtifactCommandStageNames.DispatchAccepted));
+                ContentArtifactCommandStageNames.DispatchAccepted);
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

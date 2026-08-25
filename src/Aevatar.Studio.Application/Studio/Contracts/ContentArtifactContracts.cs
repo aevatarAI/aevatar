@@ -210,7 +210,8 @@ public sealed record ContentArtifactPinCurrentStateResponse(
     DateTimeOffset UpdatedAtUtc,
     string LastMutationId,
     string LastMutationStatus,
-    string? LastRejectionCode = null);
+    string? LastRejectionCode = null,
+    ContentArtifactPrincipalContract? LastMutationRequestedBy = null);
 
 public sealed record ContentArtifactPinAcceptedReceipt(
     string ScopeId,

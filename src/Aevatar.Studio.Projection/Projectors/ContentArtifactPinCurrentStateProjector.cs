@@ -79,6 +79,11 @@ public sealed class ContentArtifactPinCurrentStateProjector
             LastMutationId = state.LastMutationId,
             LastMutationStatus = ToWireName(state.LastMutationStatus),
             LastRejectionCode = ToWireName(state.LastRejectionCode),
+            // Fix (review round 1, F1):
+            //   Clear removes pinned_by but its mutation replay still requires requester authorization.
+            //   Materialize the actor's committed last requester so the application can authorize that replay.
+            LastMutationRequestedByPrincipalId = state.LastMutationRequestedBy?.PrincipalId ?? string.Empty,
+            LastMutationRequestedByPrincipalKind = state.LastMutationRequestedBy?.PrincipalKind ?? string.Empty,
         };
     }
 

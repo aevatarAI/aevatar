@@ -196,6 +196,11 @@ public sealed class ContentArtifactProjectionTests
                 UpdatedAtUtc = Timestamp.FromDateTimeOffset(observedAt),
                 LastMutationId = "mutation-3",
                 LastMutationStatus = ContentArtifactPinMutationStatus.Succeeded,
+                LastMutationRequestedBy = new ContentArtifactPrincipal
+                {
+                    PrincipalId = "owner-1",
+                    PrincipalKind = "user",
+                },
             },
             observedAt);
 
@@ -207,6 +212,43 @@ public sealed class ContentArtifactProjectionTests
         current.PinVersion.Should().Be(3);
         current.StateVersion.Should().Be(9);
         current.PinnedBy!.PrincipalId.Should().Be("owner-1");
+        current.LastMutationRequestedBy.Should().Be(new ContentArtifactPrincipalContract("owner-1", "user"));
+    }
+
+    [Fact]
+    public async Task ClearedPinCurrentState_ShouldRemainObservable()
+    {
+        var observedAt = DateTimeOffset.Parse("2026-08-25T11:00:00Z");
+        var document = ContentArtifactPinCurrentStateProjector.ToDocument(
+            ContentArtifactConventions.BuildPinActorId(ScopeId, "daily-ops-report"),
+            new StateEvent { Version = 10, EventId = "event-10" },
+            new ContentArtifactPinState
+            {
+                ScopeId = ScopeId,
+                PinKey = "daily-ops-report",
+                PinVersion = 4,
+                UpdatedAtUtc = Timestamp.FromDateTimeOffset(observedAt),
+                LastMutationId = "mutation-clear",
+                LastMutationStatus = ContentArtifactPinMutationStatus.Succeeded,
+                LastMutationRequestedBy = new ContentArtifactPrincipal
+                {
+                    PrincipalId = "owner-1",
+                    PrincipalKind = "user",
+                },
+            },
+            observedAt);
+
+        var current = await new ProjectionContentArtifactPinQueryPort(
+            new RecordingPinDocumentReader(document)).GetAsync(ScopeId, "daily-ops-report");
+
+        current.Should().NotBeNull();
+        current!.PinnedArtifactId.Should().BeNull();
+        current.PinnedBy.Should().BeNull();
+        current.PinVersion.Should().Be(4);
+        current.StateVersion.Should().Be(10);
+        current.LastMutationId.Should().Be("mutation-clear");
+        current.LastMutationStatus.Should().Be("succeeded");
+        current.LastMutationRequestedBy.Should().Be(new ContentArtifactPrincipalContract("owner-1", "user"));
     }
 
     [Fact]

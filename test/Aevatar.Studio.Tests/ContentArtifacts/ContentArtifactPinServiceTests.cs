@@ -116,7 +116,7 @@ public sealed class ContentArtifactPinServiceTests
     }
 
     [Fact]
-    public async Task ClearAndGet_ShouldHideAbsentOrOtherOwnersPin()
+    public async Task ClearAsync_ShouldHideOtherOwnersPin()
     {
         var otherOwnerService = new ContentArtifactPinService(
             new RecordingArtifactQueryPort(current: null),
@@ -128,13 +128,68 @@ public sealed class ContentArtifactPinServiceTests
             new ClearContentArtifactPinRequest(1, "mutation-clear"),
             Principal("owner-2"));
         await denied.Should().ThrowAsync<ContentArtifactPinNotFoundException>();
+    }
 
-        var absentService = new ContentArtifactPinService(
+    [Fact]
+    public async Task GetAsync_ShouldReturnExistingEmptyPointerDocument()
+    {
+        var emptyPin = Pin(version: 2) with { PinnedArtifactId = null, PinnedBy = null };
+        var service = new ContentArtifactPinService(
             new RecordingArtifactQueryPort(current: null),
-            new RecordingPinQueryPort(Pin(version: 2) with { PinnedArtifactId = null, PinnedBy = null }),
+            new RecordingPinQueryPort(emptyPin),
             new RecordingPinCommandPort());
-        var missing = () => absentService.GetAsync("scope-1", "daily-ops-report");
-        await missing.Should().ThrowAsync<ContentArtifactPinNotFoundException>();
+
+        var current = await service.GetAsync("scope-1", "daily-ops-report");
+
+        current.Should().Be(emptyPin);
+        current.PinVersion.Should().Be(2);
+        current.LastMutationStatus.Should().Be("succeeded");
+    }
+
+    [Fact]
+    public async Task ClearAsync_ShouldDispatchEmptyPointerReplayForLastMutationRequester()
+    {
+        var commandPort = new RecordingPinCommandPort();
+        var emptyPin = Pin(version: 2) with
+        {
+            PinnedArtifactId = null,
+            PinnedBy = null,
+            LastMutationId = "mutation-clear",
+        };
+        var service = new ContentArtifactPinService(
+            new RecordingArtifactQueryPort(current: null),
+            new RecordingPinQueryPort(emptyPin),
+            commandPort);
+
+        await service.ClearAsync(
+            "scope-1",
+            "daily-ops-report",
+            new ClearContentArtifactPinRequest(1, "mutation-clear"),
+            Principal("owner-1"));
+
+        commandPort.ClearRequest.Should().Be(new ClearContentArtifactPinRequest(1, "mutation-clear"));
+    }
+
+    [Theory]
+    [InlineData("different-mutation", "owner-1")]
+    [InlineData("mutation-2", "owner-2")]
+    public async Task ClearAsync_ShouldRejectNonReplayAgainstEmptyPointer(string mutationId, string requesterId)
+    {
+        var commandPort = new RecordingPinCommandPort();
+        var emptyPin = Pin(version: 2) with { PinnedArtifactId = null, PinnedBy = null };
+        var service = new ContentArtifactPinService(
+            new RecordingArtifactQueryPort(current: null),
+            new RecordingPinQueryPort(emptyPin),
+            commandPort);
+
+        var act = () => service.ClearAsync(
+            "scope-1",
+            "daily-ops-report",
+            new ClearContentArtifactPinRequest(2, mutationId),
+            Principal(requesterId));
+
+        await act.Should().ThrowAsync<ContentArtifactPinNotFoundException>();
+        commandPort.ClearRequest.Should().BeNull();
     }
 
     private static ContentArtifactCurrentStateResponse Artifact() =>
@@ -168,7 +223,8 @@ public sealed class ContentArtifactPinServiceTests
             version,
             DateTimeOffset.UnixEpoch,
             $"mutation-{version}",
-            "succeeded");
+            "succeeded",
+            LastMutationRequestedBy: Principal("owner-1"));
 
     private static ContentArtifactPrincipalContract Principal(string id) => new(id, "user");
 

@@ -61,13 +61,16 @@ four-value ContentArtifact kind. Because every mutation for the same key reaches
 one actor, set atomically replaces the prior artifact and at most one artifact
 is pinned for that key.
 
-Set requires an ACTIVE target in the same Scope owned by the caller. Clear is
-authorized from the committed `pinnedBy` fact so a stale or unavailable target
-does not prevent explicit cleanup. The actor owns `pinVersion` CAS and
-`mutationId` idempotency. Successful set and clear advance `pinVersion`; a CAS
-conflict is persisted as a rejected mutation without changing the pointer or
-`pinVersion`. The actor current-state read model exposes both authoritative
-`pinVersion` and committed projection `stateVersion`.
+Set requires an ACTIVE target in the same Scope owned by the caller. A new clear
+is authorized from the committed `pinnedBy` fact so a stale or unavailable
+target does not prevent explicit cleanup. After clear removes that pointer, only
+the same `mutationId` from the committed last mutation requester may pass the
+application boundary as a replay candidate; the actor still verifies the full
+mutation hash. The actor owns `pinVersion` CAS and `mutationId` idempotency.
+Successful set and clear advance `pinVersion`; a CAS conflict is persisted as a
+rejected mutation without changing the pointer or `pinVersion`. The actor
+current-state read model exposes both authoritative `pinVersion` and committed
+projection `stateVersion`.
 
 Artifact lifecycle does not cascade into the pin actor. If a pinned artifact is
 later tombstoned or otherwise unavailable, consumers report

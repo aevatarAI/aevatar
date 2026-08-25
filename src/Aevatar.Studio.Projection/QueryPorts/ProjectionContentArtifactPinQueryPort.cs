@@ -47,7 +47,12 @@ public sealed class ProjectionContentArtifactPinQueryPort : IContentArtifactPinQ
             document.PinUpdatedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             document.LastMutationId,
             document.LastMutationStatus,
-            NormalizeOptional(document.LastRejectionCode));
+            NormalizeOptional(document.LastRejectionCode),
+            string.IsNullOrWhiteSpace(document.LastMutationRequestedByPrincipalId)
+                ? null
+                : new ContentArtifactPrincipalContract(
+                    document.LastMutationRequestedByPrincipalId,
+                    document.LastMutationRequestedByPrincipalKind));
     }
 
     private static string? NormalizeOptional(string? value) =>

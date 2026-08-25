@@ -93,6 +93,13 @@ internal static class ContentArtifactEndpoints
                 principal,
                 ct));
         }
+        // Fix (review round 1, F2):
+        //   Illegal label keys surfaced from normalization as ArgumentException and became HTTP 500.
+        //   Map that input-validation exception to the same 400 query contract as other invalid filters.
+        catch (ArgumentException ex)
+        {
+            return BadRequest("INVALID_CONTENT_ARTIFACT_QUERY", ex.Message);
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_CONTENT_ARTIFACT_QUERY", ex.Message);
@@ -279,6 +286,10 @@ internal static class ContentArtifactEndpoints
         {
             return PinNotFound(ex.Message);
         }
+        catch (ArgumentException ex)
+        {
+            return BadRequest("INVALID_CONTENT_ARTIFACT_PIN_QUERY", ex.Message);
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_CONTENT_ARTIFACT_PIN_QUERY", ex.Message);
@@ -307,6 +318,10 @@ internal static class ContentArtifactEndpoints
         {
             return NotFound(ex.Message);
         }
+        catch (ArgumentException ex)
+        {
+            return BadRequest("INVALID_CONTENT_ARTIFACT_PIN_COMMAND", ex.Message);
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_CONTENT_ARTIFACT_PIN_COMMAND", ex.Message);
@@ -331,6 +346,10 @@ internal static class ContentArtifactEndpoints
         catch (ContentArtifactPinNotFoundException ex)
         {
             return PinNotFound(ex.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest("INVALID_CONTENT_ARTIFACT_PIN_COMMAND", ex.Message);
         }
         catch (InvalidOperationException ex)
         {
