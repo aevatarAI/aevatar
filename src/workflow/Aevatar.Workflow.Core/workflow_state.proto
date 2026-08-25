@@ -93,6 +93,7 @@ message WorkflowState
   string revision_id = 21;
   ExternalCapabilityExecutionMode expected_execution_mode = 22;
   string tool_catalog_policy_version = 23;
+  string catalog_publication_contract_version = 24;
 }
 
 message WorkflowRunState

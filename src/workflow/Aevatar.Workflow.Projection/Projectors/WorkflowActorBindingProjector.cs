@@ -87,6 +87,7 @@ public sealed class WorkflowActorBindingProjector
             RevisionId = evt.RevisionId ?? string.Empty,
             ExpectedExecutionMode = evt.ExpectedExecutionMode,
             ToolCatalogPolicyVersion = evt.ToolCatalogPolicyVersion ?? string.Empty,
+            CatalogPublicationContractVersion = evt.CatalogPublicationContractVersion ?? string.Empty,
         };
         if (evt.CapabilityAdmissionPlan is not null)
             document.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan.Clone();

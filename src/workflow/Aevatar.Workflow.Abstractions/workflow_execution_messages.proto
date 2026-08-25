@@ -672,6 +672,7 @@ message BindWorkflowDefinitionEvent
   string revision_id = 9;
   ExternalCapabilityExecutionMode expected_execution_mode = 10;
   string tool_catalog_policy_version = 11;
+  string catalog_publication_contract_version = 12;
 }
 
 enum WorkflowServiceGrantPolicy {

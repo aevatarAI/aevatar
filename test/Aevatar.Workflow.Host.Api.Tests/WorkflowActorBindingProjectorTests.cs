@@ -20,6 +20,8 @@ public sealed class WorkflowActorBindingProjectorTests
         WorkflowActorBindingDocument.Descriptor.FindFieldByName("workflow_id")!.FieldNumber.Should().Be(16);
         WorkflowActorBindingDocument.Descriptor.FindFieldByName("revision_id")!.FieldNumber.Should().Be(17);
         WorkflowActorBindingDocument.Descriptor.FindFieldByName("expected_execution_mode")!.FieldNumber.Should().Be(18);
+        WorkflowActorBindingDocument.Descriptor.FindFieldByName("catalog_publication_contract_version")!
+            .FieldNumber.Should().Be(20);
     }
 
     [Fact]
@@ -53,6 +55,7 @@ public sealed class WorkflowActorBindingProjectorTests
                     RevisionId = "rev-alpha",
                     ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                     CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                    CatalogPublicationContractVersion = WorkflowCatalogPublicationContracts.CurrentVersion,
                     InlineWorkflowYamls =
                     {
                         [" child "] = "yaml-child",
@@ -74,6 +77,7 @@ public sealed class WorkflowActorBindingProjectorTests
         document.WorkflowId.Should().Be("wf-alpha");
         document.RevisionId.Should().Be("rev-alpha");
         document.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        document.CatalogPublicationContractVersion.Should().Be(WorkflowCatalogPublicationContracts.CurrentVersion);
         document.CapabilityAdmissionPlan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
         document.LastEventId.Should().Be("evt-definition");
     }
