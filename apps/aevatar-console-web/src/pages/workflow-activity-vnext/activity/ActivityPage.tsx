@@ -111,6 +111,12 @@ function failureTitle(error: unknown): string {
   );
 }
 
+function isRetryableActivityRunsError(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  if (!(error instanceof WorkflowActivityApiError)) return false;
+  return error.status === 408 || error.status === 429 || error.status >= 500;
+}
+
 interface ActivityPaginationState {
   readonly filterKey: string;
   readonly page: number;
@@ -375,7 +381,9 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     queryFn: () => fetchActivityPage(currentCursor),
     enabled: canQueryActivityRuns,
     refetchOnMount: 'always',
-    retry: false,
+    retry: (failureCount, error) =>
+      failureCount < 1 && isRetryableActivityRunsError(error),
+    retryDelay: 250,
   });
 
   const commitDraftFilters = React.useCallback(() => {

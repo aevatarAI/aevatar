@@ -10,6 +10,7 @@ import {
 import * as React from 'react';
 import { workflowScheduleApi } from '@/shared/api/workflowScheduleApi';
 import { history } from '@/shared/navigation/history';
+import { workflowActivityVNextCss } from '../styles';
 import WorkflowScheduleSurface from './WorkflowScheduleSurface';
 
 jest.mock('@/shared/api/workflowScheduleApi', () => ({
@@ -122,6 +123,21 @@ describe('WorkflowScheduleSurface', () => {
         '2026-08-27T01:00:00Z',
       ],
     });
+  });
+
+  it('sizes Schedule history columns for timestamps instead of empty result space', () => {
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__schedule-history-table th:nth-child(1), .wa-vnext__schedule-history-table td:nth-child(1) { width: 29%; }',
+    );
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__schedule-history-table th:nth-child(2), .wa-vnext__schedule-history-table td:nth-child(2) { width: 15%; }',
+    );
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__schedule-history-table th:nth-child(3), .wa-vnext__schedule-history-table td:nth-child(3) { width: 22%; }',
+    );
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__schedule-history-table th:nth-child(4), .wa-vnext__schedule-history-table td:nth-child(4) { width: 34%; }',
+    );
   });
 
   it('does not query schedules for an unpublished Workflow', () => {

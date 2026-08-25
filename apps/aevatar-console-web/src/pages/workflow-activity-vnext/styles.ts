@@ -744,10 +744,10 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-history-table tbody tr.wa-vnext__schedule-history-row--clickable:hover { background: #f9fafb; }
 .wa-vnext__schedule-history-attempt-link { color: inherit; text-decoration: none; }
 .wa-vnext__schedule-history-attempt-link:focus-visible { border-radius: 2px; outline: 2px solid var(--wa-blue); outline-offset: 2px; }
-.wa-vnext__schedule-history-table th:nth-child(1), .wa-vnext__schedule-history-table td:nth-child(1) { width: 24%; }
-.wa-vnext__schedule-history-table th:nth-child(2), .wa-vnext__schedule-history-table td:nth-child(2) { width: 13%; }
-.wa-vnext__schedule-history-table th:nth-child(3), .wa-vnext__schedule-history-table td:nth-child(3) { width: 39%; }
-.wa-vnext__schedule-history-table th:nth-child(4), .wa-vnext__schedule-history-table td:nth-child(4) { width: 24%; }
+.wa-vnext__schedule-history-table th:nth-child(1), .wa-vnext__schedule-history-table td:nth-child(1) { width: 29%; }
+.wa-vnext__schedule-history-table th:nth-child(2), .wa-vnext__schedule-history-table td:nth-child(2) { width: 15%; }
+.wa-vnext__schedule-history-table th:nth-child(3), .wa-vnext__schedule-history-table td:nth-child(3) { width: 22%; }
+.wa-vnext__schedule-history-table th:nth-child(4), .wa-vnext__schedule-history-table td:nth-child(4) { width: 34%; }
 .wa-vnext__schedule-history-result { display: grid; gap: 6px; min-width: 0; }
 .wa-vnext__schedule-history-result .ant-tag { justify-self: start; margin-inline-end: 0; }
 .wa-vnext__schedule-history-failure { color: var(--wa-red); font-size: 11px; margin: 0; overflow-wrap: anywhere; }

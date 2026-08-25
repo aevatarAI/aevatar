@@ -194,6 +194,12 @@ History uses one compact table or table-like list. Each attempt exposes:
 | Result | `error` | `Failed` when non-empty; otherwise `Run started` |
 | Completed time | `completedAt` | Application locale in Schedule timezone |
 
+The table allocates most horizontal space to the two localized timestamp
+columns. `Source` remains compact, and `Result` has enough room for a failed
+attempt's explanation without becoming the widest column for the common
+`Run started` case. The reference desktop proportions are `29 / 15 / 22 / 34`
+percent in the column order above.
+
 A failed row adds one concise message below its main row:
 
 ```text
@@ -245,6 +251,12 @@ silently filtering the table. Schedule is an attribution dimension, not a Run
 origin, so the handoff must not add `origin=schedule` or show Schedule in the
 Activity Source filter. No backend change is required because the Activity
 contract already accepts `workflowId` and `scheduleIds` filters.
+
+The filtered Activity request is an idempotent read. It retries one transient
+network, timeout, throttling, or server failure before showing the existing
+Activity error state. Authentication, authorization, bad-request, and response
+contract errors are not retried. The retry does not remove or weaken the
+Workflow and Schedule filters.
 
 ## Edit
 
@@ -362,6 +374,10 @@ and History are separate PNGs so each state can be reviewed at readable size.
 - `View related runs in Activity` uses exact Workflow and Schedule filters.
 - Schedule is absent from Activity Source filters and no handoff sends
   `origin=schedule`.
+- A single transient Activity handoff request failure is retried once; 4xx
+  contract errors and response decoding errors are not retried.
+- History column widths prioritize localized timestamps and do not let the
+  short Result tag dominate successful rows.
 - Loading, successful empty, request error, and failed-attempt states remain
   distinct.
 - All timestamps follow the application locale and Schedule timezone.

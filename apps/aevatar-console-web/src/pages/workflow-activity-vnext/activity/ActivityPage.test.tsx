@@ -43,6 +43,8 @@ jest.mock('@/shared/api/workflowActivityApi', () => {
 
     constructor(message: string, status: number, code?: string) {
       super(message);
+      this.name = 'WorkflowActivityApiError';
+      Object.setPrototypeOf(this, WorkflowActivityApiError.prototype);
       this.code = code;
       this.status = status;
     }
@@ -74,6 +76,13 @@ jest.mock('../hooks/useConsoleLocation', () => ({
 const mockListActivityRuns = jest.requireMock(
   '@/shared/api/workflowActivityApi',
 ).workflowActivityApi.listActivityRuns as jest.Mock;
+const MockWorkflowActivityApiError = jest.requireMock(
+  '@/shared/api/workflowActivityApi',
+).WorkflowActivityApiError as new (
+  message: string,
+  status: number,
+  code?: string,
+) => Error;
 
 describe('Workflow Activity vNext Activity ledger', () => {
   beforeEach(() => {
@@ -123,6 +132,35 @@ describe('Workflow Activity vNext Activity ledger', () => {
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />, queryClient);
 
     await waitFor(() => expect(mockListActivityRuns).toHaveBeenCalledTimes(2));
+  });
+
+  it('retries one transient Activity feed failure before showing an error', async () => {
+    mockSearch = '?workflowId=wf-alpha&schedule=schedule-alpha';
+    mockListActivityRuns
+      .mockRejectedValueOnce(
+        new MockWorkflowActivityApiError(
+          'Error occurred while trying to proxy: localhost:5175/api/workflow/observatory/activity-runs',
+          502,
+        ),
+      )
+      .mockResolvedValueOnce(feedPage([]));
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(await screen.findByText('No matching runs')).toBeInTheDocument();
+    expect(mockListActivityRuns).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Activity unavailable')).not.toBeInTheDocument();
+  });
+
+  it('does not retry an unauthorized Activity feed request', async () => {
+    mockListActivityRuns.mockRejectedValueOnce(
+      new MockWorkflowActivityApiError('Unauthorized', 401),
+    );
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
   });
 
   it('passes a URL workflow identity directly to the Activity feed', async () => {
