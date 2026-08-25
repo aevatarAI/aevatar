@@ -42,6 +42,7 @@
     <ProjectReference Include="../../agents/Aevatar.GAgents.NyxidChat/Aevatar.GAgents.NyxidChat.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.ContentArtifacts/Aevatar.GAgents.ContentArtifacts.csproj" />
     <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Studio/Aevatar.Workflow.Studio.csproj" />
+    <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
   </ItemGroup>
 
   <ItemGroup>

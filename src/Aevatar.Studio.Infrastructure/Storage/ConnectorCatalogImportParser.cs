@@ -103,7 +103,12 @@ internal sealed class ConnectorCatalogImportParser : IConnectorCatalogImportPars
             Retry: Math.Clamp(ReadInt(connectorNode, "retry", 0), 0, 5),
             Http: TryGetPropertyIgnoreCase(connectorNode, "http", out var httpNode) ? ParseHttpConfig(httpNode) : EmptyHttpConfig(),
             Cli: TryGetPropertyIgnoreCase(connectorNode, "cli", out var cliNode) ? ParseCliConfig(cliNode) : EmptyCliConfig(),
-            Mcp: TryGetPropertyIgnoreCase(connectorNode, "mcp", out var mcpNode) ? ParseMcpConfig(mcpNode) : EmptyMcpConfig());
+            Mcp: TryGetPropertyIgnoreCase(connectorNode, "mcp", out var mcpNode) ? ParseMcpConfig(mcpNode) : EmptyMcpConfig(),
+            HostCallback: TryGetPropertyIgnoreCase(connectorNode, "host_callback", out var hostCallbackNode)
+                ? ParseHostCallbackConfig(hostCallbackNode)
+                : TryGetPropertyIgnoreCase(connectorNode, "hostCallback", out hostCallbackNode)
+                    ? ParseHostCallbackConfig(hostCallbackNode)
+                    : EmptyHostCallbackConfig());
     }
 
     private static StoredHttpConnectorConfig ParseHttpConfig(JsonElement node) =>
@@ -143,6 +148,14 @@ internal sealed class ConnectorCatalogImportParser : IConnectorCatalogImportPars
                 AllowedTools: ReadStringArray(node, "allowedTools"),
                 AllowedInputKeys: ReadStringArray(node, "allowedInputKeys"));
 
+    private static StoredHostCallbackConnectorConfig ParseHostCallbackConfig(JsonElement node) =>
+        node.ValueKind != JsonValueKind.Object
+            ? EmptyHostCallbackConfig()
+            : new StoredHostCallbackConnectorConfig(
+                Handler: ReadString(node, "handler"),
+                AllowedOperations: ReadStringArray(node, "allowedOperations"),
+                AllowedInputKeys: ReadStringArray(node, "allowedInputKeys"));
+
     private static StoredConnectorAuthConfig ParseAuthConfig(JsonElement node) =>
         node.ValueKind != JsonValueKind.Object
             ? EmptyAuthConfig()
@@ -174,6 +187,9 @@ internal sealed class ConnectorCatalogImportParser : IConnectorCatalogImportPars
             string.Empty,
             [],
             []);
+
+    private static StoredHostCallbackConnectorConfig EmptyHostCallbackConfig() =>
+        new(string.Empty, [], []);
 
     private static StoredConnectorAuthConfig EmptyAuthConfig() =>
         new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);

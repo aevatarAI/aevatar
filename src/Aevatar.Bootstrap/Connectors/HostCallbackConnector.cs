@@ -14,6 +14,7 @@ public sealed class HostCallbackConnector : IConnector
     private readonly IHostCallbackConnectorHandler _handler;
     private readonly HashSet<string> _allowedOperations;
     private readonly HashSet<string> _allowedInputKeys;
+    private readonly IReadOnlyDictionary<string, int> _algorithmVersions;
 
     public HostCallbackConnector(
         string name,
@@ -32,6 +33,7 @@ public sealed class HostCallbackConnector : IConnector
         _handler = handler ?? throw new ArgumentNullException(nameof(handler));
         _allowedOperations = new HashSet<string>(allowedOperations ?? [], StringComparer.OrdinalIgnoreCase);
         _allowedInputKeys = new HashSet<string>(allowedInputKeys ?? [], StringComparer.OrdinalIgnoreCase);
+        _algorithmVersions = BuildAlgorithmVersions(handler);
     }
 
     public string Name { get; }
@@ -49,10 +51,7 @@ public sealed class HostCallbackConnector : IConnector
                 {
                     Success = false,
                     Error = "operation is required for host_callback",
-                    Metadata = new Dictionary<string, string>
-                    {
-                        ["host_callback.handler"] = _handlerName,
-                    },
+                    Metadata = BuildMetadata(operation),
                 };
             }
 
@@ -62,11 +61,7 @@ public sealed class HostCallbackConnector : IConnector
                 {
                     Success = false,
                     Error = $"operation '{operation}' is not allowed",
-                    Metadata = new Dictionary<string, string>
-                    {
-                        ["host_callback.handler"] = _handlerName,
-                        ["host_callback.operation"] = operation,
-                    },
+                    Metadata = BuildMetadata(operation),
                 };
             }
         }
@@ -77,11 +72,7 @@ public sealed class HostCallbackConnector : IConnector
             {
                 Success = false,
                 Error = schemaError,
-                Metadata = new Dictionary<string, string>
-                {
-                    ["host_callback.handler"] = _handlerName,
-                    ["host_callback.operation"] = operation,
-                },
+                Metadata = BuildMetadata(operation),
             };
         }
 
@@ -102,12 +93,7 @@ public sealed class HostCallbackConnector : IConnector
                 },
                 ct);
 
-            var metadata = new Dictionary<string, string>(response.Metadata, StringComparer.Ordinal)
-            {
-                ["host_callback.handler"] = _handlerName,
-            };
-            if (!string.IsNullOrWhiteSpace(operation))
-                metadata["host_callback.operation"] = operation;
+            var metadata = BuildMetadata(operation, response.Metadata);
 
             var output = string.Empty;
             if (response.Result != null)
@@ -130,13 +116,35 @@ public sealed class HostCallbackConnector : IConnector
             {
                 Success = false,
                 Error = ex.Message,
-                Metadata = new Dictionary<string, string>
-                {
-                    ["host_callback.handler"] = _handlerName,
-                    ["host_callback.operation"] = operation,
-                },
+                Metadata = BuildMetadata(operation),
             };
         }
+    }
+
+    // Implement (issue #3526):
+    //   Behavior: Stamp every response for a recognized deterministic operation with its exact algorithm version.
+    //   Why this shape: One metadata path keeps success, validation failure, and handler failure observability consistent.
+    private Dictionary<string, string> BuildMetadata(
+        string operation,
+        IEnumerable<KeyValuePair<string, string>>? responseMetadata = null)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (responseMetadata is not null)
+        {
+            foreach (var (key, value) in responseMetadata)
+                metadata[key] = value;
+        }
+
+        metadata["host_callback.handler"] = _handlerName;
+        if (!string.IsNullOrWhiteSpace(operation))
+            metadata["host_callback.operation"] = operation;
+        if (_algorithmVersions.TryGetValue(operation, out var algorithmVersion))
+        {
+            metadata["host_callback.algorithm_version"] =
+                algorithmVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return metadata;
     }
 
     private static void FlattenResult(
@@ -194,6 +202,28 @@ public sealed class HostCallbackConnector : IConnector
             return number.ToString("G17", System.Globalization.CultureInfo.InvariantCulture);
 
         return value.ToJsonString(JsonOptions);
+    }
+
+    private static IReadOnlyDictionary<string, int> BuildAlgorithmVersions(
+        IHostCallbackConnectorHandler handler)
+    {
+        if (handler is not IDeterministicComputeHandler deterministicHandler)
+            return new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        var versions = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var algorithm in deterministicHandler.Algorithms)
+        {
+            if (string.IsNullOrWhiteSpace(algorithm.AlgorithmId) ||
+                algorithm.AlgorithmVersion <= 0 ||
+                !versions.TryAdd(algorithm.AlgorithmId.Trim(), algorithm.AlgorithmVersion))
+            {
+                throw new ArgumentException(
+                    "deterministic handler algorithms must have unique ids and positive versions",
+                    nameof(handler));
+            }
+        }
+
+        return versions;
     }
 
     private static bool TryValidatePayloadKeys(string payload, HashSet<string> allowedKeys, out string error)

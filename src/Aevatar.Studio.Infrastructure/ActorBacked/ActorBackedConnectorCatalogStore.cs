@@ -218,7 +218,10 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
             Retry: entry.Retry,
             Http: entry.Http is not null ? ToStoredHttpConfig(entry.Http) : EmptyHttpConfig(),
             Cli: entry.Cli is not null ? ToStoredCliConfig(entry.Cli) : EmptyCliConfig(),
-            Mcp: entry.Mcp is not null ? ToStoredMcpConfig(entry.Mcp) : EmptyMcpConfig());
+            Mcp: entry.Mcp is not null ? ToStoredMcpConfig(entry.Mcp) : EmptyMcpConfig(),
+            HostCallback: entry.HostCallback is not null
+                ? ToStoredHostCallbackConfig(entry.HostCallback)
+                : EmptyHostCallbackConfig());
 
     private static StoredHttpConnectorConfig ToStoredHttpConfig(HttpConnectorConfigEntry entry) =>
         new(
@@ -251,6 +254,13 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
             AllowedTools: entry.AllowedTools.ToList().AsReadOnly(),
             AllowedInputKeys: entry.AllowedInputKeys.ToList().AsReadOnly());
 
+    private static StoredHostCallbackConnectorConfig ToStoredHostCallbackConfig(
+        HostCallbackConnectorConfigEntry entry) =>
+        new(
+            Handler: entry.Handler,
+            AllowedOperations: entry.AllowedOperations.ToList().AsReadOnly(),
+            AllowedInputKeys: entry.AllowedInputKeys.ToList().AsReadOnly());
+
     private static StoredConnectorAuthConfig ToStoredAuthConfig(ConnectorAuthEntry entry) =>
         new(
             Type: entry.Type,
@@ -274,6 +284,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
             Http = ToProtoHttpConfig(def.Http),
             Cli = ToProtoCliConfig(def.Cli),
             Mcp = ToProtoMcpConfig(def.Mcp),
+            HostCallback = ToProtoHostCallbackConfig(def.HostCallback),
         };
         return entry;
     }
@@ -328,6 +339,18 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
         return entry;
     }
 
+    private static HostCallbackConnectorConfigEntry ToProtoHostCallbackConfig(
+        StoredHostCallbackConnectorConfig config)
+    {
+        var entry = new HostCallbackConnectorConfigEntry
+        {
+            Handler = config.Handler,
+        };
+        entry.AllowedOperations.AddRange(config.AllowedOperations);
+        entry.AllowedInputKeys.AddRange(config.AllowedInputKeys);
+        return entry;
+    }
+
     private static ConnectorAuthEntry ToProtoAuthConfig(StoredConnectorAuthConfig config) =>
         new()
         {
@@ -352,6 +375,9 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             EmptyAuthConfig(), string.Empty, [], []);
+
+    private static StoredHostCallbackConnectorConfig EmptyHostCallbackConfig() =>
+        new(string.Empty, [], []);
 
     private static StoredConnectorAuthConfig EmptyAuthConfig() =>
         new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);

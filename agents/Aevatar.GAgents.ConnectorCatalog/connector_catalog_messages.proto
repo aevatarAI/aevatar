@@ -48,6 +48,12 @@ message McpConnectorConfigEntry {
   repeated string allowed_input_keys = 10;
 }
 
+message HostCallbackConnectorConfigEntry {
+  string handler = 1;
+  repeated string allowed_operations = 2;
+  repeated string allowed_input_keys = 3;
+}
+
 // ─── State ───
 
 message ConnectorDefinitionEntry {
@@ -59,6 +65,7 @@ message ConnectorDefinitionEntry {
   HttpConnectorConfigEntry http = 6;
   CliConnectorConfigEntry cli = 7;
   McpConnectorConfigEntry mcp = 8;
+  HostCallbackConnectorConfigEntry host_callback = 9;
 }
 
 message ConnectorDraftEntry {

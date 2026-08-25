@@ -14,6 +14,7 @@ public sealed class ConnectorService
         "http",
         "cli",
         "mcp",
+        "host_callback",
     };
 
     private readonly IConnectorCatalogQueryPort _queryPort;
@@ -193,6 +194,17 @@ public sealed class ConnectorService
             return;
         }
 
+        if (string.Equals(normalizedType, "host_callback", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(connector.HostCallback?.Handler))
+            {
+                throw new InvalidOperationException(
+                    $"Connector '{connector.Name}' requires hostCallback.handler.");
+            }
+
+            return;
+        }
+
         var mcpCommand = connector.Mcp?.Command?.Trim() ?? string.Empty;
         var mcpUrl = connector.Mcp?.Url?.Trim() ?? string.Empty;
         var hasMcpCommand = !string.IsNullOrWhiteSpace(mcpCommand);
@@ -251,7 +263,8 @@ public sealed class ConnectorService
                 Auth: ToStoredAuth(connector.Mcp.Auth),
                 DefaultTool: connector.Mcp.DefaultTool?.Trim() ?? string.Empty,
                 AllowedTools: NormalizeList(connector.Mcp.AllowedTools),
-                AllowedInputKeys: NormalizeList(connector.Mcp.AllowedInputKeys)));
+                AllowedInputKeys: NormalizeList(connector.Mcp.AllowedInputKeys)),
+            HostCallback: ToStoredHostCallback(connector.HostCallback));
 
     private static StoredConnectorDefinition ToStoredConnectorDraft(ConnectorDefinitionDto connector) =>
         new(
@@ -284,7 +297,8 @@ public sealed class ConnectorService
                 Auth: ToStoredAuth(connector.Mcp.Auth),
                 DefaultTool: connector.Mcp.DefaultTool?.Trim() ?? string.Empty,
                 AllowedTools: NormalizeList(connector.Mcp.AllowedTools),
-                AllowedInputKeys: NormalizeList(connector.Mcp.AllowedInputKeys)));
+                AllowedInputKeys: NormalizeList(connector.Mcp.AllowedInputKeys)),
+            HostCallback: ToStoredHostCallback(connector.HostCallback));
 
     private static ConnectorCatalogResponse ToResponse(StoredConnectorCatalog catalog) =>
         new(
@@ -344,7 +358,11 @@ public sealed class ConnectorService
                 ToDto(connector.Mcp.Auth),
                 connector.Mcp.DefaultTool,
                 connector.Mcp.AllowedTools.ToList(),
-                connector.Mcp.AllowedInputKeys.ToList()));
+                connector.Mcp.AllowedInputKeys.ToList()),
+            new HostCallbackConnectorDefinitionDto(
+                connector.HostCallback.Handler,
+                connector.HostCallback.AllowedOperations.ToList(),
+                connector.HostCallback.AllowedInputKeys.ToList()));
 
     private static void EnsureAuthConfig(string connectorName, string fieldName, ConnectorAuthDefinitionDto? auth)
     {
@@ -439,6 +457,13 @@ public sealed class ConnectorService
             auth?.SecretRef?.Trim() ?? string.Empty,
             auth?.HeaderName?.Trim() ?? string.Empty,
             auth?.HeaderValuePrefix?.Trim() ?? string.Empty);
+
+    private static StoredHostCallbackConnectorConfig ToStoredHostCallback(
+        HostCallbackConnectorDefinitionDto? hostCallback) =>
+        new(
+            hostCallback?.Handler?.Trim() ?? string.Empty,
+            NormalizeList(hostCallback?.AllowedOperations ?? []),
+            NormalizeList(hostCallback?.AllowedInputKeys ?? []));
 
     private static ConnectorAuthDefinitionDto ToDto(StoredConnectorAuthConfig auth) =>
         new(
