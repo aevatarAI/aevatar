@@ -487,6 +487,13 @@ or unavailable state and does not issue an unfiltered Runs query. Removing the
 filter returns to global Activity. The UI must not substitute Workflow name,
 `memberId`, `publishedServiceId`, or a parsed actor string.
 
+Applied Workflow, Schedule, and source scope chips form a contextual row above
+the editable Activity search, status, source, and date controls. These two
+groups must not visually collapse into one control row: when contextual chips
+exist, keep a 12px vertical interval before the editable toolbar, including
+when chips wrap on narrower viewports. When no contextual chip exists, do not
+render an empty context row or reserve its interval.
+
 ### Immutable Run Detail
 
 Run detail loads summary/detail and graph independently so a graph failure does
