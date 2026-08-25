@@ -1,6 +1,6 @@
 name: dinner_date_mock
-description: Executable mock workflow for the UC5 dinner-date flow. External NyxID services are represented by deterministic mock assign nodes so the orchestration can be validated before wiring real connectors.
-when_to_use: Use to validate the dinner-date shortlist, policy gates, silence timeout, hold-all, release, proof artifact, and optional calendar flow without calling Google, Firecrawl, Twilio, ElevenLabs, or restaurants.
+description: Template-oriented executable workflow for the UC5 dinner-date flow. Connector boundary nodes currently use deterministic mock assign outputs and can later be replaced with real NyxID-backed tool calls without changing the orchestration backbone.
+when_to_use: Use to validate the dinner-date shortlist, policy gates, silence timeout, hold-all, release, proof artifact, and optional calendar flow before replacing connector boundary nodes for Google, Firecrawl, Twilio, ElevenLabs, or restaurant calls.
 configuration:
   closed_world_mode: true
 roles: []
@@ -38,16 +38,16 @@ steps:
     parameters:
       target: pre_options_policy_check
       value: '{"options_shown":false,"restaurant_calls_started":false,"money_spent":false,"result":"pass","enforced_rules":["no_hold_before_options_shown","no_payment_without_user_approval"]}'
-    next: mock_read_history
+    next: load_participant_context
 
-  - id: mock_read_history
+  - id: load_participant_context
     type: assign
     parameters:
       target: google_history_context
       value: '{"mocked_service":"api-google","required_for_core_workflow":false,"status":"skipped_or_mocked","facts":{"past_confirmations":4,"latest_confirmation":"2026-03-14","usual_day":"Friday","usual_time":"19:30","party_size":2,"dietary_note":"one old vegetarian note, owner unknown"}}'
-    next: mock_read_calendar
+    next: load_optional_calendar_context
 
-  - id: mock_read_calendar
+  - id: load_optional_calendar_context
     type: assign
     parameters:
       target: google_calendar_context
@@ -59,16 +59,16 @@ steps:
     parameters:
       target: venue_research_plan
       value: '{"query":"romantic indoor dinner near Keong Saik or Duxton Friday 19:30","candidate_count_target":3,"evidence_needed":["availability","phone","menu_or_allergy_hint","venue_owned_page"],"side_effects_allowed":false}'
-    next: mock_research_context
+    next: discover_restaurant_candidates
 
-  - id: mock_research_context
+  - id: discover_restaurant_candidates
     type: assign
     parameters:
       target: venue_research_context
       value: '{"mocked_services":["web-search","api-firecrawl"],"required_for_core_workflow":false,"recommended":true,"facts":{"date_context":"seventh lunar month; indoor seating preferred","photo_source":"mock venue-owned pages","candidate_count":3,"candidate_source_quality":"sufficient_for_mock"}}'
-    next: build_mock_shortlist
+    next: build_shortlist_from_candidates
 
-  - id: build_mock_shortlist
+  - id: build_shortlist_from_candidates
     type: assign
     parameters:
       target: dinner_shortlist
@@ -118,14 +118,14 @@ steps:
       branch.casa_nera: record_selected_casa_nera_before_timeout
       branch.atlas_row: record_selected_atlas_row_before_timeout
       branch.deposit: final_artifact_payment_blocked
-      branch.ambiguous: mock_ambiguous_call_outcome
+      branch.ambiguous: handle_ambiguous_hold_outcome
       branch._default: wait_for_silence_timeout
     branches:
       ember_oak: record_selected_ember_oak_before_timeout
       casa_nera: record_selected_casa_nera_before_timeout
       atlas_row: record_selected_atlas_row_before_timeout
       deposit: final_artifact_payment_blocked
-      ambiguous: mock_ambiguous_call_outcome
+      ambiguous: handle_ambiguous_hold_outcome
       _default: wait_for_silence_timeout
 
   - id: record_selected_ember_oak_before_timeout
@@ -160,17 +160,17 @@ steps:
     type: switch
     parameters:
       on: "${steps.capture_user_choice.output}"
-      branch.ember_oak: mock_hold_selected_ember_oak
-      branch.casa_nera: mock_hold_selected_casa_nera
-      branch.atlas_row: mock_hold_selected_atlas_row
-      branch._default: mock_invalid_selected_choice
+      branch.ember_oak: hold_selected_ember_oak
+      branch.casa_nera: hold_selected_casa_nera
+      branch.atlas_row: hold_selected_atlas_row
+      branch._default: final_artifact_invalid_selected_choice
     branches:
-      ember_oak: mock_hold_selected_ember_oak
-      casa_nera: mock_hold_selected_casa_nera
-      atlas_row: mock_hold_selected_atlas_row
-      _default: mock_invalid_selected_choice
+      ember_oak: hold_selected_ember_oak
+      casa_nera: hold_selected_casa_nera
+      atlas_row: hold_selected_atlas_row
+      _default: final_artifact_invalid_selected_choice
 
-  - id: mock_hold_selected_ember_oak
+  - id: hold_selected_ember_oak
     type: assign
     idempotency_key: "${run_id}:hold:ember_oak:selected_only"
     parameters:
@@ -178,7 +178,7 @@ steps:
       value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Ember & Oak","venue_id":"ember_oak","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-ember-oak","elevenlabs_transcript":"mock-transcript-hold-ember-oak","confirmed_time":"19:30","allergy_answer":"no nuts in the kitchen at all","payment_requested":false}'
     next: verify_selected_hold_record
 
-  - id: mock_hold_selected_casa_nera
+  - id: hold_selected_casa_nera
     type: assign
     idempotency_key: "${run_id}:hold:casa_nera:selected_only"
     parameters:
@@ -186,7 +186,7 @@ steps:
       value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Casa Nera","venue_id":"casa_nera","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-casa-nera","elevenlabs_transcript":"mock-transcript-hold-casa-nera","confirmed_time":"19:30","allergy_answer":"pesto has pine nuts; kitchen can omit on request","payment_requested":false}'
     next: verify_selected_hold_record
 
-  - id: mock_hold_selected_atlas_row
+  - id: hold_selected_atlas_row
     type: assign
     idempotency_key: "${run_id}:hold:atlas_row:selected_only"
     parameters:
@@ -219,7 +219,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"user_choice_before_timeout","kept":"${steps.mock_hold_selected_ember_oak.json.venue}${steps.mock_hold_selected_casa_nera.json.venue}${steps.mock_hold_selected_atlas_row.json.venue}","released":[],"calendar_post_action":"optional_skipped","proof":{"call_records":["${steps.mock_hold_selected_ember_oak.json.twilio_call_record}${steps.mock_hold_selected_casa_nera.json.twilio_call_record}${steps.mock_hold_selected_atlas_row.json.twilio_call_record}"],"transcripts":["${steps.mock_hold_selected_ember_oak.json.elevenlabs_transcript}${steps.mock_hold_selected_casa_nera.json.elevenlabs_transcript}${steps.mock_hold_selected_atlas_row.json.elevenlabs_transcript}"],"verification":"${steps.verify_selected_hold_record.output}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"optional_dependencies_mocked":["api-google"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
+      value: '{"workflow_status":"completed","path":"user_choice_before_timeout","kept":"${steps.hold_selected_ember_oak.json.venue}${steps.hold_selected_casa_nera.json.venue}${steps.hold_selected_atlas_row.json.venue}","released":[],"calendar_post_action":"optional_skipped","proof":{"call_records":["${steps.hold_selected_ember_oak.json.twilio_call_record}${steps.hold_selected_casa_nera.json.twilio_call_record}${steps.hold_selected_atlas_row.json.twilio_call_record}"],"transcripts":["${steps.hold_selected_ember_oak.json.elevenlabs_transcript}${steps.hold_selected_casa_nera.json.elevenlabs_transcript}${steps.hold_selected_atlas_row.json.elevenlabs_transcript}"],"verification":"${steps.verify_selected_hold_record.output}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"optional_dependencies_mocked":["api-google"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
     next: ""
 
   - id: wait_for_silence_timeout
@@ -240,9 +240,9 @@ steps:
     parameters:
       target: hold_all_policy_check
       value: '{"path":"silence_timeout","options_shown":true,"timeout_elapsed":true,"reservation_calls_auto_allowed":true,"money_spend_allowed":false,"result":"pass"}'
-    next: mock_hold_ember_oak
+    next: hold_candidate_ember_oak
 
-  - id: mock_hold_ember_oak
+  - id: hold_candidate_ember_oak
     type: assign
     idempotency_key: "${run_id}:hold:ember_oak:timeout"
     parameters:
@@ -255,9 +255,9 @@ steps:
     parameters:
       target: hold_ember_oak_verification
       value: '{"venue":"Ember & Oak","call_record_present":true,"transcript_present":true,"hold_status_extracted_from_transcript":"confirmed","payment_requested":false,"result":"pass"}'
-    next: mock_hold_casa_nera
+    next: hold_candidate_casa_nera
 
-  - id: mock_hold_casa_nera
+  - id: hold_candidate_casa_nera
     type: assign
     idempotency_key: "${run_id}:hold:casa_nera:timeout"
     parameters:
@@ -270,9 +270,9 @@ steps:
     parameters:
       target: hold_casa_nera_verification
       value: '{"venue":"Casa Nera","call_record_present":true,"transcript_present":true,"hold_status_extracted_from_transcript":"confirmed","payment_requested":false,"result":"pass"}'
-    next: mock_hold_atlas_row
+    next: hold_candidate_atlas_row
 
-  - id: mock_hold_atlas_row
+  - id: hold_candidate_atlas_row
     type: assign
     idempotency_key: "${run_id}:hold:atlas_row:timeout"
     parameters:
@@ -291,7 +291,7 @@ steps:
     type: assign
     parameters:
       target: hold_summary
-      value: '{"status":"all_three_held","selected_venue":null,"message":"All three mock holds are confirmed. Workflow is waiting for the user to choose one.","holds":["${steps.hold_ember_oak.output}","${steps.hold_casa_nera.output}","${steps.hold_atlas_row.output}"],"proofs":["mock-call-hold-ember-oak","mock-transcript-hold-ember-oak","mock-call-hold-casa-nera","mock-transcript-hold-casa-nera","mock-call-hold-atlas-row","mock-transcript-hold-atlas-row"]}'
+      value: '{"status":"all_three_held","selected_venue":null,"message":"All three mock holds are confirmed. Workflow is waiting for the user to choose one.","holds":["${steps.hold_candidate_ember_oak.output}","${steps.hold_candidate_casa_nera.output}","${steps.hold_candidate_atlas_row.output}"],"proofs":["mock-call-hold-ember-oak","mock-transcript-hold-ember-oak","mock-call-hold-casa-nera","mock-transcript-hold-casa-nera","mock-call-hold-atlas-row","mock-transcript-hold-atlas-row"]}'
     next: publish_holds_wait_state
 
   - id: publish_holds_wait_state
@@ -299,9 +299,9 @@ steps:
     parameters:
       target: post_timeout_wait_state
       value: '{"task_id":"task-uc5b","parent_task_id":"task-uc5","stored_in":"mock_durable_workflow_state","status":"waiting_for_user_choice_after_holds","accepted_signals":["ember_oak","casa_nera","atlas_row"],"default_mock_choice":"ember_oak"}'
-    next: mock_user_selects_after_holds
+    next: receive_user_choice_after_holds
 
-  - id: mock_user_selects_after_holds
+  - id: receive_user_choice_after_holds
     type: assign
     parameters:
       target: user_choice_after_holds
@@ -313,9 +313,9 @@ steps:
     parameters:
       target: release_plan
       value: '{"selected_venue":"Ember & Oak","keep":["Ember & Oak"],"release":["Casa Nera","Atlas Row"],"do_not_release_selected":true,"release_only_confirmed_holds":true,"result":"pass"}'
-    next: mock_release_casa_nera
+    next: release_unselected_casa_nera
 
-  - id: mock_release_casa_nera
+  - id: release_unselected_casa_nera
     type: assign
     idempotency_key: "${run_id}:release:casa_nera"
     parameters:
@@ -328,9 +328,9 @@ steps:
     parameters:
       target: release_casa_nera_verification
       value: '{"venue":"Casa Nera","call_record_present":true,"transcript_present":true,"release_status_extracted_from_transcript":"confirmed","result":"pass"}'
-    next: mock_release_atlas_row
+    next: release_unselected_atlas_row
 
-  - id: mock_release_atlas_row
+  - id: release_unselected_atlas_row
     type: assign
     idempotency_key: "${run_id}:release:atlas_row"
     parameters:
@@ -380,7 +380,7 @@ steps:
       value: '{"workflow_status":"failed","path":"deposit_required_failed","reason":"restaurant requested a deposit, and this mock workflow only supports free reservations","money_spent":false,"held":false,"requires_user_decision":false,"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"deposit_request_returns_failure_reason":true}}'
     next: ""
 
-  - id: mock_ambiguous_call_outcome
+  - id: handle_ambiguous_hold_outcome
     type: assign
     idempotency_key: "${run_id}:hold:ambiguous"
     parameters:
@@ -395,7 +395,7 @@ steps:
       value: '{"workflow_status":"needs_attention","path":"ambiguous_hold_unverified","held":false,"reason":"call completed but transcript did not clearly confirm hold","proof":{"call_records":["mock-call-ambiguous"],"transcripts":["mock-transcript-ambiguous"],"verification":"hold_status_unknown"},"requires_user_decision":true,"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"ambiguous_hold_not_reported_as_confirmed":true}}'
     next: ""
 
-  - id: mock_invalid_selected_choice
+  - id: final_artifact_invalid_selected_choice
     type: assign
     parameters:
       target: dinner_date_artifact
