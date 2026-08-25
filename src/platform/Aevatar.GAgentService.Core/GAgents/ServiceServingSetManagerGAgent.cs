@@ -38,12 +38,47 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
         {
             Identity = command.Identity?.Clone(),
             Generation = State.Generation + 1,
-            Targets = { resolvedTargets.Select(CloneTarget) },
+            Targets = { resolvedTargets.Select(target => CloneTarget(target)) },
             RolloutId = command.RolloutId ?? string.Empty,
             Reason = command.Reason ?? string.Empty,
             UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
         await DispatchInvocationServingObservationAsync(CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleRemoveDeploymentAsync(RemoveDeploymentFromServiceServingTargetsCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureIdentity(command.Identity, allowInitialize: true);
+        var deploymentId = command.DeploymentId?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(deploymentId))
+            throw new InvalidOperationException("deployment_id is required.");
+
+        var target = State.Targets.FirstOrDefault(target =>
+            string.Equals(target.DeploymentId, deploymentId, StringComparison.Ordinal));
+        if (target != null)
+        {
+            if (!MatchesRemovalFence(command, target))
+                return;
+
+            var remainingTargets = State.Targets
+                .Where(target => !string.Equals(target.DeploymentId, deploymentId, StringComparison.Ordinal))
+                .Select(target => CloneTarget(target))
+                .ToList();
+            await PersistDomainEventAsync(new ServiceServingSetUpdatedEvent
+            {
+                Identity = command.Identity?.Clone(),
+                Generation = State.Generation + 1,
+                Targets = { remainingTargets },
+                RolloutId = State.ActiveRolloutId ?? string.Empty,
+                Reason = command.Reason ?? string.Empty,
+                UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+            await DispatchInvocationServingObservationAsync(CancellationToken.None);
+        }
+
+        await DispatchRemovedAckAsync(command, CancellationToken.None);
     }
 
     [EventHandler]
@@ -96,7 +131,7 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
         {
             Identity = command.Identity?.Clone(),
             Generation = State.Generation + 1,
-            Targets = { command.Targets.Select(CloneTarget) },
+            Targets = { command.Targets.Select(target => CloneTarget(target, operationId, activationAttemptId)) },
             RolloutId = command.RolloutId ?? string.Empty,
             Reason = command.Reason ?? string.Empty,
             UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -106,6 +141,33 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
             ResolvedDeploymentId = target?.DeploymentId ?? string.Empty,
             ResolvedRevisionId = target?.RevisionId ?? string.Empty,
         });
+    }
+
+    private static bool MatchesRemovalFence(
+        RemoveDeploymentFromServiceServingTargetsCommand command,
+        ServiceServingTargetSpec target)
+    {
+        if (!MatchesOptionalFence(command.RevisionId, target.RevisionId) ||
+            !MatchesOptionalFence(command.PrimaryActorId, target.PrimaryActorId) ||
+            !MatchesOptionalFence(command.ActivationAttemptId, target.ActivationAttemptId))
+        {
+            return false;
+        }
+
+        return MatchesServingOperationFence(command.ServingTargetOperationId, target.ServingTargetOperationId);
+    }
+
+    private static bool MatchesOptionalFence(string? expected, string? actual) =>
+        string.IsNullOrWhiteSpace(expected) || string.Equals(expected, actual, StringComparison.Ordinal);
+
+    private static bool MatchesServingOperationFence(string? expected, string? actual)
+    {
+        var expectedOperation = expected?.Trim() ?? string.Empty;
+        var actualOperation = actual?.Trim() ?? string.Empty;
+        if (!string.IsNullOrEmpty(expectedOperation))
+            return string.Equals(expectedOperation, actualOperation, StringComparison.Ordinal);
+
+        return string.IsNullOrEmpty(actualOperation);
     }
 
     private static void EnsureResolvedOperationMatches(
@@ -119,11 +181,19 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
             !string.Equals(appliedOperation.DeploymentId, target.DeploymentId, StringComparison.Ordinal) ||
             !string.Equals(appliedOperation.RevisionId, target.RevisionId, StringComparison.Ordinal) ||
             appliedOperation.Target == null ||
-            !appliedOperation.Target.Equals(target))
+            !MatchesResolvedTarget(appliedOperation.Target, target))
         {
             throw new InvalidOperationException("operation_id is already bound to different serving update facts.");
         }
     }
+
+    private static bool MatchesResolvedTarget(ServiceServingTargetSpec appliedTarget, ServiceServingTargetSpec requestedTarget) =>
+        string.Equals(appliedTarget.DeploymentId, requestedTarget.DeploymentId, StringComparison.Ordinal) &&
+        string.Equals(appliedTarget.RevisionId, requestedTarget.RevisionId, StringComparison.Ordinal) &&
+        string.Equals(appliedTarget.PrimaryActorId, requestedTarget.PrimaryActorId, StringComparison.Ordinal) &&
+        appliedTarget.AllocationWeight == requestedTarget.AllocationWeight &&
+        appliedTarget.ServingState == requestedTarget.ServingState &&
+        appliedTarget.EnabledEndpointIds.SequenceEqual(requestedTarget.EnabledEndpointIds);
 
     protected override ServiceServingSetState TransitionState(ServiceServingSetState current, IMessage evt) =>
         StateTransitionMatcher
@@ -138,7 +208,7 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
         next.Generation = evt.Generation;
         next.ActiveRolloutId = evt.RolloutId ?? string.Empty;
         next.Targets.Clear();
-        next.Targets.Add(evt.Targets.Select(CloneTarget));
+        next.Targets.Add(evt.Targets.Select(target => CloneTarget(target)));
         next.UpdatedAt = evt.UpdatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
         if (!string.IsNullOrWhiteSpace(evt.ResolvedOperationId))
         {
@@ -206,7 +276,10 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
         return $"{serviceKey}:serving:{generation}";
     }
 
-    private static ServiceServingTargetSpec CloneTarget(ServiceServingTargetSpec source) =>
+    private static ServiceServingTargetSpec CloneTarget(
+        ServiceServingTargetSpec source,
+        string servingTargetOperationId = "",
+        string activationAttemptId = "") =>
         new()
         {
             DeploymentId = source.DeploymentId ?? string.Empty,
@@ -215,6 +288,12 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
             AllocationWeight = source.AllocationWeight,
             ServingState = source.ServingState,
             EnabledEndpointIds = { source.EnabledEndpointIds },
+            ServingTargetOperationId = string.IsNullOrWhiteSpace(servingTargetOperationId)
+                ? source.ServingTargetOperationId ?? string.Empty
+                : servingTargetOperationId,
+            ActivationAttemptId = string.IsNullOrWhiteSpace(activationAttemptId)
+                ? source.ActivationAttemptId ?? string.Empty
+                : activationAttemptId,
         };
 
     private async Task DispatchInvocationServingObservationAsync(CancellationToken ct)
@@ -232,13 +311,41 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
                 new ObserveServiceInvocationServingCommand
                 {
                     Identity = identity.Clone(),
-                    ServingTargets = { State.Targets.Select(CloneTarget) },
+                    ServingTargets = { State.Targets.Select(target => CloneTarget(target)) },
                     SourceServingVersion = State.LastAppliedEventVersion,
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }),
             ct);
         if (!admission.Accepted)
             throw new InvalidOperationException("Service invocation serving observation was not admitted.");
+    }
+
+    private async Task DispatchRemovedAckAsync(
+        RemoveDeploymentFromServiceServingTargetsCommand command,
+        CancellationToken ct)
+    {
+        var replyActorId = command.ReplyActorId?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(replyActorId))
+            return;
+
+        var admission = await _dispatchPort.DispatchAsync(
+            replyActorId,
+            CreateEnvelope(
+                replyActorId,
+                $"service-serving-removed:{ServiceKeys.Build(command.Identity!)}:{command.DeploymentId}:{command.ServingTargetOperationId}",
+                new ServiceServingTargetsRemovedAck
+                {
+                    Identity = command.Identity?.Clone(),
+                    DeploymentId = command.DeploymentId,
+                    RevisionId = command.RevisionId,
+                    PrimaryActorId = command.PrimaryActorId,
+                    ServingTargetOperationId = command.ServingTargetOperationId,
+                    ActivationAttemptId = command.ActivationAttemptId,
+                    RemovedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                }),
+            ct);
+        if (!admission.Accepted)
+            throw new InvalidOperationException("Service serving targets removed acknowledgment was not admitted.");
     }
 
     private async Task DispatchAppliedAckAsync(
