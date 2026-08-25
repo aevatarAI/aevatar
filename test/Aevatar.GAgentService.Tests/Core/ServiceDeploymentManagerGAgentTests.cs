@@ -368,6 +368,76 @@ public sealed class ServiceDeploymentManagerGAgentTests
     }
 
     [Fact]
+    public async Task HandleDeactivateAsync_ShouldDispatchFencedServingRemovalBeforeRuntimeDeactivation()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var activator = new RecordingRuntimeActivator();
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
+            activator,
+            ServiceActorIds.Deployment(identity),
+            dispatchPort);
+        await agent.ActivateAsync();
+        BindActiveDeployment(agent, identity);
+
+        await agent.HandleDeactivateAsync(new DeactivateServiceDeploymentCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-r1",
+        });
+
+        activator.DeactivateRequests.Should().BeEmpty();
+        agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
+        var removal = dispatchPort.RemovalCommands.Should().ContainSingle().Subject;
+        removal.actorId.Should().Be(ServiceActorIds.ServingSet(identity));
+        removal.command.DeploymentId.Should().Be("dep-r1");
+        removal.command.RevisionId.Should().Be("r1");
+        removal.command.PrimaryActorId.Should().Be("actor-r1");
+        removal.command.ActivationAttemptId.Should().Be("attempt-r1");
+        removal.command.ServingTargetOperationId.Should().Be("operation-r1");
+        removal.command.ReplyActorId.Should().Be(agent.Id);
+    }
+
+    [Fact]
+    public async Task HandleServingTargetsRemovedAsync_ShouldDeactivateOnlyForMatchingServingAck()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var activator = new RecordingRuntimeActivator();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
+            activator,
+            ServiceActorIds.Deployment(identity));
+        await agent.ActivateAsync();
+        BindActiveDeployment(agent, identity);
+
+        await agent.HandleEventAsync(CreateRemovedAckEnvelope(
+            agent.Id,
+            ServiceActorIds.ServingSet(identity),
+            CreateRemovedAck(identity, operationId: "operation-old")));
+        await agent.HandleEventAsync(CreateRemovedAckEnvelope(
+            agent.Id,
+            "foreign-serving-set",
+            CreateRemovedAck(identity)));
+
+        activator.DeactivateRequests.Should().BeEmpty();
+        agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
+
+        await agent.HandleEventAsync(CreateRemovedAckEnvelope(
+            agent.Id,
+            ServiceActorIds.ServingSet(identity),
+            CreateRemovedAck(identity)));
+
+        var request = activator.DeactivateRequests.Should().ContainSingle().Subject;
+        request.DeploymentId.Should().Be("dep-r1");
+        request.RevisionId.Should().Be("r1");
+        request.PrimaryActorId.Should().Be("actor-r1");
+        agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Deactivated);
+    }
+
+    [Fact]
     public async Task HandleActivateAsync_ShouldTolerateProjectionLag_ByReArmingInsteadOfThrowing()
     {
         // The bind chain dispatches prepare->publish->activate fire-and-forget, so the revision-catalog
@@ -1276,12 +1346,14 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
         var scheduler = new RecordingCallbackScheduler();
+        var dispatchPort = new RecordingDispatchPort();
         var agent = CreateAgent(
             eventStore,
             revisionCatalog,
             activator,
             ServiceActorIds.Deployment(identity),
-            scheduler: scheduler);
+            dispatchPort,
+            scheduler);
         await agent.ActivateAsync();
 
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
@@ -1314,6 +1386,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
             Identity = identity.Clone(),
             DeploymentId = "dep-r1",
         });
+        await AcknowledgeLatestRemovalDispatchAsync(agent, identity, dispatchPort);
         var committedVersion = agent.State.LastAppliedEventVersion;
 
         await agent.HandleActivateAsync(callbackA);
@@ -2695,7 +2768,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
         await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
-        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity));
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity), dispatchPort);
 
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
         {
@@ -2707,6 +2781,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
             Identity = identity.Clone(),
             DeploymentId = "dep-r1",
         });
+        await AcknowledgeLatestRemovalDispatchAsync(agent, identity, dispatchPort);
 
         activator.DeactivateRequests.Should().ContainSingle(x => x.DeploymentId == "dep-r1");
         agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Deactivated);
@@ -2720,7 +2795,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
         await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
-        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity));
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity), dispatchPort);
 
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
         {
@@ -2737,6 +2813,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
             Identity = identity.Clone(),
             DeploymentId = "dep-r1",
         });
+        await AcknowledgeLatestRemovalDispatchAsync(agent, identity, dispatchPort);
         await agent.HandleDeactivateAsync(new DeactivateServiceDeploymentCommand
         {
             Identity = identity.Clone(),
@@ -2935,6 +3012,27 @@ public sealed class ServiceDeploymentManagerGAgentTests
             CreateDefaultServingCommittedAck(identity, command));
     }
 
+    private static async Task AcknowledgeLatestRemovalDispatchAsync(
+        ServiceDeploymentManagerGAgent agent,
+        ServiceIdentity identity,
+        RecordingDispatchPort dispatchPort)
+    {
+        var command = dispatchPort.RemovalCommands[^1].command;
+        await agent.HandleEventAsync(CreateRemovedAckEnvelope(
+            agent.Id,
+            ServiceActorIds.ServingSet(identity),
+            new ServiceServingTargetsRemovedAck
+            {
+                Identity = identity.Clone(),
+                DeploymentId = command.DeploymentId,
+                RevisionId = command.RevisionId,
+                PrimaryActorId = command.PrimaryActorId,
+                ActivationAttemptId = command.ActivationAttemptId,
+                ServingTargetOperationId = command.ServingTargetOperationId,
+                RemovedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            }));
+    }
+
     private static DefaultServingRevisionCommittedAck CreateDefaultServingCommittedAck(
         ServiceIdentity identity,
         SetDefaultServingRevisionCommand command,
@@ -2965,6 +3063,49 @@ public sealed class ServiceDeploymentManagerGAgentTests
         new()
         {
             Id = $"default-serving-committed:{ack.OperationId}",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(ack),
+            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, subscriberActorId),
+            Propagation = new EnvelopePropagation(),
+        };
+
+    private static void BindActiveDeployment(ServiceDeploymentManagerGAgent agent, ServiceIdentity identity)
+    {
+        agent.State.Identity = identity.Clone();
+        agent.State.Deployments["dep-r1"] = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-r1",
+            RevisionId = "r1",
+            PrimaryActorId = "actor-r1",
+            Status = ServiceDeploymentStatus.Active,
+            ActivatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            ActivationAttemptId = "attempt-r1",
+            ServingTargetOperationId = "operation-r1",
+        };
+    }
+
+    private static ServiceServingTargetsRemovedAck CreateRemovedAck(
+        ServiceIdentity identity,
+        string operationId = "operation-r1") =>
+        new()
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-r1",
+            RevisionId = "r1",
+            PrimaryActorId = "actor-r1",
+            ActivationAttemptId = "attempt-r1",
+            ServingTargetOperationId = operationId,
+            RemovedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        };
+
+    private static EventEnvelope CreateRemovedAckEnvelope(
+        string subscriberActorId,
+        string publisherActorId,
+        ServiceServingTargetsRemovedAck ack) =>
+        new()
+        {
+            Id = $"serving-removed:{ack.ServingTargetOperationId}",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(ack),
             Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, subscriberActorId),
@@ -3007,6 +3148,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
         public List<(string actorId, SetDefaultServingRevisionCommand command)> DefaultCommands { get; } = [];
 
+        public List<(string actorId, RemoveDeploymentFromServiceServingTargetsCommand command)> RemovalCommands { get; } = [];
+
         public List<EventEnvelope> Envelopes { get; } = [];
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
@@ -3016,6 +3159,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
                 Commands.Add((actorId, envelope.Payload.Unpack<ReplaceResolvedServiceServingTargetsCommand>()));
             else if (envelope.Payload.Is(SetDefaultServingRevisionCommand.Descriptor))
                 DefaultCommands.Add((actorId, envelope.Payload.Unpack<SetDefaultServingRevisionCommand>()));
+            else if (envelope.Payload.Is(RemoveDeploymentFromServiceServingTargetsCommand.Descriptor))
+                RemovalCommands.Add((actorId, envelope.Payload.Unpack<RemoveDeploymentFromServiceServingTargetsCommand>()));
             if (DispatchException != null)
                 throw DispatchException;
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope) with

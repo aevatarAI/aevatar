@@ -45,6 +45,8 @@ message ServiceDeploymentRecord {
   google.protobuf.Timestamp activated_at = 5;
   google.protobuf.Timestamp updated_at = 6;
   string artifact_hash = 7;
+  string activation_attempt_id = 8;
+  string serving_target_operation_id = 9;
 }
 
 message ServiceDeploymentState {
@@ -132,6 +134,7 @@ message ServiceDeploymentActivatedEvent {
   ServiceDeploymentStatus status = 5;
   google.protobuf.Timestamp activated_at = 6;
   string artifact_hash = 7;
+  string activation_attempt_id = 8;
 }
 
 message ServiceDeploymentHealthChangedEvent {

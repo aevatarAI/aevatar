@@ -613,6 +613,99 @@ public sealed class ServiceServingRolloutGAgentTests
     }
 
     [Fact]
+    public async Task ServiceServingSetManager_ShouldRemoveDeploymentFromActorStateIdempotently()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var actorId = ServiceActorIds.ServingSet(identity);
+        var agent = CreateServingSetAgent(eventStore, actorId, dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        await agent.HandleReplaceResolvedAsync(new ReplaceResolvedServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Reason = "initial serving",
+            Targets =
+            {
+                CreateTarget("dep-keep", "rev-keep", "actor-keep", 40, "chat"),
+                CreateTarget("dep-remove", "rev-remove", "actor-remove", 60, "run"),
+            },
+        });
+
+        await agent.HandleRemoveDeploymentAsync(new RemoveDeploymentFromServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-remove",
+            Reason = "deactivate:dep-remove",
+            ReplyActorId = "deployment-manager",
+        });
+        await agent.HandleRemoveDeploymentAsync(new RemoveDeploymentFromServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-remove",
+            Reason = "deactivate:dep-remove",
+            ReplyActorId = "deployment-manager",
+        });
+
+        agent.State.Generation.Should().Be(2);
+        agent.State.Targets.Should().ContainSingle();
+        agent.State.Targets[0].DeploymentId.Should().Be("dep-keep");
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(2);
+        dispatchPort.Calls.Should().HaveCount(4);
+        var observation = dispatchPort.Calls[1].Envelope.Payload.Unpack<ObserveServiceInvocationServingCommand>();
+        observation.SourceServingVersion.Should().Be(2);
+        observation.ServingTargets.Should().ContainSingle();
+        observation.ServingTargets[0].DeploymentId.Should().Be("dep-keep");
+        dispatchPort.Calls[2].Envelope.Payload.Unpack<ServiceServingTargetsRemovedAck>()
+            .DeploymentId.Should().Be("dep-remove");
+        dispatchPort.Calls[3].Envelope.Payload.Unpack<ServiceServingTargetsRemovedAck>()
+            .DeploymentId.Should().Be("dep-remove");
+    }
+
+    [Fact]
+    public async Task ServiceServingSetManager_ShouldRejectStaleDeploymentRemovalAfterNewServingOperation()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var actorId = ServiceActorIds.ServingSet(identity);
+        var agent = CreateServingSetAgent(eventStore, actorId, dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        await agent.HandleReplaceResolvedAsync(new ReplaceResolvedServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            ActivationAttemptId = "attempt-old",
+            OperationId = "operation-old",
+            ReplyActorId = "deployment-manager",
+            Targets = { CreateTarget("dep-1", "rev-1", "actor-1", 100, "chat") },
+        });
+        await agent.HandleReplaceResolvedAsync(new ReplaceResolvedServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            ActivationAttemptId = "attempt-new",
+            OperationId = "operation-new",
+            ReplyActorId = "deployment-manager",
+            Targets = { CreateTarget("dep-1", "rev-1", "actor-1", 100, "chat") },
+        });
+
+        await agent.HandleRemoveDeploymentAsync(new RemoveDeploymentFromServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-1",
+            RevisionId = "rev-1",
+            PrimaryActorId = "actor-1",
+            ActivationAttemptId = "attempt-old",
+            ServingTargetOperationId = "operation-old",
+            ReplyActorId = "deployment-manager",
+        });
+
+        agent.State.Targets.Should().ContainSingle();
+        agent.State.Targets[0].ServingTargetOperationId.Should().Be("operation-new");
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(2);
+        dispatchPort.Calls.Should().HaveCount(4);
+    }
+
+    [Fact]
     public async Task ServiceServingSetManager_ShouldCommitResolvedOperationBeforeAckAndReAckExactDuplicate()
     {
         var eventStore = new InMemoryEventStore();
