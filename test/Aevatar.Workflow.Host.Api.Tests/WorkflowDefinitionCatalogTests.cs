@@ -269,6 +269,20 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
+    public void BuiltInYaml_ShouldExportTargetRoleField()
+    {
+        var builtInYaml = string.Join('\n',
+            WorkflowDefinitionCatalog.BuiltInDirectYaml,
+            WorkflowDefinitionCatalog.BuiltInStudioYaml,
+            WorkflowDefinitionCatalog.CreateBuiltInAutoYaml(),
+            WorkflowDefinitionCatalog.CreateBuiltInAutoReviewYaml());
+
+        builtInYaml.Should().Contain("target_role:");
+        builtInYaml.Should().NotContain("\n    role:");
+        builtInYaml.Should().NotContain("\n          role:");
+    }
+
+    [Fact]
     public void BuiltInStudioYaml_ShouldParseAsMemberProvisionStudioRoleWithToolAllowlist()
     {
         var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
