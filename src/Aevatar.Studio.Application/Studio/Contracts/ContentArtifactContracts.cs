@@ -100,7 +100,8 @@ public sealed record CreateContentArtifactRequest(
     ContentArtifactRevisionWriteRequest FirstRevision,
     ContentArtifactAccessPolicyContract? AccessPolicy = null,
     ContentArtifactRetentionPolicyContract? RetentionPolicy = null,
-    string? WorkOrderId = null);
+    string? WorkOrderId = null,
+    IReadOnlyDictionary<string, string>? Labels = null);
 
 public sealed record AppendContentArtifactRevisionRequest(
     ContentArtifactRevisionWriteRequest Revision);
@@ -171,7 +172,8 @@ public sealed record ContentArtifactCurrentStateResponse(
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
     string? TombstoneReason = null,
-    DateTimeOffset? TombstonedAtUtc = null);
+    DateTimeOffset? TombstonedAtUtc = null,
+    IReadOnlyDictionary<string, string>? Labels = null);
 
 public sealed record ContentArtifactListResponse(
     string ScopeId,
@@ -185,7 +187,38 @@ public sealed record ContentArtifactQueryRequest(
     string? Kind = null,
     string? LifecycleStatus = null,
     string? WorkOrderId = null,
-    string? RunId = null);
+    string? RunId = null,
+    string? LabelKey = null,
+    string? LabelValue = null);
+
+public sealed record SetContentArtifactPinRequest(
+    string ArtifactId,
+    long ExpectedPinVersion,
+    string MutationId);
+
+public sealed record ClearContentArtifactPinRequest(
+    long ExpectedPinVersion,
+    string MutationId);
+
+public sealed record ContentArtifactPinCurrentStateResponse(
+    string ScopeId,
+    string PinKey,
+    string? PinnedArtifactId,
+    ContentArtifactPrincipalContract? PinnedBy,
+    long PinVersion,
+    long StateVersion,
+    DateTimeOffset UpdatedAtUtc,
+    string LastMutationId,
+    string LastMutationStatus,
+    string? LastRejectionCode = null);
+
+public sealed record ContentArtifactPinAcceptedReceipt(
+    string ScopeId,
+    string PinKey,
+    string CommandId,
+    string CorrelationId,
+    string Stage,
+    DateTimeOffset? AcceptedAtUtc = null);
 
 public sealed record ContentArtifactRevisionContentResponse(
     ContentArtifactReferenceContract Reference,
@@ -221,6 +254,19 @@ public sealed class ContentArtifactIdentityConflictException : InvalidOperationE
     }
 
     public string DedupKey { get; }
+}
+
+public sealed class ContentArtifactPinNotFoundException : InvalidOperationException
+{
+    public ContentArtifactPinNotFoundException(string scopeId, string pinKey)
+        : base($"ContentArtifact pin '{pinKey}' was not found in scope '{scopeId}'.")
+    {
+        ScopeId = scopeId;
+        PinKey = pinKey;
+    }
+
+    public string ScopeId { get; }
+    public string PinKey { get; }
 }
 
 public sealed class ContentArtifactContentUnavailableException : InvalidOperationException

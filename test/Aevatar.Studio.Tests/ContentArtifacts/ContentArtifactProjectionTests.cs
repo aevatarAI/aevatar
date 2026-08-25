@@ -1,6 +1,10 @@
 using System.Security.Cryptography;
+using System.Net;
+using System.Text;
 using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -9,6 +13,7 @@ using Aevatar.GAgents.ContentArtifacts;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Projection.DependencyInjection;
+using Aevatar.Studio.Projection.Metadata;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.QueryPorts;
@@ -41,6 +46,8 @@ public sealed class ContentArtifactProjectionTests
             .Should().BeOfType<InMemoryProjectionDocumentStore<ContentArtifactCurrentStateDocument, string>>();
         provider.GetRequiredService<IProjectionDocumentWriter<ContentArtifactCurrentStateDocument>>()
             .Should().BeOfType<InMemoryProjectionDocumentStore<ContentArtifactCurrentStateDocument, string>>();
+        provider.GetRequiredService<IProjectionDocumentReader<ContentArtifactPinCurrentStateDocument, string>>()
+            .Should().BeOfType<InMemoryProjectionDocumentStore<ContentArtifactPinCurrentStateDocument, string>>();
     }
 
     [Fact]
@@ -71,6 +78,7 @@ public sealed class ContentArtifactProjectionTests
         document.OwnerPrincipalId.Should().Be("owner-1");
         document.CurrentRevisionId.Should().Be("revision-2");
         document.ConcurrencyVersion.Should().Be(3);
+        document.Labels.Should().Contain("period", "2026-08-25");
         document.ArtifactUpdatedAtUtc.ToDateTimeOffset().Should().Be(updatedAt);
         document.Revisions.Select(static revision => revision.RevisionNumber).Should().Equal(1, 2);
         document.Revisions[0].InlineContent.ToStringUtf8().Should().Be("revision one");
@@ -96,7 +104,9 @@ public sealed class ContentArtifactProjectionTests
             new ContentArtifactQueryRequest(
                 TeamId: "team-1",
                 Kind: "markdown",
-                RunId: "run-1"));
+                RunId: "run-1",
+                LabelKey: "period",
+                LabelValue: "2026-08-25"));
         var current = await queryPort.GetAsync(ScopeId, ArtifactId);
 
         list.Artifacts.Should().ContainSingle();
@@ -110,6 +120,93 @@ public sealed class ContentArtifactProjectionTests
         reader.LastQuery.Filters.Should().Contain(filter => filter.FieldPath == "team_id");
         reader.LastQuery.Filters.Should().Contain(filter => filter.FieldPath == "kind");
         reader.LastQuery.Filters.Should().Contain(filter => filter.FieldPath == "provenance_run_ids");
+        reader.LastQuery.Filters.Should().Contain(filter => filter.FieldPath == "labels.period");
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldFilterLabelsByExactKeyAndValueInMemory()
+    {
+        var store = new InMemoryProjectionDocumentStore<ContentArtifactCurrentStateDocument, string>(
+            keySelector: document => document.Id);
+        var matching = BuildListDocument("matching", "caller-1");
+        matching.Labels["period"] = "2026-08-25";
+        var wrongValue = BuildListDocument("wrong-value", "caller-1");
+        wrongValue.Labels["period"] = "2026-08-24";
+        var wrongKey = BuildListDocument("wrong-key", "caller-1");
+        wrongKey.Labels["cycle"] = "2026-08-25";
+        await store.UpsertAsync(matching);
+        await store.UpsertAsync(wrongValue);
+        await store.UpsertAsync(wrongKey);
+
+        var result = await new ProjectionContentArtifactQueryPort(store).ListAsync(
+            ScopeId,
+            "caller-1",
+            new ContentArtifactQueryRequest(LabelKey: "period", LabelValue: "2026-08-25"));
+
+        result.Artifacts.Should().ContainSingle().Which.ArtifactId.Should().Be("matching");
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldUseFlattenedElasticsearchMapAndExactLabelPath()
+    {
+        var metadata = new ContentArtifactCurrentStateDocumentMetadataProvider().Metadata;
+        var properties = metadata.Mappings["properties"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        var labels = properties["labels"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        labels.Should().Contain("type", "flattened");
+
+        var handler = new RecordingElasticsearchHandler();
+        using var store = new ElasticsearchProjectionDocumentStore<ContentArtifactCurrentStateDocument, string>(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                Endpoints = ["http://localhost:9200"],
+                AutoCreateIndex = false,
+            },
+            metadata,
+            document => document.Id,
+            httpMessageHandler: handler);
+        await new ProjectionContentArtifactQueryPort(store).ListAsync(
+            ScopeId,
+            "caller-1",
+            new ContentArtifactQueryRequest(LabelKey: "period", LabelValue: "2026-08-25"));
+
+        handler.Body.Should().Contain("\"labels.period\":\"2026-08-25\"");
+        handler.Body.Should().NotContain("labels.period.keyword");
+    }
+
+    [Fact]
+    public async Task PinCurrentState_ShouldExposeActorPinVersionAndCommittedStateVersion()
+    {
+        var observedAt = DateTimeOffset.Parse("2026-08-25T10:00:00Z");
+        var document = ContentArtifactPinCurrentStateProjector.ToDocument(
+            ContentArtifactConventions.BuildPinActorId(ScopeId, "daily-ops-report"),
+            new StateEvent { Version = 9, EventId = "event-9" },
+            new ContentArtifactPinState
+            {
+                ScopeId = ScopeId,
+                PinKey = "daily-ops-report",
+                PinnedArtifactId = ArtifactId,
+                PinnedBy = new ContentArtifactPrincipal
+                {
+                    PrincipalId = "owner-1",
+                    PrincipalKind = "user",
+                },
+                PinVersion = 3,
+                UpdatedAtUtc = Timestamp.FromDateTimeOffset(observedAt),
+                LastMutationId = "mutation-3",
+                LastMutationStatus = ContentArtifactPinMutationStatus.Succeeded,
+            },
+            observedAt);
+
+        var current = await new ProjectionContentArtifactPinQueryPort(
+            new RecordingPinDocumentReader(document)).GetAsync(ScopeId, "daily-ops-report");
+
+        current.Should().NotBeNull();
+        current!.PinnedArtifactId.Should().Be(ArtifactId);
+        current.PinVersion.Should().Be(3);
+        current.StateVersion.Should().Be(9);
+        current.PinnedBy!.PrincipalId.Should().Be("owner-1");
     }
 
     [Fact]
@@ -492,6 +589,7 @@ public sealed class ContentArtifactProjectionTests
             CreatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt.AddHours(-1)),
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt),
         };
+        state.Labels["period"] = "2026-08-25";
         state.Revisions["revision-1"] = new ContentArtifactRevision
         {
             RevisionId = "revision-1",
@@ -643,6 +741,37 @@ public sealed class ContentArtifactProjectionTests
             {
                 Items = [document],
             });
+        }
+    }
+
+    private sealed class RecordingPinDocumentReader(ContentArtifactPinCurrentStateDocument document)
+        : IProjectionDocumentReader<ContentArtifactPinCurrentStateDocument, string>
+    {
+        public Task<ContentArtifactPinCurrentStateDocument?> GetAsync(
+            string key,
+            CancellationToken ct = default) =>
+            Task.FromResult<ContentArtifactPinCurrentStateDocument?>(key == document.Id ? document : null);
+
+        public Task<ProjectionDocumentQueryResult<ContentArtifactPinCurrentStateDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private sealed class RecordingElasticsearchHandler : HttpMessageHandler
+    {
+        public string Body { get; private set; } = string.Empty;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Body = request.Content == null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"hits\":{\"hits\":[]}}", Encoding.UTF8, "application/json"),
+            };
         }
     }
 

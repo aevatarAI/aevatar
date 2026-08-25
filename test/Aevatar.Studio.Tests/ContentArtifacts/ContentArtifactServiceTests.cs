@@ -3,6 +3,7 @@ using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgents.ContentArtifacts;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
@@ -30,6 +31,7 @@ public sealed class ContentArtifactServiceTests
         commandPort.CreateRequest.FirstRevision.Provenance.ScopeId.Should().Be("scope-1");
         commandPort.CreateRequest.FirstRevision.Provenance.TeamId.Should().Be("team-1");
         commandPort.CreateRequest.FirstRevision.ContentHash.Should().Be(ContentHash("report"));
+        commandPort.CreateRequest.Labels.Should().Contain("period", "2026-08-25");
     }
 
     [Fact]
@@ -70,6 +72,64 @@ public sealed class ContentArtifactServiceTests
         commandPort.CreateRequest.Should().NotBeNull();
         commandPort.CreateRequest!.TeamId.Should().BeNull();
         commandPort.CreateRequest.FirstRevision.Provenance.TeamId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectInvalidLabels()
+    {
+        var invalidLabels = new IReadOnlyDictionary<string, string>[]
+        {
+            Enumerable.Range(0, ContentArtifactConventions.MaxLabelCount + 1)
+                .ToDictionary(index => $"key-{index}", _ => "value"),
+            new Dictionary<string, string> { ["Uppercase"] = "value" },
+            new Dictionary<string, string> { ["aevatar.period"] = "value" },
+            new Dictionary<string, string> { ["period"] = "line one\nline two" },
+            new Dictionary<string, string>
+            {
+                ["period"] = new string('x', ContentArtifactConventions.MaxLabelValueCharacters + 1),
+            },
+        };
+
+        foreach (var labels in invalidLabels)
+        {
+            var service = CreateService(commandPort: new RecordingCommandPort());
+            var act = () => service.CreateAsync(
+                "scope-1",
+                CreateRequest() with { Labels = labels },
+                Principal("owner-1"));
+            await act.Should().ThrowAsync<ArgumentException>();
+        }
+    }
+
+    [Theory]
+    [InlineData("period", null)]
+    [InlineData(null, "2026-08-25")]
+    public async Task ListAsync_ShouldRejectHalfSpecifiedLabelFilter(string? labelKey, string? labelValue)
+    {
+        var service = CreateService();
+
+        var act = () => service.ListAsync(
+            "scope-1",
+            new ContentArtifactQueryRequest(LabelKey: labelKey, LabelValue: labelValue),
+            Principal("owner-1"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*labelKey and labelValue*provided together*");
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldNormalizePairedLabelFilter()
+    {
+        var queryPort = new RecordingQueryPort(BuildCurrentState());
+        var service = CreateService(queryPort: queryPort);
+
+        await service.ListAsync(
+            "scope-1",
+            new ContentArtifactQueryRequest(LabelKey: " period ", LabelValue: " 2026-08-25 "),
+            Principal("owner-1"));
+
+        queryPort.LastListQuery!.LabelKey.Should().Be("period");
+        queryPort.LastListQuery.LabelValue.Should().Be("2026-08-25");
     }
 
     [Fact]
@@ -352,7 +412,8 @@ public sealed class ContentArtifactServiceTests
             FirstRevision: RevisionWrite("report", "revision-1-dedup"),
             AccessPolicy: new([" reader-1 "], [" writer-1 "]),
             RetentionPolicy: new("retain-365-days"),
-            WorkOrderId: "work-order-1");
+            WorkOrderId: "work-order-1",
+            Labels: new Dictionary<string, string> { ["period"] = "2026-08-25" });
 
     private static ContentArtifactRevisionWriteRequest RevisionWrite(
         string content,
@@ -584,11 +645,15 @@ public sealed class ContentArtifactServiceTests
     private sealed class RecordingQueryPort(ContentArtifactCurrentStateResponse? current) : IContentArtifactQueryPort
     {
         public int ContentReadCount { get; private set; }
+        public ContentArtifactQueryRequest? LastListQuery { get; private set; }
 
-        public Task<ContentArtifactListResponse> ListAsync(string scopeId, string ownerPrincipalId, ContentArtifactQueryRequest query, CancellationToken ct = default) =>
-            Task.FromResult(new ContentArtifactListResponse(
+        public Task<ContentArtifactListResponse> ListAsync(string scopeId, string ownerPrincipalId, ContentArtifactQueryRequest query, CancellationToken ct = default)
+        {
+            LastListQuery = query;
+            return Task.FromResult(new ContentArtifactListResponse(
                 scopeId,
                 current == null ? [] : [current]));
+        }
 
         public Task<ContentArtifactCurrentStateResponse?> GetAsync(string scopeId, string artifactId, CancellationToken ct = default) =>
             Task.FromResult<ContentArtifactCurrentStateResponse?>(current);

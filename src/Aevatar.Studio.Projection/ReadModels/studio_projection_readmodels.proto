@@ -87,6 +87,29 @@ message ContentArtifactCurrentStateDocument {
   google.protobuf.Timestamp artifact_updated_at_utc = 40;
   string tombstone_reason = 41;
   google.protobuf.Timestamp tombstoned_at_utc = 42;
+  map<string, string> labels = 43;
+}
+
+// Actor-scoped current-state replica for one scope + pin_key authority.
+// pin_version advances only for successful pointer mutations; state_version
+// also exposes persisted rejection observations from the authority actor.
+message ContentArtifactPinCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string scope_id = 20;
+  string pin_key = 21;
+  string pinned_artifact_id = 22;
+  string pinned_by_principal_id = 23;
+  string pinned_by_principal_kind = 24;
+  int64 pin_version = 25;
+  google.protobuf.Timestamp pin_updated_at_utc = 26;
+  string last_mutation_id = 27;
+  string last_mutation_status = 28;
+  string last_rejection_code = 29;
 }
 
 message WorkOrderArtifactReferenceDocument {

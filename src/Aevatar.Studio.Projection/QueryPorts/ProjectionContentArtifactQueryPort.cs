@@ -43,6 +43,8 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
         AddOptionalEqual(filters, "lifecycle_status", query.LifecycleStatus);
         AddOptionalEqual(filters, "work_order_id", query.WorkOrderId);
         AddOptionalEqual(filters, "provenance_run_ids", query.RunId);
+        if (query.LabelKey != null && query.LabelValue != null)
+            filters.Add(Equal($"labels.{query.LabelKey}", query.LabelValue));
         var pageSize = query.PageSize is > 0 and <= MaxPageSize
             ? query.PageSize.Value
             : MaxPageSize;
@@ -228,7 +230,8 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
             document.CreatedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             document.ArtifactUpdatedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             NormalizeOptional(document.TombstoneReason),
-            document.TombstonedAtUtc?.ToDateTimeOffset());
+            document.TombstonedAtUtc?.ToDateTimeOffset(),
+            new Dictionary<string, string>(document.Labels, StringComparer.Ordinal));
 
     private static void EnsureReadAuthorized(
         ContentArtifactCurrentStateDocument document,

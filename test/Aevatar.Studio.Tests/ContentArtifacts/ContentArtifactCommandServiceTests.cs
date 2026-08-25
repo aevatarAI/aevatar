@@ -38,6 +38,7 @@ public sealed class ContentArtifactCommandServiceTests
         command.FirstRevision.RevisionId.Should().Be(ContentArtifactConventions.BuildRevisionId(artifactId, 1));
         command.FirstRevision.RevisionNumber.Should().Be(1);
         command.FirstRevision.Provenance.ScopeId.Should().Be(ScopeId);
+        command.Labels.Should().Contain("period", "2026-08-25");
         dispatchPort.Envelopes.Select(static envelope => envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId)
             .Should().OnlyContain(id => id == first.CommandId);
     }
@@ -220,6 +221,42 @@ public sealed class ContentArtifactCommandServiceTests
         tombstone.ExpectedConcurrencyVersion.Should().Be(11);
     }
 
+    [Fact]
+    public async Task PinCommands_ShouldDispatchToCanonicalScopeAndPinKeyActor()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ActorDispatchContentArtifactPinCommandService(
+            bootstrap,
+            CreateCommandDispatch(dispatchPort));
+        var requester = new ContentArtifactPrincipalContract("owner-1", "user");
+
+        var set = await service.SetAsync(
+            ScopeId,
+            "daily-ops-report",
+            new SetContentArtifactPinRequest("artifact-1", 0, "mutation-1"),
+            requester);
+        var clear = await service.ClearAsync(
+            ScopeId,
+            "daily-ops-report",
+            new ClearContentArtifactPinRequest(1, "mutation-2"),
+            requester);
+
+        bootstrap.ActorIds.Should().OnlyContain(actorId => actorId ==
+            ContentArtifactConventions.BuildPinActorId(ScopeId, "daily-ops-report"));
+        set.Stage.Should().Be(ContentArtifactCommandStageNames.DispatchAccepted);
+        clear.Stage.Should().Be(ContentArtifactCommandStageNames.DispatchAccepted);
+        var setCommand = dispatchPort.Envelopes[0].Payload!
+            .Unpack<Aevatar.ContentArtifacts.Abstractions.SetContentArtifactPinCommand>();
+        setCommand.ArtifactId.Should().Be("artifact-1");
+        setCommand.ExpectedPinVersion.Should().Be(0);
+        setCommand.MutationId.Should().Be("mutation-1");
+        var clearCommand = dispatchPort.Envelopes[1].Payload!
+            .Unpack<Aevatar.ContentArtifacts.Abstractions.ClearContentArtifactPinCommand>();
+        clearCommand.ExpectedPinVersion.Should().Be(1);
+        clearCommand.MutationId.Should().Be("mutation-2");
+    }
+
     [Theory]
     [InlineData("text", Aevatar.ContentArtifacts.Abstractions.ContentArtifactKind.Text)]
     [InlineData("other_content", Aevatar.ContentArtifacts.Abstractions.ContentArtifactKind.OtherContent)]
@@ -288,7 +325,8 @@ public sealed class ContentArtifactCommandServiceTests
             Title: "Quarterly report",
             Classification: "internal",
             DedupKey: "report-dedup",
-            FirstRevision: RevisionWrite("report", "revision-1-dedup"));
+            FirstRevision: RevisionWrite("report", "revision-1-dedup"),
+            Labels: new Dictionary<string, string> { ["period"] = "2026-08-25" });
 
     private static ContentArtifactRevisionWriteRequest RevisionWrite(
         string content,

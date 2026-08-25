@@ -37,6 +37,7 @@ public sealed class ContentArtifactGAgentTests
         agent.State.TeamId.Should().Be("team-1");
         agent.State.WorkOrderId.Should().Be("work-order-1");
         agent.State.AccessPolicy.Owner.PrincipalId.Should().Be("owner-1");
+        agent.State.Labels.Should().Contain("period", "2026-q3");
         agent.State.ConcurrencyVersion.Should().Be(1);
         agent.State.LifecycleStatus.Should().Be(ContentArtifactLifecycleStatus.Active);
         agent.State.CurrentRevisionId.Should().Be(ContentArtifactConventions.BuildRevisionId(ArtifactId, 1));
@@ -89,6 +90,22 @@ public sealed class ContentArtifactGAgentTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*logical identity already exists with a different request*");
         agent.State.Title.Should().Be("Quarterly report");
+    }
+
+    [Fact]
+    public async Task DuplicateCreate_ShouldTreatLabelsAsImmutableCreationFacts()
+    {
+        var agent = await CreateAgentAsync();
+        var command = BuildCreate("initial report");
+        await agent.HandleCreateAsync(command);
+        var conflicting = command.Clone();
+        conflicting.Labels["period"] = "2026-q4";
+
+        var act = () => agent.HandleCreateAsync(conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*different request*");
+        agent.State.Labels.Should().Contain("period", "2026-q3");
     }
 
     [Fact]
@@ -280,6 +297,7 @@ public sealed class ContentArtifactGAgentTests
         var agent = await CreateAgentAsync();
         await agent.HandleCreateAsync(BuildCreate("revision one"));
         var first = agent.State.Revisions[agent.State.CurrentRevisionId].Clone();
+        var labels = agent.State.Labels.ToDictionary();
         var second = BuildRevision(2, "revision two", "revision-2-dedup", first.RevisionId);
 
         await agent.HandleAppendRevisionAsync(new AppendContentArtifactRevision
@@ -304,6 +322,7 @@ public sealed class ContentArtifactGAgentTests
 
         agent.State.CurrentRevisionId.Should().Be(second.RevisionId);
         agent.State.ConcurrencyVersion.Should().Be(3);
+        agent.State.Labels.Should().BeEquivalentTo(labels);
 
         var stale = () => agent.HandleAdvanceCurrentRevisionAsync(new AdvanceContentArtifactCurrentRevision
         {
@@ -545,6 +564,7 @@ public sealed class ContentArtifactGAgentTests
             },
             WorkOrderId = "work-order-1",
             ExpectedConcurrencyVersion = 0,
+            Labels = { ["period"] = "2026-q3" },
         };
         command.FirstRevision = BuildRevision(1, content, "revision-1-dedup");
         return command;

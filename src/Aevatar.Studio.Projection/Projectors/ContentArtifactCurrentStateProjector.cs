@@ -90,6 +90,7 @@ public sealed class ContentArtifactCurrentStateProjector
             document.ReaderPrincipalIds.Add(state.AccessPolicy.ReaderPrincipalIds);
             document.WriterPrincipalIds.Add(state.AccessPolicy.WriterPrincipalIds);
         }
+        document.Labels.Add(state.Labels);
 
         foreach (var revision in state.Revisions.Values.OrderBy(static item => item.RevisionNumber))
         {

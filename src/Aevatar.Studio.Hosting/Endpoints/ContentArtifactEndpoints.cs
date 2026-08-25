@@ -26,6 +26,9 @@ internal static class ContentArtifactEndpoints
         app.MapPost("/api/scopes/{scopeId}/content-artifacts/{artifactId}/revisions/{revisionId}:expire", HandleExpireRevisionAsync).WithTags("ContentArtifacts");
         app.MapPost("/api/scopes/{scopeId}/content-artifacts/{artifactId}:tombstone", HandleTombstoneAsync).WithTags("ContentArtifacts");
         app.MapPost("/api/scopes/{scopeId}/content-artifacts:attach-to-run", HandleAttachToRunAsync).WithTags("ContentArtifacts");
+        app.MapGet("/api/scopes/{scopeId}/content-artifact-pins/{pinKey}", HandleGetPinAsync).WithTags("ContentArtifacts");
+        app.MapPut("/api/scopes/{scopeId}/content-artifact-pins/{pinKey}", HandleSetPinAsync).WithTags("ContentArtifacts");
+        app.MapDelete("/api/scopes/{scopeId}/content-artifact-pins/{pinKey}", HandleClearPinAsync).WithTags("ContentArtifacts");
     }
 
     internal static async Task<IResult> HandleCreateAsync(
@@ -67,6 +70,8 @@ internal static class ContentArtifactEndpoints
         string? lifecycleStatus,
         string? workOrderId,
         string? runId,
+        string? labelKey,
+        string? labelValue,
         CancellationToken ct)
     {
         if (!TryAuthorize(http, scopeId, out var principal, out var denied))
@@ -82,7 +87,9 @@ internal static class ContentArtifactEndpoints
                     kind,
                     lifecycleStatus,
                     workOrderId,
-                    runId),
+                    runId,
+                    labelKey,
+                    labelValue),
                 principal,
                 ct));
         }
@@ -255,6 +262,82 @@ internal static class ContentArtifactEndpoints
         }
     }
 
+    internal static async Task<IResult> HandleGetPinAsync(
+        HttpContext http,
+        string scopeId,
+        string pinKey,
+        [FromServices] IContentArtifactPinService service,
+        CancellationToken ct)
+    {
+        if (!TryAuthorize(http, scopeId, out _, out var denied))
+            return denied;
+        try
+        {
+            return Results.Ok(await service.GetAsync(scopeId, pinKey, ct));
+        }
+        catch (ContentArtifactPinNotFoundException ex)
+        {
+            return PinNotFound(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_CONTENT_ARTIFACT_PIN_QUERY", ex.Message);
+        }
+    }
+
+    // Implement (issue #3527):
+    //   Behavior: pin mutations expose accepted dispatch receipts at the scope + pin_key resource.
+    //   Why this shape: HTTP acknowledges dispatch while committed state remains observable via GET.
+    internal static async Task<IResult> HandleSetPinAsync(
+        HttpContext http,
+        string scopeId,
+        string pinKey,
+        SetContentArtifactPinRequest request,
+        [FromServices] IContentArtifactPinService service,
+        CancellationToken ct)
+    {
+        if (!TryAuthorize(http, scopeId, out var principal, out var denied))
+            return denied;
+        try
+        {
+            var receipt = await service.SetAsync(scopeId, pinKey, request, principal, ct);
+            return Results.Accepted(BuildPinLocation(scopeId, pinKey), receipt);
+        }
+        catch (ContentArtifactNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_CONTENT_ARTIFACT_PIN_COMMAND", ex.Message);
+        }
+    }
+
+    internal static async Task<IResult> HandleClearPinAsync(
+        HttpContext http,
+        string scopeId,
+        string pinKey,
+        ClearContentArtifactPinRequest request,
+        [FromServices] IContentArtifactPinService service,
+        CancellationToken ct)
+    {
+        if (!TryAuthorize(http, scopeId, out var principal, out var denied))
+            return denied;
+        try
+        {
+            var receipt = await service.ClearAsync(scopeId, pinKey, request, principal, ct);
+            return Results.Accepted(BuildPinLocation(scopeId, pinKey), receipt);
+        }
+        catch (ContentArtifactPinNotFoundException ex)
+        {
+            return PinNotFound(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_CONTENT_ARTIFACT_PIN_COMMAND", ex.Message);
+        }
+    }
+
     private static async Task<IResult> HandleReadAsync<T>(
         HttpContext http,
         string scopeId,
@@ -345,9 +428,15 @@ internal static class ContentArtifactEndpoints
     private static string BuildLocation(string scopeId, string artifactId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId)}/content-artifacts/{Uri.EscapeDataString(artifactId)}";
 
+    private static string BuildPinLocation(string scopeId, string pinKey) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/content-artifact-pins/{Uri.EscapeDataString(pinKey)}";
+
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });
 
     private static IResult NotFound(string message) =>
         Results.NotFound(new { code = "CONTENT_ARTIFACT_NOT_FOUND", message });
+
+    private static IResult PinNotFound(string message) =>
+        Results.NotFound(new { code = "CONTENT_ARTIFACT_PIN_NOT_FOUND", message });
 }

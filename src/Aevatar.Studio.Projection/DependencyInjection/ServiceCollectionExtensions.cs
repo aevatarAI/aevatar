@@ -136,6 +136,10 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
+            ContentArtifactPinCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
             WorkOrderCurrentStateProjector>();
 
         services.AddCurrentStateProjectionMaterializer<
@@ -249,6 +253,10 @@ public static class ServiceCollectionExtensions
             ContentArtifactCurrentStateDocumentMetadataProvider>();
 
         services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ContentArtifactPinCurrentStateDocument>,
+            ContentArtifactPinCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<WorkOrderCurrentStateDocument>,
             WorkOrderCurrentStateDocumentMetadataProvider>();
 
@@ -293,6 +301,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IUserMemoryQueryPort, ProjectionUserMemoryQueryPort>();
         services.TryAddSingleton<IStudioMemberQueryPort, ProjectionStudioMemberQueryPort>();
         services.TryAddSingleton<IContentArtifactQueryPort, ProjectionContentArtifactQueryPort>();
+        services.TryAddSingleton<IContentArtifactPinQueryPort, ProjectionContentArtifactPinQueryPort>();
         services.TryAddSingleton<IWorkOrderQueryPort, ProjectionWorkOrderQueryPort>();
         services.TryAddSingleton<IWorkflowDeliveryQueryPort, ProjectionWorkflowDeliveryQueryPort>();
         services.TryAddSingleton<IStudioMemberBindingRunQueryPort, ProjectionStudioMemberBindingRunQueryPort>();
@@ -317,6 +326,7 @@ public static class ServiceCollectionExtensions
             IStudioMemberWorkflowScheduleProvisioningPort,
             StudioMemberWorkflowScheduleProvisioningExecutionPort>();
         services.TryAddSingleton<IContentArtifactCommandPort, ActorDispatchContentArtifactCommandService>();
+        services.TryAddSingleton<IContentArtifactPinCommandPort, ActorDispatchContentArtifactPinCommandService>();
         services.TryAddSingleton<IWorkOrderCommandPort, ActorDispatchWorkOrderCommandService>();
         services.TryAddSingleton<
             IWorkflowDeliveryCommandPort,

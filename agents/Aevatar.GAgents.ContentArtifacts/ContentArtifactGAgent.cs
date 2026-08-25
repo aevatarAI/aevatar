@@ -207,6 +207,7 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
         if (command.Kind == ContentArtifactKind.Unspecified)
             throw new InvalidOperationException("kind is required.");
         ContentArtifactConventions.NormalizeRequired(command.Title, "title");
+        ContentArtifactConventions.ValidateCanonicalLabels(command.Labels);
         ArgumentNullException.ThrowIfNull(command.AccessPolicy);
         ValidatePrincipal(command.AccessPolicy.Owner, "access_policy.owner");
         ArgumentNullException.ThrowIfNull(command.FirstRevision);
@@ -328,6 +329,7 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
             UpdatedAtUtc = createdAt.Clone(),
             CreationRequestHash = HashCreateRequest(request),
         };
+        next.Labels.Add(request.Labels);
         next.Revisions.Add(revision.RevisionId, revision);
         return next;
     }

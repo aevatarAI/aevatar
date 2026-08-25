@@ -91,6 +91,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                 IStudioWorkspaceVersionRegressionRepairService,
                 StudioWorkspaceVersionRegressionRepairService>();
             RegisterElasticsearch<ContentArtifactCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<ContentArtifactPinCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<WorkOrderCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<WorkflowDeliveryCurrentStateDocument>(services, configuration);
         }
@@ -125,6 +126,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<StudioTeamCurrentStateDocument>(services);
             RegisterInMemory<StudioWorkspaceCurrentStateDocument>(services);
             RegisterInMemory<ContentArtifactCurrentStateDocument>(services);
+            RegisterInMemory<ContentArtifactPinCurrentStateDocument>(services);
             RegisterInMemory<WorkOrderCurrentStateDocument>(services);
             RegisterInMemory<WorkflowDeliveryCurrentStateDocument>(services);
         }
@@ -208,6 +210,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ContentArtifactCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ContentArtifactPinCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkOrderCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowDeliveryCurrentStateDocument>(services, providerKind);
     }
@@ -261,6 +264,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             StudioTeamState.Descriptor,
             StudioWorkspaceState.Descriptor,
             ContentArtifactState.Descriptor,
+            ContentArtifactPinState.Descriptor,
             WorkOrderState.Descriptor,
             WorkflowDeliveryState.Descriptor);
     }

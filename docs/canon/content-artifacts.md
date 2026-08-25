@@ -37,6 +37,42 @@ present, creation validates that the Team exists and is active in the same
 Scope. A scope-owned artifact without a Team stores no invented Team identity.
 Team ownership records resource context; it grants no implicit artifact access.
 
+## Immutable Labels
+
+An artifact may declare up to eight labels at creation. Labels are immutable
+partition facts, not an open metadata bag: keys must match
+`[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?`, the `aevatar.` prefix is reserved,
+and values must be non-empty single-line strings of at most 256 characters.
+They participate in the canonical creation request hash. Append, pointer
+advance, redaction, expiry, and tombstone never modify them; changing a
+partition requires creating an artifact under a new dedup key.
+
+List queries may supply exactly one `labelKey + labelValue` pair for exact
+equality. The projection store applies `labels.<key> == value` together with
+Scope, ACL, and other filters before cursor paging. Range, full-text, and
+multi-label predicates are outside this surface.
+
+## Scope Pin Pointers
+
+`ContentArtifactPinGAgent` is the authority for one mutable pointer identified
+by `scopeId + pinKey`. A pin key follows the label-key rules and names a
+consumer-defined artifact family such as `daily-ops-report`; it is not the
+four-value ContentArtifact kind. Because every mutation for the same key reaches
+one actor, set atomically replaces the prior artifact and at most one artifact
+is pinned for that key.
+
+Set requires an ACTIVE target in the same Scope owned by the caller. Clear is
+authorized from the committed `pinnedBy` fact so a stale or unavailable target
+does not prevent explicit cleanup. The actor owns `pinVersion` CAS and
+`mutationId` idempotency. Successful set and clear advance `pinVersion`; a CAS
+conflict is persisted as a rejected mutation without changing the pointer or
+`pinVersion`. The actor current-state read model exposes both authoritative
+`pinVersion` and committed projection `stateVersion`.
+
+Artifact lifecycle does not cascade into the pin actor. If a pinned artifact is
+later tombstoned or otherwise unavailable, consumers report
+`pinned_target_unavailable` and explicitly clear or replace the pointer.
+
 ## Immutable Revisions And CAS
 
 Creation commits revision 1 and makes it current. Append assigns the next
@@ -151,6 +187,11 @@ redact, expire, or tombstone; and attach exact references to a Service Run.
 Mutation responses are `202 Accepted` dispatch receipts. Clients observe
 committed state through the current-state query surface and its authoritative
 `stateVersion`; no endpoint implies query freshness from command acceptance.
+
+The list endpoint accepts an optional paired `labelKey` and `labelValue`.
+Pin pointers use `/api/scopes/{scopeId}/content-artifact-pins/{pinKey}` with
+GET, PUT, and DELETE; PUT and DELETE return the same accepted-dispatch semantics
+as artifact mutations.
 
 Artifact absence and artifact-level ACL denial both return HTTP 404 on reads,
 mutations, and Run attachment. A missing revision is also 404. The shared
