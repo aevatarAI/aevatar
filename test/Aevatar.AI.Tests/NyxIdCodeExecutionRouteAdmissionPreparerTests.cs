@@ -121,6 +121,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         result.Verified.Should().BeFalse();
         result.FailureKind.Should().Be(NyxIdCodeExecutionRouteRepairFailureKind.MutationRejected);
         result.HttpStatus.Should().Be(422);
+        result.MutationDefinitivelyRejected.Should().BeTrue();
         handler.Requests.Select(static request => request.Method).Should().Equal(
             HttpMethod.Get,
             HttpMethod.Get,
@@ -219,7 +220,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
     }
 
     [Fact]
-    public async Task PrepareAsync_PersonalRouteCreationRejected_SurfacesFailureKindAndHttpStatus()
+    public async Task PrepareAsync_PersonalRouteCreationRejected_SurfacesDefinitiveRejection()
     {
         var handler = new SequenceHandler(
             AutoConnectedInventory(),
@@ -239,13 +240,46 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         var exception = await act.Should()
             .ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
         var blocker = exception.Which.Readiness.Blockers.Should().ContainSingle().Which;
-        blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED");
+        blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_REPAIR_REJECTED");
         blocker.SafeMessage.Should().Be(
-            "The platform code execution route repair could not be verified. failureKind=MutationRejected httpStatus=400");
+            "NyxID rejected the platform code route repair. failureKind=MutationRejected " +
+            "httpStatus=400 The shared route contract is owner-granted: it requires " +
+            "forward_access_token=true, inject_delegation_token=true, and a delegation_token_scope " +
+            "containing proxy:* and sandbox:execute.");
+        var remediation = exception.Which.Readiness.Remediations.Should().ContainSingle().Which;
+        remediation.ActionKind.Should().Be(ExternalCapabilityRemediationActionKind.RequestAccess);
     }
 
     [Fact]
-    public async Task PrepareAsync_RouteMutationRejected_SurfacesFailureKindAndHttpStatus()
+    public async Task PrepareAsync_PersonalRouteCreationFailsTransiently_KeepsRetryableRepairBlocker()
+    {
+        var handler = new SequenceHandler(
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventory(),
+            new SequenceResponse(
+                HttpStatusCode.ServiceUnavailable,
+                """{"error":"upstream unavailable"}"""),
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventory());
+        var preparer = CreatePreparer(handler);
+
+        var act = () => preparer.PrepareAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        var exception = await act.Should()
+            .ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        var blocker = exception.Which.Readiness.Blockers.Should().ContainSingle().Which;
+        blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED");
+        blocker.SafeMessage.Should().Be(
+            "The platform code execution route repair could not be verified. failureKind=MutationRejected httpStatus=503");
+        var remediation = exception.Which.Readiness.Remediations.Should().ContainSingle().Which;
+        remediation.ActionKind.Should().Be(ExternalCapabilityRemediationActionKind.RefreshSource);
+    }
+
+    [Fact]
+    public async Task PrepareAsync_RouteMutationRejected_SurfacesDefinitiveRejection()
     {
         var handler = new SequenceHandler(
             Inventory("personal", false, true, "proxy:*"),
@@ -263,9 +297,14 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         var exception = await act.Should()
             .ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
         var blocker = exception.Which.Readiness.Blockers.Should().ContainSingle().Which;
-        blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED");
+        blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_REPAIR_REJECTED");
         blocker.SafeMessage.Should().Be(
-            "The platform code execution route repair could not be verified. failureKind=MutationRejected httpStatus=403");
+            "NyxID rejected the platform code route repair. failureKind=MutationRejected " +
+            "httpStatus=403 The shared route contract is owner-granted: it requires " +
+            "forward_access_token=true, inject_delegation_token=true, and a delegation_token_scope " +
+            "containing proxy:* and sandbox:execute.");
+        var remediation = exception.Which.Readiness.Remediations.Should().ContainSingle().Which;
+        remediation.ActionKind.Should().Be(ExternalCapabilityRemediationActionKind.RequestAccess);
     }
 
     [Fact]

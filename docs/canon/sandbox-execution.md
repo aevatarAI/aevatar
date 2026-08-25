@@ -103,6 +103,20 @@ NyxID UserService updates currently provide no compare-and-swap revision, so thi
 best-effort convergence: Aevatar sends the minimal field patch, performs fresh readback, fails
 closed on final drift, and does not claim that a concurrent scope edit cannot be overwritten.
 
+A platform auto-connected route (`auto_connected=true`, read only from NyxID `/keys` by exact ID;
+`/user-services` does not carry the field) is never mutated: NyxID owns its configuration and
+keeps it reconciled with the service's catalog identity. When the only canonical candidate is
+such a route and it misses the contract, convergence instead creates the caller's personal alias
+(`chrono-sandbox-aevatar`) with the full contract, a readable label, and the platform route's node
+binding when NyxID reports one; a conflict response means a concurrent create and admission
+re-reads instead of failing. Repair outcomes are classified, not collapsed: a definitive NyxID
+client rejection (4xx other than request-timeout or rate-limit) admits with
+`CODE_EXECUTION_ROUTE_REPAIR_REJECTED` and a request-access remediation, because retrying the
+identical repair cannot succeed — the contract must be granted by the route owner, which for the
+shared platform route means the operator updating the NyxID catalog identity that NyxID
+propagates to existing routes. Transport failures, upstream 5xx, and readback drift stay
+`CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED` with a retry remediation.
+
 Managed `codex_exec` selects the same exact `chrono-sandbox` UserService ID but calls
 `/codex/execute` with its own request credential and eligibility contract. The UserService route
 configuration is shared: managed execution requires delegation containing `proxy:*`, while

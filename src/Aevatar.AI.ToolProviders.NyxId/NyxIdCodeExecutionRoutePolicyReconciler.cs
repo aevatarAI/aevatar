@@ -19,7 +19,18 @@ public sealed record NyxIdCodeExecutionRouteReconciliation(
     bool Verified,
     NyxIdCodeExecutionRouteRepairFailureKind FailureKind =
         NyxIdCodeExecutionRouteRepairFailureKind.None,
-    int HttpStatus = 0);
+    int HttpStatus = 0)
+{
+    /// <summary>
+    /// NyxID rejected the repair mutation with a definitive client error, so retrying the
+    /// identical repair cannot succeed; the route contract has to be granted by its owner.
+    /// Request-timeout and rate-limit statuses stay retryable.
+    /// </summary>
+    public bool MutationDefinitivelyRejected =>
+        FailureKind == NyxIdCodeExecutionRouteRepairFailureKind.MutationRejected &&
+        HttpStatus is >= 400 and < 500 &&
+        HttpStatus is not ((int)HttpStatusCode.RequestTimeout or (int)HttpStatusCode.TooManyRequests);
+}
 
 /// <summary>
 /// Declares the platform code route contract and selects its exact caller-owned UserService. The
