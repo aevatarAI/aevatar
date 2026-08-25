@@ -847,6 +847,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               cache, el:createNode, esc:escapeHtml,
               document:{createDocumentFragment:()=>createNode('fragment')},
               KIND:{StepFinished:{label:'步骤完成'}}, kindIcon:()=> '[event]',
+              STATUS_LABEL:{completed:'已完成',failed:'失败'},
               STEPTYPE_LABEL:{tool:'工具'}, REPLY_KINDS:new Set(['Message','TextMessage']),
               state:{expanded:new Set()}, clockUTC:value=>String(value).slice(11,19),
               renderReplyBubble:()=>createNode('reply'), renderToolCall:()=>createNode('tool'),
@@ -860,6 +861,8 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             vm.runInContext(`
               ${functionSource('dataLookup', 'parseT')}
               ${html.slice(evidenceStart, evidenceEnd)}
+              ${functionSource('renderDiagnosticStrip', 'renderDiagnosticItem')}
+              ${functionSource('renderDiagnosticItem', 'renderDiagnostics')}
               ${functionSource('renderSteps', 'failureLogLines')}
               ${functionSource('failureLogLines', 'renderLogs')}
               ${functionSource('renderTimeline', 'renderToolCall')}
@@ -934,7 +937,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             const evidence = context.collectFailureEvidence(detail);
             assert.equal(context.evidenceHasValue(false), true, 'false is a real observed value');
             assert.equal(context.evidenceHasValue(0), true, 'zero is a real observed value');
-            assert.equal(evidence.sectionIssues.length, 2);
+            assert.equal(Object.hasOwn(evidence, 'sectionIssues'), false, 'section availability is not failure evidence');
             assert.equal(evidence.failedSteps.length, 1);
             assert.equal(evidence.retryWaitingSteps.length, 1);
             assert.equal(context.isFailedStep(detail.steps[1]), false, 'waiting retry is not a current failed step');
@@ -956,6 +959,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(payload.compilationError, detail.compilationError);
             assert.equal(payload.activityFirstFailure.message, 'activity <iframe>failure</iframe>');
             assert.equal(payload.sections.steps.reason, 'stale <b>steps</b>');
+            assert.equal(payload.sectionIssues.length, 2, 'section diagnostics remain in the issue payload');
             assert.equal(payload.recoveryCapability.retryFailedStep.unavailableReason, 'fix <a>access</a>');
             assert.equal(payload.failedOperations[0].error, 'operation <object>failed</object>');
             assert.equal(payload.failedOperations[0].resultJson, '{"stderr":"<stderr>tail</stderr>"}');
@@ -987,7 +991,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
 
             const logs = context.failureLogLines(detail).join('\n');
             for (const expected of [
-              'COMPILATION ERROR', 'ACTIVITY FIRST FAILURE', 'SECTION steps', 'FAILED OPERATION',
+              'COMPILATION ERROR', 'ACTIVITY FIRST FAILURE', 'FAILED OPERATION',
               'worker-alpha', 'completionAnnotations', 'STEP FAILURE OUTPUT [normalize]',
               'STEP FAILURE OUTPUT TRUNCATED [normalize]', 'STEP NESTED EVIDENCE TRUNCATED [normalize]',
               'fileItemResults.results (collection)', 'fileItemResults.results[0].output', 'voteAgreementDecision.reason',
@@ -995,6 +999,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               'email_retry', 'recipientMode', '源结果总数未知，当前保留 1 条',
               'TIMELINE ERROR', 'RECOVERY CAPABILITY'
             ]) assert.ok(logs.includes(expected), 'logs must retain ' + expected);
+            assert.ok(!logs.includes('SECTION steps'), 'section diagnostics are not failure log lines');
 
             const panelText = treeText(context.renderFailureEvidence(detail));
             for (const expected of [
@@ -1011,6 +1016,28 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             assert.ok(panelText.includes('当前保留 1/45 条首尾样本'));
             assert.ok(panelText.includes('源结果总数未知，当前保留 1 条首尾样本'));
             assert.ok(!panelText.includes('<script>syntax failure</script>'));
+
+            const completedWithSectionWarning = {
+              summary:{runId:'run-completed',scopeId:'scope-alpha',workflowName:'workflow-alpha',status:'completed',stateVersion:10},
+              reportVersion:'3.1', compilationError:'', finalError:'',
+              sections:{executionPath:{versionStatus:'unavailable',detailStateVersion:10,sourceStateVersion:0,reason:'Execution path graph source version is unavailable.'}},
+              diagnostics:[{severity:'warning',code:'section_unavailable',message:'Execution path graph source version is unavailable.',source:'observatory'}],
+              operations:[],steps:[],timeline:[]
+            };
+            const completedEvidence = context.collectFailureEvidence(completedWithSectionWarning);
+            assert.equal(context.failureEvidenceCount(completedEvidence), 0);
+            assert.equal(treeText(context.renderFailureEvidence(completedWithSectionWarning)), '');
+            const completedPayload = JSON.parse(context.issuePayload(completedWithSectionWarning));
+            assert.equal(completedPayload.sectionIssues.length, 1);
+            assert.equal(completedPayload.diagnostics[0].code, 'section_unavailable');
+            const warningStrip = context.renderDiagnosticStrip(completedWithSectionWarning);
+            assert.ok(warningStrip.attrs.class.includes('has-warning'));
+            assert.ok(!warningStrip.attrs.class.includes('has-error'));
+            assert.equal(warningStrip.attrs['aria-label'], '运行警告');
+            const warningText = treeText(warningStrip);
+            assert.ok(warningText.includes('运行警告'));
+            assert.ok(warningText.includes('section_unavailable'));
+            assert.ok(!warningText.includes('已捕获失败证据'));
 
             const oversized = label => label + '_HEAD\n' + 'x'.repeat(9000) + label + '_MIDDLE_MUST_NOT_RENDER' + 'y'.repeat(9000) + '\n' + label + '_TAIL';
             const oversizedOperation = {

@@ -8,6 +8,7 @@ using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Core.Sanitization;
 using FluentAssertions;
 
 namespace Aevatar.AI.Core.Tests.Tools;
@@ -1100,12 +1101,14 @@ public sealed class AdmittedAgentToolExecutorTests
         tool.ExecutionCalls.Should().Be(1);
         appender.Records.Should().NotContain(record =>
             record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.WaitingApproval);
-        appender.Records.Where(record =>
+        var sanitizedExecutionRecords = appender.Records.Where(record =>
                 record.ToolExecution.ExecutionPhase is
                     AuditToolExecutionPhase.Running or AuditToolExecutionPhase.Terminal)
-            .Should().OnlyContain(record =>
-                record.Annotations["authorization_mode"] == "unattended_exact" &&
-                record.Annotations["authorization_id"] == "sha256:authorization");
+            .Select(record => new AuditRecordSanitizer().Sanitize(record))
+            .ToList();
+        sanitizedExecutionRecords.Should().OnlyContain(record =>
+            record.Annotations["unattended_mode"] == "unattended_exact" &&
+            record.Annotations["unattended_permit_sha256"] == "sha256:authorization");
     }
 
     [Fact]
