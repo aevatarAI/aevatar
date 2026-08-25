@@ -89,7 +89,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         canonicalNext.Version = State.Version;
         if (canonicalNext.Equals(State))
         {
-            await RepublishCommittedStateAsync(bindDefinitionEvent, ct);
+            await RepublishCommittedStateAsync(BuildCommittedDefinitionRepublishEvent(), ct);
             return;
         }
 
@@ -169,6 +169,28 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         next.CompilationError = compileResult.CompilationError;
         next.Version = current.Version + 1;
         return next;
+    }
+
+    private BindWorkflowDefinitionEvent BuildCommittedDefinitionRepublishEvent()
+    {
+        var committedDefinitionEvent = new BindWorkflowDefinitionEvent
+        {
+            WorkflowName = State.WorkflowName,
+            WorkflowYaml = State.WorkflowYaml,
+            SourceKind = State.SourceKind,
+            WorkflowId = State.WorkflowId,
+            RevisionId = State.RevisionId,
+            ExpectedExecutionMode = State.ExpectedExecutionMode,
+            ToolCatalogPolicyVersion = State.ToolCatalogPolicyVersion,
+            CatalogPublicationContractVersion = State.CatalogPublicationContractVersion,
+            AuthorizationDependencies = State.AuthorizationDependencies?.Clone(),
+            CapabilityAdmissionPlan = State.CapabilityAdmissionPlan?.Clone(),
+        };
+        if (!string.IsNullOrWhiteSpace(State.ScopeId))
+            committedDefinitionEvent.ScopeId = State.ScopeId;
+        foreach (var (workflowNameKey, workflowYamlValue) in State.InlineWorkflowYamls)
+            committedDefinitionEvent.InlineWorkflowYamls[workflowNameKey] = workflowYamlValue;
+        return committedDefinitionEvent;
     }
 
     private void EnsureExistingBindingCanBind(

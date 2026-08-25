@@ -233,7 +233,7 @@ internal sealed class FileBackedWorkflowCatalogPort
             return false;
         }
 
-        if (catalog.StateVersion < sourceVersion ||
+        if (catalog.StateVersion != sourceVersion ||
             !WorkflowCatalogPublicationContracts.IsCurrent(catalog.CatalogPublicationContractVersion) ||
             !string.Equals(catalog.ActorId, actorId, StringComparison.Ordinal) ||
             !string.Equals(catalog.WorkflowName, workflowName, StringComparison.Ordinal))

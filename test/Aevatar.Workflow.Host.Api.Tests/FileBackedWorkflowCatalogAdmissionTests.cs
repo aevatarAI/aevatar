@@ -9,6 +9,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Projection.DependencyInjection;
@@ -190,6 +191,7 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
     [Theory]
     [InlineData("missing")]
     [InlineData("stale-version")]
+    [InlineData("future-version")]
     [InlineData("old-contract")]
     [InlineData("actor-id")]
     [InlineData("workflow-name")]
@@ -209,7 +211,12 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             : BuildCatalogDocument(
                 mismatch == "actor-id" ? "workflow-definition:other" : actorId,
                 mismatch == "workflow-name" ? "other-template" : workflowName,
-                mismatch == "stale-version" ? 6 : 7,
+                mismatch switch
+                {
+                    "stale-version" => 6,
+                    "future-version" => 8,
+                    _ => 7,
+                },
                 mismatch == "old-contract"
                     ? WorkflowCatalogPublicationContracts.LegacyV0
                     : WorkflowCatalogPublicationContracts.CurrentVersion,
@@ -531,6 +538,67 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
     }
 
     [Fact]
+    public async Task WorkflowGAgent_ShouldRepublishCommittedScopeWhenIncomingNoOpOmitsScope()
+    {
+        const string actorId = "workflow-definition:studio-scoped-republish";
+        const string workflowYaml = """
+            name: studio
+            roles:
+              - id: assistant
+                name: Assistant
+                allowed_tools: []
+            steps:
+              - id: reply
+                type: llm_call
+                role: assistant
+                parameters: {}
+            """;
+        using var provider = CreateLocalRuntimeProvider(TimeSpan.FromSeconds(2));
+        var runtime = provider.GetRequiredService<IActorRuntime>();
+        await SeedDefinitionBindingAsync(
+            provider,
+            actorId,
+            workflowYaml,
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Interactive,
+            scopeId: "scope-a");
+
+        try
+        {
+            var actor = await runtime.CreateAsync<WorkflowGAgent>(actorId);
+            var definitionAgent = actor.Agent.Should().BeOfType<WorkflowGAgent>().Subject;
+            var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                [],
+                []);
+
+            await definitionAgent.BindWorkflowDefinitionAsync(
+                workflowYaml,
+                "studio",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                scopeId: null,
+                sourceKind: "builtin",
+                capabilityAdmissionPlan: plan,
+                workflowId: null,
+                revisionId: null,
+                expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                toolCatalogPolicyVersion: WorkflowToolCatalogPolicies.CurrentVersion,
+                catalogPublicationContractVersion: WorkflowCatalogPublicationContracts.CurrentVersion);
+
+            definitionAgent.State.Version.Should().Be(1);
+            definitionAgent.State.ScopeId.Should().Be("scope-a");
+            var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+            events.Should().ContainSingle();
+        }
+        finally
+        {
+            await runtime.DestroyAsync(actorId);
+        }
+    }
+
+    [Fact]
     public async Task MaterializeAsync_WithLegacyUnspecifiedBinding_ShouldCommitForwardRepair()
     {
         const string actorId = "workflow-definition:studio-legacy";
@@ -804,7 +872,8 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
         string actorId,
         string workflowYaml,
         ExternalCapabilityExecutionMode persistedMode,
-        ExternalCapabilityExecutionMode admissionMode)
+        ExternalCapabilityExecutionMode admissionMode,
+        string scopeId = "")
     {
         var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             workflowYaml,
@@ -812,17 +881,20 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             admissionMode,
             [],
             []);
+        var workflow = new WorkflowParser().Parse(workflowYaml);
         var bind = new BindWorkflowDefinitionEvent
         {
             WorkflowName = "studio",
             WorkflowYaml = workflowYaml,
-            ScopeId = string.Empty,
             SourceKind = "builtin",
+            AuthorizationDependencies = WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow),
             CapabilityAdmissionPlan = plan,
             ExpectedExecutionMode = persistedMode,
             ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             CatalogPublicationContractVersion = WorkflowCatalogPublicationContracts.CurrentVersion,
         };
+        if (!string.IsNullOrWhiteSpace(scopeId))
+            bind.ScopeId = scopeId;
         return provider.GetRequiredService<IEventStore>().AppendAsync(
             actorId,
             [
