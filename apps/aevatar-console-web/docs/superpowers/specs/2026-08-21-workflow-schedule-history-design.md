@@ -194,12 +194,14 @@ History uses one compact table or table-like list. Each attempt exposes:
 | Source | `manual` | `Manual` when true; otherwise `Scheduled` |
 | Result | `error` | `Failed` when non-empty; otherwise `Run started` |
 | Completed time | `completedAt` | Application locale in Schedule timezone |
+| Action | Authoritative Run destination or valid filtered-Activity fallback | Arrow-only native link; empty when no destination exists |
 
 The table allocates most horizontal space to the two localized timestamp
 columns. `Source` remains compact, and `Result` has enough room for a failed
 attempt's explanation without becoming the widest column for the common
-`Run started` case. The reference desktop proportions are `29 / 15 / 22 / 34`
-percent in the column order above.
+`Run started` case. `Action` is an independent narrow command column and never
+shares a heading or cell with `Completed time`. The reference desktop
+proportions are `27 / 14 / 19 / 29 / 11` percent in the column order above.
 
 A failed row adds one concise message below its main row:
 
@@ -221,15 +223,17 @@ The primary row must not expose:
 - a guessed Run link when `runActorId` is empty;
 - a frontend-invented error category based on raw string matching.
 
-When `runActorId` is non-empty, the completed time and trailing arrow form a
-keyboard-accessible native Run link. The table row itself is not a scripted
-link because it can also contain Technical details. The link opens the existing
-Activity Run detail route in a new tab and preserves `workflowId + schedule` in
-the query so Back returns to the same filtered Activity context. A successful
-legacy attempt with an empty `runActorId` uses the same interaction treatment
-but opens the Workflow + Schedule filtered Activity list in a new tab; it must
-not guess a Run identity. A pre-Run failure with an empty `runActorId` remains
-non-interactive.
+`Completed time` always renders only its localized timestamp. When `runActorId`
+is non-empty, the separate `Action` cell contains a keyboard-accessible,
+arrow-only native Run link. The table row itself is not a scripted link because
+it can also contain Technical details. The link opens the existing Activity Run
+detail route in a new tab and preserves `workflowId + schedule` in the query so
+Back returns to the same filtered Activity context. A successful legacy attempt
+with an empty `runActorId` uses the same Action treatment but opens the Workflow
++ Schedule filtered Activity list in a new tab; it must not guess a Run
+identity. A pre-Run failure with an empty `runActorId` renders an empty Action
+cell and remains non-interactive. Every arrow-only Action link retains a full
+accessible name that identifies the attempt and destination.
 
 ### Activity handoff
 
@@ -385,6 +389,8 @@ and History are separate PNGs so each state can be reviewed at readable size.
   contract errors and response decoding errors are not retried.
 - History column widths prioritize localized timestamps and do not let the
   short Result tag dominate successful rows.
+- Completed time and Action are separate columns; the time remains plain text
+  and only Action contains the trailing navigation link.
 - Loading, successful empty, request error, and failed-attempt states remain
   distinct.
 - All timestamps follow the application locale and Schedule timezone.
