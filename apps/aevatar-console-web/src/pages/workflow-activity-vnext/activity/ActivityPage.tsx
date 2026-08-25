@@ -213,6 +213,9 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     unknown | null
   >(null);
   const [pendingPage, setPendingPage] = React.useState<number | null>(null);
+  const [pendingSearchTarget, setPendingSearchTarget] = React.useState<
+    string | null
+  >(null);
   const navigationRequestId = React.useRef(0);
   const currentFilterKey = React.useRef(filterKey);
   currentFilterKey.current = filterKey;
@@ -387,6 +390,8 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   });
 
   const commitDraftFilters = React.useCallback(() => {
+    if (pendingSearchTarget !== null) return;
+
     const next = new URLSearchParams(location.search);
     const apply = (name: string, value: string) => {
       if (value) next.set(name, value);
@@ -401,8 +406,9 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
     const currentSearch = new URLSearchParams(location.search).toString();
     const nextSearch = next.toString();
+    setPendingSearchTarget(nextSearch);
     if (nextSearch === currentSearch) {
-      void runs.refetch();
+      void runs.refetch().finally(() => setPendingSearchTarget(null));
       return;
     }
 
@@ -417,8 +423,21 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     draftFilters.toUtc,
     location.pathname,
     location.search,
+    pendingSearchTarget,
     runs,
   ]);
+
+  React.useEffect(() => {
+    if (
+      pendingSearchTarget === null ||
+      pendingSearchTarget !== params.toString() ||
+      runs.isFetching
+    ) {
+      return;
+    }
+
+    setPendingSearchTarget(null);
+  }, [params, pendingSearchTarget, runs.isFetching]);
 
   const currentRuns = runs.data?.items ?? [];
   const runDetailQuery = React.useCallback(
@@ -549,7 +568,10 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       )}
       headerActions={
         <Button
+          aria-busy={pendingSearchTarget !== null}
+          disabled={pendingSearchTarget !== null}
           icon={<SearchOutlined />}
+          loading={pendingSearchTarget !== null}
           onClick={commitDraftFilters}
           type="primary"
         >

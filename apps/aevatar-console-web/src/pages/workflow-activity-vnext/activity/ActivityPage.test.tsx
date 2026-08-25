@@ -395,6 +395,120 @@ describe('Workflow Activity vNext Activity ledger', () => {
     expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
   });
 
+  it('shows pending feedback for an unchanged Activity Search', async () => {
+    mockListActivityRuns.mockResolvedValueOnce(
+      feedPage([
+        activityRow({
+          runId: 'run-current',
+          workflowName: 'Current results',
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    await screen.findByText('Current results');
+    let resolveSearch!: (value: ReturnType<typeof feedPage>) => void;
+    const deferredSearch = new Promise<ReturnType<typeof feedPage>>(
+      (resolve) => {
+        resolveSearch = resolve;
+      },
+    );
+    mockListActivityRuns.mockReturnValueOnce(deferredSearch);
+
+    const searchButton = screen.getByRole('button', { name: 'Search' });
+    fireEvent.click(searchButton);
+
+    await waitFor(() => expect(mockListActivityRuns).toHaveBeenCalledTimes(2));
+    expect(searchButton).toHaveAttribute('aria-busy', 'true');
+    expect(searchButton).toHaveClass('ant-btn-loading');
+    expect(searchButton).toBeDisabled();
+    expect(screen.getByText('Current results')).toBeInTheDocument();
+
+    fireEvent.click(searchButton);
+    expect(mockListActivityRuns).toHaveBeenCalledTimes(2);
+
+    resolveSearch(
+      feedPage([
+        activityRow({
+          runId: 'run-current',
+          workflowName: 'Current results',
+        }),
+      ]),
+    );
+
+    await waitFor(() => expect(searchButton).toBeEnabled());
+    expect(searchButton).toHaveAttribute('aria-busy', 'false');
+    await waitFor(() =>
+      expect(searchButton).not.toHaveClass('ant-btn-loading'),
+    );
+  });
+
+  it('keeps Search pending while URL-backed Activity filters load', async () => {
+    mockListActivityRuns.mockResolvedValueOnce(
+      feedPage([
+        activityRow({
+          runId: 'run-before-search',
+          workflowName: 'Before search',
+        }),
+      ]),
+    );
+
+    let applyHistoryTarget!: (target: string) => void;
+    const ActivityLocationHarness = () => {
+      const [, rerenderLocation] = React.useReducer((value) => value + 1, 0);
+      applyHistoryTarget = (target: string) => {
+        mockSearch = new URL(target, 'http://console.local').search;
+        rerenderLocation();
+      };
+      return <ActivityPage scopeId="scope-alpha" />;
+    };
+
+    renderWithQueryClient(<ActivityLocationHarness />);
+
+    await screen.findByText('Before search');
+    let resolveSearch!: (value: ReturnType<typeof feedPage>) => void;
+    const deferredSearch = new Promise<ReturnType<typeof feedPage>>(
+      (resolve) => {
+        resolveSearch = resolve;
+      },
+    );
+    mockListActivityRuns.mockReturnValueOnce(deferredSearch);
+    (history.replace as jest.Mock).mockImplementation((target: string) => {
+      applyHistoryTarget(target);
+    });
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search runs' }), {
+      target: { value: 'support' },
+    });
+    const searchButton = screen.getByRole('button', { name: 'Search' });
+    fireEvent.click(searchButton);
+
+    expect(history.replace).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?q=support',
+    );
+    await waitFor(() => expect(mockListActivityRuns).toHaveBeenCalledTimes(2));
+    expect(searchButton).toHaveAttribute('aria-busy', 'true');
+    expect(searchButton).toHaveClass('ant-btn-loading');
+    expect(searchButton).toBeDisabled();
+
+    resolveSearch(
+      feedPage([
+        activityRow({
+          runId: 'run-support',
+          workflowName: 'Support workflow',
+        }),
+      ]),
+    );
+
+    await screen.findByText('Support workflow');
+    await waitFor(() => expect(searchButton).toBeEnabled());
+    expect(searchButton).toHaveAttribute('aria-busy', 'false');
+    await waitFor(() =>
+      expect(searchButton).not.toHaveClass('ant-btn-loading'),
+    );
+  });
+
   it('keeps the activity list focused on user-facing run facts', async () => {
     mockListActivityRuns.mockResolvedValue(
       feedPage(

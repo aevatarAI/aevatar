@@ -494,6 +494,15 @@ exist, keep a 12px vertical interval before the editable toolbar, including
 when chips wrap on narrower viewports. When no contextual chip exists, do not
 render an empty context row or reserve its interval.
 
+Submitting the editable Activity controls is an explicit Search command. The
+Search button enters a stable pending state immediately, blocks duplicate
+submission, and remains pending until the request for that submitted filter
+set settles. Keep already committed ledger rows mounted while Search is
+pending when the active query already owns those rows; a new URL-backed filter
+key may use the existing ledger loading surface. Initial page loading and
+background query revalidation must not impersonate a user-issued Search
+command.
+
 ### Immutable Run Detail
 
 Run detail loads summary/detail and graph independently so a graph failure does
@@ -671,6 +680,7 @@ hierarchy and density while using production tokens and real data states.
 | Run | Observation delayed | Accepted receipt plus projection-delay copy | Retry observation/Open Activity |
 | Run | Submission failed | Safe error, editable input | Retry |
 | Activity | Loading | Stable ledger skeleton | Wait |
+| Activity | Searching | Committed ledger remains visible; Search is pending and disabled | Wait |
 | Activity | Empty | No observed Runs for active server filters | Clear filters or Run a Workflow |
 | Activity | Error | Query failure distinct from empty | Retry |
 | Activity | Unknown status | Neutral Unknown label plus raw value | Open detail |
@@ -706,6 +716,9 @@ hierarchy and density while using production tokens and real data states.
   another scope's workbench.
 - Mutations disable duplicate submission and preserve a request receipt. They
   do not optimistically synthesize authoritative IDs or projection versions.
+- User-issued async commands acknowledge immediately, remain pending until
+  their own request settles, and reject duplicate submission. Background
+  fetching does not activate an unrelated command's pending presentation.
 - Save and Run failures keep user-authored input. A retry repeats only the
   user's explicit action.
 - `Open Activity` from a Workflow carries the catalogue row's authoritative
