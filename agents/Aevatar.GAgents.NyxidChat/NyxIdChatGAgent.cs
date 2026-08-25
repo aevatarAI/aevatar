@@ -18,7 +18,6 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Google.Protobuf;
@@ -171,32 +170,18 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         CancellationToken ct)
     {
         _activeConversationPromptLayer = null;
-        if (_contentArtifactPromptLayerMaterializer is not null &&
-            request.ContextAttachments is { Attachments.Count: > 0 } &&
-            !string.IsNullOrWhiteSpace(toolContext.Caller.ScopeId) &&
-            !string.IsNullOrWhiteSpace(toolContext.Caller.OwnerSubject))
-        {
-            try
-            {
-                _activeConversationPromptLayer = await _contentArtifactPromptLayerMaterializer.MaterializeAsync(
-                        toolContext.Caller.ScopeId,
-                        new ContentArtifactPrincipalContract(toolContext.Caller.OwnerSubject, "nyxid"),
-                        request.ContextAttachments,
-                        ct)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                Logger.LogWarning(
-                    exception,
-                    "Direct NyxID conversation attachment materialization failed closed. sessionId={SessionId}",
-                    request.SessionId);
-            }
-        }
+        // Fix (review round 1, F2):
+        //   Direct chat silently dropped sealed attachments when materialization could not run.
+        //   The shared boundary now returns one paired degraded entry per attachment.
+        _activeConversationPromptLayer =
+            await ContentArtifactConversationPromptLayerMaterializer.MaterializeOrDegradeAsync(
+                    _contentArtifactPromptLayerMaterializer,
+                    request.ContextAttachments,
+                    toolContext.Caller.ScopeId,
+                    toolContext.Caller.OwnerSubject,
+                    ct,
+                    Logger)
+                .ConfigureAwait(false);
 
         var profile = State.AgentProfile;
         if (profile is null)

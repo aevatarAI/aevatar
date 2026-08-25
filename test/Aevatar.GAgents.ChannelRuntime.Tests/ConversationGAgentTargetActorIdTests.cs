@@ -64,6 +64,32 @@ public sealed class ConversationGAgentTargetActorIdTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_ShouldCopySealedContextAttachmentsToRunCarriers()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_attachment_chat");
+        var runner = new DeferredReplyTurnRunner();
+        var dispatcher = new RecordingLlmReplyRunDispatcher();
+        var agent = await CreateAgentAsync(actorId, runner, dispatcher);
+        var attachments = new ConversationContextAttachmentSet();
+        attachments.Attachments.Add(new ConversationContextAttachment
+        {
+            ArtifactId = "artifact-alpha",
+            RevisionMode = ConversationContextAttachmentRevisionMode.PinnedRevision,
+            PinnedRevisionId = "revision-alpha",
+        });
+        agent.State.ContextAttachments = attachments.Clone();
+
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-attachment-1"));
+
+        dispatcher.Requests.Should().ContainSingle();
+        dispatcher.Requests[0].ContextAttachments.ToByteArray()
+            .Should().Equal(attachments.ToByteArray());
+        agent.State.PendingLlmReplyRequests.Should().ContainSingle();
+        agent.State.PendingLlmReplyRequests[0].ContextAttachments.ToByteArray()
+            .Should().Equal(attachments.ToByteArray());
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenProfileDiffersFromConversationPin_ShouldFailClosed()
     {
         var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");

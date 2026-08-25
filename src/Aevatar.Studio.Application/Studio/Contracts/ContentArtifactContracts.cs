@@ -18,6 +18,15 @@ public static class ContentArtifactRevisionAvailabilityNames
     public const string RetentionExpired = "retention_expired";
 }
 
+public enum ContentArtifactContentUnavailableReason
+{
+    Unspecified = 0,
+    Tombstoned = 1,
+    Redacted = 2,
+    RetentionExpired = 3,
+    BackingUnavailable = 4,
+}
+
 public sealed record ContentArtifactPrincipalContract(
     string PrincipalId,
     string PrincipalKind);
@@ -216,8 +225,31 @@ public sealed class ContentArtifactIdentityConflictException : InvalidOperationE
 
 public sealed class ContentArtifactContentUnavailableException : InvalidOperationException
 {
-    public ContentArtifactContentUnavailableException(string artifactId, string revisionId, string reason)
-        : base($"ContentArtifact '{artifactId}' revision '{revisionId}' content is unavailable: {reason}")
+    // Fix (review round 1, F4):
+    //   Unavailable control flow was parsed from exception message text.
+    //   The exception now carries a typed reason while preserving a useful message.
+    public ContentArtifactContentUnavailableException(
+        string artifactId,
+        string revisionId,
+        ContentArtifactContentUnavailableReason reason)
+        : base($"ContentArtifact '{artifactId}' revision '{revisionId}' content is unavailable: {FormatReason(reason)}")
     {
+        ArtifactId = artifactId;
+        RevisionId = revisionId;
+        Reason = reason;
     }
+
+    public string ArtifactId { get; }
+    public string RevisionId { get; }
+    public ContentArtifactContentUnavailableReason Reason { get; }
+
+    private static string FormatReason(ContentArtifactContentUnavailableReason reason) =>
+        reason switch
+        {
+            ContentArtifactContentUnavailableReason.Tombstoned => "artifact is tombstoned",
+            ContentArtifactContentUnavailableReason.Redacted => ContentArtifactRevisionAvailabilityNames.Redacted,
+            ContentArtifactContentUnavailableReason.RetentionExpired => ContentArtifactRevisionAvailabilityNames.RetentionExpired,
+            ContentArtifactContentUnavailableReason.BackingUnavailable => "backing content is unavailable",
+            _ => "unspecified",
+        };
 }

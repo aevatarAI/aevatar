@@ -36,6 +36,7 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -66,7 +67,8 @@ public class NyxIdChatGAgentTests
                 "agent_profile",
                 "first_turn",
                 "requested_actor_id",
-                "agent_profile_reference");
+                "agent_profile_reference",
+                "context_attachments");
     }
 
     [Fact]
@@ -276,6 +278,80 @@ public class NyxIdChatGAgentTests
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
         source.ResolveCalls.Should().Be(1);
+        runtime.CreateCalls.Should().BeEmpty();
+    }
+
+    // Fix (review round 1, F1):
+    //   Create admission rejection cases were not proven to stop actor creation.
+    //   The matrix now asserts the typed error and an empty runtime create ledger.
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("unauthorized")]
+    [InlineData("other-content")]
+    [InlineData("over-limit")]
+    [InlineData("pinned-unavailable")]
+    public async Task CreateTargetResolver_ShouldRejectUnavailableContextAttachmentsBeforeCreatingActor(
+        string failure)
+    {
+        var runtime = new RecordingActorRuntime();
+        var artifact = BuildAdmissionArtifact();
+        var query = new AttachmentAdmissionQueryPort(artifact);
+        var command = BuildAttachmentAdmissionCommand(
+            BuildContextAttachment("artifact-a", ConversationContextAttachmentRevisionMode.FollowCurrent));
+
+        switch (failure)
+        {
+            case "missing":
+                query.Artifact = null;
+                break;
+            case "unauthorized":
+                query.Artifact = artifact with
+                {
+                    Owner = new ContentArtifactPrincipalContract("principal-other", "user"),
+                    ReaderPrincipalIds = [],
+                };
+                break;
+            case "other-content":
+                query.Artifact = artifact with { Kind = "other_content" };
+                break;
+            case "over-limit":
+                command.ContextAttachments = BuildContextAttachmentSet(
+                    Enumerable.Range(1, ConversationContextAttachmentAdmission.MaximumAttachments + 1)
+                        .Select(index => BuildContextAttachment(
+                            $"artifact-{index}",
+                            ConversationContextAttachmentRevisionMode.FollowCurrent))
+                        .ToArray());
+                break;
+            case "pinned-unavailable":
+                query.Artifact = artifact with
+                {
+                    Revisions =
+                    [
+                        artifact.Revisions[0] with
+                        {
+                            Availability = ContentArtifactRevisionAvailabilityNames.Redacted,
+                        },
+                    ],
+                };
+                command.ContextAttachments = BuildContextAttachmentSet(
+                    BuildContextAttachment(
+                        "artifact-a",
+                        ConversationContextAttachmentRevisionMode.PinnedRevision,
+                        "rev-1"));
+                break;
+        }
+
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            StaticChatRoutePolicyQueryPort.ForSnapshot(null),
+            NewChatRouteResolver(),
+            new DisabledNyxIdChatAgentProfileResolver(),
+            query);
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
         runtime.CreateCalls.Should().BeEmpty();
     }
 
@@ -919,6 +995,102 @@ public class NyxIdChatGAgentTests
         await act.Should()
             .ThrowAsync<InvalidOperationException>()
             .WithMessage("*cannot be replaced*");
+    }
+
+    // Fix (review round 1, F1):
+    //   Attachment binding replay lacked bind, idempotent, conflict, and missing-set coverage.
+    //   These event-store tests mirror the established AgentProfileBoundEvent shape.
+    [Fact]
+    public async Task ActivateAsync_ShouldReplayCommittedContextAttachmentBinding()
+    {
+        using var provider = BuildServiceProvider();
+        const string actorId = "conversation-attachment-replay-bind";
+        var attachments = BuildContextAttachmentSet(
+            BuildContextAttachment(
+                "artifact-alpha",
+                ConversationContextAttachmentRevisionMode.FollowCurrent));
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new ConversationContextAttachmentsBoundEvent { Attachments = attachments.Clone() });
+        var agent = CreateConversationAgent(provider, actorId);
+
+        await agent.ActivateAsync();
+
+        ConversationContextAttachmentAdmission.ByteEquivalent(
+            agent.State.ContextAttachments,
+            attachments).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldReplayEquivalentCommittedContextAttachmentBindingIdempotently()
+    {
+        using var provider = BuildServiceProvider();
+        const string actorId = "conversation-attachment-replay-equivalent";
+        var attachments = BuildContextAttachmentSet(
+            BuildContextAttachment(
+                "artifact-alpha",
+                ConversationContextAttachmentRevisionMode.PinnedRevision,
+                "revision-alpha"));
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new ConversationContextAttachmentsBoundEvent { Attachments = attachments.Clone() },
+            new ConversationContextAttachmentsBoundEvent { Attachments = attachments.Clone() });
+        var agent = CreateConversationAgent(provider, actorId);
+
+        await agent.ActivateAsync();
+
+        ConversationContextAttachmentAdmission.ByteEquivalent(
+            agent.State.ContextAttachments,
+            attachments).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldRejectConflictingCommittedContextAttachmentBindingDuringReplay()
+    {
+        using var provider = BuildServiceProvider();
+        const string actorId = "conversation-attachment-replay-conflict";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new ConversationContextAttachmentsBoundEvent
+            {
+                Attachments = BuildContextAttachmentSet(
+                    BuildContextAttachment(
+                        "artifact-alpha",
+                        ConversationContextAttachmentRevisionMode.FollowCurrent)),
+            },
+            new ConversationContextAttachmentsBoundEvent
+            {
+                Attachments = BuildContextAttachmentSet(
+                    BuildContextAttachment(
+                        "artifact-beta",
+                        ConversationContextAttachmentRevisionMode.FollowCurrent)),
+            });
+        var agent = CreateConversationAgent(provider, actorId);
+
+        var act = () => agent.ActivateAsync();
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot replace*");
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldKeepContextAttachmentsUnboundForMissingCommittedSet()
+    {
+        using var provider = BuildServiceProvider();
+        const string actorId = "conversation-attachment-replay-missing";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new ConversationContextAttachmentsBoundEvent());
+        var agent = CreateConversationAgent(provider, actorId);
+
+        await agent.ActivateAsync();
+
+        agent.State.ContextAttachments.Should().BeNull();
     }
 
     [Fact]
@@ -2825,6 +2997,82 @@ public class NyxIdChatGAgentTests
     private static ChatRouteResolver NewChatRouteResolver() =>
         new(new StaticChatRouteFallbackProvider(string.Empty));
 
+    private static NyxIdChatConversationCreateCommand BuildAttachmentAdmissionCommand(
+        params ConversationContextAttachment[] attachments) =>
+        new()
+        {
+            ScopeId = "scope-alpha",
+            RequestedActorId = "conversation-alpha",
+            ContextAttachments = BuildContextAttachmentSet(attachments),
+            FirstTurn = new NyxIdChatStartTurnCommand
+            {
+                ScopeId = "scope-alpha",
+                ConversationActorId = "conversation-alpha",
+                TurnId = "turn-beta",
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Caller = new AgentToolCallerContextPayload
+                    {
+                        OwnerSubject = "principal-alpha",
+                    },
+                },
+            },
+        };
+
+    private static ConversationContextAttachmentSet BuildContextAttachmentSet(
+        params ConversationContextAttachment[] attachments)
+    {
+        var set = new ConversationContextAttachmentSet();
+        set.Attachments.Add(attachments);
+        return set;
+    }
+
+    private static ConversationContextAttachment BuildContextAttachment(
+        string artifactId,
+        ConversationContextAttachmentRevisionMode revisionMode,
+        string pinnedRevisionId = "") =>
+        new()
+        {
+            ArtifactId = artifactId,
+            RevisionMode = revisionMode,
+            PinnedRevisionId = pinnedRevisionId,
+        };
+
+    private static ContentArtifactCurrentStateResponse BuildAdmissionArtifact() =>
+        new(
+            "artifact-a",
+            "scope-alpha",
+            null,
+            "text",
+            "Admission fixture",
+            "plain",
+            ContentArtifactLifecycleStatusNames.Active,
+            "rev-1",
+            1,
+            1,
+            new ContentArtifactPrincipalContract("principal-alpha", "user"),
+            [],
+            [],
+            null,
+            null,
+            [
+                new ContentArtifactRevisionResponse(
+                    "rev-1",
+                    1,
+                    null,
+                    "text/plain",
+                    7,
+                    "hash-rev-1",
+                    ContentArtifactRevisionAvailabilityNames.Available,
+                    true,
+                    false,
+                    new ContentArtifactExecutionProvenanceContract("scope-alpha"),
+                    [],
+                    DateTimeOffset.Parse("2026-08-25T00:00:00Z")),
+            ],
+            DateTimeOffset.Parse("2026-08-25T00:00:00Z"),
+            DateTimeOffset.Parse("2026-08-25T00:01:00Z"));
+
     private static AgentProfileSnapshot BuildSealedProfile(
         string profileVersion,
         string routeToolSetRef = "") =>
@@ -3166,6 +3414,45 @@ public class NyxIdChatGAgentTests
                 throw DispatchException;
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
+    }
+
+    private sealed class AttachmentAdmissionQueryPort(
+        ContentArtifactCurrentStateResponse? artifact) : IContentArtifactQueryPort
+    {
+        public ContentArtifactCurrentStateResponse? Artifact { get; set; } = artifact;
+
+        public Task<ContentArtifactListResponse> ListAsync(
+            string scopeId,
+            string requesterPrincipalId,
+            ContentArtifactQueryRequest query,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ContentArtifactListResponse(
+                scopeId,
+                Artifact is null ? [] : [Artifact]));
+
+        public Task<ContentArtifactCurrentStateResponse?> GetAsync(
+            string scopeId,
+            string artifactId,
+            CancellationToken ct = default) =>
+            Task.FromResult(
+                Artifact is not null &&
+                string.Equals(Artifact.ArtifactId, artifactId, StringComparison.Ordinal)
+                    ? Artifact
+                    : null);
+
+        public Task<ContentArtifactCurrentStateResponse?> GetByDedupKeyAsync(
+            string scopeId,
+            string dedupKey,
+            CancellationToken ct = default) =>
+            Task.FromResult<ContentArtifactCurrentStateResponse?>(null);
+
+        public Task<ContentArtifactRevisionContentResponse> GetRevisionContentAsync(
+            string scopeId,
+            string artifactId,
+            string revisionId,
+            ContentArtifactPrincipalContract requester,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("Create admission must not read artifact content.");
     }
 
     private sealed class RecordingActorRuntime(List<string>? operations = null) : IActorRuntime

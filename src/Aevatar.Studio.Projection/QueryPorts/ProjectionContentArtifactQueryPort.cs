@@ -122,7 +122,7 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
             throw new ContentArtifactContentUnavailableException(
                 normalizedArtifactId,
                 normalizedRevisionId,
-                "artifact is tombstoned");
+                ContentArtifactContentUnavailableReason.Tombstoned);
         }
         if (revision.Availability is ContentArtifactRevisionAvailabilityNames.Redacted or
             ContentArtifactRevisionAvailabilityNames.RetentionExpired)
@@ -130,7 +130,9 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
             throw new ContentArtifactContentUnavailableException(
                 normalizedArtifactId,
                 normalizedRevisionId,
-                revision.Availability);
+                revision.Availability == ContentArtifactRevisionAvailabilityNames.Redacted
+                    ? ContentArtifactContentUnavailableReason.Redacted
+                    : ContentArtifactContentUnavailableReason.RetentionExpired);
         }
         if (!string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
             throw new InvalidDataException("ContentArtifact revision availability is invalid.");

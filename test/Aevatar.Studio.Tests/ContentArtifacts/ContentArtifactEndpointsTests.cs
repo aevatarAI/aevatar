@@ -128,7 +128,7 @@ public sealed class ContentArtifactEndpointsTests
         var service = new RecordingService(new ContentArtifactContentUnavailableException(
             "artifact-1",
             "revision-1",
-            "redacted"));
+            ContentArtifactContentUnavailableReason.Redacted));
 
         var result = await InvokeAsync(operation, service);
 

@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -23,6 +24,60 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
         _artifacts = artifacts ?? throw new ArgumentNullException(nameof(artifacts));
     }
 
+    // Fix (review round 1, F2/F3):
+    //   Sealed attachments were omitted when the read port or caller authority was unavailable.
+    //   Every declared attachment now degrades to a paired placeholder and diagnostic.
+    internal static async Task<ConversationContextPromptLayer?> MaterializeOrDegradeAsync(
+        ContentArtifactConversationPromptLayerMaterializer? materializer,
+        ConversationContextAttachmentSet? attachments,
+        string? scopeId,
+        string? principalId,
+        CancellationToken ct = default,
+        ILogger? logger = null)
+    {
+        if (attachments is not { Attachments.Count: > 0 })
+            return null;
+        if (materializer is null)
+        {
+            return CreateUnavailableLayer(
+                attachments,
+                ConversationContextAttachmentUnavailableReason.ReadModelUnavailable);
+        }
+
+        var normalizedScopeId = scopeId?.Trim();
+        var normalizedPrincipalId = principalId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedScopeId) ||
+            string.IsNullOrWhiteSpace(normalizedPrincipalId))
+        {
+            return CreateUnavailableLayer(
+                attachments,
+                ConversationContextAttachmentUnavailableReason.AccessDenied);
+        }
+
+        try
+        {
+            return await materializer.MaterializeAsync(
+                    normalizedScopeId,
+                    new ContentArtifactPrincipalContract(normalizedPrincipalId, "nyxid"),
+                    attachments,
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger?.LogWarning(
+                exception,
+                "Conversation context attachment materialization failed closed to a degraded layer.");
+            return CreateUnavailableLayer(
+                attachments,
+                ConversationContextAttachmentUnavailableReason.ReadModelUnavailable);
+        }
+    }
+
     public async Task<ConversationContextPromptLayer> MaterializeAsync(
         string scopeId,
         ContentArtifactPrincipalContract requester,
@@ -32,7 +87,6 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
         var normalizedScopeId = scopeId.Trim();
         var sections = new StringBuilder();
         var diagnostics = new List<PromptLayerDiagnostic>();
-        var unavailable = new List<ConversationContextAttachmentUnavailablePlaceholder>();
         var usedBytes = 0;
 
         foreach (var attachment in attachments?.Attachments ?? [])
@@ -47,7 +101,6 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
                     AppendUnavailable(
                         sections,
                         diagnostics,
-                        unavailable,
                         artifactId,
                         revisionId,
                         ConversationContextAttachmentUnavailableReason.NotFound);
@@ -59,7 +112,6 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
                     AppendUnavailable(
                         sections,
                         diagnostics,
-                        unavailable,
                         artifactId,
                         revisionId,
                         artifact.LifecycleStatus == ContentArtifactLifecycleStatusNames.Tombstoned
@@ -74,7 +126,6 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
                     AppendUnavailable(
                         sections,
                         diagnostics,
-                        unavailable,
                         artifactId,
                         revisionId,
                         ConversationContextAttachmentUnavailableReason.AccessDenied);
@@ -88,7 +139,7 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
                     string.Equals(item.RevisionId, revisionId, StringComparison.Ordinal));
                 if (revision is null)
                 {
-                    AppendUnavailable(sections, diagnostics, unavailable, artifactId, revisionId,
+                    AppendUnavailable(sections, diagnostics, artifactId, revisionId,
                         ConversationContextAttachmentUnavailableReason.RevisionUnavailable);
                     continue;
                 }
@@ -98,7 +149,6 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
                     AppendUnavailable(
                         sections,
                         diagnostics,
-                        unavailable,
                         artifactId,
                         revisionId,
                         revision.Availability switch
@@ -118,7 +168,7 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
                     ct);
                 if (content.Content.LongLength > MaximumAttachmentBytes)
                 {
-                    AppendUnavailable(sections, diagnostics, unavailable, artifactId, revisionId,
+                    AppendUnavailable(sections, diagnostics, artifactId, revisionId,
                         ConversationContextAttachmentUnavailableReason.OverBudget);
                     continue;
                 }
@@ -130,7 +180,7 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
                 var sectionBytes = Encoding.UTF8.GetByteCount(section);
                 if (usedBytes + sectionBytes > MaximumLayerBytes)
                 {
-                    AppendUnavailable(sections, diagnostics, unavailable, artifactId, revisionId,
+                    AppendUnavailable(sections, diagnostics, artifactId, revisionId,
                         ConversationContextAttachmentUnavailableReason.OverBudget);
                     continue;
                 }
@@ -138,45 +188,45 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
                 sections.Append(section);
                 usedBytes += sectionBytes;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (ContentArtifactContentUnavailableException exception)
             {
-                AppendUnavailable(sections, diagnostics, unavailable, artifactId, revisionId,
-                    MapUnavailableReason(exception.Message));
+                AppendUnavailable(sections, diagnostics, artifactId, revisionId,
+                    MapUnavailableReason(exception.Reason));
             }
             catch (ContentArtifactNotFoundException)
             {
-                AppendUnavailable(sections, diagnostics, unavailable, artifactId, revisionId,
+                AppendUnavailable(sections, diagnostics, artifactId, revisionId,
                     ConversationContextAttachmentUnavailableReason.NotFound);
+            }
+            catch (IOException)
+            {
+                AppendUnavailable(sections, diagnostics, artifactId, revisionId,
+                    ConversationContextAttachmentUnavailableReason.BackingUnavailable);
             }
             catch
             {
-                AppendUnavailable(sections, diagnostics, unavailable, artifactId, revisionId,
+                AppendUnavailable(sections, diagnostics, artifactId, revisionId,
                     ConversationContextAttachmentUnavailableReason.ReadModelUnavailable);
             }
         }
 
-        return new ConversationContextPromptLayer(
-            sections.ToString(),
-            new ConversationContextPromptProvenance("content-artifact-verified-read"),
-            new PromptLayerBounds(MaximumLayerBytes, MaximumLayerTokens),
-            diagnostics);
+        return CreateLayer(sections, diagnostics);
     }
 
+    // Fix (review round 1, F5):
+    //   Typed placeholder objects were allocated into a list that no consumer observed.
+    //   The visible marker and its diagnostic are now emitted directly from the typed reason.
     private static void AppendUnavailable(
         StringBuilder sections,
         List<PromptLayerDiagnostic> diagnostics,
-        List<ConversationContextAttachmentUnavailablePlaceholder> unavailable,
         string artifactId,
         string revisionId,
         ConversationContextAttachmentUnavailableReason reason)
     {
-        var placeholder = new ConversationContextAttachmentUnavailablePlaceholder
-        {
-            ArtifactId = artifactId,
-            RevisionId = revisionId,
-            Reason = reason,
-        };
-        unavailable.Add(placeholder);
         sections.Append("[content-artifact-unavailable artifact_id=")
             .Append(artifactId)
             .Append(" revision_id=")
@@ -189,19 +239,47 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
             $"content artifact {artifactId} revision {revisionId} unavailable: {reason}"));
     }
 
+    private static ConversationContextPromptLayer CreateUnavailableLayer(
+        ConversationContextAttachmentSet attachments,
+        ConversationContextAttachmentUnavailableReason reason)
+    {
+        var sections = new StringBuilder();
+        var diagnostics = new List<PromptLayerDiagnostic>();
+        foreach (var attachment in attachments.Attachments)
+        {
+            AppendUnavailable(
+                sections,
+                diagnostics,
+                attachment.ArtifactId.Trim(),
+                attachment.PinnedRevisionId.Trim(),
+                reason);
+        }
+
+        return CreateLayer(sections, diagnostics);
+    }
+
+    private static ConversationContextPromptLayer CreateLayer(
+        StringBuilder sections,
+        List<PromptLayerDiagnostic> diagnostics) =>
+        new(
+            sections.ToString(),
+            new ConversationContextPromptProvenance("content-artifact-verified-read"),
+            new PromptLayerBounds(MaximumLayerBytes, MaximumLayerTokens),
+            diagnostics);
+
     private static string PrefixHash(string? hash) =>
         string.IsNullOrWhiteSpace(hash)
             ? "unknown"
             : hash.Trim()[..Math.Min(16, hash.Trim().Length)];
 
-    private static ConversationContextAttachmentUnavailableReason MapUnavailableReason(string detail) =>
-        detail.Contains("tombstoned", StringComparison.OrdinalIgnoreCase)
-            ? ConversationContextAttachmentUnavailableReason.Tombstoned
-            : detail.Contains("redacted", StringComparison.OrdinalIgnoreCase)
-                ? ConversationContextAttachmentUnavailableReason.Redacted
-                : detail.Contains("retention", StringComparison.OrdinalIgnoreCase)
-                    ? ConversationContextAttachmentUnavailableReason.RetentionExpired
-                    : detail.Contains("backing", StringComparison.OrdinalIgnoreCase)
-                        ? ConversationContextAttachmentUnavailableReason.BackingUnavailable
-                        : ConversationContextAttachmentUnavailableReason.ReadModelUnavailable;
+    private static ConversationContextAttachmentUnavailableReason MapUnavailableReason(
+        ContentArtifactContentUnavailableReason reason) =>
+        reason switch
+        {
+            ContentArtifactContentUnavailableReason.Tombstoned => ConversationContextAttachmentUnavailableReason.Tombstoned,
+            ContentArtifactContentUnavailableReason.Redacted => ConversationContextAttachmentUnavailableReason.Redacted,
+            ContentArtifactContentUnavailableReason.RetentionExpired => ConversationContextAttachmentUnavailableReason.RetentionExpired,
+            ContentArtifactContentUnavailableReason.BackingUnavailable => ConversationContextAttachmentUnavailableReason.BackingUnavailable,
+            _ => ConversationContextAttachmentUnavailableReason.ReadModelUnavailable,
+        };
 }

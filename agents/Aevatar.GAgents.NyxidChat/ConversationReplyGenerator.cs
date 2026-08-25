@@ -17,7 +17,6 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Application.Studio.Contracts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using UglyToad.PdfPig;
@@ -382,7 +381,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var conversationLayer = await MaterializeConversationContextLayerAsync(
                 attachmentContext,
                 effectiveToolContext,
-                activity,
                 ct)
             .ConfigureAwait(false);
         effectiveToolContext = WithInputFileRefs(effectiveToolContext, inputFileRefs)!;
@@ -2398,40 +2396,19 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private async Task<ConversationContextPromptLayer?> MaterializeConversationContextLayerAsync(
         ChatAttachmentInputContext? attachmentContext,
         AgentToolExecutionContext toolContext,
-        ChatActivity activity,
         CancellationToken ct)
     {
-        if (_contentArtifactPromptLayerMaterializer is null ||
-            attachmentContext?.ContextAttachments is not { Attachments.Count: > 0 })
-            return null;
-
-        var scopeId = NormalizeOptional(toolContext.Caller.ScopeId) ??
-                      NormalizeOptional(activity.Conversation?.CanonicalKey);
-        var principalId = NormalizeOptional(toolContext.Caller.OwnerSubject);
-        if (scopeId is null || principalId is null)
-            return null;
-
-        try
-        {
-            return await _contentArtifactPromptLayerMaterializer.MaterializeAsync(
-                    scopeId,
-                    new ContentArtifactPrincipalContract(principalId, "nyxid"),
-                    attachmentContext.ContextAttachments,
-                    ct)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            _logger.LogWarning(
-                exception,
-                "Conversation context attachment materialization failed closed. activityId={ActivityId}",
-                activity.Id);
-            return null;
-        }
+        // Fix (review round 1, F3):
+        //   Conversation CanonicalKey was incorrectly used as a ContentArtifact owner scope.
+        //   Only the typed caller scope is used; a missing scope degrades without identity guessing.
+        return await ContentArtifactConversationPromptLayerMaterializer.MaterializeOrDegradeAsync(
+                _contentArtifactPromptLayerMaterializer,
+                attachmentContext?.ContextAttachments,
+                NormalizeOptional(toolContext.Caller.ScopeId),
+                NormalizeOptional(toolContext.Caller.OwnerSubject),
+                ct,
+                _logger)
+            .ConfigureAwait(false);
     }
 
     private string BuildSystemPrompt(

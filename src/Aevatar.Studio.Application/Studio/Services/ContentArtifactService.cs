@@ -95,7 +95,7 @@ public sealed class ContentArtifactService : IContentArtifactService
             throw new ContentArtifactContentUnavailableException(
                 current.ArtifactId,
                 string.Empty,
-                "artifact is tombstoned");
+                ContentArtifactContentUnavailableReason.Tombstoned);
         }
         if (string.IsNullOrWhiteSpace(current.CurrentRevisionId))
             throw new ContentArtifactNotFoundException(current.ScopeId, current.ArtifactId);
@@ -116,7 +116,7 @@ public sealed class ContentArtifactService : IContentArtifactService
             throw new ContentArtifactContentUnavailableException(
                 current.ArtifactId,
                 revision.RevisionId,
-                "artifact is tombstoned");
+                ContentArtifactContentUnavailableReason.Tombstoned);
         }
         if (revision.Availability is ContentArtifactRevisionAvailabilityNames.Redacted or
             ContentArtifactRevisionAvailabilityNames.RetentionExpired)
@@ -124,7 +124,9 @@ public sealed class ContentArtifactService : IContentArtifactService
             throw new ContentArtifactContentUnavailableException(
                 current.ArtifactId,
                 revision.RevisionId,
-                revision.Availability);
+                revision.Availability == ContentArtifactRevisionAvailabilityNames.Redacted
+                    ? ContentArtifactContentUnavailableReason.Redacted
+                    : ContentArtifactContentUnavailableReason.RetentionExpired);
         }
         if (!string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
             throw new InvalidOperationException("ContentArtifact revision availability is invalid.");
