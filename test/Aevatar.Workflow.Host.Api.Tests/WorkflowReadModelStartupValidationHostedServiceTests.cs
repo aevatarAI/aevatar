@@ -75,6 +75,28 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
             .WithMessage("*graph startup probe failed*");
     }
 
+    [Fact]
+    public async Task StartAsync_WhenGraphProviderIsDisabledInProduction_ShouldSkipProbe()
+    {
+        using var env = new EnvironmentVariableScope("DOTNET_ENVIRONMENT", "Production");
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>, NoOpDocumentStore<WorkflowExecutionCurrentStateDocument>>();
+        services.AddSingleton<IProjectionGraphStore, FailingGraphStore>();
+        services.AddSingleton(new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+        await using var provider = services.BuildServiceProvider();
+        var startupValidation = new WorkflowReadModelStartupValidationHostedService(
+            provider,
+            new WorkflowExecutionProjectionOptions
+            {
+                ValidateDocumentProviderOnStartup = false,
+                ValidateGraphProviderOnStartup = true,
+            });
+
+        Func<Task> act = () => startupValidation.StartAsync(CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+    }
+
     private sealed class NoOpDocumentStore<TDocument> : IProjectionDocumentReader<TDocument, string>
         where TDocument : class, IProjectionReadModel<TDocument>, new()
     {

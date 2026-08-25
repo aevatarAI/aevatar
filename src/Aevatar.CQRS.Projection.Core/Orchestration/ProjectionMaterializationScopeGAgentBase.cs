@@ -52,6 +52,19 @@ public abstract class ProjectionMaterializationScopeGAgentBase<TContext>
         }
         catch (Exception ex)
         {
+            // The hook may durably change scope state (e.g. roll back a materialization
+            // route) and update the context accordingly; a single in-turn retry then
+            // converges on the new durable state. No recovery keeps record-and-rethrow.
+            if (await TryRecoverObservationAsync(context, envelope, stateEvent, ex, ct))
+            {
+                await ProjectionScopeDispatchExecutor.ExecuteMaterializersAsync(
+                    ResolveMaterializers(),
+                    context,
+                    envelope,
+                    ct);
+                return ProjectionScopeDispatchResult.Success(observedVersion, eventType);
+            }
+
             await RecordDispatchFailureAsync(
                 "projection-execution",
                 stateEvent.EventId ?? envelope.Id ?? string.Empty,
@@ -63,6 +76,21 @@ public abstract class ProjectionMaterializationScopeGAgentBase<TContext>
         }
     }
 
-    private IEnumerable<IProjectionMaterializer<TContext>> ResolveMaterializers() =>
+    /// <summary>
+    /// Last chance to recover a materialization failure inside the observation turn before it
+    /// is recorded as a dispatch failure. Returning true retries the materializers once on the
+    /// current context; implementations must first commit the durable state change the retry
+    /// converges on and reflect it in the context. Returning false keeps the standard
+    /// record-and-rethrow path.
+    /// </summary>
+    protected virtual ValueTask<bool> TryRecoverObservationAsync(
+        TContext context,
+        EventEnvelope envelope,
+        StateEvent stateEvent,
+        Exception error,
+        CancellationToken ct) =>
+        ValueTask.FromResult(false);
+
+    protected IEnumerable<IProjectionMaterializer<TContext>> ResolveMaterializers() =>
         Services.GetServices<IProjectionMaterializer<TContext>>();
 }

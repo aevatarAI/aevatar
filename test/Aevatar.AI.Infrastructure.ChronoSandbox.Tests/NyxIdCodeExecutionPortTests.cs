@@ -106,8 +106,8 @@ public sealed class NyxIdCodeExecutionPortTests
         handler.Requests[0].Method.Should().Be(HttpMethod.Post.Method);
         handler.Requests[0].PathAndQuery.Should().Be(
             "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
-        handler.Requests[0].Authorization.Should().BeNull();
-        handler.Requests[0].ApiKeys.Should().Equal("scheduled-agent-key");
+        handler.Requests[0].Authorization.Should().Be("Bearer scheduled-agent-key");
+        handler.Requests[0].ApiKeys.Should().BeEmpty();
     }
 
     [Fact]
@@ -144,8 +144,8 @@ public sealed class NyxIdCodeExecutionPortTests
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].PathAndQuery.Should().Be(
             "/api/v1/proxy/s/chrono-sandbox-aevatar/execute?_nyxid_via=us-code-aevatar");
-        handler.Requests[0].Authorization.Should().BeNull();
-        handler.Requests[0].ApiKeys.Should().Equal("scheduled-agent-key");
+        handler.Requests[0].Authorization.Should().Be("Bearer scheduled-agent-key");
+        handler.Requests[0].ApiKeys.Should().BeEmpty();
     }
 
     [Fact]

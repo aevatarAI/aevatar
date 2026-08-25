@@ -156,29 +156,19 @@ internal sealed partial class NyxIdCodeExecutionPort(
         NyxIdProxyTextResponse response;
         try
         {
-            response = request.Caller!.ExecutionCredentialKind ==
-                       CodeExecutionNyxIdCredentialKind.AgentKey
-                ? await client.ProxyRequestBoundedWithApiKeyAsync(
-                        executionCredential,
-                        route.ServiceSlug,
-                        resolvedUserServiceId,
-                        ExecutionPath,
-                        HttpMethod.Post.Method,
-                        body,
-                        MaxResponseBytes,
-                        ct)
-                    .ConfigureAwait(false)
-                : await client.ProxyRequestBoundedAsync(
-                        executionCredential,
-                        route.ServiceSlug,
-                        resolvedUserServiceId,
-                        ExecutionPath,
-                        HttpMethod.Post.Method,
-                        body,
-                        extraHeaders: null,
-                        MaxResponseBytes,
-                        ct)
-                    .ConfigureAwait(false);
+            // Agent Keys must remain bearer caller credentials here. NyxID authenticates
+            // them and forwards the same Authorization value to Chrono on admitted routes.
+            response = await client.ProxyRequestBoundedAsync(
+                    executionCredential,
+                    route.ServiceSlug,
+                    resolvedUserServiceId,
+                    ExecutionPath,
+                    HttpMethod.Post.Method,
+                    body,
+                    extraHeaders: null,
+                    MaxResponseBytes,
+                    ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

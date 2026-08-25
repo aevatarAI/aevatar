@@ -16,6 +16,7 @@ public sealed class ProjectionGraphWriter<TReadModel>
     private readonly IProjectionGraphStore _graphStore;
     private readonly IProjectionGraphMaterializer<TReadModel> _materializer;
     private readonly IProjectionGraphOwnerIdentityResolver _ownerIdentityResolver;
+    private readonly ProjectionGraphProviderStatus? _providerStatus;
     private readonly ILogger<ProjectionGraphWriter<TReadModel>> _logger;
     private readonly Func<long> _getTimestamp;
     private readonly Func<long, TimeSpan> _getElapsedTime;
@@ -24,14 +25,16 @@ public sealed class ProjectionGraphWriter<TReadModel>
         IProjectionGraphStore graphStore,
         IProjectionGraphMaterializer<TReadModel> materializer,
         ILogger<ProjectionGraphWriter<TReadModel>>? logger = null,
-        IProjectionGraphOwnerIdentityResolver? ownerIdentityResolver = null)
+        IProjectionGraphOwnerIdentityResolver? ownerIdentityResolver = null,
+        ProjectionGraphProviderStatus? providerStatus = null)
         : this(
             graphStore,
             materializer,
             logger,
             Stopwatch.GetTimestamp,
             Stopwatch.GetElapsedTime,
-            ownerIdentityResolver)
+            ownerIdentityResolver,
+            providerStatus)
     {
     }
 
@@ -47,7 +50,8 @@ public sealed class ProjectionGraphWriter<TReadModel>
             logger,
             getTimestamp,
             getElapsedTime,
-            ownerIdentityResolver: null)
+            ownerIdentityResolver: null,
+            providerStatus: null)
     {
     }
 
@@ -57,11 +61,13 @@ public sealed class ProjectionGraphWriter<TReadModel>
         ILogger<ProjectionGraphWriter<TReadModel>>? logger,
         Func<long> getTimestamp,
         Func<long, TimeSpan> getElapsedTime,
-        IProjectionGraphOwnerIdentityResolver? ownerIdentityResolver)
+        IProjectionGraphOwnerIdentityResolver? ownerIdentityResolver,
+        ProjectionGraphProviderStatus? providerStatus)
     {
         _graphStore = graphStore ?? throw new ArgumentNullException(nameof(graphStore));
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
         _ownerIdentityResolver = ownerIdentityResolver ?? ProjectionGraphOwnerIdentityResolver.Instance;
+        _providerStatus = providerStatus;
         _logger = logger ?? NullLogger<ProjectionGraphWriter<TReadModel>>.Instance;
         _getTimestamp = getTimestamp ?? throw new ArgumentNullException(nameof(getTimestamp));
         _getElapsedTime = getElapsedTime ?? throw new ArgumentNullException(nameof(getElapsedTime));
@@ -82,6 +88,8 @@ public sealed class ProjectionGraphWriter<TReadModel>
         }
 
         ct.ThrowIfCancellationRequested();
+        if (_providerStatus is { Enabled: false })
+            return Task.CompletedTask;
 
         var elapsed = TimeSpan.Zero;
         var scope = string.Empty;

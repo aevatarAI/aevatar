@@ -29,18 +29,20 @@ the same active owner, but it is not a retention operation.
 ## Capacity contract
 
 Indefinite retention makes capacity an explicit operational responsibility.
-For every production Neo4j database that stores `ProjectionGraphNode` and
-`PROJECTION_REL`, operators must record these values at least daily:
+For every production Neo4j database that stores projection graphs, operators
+must record these values at least daily across both the legacy graph objects
+and the versioned owner-state objects:
 
-- managed owner, node, and relationship counts, grouped only for offline
-  diagnosis rather than metric labels;
+- managed owner, node, and relationship counts plus versioned owner-state,
+  owner-event, edge-identity, and pending-edge-identity counts, grouped only
+  for offline diagnosis rather than metric labels;
 - database store bytes, transaction-log bytes, provisioned disk bytes, and
   replica factor;
 - page-cache hit ratio and page-cache usage;
 - `replace_owner_graph` and incremental graph-write p50/p90/p99 duration and
   failure totals from `Aevatar.CQRS.Projection.Providers.Neo4j`;
-- seven-day and thirty-day net growth for owners, nodes, relationships, and
-  store bytes.
+- seven-day and thirty-day net growth for owners, nodes, relationships,
+  owner events, edge identities, pending identities, and store bytes.
 
 Capacity policy:
 
@@ -69,6 +71,17 @@ Run inventory with a read-only Neo4j identity. Do not return `propertiesJson`,
 node ids, edge ids, owner ids, workflow content, or credentials in operational
 logs.
 
+Before running the queries, resolve the deployed provider identifiers from
+`Projection:Graph:Providers:Neo4j`: `<node-label>` is the normalized
+`NodeLabel`, `<rel-type>` is the normalized `EdgeType`, and the versioned labels
+are `<node-label>OwnerState`, `<node-label>OwnerEvent`, and
+`<node-label>EdgeIdentity`. With the defaults these are
+`ProjectionGraphNode`, `PROJECTION_REL`,
+`ProjectionGraphNodeOwnerState`, `ProjectionGraphNodeOwnerEvent`, and
+`ProjectionGraphNodeEdgeIdentity`. Substitute all five together; mixing the
+default main labels with customized versioned labels produces a false capacity
+report.
+
 ```cypher
 MATCH (n:ProjectionGraphNode)
 WHERE coalesce(n.projectionManaged, false) = true
@@ -82,9 +95,25 @@ WHERE coalesce(r.projectionManaged, false) = true
 RETURN count(r) AS relationships;
 ```
 
+```cypher
+MATCH (state:ProjectionGraphNodeOwnerState)
+RETURN count(state) AS versionedOwners;
+```
+
+```cypher
+MATCH (event:ProjectionGraphNodeOwnerEvent)
+RETURN count(event) AS versionedOwnerEvents;
+```
+
+```cypher
+MATCH (identity:ProjectionGraphNodeEdgeIdentity)
+RETURN count(identity) AS edgeIdentities,
+       sum(CASE WHEN identity.status = 'pending' THEN 1 ELSE 0 END) AS pendingEdgeIdentities;
+```
+
 Use database-management metrics for store, transaction-log, disk, and
-page-cache values. If a deployment customizes `NodeLabel` or `EdgeType`, use the
-configured identifiers after validating them against the deployed options.
+page-cache values. Validate the resolved labels and relationship type against
+the provider's deployed schema objects before recording the sample.
 
 The inventory queries are observational only. Never attach `DELETE`, `DETACH
 DELETE`, `SET`, schema mutation, or query-time materialization to this check.
@@ -92,9 +121,9 @@ DELETE`, `SET`, schema mutation, or query-time materialization to this check.
 ## Growth review
 
 Keep a rolling daily record containing the UTC observation time, deployment
-revision, Neo4j database, counts, bytes, page-cache values, graph-write
-quantiles, forecast, and capacity ticket when one is required. Do not include
-owner identities or graph payloads.
+revision, Neo4j database, all legacy and versioned counts above, bytes,
+page-cache values, graph-write quantiles, forecast, and capacity ticket when
+one is required. Do not include owner identities or graph payloads.
 
 Review the record weekly and before a release that materially changes workflow
 fan-out, retained graph shape, or projection volume. A rising total graph size
@@ -120,4 +149,3 @@ enabled:
 No service-level owner registry, string status heuristic, query-time cleanup,
 event-store side read, replay, or projection priming may substitute for that
 contract.
-

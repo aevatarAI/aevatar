@@ -53,7 +53,7 @@ public sealed class WorkflowValidatorTests
     }
 
     [Fact]
-    public void Validate_WhenCurrentWorkflowAllowedToolsExceedBudget_ShouldReject()
+    public void Validate_WhenCurrentWorkflowAllowedToolsExceedOptimizationTarget_ShouldAccept()
     {
         var allowedTools = Enumerable.Range(0, WorkflowToolCatalogPolicies.MaximumWorkflowToolCount + 1)
             .Select(index => $"tool_{index}")
@@ -74,8 +74,7 @@ public sealed class WorkflowValidatorTests
             CurrentToolCatalogValidationOptions(),
             availableWorkflowNames: null);
 
-        errors.Should().ContainSingle(error =>
-            error.Contains($"budget of {WorkflowToolCatalogPolicies.MaximumWorkflowToolCount} tools", StringComparison.Ordinal));
+        errors.Should().NotContain(error => error.Contains("allowed_tools", StringComparison.Ordinal));
     }
 
     [Fact]

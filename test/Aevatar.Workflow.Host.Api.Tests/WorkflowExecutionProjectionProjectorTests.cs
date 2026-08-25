@@ -637,6 +637,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 new StepRequestEvent
                 {
                     StepId = "retryable-step",
+                    ExecutionId = "execution-first",
                     DisplayName = "Normalize person",
                     StepType = "code_execute",
                     TargetRole = "normalizer",
@@ -677,6 +678,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 new StepCompletedEvent
                 {
                     StepId = "retryable-step",
+                    ExecutionId = "execution-first",
                     Success = false,
                     Output = largeOutput,
                     Error = $"provider failed token={secret}",
@@ -729,6 +731,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 new StepRequestEvent
                 {
                     StepId = "retryable-step",
+                    ExecutionId = "execution-second",
                     StepType = "connector_call",
                     DisplayName = "Send normalized result",
                     TargetRole = "mailer",
@@ -746,7 +749,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         waiting.Outcome.Should().Be(WorkflowExecutionStepOutcomeReadModel.Waiting);
         waiting.StepType.Should().Be("connector_call");
         waiting.TargetRole.Should().Be("mailer");
-        waiting.RequestParameters.Should().Contain("attempt_identity", "second");
+        waiting.RequestParameters.Should().BeEmpty();
+        waiting.RequestEvidenceReference.Should().NotBeNull();
+        waiting.RequestEvidenceReference.ExecutionId.Should().Be("execution-second");
         waiting.RequestedAt.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(5));
         waiting.CompletedAt.Should().BeNull();
         waiting.Success.Should().BeNull();
@@ -778,7 +783,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         failedAttempt.DisplayName.Should().Be("Normalize person");
         failedAttempt.StepType.Should().Be("code_execute");
         failedAttempt.TargetRole.Should().Be("normalizer");
-        failedAttempt.RequestParameters.Should().Contain("attempt_identity", "first");
+        failedAttempt.RequestParameters.Should().BeEmpty();
+        failedAttempt.RequestEvidenceReference.Should().NotBeNull();
+        failedAttempt.RequestEvidenceReference.ExecutionId.Should().Be("execution-first");
         failedAttempt.RequestedAt.Should().Be(DateTimeOffset.UnixEpoch);
         failedAttempt.CompletedAt.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(2));
         failedAttempt.DurationMs.Should().Be(2000);
@@ -803,12 +810,35 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         failedAttempt.RequestedVariableName.Should().Be("approval");
         failedAttempt.ToolApprovalValue.ExecutionId.Should().Be("execution-first");
 
+        report.RequestEvidenceById.Should().HaveCount(2);
+        var firstEvidence = report.RequestEvidenceById[failedAttempt.RequestEvidenceReference.EvidenceId];
+        var secondEvidence = report.RequestEvidenceById[waiting.RequestEvidenceReference.EvidenceId];
+        firstEvidence.ParametersMap.Should().Contain("attempt_identity", "first");
+        secondEvidence.ParametersMap.Should().Contain("attempt_identity", "second");
+        firstEvidence.SourceEventId.Should().Be("evt-first-requested");
+        secondEvidence.SourceEventId.Should().Be("evt-retry-requested");
+
+        var requestTimeline = report.Timeline.Where(item => item.Stage == "step.request").ToArray();
+        requestTimeline.Should().HaveCount(2);
+        requestTimeline[0].Data.Should().BeEmpty();
+        requestTimeline[1].Data.Should().BeEmpty();
+        requestTimeline[0].RequestEvidenceReference.Should().Be(failedAttempt.RequestEvidenceReference);
+        requestTimeline[1].RequestEvidenceReference.Should().Be(waiting.RequestEvidenceReference);
+
+        var mapped = new WorkflowExecutionReadModelMapper().ToRunReport(report);
+        mapped.Steps.Single().RequestParameters.Should().Contain("attempt_identity", "second");
+        mapped.Steps.Single().LatestFailedAttempt!.RequestParameters.Should().Contain("attempt_identity", "first");
+        mapped.Timeline.Where(item => item.Stage == "step.request")
+            .Select(item => item.Data["attempt_identity"])
+            .Should().Equal("first", "second");
+
         WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
             report,
             PackStateEvent(
                 new StepCompletedEvent
                 {
                     StepId = "retryable-step",
+                    ExecutionId = "execution-second",
                     Success = true,
                     Output = "recovered",
                     FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
@@ -840,6 +870,44 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         recovered.LatestFailedAttempt.Should().BeNull();
         recovered.VoteAgreementDecision.Kind.Should().Be(AgreementDecisionKind.Agreed);
         recovered.FileItemResults.Results.Should().ContainSingle().Which.Output.Should().Be("ready");
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldRejectDifferentParametersForTheSameExecutionEvidence()
+    {
+        var report = new WorkflowRunInsightReportDocument();
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepRequestEvent
+                {
+                    StepId = "immutable-step",
+                    ExecutionId = "execution-1",
+                    StepType = "assign",
+                    Parameters = { ["value"] = "first" },
+                },
+                1,
+                "evt-first"),
+            DateTimeOffset.UnixEpoch);
+        var beforeConflict = report.Clone();
+
+        var act = () => WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepRequestEvent
+                {
+                    StepId = "immutable-step",
+                    ExecutionId = "execution-1",
+                    StepType = "assign",
+                    Parameters = { ["value"] = "different" },
+                },
+                2,
+                "evt-conflict"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*already bound to different immutable content*");
+        report.Should().Be(beforeConflict, "an immutable-evidence conflict must not partially mutate the report");
     }
 
     [Fact]

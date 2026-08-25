@@ -392,6 +392,17 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 {
                     Id = "actor-1",
                     RootActorId = "actor-1",
+                    RequestEvidenceById =
+                    {
+                        ["evidence-2"] = new WorkflowStepRequestEvidence
+                        {
+                            EvidenceId = "evidence-2",
+                            StepId = "step-2",
+                            ExecutionId = "execution-2",
+                            SourceEventId = "event-2",
+                            ParametersMap = { ["k2"] = "v2" },
+                        },
+                    },
                     Timeline =
                     {
                         new WorkflowExecutionTimelineEvent
@@ -407,8 +418,14 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                             Timestamp = DateTimeOffset.Parse("2026-03-17T08:03:00+00:00"),
                             Stage = "newer",
                             Message = "msg-2",
+                            StepId = "step-2",
                             EventType = "type-2",
-                            Data = { ["k2"] = "v2" },
+                            RequestEvidenceReference = new WorkflowStepRequestEvidenceReference
+                            {
+                                EvidenceId = "evidence-2",
+                                ExecutionId = "execution-2",
+                                SourceEventId = "event-2",
+                            },
                         },
                         new WorkflowExecutionTimelineEvent
                         {

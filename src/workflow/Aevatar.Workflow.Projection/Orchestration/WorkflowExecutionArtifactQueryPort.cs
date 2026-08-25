@@ -65,7 +65,7 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         return report.Timeline
             .OrderByDescending(x => x.Timestamp)
             .Take(boundedTake)
-            .Select(_mapper.ToWorkflowRunTimelineExportItem)
+            .Select(item => _mapper.ToWorkflowRunTimelineExportItem(item, report))
             .ToList();
     }
 

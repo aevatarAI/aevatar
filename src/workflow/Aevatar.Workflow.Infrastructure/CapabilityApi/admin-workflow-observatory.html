@@ -570,6 +570,7 @@
     overflow: hidden;
   }
   .diagnostic-strip.has-error { border-color: color-mix(in oklab, var(--err) 42%, var(--border)); background: var(--err-soft); }
+  .diagnostic-strip.has-warning { border-color: color-mix(in oklab, var(--warn) 42%, var(--border)); background: var(--warn-soft); }
   .diag-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 11px 14px; border-bottom: 1px solid var(--border-soft); }
   .diag-title { font-weight: 700; color: var(--fg-strong); }
   .diag-sub { font-size: 12px; color: var(--muted); }
@@ -2366,7 +2367,7 @@ function activityFirstFailure(detail){
     ?cache.runs.find(item=>item&&item.runId===runId):null;
   return row&&row.firstFailure&&(evidenceHasValue(row.firstFailure.message)||evidenceHasValue(row.firstFailure.stepId))?row.firstFailure:null;
 }
-function sectionFailureEvidence(detail){
+function sectionDiagnosticIssues(detail){
   const sections=detail&&detail.sections&&typeof detail.sections==="object"?detail.sections:{};
   return Object.entries(sections).filter(([,section])=>{
     const status=String(section&&section.versionStatus||"").toLowerCase();
@@ -2417,7 +2418,6 @@ function collectFailureEvidence(detail){
     finalError:String(source.finalError||""),
     compilationError:String(source.compilationError||""),
     firstFailure,
-    sectionIssues:sectionFailureEvidence(source),
     failedSteps:(Array.isArray(source.steps)?source.steps:[]).filter(isFailedStep),
     retryWaitingSteps:(Array.isArray(source.steps)?source.steps:[]).filter(isRetryWaitingStep),
     failedOperations:failedOperationEvidence(source),
@@ -2428,7 +2428,7 @@ function collectFailureEvidence(detail){
 function failureEvidenceCount(evidence){
   const source=evidence||{};
   return (evidenceHasValue(source.finalError)?1:0)+(evidenceHasValue(source.compilationError)?1:0)+
-    (evidenceHasValue(source.firstFailure)?1:0)+(source.sectionIssues||[]).length+
+    (evidenceHasValue(source.firstFailure)?1:0)+
     (source.failedSteps||[]).length+(source.retryWaitingSteps||[]).length+(source.failedOperations||[]).length+
     (source.timelineErrors||[]).length+(source.recoveryCapability?1:0);
 }
@@ -2573,7 +2573,6 @@ function renderFailureEvidence(detail){
   if(evidence.compilationError) appendFailureEvidenceItem(wrap,"工作流编译错误","compilationError",evidence.compilationError,[],false);
   if(evidence.finalError) appendFailureEvidenceItem(wrap,"运行最终错误","finalError",evidence.finalError,[],false);
   if(evidence.firstFailure) appendFailureEvidenceItem(wrap,"Activity 失败摘要",evidence.firstFailure.stepId?"step "+evidence.firstFailure.stepId:"failureSummary",evidence.firstFailure.message||"",[["availability",evidence.firstFailure.availability]],false);
-  evidence.sectionIssues.forEach(section=>appendFailureEvidenceItem(wrap,"详情分区不可用",section.section,section.reason||"",[["versionStatus",section.versionStatus],["detailStateVersion",section.detailStateVersion],["sourceStateVersion",section.sourceStateVersion]],false));
   evidence.failedSteps.forEach(step=>appendStepAttemptEvidence(wrap,step,"失败步骤"));
   evidence.retryWaitingSteps.forEach(step=>appendStepAttemptEvidence(wrap,step,"等待重试 · 最近一次失败尝试"));
   evidence.failedOperations.forEach(operation=>{
@@ -2607,7 +2606,7 @@ function issuePayload(detail){
     finalError:evidence.finalError,
     activityFirstFailure:cloneEvidenceValue(evidence.firstFailure),
     sections:cloneEvidenceValue(detail.sections||{}),
-    sectionIssues:cloneEvidenceValue(evidence.sectionIssues),
+    sectionIssues:cloneEvidenceValue(sectionDiagnosticIssues(detail)),
     recoveryCapability:cloneEvidenceValue(detail.recoveryCapability||{}),
     diagnostics:cloneEvidenceValue(detail.diagnostics||[]),
     failedOperations:evidence.failedOperations.map(operation=>boundedOperationEvidenceSnapshot(operation,OPERATION_EVIDENCE_DETAIL_MAX_CHARS)),
@@ -2625,11 +2624,14 @@ function issuePayload(detail){
 function renderDiagnosticStrip(detail){
   const diagnostics = detail.diagnostics || [];
   const evidenceCount=failureEvidenceCount(collectFailureEvidence(detail));
-  if(!diagnostics.length && !evidenceCount && !["failed","timed_out","stopped"].includes(detail.summary.status)) return document.createDocumentFragment();
-  const hasProblem = diagnostics.some(t => t.severity === "error" || t.severity === "warning") || evidenceCount>0 || ["failed","timed_out","stopped"].includes(detail.summary.status);
-  const box = el("section", { class:"diagnostic-strip"+(hasProblem?" has-error":""), "aria-label":"失败诊断" });
+  const problemStatus=["failed","timed_out","stopped"].includes(String(detail.summary.status||"").toLowerCase());
+  if(!diagnostics.length && !evidenceCount && !problemStatus) return document.createDocumentFragment();
+  const hasError = diagnostics.some(t => String(t&&t.severity||"").toLowerCase() === "error") || evidenceCount>0 || problemStatus;
+  const hasWarning = !hasError && diagnostics.some(t => String(t&&t.severity||"").toLowerCase() === "warning");
+  const label=hasError?"失败诊断":hasWarning?"运行警告":"运行诊断";
+  const box = el("section", { class:"diagnostic-strip"+(hasError?" has-error":hasWarning?" has-warning":""), "aria-label":label });
   const head = el("div", { class:"diag-head" });
-  head.innerHTML = `<span class="diag-title">${hasProblem ? "失败诊断" : "当前位置"}</span><span class="diag-sub">${evidenceCount?`${evidenceCount} 条原始失败证据 · `:""}${diagnostics.length ? `${diagnostics.length} 条诊断信息` : "暂未收集到更多诊断信息"}</span>`;
+  head.innerHTML = `<span class="diag-title">${label}</span><span class="diag-sub">${evidenceCount?`${evidenceCount} 条原始失败证据 · `:""}${diagnostics.length ? `${diagnostics.length} 条诊断信息` : "暂未收集到更多诊断信息"}</span>`;
   box.appendChild(head);
   if(evidenceCount) box.appendChild(renderFailureEvidence(detail));
   if(diagnostics.length){
@@ -2742,7 +2744,6 @@ function failureLogLines(detail){
   if(evidence.compilationError)lines.push("COMPILATION ERROR "+evidence.compilationError);
   if(evidence.finalError)lines.push("FINAL ERROR "+evidence.finalError);
   if(evidence.firstFailure)lines.push("ACTIVITY FIRST FAILURE "+evidenceText(evidence.firstFailure));
-  evidence.sectionIssues.forEach(section=>lines.push("SECTION "+section.section+" "+evidenceText(section)));
   evidence.failedOperations.forEach(operation=>lines.push("FAILED OPERATION "+evidenceText(boundedOperationEvidenceSnapshot(operation,OPERATION_EVIDENCE_DETAIL_MAX_CHARS))));
   evidence.failedSteps.forEach(step=>{
     lines.push("FAILED STEP "+evidenceText({

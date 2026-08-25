@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime;
@@ -101,6 +102,44 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
             StateVersion = InitialReportVersion,
             EventId = InitialReportEventId,
         });
+    }
+
+    [Fact]
+    public async Task GraphDisabled_WhenScopeStarts_ShouldNotRequestOrScheduleCutover()
+    {
+        var harness = new CutoverScopeHarness(graphProjectionEnabled: false);
+
+        var actor = await harness.StartScopeAsync();
+
+        actor.Agent.State.ActiveMaterializationRoute.Should().Be(CompatibilityRoute());
+        actor.Agent.State.MaterializationCutover.Should().BeNull();
+        actor.Outbox.Pending.Should().BeEmpty();
+        (await harness.CommittedEventTypesAsync()).Should().Equal(
+            ProjectionScopeStartedEvent.Descriptor.FullName,
+            ProjectionObservationAttachmentUpdatedEvent.Descriptor.FullName,
+            ProjectionMaterializationRouteInitializedEvent.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task GraphDisabled_WhenCutoverWasAlreadyRequested_ShouldPauseContinuation()
+    {
+        var harness = new CutoverScopeHarness();
+        var started = await harness.StartScopeAsync();
+        started.Agent.State.MaterializationCutover!.Phase.Should()
+            .Be(ProjectionMaterializationCutoverPhase.Requested);
+        var committedBeforeDisable = await harness.CommittedEventTypesAsync();
+        var disabledServices = harness.BuildServices(
+            adoptionReceiptGranted: true,
+            graphProjectionEnabled: false);
+
+        var recovered = await harness.ReactivateScopeAsync(disabledServices);
+        await recovered.Agent.HandleContinueMaterializationCutoverAsync(
+            new ContinueProjectionMaterializationCutoverCommand { ExpectedRouteEpoch = 2 });
+
+        recovered.Outbox.Pending.Should().BeEmpty();
+        recovered.Agent.State.MaterializationCutover!.Phase.Should()
+            .Be(ProjectionMaterializationCutoverPhase.Requested);
+        (await harness.CommittedEventTypesAsync()).Should().Equal(committedBeforeDisable);
     }
 
     [Theory]
@@ -476,6 +515,86 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
         (await harness.CommittedEventTypesAsync()).Should().StartWith(committedBefore);
     }
 
+    [Fact]
+    public async Task OverBoundCandidate_ShouldAbortCutoverAndStayOnCompatibilityRoute()
+    {
+        var harness = new CutoverScopeHarness(maximumCandidateMutationCount: 1);
+        var actor = await harness.StartScopeAsync();
+        actor.Agent.State.MaterializationCutover!.Phase.Should()
+            .Be(ProjectionMaterializationCutoverPhase.Requested);
+
+        var phases = await harness.DrainAsync(actor);
+
+        phases.Should().Equal(ProjectionMaterializationCutoverPhase.Aborted);
+        actor.Outbox.Pending.Should().BeEmpty("an aborted cutover must not reschedule itself");
+        var state = actor.Agent.State;
+        state.ActiveMaterializationRoute.Should().Be(CompatibilityRoute(),
+            "an over-bound owner stays on the compatibility route");
+        state.MaterializationCutover!.Phase.Should().Be(ProjectionMaterializationCutoverPhase.Aborted);
+        state.MaterializationCutover.AbortReason.Should().Contain("mutations");
+
+        // Observations keep flowing on the compatibility route and never re-arm the saga.
+        await actor.Agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservation(7, "evt-7"));
+        harness.Materializer.Routes.Should().ContainSingle().Which.Should().Be(CompatibilityRoute());
+        actor.Outbox.Pending.Should().BeEmpty();
+        actor.Agent.State.LastSuccessfulSourceCoordinatesByActor[RootActorId]
+            .Should().Be(SourceCoordinate(7, "evt-7"));
+
+        // A restart replays the aborted saga and does not request a fresh cutover.
+        var committedBefore = await harness.CommittedEventTypesAsync();
+        var restarted = await harness.ReactivateScopeAsync();
+        restarted.Outbox.Pending.Should().BeEmpty();
+        restarted.Agent.State.MaterializationCutover!.Phase.Should()
+            .Be(ProjectionMaterializationCutoverPhase.Aborted);
+        (await harness.CommittedEventTypesAsync()).Should().Equal(committedBefore);
+    }
+
+    [Fact]
+    public async Task OverBoundReplacement_OnIncrementalRoute_ShouldRollBackRouteAndRetryOnCompatibilityRoute()
+    {
+        var harness = new CutoverScopeHarness();
+        var actor = await harness.StartScopeAsync();
+        await harness.DrainAsync(actor);
+        actor.Agent.State.ActiveMaterializationRoute.Should().Be(IncrementalRoute());
+        var committedBefore = await harness.CommittedEventTypesAsync();
+        harness.Materializer.ThrowOverBoundOnIncrementalRoute = true;
+
+        await actor.Agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservation(7, "evt-7"));
+
+        var state = actor.Agent.State;
+        state.ActiveMaterializationRoute.Should().Be(CompatibilityRoute(routeEpoch: 3),
+            "the route rolls back to the compatibility writer at an advanced epoch");
+        state.MaterializationCutover!.Phase.Should().Be(ProjectionMaterializationCutoverPhase.Aborted);
+        state.MaterializationCutover.AbortReason.Should().Contain("mutations");
+        harness.Materializer.Routes.Should().HaveCount(2);
+        harness.Materializer.Routes[0].Should().Be(IncrementalRoute());
+        harness.Materializer.Routes[1].Should().Be(CompatibilityRoute(routeEpoch: 3));
+        state.LastSuccessfulSourceCoordinatesByActor[RootActorId].Should().Be(SourceCoordinate(7, "evt-7"));
+        state.InFlightObservation.Should().BeNull();
+        (await harness.CommittedEventTypesAsync()).Should().Equal(
+            [
+                .. committedBefore,
+                ProjectionScopeEnvelopeReceivedEvent.Descriptor.FullName,
+                ProjectionScopeEnvelopeAttemptedEvent.Descriptor.FullName,
+                ProjectionScopeObservationStagedEvent.Descriptor.FullName,
+                ProjectionMaterializationRouteRolledBackEvent.Descriptor.FullName,
+                ProjectionScopeWatermarkAdvancedEvent.Descriptor.FullName,
+            ],
+            "the rollback must be committed before the recovered observation advances its watermark");
+
+        // Later observations run on the compatibility route without re-arming the saga.
+        harness.Materializer.ThrowOverBoundOnIncrementalRoute = false;
+        await actor.Agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservation(8, "evt-8"));
+        harness.Materializer.Routes.Should().HaveCount(3);
+        harness.Materializer.Routes[2].Should().Be(CompatibilityRoute(routeEpoch: 3));
+        actor.Outbox.Pending.Should().BeEmpty();
+
+        // A restart replays the rollback; the route stays on the compatibility writer.
+        var restarted = await harness.ReactivateScopeAsync();
+        restarted.Agent.State.ActiveMaterializationRoute.Should().Be(CompatibilityRoute(routeEpoch: 3));
+        restarted.Outbox.Pending.Should().BeEmpty();
+    }
+
     private static IEnumerable<ProjectionMaterializationCutoverPhase> RemainingPhasesAfter(
         ProjectionMaterializationCutoverPhase phase) =>
         phase switch
@@ -498,13 +617,13 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
             _ => throw new ArgumentOutOfRangeException(nameof(phase), phase, null),
         };
 
-    private static ProjectionMaterializationRouteFingerprint CompatibilityRoute() =>
+    private static ProjectionMaterializationRouteFingerprint CompatibilityRoute(long routeEpoch = 1) =>
         new()
         {
             ContractId = WorkflowExecutionGraphConstants.LegacyContractId,
             ContractVersion = WorkflowExecutionGraphConstants.LegacyContractVersion,
             PhysicalNamespace = WorkflowExecutionGraphConstants.Scope,
-            RouteEpoch = 1,
+            RouteEpoch = routeEpoch,
         };
 
     private static ProjectionMaterializationRouteFingerprint IncrementalRoute(
@@ -582,22 +701,29 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
         private readonly InMemoryStreamProvider _streamProvider = new();
         private readonly MutableReportReader _reportReader;
         private readonly MutableFleetAdmissionSource _fleet;
-        private readonly WorkflowRunIncrementalGraphMaterializer _graphMaterializer =
-            new(ProjectionGraphOwnerIdentityResolver.Instance);
+        private readonly WorkflowRunIncrementalGraphMaterializer _graphMaterializer;
         private readonly IServiceProvider _services;
 
         public CutoverScopeHarness(
             bool adoptionReceiptGranted = true,
-            bool fleetAdmissionGranted = true)
+            bool fleetAdmissionGranted = true,
+            int? maximumCandidateMutationCount = null,
+            bool graphProjectionEnabled = true)
         {
+            _graphMaterializer = new WorkflowRunIncrementalGraphMaterializer(
+                ProjectionGraphOwnerIdentityResolver.Instance,
+                maximumCandidateMutationCount ??
+                WorkflowRunIncrementalGraphMaterializer.MaximumCandidateMutationCount);
             _reportReader = new MutableReportReader(BuildReport());
             _fleet = new MutableFleetAdmissionSource(fleetAdmissionGranted ? CreateAdmission() : null);
-            _services = BuildServices(adoptionReceiptGranted);
+            _services = BuildServices(adoptionReceiptGranted, graphProjectionEnabled);
         }
 
         public RecordingMaterializer Materializer { get; } = new();
 
-        public IServiceProvider BuildServices(bool adoptionReceiptGranted)
+        public IServiceProvider BuildServices(
+            bool adoptionReceiptGranted,
+            bool graphProjectionEnabled = true)
         {
             var services = new ServiceCollection()
                 .AddSingleton<IEventStore>(_eventStore)
@@ -607,6 +733,9 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
                 .AddSingleton<TimeProvider>(new FixedTimeProvider(Now))
                 .AddSingleton<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>(_reportReader)
                 .AddSingleton<IVersionedProjectionGraphStore>(_graphStore)
+                .AddSingleton(new ProjectionGraphProviderStatus(
+                    graphProjectionEnabled ? "InMemory" : "Disabled",
+                    graphProjectionEnabled))
                 .AddSingleton(_graphMaterializer)
                 .AddSingleton<WorkflowProjectionGraphCutoverOrchestrator>()
                 .AddSingleton<IRuntimeFleetCapabilityAdmissionReader>(_fleet)
@@ -871,6 +1000,7 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
     {
         public List<ProjectionMaterializationRouteFingerprint?> Routes { get; } = [];
         public List<WorkflowExecutionMaterializationContext> Contexts { get; } = [];
+        public bool ThrowOverBoundOnIncrementalRoute { get; set; }
 
         public ValueTask ProjectAsync(
             WorkflowExecutionMaterializationContext context,
@@ -880,6 +1010,14 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
             ct.ThrowIfCancellationRequested();
             Contexts.Add(context);
             Routes.Add(context.MaterializationRoute?.Clone());
+            if (ThrowOverBoundOnIncrementalRoute &&
+                WorkflowRunIncrementalGraphMaterializer.IsIncrementalRoute(context.MaterializationRoute))
+            {
+                throw new ProjectionGraphCandidateOverBoundException(
+                    WorkflowRunIncrementalGraphMaterializer.MaximumCandidateMutationCount + 1,
+                    WorkflowRunIncrementalGraphMaterializer.MaximumCandidateMutationCount);
+            }
+
             return ValueTask.CompletedTask;
         }
     }

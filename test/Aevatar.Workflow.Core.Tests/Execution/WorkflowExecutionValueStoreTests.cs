@@ -553,6 +553,100 @@ public sealed class WorkflowExecutionValueStoreTests
     }
 
     [Fact]
+    public void Release_ShouldSupportPerIterationReleaseOfReboundVariable()
+    {
+        var state = NormalizedState();
+        var firstValueId = Record(state, new StepCompletedEvent
+        {
+            StepId = "producer",
+            ExecutionId = "producer-1",
+            Success = true,
+            Output = "payload-1",
+            AssignedVariable = "raw_pages",
+            AssignedValue = "payload-1",
+            AssignedValueProvenance = WorkflowStepAssignedValueProvenance.ReferencesOutput,
+        });
+        Record(state, new StepCompletedEvent
+        {
+            StepId = "reduce",
+            ExecutionId = "reduce-1",
+            Success = true,
+            Output = "reduced-1",
+        });
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state, Release("raw_pages"), "reduce", "reduce-1");
+        var firstRead = () => WorkflowExecutionValueStore.CreateVariableView(state)["raw_pages"];
+        firstRead.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleasedValueAccessed);
+
+        // Iteration 2: the releasing step ran again and re-bound the name to a new value.
+        var secondValueId = Record(state, new StepCompletedEvent
+        {
+            StepId = "producer",
+            ExecutionId = "producer-2",
+            Success = true,
+            Output = "payload-2",
+            AssignedVariable = "raw_pages",
+            AssignedValue = "payload-2",
+            AssignedValueProvenance = WorkflowStepAssignedValueProvenance.ReferencesOutput,
+        });
+        secondValueId.Should().NotBe(firstValueId);
+
+        // The re-bound value is readable: the tombstone covers only the released value id.
+        WorkflowExecutionValueStore.CreateVariableView(state)["raw_pages"].Should().Be("payload-2");
+
+        // A redelivery of the first iteration's release while the new value is live is a no-op.
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state, Release("raw_pages"), "reduce", "reduce-1");
+        WorkflowExecutionValueStore.CreateVariableView(state)["raw_pages"].Should().Be("payload-2");
+
+        // The second iteration's release targets the new value and succeeds.
+        Record(state, new StepCompletedEvent
+        {
+            StepId = "reduce",
+            ExecutionId = "reduce-2",
+            Success = true,
+            Output = "reduced-2",
+        });
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state, Release("raw_pages"), "reduce", "reduce-2");
+
+        var tombstone = state.NormalizedValues!.ReleasedBindings["raw_pages"];
+        tombstone.ValueId.Should().Be(secondValueId);
+        tombstone.ReleasedAfterExecutionId.Should().Be("reduce-2");
+        state.NormalizedValues.CanonicalValues[secondValueId].Value.Should().BeEmpty();
+        var secondRead = () => WorkflowExecutionValueStore.CreateVariableView(state)["raw_pages"];
+        secondRead.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleasedValueAccessed);
+
+        // Redelivery of the second release stays idempotent.
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state, Release("raw_pages"), "reduce", "reduce-2");
+
+        // A redelivery from the first iteration stays idempotent even after the latest
+        // tombstone has moved to the second value identity.
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state, Release("raw_pages"), "reduce", "reduce-1");
+        state.NormalizedValues.ReleasedBindings["raw_pages"].ValueId.Should().Be(secondValueId);
+        secondRead.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleasedValueAccessed);
+    }
+
+    [Fact]
+    public void Release_ShouldRejectReReleaseWhenNameWasNotRebound()
+    {
+        var state = StateReadyToRelease("payload", out _);
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state, Release("raw_pages"), "reduce", "reduce-execution");
+
+        var act = () => WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state, Release("raw_pages"), "reduce", "reduce-execution-2");
+
+        act.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleasedValueAccessed);
+    }
+
+    [Fact]
     public void ProjectedSeed_ShouldOmitRedactedReplayOnlyCompletionWithoutCanonicalValue()
     {
         var state = NormalizedState();

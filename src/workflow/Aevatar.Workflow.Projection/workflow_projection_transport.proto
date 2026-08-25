@@ -62,6 +62,27 @@ message WorkflowRunRecoveryCapabilityReadModel {
   int64 workflow_definition_version = 4;
 }
 
+// Immutable, run-document-local address for one step request attempt. The evidence id is an
+// opaque key derived from the typed (step_id, execution_id) identity; consumers must not parse it.
+message WorkflowStepRequestEvidenceReference {
+  string evidence_id = 1;
+  string execution_id = 2;
+  string source_event_id = 3;
+}
+
+// Sanitized request parameters retained once per immutable step execution. Step summaries,
+// failed-attempt snapshots and timeline entries carry only WorkflowStepRequestEvidenceReference.
+message WorkflowStepRequestEvidence {
+  string evidence_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string source_event_id = 4;
+  map<string, string> parameters_map = 5;
+  int64 source_parameter_utf8_bytes = 6;
+  int64 retained_parameter_utf8_bytes = 7;
+  string retained_parameter_sha256 = 8;
+}
+
 message WorkflowRunInsightReportDocument {
   string id = 1;
   int64 state_version = 2;
@@ -92,6 +113,10 @@ message WorkflowRunInsightReportDocument {
   // Stable O(1) lookup for the growing step list. Values are zero-based indexes
   // into step_entries and are rebuilt once when reading a legacy document.
   map<string, int32> step_index_by_id = 27;
+  // Immutable evidence store keyed by an opaque digest of (step_id, execution_id). This is a
+  // typed collection, not an extension bag; each full sanitized request parameter map appears
+  // at most once in the report document.
+  map<string, WorkflowStepRequestEvidence> request_evidence_by_id = 28;
 }
 
 message WorkflowExecutionCurrentStateDocument {
@@ -234,6 +259,7 @@ message WorkflowExecutionStepTrace {
   string worker_id = 7;
   string output_preview = 8;
   string error = 9;
+  // Legacy inline slot. New requests with a typed execution_id use request_evidence_reference.
   map<string, string> request_parameters_map = 10;
   map<string, string> completion_annotations_map = 11;
   string next_step_id = 12;
@@ -262,6 +288,7 @@ message WorkflowExecutionStepTrace {
   // before the current-attempt fields are reset. This keeps request identity and failure evidence
   // from different attempts from being combined.
   WorkflowExecutionFailedStepAttemptReadModel latest_failed_attempt = 32;
+  WorkflowStepRequestEvidenceReference request_evidence_reference = 33;
 }
 
 message WorkflowExecutionFailedStepAttemptReadModel {
@@ -274,6 +301,7 @@ message WorkflowExecutionFailedStepAttemptReadModel {
   string worker_id = 7;
   string output_preview = 8;
   string error = 9;
+  // Legacy inline slot. New snapshots retain only request_evidence_reference.
   map<string, string> request_parameters_map = 10;
   map<string, string> completion_annotations_map = 11;
   string next_step_id = 12;
@@ -294,6 +322,7 @@ message WorkflowExecutionFailedStepAttemptReadModel {
   string requested_variable_name = 27;
   string suspension_content = 28;
   WorkflowToolApprovalReadModel tool_approval_value = 29;
+  WorkflowStepRequestEvidenceReference request_evidence_reference = 30;
 }
 
 message WorkflowToolApprovalReadModel {
@@ -360,6 +389,9 @@ message WorkflowExecutionTimelineEvent {
   string step_type = 6;
   string event_type = 7;
   map<string, string> data_map = 8;
+  // Present for step.request entries with a typed execution_id. Other timeline stages continue
+  // to use data_map for their bounded stage-specific data.
+  WorkflowStepRequestEvidenceReference request_evidence_reference = 9;
 }
 
 message WorkflowExecutionSummary {

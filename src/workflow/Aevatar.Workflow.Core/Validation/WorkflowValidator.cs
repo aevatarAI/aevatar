@@ -87,7 +87,6 @@ public static class WorkflowValidator
 
             ValidateBranchTargets(step, stepIds, errors);
             ValidateTypeSpecificRules(step, availableWorkflowNames, knownCanonicalStepTypes, options, errors);
-
         }
 
         if (options.RequireExplicitLlmAgentToolScopes)
@@ -172,14 +171,6 @@ public static class WorkflowValidator
             .ToArray();
         if (normalizedNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() != normalizedNames.Length)
             errors.Add($"{owner} allowed_tools contains duplicate names.");
-
-        if (normalizedNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() >
-            WorkflowToolCatalogPolicies.MaximumWorkflowToolCount)
-        {
-            errors.Add(
-                $"{owner} allowed_tools exceeds the workflow catalog budget of " +
-                $"{WorkflowToolCatalogPolicies.MaximumWorkflowToolCount} tools.");
-        }
     }
 
     private static void ValidateValueLifecycles(

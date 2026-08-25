@@ -174,20 +174,25 @@ public class AgentToolVoiceCatalogTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_WithMoreThanSixAllowedTools_ShouldFailBeforeDiscovery()
+    public async Task DiscoverAsync_WithMoreThanSixAllowedTools_ShouldKeepEveryExactTool()
     {
-        var source = new CountingToolSource(new FakeAgentTool("door.open", "fake", "{}"));
+        var tools = Enumerable.Range(1, 7)
+            .Select(index => (IAgentTool)new FakeAgentTool($"tool-{index}", "fake", "{}"))
+            .ToArray();
+        var source = new CountingToolSource(tools);
         var credentials = new StubCredentialProvider(("voice-tool:ref-1", "caller-token"));
         var catalog = new AgentToolVoiceCatalog([source], credentials);
         var context = CreateToolContext(
             "voice-tool:ref-1",
-            "tool-1", "tool-2", "tool-3", "tool-4", "tool-5", "tool-6", "tool-7");
+            tools.Select(static tool => tool.Name).ToArray());
 
-        var act = () => catalog.DiscoverAsync(context);
+        var snapshot = await catalog.DiscoverAsync(context);
 
-        var exception = await act.Should().ThrowAsync<AgentTurnToolCatalogException>();
-        exception.Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.CatalogOverBudget);
-        source.DiscoverCalls.Should().Be(0);
+        VoiceToolCatalogSnapshotValidator.Validate(snapshot);
+        snapshot.Tools.Should().HaveCount(7);
+        snapshot.Proof.ToolCount.Should().Be(7);
+        snapshot.Proof.MaximumToolCount.Should().Be(6);
+        source.DiscoverCalls.Should().Be(1);
     }
 
     [Fact]

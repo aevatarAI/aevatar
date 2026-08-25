@@ -318,6 +318,14 @@ jobs:
       - name: Projection Provider E2E Smoke Test
         run: bash tools/ci/projection_provider_e2e_smoke.sh
 
+      - name: Upload workflow report-artifact benchmark
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-report-artifact-write-cost
+          path: artifacts/ci/workflow-report-artifact-write-cost.txt
+          if-no-files-found: warn
+
   kafka-transport-integration:
     # Refactor (iter16/cluster-ci-systemic-refactor):
     #   Old pattern: kafka-transport-integration skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or kafka_runtime changes

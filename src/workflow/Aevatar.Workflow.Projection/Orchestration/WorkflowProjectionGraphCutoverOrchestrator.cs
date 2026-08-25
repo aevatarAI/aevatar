@@ -9,15 +9,18 @@ public sealed class WorkflowProjectionGraphCutoverOrchestrator
     private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _reportReader;
     private readonly IVersionedProjectionGraphStore _graphStore;
     private readonly WorkflowRunIncrementalGraphMaterializer _materializer;
+    private readonly ProjectionGraphProviderStatus? _graphProviderStatus;
 
     public WorkflowProjectionGraphCutoverOrchestrator(
         IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> reportReader,
         IVersionedProjectionGraphStore graphStore,
-        WorkflowRunIncrementalGraphMaterializer materializer)
+        WorkflowRunIncrementalGraphMaterializer materializer,
+        ProjectionGraphProviderStatus? graphProviderStatus = null)
     {
         _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
         _graphStore = graphStore ?? throw new ArgumentNullException(nameof(graphStore));
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
+        _graphProviderStatus = graphProviderStatus;
     }
 
     public async Task<WorkflowProjectionGraphCandidate?> BuildCandidateAsync(
@@ -26,6 +29,9 @@ public sealed class WorkflowProjectionGraphCutoverOrchestrator
         ProjectionMaterializationRouteFingerprint candidateRoute,
         CancellationToken ct = default)
     {
+        if (_graphProviderStatus is { Enabled: false })
+            return null;
+
         var report = await ReadAuthoritativeReportAsync(rootActorId, ct);
         if (report == null)
             return null;
@@ -72,6 +78,9 @@ public sealed class WorkflowProjectionGraphCutoverOrchestrator
         string candidateFingerprint,
         CancellationToken ct = default)
     {
+        if (_graphProviderStatus is { Enabled: false })
+            return false;
+
         var report = await ReadAuthoritativeReportAsync(rootActorId, ct);
         if (report == null || !HasSameSource(report, candidateSource))
             return false;

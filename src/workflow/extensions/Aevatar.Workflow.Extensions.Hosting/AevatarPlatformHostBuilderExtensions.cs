@@ -136,6 +136,18 @@ public static class AevatarPlatformHostBuilderExtensions
                 Category = "dependency",
                 ProbeAsync = static async (serviceProvider, cancellationToken) =>
                 {
+                    var providerStatus = serviceProvider.GetService<ProjectionGraphProviderStatus>();
+                    if (providerStatus is { Enabled: false })
+                    {
+                        return AevatarHealthContributorResult.Healthy(
+                            "Workflow graph read model is disabled by configuration.",
+                            new Dictionary<string, string>
+                            {
+                                ["provider"] = providerStatus.ProviderName,
+                                ["enabled"] = bool.FalseString,
+                            });
+                    }
+
                     var graphStore = serviceProvider.GetRequiredService<IProjectionGraphStore>();
                     _ = await graphStore.ListNodesByOwnerAsync(
                         scope: WorkflowExecutionGraphConstants.Scope,

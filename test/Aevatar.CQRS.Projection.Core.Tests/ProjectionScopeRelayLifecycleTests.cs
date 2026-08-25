@@ -114,6 +114,35 @@ public sealed class ProjectionScopeRelayLifecycleTests
             .Which.ActivationGeneration.Should().Be(4);
     }
 
+    [Fact]
+    public async Task DurableReleasedScope_Activation_ShouldRemoveStaleRelay()
+    {
+        var (agent, stream) = CreateAgent(
+            "projection-scope-release-reactivation",
+            ProjectionRuntimeMode.DurableMaterialization);
+        agent.State.Released = true;
+
+        await agent.ActivateForTestAsync();
+
+        stream.RemovedRelayTargetIds.Should().Equal("projection-scope-release-reactivation");
+        stream.UpsertedRelays.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InactiveScope_Activation_ShouldRemoveStaleRelay()
+    {
+        var (agent, stream) = CreateAgent(
+            "projection-scope-inactive-reactivation",
+            ProjectionRuntimeMode.DurableMaterialization);
+        agent.State.Active = false;
+        agent.State.ObservationAttached = false;
+
+        await agent.ActivateForTestAsync();
+
+        stream.RemovedRelayTargetIds.Should().Equal("projection-scope-inactive-reactivation");
+        stream.UpsertedRelays.Should().BeEmpty();
+    }
+
     private static (LifecycleScopeAgent Agent, RecordingStream Stream) CreateAgent(
         string scopeId,
         ProjectionRuntimeMode runtimeMode)
@@ -151,6 +180,8 @@ public sealed class ProjectionScopeRelayLifecycleTests
         protected override ProjectionRuntimeMode RuntimeMode { get; } = runtimeMode;
 
         public Task DeactivateForTestAsync() => OnDeactivateAsync(CancellationToken.None);
+
+        public Task ActivateForTestAsync() => OnActivateAsync(CancellationToken.None);
 
         protected override ValueTask<ProjectionScopeDispatchResult> ProcessObservationCoreAsync(
             LifecycleContext context,
