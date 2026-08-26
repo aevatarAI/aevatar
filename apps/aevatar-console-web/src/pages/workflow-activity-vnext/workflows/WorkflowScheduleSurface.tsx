@@ -35,10 +35,12 @@ import {
 import { t } from '@/shared/i18n/messages';
 import { AevatarLoadingOverlay } from '@/shared/ui/AevatarLoading';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import { describeError } from '@/shared/ui/errorText';
 import {
   buildWorkflowActivityRunHref,
   buildWorkflowActivitySectionHref,
 } from '../navigation';
+import TechnicalDetails from '../TechnicalDetails';
 
 type WorkflowScheduleSurfaceProps = {
   readonly initialView?: ScheduleSurfaceView;
@@ -271,8 +273,27 @@ function scheduleRecurrenceSummary(cronExpression: string): string {
   );
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function rawErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return String(error ?? '');
+}
+
+function scheduleErrorDescription(error: unknown): React.ReactNode {
+  const description = describeError(error);
+  const technicalDetails = rawErrorMessage(error).trim();
+
+  return (
+    <div className="wa-vnext__schedule-failure-copy">
+      <p>{description}</p>
+      {technicalDetails && technicalDetails !== description ? (
+        <TechnicalDetails>{technicalDetails}</TechnicalDetails>
+      ) : null}
+    </div>
+  );
 }
 
 const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
@@ -486,7 +507,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
       setCreationStep('review');
     } catch (error) {
       setCreationStep('configure');
-      toast.error(errorMessage(error));
+      toast.error(describeError(error));
     }
   };
 
@@ -536,11 +557,11 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         );
         if (mode === 'modal') onClose();
         void refreshSchedules().catch((error) => {
-          toast.error(errorMessage(error));
+          toast.error(describeError(error));
         });
       }
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(describeError(error));
     } finally {
       setSaving(false);
     }
@@ -579,7 +600,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
       );
       await refreshSchedules();
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(describeError(error));
     } finally {
       setActionScheduleId(null);
     }
@@ -604,7 +625,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
       setSelectedSchedule(null);
       setSurfaceView('list');
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(describeError(error));
     } finally {
       setActionScheduleId(null);
     }
@@ -1180,13 +1201,14 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         </div>
       ) : schedules.isError ? (
         <Alert
+          className="wa-vnext__schedule-failure"
           showIcon
           type="error"
           title={t(
             'workflowActivityVNext.schedule.loadFailed',
             "Schedules couldn't be loaded",
           )}
-          description={errorMessage(schedules.error)}
+          description={scheduleErrorDescription(schedules.error)}
           action={
             <Button
               loading={schedules.isFetching}
@@ -1502,6 +1524,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         </div>
       ) : scheduleDetail.isError ? (
         <Alert
+          className="wa-vnext__schedule-failure"
           action={
             <Button
               loading={scheduleDetail.isFetching}
@@ -1510,7 +1533,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
               {t('workflowActivityVNext.common.retry', 'Retry')}
             </Button>
           }
-          description={errorMessage(scheduleDetail.error)}
+          description={scheduleErrorDescription(scheduleDetail.error)}
           showIcon
           title={t(
             detailTab === 'history'

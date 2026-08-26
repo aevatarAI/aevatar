@@ -356,6 +356,14 @@ render stale collection summaries as if they were detail data.
 A failed attempt is business data, not a History-request error. Refresh and
 Retry preserve the selected Schedule and active tab.
 
+Request-error Alerts use one concise product description and keep Retry in the
+owning data region. The raw error is not the description: proxy text, endpoint
+paths, local addresses, and backend exception details stay behind a collapsed
+`Technical details` disclosure. Alert content must shrink within the modal or
+drawer; long diagnostics wrap or scroll locally, and the Retry action moves
+below the message at narrow widths instead of escaping or overlapping the
+container.
+
 ## Backend Compatibility
 
 The design uses the existing Workflow-facing contract without additions:

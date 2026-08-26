@@ -156,7 +156,10 @@ POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview
 
 The request contains `cronExpression`, `timezone`, and `count: 5`. The
 browser never calculates future fire times. A preview error returns the user
-to the form with the invalid field still editable.
+to the form with the invalid field still editable. Preview, create, edit, and
+lifecycle failure Toasts use the shared user-facing error boundary; they never
+display raw proxy text, endpoint paths, local addresses, or backend exception
+messages.
 
 ### Review
 
@@ -226,6 +229,13 @@ The UI may present only typed response facts, including:
 
 Low-level service, actor, command, correlation, credential, or Team fields do
 not belong in the primary product UI.
+
+Collection and selected-Schedule request failures keep their owning modal or
+panel shell, name what could not be loaded, and provide Retry. Their primary
+description uses stable product language rather than the backend exception
+string. Raw transport diagnostics may appear only inside a collapsed
+`Technical details` disclosure. Long diagnostic text wraps or scrolls inside
+that disclosure; it must never widen the Alert, modal, drawer, or viewport.
 
 Selecting an existing Schedule opens its read-only Overview before editing.
 Overview and History are sibling tabs in one stable management surface.

@@ -27,6 +27,8 @@ jest.mock('@/shared/api/workflowScheduleApi', () => ({
 }));
 
 const mockedWorkflowScheduleApi = jest.mocked(workflowScheduleApi);
+const rawProxyError =
+  'Error occurred while trying to proxy: 127.0.0.1:5175/api/scopes/scope-alpha/workflows/wf-alpha/schedules/schedule-alpha';
 
 function createScheduleSummary(overrides: Record<string, unknown> = {}) {
   return {
@@ -148,6 +150,21 @@ describe('WorkflowScheduleSurface', () => {
     );
   });
 
+  it('keeps Schedule failure content bounded at desktop and narrow widths', () => {
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__schedule-failure { max-width: 100%; min-width: 0; width: 100%; }',
+    );
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__schedule-failure-copy > p { margin: 0; overflow-wrap: anywhere; }',
+    );
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__schedule-failure-copy .wa-vnext__technical-details-body { max-height: 132px; overflow: auto; white-space: pre-wrap; }',
+    );
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__schedule-failure .ant-alert-action, .wa-vnext__schedule-failure .ant-alert-actions { grid-column: 2; margin-inline-start: 0; margin-top: 10px; }',
+    );
+  });
+
   it('does not query schedules for an unpublished Workflow', () => {
     renderSurface(false);
 
@@ -157,6 +174,29 @@ describe('WorkflowScheduleSurface', () => {
       ),
     ).toBeInTheDocument();
     expect(workflowScheduleApi.list).not.toHaveBeenCalled();
+  });
+
+  it('keeps transport diagnostics secondary when the Schedule list fails', async () => {
+    mockedWorkflowScheduleApi.list.mockRejectedValue(new Error(rawProxyError));
+
+    renderSurface(true, 'modal', jest.fn(), 'list');
+
+    await waitFor(() =>
+      expect(screen.getByText("Schedules couldn't be loaded")).toBeVisible(),
+    );
+    expect(
+      screen.getByText(
+        'The current service is temporarily unavailable, please try again later.',
+      ),
+    ).toBeVisible();
+    expect(screen.getByText(rawProxyError)).not.toBeVisible();
+    expect(screen.getByText('Technical details')).toBeVisible();
+    expect(
+      screen.getByText("Schedules couldn't be loaded").closest('.ant-alert'),
+    ).toHaveClass('wa-vnext__schedule-failure');
+
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(screen.getByText(rawProxyError)).toBeVisible();
   });
 
   it('opens modal creation directly with one design-aligned configure surface', async () => {
@@ -261,6 +301,25 @@ describe('WorkflowScheduleSurface', () => {
     expect(
       screen.queryByText('Refreshing Workflow schedules'),
     ).not.toBeInTheDocument();
+  });
+
+  it('keeps transport diagnostics out of Schedule failure toasts', async () => {
+    mockedWorkflowScheduleApi.preview.mockRejectedValue(
+      new Error(rawProxyError),
+    );
+    renderSurface(true);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
+      target: { value: 'Daily workflow run' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Review schedule' }));
+
+    await waitFor(() =>
+      expect(mockToast.error).toHaveBeenCalledWith(
+        'The current service is temporarily unavailable, please try again later.',
+      ),
+    );
+    expect(mockToast.error).not.toHaveBeenCalledWith(rawProxyError);
   });
 
   it('returns the editor panel to the list while schedule refresh continues', async () => {
@@ -1334,7 +1393,7 @@ describe('WorkflowScheduleSurface', () => {
       totalCount: 1,
     });
     mockedWorkflowScheduleApi.get
-      .mockRejectedValueOnce(new Error('Schedule detail unavailable'))
+      .mockRejectedValueOnce(new Error(rawProxyError))
       .mockResolvedValueOnce({ schedule, recentFires: [] });
 
     renderSurface(true, 'modal', jest.fn(), 'list');
@@ -1349,7 +1408,20 @@ describe('WorkflowScheduleSurface', () => {
     await waitFor(() =>
       expect(screen.getByText("Schedule couldn't be loaded")).toBeVisible(),
     );
+    expect(
+      screen.getByText(
+        'The current service is temporarily unavailable, please try again later.',
+      ),
+    ).toBeVisible();
+    expect(screen.getByText(rawProxyError)).not.toBeVisible();
+    expect(screen.getByText('Technical details')).toBeVisible();
+    expect(
+      screen.getByText("Schedule couldn't be loaded").closest('.ant-alert'),
+    ).toHaveClass('wa-vnext__schedule-failure');
     expect(screen.queryByText('No attempts yet')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(screen.getByText(rawProxyError)).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 

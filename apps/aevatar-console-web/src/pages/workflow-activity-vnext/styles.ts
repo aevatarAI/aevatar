@@ -793,6 +793,12 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-toolbar { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .wa-vnext__schedule-toolbar--actions { justify-content: flex-end; }
 .wa-vnext__schedule-refresh-overlay { grid-column: 1; grid-row: 2; }
+.wa-vnext__schedule-failure { max-width: 100%; min-width: 0; width: 100%; }
+.wa-vnext__schedule-failure .ant-alert-section, .wa-vnext__schedule-failure .ant-alert-content, .wa-vnext__schedule-failure .ant-alert-description { max-width: 100%; min-width: 0; }
+.wa-vnext__schedule-failure-copy { display: grid; gap: 10px; max-width: 100%; min-width: 0; }
+.wa-vnext__schedule-failure-copy > p { margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__schedule-failure-copy .wa-vnext__technical-details { margin-top: 0; min-width: 0; }
+.wa-vnext__schedule-failure-copy .wa-vnext__technical-details-body { max-height: 132px; overflow: auto; white-space: pre-wrap; }
 .wa-vnext__schedule-list { display: grid; gap: 10px; }
 .wa-vnext__schedule-row { align-items: center; appearance: none; background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); color: var(--wa-ink); cursor: pointer; display: flex; font: inherit; gap: 16px; justify-content: space-between; min-width: 0; padding: 14px; text-align: left; transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease; width: 100%; }
 .wa-vnext__schedule-row:hover { background: #f2f4f7; border-color: #98a2b3; box-shadow: 0 2px 8px rgba(16, 24, 40, .06); }
@@ -998,6 +1004,10 @@ export const workflowActivityVNextCss = `
 }
 @media (max-width: 767px) {
   .wa-vnext-schedule-modal .ant-modal-content { padding: 18px; }
+  .wa-vnext__schedule-failure { align-items: flex-start; display: grid; grid-template-columns: auto minmax(0, 1fr); }
+  .wa-vnext__schedule-failure .ant-alert-icon { grid-column: 1; grid-row: 1; }
+  .wa-vnext__schedule-failure .ant-alert-section, .wa-vnext__schedule-failure .ant-alert-content { grid-column: 2; grid-row: 1; }
+  .wa-vnext__schedule-failure .ant-alert-action, .wa-vnext__schedule-failure .ant-alert-actions { grid-column: 2; margin-inline-start: 0; margin-top: 10px; }
   .wa-vnext__schedule-repeat-grid, .wa-vnext__schedule-cron-grid, .wa-vnext__schedule-review-details, .wa-vnext__schedule-detail-facts { grid-template-columns: 1fr; }
   .wa-vnext__schedule-context { align-items: flex-start; flex-direction: column; }
   .wa-vnext__schedule-context strong { text-align: left; }
