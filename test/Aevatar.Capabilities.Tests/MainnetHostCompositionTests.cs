@@ -297,6 +297,58 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public async Task AddAevatarMainnetHost_ShouldMaterializeUnprofiledNyxIdChatBaseline()
+    {
+        // Regression for issue #3532: the ordinary unprofiled Studio turn must
+        // materialize the reviewed baseline from the real mainnet composition,
+        // not fail closed because an unrelated source or capability is
+        // unavailable in this composition.
+        using var home = new TemporaryAevatarHomeScope();
+        using var secretStoreBackend = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__SecretStoreBackend", "InMemory");
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var materializer = app.Services.GetRequiredService<AgentTurnToolCatalogMaterializer>();
+
+        var catalog = await materializer.MaterializeUnprofiledBaselineAsync(
+            AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials(
+                    "token-alpha",
+                    null,
+                    null,
+                    AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            });
+
+        var diagnosticsDetail = string.Join(
+            ",",
+            catalog.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Code}:{diagnostic.Detail}"));
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            [
+            "nyxid_services",
+            "nyxid_api_keys",
+            "nyxid_nodes",
+            "nyxid_account",
+            "nyxid_status",
+            "nyxid_catalog",
+            "nyxid_require_service",
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+            ],
+            because: diagnosticsDetail);
+        catalog.ExactTools.Should().HaveCount(10);
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldComposeAgentProfilePublishingApplication()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -766,6 +818,7 @@ public sealed class MainnetHostCompositionTests
             ToolSetNames.ChatCore,
             ToolSetNames.LarkSelfNotify,
             ToolSetNames.NyxIdAssistantAdmission,
+            ToolSetNames.NyxIdChatBaseline,
             ToolSetNames.NyxIdChatDefault,
             ToolSetNames.NyxIdConnectedServices,
             ToolSetNames.NyxIdExecution,

@@ -32,6 +32,16 @@ public static class ToolSetNames
     public const string NyxIdChatDefault = "nyxid.chat.default";
 
     /// <summary>
+    /// The reviewed unprofiled-baseline slice of the NyxID chat surface: only
+    /// the dependency-light sources that provide the pinned Class-R reads, the
+    /// service readiness gate, typed user input, and explicit skill
+    /// discovery/loading. Kept separate from the full route ceiling so one
+    /// unavailable heavyweight source cannot fail the ordinary turn baseline
+    /// closed at resolve time.
+    /// </summary>
+    public const string NyxIdChatBaseline = "nyxid.chat.baseline";
+
+    /// <summary>
     /// Read-only external capability discovery, readiness, and explicit-request preview used by
     /// workflow authoring surfaces.
     /// </summary>

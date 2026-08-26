@@ -578,10 +578,10 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
     /// <summary>
     /// Materializes the reviewed baseline catalog for an ordinary, unprofiled
-    /// NyxID chat turn from the nyxid.chat.default route set. The baseline is
-    /// narrowed to the pinned reviewed tool names and the caller's tool
-    /// visibility; tools absent from the composition degrade individually
-    /// instead of failing the whole surface closed.
+    /// NyxID chat turn from the dedicated nyxid.chat.baseline set. The baseline
+    /// is narrowed to the pinned reviewed tool names and the caller's tool
+    /// visibility; tools that are absent, ineligible, or collided degrade
+    /// individually instead of failing the whole surface closed.
     /// </summary>
     public async Task<AgentTurnToolCatalog> MaterializeUnprofiledBaselineAsync(
         AgentToolExecutionContext toolContext,
@@ -590,14 +590,16 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         ArgumentNullException.ThrowIfNull(toolContext);
         var diagnostics = new List<AgentProfileTurnDiagnostic>();
         var routeTools = await DiscoverToolSetAsync(
-            ToolSetNames.NyxIdChatDefault,
+            ToolSetNames.NyxIdChatBaseline,
             toolContext,
             AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
             diagnostics,
             ct);
-        if (routeTools.HadFailure)
-            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
 
+        // The baseline is availability-intersected: a tool that is ineligible,
+        // collided, or unavailable degrades on its own (with a diagnostic) and
+        // the remaining reviewed tools still ship. Only an empty intersection
+        // fails closed.
         var selectedTools = routeTools.Tools
             .Where(pair => UnprofiledBaselineToolNames.Contains(pair.Key) &&
                            toolContext.ToolVisibility.Allows(pair.Key))
@@ -2017,7 +2019,9 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
             if (!IsEligible(tool, toolContext))
             {
-                hadFailure = true;
+                // Capability ineligibility is an availability intersection for
+                // this caller, not a discovery failure: the tool drops with a
+                // diagnostic while the rest of the surface stays usable.
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
                     AgentProfileTurnDiagnosticCode.ToolCapabilityRejected,
                     group.Key));
@@ -2058,7 +2062,6 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
             if (!IsEligible(registeredTool, toolContext))
             {
-                hadFailure = true;
                 available.Remove(name);
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
                     AgentProfileTurnDiagnosticCode.ToolCapabilityRejected,

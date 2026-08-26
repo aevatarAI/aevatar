@@ -333,7 +333,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             .ToArray();
         var source = new TokenBoundToolSource("request-token", tools);
         var registry = new RecordingToolSetRegistry();
-        registry.Add(ToolSetNames.NyxIdChatDefault, source);
+        registry.Add(ToolSetNames.NyxIdChatBaseline, source);
         var materializer = NewMaterializer(
             registry,
             new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
@@ -343,7 +343,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             ToolContext("request-token"),
             CancellationToken.None);
 
-        registry.ResolveCalls.Should().Equal(ToolSetNames.NyxIdChatDefault);
+        registry.ResolveCalls.Should().Equal(ToolSetNames.NyxIdChatBaseline);
         source.ObservedTokens.Should().Equal("request-token");
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo(reviewedNames);
         catalog.ExactTools.Keys.Should().BeEquivalentTo(reviewedNames);
@@ -360,7 +360,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         var source = new StaticToolSource(
             [new TestTool("nyxid_services"), new TestTool("ask_user")]);
         var registry = new RecordingToolSetRegistry();
-        registry.Add(ToolSetNames.NyxIdChatDefault, source);
+        registry.Add(ToolSetNames.NyxIdChatBaseline, source);
         var materializer = NewMaterializer(
             registry,
             new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
@@ -373,6 +373,38 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             "nyxid_services",
             "ask_user");
+    }
+
+    [Fact]
+    public async Task MaterializeUnprofiledBaselineAsync_ShouldDegradeIneligibleToolsIndividually()
+    {
+        // A human-session-only read on a turn without a resolvable human
+        // bearer drops on its own; the remaining reviewed tools still ship.
+        var source = new StaticToolSource(
+        [
+            new CapabilityTool("nyxid_services", [AgentToolCapabilities.RequiresHumanSession]),
+            new TestTool("nyxid_catalog"),
+            new TestTool("nyxid_require_service"),
+            new TestTool("ask_user"),
+        ]);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(ToolSetNames.NyxIdChatBaseline, source);
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeUnprofiledBaselineAsync(
+            ToolContext(accessToken: null),
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_catalog",
+            "nyxid_require_service",
+            "ask_user");
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected &&
+            diagnostic.Detail == "nyxid_services");
     }
 
     [Fact]
@@ -2913,7 +2945,9 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         catalog.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected &&
             diagnostic.Detail == "task");
-        fetcher.CallCount.Should().Be(0);
+        // Capability ineligibility degrades the one tool instead of failing
+        // the whole materialization, so the selected-skill layer still pins.
+        fetcher.CallCount.Should().Be(1);
     }
 
     [Fact]

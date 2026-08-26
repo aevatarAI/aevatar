@@ -617,6 +617,16 @@ public static class MainnetHostBuilderExtensions
                 [CreateToolSource<NyxIdAssistantToolSource>],
                 "Pinned local NyxID Assistant tools used by built-in admission intents without external discovery dependencies.");
             options.AddToolSet(
+                ToolSetNames.NyxIdChatBaseline,
+                [
+                    CreateToolSource<NyxIdAssistantToolSource>,
+                    CreateToolSource<AskUserAgentToolSource>,
+                    CreateToolSource<SkillsAgentToolSource>,
+                    CreateToolSource<OrnnSearchAgentToolSource>,
+                ],
+                "Reviewed unprofiled NyxID chat baseline: pinned Class-R management reads, the " +
+                "service readiness gate, typed user input, and explicit skill discovery/loading.");
+            options.AddToolSet(
                 ToolSetNames.NyxIdChatDefault,
                 [
                     CreateToolSource<NyxIdAssistantToolSource>,

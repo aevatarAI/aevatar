@@ -2465,9 +2465,31 @@ public sealed class NyxIdChatTurnOperationExecutor
         var toolContext = ResolveCatalogToolContext(request);
         try
         {
-            return await _turnCatalogMaterializer
+            var catalog = await _turnCatalogMaterializer
                 .MaterializeUnprofiledBaselineAsync(toolContext, ct)
                 .ConfigureAwait(false);
+            if (catalog.ExactTools.Count == 0)
+            {
+                _logger.LogWarning(
+                    "Unprofiled NyxID chat baseline catalog materialized empty. diagnostics={Diagnostics}",
+                    string.Join(
+                        ",",
+                        catalog.Diagnostics.Select(static diagnostic =>
+                            $"{diagnostic.Code}:{diagnostic.Detail}")));
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Unprofiled NyxID chat baseline catalog materialized. toolCount={ToolCount} tools={Tools} diagnostics={Diagnostics}",
+                    catalog.ExactTools.Count,
+                    string.Join(",", catalog.FinalAllowedToolNames.OrderBy(static name => name, StringComparer.Ordinal)),
+                    string.Join(
+                        ",",
+                        catalog.Diagnostics.Select(static diagnostic =>
+                            $"{diagnostic.Code}:{diagnostic.Detail}")));
+            }
+
+            return catalog;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
