@@ -4,6 +4,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
+  HistoryOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
@@ -47,8 +48,10 @@ import { previewScheduledDispatch } from "@/shared/api/scheduledDispatchApi";
 import { NyxIDAuthClient } from "@/shared/auth/client";
 import { getNyxIDRuntimeConfig } from "@/shared/auth/config";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
+import { history } from "@/shared/navigation/history";
 import {
   buildTeamMemberAutomationsHref,
+  buildTeamMemberPublishedRunsHref,
 } from "@/shared/navigation/teamRoutes";
 import {
   AevatarInspectorEmpty,
@@ -272,7 +275,7 @@ const responsiveStyle = `
 @media (max-width: 520px) {
   .team-automation-actions {
     display: grid !important;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .team-automation-actions .ant-btn {
@@ -1385,6 +1388,19 @@ const TeamAutomationsTab: React.FC<Props> = ({
           border: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
+        {renderAutomationActionButton({
+          icon: <HistoryOutlined />,
+          label: copy("teams.automations.actions.viewRuns", "View runs"),
+          onClick: () =>
+            history.push(
+              buildTeamMemberPublishedRunsHref({
+                scopeId: view.scopeId,
+                teamId: view.teamId,
+                memberId: view.memberId,
+                scheduleId: view.scheduleId,
+              }),
+            ),
+        })}
         {active
           ? renderAutomationActionButton({
               icon: <EditOutlined />,
@@ -1517,11 +1533,21 @@ const TeamAutomationsTab: React.FC<Props> = ({
         <div className="team-automation-row__schedule" style={{ display: "grid", gap: 5, minWidth: 0 }}>
           <FactLine monospace={false} text={cadence.summary} tooltipText={`${cadence.detail} · ${view.cronExpression}`} />
           <Typography.Text style={{ fontSize: 12 }} type="secondary">
+            {view.timezone}
+          </Typography.Text>
+          <Typography.Text style={{ fontSize: 12 }} type="secondary">
             {view.nextFireAt
               ? copy("teams.automations.row.nextRun", "Next {time}", {
                   time: formatCompactDateTime(view.nextFireAt, "--"),
                 })
               : copy("teams.automations.row.noNextRun", "No next run")}
+          </Typography.Text>
+          <Typography.Text style={{ fontSize: 12 }} type="secondary">
+            {view.lastFireAt
+              ? copy("teams.automations.row.lastRun", "Last {time}", {
+                  time: formatCompactDateTime(view.lastFireAt, "--"),
+                })
+              : copy("teams.automations.row.noLastRun", "No previous run")}
           </Typography.Text>
         </div>
         {renderActions(view)}
