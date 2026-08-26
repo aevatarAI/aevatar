@@ -112,7 +112,7 @@ is_backend_impact_path() {
     src/*|agents/*|test/*|demos/*|scripts/*|tools/ci/*)
       return 0
       ;;
-    .github/workflows/ci.yml)
+    .github/workflows/ci.yml|.github/workflows/fkst-review-policy.yml)
       return 0
       ;;
     aevatar.slnx|aevatar.*.slnf|Directory.Build.props|Directory.Packages.props|global.json|buf.work.yaml)
