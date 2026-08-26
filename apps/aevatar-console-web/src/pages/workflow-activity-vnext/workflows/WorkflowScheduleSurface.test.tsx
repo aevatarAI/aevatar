@@ -974,6 +974,7 @@ describe('WorkflowScheduleSurface', () => {
     mockedWorkflowScheduleApi.runNow.mockResolvedValue({
       scheduleId: schedule.scheduleId,
       accepted: true,
+      scheduledFireAt: '2026-08-20T01:00:00Z',
     });
 
     renderSurface(true, 'modal', jest.fn(), 'list');

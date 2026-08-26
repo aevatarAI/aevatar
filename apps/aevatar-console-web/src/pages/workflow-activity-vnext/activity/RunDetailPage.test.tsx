@@ -540,13 +540,16 @@ describe('Workflow Activity vNext run detail console', () => {
       'aria-busy',
     );
 
-    const loadedBetaRun = buildRunDetail();
-    loadedBetaRun.summary = {
-      ...loadedBetaRun.summary,
-      runId: 'run-source-beta',
-      status: 'completed',
-      success: true,
-      updatedAtUtc: '2026-08-04T09:01:00Z',
+    const loadedBetaRunFixture = buildRunDetail();
+    const loadedBetaRun = {
+      ...loadedBetaRunFixture,
+      summary: {
+        ...loadedBetaRunFixture.summary,
+        runId: 'run-source-beta',
+        status: 'completed',
+        success: true,
+        updatedAtUtc: '2026-08-04T09:01:00Z',
+      },
     };
 
     await act(async () => {
