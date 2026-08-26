@@ -1011,11 +1011,10 @@ public sealed class ManagedCodexCredentialLifecycleTests
     }
 
     [Theory]
-    [InlineData(false, "proxy:*")]
-    [InlineData(true, "proxy:*")]
     [InlineData(false, "proxy:* sandbox:execute")]
     [InlineData(true, "sandbox:execute proxy:*")]
-    public async Task ProvisionAsync_WithTransitionalSandboxPolicy_CreatesExactKeyAndPersistsOnlyTheVaultReference(
+    [InlineData(true, "account:read proxy:* sandbox:execute")]
+    public async Task ProvisionAsync_WithCurrentSandboxPolicy_CreatesExactKeyAndPersistsOnlyTheVaultReference(
         bool forwardAccessToken,
         string delegationScope)
     {
@@ -1496,9 +1495,9 @@ public sealed class ManagedCodexCredentialLifecycleTests
     [Theory]
     [InlineData(false, true, false, true, "proxy:*", "managed_user_services_unavailable")]
     [InlineData(true, true, false, false, "proxy:*", "chrono_sandbox_delegation_misconfigured")]
+    [InlineData(true, true, false, true, "proxy:*", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, true, false, true, "llm:proxy", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, true, false, true, "admin", "chrono_sandbox_delegation_misconfigured")]
-    [InlineData(true, true, false, true, "proxy:* sandbox:execute admin", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, false, false, true, "proxy:*", "managed_user_services_unavailable")]
     public async Task ProvisionAsync_WhenRequiredServiceIsInactiveOrMisconfigured_FailsBeforeIssuingKey(
         bool sandboxActive,
@@ -3250,7 +3249,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             null,
             false,
             true,
-            "proxy:*"),
+            "proxy:* sandbox:execute"),
         new(
             "us-llm",
             "chrono-llm-public",
@@ -3272,7 +3271,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         bool llmActive = true,
         bool forwardAccessToken = false,
         bool injectDelegationToken = true,
-        string delegationScope = "proxy:*",
+        string delegationScope = "proxy:* sandbox:execute",
         bool? sandboxCredentialSourceAllowed = null,
         bool? llmCredentialSourceAllowed = null) =>
         JsonSerializer.Serialize(new
@@ -3387,7 +3386,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
               "is_active": true,
               "forward_access_token": false,
               "inject_delegation_token": true,
-              "delegation_token_scope": "proxy:*",
+              "delegation_token_scope": "proxy:* sandbox:execute",
               "credential_source": { "type": "personal" }
             },
             {

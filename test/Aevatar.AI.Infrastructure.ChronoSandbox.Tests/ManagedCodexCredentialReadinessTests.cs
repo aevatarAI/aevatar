@@ -3046,7 +3046,7 @@ public sealed class ManagedCodexCredentialReadinessTests
                 null,
                 false,
                 true,
-                "proxy:*"),
+                "proxy:* sandbox:execute"),
             new ManagedCodexNyxIdService(
                 llmId,
                 ManagedCodexOptions.ChronoLlmServiceSlug,

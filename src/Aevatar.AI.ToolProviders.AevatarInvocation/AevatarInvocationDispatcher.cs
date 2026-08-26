@@ -36,6 +36,8 @@ public sealed class AevatarInvocationDispatcher
         "This channel bot is not provisioned for workflow result delivery, so the workflow was not started. Open /channels, select this registration, and choose Repair workflow replies. This repairs Aevatar's workflow result delivery binding; provider webhook settings usually do not need changes. You can also start the workflow from a surface that can observe its result.";
     private const string ChannelAgentKeyNotReadyMessage =
         "The channel bot Agent Key could not be prepared for NyxID workflow access, so the workflow was not started. Open /channels, select this registration, and choose Repair workflow replies. The workflow will not fall back to a short-lived user token.";
+    private const string ChannelAgentKeyRebindRequiredMessage =
+        "This channel bot uses an incompatible NyxID Agent Key, so the workflow was not started. Open /channels, remove this registration, and add the bot again to issue a compatible Agent Key. Repair workflow replies cannot change an Agent Key security class, and the workflow will not fall back to a short-lived user token.";
     private const string WorkflowBackgroundDeliveryReservationFailedMessage =
         "Workflow result delivery could not be prepared, so the workflow was not started. Retry from this chat, or start the workflow from a surface that can observe its result.";
     private static readonly TimeSpan WorkflowBackgroundDeliveryReservationLifetime = TimeSpan.FromDays(30);
@@ -2302,13 +2304,20 @@ public sealed class AevatarInvocationDispatcher
             return Error("channel_agent_key_not_ready", ChannelAgentKeyNotReadyMessage);
         }
 
-        return readiness.Ready
-            ? null
-            : Error(
-                string.IsNullOrWhiteSpace(readiness.FailureCode)
-                    ? "channel_agent_key_not_ready"
-                    : readiness.FailureCode,
-                ChannelAgentKeyNotReadyMessage);
+        if (readiness.Ready)
+            return null;
+
+        var failureCode = string.IsNullOrWhiteSpace(readiness.FailureCode)
+            ? "channel_agent_key_not_ready"
+            : readiness.FailureCode;
+        return Error(
+            failureCode,
+            string.Equals(
+                failureCode,
+                "channel_agent_key_rebind_required",
+                StringComparison.Ordinal)
+                ? ChannelAgentKeyRebindRequiredMessage
+                : ChannelAgentKeyNotReadyMessage);
     }
 
     private static bool TryGetManagedWorkflowRuntimeContext(

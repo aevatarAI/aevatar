@@ -21,7 +21,7 @@ public sealed class ScheduledAgentApiKeyIssuerTests
     {
         var handler = new RoutingJsonHandler(
             PersonalScopePlanJson(),
-            """{"id":"key-1","full_key":"secret"}""");
+            GeneralKeyResponse("key-1", "secret"));
         var issuer = CreateIssuer(handler);
         var plan = ValidPlan();
 
@@ -69,12 +69,56 @@ public sealed class ScheduledAgentApiKeyIssuerTests
             .Be(Now.AddDays(30));
     }
 
+    [Theory]
+    [InlineData("scheduled_invocation", true)]
+    [InlineData("scheduled_invocation", false)]
+    [InlineData("general", true)]
+    public async Task IssueAsync_WhenNyxIdReturnsIncompatibleCredentialClass_FailsAfterIssue(
+        string purpose,
+        bool scheduledWriteEnabled)
+    {
+        var handler = new RoutingJsonHandler(
+            PersonalScopePlanJson(),
+            $$"""{"id":"key-wrong-class","full_key":"secret","purpose":"{{purpose}}","scheduled_write_enabled":{{scheduledWriteEnabled.ToString().ToLowerInvariant()}}}""");
+        var issuer = CreateIssuer(handler);
+
+        var result = await issuer.IssueAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan()),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ApiKeyId.Should().Be("key-wrong-class");
+        result.Error.Should().Be("api_key_create_credential_class_invalid");
+        result.ToString().Should().NotContain("secret");
+    }
+
+    [Fact]
+    public async Task IssueAsync_WhenNyxIdOmitsCredentialClass_FailsAfterIssue()
+    {
+        var handler = new RoutingJsonHandler(
+            PersonalScopePlanJson(),
+            """{"id":"key-missing-class","full_key":"secret"}""");
+        var issuer = CreateIssuer(handler);
+
+        var result = await issuer.IssueAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan()),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ApiKeyId.Should().Be("key-missing-class");
+        result.Error.Should().Be("api_key_create_credential_class_invalid");
+    }
+
     [Fact]
     public async Task IssueAsync_WhenNoServiceGrantsRequired_CreatesEmptyAllowlistKey()
     {
         var handler = new RoutingJsonHandler(
             EmptyScopePlanJson(),
-            """{"id":"key-empty","full_key":"secret"}""");
+            GeneralKeyResponse("key-empty", "secret"));
         var issuer = CreateIssuer(handler);
         var plan = ValidPlan();
         plan.NyxIdServiceGrants.Clear();
@@ -116,7 +160,7 @@ public sealed class ScheduledAgentApiKeyIssuerTests
     {
         var handler = new RoutingJsonHandler(
             OrganizationScopePlanJson(),
-            """{"id":"key-org","full_key":"secret"}""");
+            GeneralKeyResponse("key-org", "secret"));
         var issuer = CreateIssuer(handler);
         var plan = ValidPlan();
         plan.Owner.OwnerKind = AuthorizationOwnerKind.Organization;
@@ -478,7 +522,7 @@ public sealed class ScheduledAgentApiKeyIssuerTests
     {
         var handler = new RoutingJsonHandler(
             PersonalScopePlanJson(),
-            """{"id":"key-1","full_key":"secret"}""");
+            GeneralKeyResponse("key-1", "secret"));
         var issuer = CreateIssuer(handler);
         var validated = new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan());
         validated.Plan.NyxIdServiceGrants[0].UserServiceId = "tampered";
@@ -611,6 +655,9 @@ public sealed class ScheduledAgentApiKeyIssuerTests
             new TestNyxIdApiClientFactory(client),
             timeProvider: new FakeTimeProvider(Now));
     }
+
+    private static string GeneralKeyResponse(string id, string fullKey) =>
+        $$"""{"id":"{{id}}","full_key":"{{fullKey}}","purpose":"general","scheduled_write_enabled":false}""";
 
     private static ScheduledInvocationAuthorizationPlan ValidPlan()
     {

@@ -19,6 +19,13 @@ bash tools/ci/nyxid_conformance_guard.sh
 
 Commit the resulting `sources.json` update only after the guard passes.
 
+## Code-execution wire contract
+
+The current-`main` code-execution boundary is maintained independently in
+`docs/contracts/nyxid-code-execution-conformance/v1`. Keeping it out of this fixed Assistant source
+pin lets upstream wire drift fail its own pull-request and scheduled check without changing the
+reproducible Assistant semantic-evaluation baseline.
+
 ## Registry revision `nyxid-assistant-actions.v8`
 
 NyxID production began serving `nyxid-assistant-actions.v8` on 2026-08-19

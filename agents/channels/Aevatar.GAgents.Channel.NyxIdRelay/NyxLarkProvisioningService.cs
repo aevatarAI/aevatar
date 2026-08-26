@@ -155,6 +155,17 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         {
             var relayApiKeyResponse = await CreateRelayApiKeyAsync(request.AccessToken, relayCallbackUrl, registrationId, ct);
             apiKeyId = NyxApiResponseHelper.ExtractRequiredApiKeyId(relayApiKeyResponse);
+            if (!NyxApiResponseHelper.HasGeneralProxyCredentialClass(relayApiKeyResponse))
+            {
+                var rejectedApiKeyId = apiKeyId;
+                var cleaned = await TryDeleteRejectedAgentKeyAsync(
+                    request.AccessToken,
+                    rejectedApiKeyId);
+                apiKeyId = null;
+                throw new InvalidOperationException(cleaned
+                    ? "api_key_credential_class_invalid"
+                    : "api_key_credential_class_cleanup_failed");
+            }
             // The one-time NyxID full_key goes ONLY into the distributed secret vault; the local
             // mirror persists just the typed SecretReference handle. The interactive relay reply
             // path keeps authenticating via NyxID-issued reply tokens; the vault handle exists so
@@ -348,6 +359,34 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 ex,
                 "Secret vault revoke for the workflow result delivery agent key failed during provisioning rollback: reason=credential_vault_revoke_failed registration={RegistrationId}",
                 registrationId);
+        }
+    }
+
+    private async Task<bool> TryDeleteRejectedAgentKeyAsync(
+        string accessToken,
+        string apiKeyId)
+    {
+        try
+        {
+            var response = await _nyxClient.DeleteApiKeyAsync(
+                accessToken,
+                apiKeyId,
+                CancellationToken.None);
+            if (!NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+                return true;
+
+            _logger.LogError(
+                "NyxID rejected incompatible Lark Agent Key cleanup; manual cleanup is required: apiKeyId={ApiKeyId}",
+                apiKeyId);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Incompatible Lark Agent Key cleanup failed; manual cleanup is required: apiKeyId={ApiKeyId}",
+                apiKeyId);
+            return false;
         }
     }
 

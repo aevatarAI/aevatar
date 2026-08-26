@@ -91,17 +91,62 @@ internal sealed class ChannelWorkflowResultDeliveryRepairNyxPort
             using var document = JsonDocument.Parse(response);
             var root = document.RootElement;
             var rotatedId = RequiredString(root, "id", "rotation_missing_id");
-            var fullKey = RequiredString(root, "full_key", "rotation_missing_full_key");
-            var createdAt = RequiredTimestamp(root, "created_at", "rotation_invalid_created_at");
-            _logger.LogInformation(
-                "Rotated NyxID relay API key for channel workflow delivery repair: previousKeyId={PreviousKeyId}, rotatedKeyId={RotatedKeyId}",
-                apiKeyId.Trim(),
-                rotatedId);
-            return new ChannelRotatedNyxAgentCredential(rotatedId, fullKey, createdAt);
+            try
+            {
+                if (!NyxIdApiAccessResponseParser.TryParseCreatedAgentApiKeySecurityClass(
+                        root,
+                        out var securityClass) ||
+                    securityClass is not { IsGeneralProxyCredential: true })
+                {
+                    throw Controlled("rotation_credential_class_invalid");
+                }
+                var fullKey = RequiredString(root, "full_key", "rotation_missing_full_key");
+                var createdAt = RequiredTimestamp(root, "created_at", "rotation_invalid_created_at");
+                _logger.LogInformation(
+                    "Rotated NyxID relay API key for channel workflow delivery repair: previousKeyId={PreviousKeyId}, rotatedKeyId={RotatedKeyId}",
+                    apiKeyId.Trim(),
+                    rotatedId);
+                return new ChannelRotatedNyxAgentCredential(rotatedId, fullKey, createdAt);
+            }
+            catch (InvalidOperationException ex) when (IsControlledRotationValidationFailure(ex))
+            {
+                var cleaned = await TryDeleteRejectedRotatedKeyAsync(accessToken, rotatedId);
+                if (!cleaned)
+                    throw Controlled("rotation_credential_cleanup_failed");
+                throw;
+            }
         }
         catch (JsonException)
         {
             throw Controlled("rotation_invalid_json");
+        }
+    }
+
+    private async Task<bool> TryDeleteRejectedRotatedKeyAsync(
+        string accessToken,
+        string rotatedId)
+    {
+        try
+        {
+            var response = await _nyxClient.DeleteApiKeyAsync(
+                accessToken,
+                rotatedId,
+                CancellationToken.None);
+            if (!NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+                return true;
+
+            _logger.LogError(
+                "NyxID rejected rotated Agent Key cleanup; manual cleanup is required: rotatedKeyId={RotatedKeyId}",
+                rotatedId);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "NyxID rotated Agent Key cleanup failed; manual cleanup is required: rotatedKeyId={RotatedKeyId}",
+                rotatedId);
+            return false;
         }
     }
 
@@ -235,4 +280,9 @@ internal sealed class ChannelWorkflowResultDeliveryRepairNyxPort
 
     private static InvalidOperationException Controlled(string failure) =>
         new(FailurePrefix + failure);
+
+    private static bool IsControlledRotationValidationFailure(InvalidOperationException ex) =>
+        ex.Message.StartsWith(
+            FailurePrefix + "rotation_",
+            StringComparison.Ordinal);
 }

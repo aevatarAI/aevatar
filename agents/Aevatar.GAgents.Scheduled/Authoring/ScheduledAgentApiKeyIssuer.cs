@@ -324,7 +324,23 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             if (id is null)
                 return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_missing_id");
             if (fullKey is null)
-                return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_missing_full_key");
+            {
+                return ScheduledAgentApiKeyIssueResult.FailedAfterIssue(
+                    id,
+                    "api_key_create_missing_full_key");
+            }
+            if (!NyxIdApiAccessResponseParser.TryParseCreatedAgentApiKeySecurityClass(
+                    document.RootElement,
+                    out var securityClass) ||
+                securityClass is null ||
+                !securityClass.IsGeneralProxyCredential)
+            {
+                return ScheduledAgentApiKeyIssueResult.FailedAfterIssue(
+                    id,
+                    "api_key_create_credential_class_invalid",
+                    "NyxID returned a credential class that cannot authorize the asynchronous code execution lifecycle.",
+                    "Reissue this Agent Key with purpose=general and scheduled_write_enabled=false.");
+            }
             return ScheduledAgentApiKeyIssueResult.Succeeded(id, fullKey, keyExpiresAtUnixMs);
         }
         catch (JsonException)

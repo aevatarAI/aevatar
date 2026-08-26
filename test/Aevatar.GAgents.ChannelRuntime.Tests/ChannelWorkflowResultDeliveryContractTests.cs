@@ -84,7 +84,8 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         actorNetwork.RegisterActivated(ChannelBotRegistrationGAgent.WellKnownId, registrationAgent);
 
         var provisioningHandler = new QueueHandler();
-        provisioningHandler.Enqueue($$$"""{"id":"key-123","full_key":"{{{RawAgentKey}}}"}""");
+        provisioningHandler.Enqueue(
+            $$$"""{"id":"key-123","full_key":"{{{RawAgentKey}}}","purpose":"general","scheduled_write_enabled":false}""");
         provisioningHandler.Enqueue("""{"id":"bot-456","status":"pending_webhook"}""");
         provisioningHandler.Enqueue("""{"id":"route-789","default_agent":true}""");
         provisioningHandler.Enqueue("""{"id":"svc-1"}""");

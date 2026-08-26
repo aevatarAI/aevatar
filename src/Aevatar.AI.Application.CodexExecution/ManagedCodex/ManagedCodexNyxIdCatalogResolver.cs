@@ -73,13 +73,8 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
         var scopes = scope.Split(
             (char[]?)null,
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return scopes.Length switch
-        {
-            1 => string.Equals(scopes[0], SharedDelegationScope, StringComparison.Ordinal),
-            2 => scopes.Contains(SharedDelegationScope, StringComparer.Ordinal) &&
-                 scopes.Contains(CodeDelegationScope, StringComparer.Ordinal),
-            _ => false,
-        };
+        return scopes.Contains(SharedDelegationScope, StringComparer.Ordinal) &&
+               scopes.Contains(CodeDelegationScope, StringComparer.Ordinal);
     }
 
     private static bool IsUsable(ManagedCodexNyxIdService service) =>

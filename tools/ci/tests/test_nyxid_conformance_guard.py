@@ -17,6 +17,9 @@ from nyxid_conformance_guard import (  # noqa: E402
     refresh_aevatar_pin,
     validate_assistant_registry_digests,
     validate_aevatar_digests,
+    validate_nyxid_wire_contract,
+    validate_nyxid_wire_manifest,
+    validate_nyxid_wire_source,
 )
 
 
@@ -135,6 +138,122 @@ class NyxIdConformanceGuardTests(unittest.TestCase):
             self.digest,
             sources["aevatar"]["files"]["src/contract.txt"],
         )
+
+    def test_nyxid_wire_contract_requires_pinned_markers(self):
+        wire_source = self.repo_root / "backend/src/handlers/keys.rs"
+        wire_source.parent.mkdir(parents=True)
+        wire_source.write_text("pub auto_connected: bool,\n", encoding="utf-8")
+        wire_contract = {
+            "files": {
+                "backend/src/handlers/keys.rs": hashlib.sha256(
+                    wire_source.read_bytes()
+                ).hexdigest(),
+            },
+            "required_markers": {
+                "backend/src/handlers/keys.rs": ["pub auto_connected: bool,"],
+            },
+            "forbidden_markers": {
+                "backend/src/handlers/keys.rs": ["pub credential: String,"],
+            },
+        }
+        errors = []
+
+        validate_nyxid_wire_contract(self.repo_root, wire_contract, errors)
+
+        self.assertEqual([], errors)
+
+    def test_nyxid_wire_contract_rejects_semantic_and_digest_drift(self):
+        wire_source = self.repo_root / "backend/src/handlers/user_services_handler.rs"
+        wire_source.parent.mkdir(parents=True)
+        wire_source.write_text("pub auto_connected: bool,\n", encoding="utf-8")
+        wire_contract = {
+            "files": {
+                "backend/src/handlers/user_services_handler.rs": "0" * 64,
+            },
+            "required_markers": {
+                "backend/src/handlers/user_services_handler.rs": [
+                    "pub forward_access_token: bool,",
+                ],
+            },
+            "forbidden_markers": {
+                "backend/src/handlers/user_services_handler.rs": [
+                    "pub auto_connected: bool,",
+                ],
+            },
+        }
+        errors = []
+
+        validate_nyxid_wire_contract(self.repo_root, wire_contract, errors)
+
+        self.assertTrue(any("wire source drift" in error for error in errors))
+        self.assertTrue(any("marker is missing" in error for error in errors))
+        self.assertTrue(any("forbidden wire field" in error for error in errors))
+
+    def test_nyxid_wire_marker_sources_must_be_digest_pinned(self):
+        errors = []
+
+        validate_nyxid_wire_contract(
+            self.repo_root,
+            {
+                "files": {},
+                "required_markers": {"backend/src/handlers/proxy.rs": ["required"]},
+            },
+            errors,
+        )
+
+        self.assertIn(
+            "NyxID wire marker source is not digest-pinned: "
+            "backend/src/handlers/proxy.rs",
+            errors,
+        )
+
+    def test_nyxid_wire_source_accepts_descendant_head_with_unchanged_contract(self):
+        wire_source = self.repo_root / "backend/src/handlers/keys.rs"
+        wire_source.parent.mkdir(parents=True)
+        wire_source.write_text("pub auto_connected: bool,\n", encoding="utf-8")
+        run_git(self.repo_root, "add", "backend/src/handlers/keys.rs")
+        run_git(self.repo_root, "commit", "--quiet", "-m", "Add wire source")
+        reviewed_revision = run_git(self.repo_root, "rev-parse", "HEAD")
+        digest = hashlib.sha256(wire_source.read_bytes()).hexdigest()
+        run_git(self.repo_root, "commit", "--quiet", "--allow-empty", "-m", "Advance main")
+        errors = []
+
+        observed_revision = validate_nyxid_wire_source(
+            self.repo_root,
+            self.wire_sources(reviewed_revision, digest),
+            errors,
+        )
+
+        self.assertEqual(run_git(self.repo_root, "rev-parse", "HEAD"), observed_revision)
+        self.assertEqual([], errors)
+
+    def test_nyxid_wire_manifest_rejects_non_main_tracking(self):
+        sources = self.wire_sources("1" * 40, "2" * 64)
+        sources["nyxid"]["tracked_ref"] = "release"
+        errors = []
+
+        validate_nyxid_wire_manifest(sources, errors)
+
+        self.assertIn("NyxID wire manifest must track main", errors)
+
+    @staticmethod
+    def wire_sources(reviewed_revision, digest):
+        return {
+            "schema_version": 1,
+            "nyxid": {
+                "repository": "https://github.com/ChronoAIProject/NyxID.git",
+                "tracked_ref": "main",
+                "reviewed_revision": reviewed_revision,
+            },
+            "wire_contract": {
+                "revision": "nyxid-code-execution-wire.v1",
+                "files": {"backend/src/handlers/keys.rs": digest},
+                "required_markers": {
+                    "backend/src/handlers/keys.rs": ["pub auto_connected: bool,"],
+                },
+                "forbidden_markers": {},
+            },
+        }
 
     def test_transition_revisions_must_match_payload_pins(self):
         contract_root = Path(self.directory.name) / "contracts"

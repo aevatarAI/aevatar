@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "nyxid": {
+    "repository": "https://github.com/ChronoAIProject/NyxID.git",
+    "tracked_ref": "main",
+    "reviewed_revision": "220b860fc31a7439a0b5b02662d3e1ea30873091"
+  },
+  "wire_contract": {
+    "revision": "nyxid-code-execution-wire.v1",
+    "files": {
+      "backend/src/handlers/api_keys.rs": "cf7131572306b50dc06dbfaf89b5af0d65cfefb146a81da386c9dadaf204bcf4",
+      "backend/src/handlers/keys.rs": "59a28fa2395121c9fc9f22622ead88dc23ef35397ee3b4b9a4510d8be504ae70",
+      "backend/src/handlers/proxy.rs": "b54f5f2a2ddfd99e34608bc8d4b4bdac6e04a66caefe96e873226afa88b9e00d",
+      "backend/src/handlers/user_services_handler.rs": "f0afeb1315b581d597e3f076bef35795f967fc014d950ebd56e6dfad20843309",
+      "backend/src/services/catalog_identity_service.rs": "bf27e10c89a6d419910db20f39fe535d3f8b987e6e1f57fc306ee78a151e6979",
+      "backend/src/services/unified_key_service.rs": "8364e9f9dcc669254a0ce622785cddc65420ea60f546ecbbade2c143d407d338"
+    },
+    "required_markers": {
+      "backend/src/handlers/api_keys.rs": [
+        "ordinary key creation must leave this empty",
+        "pub purpose: ApiKeyPurpose,",
+        "pub scheduled_write_enabled: bool,",
+        "pub durable_grants: Vec<DurableGrantReceipt>,",
+        "let scheduled = !body.selected_operations.is_empty();",
+        "durable_grants: Vec::new(),"
+      ],
+      "backend/src/handlers/keys.rs": [
+        "pub auto_connected: bool,",
+        "pub credential: Option<String>,",
+        "let credential = body.credential.as_deref().unwrap_or(\"\");",
+        "unified_key_service::create_key("
+      ],
+      "backend/src/handlers/proxy.rs": [
+        "if target.service.inject_delegation_token {",
+        "&target.service.delegation_token_scope,",
+        "X-NyxID-Durable-Grant-Id is required for scheduled_invocation keys",
+        "X-NyxID-Operation-Id is required for scheduled_invocation keys",
+        "if target.service.forward_access_token"
+      ],
+      "backend/src/handlers/user_services_handler.rs": [
+        "pub catalog_service_id: Option<String>,",
+        "pub forward_access_token: bool,",
+        "pub inject_delegation_token: bool,",
+        "pub delegation_token_scope: String,"
+      ],
+      "backend/src/services/catalog_identity_service.rs": [
+        "if changes.is_empty() {",
+        "total.saturating_sub(result.matched_count)",
+        "\"forward_access_token\"",
+        "\"inject_delegation_token\"",
+        "\"delegation_token_scope\""
+      ],
+      "backend/src/services/unified_key_service.rs": [
+        "if credential.is_empty()",
+        "Credential is required for direct routing (or select a node)",
+        "validate_token_exchange_catalog_credential(&svc, credential)?;"
+      ]
+    },
+    "forbidden_markers": {
+      "backend/src/handlers/user_services_handler.rs": [
+        "pub auto_connected: bool,"
+      ]
+    }
+  }
+}

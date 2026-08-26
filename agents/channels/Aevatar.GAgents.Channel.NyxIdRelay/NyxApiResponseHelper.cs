@@ -1,4 +1,6 @@
+using System.Net;
 using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Microsoft.Extensions.Logging;
 
@@ -90,6 +92,30 @@ internal static class NyxApiResponseHelper
         catch (JsonException)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether a create-api-key response carries the only NyxID credential class that can back
+    /// the channel's asynchronous workflow lifecycle. A scheduled-invocation key cannot authorize
+    /// the later status/result reads, so an absent or incompatible class fails closed.
+    /// </summary>
+    public static bool HasGeneralProxyCredentialClass(string response)
+    {
+        if (LooksLikeErrorEnvelope(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            return NyxIdApiAccessResponseParser.TryParseCreatedAgentApiKeySecurityClass(
+                       document.RootElement,
+                       out var securityClass) &&
+                   securityClass is { IsGeneralProxyCredential: true };
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 
@@ -293,6 +319,51 @@ internal static class NyxApiResponseHelper
         catch (JsonException)
         {
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Whether a wrapped non-2xx response is NyxID's typed rejection for using a
+    /// <c>scheduled_invocation</c> key outside its durable proxy-only route. Such a key cannot
+    /// inspect its own API-key record, so readiness must recognize this error before <c>purpose</c>
+    /// can be read and direct the owner to rebind the registration.
+    /// </summary>
+    public static bool IsDurableGrantMismatchError(string response)
+    {
+        try
+        {
+            using var envelope = JsonDocument.Parse(response);
+            var root = envelope.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("error", out var envelopeError) ||
+                envelopeError.ValueKind != JsonValueKind.True ||
+                !root.TryGetProperty("status", out var status) ||
+                status.ValueKind != JsonValueKind.Number ||
+                !status.TryGetInt32(out var httpStatus) ||
+                httpStatus != (int)HttpStatusCode.Forbidden ||
+                !root.TryGetProperty("body", out var body) ||
+                body.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            using var providerError = JsonDocument.Parse(body.GetString() ?? string.Empty);
+            var providerRoot = providerError.RootElement;
+            return providerRoot.ValueKind == JsonValueKind.Object &&
+                   providerRoot.TryGetProperty("error", out var error) &&
+                   error.ValueKind == JsonValueKind.String &&
+                   string.Equals(
+                       error.GetString(),
+                       "durable_grant_mismatch",
+                       StringComparison.Ordinal) &&
+                   providerRoot.TryGetProperty("error_code", out var errorCode) &&
+                   errorCode.ValueKind == JsonValueKind.Number &&
+                   errorCode.TryGetInt32(out var numericErrorCode) &&
+                   numericErrorCode == 9009;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

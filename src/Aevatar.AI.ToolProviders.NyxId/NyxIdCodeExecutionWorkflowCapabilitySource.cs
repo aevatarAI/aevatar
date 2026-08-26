@@ -16,11 +16,6 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
     ILogger<NyxIdCodeExecutionWorkflowCapabilitySource>? logger = null) :
     IExternalWorkflowCapabilitySource
 {
-    private const string PolicyMismatchMessage =
-        "The canonical platform code execution route does not deliver the required Agent Key " +
-        "and execution capability. Set forward_access_token=true, inject_delegation_token=true, " +
-        "and include proxy:* and sandbox:execute in delegation_token_scope.";
-
     private static readonly TimeSpan FreshnessWindow = TimeSpan.FromMinutes(5);
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly ILogger<NyxIdCodeExecutionWorkflowCapabilitySource> _logger =
@@ -249,7 +244,8 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 executionMode,
                 ExternalCapabilityReadinessStatus.ContractDrift,
                 "CODE_EXECUTION_ROUTE_POLICY_MISMATCH",
-                PolicyMismatchMessage,
+                NyxIdCodeExecutionRouteResolver.FormatPolicyMismatch(
+                    resolution.PolicyObservations),
                 source,
                 remediationAction: ExternalCapabilityRemediationActionKind.ConnectCredential,
                 remediationLabel: "Update the platform code service identity settings"),

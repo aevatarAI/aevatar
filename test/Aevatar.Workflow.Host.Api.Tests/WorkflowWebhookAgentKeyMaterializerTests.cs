@@ -20,7 +20,7 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
         const string issuedAgentKey = "nyxid_ag_dedicated_webhook_runtime_key";
         var handler = new SequencedNyxIdHandler(
             ScopePlanResponse(),
-            $$"""{"id":"provider-key-1","full_key":"{{issuedAgentKey}}"}""",
+            CreatedKeyResponse("provider-key-1", issuedAgentKey),
             string.Empty);
         var vault = new InMemorySecretVault();
         var materializer = CreateMaterializer(handler, vault);
@@ -94,7 +94,7 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
     {
         var handler = new SequencedNyxIdHandler(
             ScopePlanResponse(),
-            """{"id":"provider-key-rollback","full_key":"nyxid_ag_rollback_runtime_key"}""",
+            CreatedKeyResponse("provider-key-rollback", "nyxid_ag_rollback_runtime_key"),
             string.Empty);
         var materializer = CreateMaterializer(handler, new FailingPutSecretVault());
 
@@ -213,7 +213,6 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
     [InlineData("{\"error\":true}", 502)]
     [InlineData("{\"error\":true,\"status\":409}", 409)]
     [InlineData("{\"id\":\" provider-key\",\"full_key\":\"nyxid_ag_key\"}", 502)]
-    [InlineData("{\"id\":\"provider-key\",\"full_key\":\" \"}", 502)]
     public async Task Materialize_WhenProviderCreationResponseIsInvalid_ShouldNormalizeStatus(
         string createResponse,
         int expectedStatus)
@@ -226,6 +225,70 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
 
         result.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_CREATE_FAILED");
         result.StatusCode.Should().Be(expectedStatus);
+    }
+
+    [Fact]
+    public async Task Materialize_WhenProviderOmitsFullKey_RollsBackIssuedIdentity()
+    {
+        var handler = new SequencedNyxIdHandler(
+            ScopePlanResponse(),
+            """{"id":"provider-key-missing-secret","full_key":" "}""",
+            string.Empty);
+
+        var result = await CreateMaterializer(handler, new InMemorySecretVault())
+            .MaterializeAsync(
+                CallerAuthority(), DurableAdmissionPlan(), "scope-1", "hr-01", CancellationToken.None);
+
+        result.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_CREATE_FAILED");
+        result.StatusCode.Should().Be(502);
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Delete);
+        handler.Requests[2].Uri.Should().EndWith("/api/v1/api-keys/provider-key-missing-secret");
+    }
+
+    [Theory]
+    [InlineData("scheduled_invocation", true)]
+    [InlineData("scheduled_invocation", false)]
+    [InlineData("general", true)]
+    public async Task Materialize_WhenProviderReturnsIncompatibleCredentialClass_RollsBackKey(
+        string purpose,
+        bool scheduledWriteEnabled)
+    {
+        var createResponse =
+            $$"""{"id":"provider-key-wrong-class","full_key":"nyxid_ag_key","purpose":"{{purpose}}","scheduled_write_enabled":{{scheduledWriteEnabled.ToString().ToLowerInvariant()}}}""";
+        var handler = new SequencedNyxIdHandler(
+            ScopePlanResponse(),
+            createResponse,
+            string.Empty);
+
+        var result = await CreateMaterializer(handler, new InMemorySecretVault())
+            .MaterializeAsync(
+                CallerAuthority(), DurableAdmissionPlan(), "scope-1", "hr-01", CancellationToken.None);
+
+        result.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_CLASS_INVALID");
+        result.StatusCode.Should().Be(502);
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Delete);
+        handler.Requests[2].Uri.Should().EndWith("/api/v1/api-keys/provider-key-wrong-class");
+    }
+
+    [Fact]
+    public async Task Materialize_WhenIncompatibleCredentialCleanupIsRejected_ReportsManualCleanupFailure()
+    {
+        var handler = new SequencedNyxIdHandler(
+            ScopePlanResponse(),
+            """{"id":"provider-key-wrong-class","full_key":"nyxid_ag_key","purpose":"scheduled_invocation","scheduled_write_enabled":true}""",
+            """{"error":true,"status":503}""");
+
+        var result = await CreateMaterializer(handler, new InMemorySecretVault())
+            .MaterializeAsync(
+                CallerAuthority(), DurableAdmissionPlan(), "scope-1", "hr-01", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_CLEANUP_FAILED");
+        result.StatusCode.Should().Be(503);
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Delete);
     }
 
     [Fact]
@@ -309,6 +372,9 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
         new StaticApiClientFactory(handler),
         vault,
         NullLogger<WorkflowWebhookAgentKeyMaterializer>.Instance);
+
+    private static string CreatedKeyResponse(string id, string fullKey) =>
+        $$"""{"id":"{{id}}","full_key":"{{fullKey}}","purpose":"general","scheduled_write_enabled":false}""";
 
     private static WorkflowCallerNyxIdAuthority CallerAuthority() => new()
     {

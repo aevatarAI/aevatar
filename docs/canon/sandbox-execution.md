@@ -41,8 +41,12 @@ run outside that runtime. Do not present it as a natural-language agent delegati
 
 Route selection is fail closed, but credential provenance is not a capability lifecycle. During
 interactive admission, Aevatar reads the caller-visible typed NyxID UserService inventory and
-selects exactly one active, catalog-backed `chrono-sandbox` route that delivers an execution
-credential the code runtime accepts. A personal route is accessible by ownership; an
+selects an active, catalog-backed route that delivers an execution credential the code runtime
+accepts. When both the shared `chrono-sandbox` route and the personal
+`chrono-sandbox-aevatar` fallback are eligible, the shared route wins deterministically. An exact
+UserService ID already sealed into an admission proof remains authoritative. Multiple eligible
+shared routes, or multiple eligible aliases without a shared route, remain ambiguous and fail
+closed. A personal route is accessible by ownership; an
 organization/member route is accessible only when NyxID reports
 `credential_source.allowed=true`. An arbitrary custom UserService with the same slug has no
 canonical `catalog_service_id` and cannot shadow the platform route. The resolved exact
@@ -63,7 +67,8 @@ The shared `chrono-sandbox` route must deliver two credentials with different ty
   request, while `proxy:*` preserves the managed Codex contract on the same route.
 
 This policy is a conjunction. A route missing any setting or required scope is rejected as
-`CODE_EXECUTION_ROUTE_POLICY_MISMATCH`, and the blocker names the unsatisfied contract. Admission
+`CODE_EXECUTION_ROUTE_POLICY_MISMATCH`, and the blocker reports only the observed fields that
+differ from the required values. Admission
 checks scope membership rather than exact string order and preserves unrelated existing scopes.
 
 For an exact forwarded `nyxid_ag_` Agent Key, Chrono validates the separate delegation token for
@@ -121,7 +126,8 @@ Managed `codex_exec` selects the same exact `chrono-sandbox` UserService ID but 
 `/codex/execute` with its own request credential and eligibility contract. The UserService route
 configuration is shared: managed execution requires delegation containing `proxy:*`, while
 `code_execute` convergence preserves existing scopes and ensures both `proxy:*` and
-`sandbox:execute`. Neither
+`sandbox:execute`. Managed eligibility checks the same two required members and tolerates
+unrelated additional scopes. Neither
 capability may replace the other's contract or fall back to the other's runtime path.
 
 Interactive NyxID ingress may authorize that admission read with either a source-readable user
@@ -129,6 +135,29 @@ bearer or the short-lived proxy delegation token injected for Aevatar when it ca
 `account:read` grant. This code-execution admission rule is not shared by connected-service
 discovery, ordinary `nyxid_proxy`, LLM, or managed Codex paths. Unattended channel, webhook, and
 scheduled paths do not substitute such a short token for their Vault-backed Agent Key.
+
+The word "scheduled" in an Aevatar credential purpose describes who owns and reuses the Vault
+reference; it does not select NyxID's `scheduled_invocation` API-key security class. The
+asynchronous `code_execute` lifecycle requires one `POST /executions` followed by `GET` status and
+result requests. NyxID durable-operation grants bind one exact published write operation and
+require a grant ID plus operation ID on every request, so they cannot authorize this multi-request
+lifecycle. Channel, webhook, and scheduled provisioning must therefore accept only a NyxID create
+response with `purpose=general`, `scheduled_write_enabled=false`, and `durable_grants` absent or
+empty. Any other or absent class is rejected, and any incompatible key is rolled back before its
+secret is persisted. Existing incompatible channel keys require a full registration
+rebind because rotation preserves the security class; the narrower "Repair workflow replies"
+action cannot perform that conversion. Other incompatible keys must likewise be reissued through
+their owning binding flow. Aevatar must not guess durable grant headers or replace the Agent Key
+with a five-minute delegation token.
+
+Production drift is checked independently of source conformance. The hourly
+`nyxid-code-execution-route-drift.yml` workflow runs
+`tools/ops/check_nyxid_code_execution_route.sh` with a dedicated read-only canary identity. Its
+fixed API endpoint comes from the `NYXID_ROUTE_DRIFT_API_BASE_URL` repository variable and its
+runtime-only bearer comes from the `NYXID_ROUTE_DRIFT_READ_TOKEN` Actions secret; absence of either
+is itself a failing, visible check. The probe performs one inventory GET, requires one
+catalog-backed shared route, and verifies the ADR-0050 conjunction without logging credentials,
+route IDs, owners, or response bodies.
 
 For workflows, `code_execute` is compiled as an external capability with no caller-authored route
 selector. Fresh draft-run, save, and bind command admission performs the bounded exact-route

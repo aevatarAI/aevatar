@@ -13,6 +13,9 @@ from nyxid_semantic_evaluation import validate_semantic_evaluation
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_ROOT = REPO_ROOT / "docs/contracts/nyxid-assistant-conformance/v1"
+CODE_EXECUTION_CONTRACT_ROOT = (
+    REPO_ROOT / "docs/contracts/nyxid-code-execution-conformance/v1"
+)
 MAX_DIAGNOSTICS = 20
 
 
@@ -28,6 +31,11 @@ def load_json(path: Path):
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--nyxid-root", type=Path)
+    parser.add_argument(
+        "--nyxid-wire-root",
+        type=Path,
+        help="validate only the code-execution wire surfaces against a NyxID checkout",
+    )
     parser.add_argument("--gist-root", type=Path)
     parser.add_argument(
         "--refresh-aevatar-revision",
@@ -36,6 +44,31 @@ def main() -> int:
     )
     args = parser.parse_args()
     errors = []
+
+    if args.nyxid_wire_root and (
+        args.nyxid_root or args.gist_root or args.refresh_aevatar_revision
+    ):
+        parser.error("--nyxid-wire-root is an independent validation mode")
+
+    if args.nyxid_wire_root:
+        wire_sources = load_json(CODE_EXECUTION_CONTRACT_ROOT / "sources.json")
+        observed_revision = validate_nyxid_wire_source(
+            args.nyxid_wire_root.resolve(),
+            wire_sources,
+            errors,
+        )
+        if errors:
+            print("NyxID code-execution wire guard failed:")
+            for error in errors[:MAX_DIAGNOSTICS]:
+                print(f"  - {error}")
+            if len(errors) > MAX_DIAGNOSTICS:
+                print(f"  - ... {len(errors) - MAX_DIAGNOSTICS} more diagnostic(s) omitted")
+            return 1
+        print(
+            "NyxID code-execution wire guard passed at "
+            f"{observed_revision[:12]}."
+        )
+        return 0
 
     sources = load_json(CONTRACT_ROOT / "sources.json")
     if args.refresh_aevatar_revision:
@@ -410,6 +443,85 @@ def validate_nyxid(root, sources, expected_leaves, errors):
                 errors.append(f"checked-in leaf absent from NyxID clap tree: {path}")
             if expected_paths == actual_paths:
                 errors.append("NyxID clap leaf metadata drifted")
+
+
+def validate_nyxid_wire_source(root, sources, errors):
+    validate_nyxid_wire_manifest(sources, errors)
+
+    reviewed_revision = sources.get("nyxid", {}).get("reviewed_revision", "")
+    observed_revision = resolve_git_commit(root, "HEAD", errors, "NyxID wire HEAD")
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", reviewed_revision)
+        and git_commit_exists(root, reviewed_revision, errors, "NyxID reviewed revision")
+        and observed_revision is not None
+        and not git_is_ancestor(root, reviewed_revision, observed_revision)
+    ):
+        errors.append(
+            "NyxID wire HEAD must be the reviewed revision or one of its descendants"
+        )
+
+    validate_nyxid_wire_contract(root, sources.get("wire_contract", {}), errors)
+    return observed_revision or "unknown"
+
+
+def validate_nyxid_wire_manifest(sources, errors):
+    if sources.get("schema_version") != 1:
+        errors.append("NyxID wire manifest schema_version must be 1")
+
+    nyxid = sources.get("nyxid", {})
+    if nyxid.get("repository") != "https://github.com/ChronoAIProject/NyxID.git":
+        errors.append("NyxID wire manifest repository is not the canonical source")
+    if nyxid.get("tracked_ref") != "main":
+        errors.append("NyxID wire manifest must track main")
+    if not re.fullmatch(r"[0-9a-f]{40}", nyxid.get("reviewed_revision", "")):
+        errors.append("NyxID wire reviewed_revision must be a full lowercase commit SHA")
+
+    wire_contract = sources.get("wire_contract", {})
+    if wire_contract.get("revision") != "nyxid-code-execution-wire.v1":
+        errors.append("NyxID wire contract revision is unsupported")
+
+    files = wire_contract.get("files", {})
+    if not files:
+        errors.append("NyxID wire manifest must pin at least one source file")
+    for relative_path, digest in files.items():
+        path = Path(relative_path)
+        if path.is_absolute() or ".." in path.parts:
+            errors.append(f"NyxID wire source path escapes the checkout: {relative_path}")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            errors.append(f"NyxID wire source digest is invalid: {relative_path}")
+
+
+def validate_nyxid_wire_contract(root, wire_contract, errors):
+
+    files = wire_contract.get("files", {})
+    required_markers = wire_contract.get("required_markers", {})
+    forbidden_markers = wire_contract.get("forbidden_markers", {})
+    declared_paths = set(files)
+    marker_paths = set(required_markers) | set(forbidden_markers)
+    if marker_paths - declared_paths:
+        for relative_path in sorted(marker_paths - declared_paths):
+            errors.append(
+                "NyxID wire marker source is not digest-pinned: " + relative_path
+            )
+
+    for relative_path, expected in files.items():
+        source = root / relative_path
+        if not source.is_file():
+            errors.append(f"NyxID wire source is missing: {relative_path}")
+            continue
+        if sha256(source) != expected:
+            errors.append(f"NyxID wire source drift: {relative_path}")
+        text = source.read_text(encoding="utf-8")
+        for marker in required_markers.get(relative_path, []):
+            if marker not in text:
+                errors.append(
+                    f"NyxID wire contract marker is missing from {relative_path}: {marker}"
+                )
+        for marker in forbidden_markers.get(relative_path, []):
+            if marker in text:
+                errors.append(
+                    f"NyxID forbidden wire field appeared in {relative_path}: {marker}"
+                )
 
 
 def validate_gist(root, sources, errors):

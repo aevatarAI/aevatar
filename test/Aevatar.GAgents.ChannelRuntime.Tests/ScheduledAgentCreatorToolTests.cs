@@ -1294,7 +1294,8 @@ public sealed class ScheduledAgentCreatorToolTests
     ];
 
     private static RoutingJsonHandler CreateSuccessHandler(
-        string createApiKeyResponse = """{"id":"key-created","full_key":"full-secret-key"}""")
+        string createApiKeyResponse =
+            """{"id":"key-created","full_key":"full-secret-key","purpose":"general","scheduled_write_enabled":false}""")
     {
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", createApiKeyResponse);

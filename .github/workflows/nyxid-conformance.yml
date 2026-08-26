@@ -6,6 +6,7 @@ on:
       - '.github/workflows/nyxid-conformance.yml'
       - 'agents/Aevatar.GAgents.NyxidChat/**'
       - 'docs/contracts/nyxid-assistant-conformance/**'
+      - 'docs/contracts/nyxid-code-execution-conformance/**'
       - 'src/Aevatar.AI.ToolProviders.NyxId/**'
       - 'src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs'
       - 'tools/ci/nyxid_conformance_guard.py'
@@ -14,6 +15,8 @@ on:
       - 'tools/ci/tests/test_nyxid_conformance_guard.py'
       - 'tools/ci/tests/test_nyxid_semantic_evaluation.py'
       - 'tools/nyxid-conformance/**'
+  schedule:
+    - cron: '23 4 * * *'
   workflow_dispatch:
 
 jobs:
@@ -49,3 +52,26 @@ jobs:
           bash tools/ci/nyxid_conformance_guard.sh
           --nyxid-root external/nyxid
           --gist-root external/support-contract
+
+  current-main-wire-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout current NyxID main
+        uses: actions/checkout@v4
+        with:
+          repository: ChronoAIProject/NyxID
+          ref: main
+          path: external/nyxid-main
+          fetch-depth: 0
+
+      - name: Detect upstream code-execution wire drift
+        run: >-
+          bash tools/ci/nyxid_conformance_guard.sh
+          --nyxid-wire-root external/nyxid-main

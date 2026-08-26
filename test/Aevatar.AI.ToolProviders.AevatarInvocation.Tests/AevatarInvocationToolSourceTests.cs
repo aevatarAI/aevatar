@@ -3766,6 +3766,35 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflow_WhenChannelAgentKeyClassRequiresRebind_ShouldNotOfferInPlaceRepair()
+    {
+        var harness = new Harness();
+        harness.ChannelAgentKeyReadiness.Result =
+            ChannelNyxIdAgentKeyReadinessResult.Failed("channel_agent_key_rebind_required");
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-channel-agent-key-rebind",
+            accessToken: "short-lived-user-token",
+            sourceReadableAccessToken: "short-lived-source-token",
+            channelPlatform: "lark",
+            executionOwner: AgentToolExecutionOwners.ChannelRegistration("bot-reg-1"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().Be("channel_agent_key_rebind_required");
+        ErrorMessage(output).Should().Contain("remove this registration");
+        ErrorMessage(output).Should().Contain("add the bot again");
+        ErrorMessage(output).Should().Contain("cannot change an Agent Key security class");
+        harness.WorkflowDispatch.Command.Should().BeNull();
+    }
+
+    [Fact]
     public async Task StartWorkflow_ShouldKeepTrustedControlInTypedFields_NotMetadataBag()
     {
         var harness = new Harness();

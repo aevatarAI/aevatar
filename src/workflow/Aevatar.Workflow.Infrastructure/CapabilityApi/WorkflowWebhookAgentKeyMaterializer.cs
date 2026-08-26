@@ -167,10 +167,25 @@ internal sealed class WorkflowWebhookAgentKeyMaterializer : IWorkflowWebhookAgen
                 createResponse,
                 out var providerCredentialId,
                 out var fullKey,
-                out var createStatus))
+                out var createStatus,
+                out var createErrorCode))
         {
+            if (!string.IsNullOrWhiteSpace(providerCredentialId))
+            {
+                var cleaned = await TryDeleteProviderCredentialAsync(
+                    client,
+                    bearerToken,
+                    providerCredentialId,
+                    CancellationToken.None);
+                if (!cleaned)
+                {
+                    return WorkflowWebhookAgentKeyMaterializationResult.Failure(
+                        "WEBHOOK_CALLER_CREDENTIAL_CLEANUP_FAILED",
+                        StatusCodes.Status503ServiceUnavailable);
+                }
+            }
             return WorkflowWebhookAgentKeyMaterializationResult.Failure(
-                "WEBHOOK_CALLER_CREDENTIAL_CREATE_FAILED",
+                createErrorCode,
                 NormalizeProviderStatus(createStatus));
         }
 
@@ -307,7 +322,15 @@ internal sealed class WorkflowWebhookAgentKeyMaterializer : IWorkflowWebhookAgen
             var response = await client.DeleteApiKeyAsync(bearerToken, providerCredentialId, ct);
             if (string.IsNullOrWhiteSpace(response))
                 return true;
-            return !TryReadErrorEnvelope(response, out var status) || status == StatusCodes.Status404NotFound;
+            var deleted = !TryReadErrorEnvelope(response, out var status) ||
+                          status == StatusCodes.Status404NotFound;
+            if (!deleted)
+            {
+                _logger?.LogError(
+                    "NyxID webhook Agent Key cleanup failed after provider rejection and requires manual remediation. status={Status}",
+                    status);
+            }
+            return deleted;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -397,10 +420,12 @@ internal sealed class WorkflowWebhookAgentKeyMaterializer : IWorkflowWebhookAgen
         string response,
         out string providerCredentialId,
         out string fullKey,
-        out int? status)
+        out int? status,
+        out string errorCode)
     {
         providerCredentialId = string.Empty;
         fullKey = string.Empty;
+        errorCode = "WEBHOOK_CALLER_CREDENTIAL_CREATE_FAILED";
         if (TryReadErrorEnvelope(response, out status))
             return false;
 
@@ -409,7 +434,19 @@ internal sealed class WorkflowWebhookAgentKeyMaterializer : IWorkflowWebhookAgen
             using var document = JsonDocument.Parse(response);
             providerCredentialId = ReadNormalizedString(document.RootElement, "id") ?? string.Empty;
             fullKey = ReadNormalizedString(document.RootElement, "full_key") ?? string.Empty;
-            return providerCredentialId.Length > 0 && fullKey.Length > 0;
+            if (providerCredentialId.Length == 0 || fullKey.Length == 0)
+                return false;
+            if (!NyxIdApiAccessResponseParser.TryParseCreatedAgentApiKeySecurityClass(
+                    document.RootElement,
+                    out var securityClass) ||
+                securityClass is null ||
+                !securityClass.IsGeneralProxyCredential)
+            {
+                errorCode = "WEBHOOK_CALLER_CREDENTIAL_CLASS_INVALID";
+                return false;
+            }
+
+            return true;
         }
         catch (JsonException)
         {

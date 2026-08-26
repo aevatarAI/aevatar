@@ -15,9 +15,9 @@ public sealed class ChannelWorkflowResultDeliveryRepairNyxPortTests
     {
         const string fullKey = "nyxid_ag_secret_alpha";
         var handler = new RecordingHandler(
-            """{"id":"key-old-alpha","scopes":"read write"}""",
+            """{"id":"key-old-alpha","scopes":"read write","purpose":"general","scheduled_write_enabled":false}""",
             """{"id":"key-old-alpha","scopes":"read write proxy"}""",
-            """{"id":"key-new-alpha","full_key":"nyxid_ag_secret_alpha","created_at":"2026-07-21T02:00:00Z"}""",
+            """{"id":"key-new-alpha","full_key":"nyxid_ag_secret_alpha","created_at":"2026-07-21T02:00:00Z","purpose":"general","scheduled_write_enabled":false}""",
             """[{"id":"key-new-alpha","name":"aevatar-lark-relay-reg-alpha","is_active":true,"created_at":"2026-07-21T02:00:00Z","scopes":"read write proxy"}]""",
             """{"id":"route-alpha","agent_api_key_id":"key-new-alpha","default_agent":true}""");
         var logger = new RecordingLogger<ChannelWorkflowResultDeliveryRepairNyxPort>();
@@ -75,7 +75,7 @@ public sealed class ChannelWorkflowResultDeliveryRepairNyxPortTests
     {
         var handler = operation == "rotation"
             ? new RecordingHandler(
-                """{"id":"key-old-alpha","scopes":"read write proxy"}""",
+                """{"id":"key-old-alpha","scopes":"read write proxy","purpose":"general","scheduled_write_enabled":false}""",
                 response)
             : new RecordingHandler(response);
         var logger = new RecordingLogger<ChannelWorkflowResultDeliveryRepairNyxPort>();
@@ -105,6 +105,93 @@ public sealed class ChannelWorkflowResultDeliveryRepairNyxPortTests
         logger.Messages.Should().NotContain(message =>
             message.Contains("nyxid_ag_secret_alpha", StringComparison.Ordinal) ||
             message.Contains("user-bearer-alpha", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RotateAgentKeyAsync_DeletesRotatedCredentialWhenReturnedClassIsIncompatible()
+    {
+        const string fullKey = "nyxid_ag_secret_alpha";
+        var handler = new RecordingHandler(
+            """{"id":"key-old-alpha","scopes":"read write proxy","purpose":"general","scheduled_write_enabled":false}""",
+            """{"id":"key-new-alpha","full_key":"nyxid_ag_secret_alpha","created_at":"2026-07-21T02:00:00Z","purpose":"scheduled_invocation","scheduled_write_enabled":true,"durable_grants":[{"id":"grant-alpha"}]}""",
+            """{}""");
+        var logger = new RecordingLogger<ChannelWorkflowResultDeliveryRepairNyxPort>();
+        var port = CreatePort(handler, logger);
+
+        var exception = await FluentActions.Awaiting(() => port.RotateAgentKeyAsync(
+                "user-bearer-alpha",
+                "key-old-alpha",
+                CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>();
+
+        exception.Which.Message.Should().Be(
+            "channel_workflow_delivery_repair_nyx_rotation_credential_class_invalid");
+        handler.Requests.Select(static request => (request.Method, request.Path)).Should().Equal(
+            (HttpMethod.Get, "/api/v1/api-keys/key-old-alpha"),
+            (HttpMethod.Post, "/api/v1/api-keys/key-old-alpha/rotate"),
+            (HttpMethod.Delete, "/api/v1/api-keys/key-new-alpha"));
+        handler.Requests.Should().OnlyContain(request =>
+            request.Authorization == "Bearer user-bearer-alpha");
+        logger.Messages.Should().NotContain(message =>
+            message.Contains(fullKey, StringComparison.Ordinal) ||
+            message.Contains("user-bearer-alpha", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(
+        "{\"id\":\"key-new-alpha\",\"created_at\":\"2026-07-21T02:00:00Z\",\"purpose\":\"general\",\"scheduled_write_enabled\":false}",
+        "channel_workflow_delivery_repair_nyx_rotation_missing_full_key")]
+    [InlineData(
+        "{\"id\":\"key-new-alpha\",\"full_key\":\"nyxid_ag_secret_alpha\",\"created_at\":\"not-a-timestamp\",\"purpose\":\"general\",\"scheduled_write_enabled\":false}",
+        "channel_workflow_delivery_repair_nyx_rotation_invalid_created_at")]
+    public async Task RotateAgentKeyAsync_DeletesRotatedCredentialWhenResponseValidationFails(
+        string rotationResponse,
+        string expectedFailure)
+    {
+        var handler = new RecordingHandler(
+            """{"id":"key-old-alpha","scopes":"read write proxy","purpose":"general","scheduled_write_enabled":false}""",
+            rotationResponse,
+            """{}""");
+        var port = CreatePort(
+            handler,
+            new RecordingLogger<ChannelWorkflowResultDeliveryRepairNyxPort>());
+
+        var exception = await FluentActions.Awaiting(() => port.RotateAgentKeyAsync(
+                "user-bearer-alpha",
+                "key-old-alpha",
+                CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>();
+
+        exception.Which.Message.Should().Be(expectedFailure);
+        handler.Requests.Select(static request => (request.Method, request.Path)).Should().Equal(
+            (HttpMethod.Get, "/api/v1/api-keys/key-old-alpha"),
+            (HttpMethod.Post, "/api/v1/api-keys/key-old-alpha/rotate"),
+            (HttpMethod.Delete, "/api/v1/api-keys/key-new-alpha"));
+    }
+
+    [Fact]
+    public async Task RotateAgentKeyAsync_WhenRejectedCredentialCleanupFails_RequiresManualCleanup()
+    {
+        var handler = new RecordingHandler(
+            """{"id":"key-old-alpha","scopes":"read write proxy","purpose":"general","scheduled_write_enabled":false}""",
+            """{"id":"key-new-alpha","full_key":"nyxid_ag_secret_alpha","created_at":"2026-07-21T02:00:00Z","purpose":"scheduled_invocation","scheduled_write_enabled":true}""",
+            """{"error":true,"status":503}""");
+        var port = CreatePort(
+            handler,
+            new RecordingLogger<ChannelWorkflowResultDeliveryRepairNyxPort>());
+
+        var exception = await FluentActions.Awaiting(() => port.RotateAgentKeyAsync(
+                "user-bearer-alpha",
+                "key-old-alpha",
+                CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>();
+
+        exception.Which.Message.Should().Be(
+            "channel_workflow_delivery_repair_nyx_rotation_credential_cleanup_failed");
+        handler.Requests.Select(static request => (request.Method, request.Path)).Should().Equal(
+            (HttpMethod.Get, "/api/v1/api-keys/key-old-alpha"),
+            (HttpMethod.Post, "/api/v1/api-keys/key-old-alpha/rotate"),
+            (HttpMethod.Delete, "/api/v1/api-keys/key-new-alpha"));
     }
 
     [Theory]

@@ -18,7 +18,7 @@ public class NyxLarkProvisioningServiceTests
     public async Task ProvisionAsync_Captures_FullKey_Into_Vault_And_Mirrors_Typed_Handle_Only()
     {
         var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456","status":"pending_webhook"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789","default_agent":true}""");
         handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
@@ -111,7 +111,7 @@ public class NyxLarkProvisioningServiceTests
     public async Task ProvisionAsync_Without_FullKey_Provisions_Bot_Without_Delivery_Credential()
     {
         var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123"}""");
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123"));
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456","status":"pending_webhook"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789","default_agent":true}""");
         handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
@@ -145,10 +145,60 @@ public class NyxLarkProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_WithIncompatibleCredentialClass_DeletesKeyBeforeVaultWrite()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue(
+            HttpMethod.Post,
+            "/api/v1/api-keys",
+            """{"id":"key-invalid","full_key":"full-key","purpose":"scheduled_invocation","scheduled_write_enabled":true}""");
+        handler.Enqueue(
+            HttpMethod.Delete,
+            "/api/v1/api-keys/key-invalid",
+            """{"ok":true}""");
+        var secretVault = new RecordingSecretVault();
+
+        var result = await CreateService(handler, secretVault)
+            .ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("api_key_credential_class_invalid");
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[1].Method.Should().Be(HttpMethod.Delete);
+        handler.Requests[1].Path.Should().Be("/api/v1/api-keys/key-invalid");
+        secretVault.PutRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenIncompatibleCredentialCleanupFails_ReportsManualCleanup()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue(
+            HttpMethod.Post,
+            "/api/v1/api-keys",
+            """{"id":"key-invalid","full_key":"full-key","purpose":"scheduled_invocation","scheduled_write_enabled":true}""");
+        handler.Enqueue(
+            HttpMethod.Delete,
+            "/api/v1/api-keys/key-invalid",
+            """{"error":true,"status":503}""");
+        var secretVault = new RecordingSecretVault();
+
+        var result = await CreateService(handler, secretVault)
+            .ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("api_key_credential_class_cleanup_failed");
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[1].Method.Should().Be(HttpMethod.Delete);
+        handler.Requests[1].Path.Should().Be("/api/v1/api-keys/key-invalid");
+        secretVault.PutRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProvisionAsync_Omits_Blank_EncryptKey_From_ChannelBot_Payload()
     {
         var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
         handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
@@ -222,7 +272,7 @@ public class NyxLarkProvisioningServiceTests
         // must store that per-connection slug so this bot replies through ITS OWN Lark app instead
         // of the first one (the multi-bot cross-talk bug).
         var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456","status":"pending_webhook"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789","default_agent":true}""");
         handler.Enqueue("/api/v1/keys", """{"id":"svc-3","proxy_url_slug":"https://nyx.example.com/api/v1/proxy/s/api-lark-bot-3/{path}"}""");
@@ -260,7 +310,7 @@ public class NyxLarkProvisioningServiceTests
     public async Task ProvisionAsync_Uses_Explicit_ProviderSlug_For_Proxy_Service_Connection()
     {
         var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456","status":"pending_webhook"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789","default_agent":true}""");
         handler.Enqueue("/api/v1/keys", """{"id":"svc-explicit","slug":"api-lark-bot-custom"}""");
@@ -345,7 +395,7 @@ public class NyxLarkProvisioningServiceTests
         // from /channels without manual NyxID cleanup (the 502 the wizard showed). A second Lark bot
         // for a DIFFERENT app is fetched but left untouched.
         var handler = new RecordingHandler();
-        handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"x"}""");
+        handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", GeneralAgentKeyResponse("key-1", "x"));
         handler.Enqueue(HttpMethod.Post, "/api/v1/channel-bots", """{"error":true,"status":409,"message":"channel bot already exists"}""");
         // Real list shape: items have id + platform, NO platform_bot_id. Includes a telegram bot
         // (skipped) and a second lark bot for another app (fetched, not matched, not deleted).
@@ -437,7 +487,7 @@ public class NyxLarkProvisioningServiceTests
     public async Task ProvisionAsync_ShouldRollbackRemoteResources_WhenLocalMirrorRegistrationFails()
     {
         var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
         handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
@@ -492,7 +542,7 @@ public class NyxLarkProvisioningServiceTests
         // compensate BOTH legs — revoke the vault record and delete the NyxID api key — or a live
         // key stays resolvable with no registration referencing it.
         var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
         handler.Enqueue("/api/v1/channel-bots", """{"error":true,"status":500,"message":"upstream unavailable"}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
 
@@ -525,7 +575,7 @@ public class NyxLarkProvisioningServiceTests
         // failure must not shadow the api-key delete that follows it — deleting the NyxID key is
         // what makes an orphaned vault record inert.
         var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
         handler.Enqueue("/api/v1/channel-bots", """{"error":true,"status":500,"message":"upstream unavailable"}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
 
@@ -563,7 +613,7 @@ public class NyxLarkProvisioningServiceTests
         // key whose full_key stays resolvable in the vault.
         using var cts = new CancellationTokenSource();
         var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
         handler.Enqueue(HttpMethod.Post, "/api/v1/channel-bots", () =>
         {
             cts.Cancel();
@@ -612,7 +662,9 @@ public class NyxLarkProvisioningServiceTests
             Label: "Ops Bot",
             NyxProviderSlug: "api-lark-bot");
 
-    private static NyxLarkProvisioningService CreateService(RecordingHandler handler)
+    private static NyxLarkProvisioningService CreateService(
+        RecordingHandler handler,
+        ISecretVault? secretVault = null)
     {
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
@@ -625,9 +677,14 @@ public class NyxLarkProvisioningServiceTests
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
-            new InMemorySecretVault(),
+            secretVault ?? new InMemorySecretVault(),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
     }
+
+    private static string GeneralAgentKeyResponse(string id, string? fullKey = null) =>
+        fullKey is null
+            ? $$"""{"id":"{{id}}","purpose":"general","scheduled_write_enabled":false}"""
+            : $$"""{"id":"{{id}}","full_key":"{{fullKey}}","purpose":"general","scheduled_write_enabled":false}""";
 
     private sealed class RecordingSecretVault : ISecretVault
     {

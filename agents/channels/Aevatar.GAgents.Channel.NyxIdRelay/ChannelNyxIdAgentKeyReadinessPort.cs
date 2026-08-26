@@ -49,6 +49,18 @@ internal sealed class ChannelNyxIdAgentKeyReadinessPort(
         {
             throw;
         }
+        catch (InvalidOperationException ex) when (string.Equals(
+            ex.Message,
+            "channel_agent_key_credential_class_invalid",
+            StringComparison.Ordinal))
+        {
+            logger.LogWarning(
+                "Channel Agent Key uses an incompatible NyxID credential class and must be reissued by its registration owner: subjectId={SubjectId} scope={Scope}",
+                credential.SubjectId,
+                credential.OwnerScopeKey);
+            return ChannelNyxIdAgentKeyReadinessResult.Failed(
+                "channel_agent_key_rebind_required");
+        }
         catch (Exception ex)
         {
             logger.LogWarning(
@@ -114,6 +126,7 @@ internal static class ChannelNyxIdAgentKeyScopePolicy
 
         var normalizedApiKeyId = apiKeyId.Trim();
         var currentResponse = await nyxClient.GetApiKeyAsync(credential, normalizedApiKeyId, ct);
+        EnsureGeneralProxyCredentialClass(currentResponse);
         var currentScopes = ParseScopes(currentResponse, "scope_inspection_failed");
         if (HasProxyScope(currentScopes))
             return;
@@ -160,6 +173,32 @@ internal static class ChannelNyxIdAgentKeyScopePolicy
     private static bool HasProxyScope(string scopes) =>
         scopes.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Any(static scope => scope is "proxy" or "proxy:*");
+
+    private static void EnsureGeneralProxyCredentialClass(string response)
+    {
+        if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+        {
+            if (NyxApiResponseHelper.IsDurableGrantMismatchError(response))
+                throw Controlled("credential_class_invalid");
+            throw Controlled("credential_class_inspection_failed");
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            if (!NyxIdApiAccessResponseParser.TryParseCreatedAgentApiKeySecurityClass(
+                    document.RootElement,
+                    out var securityClass) ||
+                securityClass is not { IsGeneralProxyCredential: true })
+            {
+                throw Controlled("credential_class_invalid");
+            }
+        }
+        catch (JsonException)
+        {
+            throw Controlled("credential_class_inspection_failed");
+        }
+    }
 
     private static string AppendProxyScope(string scopes)
     {

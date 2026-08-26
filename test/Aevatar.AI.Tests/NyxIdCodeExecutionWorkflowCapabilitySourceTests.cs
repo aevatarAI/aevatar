@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -60,6 +61,79 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
 
         readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
         readiness.SelectedCapability.CodeExecution.UserServiceId.Should().Be("us-code-alpha");
+    }
+
+    [Fact]
+    public async Task InspectAsync_SharedAndPersonalAliasAreEligible_PrefersSharedCanonicalRoute()
+    {
+        var routes = Inventory(
+            Service("us-code-shared", "personal", true),
+            Service(
+                "us-code-alias",
+                "personal",
+                true,
+                slug: CodeExecutionContract.PersonalServiceSlug));
+        var source = CreateSource(new InventoryHandler(
+            routes,
+            ExecutionInventory(
+                ExecutionService("us-code-shared", CodeExecutionContract.ServiceSlug),
+                ExecutionService("us-code-alias", CodeExecutionContract.PersonalServiceSlug))));
+
+        var readiness = await source.InspectAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        readiness.SelectedCapability.CodeExecution.UserServiceId.Should().Be("us-code-shared");
+        readiness.SelectedCapability.CodeExecution.ServiceSlugSnapshot.Should()
+            .Be(CodeExecutionContract.ServiceSlug);
+    }
+
+    [Fact]
+    public void Resolve_ExactPersonalAlias_RemainsAuthoritative()
+    {
+        var routes = NyxIdApiAccessResponseParser.ParseUserServiceRoutes(Inventory(
+            Service("us-code-shared", "personal", true),
+            Service(
+                "us-code-alias",
+                "personal",
+                true,
+                slug: CodeExecutionContract.PersonalServiceSlug)));
+        var execution = NyxIdApiAccessResponseParser.ParseUserServiceKeys(ExecutionInventory(
+            ExecutionService("us-code-shared", CodeExecutionContract.ServiceSlug),
+            ExecutionService("us-code-alias", CodeExecutionContract.PersonalServiceSlug)));
+
+        var resolution = NyxIdCodeExecutionRouteResolver.Resolve(
+            new NyxIdUserServiceAuthoritySnapshot(routes, execution),
+            "us-code-alias");
+
+        resolution.IsReady.Should().BeTrue();
+        resolution.Service!.Id.Should().Be("us-code-alias");
+    }
+
+    [Fact]
+    public void Resolve_DuplicateSharedRoutes_RemainsAmbiguous()
+    {
+        var routes = NyxIdApiAccessResponseParser.ParseUserServiceRoutes(Inventory(
+            Service("us-code-shared-a", "personal", true),
+            Service("us-code-shared-b", "personal", true),
+            Service(
+                "us-code-alias",
+                "personal",
+                true,
+                slug: CodeExecutionContract.PersonalServiceSlug)));
+        var execution = NyxIdApiAccessResponseParser.ParseUserServiceKeys(ExecutionInventory(
+            ExecutionService("us-code-shared-a", CodeExecutionContract.ServiceSlug),
+            ExecutionService("us-code-shared-b", CodeExecutionContract.ServiceSlug),
+            ExecutionService("us-code-alias", CodeExecutionContract.PersonalServiceSlug)));
+
+        var resolution = NyxIdCodeExecutionRouteResolver.Resolve(
+            new NyxIdUserServiceAuthoritySnapshot(routes, execution));
+
+        resolution.Kind.Should().Be(NyxIdCodeExecutionRouteResolutionKind.Ambiguous);
+        resolution.Service.Should().BeNull();
+        resolution.EligibleCandidateCount.Should().Be(3);
     }
 
     [Fact]
@@ -137,15 +211,40 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
 
         var blocker = readiness.Blockers.Should().ContainSingle().Subject;
         blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_POLICY_MISMATCH");
-        blocker.SafeMessage.Should().Contain("forward_access_token")
-            .And.Contain("inject_delegation_token")
-            .And.Contain("proxy:*")
-            .And.Contain("sandbox:execute");
+        blocker.SafeMessage.Should()
+            .Contain("delegation_token_scope: missing [proxy:*, sandbox:execute]")
+            .And.NotContain("forward_access_token")
+            .And.NotContain("inject_delegation_token");
         var remediation = readiness.Remediations.Should().ContainSingle().Subject;
         remediation.ActionKind.Should()
             .Be(ExternalCapabilityRemediationActionKind.ConnectCredential);
         remediation.TrustedLocator.Should().Be("https://nyx.example");
         readiness.ToString().Should().NotContain("caller-bearer").And.NotContain("us-code-alpha");
+    }
+
+    [Fact]
+    public async Task InspectAsync_PolicyMismatch_ReportsOnlyObservedFieldDifferences()
+    {
+        var source = CreateSource(Inventory(Service(
+            "us-code-alpha",
+            "personal",
+            allowed: true,
+            injectDelegationToken: false,
+            scope: "proxy:*",
+            forwardAccessToken: false)));
+
+        var readiness = await source.InspectAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        var message = readiness.Blockers.Should().ContainSingle().Which.SafeMessage;
+        message.Should()
+            .Contain("forward_access_token: false -> true")
+            .And.Contain("inject_delegation_token: false -> true")
+            .And.Contain("delegation_token_scope: missing [sandbox:execute] -> contains [proxy:*, sandbox:execute]")
+            .And.NotContain("caller-bearer")
+            .And.NotContain("us-code-alpha");
     }
 
     [Theory]
@@ -350,6 +449,22 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
 
     private static string Inventory(params object[] services) =>
         JsonSerializer.Serialize(new { services });
+
+    private static string ExecutionInventory(params object[] services) =>
+        JsonSerializer.Serialize(new { keys = services });
+
+    private static object ExecutionService(string id, string slug) => new
+    {
+        id,
+        slug,
+        catalog_service_id = "catalog-chrono-sandbox",
+        catalog_service_slug = CodeExecutionContract.ServiceSlug,
+        is_active = true,
+        status = "active",
+        connected = true,
+        auto_connected = string.Equals(slug, CodeExecutionContract.ServiceSlug, StringComparison.Ordinal),
+        credential_source = new { type = "personal" },
+    };
 
     private static object Service(
         string id,

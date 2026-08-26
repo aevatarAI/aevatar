@@ -22,10 +22,16 @@ public sealed record NyxIdCodeExecutionRouteResolution(
     int AccessibleCandidateCount,
     int ActiveCandidateCount,
     int EligibleCandidateCount,
-    NyxIdApiAccessFailure? SourceFailure = null)
+    NyxIdApiAccessFailure? SourceFailure = null,
+    IReadOnlyList<NyxIdCodeExecutionRoutePolicyObservation>? PolicyObservations = null)
 {
     public bool IsReady => Kind == NyxIdCodeExecutionRouteResolutionKind.Ready && Service is not null;
 }
+
+public sealed record NyxIdCodeExecutionRoutePolicyObservation(
+    bool? ForwardAccessToken,
+    bool? InjectDelegationToken,
+    IReadOnlyList<string> MissingDelegationScopes);
 
 /// <summary>
 /// Resolves the platform code runtime from caller-visible NyxID facts. Catalog identity prevents
@@ -150,13 +156,19 @@ public static class NyxIdCodeExecutionRouteResolver
 
         var eligible = executionReady.Where(HasUsableExecutionCredential).ToArray();
         if (eligible.Length == 0)
-            return Result(
+            return new NyxIdCodeExecutionRouteResolution(
                 NyxIdCodeExecutionRouteResolutionKind.PolicyMismatch,
-                canonical,
-                accessible,
-                active,
-                eligible);
-        if (eligible.Length != 1)
+                null,
+                canonical.Length,
+                accessible.Length,
+                active.Length,
+                eligible.Length,
+                PolicyObservations: executionReady
+                    .Select(ObservePolicy)
+                    .ToArray());
+
+        var selected = SelectPreferredEligibleRoute(eligible, requestedId);
+        if (selected is null)
             return Result(
                 NyxIdCodeExecutionRouteResolutionKind.Ambiguous,
                 canonical,
@@ -166,7 +178,7 @@ public static class NyxIdCodeExecutionRouteResolver
 
         return new NyxIdCodeExecutionRouteResolution(
             NyxIdCodeExecutionRouteResolutionKind.Ready,
-            eligible[0],
+            selected,
             canonical.Length,
             accessible.Length,
             active.Length,
@@ -185,6 +197,57 @@ public static class NyxIdCodeExecutionRouteResolver
         return service.ForwardAccessToken == true &&
                service.InjectDelegationToken == true &&
                GrantsRequiredDelegationScopes(service.DelegationTokenScope);
+    }
+
+    public static string FormatPolicyMismatch(
+        IReadOnlyList<NyxIdCodeExecutionRoutePolicyObservation>? observations)
+    {
+        const string prefix = "The canonical platform code execution route policy differs: ";
+        if (observations is not { Count: > 0 })
+        {
+            return prefix +
+                   "forward_access_token must be true; inject_delegation_token must be true; " +
+                   "delegation_token_scope must contain proxy:* and sandbox:execute.";
+        }
+
+        var differences = new List<string>();
+        var forwardValues = observations
+            .Where(static observation => observation.ForwardAccessToken != true)
+            .Select(static observation => FormatObservedBoolean(observation.ForwardAccessToken))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (forwardValues.Length > 0)
+        {
+            differences.Add(
+                $"forward_access_token: {FormatObservedValues(forwardValues)} -> true");
+        }
+
+        var injectionValues = observations
+            .Where(static observation => observation.InjectDelegationToken != true)
+            .Select(static observation => FormatObservedBoolean(observation.InjectDelegationToken))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (injectionValues.Length > 0)
+        {
+            differences.Add(
+                $"inject_delegation_token: {FormatObservedValues(injectionValues)} -> true");
+        }
+
+        var missingScopes = observations
+            .SelectMany(static observation => observation.MissingDelegationScopes)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (missingScopes.Length > 0)
+        {
+            differences.Add(
+                $"delegation_token_scope: missing [{string.Join(", ", missingScopes)}] -> " +
+                "contains [proxy:*, sandbox:execute]");
+        }
+
+        return prefix + string.Join("; ", differences) + ".";
     }
 
     public static string AddRequiredDelegationScopes(string? delegationTokenScope)
@@ -215,6 +278,52 @@ public static class NyxIdCodeExecutionRouteResolver
         return scopes.Contains(CodeDelegationScope, StringComparer.Ordinal) &&
                scopes.Contains(ProxyDelegationScope, StringComparer.Ordinal);
     }
+
+    private static NyxIdCodeExecutionRoutePolicyObservation ObservePolicy(
+        NyxIdUserService service)
+    {
+        var scopes = string.IsNullOrWhiteSpace(service.DelegationTokenScope)
+            ? []
+            : service.DelegationTokenScope.Split(
+                (char[]?)null,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var missingScopes = new[] { ProxyDelegationScope, CodeDelegationScope }
+            .Where(required => !scopes.Contains(required, StringComparer.Ordinal))
+            .ToArray();
+        return new NyxIdCodeExecutionRoutePolicyObservation(
+            service.ForwardAccessToken,
+            service.InjectDelegationToken,
+            missingScopes);
+    }
+
+    private static NyxIdUserService? SelectPreferredEligibleRoute(
+        IReadOnlyList<NyxIdUserService> eligible,
+        string? requestedId)
+    {
+        if (eligible.Count == 1)
+            return eligible[0];
+        if (requestedId is not null)
+            return null;
+
+        var shared = eligible
+            .Where(static service => string.Equals(
+                service.Slug,
+                CodeExecutionContract.ServiceSlug,
+                StringComparison.Ordinal))
+            .ToArray();
+        return shared.Length == 1 ? shared[0] : null;
+    }
+
+    private static string FormatObservedBoolean(bool? value) =>
+        value switch
+        {
+            true => "true",
+            false => "false",
+            null => "absent",
+        };
+
+    private static string FormatObservedValues(IReadOnlyList<string> values) =>
+        values.Count == 1 ? values[0] : $"[{string.Join(", ", values)}]";
 
     private static bool IsAccessible(NyxIdUserService service) =>
         service.CredentialSource.Kind switch

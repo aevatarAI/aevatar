@@ -20,7 +20,7 @@ public sealed class ChannelNyxIdAgentKeyReadinessPortTests
         var vault = new InMemorySecretVault();
         var durable = await StoreAsync(vault, rawAgentKey);
         var handler = new RecordingHandler(
-            """{"id":"key-alpha","scopes":"read write"}""",
+            GeneralKey("read write"),
             """{"id":"key-alpha","scopes":"read write proxy"}""");
         var logger = new RecordingLogger<ChannelNyxIdAgentKeyReadinessPort>();
         var port = CreatePort(vault, handler, logger);
@@ -42,7 +42,7 @@ public sealed class ChannelNyxIdAgentKeyReadinessPortTests
     {
         var vault = new InMemorySecretVault();
         var durable = await StoreAsync(vault, "nyxid_ag_secret_alpha");
-        var handler = new RecordingHandler("""{"id":"key-alpha","scopes":"read write proxy"}""");
+        var handler = new RecordingHandler(GeneralKey("read write proxy"));
         var port = CreatePort(
             vault,
             handler,
@@ -51,6 +51,49 @@ public sealed class ChannelNyxIdAgentKeyReadinessPortTests
         var result = await port.EnsureReadyAsync(durable);
 
         result.Ready.Should().BeTrue();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Method.Should().Be(HttpMethod.Get);
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_ScheduledInvocationKey_FailsBeforeScopeMutation()
+    {
+        var vault = new InMemorySecretVault();
+        var durable = await StoreAsync(vault, "nyxid_ag_secret_alpha");
+        var handler = new RecordingHandler(
+            """{"id":"key-alpha","scopes":"read write","purpose":"scheduled_invocation","scheduled_write_enabled":true}""");
+        var port = CreatePort(
+            vault,
+            handler,
+            new RecordingLogger<ChannelNyxIdAgentKeyReadinessPort>());
+
+        var result = await port.EnsureReadyAsync(durable);
+
+        result.Ready.Should().BeFalse();
+        result.FailureCode.Should().Be("channel_agent_key_rebind_required");
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Method.Should().Be(HttpMethod.Get);
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_ScheduledInvocationKeySelfReadIsForbidden_RequiresRebind()
+    {
+        var vault = new InMemorySecretVault();
+        var durable = await StoreAsync(vault, "nyxid_ag_secret_alpha");
+        var handler = new RecordingHandler(
+            """{"error":"durable_grant_mismatch","error_code":9009,"message":"scheduled_invocation API keys are restricted to durable proxy execution routes"}""")
+        {
+            StatusCode = HttpStatusCode.Forbidden,
+        };
+        var port = CreatePort(
+            vault,
+            handler,
+            new RecordingLogger<ChannelNyxIdAgentKeyReadinessPort>());
+
+        var result = await port.EnsureReadyAsync(durable);
+
+        result.Ready.Should().BeFalse();
+        result.FailureCode.Should().Be("channel_agent_key_rebind_required");
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].Method.Should().Be(HttpMethod.Get);
     }
@@ -106,11 +149,15 @@ public sealed class ChannelNyxIdAgentKeyReadinessPortTests
         return new ChannelNyxIdAgentKeyReadinessPort(vault, client, logger);
     }
 
+    private static string GeneralKey(string scopes) =>
+        $$"""{"id":"key-alpha","scopes":"{{scopes}}","purpose":"general","scheduled_write_enabled":false}""";
+
     private sealed class RecordingHandler(params string[] responses) : HttpMessageHandler
     {
         private readonly Queue<string> _responses = new(responses);
 
         public List<RecordedRequest> Requests { get; } = [];
+        public HttpStatusCode StatusCode { get; init; } = HttpStatusCode.OK;
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -124,7 +171,7 @@ public sealed class ChannelNyxIdAgentKeyReadinessPortTests
                 request.RequestUri!.AbsolutePath,
                 request.Headers.Authorization?.ToString() ?? string.Empty,
                 body));
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(StatusCode)
             {
                 Content = new StringContent(
                     _responses.Count > 0 ? _responses.Dequeue() : "{}",

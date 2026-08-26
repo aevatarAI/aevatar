@@ -153,6 +153,24 @@ public sealed record NyxIdAgentApiKeyEvidence(
     DateTimeOffset CreatedAtUtc,
     NyxIdApiKeyVersionEvidence? VersionEvidence);
 
+public enum NyxIdAgentApiKeyPurpose
+{
+    Unspecified = 0,
+    General = 1,
+    ScheduledInvocation = 2,
+}
+
+public sealed record NyxIdCreatedAgentApiKeySecurityClass(
+    NyxIdAgentApiKeyPurpose Purpose,
+    bool ScheduledWriteEnabled,
+    bool HasDurableGrants)
+{
+    public bool IsGeneralProxyCredential =>
+        Purpose == NyxIdAgentApiKeyPurpose.General &&
+        !ScheduledWriteEnabled &&
+        !HasDurableGrants;
+}
+
 public enum NyxIdScopePlanPrincipalKind
 {
     Unspecified = 0,
@@ -323,6 +341,44 @@ public static class NyxIdApiAccessResponseParser
 
     public static NyxIdApiAccessResult<NyxIdApiKeyScopePlan> ParseScopePlan(string response) =>
         Parse(response, ScopePlanFailurePrefix, ParseScopePlanDocument);
+
+    public static bool TryParseCreatedAgentApiKeySecurityClass(
+        JsonElement root,
+        out NyxIdCreatedAgentApiKeySecurityClass? securityClass)
+    {
+        securityClass = null;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("purpose", out var purposeElement) ||
+            purposeElement.ValueKind != JsonValueKind.String ||
+            !root.TryGetProperty("scheduled_write_enabled", out var scheduledWriteElement) ||
+            scheduledWriteElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return false;
+        }
+
+        var purpose = purposeElement.GetString() switch
+        {
+            "general" => NyxIdAgentApiKeyPurpose.General,
+            "scheduled_invocation" => NyxIdAgentApiKeyPurpose.ScheduledInvocation,
+            _ => NyxIdAgentApiKeyPurpose.Unspecified,
+        };
+        if (purpose == NyxIdAgentApiKeyPurpose.Unspecified)
+            return false;
+
+        var hasDurableGrants = false;
+        if (root.TryGetProperty("durable_grants", out var durableGrantsElement))
+        {
+            if (durableGrantsElement.ValueKind != JsonValueKind.Array)
+                return false;
+            hasDurableGrants = durableGrantsElement.GetArrayLength() > 0;
+        }
+
+        securityClass = new NyxIdCreatedAgentApiKeySecurityClass(
+            purpose,
+            scheduledWriteElement.GetBoolean(),
+            hasDurableGrants);
+        return true;
+    }
 
     private static NyxIdApiAccessResult<T> Parse<T>(
         string response,

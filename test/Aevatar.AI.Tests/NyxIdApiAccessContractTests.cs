@@ -946,6 +946,26 @@ public sealed class NyxIdApiAccessContractTests
             .And.NotContain("secret/token");
     }
 
+    [Theory]
+    [InlineData("{\"purpose\":\"general\",\"scheduled_write_enabled\":false}", true, true)]
+    [InlineData("{\"purpose\":\"general\",\"scheduled_write_enabled\":false,\"durable_grants\":[]}", true, true)]
+    [InlineData("{\"purpose\":\"general\",\"scheduled_write_enabled\":false,\"durable_grants\":[{}]}", true, false)]
+    [InlineData("{\"purpose\":\"general\",\"scheduled_write_enabled\":false,\"durable_grants\":{}}", false, false)]
+    public void CreatedAgentApiKeySecurityClass_ShouldRequireNoDurableGrants(
+        string response,
+        bool expectedParsed,
+        bool expectedUsable)
+    {
+        using var document = JsonDocument.Parse(response);
+
+        var parsed = NyxIdApiAccessResponseParser.TryParseCreatedAgentApiKeySecurityClass(
+            document.RootElement,
+            out var securityClass);
+
+        parsed.Should().Be(expectedParsed);
+        (securityClass?.IsGeneralProxyCredential ?? false).Should().Be(expectedUsable);
+    }
+
     [Fact]
     public void AddNyxIdApiAccess_ShouldUseApiBaseUrlPrecedenceAndRegisterFactory()
     {

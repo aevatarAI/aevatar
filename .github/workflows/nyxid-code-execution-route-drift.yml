@@ -1,0 +1,39 @@
+name: NyxID Code Execution Route Drift
+
+on:
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nyxid-code-execution-route-drift
+  cancel-in-progress: true
+
+jobs:
+  shared-route-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check ADR-0050 shared route
+        env:
+          NYXID_ROUTE_DRIFT_READ_TOKEN: ${{ secrets.NYXID_ROUTE_DRIFT_READ_TOKEN }}
+          NYXID_ROUTE_DRIFT_API_BASE_URL: ${{ vars.NYXID_ROUTE_DRIFT_API_BASE_URL }}
+        run: |
+          if [[ -z "${NYXID_ROUTE_DRIFT_API_BASE_URL:-}" ]]; then
+            echo "::error title=NyxID route drift canary is not configured::Repository variable NYXID_ROUTE_DRIFT_API_BASE_URL is empty."
+            exit 2
+          fi
+          if [[ -z "${NYXID_ROUTE_DRIFT_READ_TOKEN:-}" ]]; then
+            echo "::error title=NyxID route drift canary is not configured::Repository secret NYXID_ROUTE_DRIFT_READ_TOKEN is empty."
+            exit 2
+          fi
+          if ! bash tools/ops/check_nyxid_code_execution_route.sh \
+            "${NYXID_ROUTE_DRIFT_API_BASE_URL}"; then
+            echo "::error title=NyxID code-execution route drifted::The sanitized ADR-0050 route check failed."
+            exit 1
+          fi
