@@ -2,7 +2,6 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -17,7 +16,7 @@ namespace Aevatar.Studio.Tests;
 public sealed class ConnectorExternalWorkflowCapabilitySourceTests
 {
     [Fact]
-    public void HostConnectorDefaults_ShouldPreserveScopeConnectors_AndReplaceSameNameDrift()
+    public void CatalogNameAuthority_ShouldPreserveScopeConnectors_ReplaceDrift_AndExcludeHostOwnedWrites()
     {
         var scopeConnector = Connector("fortune-engine", authType: string.Empty);
         var driftedDeterministicConnector = DeterministicConnector(
@@ -25,10 +24,13 @@ public sealed class ConnectorExternalWorkflowCapabilitySourceTests
             allowedOperations: ["different_algorithm"]);
         var hostDeterministicConnector = DeterministicConnector("deterministic_compute");
 
-        var merged = ActorBackedConnectorCatalogStore.MergeHostConnectorDefaults(
-            [scopeConnector, driftedDeterministicConnector],
-            [hostDeterministicConnector]);
+        var authority = new ConnectorCatalogNameAuthority(
+            [new StubHostConnectorCatalogDefaults([hostDeterministicConnector])]);
+        var scopeOwned = authority.SelectScopeOwnedDefinitions(
+            [scopeConnector, driftedDeterministicConnector]);
+        var merged = authority.ComposeDefinitions(scopeOwned);
 
+        scopeOwned.Should().Equal(scopeConnector);
         merged.Should().HaveCount(2);
         merged.Should().ContainSingle(connector => connector.Name == "fortune-engine");
         merged.Should().ContainSingle(connector => connector.Name == "deterministic_compute")
@@ -386,6 +388,12 @@ public sealed class ConnectorExternalWorkflowCapabilitySourceTests
 
         public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class StubHostConnectorCatalogDefaults(
+        IReadOnlyList<StoredConnectorDefinition> connectors) : IHostConnectorCatalogDefaults
+    {
+        public IReadOnlyList<StoredConnectorDefinition> Connectors { get; } = connectors;
     }
 
     private sealed class FixedTimeProvider : TimeProvider

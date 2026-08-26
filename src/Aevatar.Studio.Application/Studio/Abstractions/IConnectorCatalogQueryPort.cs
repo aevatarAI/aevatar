@@ -17,3 +17,20 @@ public interface IHostConnectorCatalogDefaults
 {
     IReadOnlyList<StoredConnectorDefinition> Connectors { get; }
 }
+
+public sealed record ConnectorCatalogNameEntry(string Name, bool Enabled);
+
+/// <summary>
+/// Owns Host-default connector-name precedence across catalog readers and scope writes.
+/// </summary>
+public interface IConnectorCatalogNameAuthority
+{
+    IReadOnlyList<StoredConnectorDefinition> ComposeDefinitions(
+        IReadOnlyList<StoredConnectorDefinition> scopedConnectors);
+
+    IReadOnlyList<string> ComposeEnabledNames(
+        IReadOnlyList<ConnectorCatalogNameEntry> scopedConnectors);
+
+    IReadOnlyList<StoredConnectorDefinition> SelectScopeOwnedDefinitions(
+        IReadOnlyList<StoredConnectorDefinition> requestedConnectors);
+}

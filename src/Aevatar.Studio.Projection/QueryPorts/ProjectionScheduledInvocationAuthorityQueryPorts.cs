@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.GAgents.UserConfig;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Abstractions;
 
@@ -127,7 +128,8 @@ public sealed class ProjectionScheduledInvocationWorkflowQueryPort(
 }
 
 public sealed class ProjectionScheduledInvocationConnectorQueryPort(
-    IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> reader)
+    IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> reader,
+    IConnectorCatalogNameAuthority connectorCatalogNameAuthority)
     : IScheduledInvocationConnectorEvidenceQueryPort
 {
     public async Task<ScheduledInvocationConnectorEvidence?> GetAsync(
@@ -135,16 +137,25 @@ public sealed class ProjectionScheduledInvocationConnectorQueryPort(
         CancellationToken ct = default)
     {
         var document = await reader.GetAsync($"connector-catalog-{scopeId.Trim()}", ct);
-        if (document?.StateRoot?.Is(ConnectorCatalogState.Descriptor) != true)
+        if (document is not null &&
+            document.StateRoot?.Is(ConnectorCatalogState.Descriptor) != true)
             return null;
 
-        var state = document.StateRoot.Unpack<ConnectorCatalogState>();
+        var state = document?.StateRoot?.Unpack<ConnectorCatalogState>();
+        var scopedConnectorNames = state?.Connectors
+            .Select(static connector => new ConnectorCatalogNameEntry(connector.Name, connector.Enabled))
+            .ToArray() ?? [];
+
+        // Fix (review round 1, F1):
+        //   Scheduled evidence ignored Host defaults and rejected connectors advertised by GET.
+        //   Resolve names through the shared authority, including when no scope document exists.
+        var connectorNames = connectorCatalogNameAuthority.ComposeEnabledNames(scopedConnectorNames);
+        if (document is null && connectorNames.Count == 0)
+            return null;
+
         return new ScheduledInvocationConnectorEvidence(
-            document.StateVersion,
-            state.Connectors
-                .Where(static connector => connector.Enabled && !string.IsNullOrWhiteSpace(connector.Name))
-                .Select(static connector => connector.Name.Trim())
-                .ToArray());
+            document?.StateVersion ?? 0,
+            connectorNames);
     }
 }
 

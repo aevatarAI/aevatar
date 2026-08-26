@@ -535,6 +535,13 @@ public sealed class MainnetHostCompositionTests
             ExternalCapabilityExecutionMode.Interactive);
         deterministicReadiness.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
 
+        var scheduledConnectorEvidence = await app.Services
+            .GetRequiredService<IScheduledInvocationConnectorEvidenceQueryPort>()
+            .GetAsync("default");
+        scheduledConnectorEvidence.Should().NotBeNull();
+        scheduledConnectorEvidence!.ConnectorCapabilityRefs.Should()
+            .Contain(MainnetDeterministicComputeConnectorDefinition.ConnectorName);
+
         var routePatterns = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
             .OfType<RouteEndpoint>()

@@ -342,6 +342,10 @@ Mainnet Host 默认启用一个 Host-owned 确定性计算 connector：
 Studio scope 的 connector catalog；因此生产镜像不依赖节点本地 `~/.aevatar/connectors.json` 才能暴露该
 内建能力。运行时注册仍通过 `HostCallbackConnectorBuilder`，若上述 handler/operation 与已注册的
 `DeterministicAlgorithmDescriptor` 不精确一致，Host 启动失败且 catalog 不会形成一个可运行的弱契约。
+Studio catalog GET、workflow capability source 与 scheduled authorization evidence 共用同一个 Host-default
+connector-name authority。scope PUT 只持久化 scope-owned connector，忽略同名 Host-owned 项并返回组合后的
+catalog view；因此不依赖客户端先 GET 再 PUT 来发布默认项。catalog `Version` / ETag 只描述可写的 scope
+catalog actor version，Host-owned defaults 随 Host 组合发布且不属于该并发控制边界。
 
 ## 3.4 Host 责任边界
 

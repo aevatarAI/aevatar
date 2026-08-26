@@ -23,6 +23,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkspaceService>();
         services.AddSingleton<ExecutionService>();
         services.AddSingleton<ConnectorService>();
+        services.TryAddSingleton<IConnectorCatalogNameAuthority, ConnectorCatalogNameAuthority>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IExternalWorkflowCapabilitySource,
             ConnectorExternalWorkflowCapabilitySource>());
