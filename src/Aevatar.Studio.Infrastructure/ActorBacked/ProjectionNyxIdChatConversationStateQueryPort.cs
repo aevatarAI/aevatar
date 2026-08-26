@@ -156,7 +156,8 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                     document.AttentionKind,
                     ToDateTimeOffset(document.AttentionSince),
                     NullIfEmpty(document.ActiveStepSummary),
-                    document.StateVersion),
+                    document.StateVersion,
+                    ToContextAttachments(document.ContextAttachments)),
                 StringComparer.Ordinal);
     }
 
@@ -187,7 +188,17 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             document.RecentActions.Select(ToAction).ToArray(),
             ToStepControlResult(document.LatestStepControlResult),
             document.RecentStepControlResults.Select(result => ToStepControlResult(result)!).ToArray(),
-            ToCanaryEffectFault(document.CanaryEffectFault));
+            ToCanaryEffectFault(document.CanaryEffectFault),
+            ToContextAttachments(document.ContextAttachments));
+
+    private static IReadOnlyList<NyxIdChatConversationContextAttachmentSnapshot> ToContextAttachments(
+        IEnumerable<NyxIdChatConversationContextAttachmentDocument> attachments) =>
+        attachments.Select(static attachment =>
+                new NyxIdChatConversationContextAttachmentSnapshot(
+                    attachment.ArtifactId,
+                    attachment.RevisionMode,
+                    attachment.PinnedRevisionId))
+            .ToArray();
 
     private static NyxIdChatCanaryEffectFaultSnapshot? ToCanaryEffectFault(
         NyxIdChatConversationCanaryEffectFaultDocument? fault) =>

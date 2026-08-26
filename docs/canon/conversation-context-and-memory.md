@@ -42,10 +42,18 @@ Conversation structured attachments are create-only, immutable references. Each 
 `FOLLOW_CURRENT` or `PINNED_REVISION`; the set is bounded to four artifact identities and is
 sealed by `ConversationContextAttachmentsBoundEvent`. Replaying the same deterministic protobuf
 bytes is idempotent; a different or missing set cannot replace an existing binding. Create
-admission reads only the ContentArtifact read model and fails closed with `ADMISSION_UNAVAILABLE`
-for missing, inactive, unauthorized, unsupported-kind, duplicate/over-limit, or unavailable
-pinned revisions. A turn may degrade to a typed unavailable placeholder when a later verified
-read is redacted, tombstoned, expired, over budget, or temporarily unavailable.
+admission reads only the ContentArtifact read model. Attachment failures use
+`ATTACHMENT_ADMISSION_DENIED` plus a typed reason (`not_found`, `access_denied`,
+`unsupported_kind`, `over_limit`, `pinned_revision_unavailable`, or the narrower invalid,
+inactive, and read-model-unavailable reasons); Profile and route failures retain
+`ADMISSION_UNAVAILABLE`. A turn may degrade to a typed unavailable placeholder when a later
+verified read is redacted, tombstoned, expired, over budget, or temporarily unavailable.
+
+The sealed reference set is copied from committed Conversation state into the actor-scoped
+current-state read model. Both `/api/chat/conversations/{conversationId}/state` and the
+`/api/chat/conversations` index expose only `artifactId`, `revisionMode`, and
+`pinnedRevisionId`; artifact bodies remain exclusively behind the verified ContentArtifact read
+path and never enter Conversation state, transcript, or either response.
 
 `FOLLOW_CURRENT` resolves only the artifact read model's explicit `CurrentRevisionId` on each
 turn; it never infers the highest revision number or silently retargets to the latest append.

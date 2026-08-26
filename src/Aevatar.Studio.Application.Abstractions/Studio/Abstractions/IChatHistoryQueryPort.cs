@@ -174,7 +174,8 @@ public sealed record ConversationMeta(
     string? AttentionKind = null,
     DateTimeOffset? AttentionSince = null,
     string? ActiveStepSummary = null,
-    long StateVersion = 0);
+    long StateVersion = 0,
+    IReadOnlyList<NyxIdChatConversationContextAttachmentSnapshot>? ContextAttachments = null);
 
 public sealed record StoredChatMessage(
     string Id,

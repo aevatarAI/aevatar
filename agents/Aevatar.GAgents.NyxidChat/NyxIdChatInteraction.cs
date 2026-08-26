@@ -189,6 +189,14 @@ public enum NyxIdChatStartError
     ActorNotFound = 1,
     ProjectionUnavailable = 2,
     AdmissionUnavailable = 3,
+    AttachmentNotFound = 4,
+    AttachmentAccessDenied = 5,
+    AttachmentUnsupportedKind = 6,
+    AttachmentOverLimit = 7,
+    AttachmentPinnedRevisionUnavailable = 8,
+    AttachmentInvalidRequest = 9,
+    AttachmentInactive = 10,
+    AttachmentReadModelUnavailable = 11,
 }
 
 public readonly record struct NyxIdChatCompletionStatus
@@ -427,6 +435,22 @@ internal sealed class NyxIdChatCommandTargetResolver
                     NyxIdChatLifecycleCommandStartError.AdmissionUnavailable or
                         NyxIdChatLifecycleCommandStartError.RouteRejected or
                         NyxIdChatLifecycleCommandStartError.AccessDenied => NyxIdChatStartError.AdmissionUnavailable,
+                    NyxIdChatLifecycleCommandStartError.AttachmentNotFound =>
+                        NyxIdChatStartError.AttachmentNotFound,
+                    NyxIdChatLifecycleCommandStartError.AttachmentAccessDenied =>
+                        NyxIdChatStartError.AttachmentAccessDenied,
+                    NyxIdChatLifecycleCommandStartError.AttachmentUnsupportedKind =>
+                        NyxIdChatStartError.AttachmentUnsupportedKind,
+                    NyxIdChatLifecycleCommandStartError.AttachmentOverLimit =>
+                        NyxIdChatStartError.AttachmentOverLimit,
+                    NyxIdChatLifecycleCommandStartError.AttachmentPinnedRevisionUnavailable =>
+                        NyxIdChatStartError.AttachmentPinnedRevisionUnavailable,
+                    NyxIdChatLifecycleCommandStartError.AttachmentInvalidRequest =>
+                        NyxIdChatStartError.AttachmentInvalidRequest,
+                    NyxIdChatLifecycleCommandStartError.AttachmentInactive =>
+                        NyxIdChatStartError.AttachmentInactive,
+                    NyxIdChatLifecycleCommandStartError.AttachmentReadModelUnavailable =>
+                        NyxIdChatStartError.AttachmentReadModelUnavailable,
                     _ => NyxIdChatStartError.ProjectionUnavailable,
                 });
         }

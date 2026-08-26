@@ -35,11 +35,21 @@ internal static class ConversationContextAttachmentAdmission
 
     public static bool TryNormalize(
         ConversationContextAttachmentSet? source,
-        out ConversationContextAttachmentSet normalized)
+        out ConversationContextAttachmentSet normalized) =>
+        TryNormalize(source, out normalized, out _);
+
+    public static bool TryNormalize(
+        ConversationContextAttachmentSet? source,
+        out ConversationContextAttachmentSet normalized,
+        out ConversationContextAttachmentAdmissionFailureReason failureReason)
     {
         normalized = CloneSet(source?.Attachments);
+        failureReason = ConversationContextAttachmentAdmissionFailureReason.Unspecified;
         if (normalized.Attachments.Count > MaximumAttachments)
+        {
+            failureReason = ConversationContextAttachmentAdmissionFailureReason.OverLimit;
             return false;
+        }
 
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var attachment in normalized.Attachments)
@@ -48,12 +58,18 @@ internal static class ConversationContextAttachmentAdmission
             attachment.PinnedRevisionId = attachment.PinnedRevisionId.Trim();
             if (string.IsNullOrWhiteSpace(attachment.ArtifactId) ||
                 !ids.Add(attachment.ArtifactId))
+            {
+                failureReason = ConversationContextAttachmentAdmissionFailureReason.InvalidRequest;
                 return false;
+            }
 
             if (attachment.RevisionMode == ConversationContextAttachmentRevisionMode.PinnedRevision)
             {
                 if (string.IsNullOrWhiteSpace(attachment.PinnedRevisionId))
+                {
+                    failureReason = ConversationContextAttachmentAdmissionFailureReason.InvalidRequest;
                     return false;
+                }
             }
             else if (attachment.RevisionMode == ConversationContextAttachmentRevisionMode.FollowCurrent)
             {
@@ -61,6 +77,7 @@ internal static class ConversationContextAttachmentAdmission
             }
             else
             {
+                failureReason = ConversationContextAttachmentAdmissionFailureReason.InvalidRequest;
                 return false;
             }
         }

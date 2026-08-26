@@ -27,7 +27,13 @@ public sealed record NyxIdChatConversationAttentionSummary(
     string AttentionKind,
     DateTimeOffset? AttentionSince,
     string? ActiveStepSummary,
-    long StateVersion);
+    long StateVersion,
+    IReadOnlyList<NyxIdChatConversationContextAttachmentSnapshot>? ContextAttachments = null);
+
+public sealed record NyxIdChatConversationContextAttachmentSnapshot(
+    string ArtifactId,
+    string RevisionMode,
+    string PinnedRevisionId);
 
 public sealed record NyxIdChatConversationStateQuery(
     string ScopeId,
@@ -122,7 +128,8 @@ public sealed record NyxIdChatConversationStateSnapshot(
     IReadOnlyList<NyxIdChatActionSnapshot>? RecentActions = null,
     NyxIdChatStepControlResultSnapshot? LatestStepControlResult = null,
     IReadOnlyList<NyxIdChatStepControlResultSnapshot>? RecentStepControlResults = null,
-    NyxIdChatCanaryEffectFaultSnapshot? CanaryEffectFault = null);
+    NyxIdChatCanaryEffectFaultSnapshot? CanaryEffectFault = null,
+    IReadOnlyList<NyxIdChatConversationContextAttachmentSnapshot>? ContextAttachments = null);
 
 public sealed record NyxIdChatCanaryEffectFaultSnapshot(
     string ArmId,
