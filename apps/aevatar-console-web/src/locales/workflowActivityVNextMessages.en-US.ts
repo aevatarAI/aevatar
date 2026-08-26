@@ -704,6 +704,8 @@ const workflowActivityVNextMessages = {
     'Schedule request accepted. It will appear in the list shortly.',
   'workflowActivityVNext.schedule.cron': 'Cron expression',
   'workflowActivityVNext.schedule.cronSummary': 'Cron: {cron}',
+  'workflowActivityVNext.schedule.runs': 'Runs',
+  'workflowActivityVNext.schedule.technicalFormat': 'Technical format',
   'workflowActivityVNext.schedule.hourly': 'Every hour',
   'workflowActivityVNext.schedule.daily': 'Every day',
   'workflowActivityVNext.schedule.everyWeekdaySummary':

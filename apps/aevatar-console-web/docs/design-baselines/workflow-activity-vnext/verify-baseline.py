@@ -23,13 +23,13 @@ SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PNG_SHA256 = {
-    "schedule-workflows-list-modal.png": "5460450bf3a108c4ec5a506e73fa91006103ecb432f003845a0248ff73caf417",
-    "schedule-workflow-editor-panel.png": "4d38bca61d38665c4e398cf93289a314f317f7664374ac155d5f5eeef53cda3c",
-    "schedule-review.png": "5cbbaea8cca0c89e6cade63761d37776900925bdc6261548dd29ba0c079ec98b",
-    "schedule-creation-pending.png": "e6de092b6dc5ef235f7ad7e46e3b500af6d916b4d1e54a8e8efee7068342d729",
-    "schedule-detail.png": "d65232de401fd43a8540cd6bd7e5de55ae38a459ba823dfb0b6a37a9c84988d5",
-    "schedule-history.png": "18f5eee48581e18e4c83fe52283693ca2b7bbd8480e8b53ca3c0224028bd4379",
-    "schedule-edit.png": "685b2b94f6ae503888900ba3d0f208a6164337fe8d957c15e43324cb71359fe9",
+    "schedule-workflows-list-modal.png": "14d6fbcb856f0743f92f73babbd0b2b96abae2ca725ccdcf887aaf10e19e3778",
+    "schedule-workflow-editor-panel.png": "2498073995c91197655b34fe4d8f65c19420a2da7f0099249cf9496bb64354db",
+    "schedule-review.png": "7af3db8ef47a0353025fb2ac5487f01c668d366db82164e5317e663398267874",
+    "schedule-creation-pending.png": "4601963d99efa82a9b22e0db90e3c48ce93a279aa32a1181bf115c25d3e44c8a",
+    "schedule-detail.png": "eefb5bae6cbdfd4b93775b1e035e458972b2bc1569a36a90e68c27f0c8300840",
+    "schedule-history.png": "5fd97c62a884678f80f23ecc62ecd41277ffd9a36fa47e45de8988b8a71acb73",
+    "schedule-edit.png": "4aa5d9c9848492ec2dc8ea8b7ee11886e1a27f5d0f252fdedb1775e37ee0e19e",
 }
 OBSOLETE_SCHEDULE_PNGS = (
     "prototype-schedule.png",
@@ -37,7 +37,7 @@ OBSOLETE_SCHEDULE_PNGS = (
     "schedule-authorization-review.png",
 )
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "7929225d09529221a8d6d0f989b742a99d40d64fd9580b5422324228ca524c6b"
+EXPECTED_SCHEDULE_SHA256 = "7c27a027eec6a3ec9d1b118fa3b4ab80d1938fd85f3bc04451d1189553fb67d8"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -363,6 +363,9 @@ def main() -> None:
         "failed attempts",
         "summarize new feedback",
         "advanced details",
+        "runs",
+        "technical format",
+        "0 9 * * 1-5",
         "run now",
         "edit schedule",
         "more",
@@ -401,6 +404,15 @@ def main() -> None:
         raise SystemExit("Schedule board still presents the removed collection model")
 
     prototype_text = prototype_path.read_text(encoding="utf-8")
+    overview_start = prototype_text.index("function scheduleOverviewMarkup")
+    overview_end = prototype_text.index("function scheduleHistoryMarkup", overview_start)
+    prototype_overview_text = prototype_text[overview_start:overview_end]
+    for required in (
+        '<span>Runs</span><strong>${escapeHtml(editModel.humanSummary)}</strong>',
+        '<span>Technical format</span><code>${escapeHtml(schedule.cronExpression)}</code>',
+    ):
+        if required not in prototype_overview_text:
+            raise SystemExit(f"prototype Schedule Overview is missing readable technical hierarchy: {required}")
     creation_start = prototype_text.index("function resetScheduleCreation")
     creation_end = prototype_text.index("function openSchedulePrototype", creation_start)
     creation_text = prototype_text[creation_start:creation_end]

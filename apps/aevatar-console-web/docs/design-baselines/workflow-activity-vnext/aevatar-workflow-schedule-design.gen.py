@@ -571,9 +571,13 @@ def frame_schedule_detail(index: int) -> None:
     text(cx + 776, cy + 620, "Summarize new feedback.", FS_BODY, INK, width=492)
     line(cx + 776, cy + 664, 492, 0, color=LINE)
     text(cx + 776, cy + 694, "Advanced details", FS_BODY, INK, width=220)
-    text(cx + 1240, cy + 694, "›", FS_BODY, MUTED, width=20, align="right")
+    text(cx + 1240, cy + 694, "▾", FS_BODY, MUTED, width=20, align="right")
+    text(cx + 776, cy + 730, "RUNS", FS_SMALL, MUTED, font=FONT_MONO, width=138)
+    text(cx + 930, cy + 730, "Every weekday at 09:00", FS_BODY, INK, width=338)
+    text(cx + 776, cy + 764, "TECHNICAL FORMAT", FS_SMALL, MUTED, font=FONT_MONO, width=138)
+    text(cx + 930, cy + 764, "0 9 * * 1-5", FS_BODY, MUTED, font=FONT_MONO, width=338)
     annotation(fx + FRAME_W + 42, fy + 300, "5", "Overview answers what is configured",
-                "The default tab keeps recurrence and observed state readable. Run and Edit stay direct; Pause and Delete move under More.")
+                "Run and Edit stay direct; Pause and Delete stay under More. Expanded details pair plain meaning with the exact technical format.")
     end_frame()
 
 

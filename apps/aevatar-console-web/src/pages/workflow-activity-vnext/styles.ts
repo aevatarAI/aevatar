@@ -832,11 +832,11 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-run-input p { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: 6px; color: var(--wa-ink); line-height: 18px; margin: 0; max-height: 120px; overflow: auto; padding: 10px 12px; white-space: pre-wrap; }
 .wa-vnext__schedule-advanced-details { color: var(--wa-muted); padding: 2px; }
 .wa-vnext__schedule-advanced-details summary { cursor: pointer; font-size: 11px; font-weight: 650; }
-.wa-vnext__schedule-advanced-details dl { display: grid; gap: 4px; margin: 10px 0 0; }
+.wa-vnext__schedule-advanced-details dl { display: grid; gap: 8px; margin: 10px 0 0; }
 .wa-vnext__schedule-advanced-details div { align-items: baseline; display: grid; gap: 10px; grid-template-columns: max-content minmax(0, 1fr); }
 .wa-vnext__schedule-advanced-details dt { font-size: 11px; }
 .wa-vnext__schedule-advanced-details dd { color: var(--wa-ink); margin: 0; overflow-wrap: anywhere; }
-.wa-vnext__schedule-advanced-details code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.wa-vnext__schedule-advanced-details code { background: var(--wa-subtle); border-radius: 4px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 5px; }
 .wa-vnext__schedule-history { display: grid; gap: 14px; min-width: 0; }
 .wa-vnext__schedule-history-header { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .wa-vnext__schedule-history-header h2 { color: var(--wa-ink); font-size: 15px; line-height: 21px; margin: 0; }

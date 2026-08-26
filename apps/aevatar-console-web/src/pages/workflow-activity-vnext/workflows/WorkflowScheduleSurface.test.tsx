@@ -794,7 +794,11 @@ describe('WorkflowScheduleSurface', () => {
       await screen.findByRole('button', { name: 'View Daily workflow run' }),
     );
 
-    expect(await screen.findByText('Every weekday at 09:00')).toBeVisible();
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Every weekday at 09:00',
+      }),
+    ).toBeVisible();
     expect(screen.getByText('Enabled')).toBeVisible();
     expect(screen.getByText('Timezone')).toBeVisible();
     expect(screen.getByText('Asia/Shanghai')).toBeVisible();
@@ -806,6 +810,23 @@ describe('WorkflowScheduleSurface', () => {
     expect(screen.getByText('Summarize new feedback.')).toBeVisible();
     expect(screen.getByText('Advanced details')).toBeVisible();
     expect(screen.getByText('0 9 * * 1-5')).not.toBeVisible();
+
+    const advancedDetails = screen
+      .getByText('Advanced details')
+      .closest('details');
+    expect(advancedDetails).not.toBeNull();
+    if (!advancedDetails) {
+      throw new Error('Expected Schedule advanced details disclosure');
+    }
+
+    fireEvent.click(within(advancedDetails).getByText('Advanced details'));
+
+    expect(within(advancedDetails).getByText('Runs')).toBeVisible();
+    expect(
+      within(advancedDetails).getByText('Every weekday at 09:00'),
+    ).toBeVisible();
+    expect(within(advancedDetails).getByText('Technical format')).toBeVisible();
+    expect(within(advancedDetails).getByText('0 9 * * 1-5')).toBeVisible();
 
     expect(screen.getByRole('button', { name: 'Run now' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Edit schedule' })).toBeVisible();
@@ -867,7 +888,11 @@ describe('WorkflowScheduleSurface', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'View Daily workflow run' }),
     );
-    expect(await screen.findByText('Every weekday at 09:00')).toBeVisible();
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Every weekday at 09:00',
+      }),
+    ).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
 
@@ -879,7 +904,9 @@ describe('WorkflowScheduleSurface', () => {
     );
     expect(detailRegion).toHaveAttribute('aria-busy', 'true');
     expect(
-      within(detailRegion).getByText('Every weekday at 09:00'),
+      within(detailRegion).getByRole('heading', {
+        name: 'Every weekday at 09:00',
+      }),
     ).toBeVisible();
     const refreshStatus = within(detailRegion).getByRole('status', {
       name: 'Refreshing schedule details…',

@@ -123,7 +123,7 @@ Contract specification:
 Schedule design, when Schedule is in scope:
   aevatar-workflow-schedule-design.excalidraw
 Schedule design SHA-256:
-  688d5b14a2e1047739f3cf950a1714e256523430cf6966b1441e4b1e4344b3e0
+  7c27a027eec6a3ec9d1b118fa3b4ab80d1938fd85f3bc04451d1189553fb67d8
 Schedule supplement, when Schedule is in scope:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-11-workflow-schedule-design.md
@@ -164,7 +164,7 @@ failures rather than undocumented implementation choices.
 - `schedule-workflow-editor-panel.png`：Workflow 编辑器右侧的新建 Schedule panel。
 - `schedule-review.png`：确认 Workflow、名称、周期、时区、可选运行输入、创建后启用状态与五次 next-fire 预览的创建复核页。
 - `schedule-creation-pending.png`：创建命令 `202 Accepted` 后回到列表并显示 Toast 的页面。
-- `schedule-detail.png`：Workflow 内默认打开的 Schedule Overview，展示人类可读规则、当前状态、关键统计和分层动作。
+- `schedule-detail.png`：Workflow 内默认打开的 Schedule Overview，展示人类可读规则、当前状态、关键统计和分层动作；展开 Advanced details 后仍先解释运行周期，再显示精确技术格式。
 - `schedule-history.png`：Workflow 内的 Schedule History，展示有界 recent attempts、诚实的 Schedule outcome、失败技术详情折叠，以及有权威 Run ID 时的整行导航。
 - `schedule-edit.png`：Workflow 内修改重复规则、时间、时区和可选运行输入的页面。
 - `prototype-workflows.png`：Workflows 桌面视图截图。

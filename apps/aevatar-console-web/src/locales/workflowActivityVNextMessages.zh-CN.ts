@@ -661,6 +661,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '计划任务请求已受理，稍后会出现在列表中。',
     'workflowActivityVNext.schedule.cron': 'Cron 表达式',
     'workflowActivityVNext.schedule.cronSummary': 'Cron：{cron}',
+    'workflowActivityVNext.schedule.runs': '运行周期',
+    'workflowActivityVNext.schedule.technicalFormat': '技术格式',
     'workflowActivityVNext.schedule.hourly': '每小时',
     'workflowActivityVNext.schedule.daily': '每天',
     'workflowActivityVNext.schedule.everyWeekdaySummary': '每个工作日 {time}',

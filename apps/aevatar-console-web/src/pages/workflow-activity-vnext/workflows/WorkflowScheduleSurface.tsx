@@ -1718,10 +1718,18 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
               </summary>
               <dl>
                 <div>
+                  <dt>{t('workflowActivityVNext.schedule.runs', 'Runs')}</dt>
+                  <dd>
+                    {scheduleRecurrenceSummary(
+                      scheduleDetail.data.schedule.cronExpression,
+                    )}
+                  </dd>
+                </div>
+                <div>
                   <dt>
                     {t(
-                      'workflowActivityVNext.schedule.cron',
-                      'Cron expression',
+                      'workflowActivityVNext.schedule.technicalFormat',
+                      'Technical format',
                     )}
                   </dt>
                   <dd>

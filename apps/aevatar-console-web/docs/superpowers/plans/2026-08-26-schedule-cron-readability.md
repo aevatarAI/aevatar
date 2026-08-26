@@ -157,7 +157,7 @@ Keep the recurrence meaning visually stronger than the monospace technical forma
 
 - [ ] **Step 3: Strengthen deterministic semantic verification**
 
-Require the Overview frame and prototype source to contain all of:
+Require the Overview frame to contain all of:
 
 ```python
 (
@@ -169,7 +169,10 @@ Require the Overview frame and prototype source to contain all of:
 )
 ```
 
-This must fail if raw cron again becomes the only explanation.
+For the dynamic prototype function, require the `Runs` row to bind to
+`editModel.humanSummary` and the `Technical format` row to bind to
+`schedule.cronExpression`. This must fail if raw cron again becomes the only
+explanation or if either row disconnects from its owning value.
 
 - [ ] **Step 4: Regenerate the Schedule board and standalone PNGs**
 
