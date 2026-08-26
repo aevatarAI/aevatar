@@ -786,10 +786,10 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.reviewTitle': 'Review schedule',
   'workflowActivityVNext.schedule.save': 'Save changes',
   'workflowActivityVNext.schedule.scheduleName': 'Schedule name',
-  'workflowActivityVNext.schedule.subtitle': 'Recurring runs for {name}',
   'workflowActivityVNext.schedule.time': 'Time',
   'workflowActivityVNext.schedule.timezone': 'Timezone',
   'workflowActivityVNext.schedule.title': 'Schedules',
+  'workflowActivityVNext.schedule.titleForWorkflow': 'Schedules for {name}',
   'workflowActivityVNext.schedule.updateAccepted': 'Schedule update accepted.',
   'workflowActivityVNext.schedule.useRepeatBuilder': 'use the repeat builder',
   'workflowActivityVNext.schedule.unavailableDescription':

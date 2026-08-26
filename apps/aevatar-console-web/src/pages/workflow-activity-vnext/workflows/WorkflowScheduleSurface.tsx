@@ -735,12 +735,16 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     </div>
   ) : null;
 
+  const scheduleCollectionTitle = t(
+    'workflowActivityVNext.schedule.titleForWorkflow',
+    'Schedules for {name}',
+    { name: workflowName },
+  );
+
   const surfaceTitle =
     selectedScheduleTitle ??
     (surfaceView === 'list'
-      ? mode === 'modal'
-        ? t('workflowActivityVNext.schedule.title', 'Schedules')
-        : workflowName
+      ? scheduleCollectionTitle
       : creationStep === 'review'
         ? t('workflowActivityVNext.schedule.reviewTitle', 'Review schedule')
         : t('workflowActivityVNext.schedule.new', 'New schedule'));
@@ -1148,22 +1152,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   const listView = (
     <section
       aria-busy={scheduleListRefreshing}
-      aria-label={t('workflowActivityVNext.schedule.title', 'Schedules')}
+      aria-label={scheduleCollectionTitle}
       className="wa-vnext__schedule-surface"
     >
-      <div className="wa-vnext__schedule-toolbar">
-        <div>
-          <strong>
-            {t('workflowActivityVNext.schedule.title', 'Schedules')}
-          </strong>
-          <p>
-            {t(
-              'workflowActivityVNext.schedule.subtitle',
-              'Recurring runs for {name}',
-              { name: workflowName },
-            )}
-          </p>
-        </div>
+      <div className="wa-vnext__schedule-toolbar wa-vnext__schedule-toolbar--actions">
         <Space>
           <Button
             aria-label={t(

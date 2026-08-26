@@ -307,7 +307,9 @@ describe('WorkflowScheduleSurface', () => {
       ),
     );
     expect(
-      screen.getByText('Weekly review', { selector: '.ant-drawer-title' }),
+      screen.getByText('Schedules for Weekly review', {
+        selector: '.ant-drawer-title',
+      }),
     ).toBeVisible();
     await waitFor(() => expect(listCallCount).toBeGreaterThanOrEqual(2));
     resolveRefresh({ items: [], nextCursor: null, totalCount: 0 });
@@ -548,6 +550,14 @@ describe('WorkflowScheduleSurface', () => {
   it('keeps the empty schedule state compact with one create action', async () => {
     renderSurface(true, 'panel');
 
+    const drawer = document.querySelector<HTMLElement>(
+      '.wa-vnext-schedule-drawer',
+    );
+    expect(drawer).not.toBeNull();
+    if (!drawer) {
+      throw new Error('Expected Schedule drawer');
+    }
+
     await waitFor(() =>
       expect(
         screen.getByRole('heading', { name: 'No schedules yet' }),
@@ -555,11 +565,22 @@ describe('WorkflowScheduleSurface', () => {
     );
 
     expect(
+      within(drawer).getByText('Schedules for Weekly review', {
+        selector: '.ant-drawer-title',
+      }),
+    ).toBeVisible();
+    expect(
+      within(drawer).queryByText('Schedules', {
+        selector: '.wa-vnext__schedule-toolbar strong',
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(drawer).queryByText('Recurring runs for Weekly review'),
+    ).not.toBeInTheDocument();
+    expect(
       screen.getAllByRole('button', { name: 'New schedule' }),
     ).toHaveLength(1);
-    expect(
-      document.querySelector('.wa-vnext-schedule-drawer'),
-    ).toBeInTheDocument();
+    expect(drawer).toBeInTheDocument();
     expect(
       screen.getByRole('heading', { name: 'No schedules yet' }),
     ).toHaveClass('wa-vnext__schedule-empty-title');
@@ -601,7 +622,7 @@ describe('WorkflowScheduleSurface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh schedules' }));
 
     const scheduleRegion = await screen.findByRole('region', {
-      name: 'Schedules',
+      name: 'Schedules for Weekly review',
     });
     await waitFor(() =>
       expect(workflowScheduleApi.list).toHaveBeenCalledTimes(2),
@@ -679,8 +700,18 @@ describe('WorkflowScheduleSurface', () => {
       expect(screen.getByText('Daily workflow run')).toBeVisible(),
     );
     expect(
-      screen.getByText('Schedules', { selector: '.ant-modal-title' }),
+      screen.getByText('Schedules for Weekly review', {
+        selector: '.ant-modal-title',
+      }),
     ).toBeVisible();
+    expect(
+      screen.queryByText('Schedules', {
+        selector: '.wa-vnext__schedule-toolbar strong',
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Recurring runs for Weekly review'),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'View Daily workflow run' }),
     ).toBeVisible();
@@ -714,7 +745,9 @@ describe('WorkflowScheduleSurface', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Back to schedules' }));
     expect(
-      screen.getByText('Schedules', { selector: '.ant-modal-title' }),
+      screen.getByText('Schedules for Weekly review', {
+        selector: '.ant-modal-title',
+      }),
     ).toBeVisible();
     expect(
       screen.queryByRole('button', { name: 'Back to schedules' }),

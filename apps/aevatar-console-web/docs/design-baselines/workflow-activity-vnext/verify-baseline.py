@@ -23,13 +23,13 @@ SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PNG_SHA256 = {
-    "schedule-workflows-list-modal.png": "14d6fbcb856f0743f92f73babbd0b2b96abae2ca725ccdcf887aaf10e19e3778",
-    "schedule-workflow-editor-panel.png": "2498073995c91197655b34fe4d8f65c19420a2da7f0099249cf9496bb64354db",
-    "schedule-review.png": "7af3db8ef47a0353025fb2ac5487f01c668d366db82164e5317e663398267874",
-    "schedule-creation-pending.png": "4601963d99efa82a9b22e0db90e3c48ce93a279aa32a1181bf115c25d3e44c8a",
-    "schedule-detail.png": "eefb5bae6cbdfd4b93775b1e035e458972b2bc1569a36a90e68c27f0c8300840",
-    "schedule-history.png": "5fd97c62a884678f80f23ecc62ecd41277ffd9a36fa47e45de8988b8a71acb73",
-    "schedule-edit.png": "4aa5d9c9848492ec2dc8ea8b7ee11886e1a27f5d0f252fdedb1775e37ee0e19e",
+    "schedule-workflows-list-modal.png": "e151c9feedec7ead21498bd5af62a1f914fdbf949de8a4ca7269a84622a1d72b",
+    "schedule-workflow-editor-panel.png": "9b948a4ca69a1549f93319cf992024fa4bba9869ca1c8d333cda1b0196aa2e56",
+    "schedule-review.png": "1e4ebcf6b675efa625b5b9a2968cca289734cd1d6a48539b9e4a3a76232b1020",
+    "schedule-creation-pending.png": "3964b97d0c5bebb625cfc767ad287c8ab8f303a6b2769dc017df8345214425c7",
+    "schedule-detail.png": "b2253dff9288838557f0378af7f71aeacd3afbb57c9771a5cc7bb0f49b0e7c0b",
+    "schedule-history.png": "536a4775ea946251bb66185ac470a3316a737b9dd44d3998e3f092da385ebb76",
+    "schedule-edit.png": "1fed99e375085e78af23ef6999d6232304a98aac47bd0f338939af32027987dd",
 }
 OBSOLETE_SCHEDULE_PNGS = (
     "prototype-schedule.png",
@@ -37,7 +37,7 @@ OBSOLETE_SCHEDULE_PNGS = (
     "schedule-authorization-review.png",
 )
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "7c27a027eec6a3ec9d1b118fa3b4ab80d1938fd85f3bc04451d1189553fb67d8"
+EXPECTED_SCHEDULE_SHA256 = "cd5c84c45ffb0cdb253af31b7e1b7616504b35520298f01773026e3b76882d8a"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -275,9 +275,11 @@ def main() -> None:
         )
 
     quick_modal_text = schedule_frame_text("01 · Workflows — schedule management modal").casefold()
-    for required in ("schedules", "new schedule", "open"):
+    for required in ("schedules for weekly feedback report", "new schedule", "open"):
         if required not in quick_modal_text:
             raise SystemExit(f"Workflow catalogue Schedule management modal is missing: {required}")
+    if "recurring runs owned by weekly feedback report" in quick_modal_text:
+        raise SystemExit("Workflow catalogue Schedule modal repeats its ownership as helper copy")
     quick_modal_lines = {line.strip() for line in quick_modal_text.splitlines()}
     for forbidden in ("edit", "pause", "run now", "delete"):
         if forbidden in quick_modal_lines:
@@ -404,6 +406,19 @@ def main() -> None:
         raise SystemExit("Schedule board still presents the removed collection model")
 
     prototype_text = prototype_path.read_text(encoding="utf-8")
+    modal_list_start = prototype_text.index("function renderScheduleModalList")
+    modal_list_end = prototype_text.index("function openScheduleQuickModal", modal_list_start)
+    prototype_modal_list_text = prototype_text[modal_list_start:modal_list_end]
+    for required in (
+        'textContent = `Schedules for ${workflow.name}`',
+        'id="quick-schedule-refresh"',
+        'id="quick-schedule-new"',
+    ):
+        if required not in prototype_modal_list_text:
+            raise SystemExit(f"prototype Schedule collection is missing meaningful hierarchy: {required}")
+    for forbidden in ("Recurring runs owned by", "<h3>Schedules</h3>", "schedule-quick-context"):
+        if forbidden in prototype_modal_list_text:
+            raise SystemExit(f"prototype Schedule collection retains redundant title content: {forbidden}")
     overview_start = prototype_text.index("function scheduleOverviewMarkup")
     overview_end = prototype_text.index("function scheduleHistoryMarkup", overview_start)
     prototype_overview_text = prototype_text[overview_start:overview_end]
@@ -435,7 +450,7 @@ def main() -> None:
         "function acceptQuickScheduleCreation",
         "Review schedule",
         "Create schedule",
-        "Recurring runs owned by",
+        'textContent = `Schedules for ${workflow.name}`',
         'id="quick-schedule-new"',
         "without leaving Workflows",
         "Next five fire times",

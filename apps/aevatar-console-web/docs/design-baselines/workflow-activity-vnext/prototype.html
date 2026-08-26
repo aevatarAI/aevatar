@@ -383,6 +383,7 @@
     .schedule-fact strong { display: block; margin-top: 7px; font-size: 12px; line-height: 1.4; }
     .schedule-run-input { padding: 17px 0; border-bottom: 1px solid #eaecf0; }
     .schedule-run-input p { margin: 7px 0 0; font-size: 12px; line-height: 1.5; }
+    .schedule-list-actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px; }
     .schedule-advanced { padding: 15px 0; border-bottom: 1px solid #eaecf0; }
     .schedule-advanced summary { color: var(--ink); cursor: pointer; font-size: 12px; font-weight: 700; }
     .schedule-advanced div { display: flex; justify-content: space-between; gap: 16px; margin-top: 10px; color: var(--muted); font-size: 11px; }
@@ -1488,12 +1489,11 @@ steps:
       scheduleModalMode = "list";
       selectedScheduleId = null;
       document.querySelector("#schedule-quick-back").hidden = true;
-      document.querySelector("#schedule-quick-title").textContent = "Schedules";
-      document.querySelector("#schedule-quick-subtitle").hidden = false;
-      document.querySelector("#schedule-quick-subtitle").textContent = `Recurring runs owned by ${workflow.name}.`;
-      content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>Published Workflow · ${schedules.length} schedule${schedules.length === 1 ? "" : "s"}</span></div><span class="schedule-state">Managed</span></div><div class="section-heading" style="margin:0 0 10px"><div><h3>Schedules</h3><p>${schedules.length ? "Select a Schedule to review its configuration." : "Create recurring work for this published Workflow."}</p></div><button type="button" class="button small primary" id="quick-schedule-new">New schedule</button></div>${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : `<div class="schedule-quick-review"><p>No schedules yet.</p></div>`}`;
-      footer.hidden = false;
-      footer.innerHTML = `<button type="button" class="button" id="quick-schedule-refresh">Refresh</button>`;
+      document.querySelector("#schedule-quick-title").textContent = `Schedules for ${workflow.name}`;
+      document.querySelector("#schedule-quick-subtitle").hidden = true;
+      content.innerHTML = `<div class="schedule-list-actions"><button type="button" class="button small" id="quick-schedule-refresh">Refresh</button><button type="button" class="button small primary" id="quick-schedule-new">New schedule</button></div>${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : `<div class="schedule-quick-review"><p><strong>No schedules yet</strong></p><p>Create recurring work for this published Workflow.</p></div>`}`;
+      footer.hidden = true;
+      footer.innerHTML = "";
       document.querySelector("#quick-schedule-new").onclick = () => {
         initializeScheduleCreation(workflow, "modal");
         renderScheduleCreation();
@@ -2238,7 +2238,7 @@ steps:
       }
       if (schedulePanelMode === "list") {
         const rows = schedules.map(scheduleListRow).join("");
-        panel.innerHTML = `<header class="studio-panel-header"><div><h2>Workflow schedules</h2><p>Recurring runs owned by this Workflow.</p></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header><div class="studio-panel-body"><div class="section-heading" style="margin:0 0 10px"><div><h2>${schedules.length ? "Schedules" : "No schedules yet"}</h2><p>${schedules.length ? "Select a Schedule to review it." : "Create recurring work for this published Workflow."}</p></div><button type="button" class="button small primary" id="schedule-new">New schedule</button></div>${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : ""}<button type="button" class="button small" id="schedule-refresh">Refresh</button></div>`;
+        panel.innerHTML = `<header class="studio-panel-header"><div><h2>Schedules for ${escapeHtml(currentWorkflow.name)}</h2></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header><div class="studio-panel-body"><div class="schedule-list-actions"><button type="button" class="button small" id="schedule-refresh">Refresh</button><button type="button" class="button small primary" id="schedule-new">New schedule</button></div>${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : `<div class="schedule-quick-review"><p><strong>No schedules yet</strong></p><p>Create recurring work for this published Workflow.</p></div>`}</div>`;
         panel.querySelector("#close-schedule").onclick = closeSchedulePanel;
         panel.querySelector("#schedule-new").onclick = openSchedulePanelCreation;
         panel.querySelector("#schedule-refresh").onclick = () => {

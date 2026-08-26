@@ -74,6 +74,13 @@ The action opens a management modal over the current list. It is the durable
 place to see every Schedule owned by that Workflow and provides `New schedule`
 for creation without navigating into the editor.
 
+The collection container has one resource-owned title:
+`Schedules for {workflowName}`. Its content toolbar contains only Refresh and
+`New schedule`; it does not repeat `Schedules` or add a generic subtitle that
+paraphrases the same Workflow ownership. A nested title remains appropriate
+only for a distinct state such as `No schedules yet` or a different task such
+as `Edit schedule`.
+
 Draft and unavailable Workflows keep the action disabled and explain that the
 Workflow must be saved and published.
 

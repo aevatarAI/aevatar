@@ -738,10 +738,10 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.reviewTitle': '复核计划任务',
     'workflowActivityVNext.schedule.save': '保存更改',
     'workflowActivityVNext.schedule.scheduleName': '计划任务名称',
-    'workflowActivityVNext.schedule.subtitle': '为 {name} 创建周期性运行',
     'workflowActivityVNext.schedule.time': '时间',
     'workflowActivityVNext.schedule.timezone': '时区',
     'workflowActivityVNext.schedule.title': '计划任务',
+    'workflowActivityVNext.schedule.titleForWorkflow': '{name} 的计划任务',
     'workflowActivityVNext.schedule.updateAccepted': '计划任务更新请求已受理。',
     'workflowActivityVNext.schedule.useRepeatBuilder': '使用重复规则构建器',
     'workflowActivityVNext.schedule.unavailableDescription':

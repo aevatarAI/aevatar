@@ -676,14 +676,16 @@ describe('Workflow Activity vNext catalogue', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText('Schedules', { selector: '.ant-modal-title' }),
+        screen.getByText('Schedules for Published workflow', {
+          selector: '.ant-modal-title',
+        }),
       ).toBeVisible(),
     );
     expect(screen.getByText('No schedules yet')).toBeVisible();
     expect(screen.getByRole('button', { name: 'New schedule' })).toBeVisible();
     expect(
-      screen.getByText('Recurring runs for Published workflow'),
-    ).toBeVisible();
+      screen.queryByText('Recurring runs for Published workflow'),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText('WORKFLOW SCHEDULE')).not.toBeInTheDocument();
     expect(screen.queryByText('What will happen')).not.toBeInTheDocument();
     expect(

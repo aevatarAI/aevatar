@@ -64,6 +64,11 @@ Schedule.
 
 ### Schedule collection
 
+The modal and panel list state use one title, `Schedules for {workflowName}`,
+to identify both the collection and its owning Workflow. The list body does not
+repeat that collection title or add helper copy that only restates recurrence
+or ownership; its toolbar is reserved for collection actions.
+
 Each row shows only the facts needed to choose a Schedule:
 
 - Schedule name;

@@ -123,7 +123,7 @@ Contract specification:
 Schedule design, when Schedule is in scope:
   aevatar-workflow-schedule-design.excalidraw
 Schedule design SHA-256:
-  7c27a027eec6a3ec9d1b118fa3b4ab80d1938fd85f3bc04451d1189553fb67d8
+  cd5c84c45ffb0cdb253af31b7e1b7616504b35520298f01773026e3b76882d8a
 Schedule supplement, when Schedule is in scope:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-11-workflow-schedule-design.md

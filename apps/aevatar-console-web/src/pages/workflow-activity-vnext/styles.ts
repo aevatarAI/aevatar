@@ -791,7 +791,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-form-title { color: var(--wa-ink); font-size: 15px; line-height: 21px; margin: 0; }
 .wa-vnext__schedule-surface { display: grid; gap: 16px; min-width: 0; position: relative; }
 .wa-vnext__schedule-toolbar { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
-.wa-vnext__schedule-toolbar p { color: var(--wa-muted); margin: 4px 0 0; }
+.wa-vnext__schedule-toolbar--actions { justify-content: flex-end; }
 .wa-vnext__schedule-refresh-overlay { grid-column: 1; grid-row: 2; }
 .wa-vnext__schedule-list { display: grid; gap: 10px; }
 .wa-vnext__schedule-row { align-items: center; appearance: none; background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); color: var(--wa-ink); cursor: pointer; display: flex; font: inherit; gap: 16px; justify-content: space-between; min-width: 0; padding: 14px; text-align: left; transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease; width: 100%; }
@@ -986,7 +986,9 @@ export const workflowActivityVNextCss = `
   .wa-vnext__account-profile > .ant-btn, .wa-vnext__account-section-heading > .ant-btn { width: 100%; }
   .wa-vnext__state--compact { padding: 18px; }
   .wa-vnext__schedule-toolbar, .wa-vnext__schedule-row { align-items: stretch; flex-direction: column; }
+  .wa-vnext__schedule-toolbar--actions { align-items: flex-end; flex-direction: row; }
   .wa-vnext__schedule-toolbar .ant-space, .wa-vnext__schedule-row .ant-space { width: 100%; }
+  .wa-vnext__schedule-toolbar--actions .ant-space { width: auto; }
   .wa-vnext__schedule-toolbar .ant-btn, .wa-vnext__schedule-row .ant-btn { flex: 1 1 auto; }
   .wa-vnext__template-toolbar { align-items: stretch; flex-direction: column; }
   .wa-vnext__template-search { flex-basis: auto; max-width: none; width: 100%; }

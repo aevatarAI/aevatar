@@ -200,6 +200,12 @@ pnpm --dir apps/aevatar-console-web build
   magic values.
 - Treat the console as an operational tool: prioritize scannability, clear
   hierarchy, predictable navigation, and efficient repeated actions.
+- Every visible title or heading must add distinct orientation, resource
+  identity, current-state, or task meaning. Do not repeat the same noun at the
+  modal/drawer shell and content levels, and do not add helper copy that merely
+  paraphrases an adjacent heading. Prefer one resource-owned container title;
+  add a nested heading only when it names a genuinely different state, view,
+  or user task.
 - Scope asynchronous loading feedback to the data region owned by the query or
   command. Keep committed sibling regions mounted and usable, preserving their
   selection and scroll position when they are not being reloaded. Use a

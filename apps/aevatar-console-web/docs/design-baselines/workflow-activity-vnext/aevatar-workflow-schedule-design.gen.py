@@ -370,26 +370,19 @@ def frame_workflows_list(index: int) -> None:
     modal_x, modal_y, modal_w, modal_h = cx + 520, cy + 18, 760, 890
     rect(cx + 500, cy + 10, cw - 512, 910, bg="#eef2f6", stroke="#eef2f6", radius=False)
     rect(modal_x, modal_y, modal_w, modal_h, bg=SURFACE, stroke=INK, sw=2)
-    text(modal_x + 28, modal_y + 26, "Schedules", FS_HEAD, INK, width=300)
-    text(modal_x + 28, modal_y + 58,
-         "Recurring runs owned by Weekly Feedback Report.", FS_SMALL, MUTED,
-         width=520)
+    text(modal_x + 28, modal_y + 26, "Schedules for Weekly Feedback Report",
+         FS_HEAD, INK, width=560)
     button(modal_x + modal_w - 58, modal_y + 20, 32, "×", color=MUTED)
-    rect(modal_x + 28, modal_y + 94, modal_w - 56, 72, bg=BLUE_BG, stroke="#84adff")
-    text(modal_x + 48, modal_y + 112, "Weekly Feedback Report", FS_BODY, INK,
-         width=360)
-    text(modal_x + 48, modal_y + 142, "Published Workflow · 2 schedules", FS_SMALL,
-         MUTED, width=360)
-    button(modal_x + modal_w - 176, modal_y + 112, 120, "New schedule",
+    button(modal_x + modal_w - 280, modal_y + 82, 108, "Refresh", color=MUTED)
+    button(modal_x + modal_w - 160, modal_y + 82, 132, "New schedule",
            primary=True, color=BLUE)
-    text(modal_x + 28, modal_y + 194, "SCHEDULES", FS_SMALL, MUTED,
-         font=FONT_MONO, width=200)
+    line(modal_x + 28, modal_y + 140, modal_w - 56, 0, color=LINE)
     schedule_rows = [
         ("Weekly feedback report", "Weekdays · 09:00 · Asia/Shanghai", "Enabled", "ok"),
         ("Monthly billing review", "Monthly · day 1 · Asia/Shanghai", "Paused", "muted"),
     ]
     for row_index, (name, summary, state, kind) in enumerate(schedule_rows):
-        row_y = modal_y + 224 + row_index * 154
+        row_y = modal_y + 168 + row_index * 154
         rect(modal_x + 28, row_y, modal_w - 56, 132, bg=SURFACE, stroke=LINE)
         text(modal_x + 48, row_y + 18, name, FS_BODY, INK, width=330)
         badge(modal_x + modal_w - 132, row_y + 16, state, kind)
@@ -399,8 +392,8 @@ def frame_workflows_list(index: int) -> None:
              FS_SMALL, INK if state == "Enabled" else MUTED, width=360)
         text(modal_x + modal_w - 110, row_y + 88, "Open  →", FS_SMALL, BLUE,
              width=74, align="right")
-    annotation(fx + FRAME_W + 42, fy + 160, "1", "Manage schedules where they are created",
-                "The published Workflow row opens its Schedule management modal. Existing entries are readable and editable; New schedule starts the shared configure/review flow.")
+    annotation(fx + FRAME_W + 42, fy + 160, "1", "One title identifies collection and owner",
+                "Schedules for Weekly Feedback Report replaces a repeated title stack. The body starts with collection actions, while each row supplies the facts needed for selection.")
     end_frame()
 
 
