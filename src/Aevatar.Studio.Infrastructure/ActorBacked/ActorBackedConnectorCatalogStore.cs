@@ -10,7 +10,8 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of connector catalog query and command ports.
-/// Reads from the projection document store (CQRS read model).
+/// Reads scope-owned definitions from the projection document store (CQRS read model), then
+/// composes immutable Host-owned defaults supplied by the deployment Host.
 /// Writes send commands to the Write GAgent through CQRS Core dispatch.
 /// Local JSON is only an explicit import boundary, never a draft backup.
 /// Per-scope isolation: each scope gets its own <c>connector-catalog-{scopeId}</c> actor.
@@ -28,6 +29,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
     private readonly IStudioLocalConnectorCatalogImportReader _localImportReader;
     private readonly IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedConnectorCatalogStore> _logger;
+    private readonly IConnectorCatalogNameAuthority _connectorCatalogNameAuthority;
 
     public ActorBackedConnectorCatalogStore(
         IStudioActorBootstrap bootstrap,
@@ -35,6 +37,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
         IAppScopeResolver scopeResolver,
         IStudioLocalConnectorCatalogImportReader localImportReader,
         IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> documentReader,
+        IConnectorCatalogNameAuthority connectorCatalogNameAuthority,
         ILogger<ActorBackedConnectorCatalogStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
@@ -42,6 +45,8 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _localImportReader = localImportReader ?? throw new ArgumentNullException(nameof(localImportReader));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _connectorCatalogNameAuthority = connectorCatalogNameAuthority ??
+            throw new ArgumentNullException(nameof(connectorCatalogNameAuthority));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -50,20 +55,17 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
     {
         var state = await ReadProjectedStateAsync(cancellationToken);
         var version = state?.LastAppliedEventVersion ?? 0;
-        if (state is null)
-        {
-            return new StoredConnectorCatalog(
-                HomeDirectory: ActorHomeDirectory,
-                FilePath: ActorFilePath,
-                FileExists: false,
-                Connectors: [],
-                Version: version);
-        }
-
-        var connectors = state.Connectors
+        var scopedConnectors = state?.Connectors
             .Select(ToStoredConnectorDefinition)
-            .ToList()
-            .AsReadOnly();
+            .ToList() ?? [];
+
+        // Implement (issue #3542):
+        //   Behavior: Publish deployment-owned connector defaults in every scope while preserving scope-owned entries.
+        //   Why this shape: Mainnet capabilities remain discoverable without query-time writes or a process-local scope registry.
+        // Fix (review round 1, F1):
+        //   GET was the only reader that composed Host-owned connector names.
+        //   Delegate composition to the catalog-name authority shared with scheduled evidence.
+        var connectors = _connectorCatalogNameAuthority.ComposeDefinitions(scopedConnectors);
 
         return new StoredConnectorCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -78,9 +80,13 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
         long? expectedVersion = null,
         CancellationToken cancellationToken = default)
     {
+        // Fix (review round 1, F2):
+        //   GET+PUT could persist Host-owned defaults and PUT returned a different catalog view.
+        //   Persist only scope-owned entries, then return the same composed view exposed by GET.
+        var scopedConnectors = _connectorCatalogNameAuthority.SelectScopeOwnedDefinitions(catalog.Connectors);
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new ConnectorCatalogSavedEvent();
-        evt.Connectors.AddRange(catalog.Connectors.Select(ToProtoConnectorDefinition));
+        evt.Connectors.AddRange(scopedConnectors.Select(ToProtoConnectorDefinition));
         if (expectedVersion is not null)
             evt.ExpectedVersion = expectedVersion.Value;
         await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
@@ -89,7 +95,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath,
             FileExists: true,
-            Connectors: catalog.Connectors,
+            Connectors: _connectorCatalogNameAuthority.ComposeDefinitions(scopedConnectors),
             Version: NextDeterministicVersion(expectedVersion));
     }
 

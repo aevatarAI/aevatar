@@ -6,6 +6,8 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.GAgents.UserConfig;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Abstractions;
@@ -192,12 +194,40 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
                 StateVersion = 7,
                 StateRoot = Any.Pack(connectorState),
             });
-        var connector = await new ProjectionScheduledInvocationConnectorQueryPort(connectorReader)
+        var connector = await new ProjectionScheduledInvocationConnectorQueryPort(
+                connectorReader,
+                new ConnectorCatalogNameAuthority([]))
             .GetAsync(" scope-alpha ");
 
         connectorReader.Key.Should().Be("connector-catalog-scope-alpha");
         connector!.StateVersion.Should().Be(7);
         connector.ConnectorCapabilityRefs.Should().Equal("calendar");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConnectorPort_WithMissingOrEmptyScopeCatalog_ShouldUseHostDefaults(
+        bool scopeDocumentExists)
+    {
+        var connectorState = new ConnectorCatalogState();
+        var connectorReader = new RecordingReader<ConnectorCatalogCurrentStateDocument>(
+            scopeDocumentExists
+                ? new ConnectorCatalogCurrentStateDocument
+                {
+                    StateVersion = 9,
+                    StateRoot = Any.Pack(connectorState),
+                }
+                : null);
+        var authority = new ConnectorCatalogNameAuthority(
+            [new StubHostConnectorCatalogDefaults([HostDefaultConnector("deterministic_compute")])]);
+
+        var connector = await new ProjectionScheduledInvocationConnectorQueryPort(connectorReader, authority)
+            .GetAsync("scope-alpha");
+
+        connector.Should().NotBeNull();
+        connector!.StateVersion.Should().Be(scopeDocumentExists ? 9 : 0);
+        connector.ConnectorCapabilityRefs.Should().Equal("deterministic_compute");
     }
 
     [Fact]
@@ -430,7 +460,9 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         (await new ProjectionScheduledInvocationMemberQueryPort(incompleteMember).GetAsync("s", "m")).Should().BeNull();
         (await new ProjectionScheduledInvocationWorkflowQueryPort(missingWorkflow)
             .GetAsync("s", "svc", "rev")).Should().BeNull();
-        (await new ProjectionScheduledInvocationConnectorQueryPort(missingConnector).GetAsync("s")).Should().BeNull();
+        (await new ProjectionScheduledInvocationConnectorQueryPort(
+            missingConnector,
+            new ConnectorCatalogNameAuthority([])).GetAsync("s")).Should().BeNull();
     }
 
     [Fact]
@@ -514,6 +546,46 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         Kind = LLMModelSelectionKind.ExplicitModel,
         ModelId = modelId,
     };
+
+    private static StoredConnectorDefinition HostDefaultConnector(string name) =>
+        new(
+            name,
+            "host_callback",
+            true,
+            30_000,
+            0,
+            new StoredHttpConnectorConfig(
+                string.Empty,
+                [],
+                [],
+                [],
+                new Dictionary<string, string>(),
+                new StoredConnectorAuthConfig("", "", "", "", "", "", "", "")),
+            new StoredCliConnectorConfig(
+                string.Empty,
+                [],
+                [],
+                [],
+                string.Empty,
+                new Dictionary<string, string>()),
+            new StoredMcpConnectorConfig(
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                [],
+                new Dictionary<string, string>(),
+                new Dictionary<string, string>(),
+                new StoredConnectorAuthConfig("", "", "", "", "", "", "", ""),
+                string.Empty,
+                [],
+                []),
+            new StoredHostCallbackConnectorConfig("deterministic_compute", ["sha256_utf8"], ["text"]));
+
+    private sealed class StubHostConnectorCatalogDefaults(
+        IReadOnlyList<StoredConnectorDefinition> connectors) : IHostConnectorCatalogDefaults
+    {
+        public IReadOnlyList<StoredConnectorDefinition> Connectors { get; } = connectors;
+    }
 
     private sealed class RecordingRevisionCatalogReader(ServiceRevisionCatalogSnapshot? snapshot)
         : IServiceRevisionCatalogQueryReader

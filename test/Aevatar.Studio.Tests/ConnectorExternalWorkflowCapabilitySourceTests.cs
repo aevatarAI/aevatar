@@ -16,6 +16,29 @@ namespace Aevatar.Studio.Tests;
 public sealed class ConnectorExternalWorkflowCapabilitySourceTests
 {
     [Fact]
+    public void CatalogNameAuthority_ShouldPreserveScopeConnectors_ReplaceDrift_AndExcludeHostOwnedWrites()
+    {
+        var scopeConnector = Connector("fortune-engine", authType: string.Empty);
+        var driftedDeterministicConnector = DeterministicConnector(
+            "deterministic_compute",
+            allowedOperations: ["different_algorithm"]);
+        var hostDeterministicConnector = DeterministicConnector("deterministic_compute");
+
+        var authority = new ConnectorCatalogNameAuthority(
+            [new StubHostConnectorCatalogDefaults([hostDeterministicConnector])]);
+        var scopeOwned = authority.SelectScopeOwnedDefinitions(
+            [scopeConnector, driftedDeterministicConnector]);
+        var merged = authority.ComposeDefinitions(scopeOwned);
+
+        scopeOwned.Should().Equal(scopeConnector);
+        merged.Should().HaveCount(2);
+        merged.Should().ContainSingle(connector => connector.Name == "fortune-engine");
+        merged.Should().ContainSingle(connector => connector.Name == "deterministic_compute")
+            .Which.HostCallback.AllowedOperations.Should()
+            .Equal(TestDeterministicComputeHandler.OperationId);
+    }
+
+    [Fact]
     public void AddStudioApplication_ShouldRegisterConnectorCapabilitySource()
     {
         var services = new ServiceCollection();
@@ -365,6 +388,12 @@ public sealed class ConnectorExternalWorkflowCapabilitySourceTests
 
         public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class StubHostConnectorCatalogDefaults(
+        IReadOnlyList<StoredConnectorDefinition> connectors) : IHostConnectorCatalogDefaults
+    {
+        public IReadOnlyList<StoredConnectorDefinition> Connectors { get; } = connectors;
     }
 
     private sealed class FixedTimeProvider : TimeProvider
