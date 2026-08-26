@@ -74,7 +74,9 @@ reference. This is a separate authority: an attachment names an exact ContentArt
 and chooses `FOLLOW_CURRENT` or `PINNED_REVISION`; it does not grant write access or turn the
 artifact into profile content. The create resolver validates the artifact read model before actor
 creation (active lifecycle, owner/reader ACL, `TEXT`/`MARKDOWN`/`STRUCTURED_DOCUMENT` kind, and
-available pinned revision). Any failure is `ADMISSION_UNAVAILABLE` and no actor is created.
+available pinned revision). Attachment failures return `ATTACHMENT_ADMISSION_DENIED` with a typed
+reason; Profile and route failures continue to use `ADMISSION_UNAVAILABLE`. No actor is created
+after either rejection.
 
 The Conversation actor commits `ConversationContextAttachmentsBoundEvent` once. Equal protobuf
 bytes are idempotent; a different or absent later declaration is rejected. The sealed set is
@@ -86,6 +88,10 @@ verified ContentArtifact read path and emits an identity header (`artifact_id`, 
 backing failures, read-model unavailability, and either prompt budget produce a typed unavailable
 placeholder plus diagnostic; content is never truncated or persisted in Conversation state,
 read models, or transcript history.
+
+The current-state projector copies the sealed set as reference-only data. The state and list
+resources expose `artifactId`, `revisionMode`, and `pinnedRevisionId` for reconciliation, without
+materializing or persisting any artifact body.
 
 ## Static route tool ceiling
 

@@ -1,4 +1,5 @@
 using System.Text;
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
@@ -17,6 +18,50 @@ namespace Aevatar.Studio.Tests;
 public sealed class NyxIdChatConversationCurrentStateProjectorTests
 {
     private const string ActorId = "conversation-alpha";
+
+    [Fact]
+    public async Task ProjectAsync_ShouldCopySealedContextAttachmentReferencesWithoutBodies()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-27T04:00:00Z")));
+        var state = BuildState();
+        state.ContextAttachments = new ConversationContextAttachmentSet
+        {
+            Attachments =
+            {
+                new ConversationContextAttachment
+                {
+                    ArtifactId = "artifact-follow",
+                    RevisionMode = ConversationContextAttachmentRevisionMode.FollowCurrent,
+                },
+                new ConversationContextAttachment
+                {
+                    ArtifactId = "artifact-pinned",
+                    RevisionMode = ConversationContextAttachmentRevisionMode.PinnedRevision,
+                    PinnedRevisionId = "revision-7",
+                },
+            },
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new ConversationContextAttachmentsBoundEvent(),
+                state,
+                version: 32,
+                eventId: "event-alpha-32",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-27T03:59:00Z")));
+
+        var attachments = dispatcher.Upserts.Should().ContainSingle().Which
+            .ContextAttachments;
+        attachments.Select(static attachment =>
+                (attachment.ArtifactId, attachment.RevisionMode, attachment.PinnedRevisionId))
+            .Should().Equal(
+                ("artifact-follow", "follow_current", string.Empty),
+                ("artifact-pinned", "pinned_revision", "revision-7"));
+    }
 
     [Fact]
     public async Task ProjectAsync_ShouldExposeReloadablePendingAndRecentActionRequests()

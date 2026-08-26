@@ -52,6 +52,14 @@ public enum NyxIdChatLifecycleCommandStartError
     AdmissionUnavailable = 2,
     TargetNotFound = 3,
     AccessDenied = 4,
+    AttachmentNotFound = 5,
+    AttachmentAccessDenied = 6,
+    AttachmentUnsupportedKind = 7,
+    AttachmentOverLimit = 8,
+    AttachmentPinnedRevisionUnavailable = 9,
+    AttachmentInvalidRequest = 10,
+    AttachmentInactive = 11,
+    AttachmentReadModelUnavailable = 12,
 }
 
 public sealed class NyxIdChatLifecycleFacade
@@ -229,10 +237,11 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
             }
         }
 
-        if (!await ValidateContextAttachmentsAsync(command, ct))
+        var attachmentFailureReason = await ValidateContextAttachmentsAsync(command, ct);
+        if (attachmentFailureReason != ConversationContextAttachmentAdmissionFailureReason.Unspecified)
         {
             return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
-                NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+                ToAttachmentStartError(attachmentFailureReason));
         }
 
         var callerScope = OwnerScope.ForNyxIdNative(command.ScopeId);
@@ -281,23 +290,27 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                 NyxIdChatConversationCreateStatus.Accepted));
     }
 
-    private async Task<bool> ValidateContextAttachmentsAsync(
+    // Implement (issue #3543):
+    //   Behavior: Every create-only attachment rejection retains its typed client recovery reason.
+    //   Why this shape: Admission remains read-model-only and fails before actor creation.
+    private async Task<ConversationContextAttachmentAdmissionFailureReason> ValidateContextAttachmentsAsync(
         NyxIdChatConversationCreateCommand command,
         CancellationToken ct)
     {
         if (!ConversationContextAttachmentAdmission.TryNormalize(
                 command.ContextAttachments,
-                out var normalized))
-            return false;
+                out var normalized,
+                out var failureReason))
+            return failureReason;
         command.ContextAttachments = normalized;
         if (normalized.Attachments.Count == 0)
-            return true;
+            return ConversationContextAttachmentAdmissionFailureReason.Unspecified;
         if (_contentArtifactQueryPort is null)
-            return false;
+            return ConversationContextAttachmentAdmissionFailureReason.ReadModelUnavailable;
 
         var requester = command.FirstTurn?.ToolContext?.Caller?.OwnerSubject?.Trim();
         if (string.IsNullOrWhiteSpace(requester))
-            return false;
+            return ConversationContextAttachmentAdmissionFailureReason.AccessDenied;
 
         foreach (var attachment in normalized.Attachments)
         {
@@ -311,14 +324,20 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
             }
             catch
             {
-                return false;
+                return ConversationContextAttachmentAdmissionFailureReason.ReadModelUnavailable;
             }
 
-            if (artifact is null ||
-                !string.Equals(artifact.LifecycleStatus, ContentArtifactLifecycleStatusNames.Active, StringComparison.Ordinal) ||
-                !ConversationContextAttachmentAdmission.IsAllowedKind(artifact.Kind) ||
-                !ConversationContextAttachmentAdmission.IsAuthorized(artifact, requester))
-                return false;
+            if (artifact is null)
+                return ConversationContextAttachmentAdmissionFailureReason.NotFound;
+            if (!string.Equals(
+                    artifact.LifecycleStatus,
+                    ContentArtifactLifecycleStatusNames.Active,
+                    StringComparison.Ordinal))
+                return ConversationContextAttachmentAdmissionFailureReason.Inactive;
+            if (!ConversationContextAttachmentAdmission.IsAllowedKind(artifact.Kind))
+                return ConversationContextAttachmentAdmissionFailureReason.UnsupportedKind;
+            if (!ConversationContextAttachmentAdmission.IsAuthorized(artifact, requester))
+                return ConversationContextAttachmentAdmissionFailureReason.AccessDenied;
 
             if (attachment.RevisionMode == ConversationContextAttachmentRevisionMode.PinnedRevision)
             {
@@ -326,12 +345,34 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                     string.Equals(item.RevisionId, attachment.PinnedRevisionId, StringComparison.Ordinal));
                 if (revision is null ||
                     !string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
-                    return false;
+                    return ConversationContextAttachmentAdmissionFailureReason.PinnedRevisionUnavailable;
             }
         }
 
-        return true;
+        return ConversationContextAttachmentAdmissionFailureReason.Unspecified;
     }
+
+    private static NyxIdChatLifecycleCommandStartError ToAttachmentStartError(
+        ConversationContextAttachmentAdmissionFailureReason reason) => reason switch
+        {
+            ConversationContextAttachmentAdmissionFailureReason.NotFound =>
+                NyxIdChatLifecycleCommandStartError.AttachmentNotFound,
+            ConversationContextAttachmentAdmissionFailureReason.AccessDenied =>
+                NyxIdChatLifecycleCommandStartError.AttachmentAccessDenied,
+            ConversationContextAttachmentAdmissionFailureReason.UnsupportedKind =>
+                NyxIdChatLifecycleCommandStartError.AttachmentUnsupportedKind,
+            ConversationContextAttachmentAdmissionFailureReason.OverLimit =>
+                NyxIdChatLifecycleCommandStartError.AttachmentOverLimit,
+            ConversationContextAttachmentAdmissionFailureReason.PinnedRevisionUnavailable =>
+                NyxIdChatLifecycleCommandStartError.AttachmentPinnedRevisionUnavailable,
+            ConversationContextAttachmentAdmissionFailureReason.InvalidRequest =>
+                NyxIdChatLifecycleCommandStartError.AttachmentInvalidRequest,
+            ConversationContextAttachmentAdmissionFailureReason.Inactive =>
+                NyxIdChatLifecycleCommandStartError.AttachmentInactive,
+            ConversationContextAttachmentAdmissionFailureReason.ReadModelUnavailable =>
+                NyxIdChatLifecycleCommandStartError.AttachmentReadModelUnavailable,
+            _ => NyxIdChatLifecycleCommandStartError.AdmissionUnavailable,
+        };
 }
 
 internal sealed class NyxIdChatConversationDeleteCommandTargetResolver

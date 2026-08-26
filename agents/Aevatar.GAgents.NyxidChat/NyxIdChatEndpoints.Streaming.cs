@@ -621,6 +621,21 @@ public static partial class NyxIdChatEndpoints
         if (result.Succeeded)
             return;
 
+        var attachmentReason = ToAttachmentAdmissionFailureReason(result.Error);
+        if (attachmentReason != ConversationContextAttachmentAdmissionFailureReason.Unspecified)
+        {
+            await writerGate.WriteTerminalAsync(
+                token => writer.WriteRunErrorAsync(
+                    turnId,
+                    "ATTACHMENT_ADMISSION_DENIED",
+                    ToAttachmentAdmissionMessage(attachmentReason),
+                    ToAttachmentAdmissionWireName(attachmentReason),
+                    0,
+                    token),
+                CancellationToken.None);
+            return;
+        }
+
         await writerGate.WriteTerminalAsync(
             token => writer.WriteRunErrorAsync(
                 turnId,
@@ -643,6 +658,66 @@ public static partial class NyxIdChatEndpoints
                 token),
             CancellationToken.None);
     }
+
+    private static ConversationContextAttachmentAdmissionFailureReason ToAttachmentAdmissionFailureReason(
+        NyxIdChatStartError error) => error switch
+        {
+            NyxIdChatStartError.AttachmentNotFound =>
+                ConversationContextAttachmentAdmissionFailureReason.NotFound,
+            NyxIdChatStartError.AttachmentAccessDenied =>
+                ConversationContextAttachmentAdmissionFailureReason.AccessDenied,
+            NyxIdChatStartError.AttachmentUnsupportedKind =>
+                ConversationContextAttachmentAdmissionFailureReason.UnsupportedKind,
+            NyxIdChatStartError.AttachmentOverLimit =>
+                ConversationContextAttachmentAdmissionFailureReason.OverLimit,
+            NyxIdChatStartError.AttachmentPinnedRevisionUnavailable =>
+                ConversationContextAttachmentAdmissionFailureReason.PinnedRevisionUnavailable,
+            NyxIdChatStartError.AttachmentInvalidRequest =>
+                ConversationContextAttachmentAdmissionFailureReason.InvalidRequest,
+            NyxIdChatStartError.AttachmentInactive =>
+                ConversationContextAttachmentAdmissionFailureReason.Inactive,
+            NyxIdChatStartError.AttachmentReadModelUnavailable =>
+                ConversationContextAttachmentAdmissionFailureReason.ReadModelUnavailable,
+            _ => ConversationContextAttachmentAdmissionFailureReason.Unspecified,
+        };
+
+    private static string ToAttachmentAdmissionWireName(
+        ConversationContextAttachmentAdmissionFailureReason reason) => reason switch
+        {
+            ConversationContextAttachmentAdmissionFailureReason.NotFound => "not_found",
+            ConversationContextAttachmentAdmissionFailureReason.AccessDenied => "access_denied",
+            ConversationContextAttachmentAdmissionFailureReason.UnsupportedKind => "unsupported_kind",
+            ConversationContextAttachmentAdmissionFailureReason.OverLimit => "over_limit",
+            ConversationContextAttachmentAdmissionFailureReason.PinnedRevisionUnavailable =>
+                "pinned_revision_unavailable",
+            ConversationContextAttachmentAdmissionFailureReason.InvalidRequest => "invalid_request",
+            ConversationContextAttachmentAdmissionFailureReason.Inactive => "inactive",
+            ConversationContextAttachmentAdmissionFailureReason.ReadModelUnavailable =>
+                "read_model_unavailable",
+            _ => "unspecified",
+        };
+
+    private static string ToAttachmentAdmissionMessage(
+        ConversationContextAttachmentAdmissionFailureReason reason) => reason switch
+        {
+            ConversationContextAttachmentAdmissionFailureReason.NotFound =>
+                "A requested context attachment was not found.",
+            ConversationContextAttachmentAdmissionFailureReason.AccessDenied =>
+                "Access to a requested context attachment was denied.",
+            ConversationContextAttachmentAdmissionFailureReason.UnsupportedKind =>
+                "A requested context attachment kind is unsupported.",
+            ConversationContextAttachmentAdmissionFailureReason.OverLimit =>
+                $"A conversation can bind at most {ConversationContextAttachmentAdmission.MaximumAttachments} context attachments.",
+            ConversationContextAttachmentAdmissionFailureReason.PinnedRevisionUnavailable =>
+                "A requested pinned context attachment revision is unavailable.",
+            ConversationContextAttachmentAdmissionFailureReason.InvalidRequest =>
+                "The context attachment declaration is invalid.",
+            ConversationContextAttachmentAdmissionFailureReason.Inactive =>
+                "A requested context attachment is inactive.",
+            ConversationContextAttachmentAdmissionFailureReason.ReadModelUnavailable =>
+                "Context attachment admission is temporarily unavailable.",
+            _ => "Context attachment admission was denied.",
+        };
 
     private static bool IsTerminalFrame(AGUIEvent evt) =>
         evt.EventCase is AGUIEvent.EventOneofCase.RunFinished or AGUIEvent.EventOneofCase.RunError;

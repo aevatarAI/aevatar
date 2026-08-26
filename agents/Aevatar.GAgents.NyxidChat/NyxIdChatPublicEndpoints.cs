@@ -131,6 +131,7 @@ public static partial class NyxIdChatEndpoints
                     AttentionSince = summary.AttentionSince,
                     ActiveStepSummary = summary.ActiveStepSummary,
                     StateVersion = summary.StateVersion,
+                    ContextAttachments = summary.ContextAttachments,
                 };
             }).ToList(),
             page.NextCursor));

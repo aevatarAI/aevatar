@@ -95,6 +95,15 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.TaskStatus.Should().Be("active");
         result.Snapshot.AttentionKind.Should().Be("input");
         result.Snapshot.ActiveStepSummary.Should().Be("Choose a deployment region.");
+        result.Snapshot.ContextAttachments.Should().Equal(
+            new NyxIdChatConversationContextAttachmentSnapshot(
+                "artifact-follow",
+                "follow_current",
+                string.Empty),
+            new NyxIdChatConversationContextAttachmentSnapshot(
+                "artifact-pinned",
+                "pinned_revision",
+                "revision-7"));
         result.Snapshot.LatestStepControlResult.Should().NotBeNull();
         result.Snapshot.LatestStepControlResult!.RequestId.Should().Be("retry-alpha");
         result.Snapshot.LatestStepControlResult.Kind.Should().Be("retry");
@@ -287,6 +296,15 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
             DateTimeOffset.Parse("2026-08-01T12:00:00Z"));
         summary.Value.ActiveStepSummary.Should().Be("Choose a deployment region.");
         summary.Value.StateVersion.Should().Be(23);
+        summary.Value.ContextAttachments.Should().Equal(
+            new NyxIdChatConversationContextAttachmentSnapshot(
+                "artifact-follow",
+                "follow_current",
+                string.Empty),
+            new NyxIdChatConversationContextAttachmentSnapshot(
+                "artifact-pinned",
+                "pinned_revision",
+                "revision-7"));
         reader.Queries.Should().ContainSingle().Which.Should().Match<ProjectionDocumentQuery>(query =>
             query.Take == 3 &&
             query.Filters.Any(filter =>
@@ -403,6 +421,20 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         LastEventId = $"event-alpha-{stateVersion}",
         UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-25T06:20:00Z")),
         ProgressSequence = 34,
+        ContextAttachments =
+        {
+            new NyxIdChatConversationContextAttachmentDocument
+            {
+                ArtifactId = "artifact-follow",
+                RevisionMode = "follow_current",
+            },
+            new NyxIdChatConversationContextAttachmentDocument
+            {
+                ArtifactId = "artifact-pinned",
+                RevisionMode = "pinned_revision",
+                PinnedRevisionId = "revision-7",
+            },
+        },
         PendingInput = new NyxIdChatConversationPendingInputDocument
         {
             RequestId = "input-alpha",

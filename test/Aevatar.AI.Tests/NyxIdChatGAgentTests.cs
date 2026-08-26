@@ -285,13 +285,17 @@ public class NyxIdChatGAgentTests
     //   Create admission rejection cases were not proven to stop actor creation.
     //   The matrix now asserts the typed error and an empty runtime create ledger.
     [Theory]
-    [InlineData("missing")]
-    [InlineData("unauthorized")]
-    [InlineData("other-content")]
-    [InlineData("over-limit")]
-    [InlineData("pinned-unavailable")]
+    [InlineData("missing", NyxIdChatLifecycleCommandStartError.AttachmentNotFound)]
+    [InlineData("unauthorized", NyxIdChatLifecycleCommandStartError.AttachmentAccessDenied)]
+    [InlineData("other-content", NyxIdChatLifecycleCommandStartError.AttachmentUnsupportedKind)]
+    [InlineData("over-limit", NyxIdChatLifecycleCommandStartError.AttachmentOverLimit)]
+    [InlineData("pinned-unavailable", NyxIdChatLifecycleCommandStartError.AttachmentPinnedRevisionUnavailable)]
+    [InlineData("invalid", NyxIdChatLifecycleCommandStartError.AttachmentInvalidRequest)]
+    [InlineData("inactive", NyxIdChatLifecycleCommandStartError.AttachmentInactive)]
+    [InlineData("read-model-unavailable", NyxIdChatLifecycleCommandStartError.AttachmentReadModelUnavailable)]
     public async Task CreateTargetResolver_ShouldRejectUnavailableContextAttachmentsBeforeCreatingActor(
-        string failure)
+        string failure,
+        NyxIdChatLifecycleCommandStartError expectedError)
     {
         var runtime = new RecordingActorRuntime();
         var artifact = BuildAdmissionArtifact();
@@ -339,6 +343,21 @@ public class NyxIdChatGAgentTests
                         ConversationContextAttachmentRevisionMode.PinnedRevision,
                         "rev-1"));
                 break;
+            case "invalid":
+                command.ContextAttachments = BuildContextAttachmentSet(
+                    BuildContextAttachment(
+                        "artifact-a",
+                        ConversationContextAttachmentRevisionMode.FollowCurrent),
+                    BuildContextAttachment(
+                        "artifact-a",
+                        ConversationContextAttachmentRevisionMode.FollowCurrent));
+                break;
+            case "inactive":
+                query.Artifact = artifact with
+                {
+                    LifecycleStatus = ContentArtifactLifecycleStatusNames.Tombstoned,
+                };
+                break;
         }
 
         var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
@@ -346,12 +365,12 @@ public class NyxIdChatGAgentTests
             StaticChatRoutePolicyQueryPort.ForSnapshot(null),
             NewChatRouteResolver(),
             new DisabledNyxIdChatAgentProfileResolver(),
-            query);
+            failure == "read-model-unavailable" ? null : query);
 
         var result = await resolver.ResolveAsync(command);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+        result.Error.Should().Be(expectedError);
         runtime.CreateCalls.Should().BeEmpty();
     }
 

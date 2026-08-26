@@ -229,6 +229,20 @@ internal sealed class NyxIdChatSseWriter
             runError = new { runId = turnId, code, message },
         }, sequence, ct);
 
+    public ValueTask WriteRunErrorAsync(
+        string turnId,
+        string code,
+        string message,
+        string reason,
+        long sequence,
+        CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "RUN_ERROR",
+            turnId,
+            runError = new { runId = turnId, code, message, reason },
+        }, sequence, ct);
+
     public ValueTask WriteMediaContentAsync(
         Aevatar.AI.Abstractions.MediaContentEvent evt,
         long sequence,

@@ -875,6 +875,12 @@ message NyxIdChatConversationServiceAccessReviewDocument {
   string resource_uri = 3;
 }
 
+message NyxIdChatConversationContextAttachmentDocument {
+  string artifact_id = 1;
+  string revision_mode = 2;
+  string pinned_revision_id = 3;
+}
+
 message NyxIdChatConversationCurrentStateDocument {
   string id = 1;
   string actor_id = 2;
@@ -907,6 +913,7 @@ message NyxIdChatConversationCurrentStateDocument {
   NyxIdChatConversationCanaryEffectFaultDocument canary_effect_fault = 42;
   bool deleted = 43;
   google.protobuf.Timestamp deleted_at = 44;
+  repeated NyxIdChatConversationContextAttachmentDocument context_attachments = 45;
 }
 
 message NyxIdChatConversationCanaryEffectFaultDocument {

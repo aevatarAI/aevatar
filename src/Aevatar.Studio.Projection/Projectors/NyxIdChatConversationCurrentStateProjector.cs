@@ -95,6 +95,21 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         document.RecentActions.AddRange(state.RecentActions.Select(ToAction));
         document.RecentStepControlResults.AddRange(
             state.RecentStepControlResults.Select(result => ToStepControlResult(result)!));
+        if (state.ContextAttachments is not null)
+        {
+            document.ContextAttachments.AddRange(state.ContextAttachments.Attachments.Select(static attachment =>
+                new NyxIdChatConversationContextAttachmentDocument
+                {
+                    ArtifactId = attachment.ArtifactId,
+                    RevisionMode = attachment.RevisionMode switch
+                    {
+                        ConversationContextAttachmentRevisionMode.FollowCurrent => "follow_current",
+                        ConversationContextAttachmentRevisionMode.PinnedRevision => "pinned_revision",
+                        _ => "unspecified",
+                    },
+                    PinnedRevisionId = attachment.PinnedRevisionId,
+                }));
+        }
 
         var result = await _writeDispatcher.UpsertAsync(document, ct).ConfigureAwait(false);
         if (result.IsRejected)

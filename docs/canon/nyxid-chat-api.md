@@ -666,6 +666,9 @@ effect evidence, available actions, pending input, approval presentation,
 latest safe input/approval resolution facts, typed `pendingActions` and bounded
 `recentActions`, control fences, continuation admission, progress sequence,
 actor-authored attention, and actor version. It also exposes
+the create-only sealed `contextAttachments` set as reference-only
+`artifactId / revisionMode / pinnedRevisionId` entries. No attachment body is part of this
+document or response. The state resource also exposes
 the exact safe typed parameters needed to resume browser actions after reload:
 `key.create` preserves `name`, `platform`, and the nonempty
 `allowedServiceIds`; `key.rotate` preserves only `keyId`. These values come
@@ -691,7 +694,7 @@ All resources use the authenticated scope and the same public `conversationId`; 
 
 | Route | Behavior |
 |---|---|
-| `GET /api/chat/conversations?pageSize={n}&cursor={cursor}` | Lists the caller's NyxID Assistant transcript index. `pageSize` defaults to `50`; `cursor` is opaque. Each materialized conversation may include actor-authored `taskStatus`, `attentionKind`, `attentionSince`, `activeStepSummary`, and `stateVersion`; the response also contains an optional `nextCursor`. |
+| `GET /api/chat/conversations?pageSize={n}&cursor={cursor}` | Lists the caller's NyxID Assistant transcript index. `pageSize` defaults to `50`; `cursor` is opaque. Each materialized conversation may include actor-authored `taskStatus`, `attentionKind`, `attentionSince`, `activeStepSummary`, `stateVersion`, and the reference-only sealed `contextAttachments`; the response also contains an optional `nextCursor`. |
 | `GET /api/chat/conversations/{conversationId}` | Returns the durable transcript as `messages` plus its `stateVersion`. |
 | `GET /api/chat/conversations/{conversationId}/state` | Returns the conditional current-state result documented above. |
 | `DELETE /api/chat/conversations/{conversationId}` | Submits the existing authoritative conversation retirement/deletion commands. |
@@ -705,6 +708,13 @@ Transcript and index materialization are eventually consistent. A transient `404
 NyxID Assistant ingress is `application/json` (including `+json`) with one recognized `type`. JSON without `type` and `multipart/form-data` remain Workflow Chat inputs on Mainnet. A malformed/non-object body, unsupported media type, malformed discriminator, or unknown explicit discriminator returns `400 INVALID_CHAT_INPUT` and never falls through to Workflow. Assistant DTOs reject unknown fields, including caller-supplied `scopeId`.
 
 The caller must authenticate with exactly one non-conflicting `scope_id` or `workflow.scope_id` claim. Missing or ambiguous scope returns `401`; an owned-resource mismatch returns `403`; absent conversations/read models return `404`; unavailable admission returns `503`. Stream setup and execution failures are emitted as safe AGUI `RUN_ERROR` terminals when streaming has begun.
+
+Create-time attachment rejection emits `RUN_ERROR(code=ATTACHMENT_ADMISSION_DENIED)` with a typed
+`reason`: `not_found`, `access_denied`, `unsupported_kind`, `over_limit`,
+`pinned_revision_unavailable`, `invalid_request`, `inactive`, or `read_model_unavailable`.
+Clients may drop or correct attachments for structural reasons and retry transient read-model
+unavailability. Profile and route admission failures remain `ADMISSION_UNAVAILABLE` and do not
+claim an attachment cause.
 
 `clientRequestId` is the transport idempotency identity. When both the body and `Idempotency-Key` header provide one, the body wins. An exact retry preserves the existing admission/result, while reuse with different content fails closed. Input, approval, controls, and delete return honest `202` receipts; committed state and projection visibility are observed later through AGUI or the public state resource.
 

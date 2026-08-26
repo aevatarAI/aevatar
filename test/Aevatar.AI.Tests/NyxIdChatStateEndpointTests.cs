@@ -452,7 +452,18 @@ public sealed class NyxIdChatStateEndpointTests
                 [],
                 null,
                 null,
-                null)),
+                null,
+                ContextAttachments:
+                [
+                    new NyxIdChatConversationContextAttachmentSnapshot(
+                        "artifact-follow",
+                        "follow_current",
+                        string.Empty),
+                    new NyxIdChatConversationContextAttachmentSnapshot(
+                        "artifact-pinned",
+                        "pinned_revision",
+                        "revision-7"),
+                ])),
         };
 
         var response = await ExecuteAsync(
@@ -471,6 +482,16 @@ public sealed class NyxIdChatStateEndpointTests
         json.RootElement.GetProperty("turnId").GetString().Should().Be("turn-alpha");
         json.RootElement.GetProperty("snapshot").GetProperty("actorId").GetString()
             .Should().Be("conversation-alpha");
+        var contextAttachments = json.RootElement.GetProperty("snapshot")
+            .GetProperty("contextAttachments");
+        contextAttachments.GetArrayLength().Should().Be(2);
+        contextAttachments[0].GetProperty("artifactId").GetString().Should().Be("artifact-follow");
+        contextAttachments[0].GetProperty("revisionMode").GetString().Should().Be("follow_current");
+        contextAttachments[0].GetProperty("pinnedRevisionId").GetString().Should().BeEmpty();
+        contextAttachments[1].GetProperty("artifactId").GetString().Should().Be("artifact-pinned");
+        contextAttachments[1].GetProperty("revisionMode").GetString().Should().Be("pinned_revision");
+        contextAttachments[1].GetProperty("pinnedRevisionId").GetString().Should().Be("revision-7");
+        response.Body.Should().NotContain("inlineContent").And.NotContain("body");
         json.RootElement
             .GetProperty("snapshot")
             .GetProperty("activeTask")

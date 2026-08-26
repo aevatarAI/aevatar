@@ -655,7 +655,17 @@ public sealed class NyxIdChatPublicEndpointsTests
                     "input",
                     DateTimeOffset.Parse("2026-08-01T12:00:00Z"),
                     "Choose a deployment region.",
-                    23),
+                    23,
+                    [
+                        new NyxIdChatConversationContextAttachmentSnapshot(
+                            "artifact-follow",
+                            "follow_current",
+                            string.Empty),
+                        new NyxIdChatConversationContextAttachmentSnapshot(
+                            "artifact-pinned",
+                            "pinned_revision",
+                            "revision-7"),
+                    ]),
             },
         };
         var context = CreateContext("scope-alpha", services => services
@@ -678,6 +688,12 @@ public sealed class NyxIdChatPublicEndpointsTests
         conversation.GetProperty("activeStepSummary").GetString().Should()
             .Be("Choose a deployment region.");
         conversation.GetProperty("stateVersion").GetInt64().Should().Be(23);
+        var contextAttachments = conversation.GetProperty("contextAttachments");
+        contextAttachments.GetArrayLength().Should().Be(2);
+        contextAttachments[0].GetProperty("artifactId").GetString().Should().Be("artifact-follow");
+        contextAttachments[1].GetProperty("artifactId").GetString().Should().Be("artifact-pinned");
+        contextAttachments[1].GetProperty("pinnedRevisionId").GetString().Should().Be("revision-7");
+        response.Body.Should().NotContain("inlineContent").And.NotContain("body");
         state.AttentionRequests.Should().ContainSingle().Which.Should().BeEquivalentTo(
             ("scope-alpha", (IReadOnlyCollection<string>)["conversation-alpha"]));
 
