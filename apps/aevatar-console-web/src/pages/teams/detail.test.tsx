@@ -1507,6 +1507,80 @@ describe("TeamDetailPage", () => {
     });
   });
 
+  it("loads, filters, and refreshes team-scoped activity from a direct route", async () => {
+    const memberId = "member-team-alpha";
+    const workflowId = "workflow-1";
+    const publishedServiceId = "alpha-service";
+    window.history.replaceState(
+      {},
+      "",
+      `/scopes/scope-1/teams/t-alpha?memberId=${memberId}&workflowId=${workflowId}&serviceId=${publishedServiceId}&runId=run-current&tab=activity`,
+    );
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(async () => ({
+      ...mockCreateRunsCatalog(),
+      serviceId: publishedServiceId,
+      serviceKey: `scope-1:${publishedServiceId}`,
+      runs: mockCreateRunsCatalog().runs.map((run) => ({
+        ...run,
+        serviceId: publishedServiceId,
+      })),
+    }));
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    const activity = await screen.findByTestId("team-activity-tab");
+    expect(within(activity).getByRole("heading", { name: "最近活动" })).toBeTruthy();
+    expect(await within(activity).findAllByText("Team Alpha Operator")).toHaveLength(2);
+    expect(within(activity).getByText("Waiting on approval")).toBeTruthy();
+    expect(within(activity).getByText("Resolved")).toBeTruthy();
+    expect(screen.queryByText("当前态势")).toBeNull();
+    expect(screen.getByRole("navigation", { name: "面包屑" })).toHaveTextContent(
+      "活动",
+    );
+    expect(within(activity).getAllByRole("link", { name: "查看详情" })[0])
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          `/scopes/scope-1/teams/t-alpha/members/${memberId}/runs?runId=run-current`,
+        ),
+      );
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
+        "scope-1",
+        publishedServiceId,
+        expect.objectContaining({ take: 12 }),
+      );
+    });
+
+    fireEvent.click(within(activity).getByText("需要处理"));
+    expect(within(activity).getByText("Waiting on approval")).toBeTruthy();
+    expect(within(activity).queryByText("Resolved")).toBeNull();
+
+    fireEvent.click(within(activity).getByText("运行中"));
+    expect(
+      within(activity).getByText("没有符合当前筛选的最近运行"),
+    ).toBeTruthy();
+    fireEvent.click(
+      within(activity).getByRole("button", { name: "显示全部最近运行" }),
+    );
+    expect(within(activity).getByText("Resolved")).toBeTruthy();
+
+    const requestCountBeforeRefresh = (
+      scopeRuntimeApi.listServiceRuns as jest.Mock
+    ).mock.calls.length;
+    fireEvent.click(
+      within(activity).getByRole("button", { name: "刷新最近活动" }),
+    );
+    await waitFor(() => {
+      expect((scopeRuntimeApi.listServiceRuns as jest.Mock).mock.calls.length)
+        .toBeGreaterThan(requestCountBeforeRefresh);
+    });
+
+    expect(memberId).not.toBe(workflowId);
+    expect(memberId).not.toBe(publishedServiceId);
+    expect(workflowId).not.toBe(publishedServiceId);
+  });
+
   it("falls legacy event deep links back to the overview tab", async () => {
     window.history.replaceState(
       {},

@@ -54,8 +54,9 @@ import {
   isAbortLikeError,
   type TeamTestErrorDescription,
 } from "./components/teamTestErrors";
-import TeamMembersTab, { type TeamMembersDeleteTarget } from "./tabs/TeamMembersTab";
+import TeamActivityTab from "./tabs/TeamActivityTab";
 import TeamAutomationsTab from "./tabs/TeamAutomationsTab";
+import TeamMembersTab, { type TeamMembersDeleteTarget } from "./tabs/TeamMembersTab";
 import TeamOverviewTab from "./tabs/TeamOverviewTab";
 import TeamWorkOrdersTab from "./tabs/TeamWorkOrdersTab";
 import { resolveWorkflowOperationalUnit } from "./workflowOperationalUnits";
@@ -224,6 +225,11 @@ function formatTeamTabLabel(
   intl: ReturnType<typeof useIntl>,
 ): string {
   switch (tab) {
+    case "activity":
+      return intl.formatMessage({
+        defaultMessage: "Activity",
+        id: "teams.detail.tabs.activity",
+      });
     case "automations":
       return intl.formatMessage({
         defaultMessage: "Automations",
@@ -582,7 +588,7 @@ const TeamDetailPage: React.FC = () => {
       isProjectionSyncing404(teamMembersQuery.failureReason)) ||
       (teamMembersQuery.isError && isProjectionSyncing404(teamMembersQuery.error)));
   const teamRuntimeServiceIds = React.useMemo(() => {
-    if (activeTab !== "overview") {
+    if (activeTab !== "overview" && activeTab !== "activity") {
       return [];
     }
 
@@ -612,7 +618,8 @@ const TeamDetailPage: React.FC = () => {
   const hasExplicitRuntimeFocus = Boolean(
     trimText(preferredMemberId) || trimText(preferredServiceId) || trimText(preferredRunId),
   );
-  const shouldLoadTeamRuntimeLens = hasTeamIdentity && activeTab === "overview";
+  const shouldLoadTeamRuntimeLens =
+    hasTeamIdentity && (activeTab === "overview" || activeTab === "activity");
   const {
     lens,
     runsQuery,
@@ -1293,9 +1300,9 @@ const TeamDetailPage: React.FC = () => {
       : !entryRosterRow?.canInvokeAsEntry
         ? intl.formatMessage({ id: "teams.detail.test.entry.configuredNeedsBinding" })
         : "";
-  const overviewLatestRuns = React.useMemo(
+  const recentRunRows = React.useMemo(
     () =>
-      (runsQuery.data?.runs ?? []).slice(0, 5).map((run) => {
+      (runsQuery.data?.runs ?? []).map((run) => {
         const runServiceId = trimText(run.serviceId);
         const matchedMember = teamRosterRows.find(
           (row) => trimText(row.publishedServiceId) === runServiceId,
@@ -1342,6 +1349,7 @@ const TeamDetailPage: React.FC = () => {
             trimText(run.lastOutput) ||
             t("teams.detail.overview.history.noOutput", "No output snapshot captured yet."),
           runId: run.runId,
+          statusKey: trimText(run.completionStatus),
           statusLabel: formatFriendlyStatus(run.completionStatus, intl),
           statusStyle: resolveStatusPillStyle(token, run.completionStatus),
           updatedLabel: formatCompactTimestamp(run.lastUpdatedAt),
@@ -1370,6 +1378,7 @@ const TeamDetailPage: React.FC = () => {
   );
   const tabOptions: TeamTabOption[] = [
     { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
+    { label: t("teams.detail.tabs.activity", "Activity"), value: "activity" },
     { label: t("teams.detail.tabs.automations", "Automations"), value: "automations" },
     { label: t("teams.detail.tabs.workOrders", "Requests"), value: "work-orders" },
     { label: t("pages.teams.detail.copy.46", "Team members"), value: "members" },
@@ -1382,7 +1391,7 @@ const TeamDetailPage: React.FC = () => {
 
   const pushTeamTab = React.useCallback(
     (tab: TeamDetailTab) => {
-      const includeRuntimeContext = tab === "overview";
+      const includeRuntimeContext = tab === "overview" || tab === "activity";
       setActiveTab(tab);
       history.push(
         buildTeamDetailHref({
@@ -1973,7 +1982,7 @@ const TeamDetailPage: React.FC = () => {
         entryMemberId={entryMemberId || null}
         entryMemberLabel={entryMemberLabel}
         entryMemberUpdating={entryActionBusyMemberId === entryMemberClearingId}
-        latestRuns={overviewLatestRuns}
+        latestRuns={recentRunRows.slice(0, 3)}
         latestVisibleUpdateLabel={formatCompactTimestamp(latestVisibleUpdate)}
         latestVisibleUpdateNote={latestVisibleUpdateNote}
         onClearEntryMember={
@@ -1983,6 +1992,22 @@ const TeamDetailPage: React.FC = () => {
         }
         onNavigate={(href) => history.push(href)}
         onOpenTeamTest={openTeamTestModal}
+        teamRunDisabled={!canRunTeamFromOverview}
+        teamRunDisabledReason={teamRunDisabledReason}
+      />
+    );
+  };
+
+  const renderActivityTab = () => {
+    return (
+      <TeamActivityTab
+        error={runsQuery.isError}
+        loading={runsQuery.isLoading}
+        onNavigate={(href) => history.push(href)}
+        onOpenTeamTest={openTeamTestModal}
+        onRefresh={() => void runsQuery.refetch()}
+        refreshing={runsQuery.isFetching}
+        runs={recentRunRows}
         teamRunDisabled={!canRunTeamFromOverview}
         teamRunDisabledReason={teamRunDisabledReason}
       />
@@ -2059,6 +2084,9 @@ const TeamDetailPage: React.FC = () => {
 
   let tabContent: React.ReactNode;
   switch (activeTab) {
+    case "activity":
+      tabContent = renderActivityTab();
+      break;
     case "automations":
       tabContent = renderAutomationsTab();
       break;
