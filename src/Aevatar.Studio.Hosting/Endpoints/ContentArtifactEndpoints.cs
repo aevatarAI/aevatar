@@ -328,11 +328,13 @@ internal static class ContentArtifactEndpoints
         }
     }
 
+    // DELETE carries the CAS + idempotency envelope, so the body must be bound explicitly:
+    // minimal APIs refuse inferred body parameters on DELETE and would fail endpoint construction.
     internal static async Task<IResult> HandleClearPinAsync(
         HttpContext http,
         string scopeId,
         string pinKey,
-        ClearContentArtifactPinRequest request,
+        [FromBody] ClearContentArtifactPinRequest request,
         [FromServices] IContentArtifactPinService service,
         CancellationToken ct)
     {
