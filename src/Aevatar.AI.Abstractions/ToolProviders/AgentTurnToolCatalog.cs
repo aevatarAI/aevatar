@@ -27,6 +27,7 @@ public enum AgentProfileTurnDiagnosticCode
     CatalogOverBudget = 15,
     CatalogNeedsDisambiguation = 16,
     SchemaInvalid = 17,
+    SelectedPolicyEmpty = 18,
 }
 
 public sealed record AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode Code, string Detail);

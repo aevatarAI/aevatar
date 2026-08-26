@@ -342,6 +342,21 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         selectedPolicy.UnionWith(taskPolicy.Names);
         var ceiling = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
         ceiling.IntersectWith(selectedPolicy);
+        if (includeBuiltInNyxIdIntents && ceiling.Count == 0)
+        {
+            // A selected NyxID chat member whose resolved task and recovery
+            // policies admit no currently-available tool (for example a
+            // catch-all member sealed with an empty task policy) must not zero
+            // the turn: the reviewed ordinary baseline survives wherever the
+            // profile's eligible surface admits it (#3532). The maximum policy
+            // stays the hard ceiling and non-chat surfaces keep the sealed
+            // selection verbatim.
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.SelectedPolicyEmpty,
+                candidate.IntentId));
+            ceiling.UnionWith(OrdinaryDegradedNames(available, recoveryNames));
+        }
+
         if (profile.ActivationMode != AgentProfileActivationMode.Enforced)
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(

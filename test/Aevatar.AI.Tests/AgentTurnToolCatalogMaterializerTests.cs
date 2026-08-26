@@ -582,6 +582,74 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task PrepareNyxIdChatAsync_SelectedMemberWithEmptyPolicies_ShouldKeepOrdinaryBaseline()
+    {
+        // Mirrors the production #3532 catch-all shape: classification selects a
+        // member whose task policy and the profile recovery policy are both
+        // empty, so the sealed selection alone would admit zero tools.
+        var tools = NewTools("nyxid_services", "use_skill", "task", "extra");
+        var profile = BuildProfile();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add(["nyxid_services", "use_skill", "task"]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        var classifier = new SequencedClassifier(
+            AgentProfileTurnClassificationResult.Matched(
+                AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+            AgentProfileTurnClassificationResult.Matched("intent-alpha"));
+
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                classifier,
+                fetcher: null)
+            .PrepareNyxIdChatAsync(
+                SealProfile(profile),
+                "session-selected-empty-policy",
+                "what NyxID services are connected to my account?",
+                tools,
+                ToolContext(),
+                llmControl: null,
+                CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Selected);
+        preparation.Authority.CandidateRoute!.IntentId.Should().Be("intent-alpha");
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "use_skill");
+        preparation.Diagnostics.Should().Contain(static diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.SelectedPolicyEmpty &&
+            diagnostic.Detail == "intent-alpha");
+    }
+
+    [Fact]
+    public async Task PrepareAsync_SelectedMemberWithEmptyPolicies_ShouldKeepSealedSelectionOutsideNyxIdChat()
+    {
+        var tools = NewTools("nyxid_services", "use_skill", "task");
+        var profile = BuildProfile();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add(["nyxid_services", "use_skill", "task"]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.Matched("intent-alpha")),
+                fetcher: null)
+            .PrepareAsync(
+                SealProfile(profile),
+                "session-non-chat-selected-empty",
+                "what NyxID services are connected to my account?",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Selected);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEmpty();
+        preparation.Diagnostics.Should().NotContain(static diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.SelectedPolicyEmpty);
+    }
+
+    [Fact]
     public async Task PrepareAsync_ClassifierNoMatch_ShouldStayRestrictedEmptyOutsideNyxIdChat()
     {
         var tools = NewTools("nyxid_services", "use_skill", "task");
