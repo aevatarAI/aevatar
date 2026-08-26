@@ -560,7 +560,7 @@ def frame_schedule_detail(index: int) -> None:
     text(cx + 776, cy + 396, "NEXT SCHEDULED", FS_SMALL, MUTED, font=FONT_MONO, width=212)
     text(cx + 1032, cy + 396, "LAST ATTEMPT", FS_SMALL, MUTED, font=FONT_MONO, width=212)
     text(cx + 776, cy + 426, "Tue 25 Aug · 09:00", FS_BODY, INK, width=220)
-    text(cx + 1032, cy + 426, "Mon 24 Aug · Succeeded", FS_BODY, INK, width=226)
+    text(cx + 1032, cy + 426, "Mon 24 Aug · Failed to start", FS_BODY, RED, width=226)
     line(cx + 776, cy + 468, 492, 0, color=LINE)
     text(cx + 776, cy + 492, "TOTAL ATTEMPTS", FS_SMALL, MUTED, font=FONT_MONO, width=212)
     text(cx + 1032, cy + 492, "FAILED ATTEMPTS", FS_SMALL, MUTED, font=FONT_MONO, width=212)
@@ -604,36 +604,37 @@ def frame_schedule_history(index: int) -> None:
          MUTED, width=470)
 
     table_y = cy + 278
-    widths = [133, 69, 93, 143, 54]
+    widths = [138, 70, 138, 146]
     rect(cx + 776, table_y, sum(widths), 42, bg=SUBTLE, stroke=LINE, radius=False)
     cursor = cx + 776
-    for width, label in zip(widths, ("SCHEDULED", "SOURCE", "RESULT", "COMPLETED", "ACTION")):
-        padding = 4 if label == "ACTION" else 8
-        size = 12 if label == "ACTION" else FS_SMALL
-        text(cursor + padding, table_y + 13, label, size, MUTED,
-             font=FONT_MONO, width=width - 2 * padding)
+    for width, label in zip(widths, ("SCHEDULED", "SOURCE", "SCHEDULE OUTCOME", "COMPLETED")):
+        size = 12 if label == "SCHEDULE OUTCOME" else FS_SMALL
+        text(cursor + 8, table_y + 13, label, size, MUTED,
+             font=FONT_MONO, width=width - 16)
         cursor += width
 
     rows = [
-        ("24 Aug · 09:00", "Scheduled", "Failed", "09:00", False),
-        ("21 Aug · 09:00", "Scheduled", "Run started", "09:01", True),
-        ("20 Aug · 15:42", "Manual", "Run started", "15:43", True),
+        ("24 Aug · 09:00", "Scheduled", "Failed to start", "09:00", False),
+        ("21 Aug · 09:00", "Scheduled", "Run created", "09:01", True),
+        ("20 Aug · 15:42", "Manual", "Accepted", "15:43", False),
     ]
     row_offsets = [42, 194, 270]
-    for row_index, (scheduled, source, result, completed, has_action) in enumerate(rows):
+    for row_index, (scheduled, source, outcome, completed, linked) in enumerate(rows):
         row_y = table_y + row_offsets[row_index]
         row_h = 152 if row_index == 0 else 76
-        rect(cx + 776, row_y, sum(widths), row_h, bg=SURFACE, stroke=LINE,
+        rect(cx + 776, row_y, sum(widths), row_h,
+             bg=BLUE_BG if linked else SURFACE, stroke="#84adff" if linked else LINE,
              radius=False)
+        if linked:
+            rect(cx + 776, row_y, 3, row_h, bg=BLUE, stroke=BLUE, radius=False)
         cursor = cx + 776
-        for width, value in zip(widths[:4], (scheduled, source, result, completed)):
-            color = RED if value == "Failed" else GREEN if value == "Run started" else INK
+        for width, value in zip(widths, (scheduled, source, outcome, completed)):
+            color = (RED if value == "Failed to start" else
+                     GREEN if value == "Run created" else
+                     AMBER if value == "Accepted" else INK)
             text(cursor + 4, row_y + 18, value, 12, color,
                  width=width - 8)
             cursor += width
-        if has_action:
-            text(cursor, row_y + 16, "→", FS_BODY, BLUE,
-                 width=widths[-1], align="center")
         if row_index == 0:
             text(cx + 784, row_y + 54,
                  "The scheduled attempt could not start the Workflow.", FS_SMALL,
@@ -645,7 +646,7 @@ def frame_schedule_history(index: int) -> None:
                  "Capability admission rejected the scheduled request.", FS_SMALL,
                  MUTED, font=FONT_MONO, width=452)
     annotation(fx + FRAME_W + 42, fy + 300, "6", "History is attempts, Activity is Runs",
-                "recentFires renders as a compact bounded list. Technical errors stay disclosed; Activity receives exact Workflow and Schedule filters.")
+                "Schedule outcome states only what recentFires proves. A row with an exact Run destination is one native link; the blue row shows its hover treatment.")
     end_frame()
 
 

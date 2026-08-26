@@ -626,17 +626,19 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '在活动记录中查看相关运行',
     'workflowActivityVNext.schedule.scheduledTime': '计划时间',
     'workflowActivityVNext.schedule.source': '来源',
-    'workflowActivityVNext.schedule.result': '结果',
+    'workflowActivityVNext.schedule.outcome': '计划任务结果',
     'workflowActivityVNext.schedule.completedTime': '完成时间',
-    'workflowActivityVNext.schedule.action': '操作',
     'workflowActivityVNext.schedule.technicalDetails': '技术详情',
     'workflowActivityVNext.schedule.noAttempts': '暂无尝试记录',
     'workflowActivityVNext.schedule.scheduledAttemptFailed':
       '定时尝试未能启动工作流。',
     'workflowActivityVNext.schedule.manualAttemptFailed':
       '手动尝试未能启动工作流。',
-    'workflowActivityVNext.schedule.openRunAria': '打开 {date} 的运行记录',
-    'workflowActivityVNext.schedule.runStarted': '运行已启动',
+    'workflowActivityVNext.schedule.openRunAria':
+      '打开由 {date} 的计划任务尝试创建的运行记录',
+    'workflowActivityVNext.schedule.runCreated': '已创建运行',
+    'workflowActivityVNext.schedule.failedToStart': '启动失败',
+    'workflowActivityVNext.schedule.attemptAccepted': '已接受',
     'workflowActivityVNext.schedule.enable': '启用',
     'workflowActivityVNext.schedule.failed': '失败',
     'workflowActivityVNext.schedule.failedCount': '{count} 次失败',

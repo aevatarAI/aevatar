@@ -1,6 +1,5 @@
 import {
   ArrowLeftOutlined,
-  ArrowRightOutlined,
   CalendarOutlined,
   DeleteOutlined,
   DownOutlined,
@@ -28,6 +27,7 @@ import {
 import React from 'react';
 import {
   type WorkflowScheduleConfigurationInput,
+  type WorkflowScheduleFire,
   type WorkflowSchedulePreview,
   type WorkflowScheduleSummary,
   workflowScheduleApi,
@@ -63,6 +63,7 @@ type CreationStep = 'configure' | 'previewing' | 'review';
 type ScheduleSurfaceView = 'list' | 'detail' | 'form';
 type ScheduleDetailTab = 'overview' | 'history';
 type RepeatPreset = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'monthly';
+type ScheduleAttemptOutcome = 'accepted' | 'failed' | 'run-created';
 
 const weekdayValues = ['1', '2', '3', '4', '5', '6', '0'] as const;
 type WeekdayValue = (typeof weekdayValues)[number];
@@ -77,6 +78,25 @@ const scheduleQueryKey = (scopeId: string, workflowId: string) => [
   scopeId,
   workflowId,
 ];
+
+function getScheduleAttemptOutcome(
+  fire: Pick<WorkflowScheduleFire, 'error' | 'runActorId'>,
+): ScheduleAttemptOutcome {
+  if (fire.error.trim()) return 'failed';
+  return fire.runActorId.trim() ? 'run-created' : 'accepted';
+}
+
+function getScheduleAttemptOutcomeLabel(
+  outcome: ScheduleAttemptOutcome,
+): string {
+  if (outcome === 'failed') {
+    return t('workflowActivityVNext.schedule.failedToStart', 'Failed to start');
+  }
+  if (outcome === 'run-created') {
+    return t('workflowActivityVNext.schedule.runCreated', 'Run created');
+  }
+  return t('workflowActivityVNext.schedule.attemptAccepted', 'Accepted');
+}
 
 function defaultTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -1316,7 +1336,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                   {t('workflowActivityVNext.schedule.source', 'Source')}
                 </th>
                 <th scope="col">
-                  {t('workflowActivityVNext.schedule.result', 'Result')}
+                  {t(
+                    'workflowActivityVNext.schedule.outcome',
+                    'Schedule outcome',
+                  )}
                 </th>
                 <th scope="col">
                   {t(
@@ -1324,14 +1347,12 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                     'Completed time',
                   )}
                 </th>
-                <th scope="col">
-                  {t('workflowActivityVNext.schedule.action', 'Action')}
-                </th>
               </tr>
             </thead>
             <tbody>
               {scheduleDetail.data.recentFires.map((fire) => {
-                const failed = Boolean(fire.error.trim());
+                const outcome = getScheduleAttemptOutcome(fire);
+                const failed = outcome === 'failed';
                 const source = fire.manual
                   ? t('workflowActivityVNext.schedule.manual', 'Manual')
                   : t('workflowActivityVNext.schedule.scheduled', 'Scheduled');
@@ -1349,13 +1370,33 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                 const attemptLabel = attemptHref
                   ? t(
                       'workflowActivityVNext.schedule.openRunAria',
-                      'Open Run from {date}',
+                      'Open Run created by the Schedule attempt at {date}',
                       { date: formattedScheduledAt },
                     )
                   : null;
                 return (
-                  <tr key={`${fire.idempotencyKey}:${fire.completedAt}`}>
+                  <tr
+                    className={
+                      attemptHref
+                        ? 'wa-vnext__schedule-history-row--linked'
+                        : undefined
+                    }
+                    key={`${fire.idempotencyKey}:${fire.completedAt}`}
+                  >
                     <td>
+                      {attemptHref && attemptLabel ? (
+                        <a
+                          aria-label={attemptLabel}
+                          className="wa-vnext__schedule-history-row-link"
+                          href={attemptHref}
+                          rel="noopener noreferrer"
+                          target="_blank"
+                        >
+                          <span className="aevatar-loading-visually-hidden">
+                            {attemptLabel}
+                          </span>
+                        </a>
+                      ) : null}
                       <time dateTime={fire.scheduledFireAt}>
                         {formattedScheduledAt}
                       </time>
@@ -1363,16 +1404,16 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                     <td>{source}</td>
                     <td>
                       <div className="wa-vnext__schedule-history-result">
-                        <Tag color={failed ? 'red' : 'green'}>
-                          {failed
-                            ? t(
-                                'workflowActivityVNext.schedule.failed',
-                                'Failed',
-                              )
-                            : t(
-                                'workflowActivityVNext.schedule.runStarted',
-                                'Run started',
-                              )}
+                        <Tag
+                          color={
+                            outcome === 'failed'
+                              ? 'red'
+                              : outcome === 'run-created'
+                                ? 'green'
+                                : 'gold'
+                          }
+                        >
+                          {getScheduleAttemptOutcomeLabel(outcome)}
                         </Tag>
                         {failed ? (
                           <>
@@ -1412,19 +1453,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                           scheduleDetail.data.schedule.timezone,
                         )}
                       </time>
-                    </td>
-                    <td className="wa-vnext__schedule-history-action">
-                      {attemptHref && attemptLabel ? (
-                        <a
-                          aria-label={attemptLabel}
-                          className="wa-vnext__schedule-history-attempt-link"
-                          href={attemptHref}
-                          rel="noopener noreferrer"
-                          target="_blank"
-                        >
-                          <ArrowRightOutlined aria-hidden="true" />
-                        </a>
-                      ) : null}
                     </td>
                   </tr>
                 );
@@ -1642,12 +1670,11 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                   {scheduleDetail.data.recentFires[0] ? (
                     <span>
                       {' · '}
-                      {scheduleDetail.data.recentFires[0].error.trim()
-                        ? t('workflowActivityVNext.schedule.failed', 'Failed')
-                        : t(
-                            'workflowActivityVNext.schedule.runStarted',
-                            'Run started',
-                          )}
+                      {getScheduleAttemptOutcomeLabel(
+                        getScheduleAttemptOutcome(
+                          scheduleDetail.data.recentFires[0],
+                        ),
+                      )}
                     </span>
                   ) : null}
                 </dd>

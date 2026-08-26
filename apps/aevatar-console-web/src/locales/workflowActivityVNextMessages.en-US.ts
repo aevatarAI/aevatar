@@ -669,17 +669,19 @@ const workflowActivityVNextMessages = {
     'View related runs in Activity',
   'workflowActivityVNext.schedule.scheduledTime': 'Scheduled time',
   'workflowActivityVNext.schedule.source': 'Source',
-  'workflowActivityVNext.schedule.result': 'Result',
+  'workflowActivityVNext.schedule.outcome': 'Schedule outcome',
   'workflowActivityVNext.schedule.completedTime': 'Completed time',
-  'workflowActivityVNext.schedule.action': 'Action',
   'workflowActivityVNext.schedule.technicalDetails': 'Technical details',
   'workflowActivityVNext.schedule.noAttempts': 'No attempts yet',
   'workflowActivityVNext.schedule.scheduledAttemptFailed':
     'The scheduled attempt could not start the Workflow.',
   'workflowActivityVNext.schedule.manualAttemptFailed':
     'The manual attempt could not start the Workflow.',
-  'workflowActivityVNext.schedule.openRunAria': 'Open Run from {date}',
-  'workflowActivityVNext.schedule.runStarted': 'Run started',
+  'workflowActivityVNext.schedule.openRunAria':
+    'Open Run created by the Schedule attempt at {date}',
+  'workflowActivityVNext.schedule.runCreated': 'Run created',
+  'workflowActivityVNext.schedule.failedToStart': 'Failed to start',
+  'workflowActivityVNext.schedule.attemptAccepted': 'Accepted',
   'workflowActivityVNext.schedule.enable': 'Enable',
   'workflowActivityVNext.schedule.failed': 'Failed',
   'workflowActivityVNext.schedule.failedCount': '{count} failed',

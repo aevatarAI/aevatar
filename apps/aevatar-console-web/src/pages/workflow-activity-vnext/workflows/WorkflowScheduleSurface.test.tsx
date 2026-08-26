@@ -120,21 +120,31 @@ describe('WorkflowScheduleSurface', () => {
     });
   });
 
-  it('allocates a separate Schedule history Action column', () => {
+  it('allocates four Schedule history columns with a whole-row link affordance', () => {
+    const schedulePortalTokens = workflowActivityVNextCss.match(
+      /\.wa-vnext-schedule-modal, \.wa-vnext-schedule-drawer \{([^}]*)\}/,
+    )?.[1];
+
+    expect(schedulePortalTokens).toContain('--wa-blue-bg: #eff8ff;');
+    expect(schedulePortalTokens).toContain('--wa-red: #b42318;');
+    expect(schedulePortalTokens).toContain('--wa-red-bg: #fef3f2;');
     expect(workflowActivityVNextCss).toContain(
-      '.wa-vnext__schedule-history-table th:nth-child(1), .wa-vnext__schedule-history-table td:nth-child(1) { width: 27%; }',
+      '.wa-vnext__schedule-history-table th:nth-child(1), .wa-vnext__schedule-history-table td:nth-child(1) { width: 28%; }',
     );
     expect(workflowActivityVNextCss).toContain(
       '.wa-vnext__schedule-history-table th:nth-child(2), .wa-vnext__schedule-history-table td:nth-child(2) { width: 14%; }',
     );
     expect(workflowActivityVNextCss).toContain(
-      '.wa-vnext__schedule-history-table th:nth-child(3), .wa-vnext__schedule-history-table td:nth-child(3) { width: 19%; }',
+      '.wa-vnext__schedule-history-table th:nth-child(3), .wa-vnext__schedule-history-table td:nth-child(3) { width: 28%; }',
     );
     expect(workflowActivityVNextCss).toContain(
-      '.wa-vnext__schedule-history-table th:nth-child(4), .wa-vnext__schedule-history-table td:nth-child(4) { width: 29%; }',
+      '.wa-vnext__schedule-history-table th:nth-child(4), .wa-vnext__schedule-history-table td:nth-child(4) { width: 30%; }',
     );
     expect(workflowActivityVNextCss).toContain(
-      '.wa-vnext__schedule-history-table th:nth-child(5), .wa-vnext__schedule-history-table td:nth-child(5) { width: 11%; }',
+      '.wa-vnext__schedule-history-row--linked:hover td { background: var(--wa-blue-bg); }',
+    );
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__schedule-history-row-link { border-radius: var(--wa-radius); inset: 0; position: absolute; z-index: 1; }',
     );
   });
 
@@ -1000,15 +1010,20 @@ describe('WorkflowScheduleSurface', () => {
       await screen.findByRole('columnheader', { name: 'Scheduled time' }),
     ).toBeVisible();
     expect(screen.getByRole('columnheader', { name: 'Source' })).toBeVisible();
-    expect(screen.getByRole('columnheader', { name: 'Result' })).toBeVisible();
+    expect(
+      screen.getByRole('columnheader', { name: 'Schedule outcome' }),
+    ).toBeVisible();
     expect(
       screen.getByRole('columnheader', { name: 'Completed time' }),
     ).toBeVisible();
-    expect(screen.getByRole('columnheader', { name: 'Action' })).toBeVisible();
+    expect(
+      screen.queryByRole('columnheader', { name: 'Action' }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText('Scheduled')).toBeVisible();
     expect(screen.getByText('Manual')).toBeVisible();
-    expect(screen.getByText('Failed')).toBeVisible();
-    expect(screen.getByText('Run started')).toBeVisible();
+    expect(screen.getByText('Failed to start')).toBeVisible();
+    expect(screen.getByText('Run created')).toBeVisible();
+    expect(screen.queryByText('Run started')).not.toBeInTheDocument();
     expect(screen.queryByText('Succeeded')).not.toBeInTheDocument();
     expect(
       screen.getByText('The scheduled attempt could not start the Workflow.'),
@@ -1020,22 +1035,27 @@ describe('WorkflowScheduleSurface', () => {
     ).not.toBeVisible();
     expect(screen.getByText('Technical details')).toBeInTheDocument();
     expect(screen.queryByText('schedule-alpha:fire:1')).not.toBeInTheDocument();
-    const runLink = screen.getByRole('link', { name: /Open Run from/ });
+    const runLink = screen.getByRole('link', {
+      name: /Open Run created by the Schedule attempt at/,
+    });
     expect(runLink).toBeVisible();
-    expect(runLink.closest('td')?.cellIndex).toBe(4);
+    expect(runLink).toHaveClass('wa-vnext__schedule-history-row-link');
+    const runRow = runLink.closest('tr');
+    expect(runRow).toHaveClass('wa-vnext__schedule-history-row--linked');
+    expect(runRow?.querySelectorAll('td')).toHaveLength(4);
+    expect(runRow).toContainElement(screen.getByText('Run created'));
     const completedTime = dialog.querySelector<HTMLTimeElement>(
       'time[datetime="2026-08-19T03:01:00Z"]',
     );
     expect(completedTime).toBeInTheDocument();
     expect(completedTime?.closest('td')?.cellIndex).toBe(3);
-    expect(completedTime?.closest('td')).not.toContainElement(runLink);
     const failedRow = screen
       .getByText('The scheduled attempt could not start the Workflow.')
       .closest('tr');
-    expect(failedRow).not.toHaveAttribute('role', 'link');
+    expect(failedRow).not.toHaveClass('wa-vnext__schedule-history-row--linked');
     const failedCells = failedRow?.querySelectorAll('td');
-    expect(failedCells).toHaveLength(5);
-    expect(failedCells?.[4]?.querySelector('a')).toBeNull();
+    expect(failedCells).toHaveLength(4);
+    expect(failedRow?.querySelector('a')).toBeNull();
 
     fireEvent.click(screen.getByText('Technical details'));
     expect(
@@ -1086,7 +1106,9 @@ describe('WorkflowScheduleSurface', () => {
     );
     fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
 
-    const runLink = await screen.findByRole('link', { name: /Open Run from/ });
+    const runLink = await screen.findByRole('link', {
+      name: /Open Run created by the Schedule attempt at/,
+    });
     expect(runLink).toHaveAttribute(
       'href',
       '/scopes/scope-alpha/workflow-activity-vnext/activity/run-alpha?workflowId=wf-alpha&schedule=schedule-alpha',
@@ -1132,11 +1154,14 @@ describe('WorkflowScheduleSurface', () => {
     expect(
       screen.queryByRole('link', { name: /View related runs from/ }),
     ).not.toBeInTheDocument();
-    const attemptRow = screen.getByText('Run started').closest('tr');
+    const attemptRow = screen.getByText('Accepted').closest('tr');
     expect(attemptRow).not.toBeNull();
     const attemptCells = attemptRow?.querySelectorAll('td');
-    expect(attemptCells).toHaveLength(5);
-    expect(attemptCells?.[4]?.querySelector('a')).toBeNull();
+    expect(attemptCells).toHaveLength(4);
+    expect(attemptRow).not.toHaveClass(
+      'wa-vnext__schedule-history-row--linked',
+    );
+    expect(attemptRow?.querySelector('a')).toBeNull();
 
     const relatedRunsLink = screen.getByRole('link', {
       name: 'View related runs in Activity',

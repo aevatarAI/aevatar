@@ -23,13 +23,13 @@ SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PNG_SHA256 = {
-    "schedule-workflows-list-modal.png": "c328b3fbab83e7500a4e632bbd8e9a9315fb28b2e671278664cbc6d9a8d08d6e",
-    "schedule-workflow-editor-panel.png": "e21eddf69c4dfa7aae10de7f6f8047126c07d234fe99a0cda9389d3e0f0d82d8",
-    "schedule-review.png": "123e681da9d37a587dc6024ace8cba57d22cd41a86883027622853ce33d4de34",
-    "schedule-creation-pending.png": "677a02d7f4e9c27b1c0af4b1f039b97851c3ab1f897358eaa0510e2fc1f7e923",
-    "schedule-detail.png": "69e3d666f102ce9cb802837e0d97ade3502dd9299e59983591ed50a337d0f92d",
-    "schedule-history.png": "9f6d7a85bdaa5bed6919f0f6b09deebdceaa463ea60a062a8d4fe99ad6bd8089",
-    "schedule-edit.png": "373d69cc42b1a92c6517f48133640ad8965dda1e4eb8dbb03e287a5f550166f1",
+    "schedule-workflows-list-modal.png": "5460450bf3a108c4ec5a506e73fa91006103ecb432f003845a0248ff73caf417",
+    "schedule-workflow-editor-panel.png": "4d38bca61d38665c4e398cf93289a314f317f7664374ac155d5f5eeef53cda3c",
+    "schedule-review.png": "5cbbaea8cca0c89e6cade63761d37776900925bdc6261548dd29ba0c079ec98b",
+    "schedule-creation-pending.png": "e6de092b6dc5ef235f7ad7e46e3b500af6d916b4d1e54a8e8efee7068342d729",
+    "schedule-detail.png": "d65232de401fd43a8540cd6bd7e5de55ae38a459ba823dfb0b6a37a9c84988d5",
+    "schedule-history.png": "18f5eee48581e18e4c83fe52283693ca2b7bbd8480e8b53ca3c0224028bd4379",
+    "schedule-edit.png": "685b2b94f6ae503888900ba3d0f208a6164337fe8d957c15e43324cb71359fe9",
 }
 OBSOLETE_SCHEDULE_PNGS = (
     "prototype-schedule.png",
@@ -37,7 +37,7 @@ OBSOLETE_SCHEDULE_PNGS = (
     "schedule-authorization-review.png",
 )
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "7a4007bdfda705b4862bda88f080d3705d1576451ca200c2a45c21ebf6e9848c"
+EXPECTED_SCHEDULE_SHA256 = "7929225d09529221a8d6d0f989b742a99d40d64fd9580b5422324228ca524c6b"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -379,15 +379,21 @@ def main() -> None:
         "recent attempts",
         "scheduled",
         "manual",
-        "run started",
-        "failed",
-        "action",
+        "schedule outcome",
+        "run created",
+        "failed to start",
+        "accepted",
+        "completed",
         "technical details",
         "the scheduled attempt could not start the workflow",
         "view related runs in activity",
     ):
         if required not in schedule_history_text:
             raise SystemExit(f"Workflow Schedule History is missing: {required}")
+    schedule_history_lines = {line.strip() for line in schedule_history_text.splitlines()}
+    for forbidden in ("result", "run started", "action"):
+        if forbidden in schedule_history_lines:
+            raise SystemExit(f"Workflow Schedule History retains ambiguous or redundant copy: {forbidden}")
     for forbidden in ("run id", "actor id", "command id", "correlation id", "idempotency key"):
         if forbidden in schedule_history_text:
             raise SystemExit(f"Workflow Schedule History leaks a runtime identifier: {forbidden}")
@@ -524,13 +530,22 @@ def main() -> None:
             raise SystemExit(f"prototype Schedule surface uses the obsolete Activity handoff: {forbidden}")
     for required in (
         "function renderScheduleModalSelected",
+        "function scheduleAttemptOutcome",
         "function scheduleOverviewMarkup",
         "function scheduleHistoryMarkup",
         "function openRelatedRunsInActivity",
         "View related runs in Activity",
         "Recent attempts",
+        "Schedule outcome",
+        "Failed to start",
+        "Run created",
+        "Accepted",
         "Technical details",
         "The ${source.toLowerCase()} attempt could not start the Workflow.",
+        'class="schedule-attempt-row-link"',
+        'target="_blank" rel="noopener noreferrer"',
+        "data-production-href",
+        "prototypeRun",
         "activityScheduleId",
         "run.scheduleId === activityScheduleId",
         "?workflowId=${workflow.id}&schedule=${schedule.scheduleId}&origin=schedule",

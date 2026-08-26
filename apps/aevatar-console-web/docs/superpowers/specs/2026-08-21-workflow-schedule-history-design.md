@@ -194,16 +194,22 @@ History uses one compact table or table-like list. Each attempt exposes:
 | --- | --- | --- |
 | Scheduled time | `scheduledFireAt` | Application locale in Schedule timezone |
 | Source | `manual` | `Manual` when true; otherwise `Scheduled` |
-| Result | `error` | `Failed` when non-empty; otherwise `Run started` |
+| Schedule outcome | `error` + `runActorId` | `Failed to start`, `Run created`, or `Accepted` according to the mapping below |
 | Completed time | `completedAt` | Application locale in Schedule timezone |
-| Action | Authoritative Run destination or valid filtered-Activity fallback | Arrow-only native link; empty when no destination exists |
 
 The table allocates most horizontal space to the two localized timestamp
-columns. `Source` remains compact, and `Result` has enough room for a failed
-attempt's explanation without becoming the widest column for the common
-`Run started` case. `Action` is an independent narrow command column and never
-shares a heading or cell with `Completed time`. The reference desktop
-proportions are `27 / 14 / 19 / 29 / 11` percent in the column order above.
+columns. `Source` remains compact, and `Schedule outcome` has enough room to
+name the observed dispatch state without implying a terminal Run result. The
+reference desktop proportions are `28 / 14 / 28 / 30` percent in the column
+order above.
+
+Outcome mapping is exact and does not infer execution state:
+
+| Condition | Label | Meaning |
+| --- | --- | --- |
+| `error` is non-empty | `Failed to start` | The Schedule attempt failed before it could reliably create a Run. |
+| `error` is empty and `runActorId` is non-empty | `Run created` | The backend returned an authoritative Run identity; Activity owns its current and terminal state. |
+| `error` is empty and `runActorId` is empty | `Accepted` | The attempt has no immediate Schedule error, but this record cannot identify an exact Run. |
 
 A failed row adds one concise message below its main row:
 
@@ -226,16 +232,17 @@ The primary row must not expose:
 - a frontend-invented error category based on raw string matching.
 
 `Completed time` always renders only its localized timestamp. When `runActorId`
-is non-empty, the separate `Action` cell contains a keyboard-accessible,
-arrow-only native Run link. The table row itself is not a scripted link because
-it can also contain Technical details. The link opens the existing Activity Run
-detail route in a new tab and preserves `workflowId + schedule` in the query so
-Back returns to the same filtered Activity context. Any attempt with an empty
-`runActorId`, whether successful or failed, renders an empty Action cell and
-remains non-interactive. A row-level Action represents one exact attempt and
-must never fall back to the Workflow + Schedule filtered Activity list. Every
-arrow-only Action link retains a full accessible name that identifies the
-attempt and destination.
+is non-empty, one native anchor covers the full data row. The row receives a
+single hover and focus treatment, opens the existing Activity Run detail route
+in a new tab, and preserves `workflowId + schedule` in the query so Back returns
+to the same filtered Activity context. The anchor has a full accessible name
+that identifies the attempt and destination, supports keyboard focus and the
+browser link context menu, and does not rely on a scripted row click.
+
+Technical details remains an independently interactive disclosure above the
+row-link hit area. Any attempt with an empty `runActorId`, whether accepted or
+failed, remains non-interactive. It must never guess an identity or fall back to
+the Workflow + Schedule filtered Activity list.
 
 ### Activity handoff
 
@@ -326,7 +333,7 @@ render stale collection summaries as if they were detail data.
 | History loading | Stable row skeleton under `Recent attempts` |
 | Successful empty History | `No attempts yet` |
 | History request error | `History couldn't be loaded` with Retry |
-| Failed attempt | Normal History row with Failed result and Technical details |
+| Failed attempt | Normal History row with `Failed to start` outcome and Technical details |
 
 A failed attempt is business data, not a History-request error. Refresh and
 Retry preserve the selected Schedule and active tab.
@@ -394,9 +401,11 @@ and History are separate PNGs so each state can be reviewed at readable size.
 - A single transient Activity handoff request failure is retried once; 4xx
   contract errors and response decoding errors are not retried.
 - History column widths prioritize localized timestamps and do not let the
-  short Result tag dominate successful rows.
-- Completed time and Action are separate columns; the time remains plain text
-  and only Action contains the trailing navigation link.
+  Schedule outcome tag dominate common rows.
+- History has no Action column. A row with an authoritative `runActorId` is one
+  native whole-row link, while a row without one remains non-interactive.
+- Schedule outcome labels describe only the observed Schedule dispatch state;
+  Workflow Run success or failure remains visible in Activity Run detail.
 - Loading, successful empty, request error, and failed-attempt states remain
   distinct.
 - All timestamps follow the application locale and Schedule timezone.

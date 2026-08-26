@@ -391,15 +391,20 @@
     .schedule-history-link { padding: 0; color: var(--blue); border: 0; background: transparent; font-size: 11px; font-weight: 700; }
     .schedule-history-copy { margin: 7px 0 15px; color: var(--muted); font-size: 11px; line-height: 1.45; }
     .schedule-attempts { overflow: hidden; border: 1px solid #e5e7eb; border-radius: 6px; }
-    .schedule-attempt-row { display: grid; grid-template-columns: minmax(104px,1.5fr) minmax(62px,.75fr) minmax(68px,.8fr) minmax(72px,1fr); border-bottom: 1px solid #e5e7eb; }
+    .schedule-attempt-row { position: relative; display: grid; grid-template-columns: minmax(104px,1.4fr) minmax(62px,.7fr) minmax(104px,1.4fr) minmax(96px,1.5fr); border-bottom: 1px solid #e5e7eb; }
     .schedule-attempt-row:last-child { border-bottom: 0; }
     .schedule-attempt-row.header { color: var(--muted); background: var(--subtle); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
     .schedule-attempt-row > span { min-width: 0; padding: 10px 7px; overflow-wrap: anywhere; font-size: 10px; line-height: 1.35; }
     .schedule-attempt-row.header > span { font-size: 9px; }
+    .schedule-attempt-row.linked { cursor: pointer; }
+    .schedule-attempt-row.linked:hover, .schedule-attempt-row.linked:focus-within { background: var(--blue-bg); }
+    .schedule-attempt-row-link { position: absolute; z-index: 1; inset: 0; }
+    .schedule-attempt-row-link:focus-visible { outline: 3px solid rgba(23,92,211,.3); outline-offset: -3px; }
     .schedule-attempt-result { font-weight: 700; }
-    .schedule-attempt-result.succeeded { color: var(--green); }
+    .schedule-attempt-result.run-created { color: var(--green); }
     .schedule-attempt-result.failed { color: var(--red); }
-    .schedule-attempt-failure { grid-column: 1 / -1; padding: 0 8px 11px; }
+    .schedule-attempt-result.accepted { color: #b54708; }
+    .schedule-attempt-failure { position: relative; z-index: 2; grid-column: 1 / -1; padding: 0 8px 11px; }
     .schedule-attempt-failure p { margin: 0 0 8px; color: var(--ink); font-size: 11px; line-height: 1.45; }
     .schedule-attempt-failure details summary { color: var(--blue); cursor: pointer; font-size: 10px; font-weight: 700; }
     .schedule-attempt-failure pre { margin: 8px 0 0; padding: 8px; overflow: auto; color: #475467; border: 1px solid #e5e7eb; border-radius: 4px; background: var(--subtle); font: 9px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
@@ -1135,13 +1140,13 @@ steps:
               prompt: "Summarize new feedback.",
               enabled: true,
               nextFireAt: "Tue, Aug 12 at 09:00",
-              lastFireAt: "Failed yesterday",
+              lastFireAt: "Failed to start yesterday",
               fireCount: 18,
               failureCount: 1,
               recentFires: [
-                { scheduledFireAt: "2026-08-24T01:00:00Z", completedAt: "2026-08-24T01:00:04Z", manual: false, error: "Capability admission rejected the scheduled request for the current published revision." },
-                { scheduledFireAt: "2026-08-21T01:00:00Z", completedAt: "2026-08-21T01:01:13Z", manual: false, error: "" },
-                { scheduledFireAt: "2026-08-20T07:42:00Z", completedAt: "2026-08-20T07:43:06Z", manual: true, error: "" }
+                { scheduledFireAt: "2026-08-24T01:00:00Z", completedAt: "2026-08-24T01:00:04Z", manual: false, runActorId: "", error: "Capability admission rejected the scheduled request for the current published revision." },
+                { scheduledFireAt: "2026-08-21T01:00:00Z", completedAt: "2026-08-21T01:01:13Z", manual: false, runActorId: "R-1040", error: "" },
+                { scheduledFireAt: "2026-08-20T07:42:00Z", completedAt: "2026-08-20T07:43:06Z", manual: true, runActorId: "", error: "" }
               ],
               lastError: "Last run couldn't be completed. Review the prompt or pause this Schedule."
             },
@@ -1153,12 +1158,12 @@ steps:
               prompt: "",
               enabled: false,
               nextFireAt: "No upcoming run",
-              lastFireAt: "Succeeded Mon, Aug 4",
+              lastFireAt: "Accepted Mon, Aug 4",
               fireCount: 12,
               failureCount: 0,
               recentFires: [
-                { scheduledFireAt: "2026-08-17T02:00:00Z", completedAt: "2026-08-17T02:00:58Z", manual: false, error: "" },
-                { scheduledFireAt: "2026-08-10T02:00:00Z", completedAt: "2026-08-10T02:01:02Z", manual: false, error: "" }
+                { scheduledFireAt: "2026-08-17T02:00:00Z", completedAt: "2026-08-17T02:00:58Z", manual: false, runActorId: "", error: "" },
+                { scheduledFireAt: "2026-08-10T02:00:00Z", completedAt: "2026-08-10T02:01:02Z", manual: false, runActorId: "", error: "" }
               ],
               lastError: ""
             }
@@ -2042,24 +2047,34 @@ steps:
       return `<div class="schedule-tabs" role="tablist" aria-label="Schedule views"><button type="button" class="schedule-tab" data-schedule-tab="overview" role="tab" aria-selected="${activeMode === "overview"}" tabindex="${activeMode === "overview" ? "0" : "-1"}">Overview</button><button type="button" class="schedule-tab" data-schedule-tab="history" role="tab" aria-selected="${activeMode === "history"}" tabindex="${activeMode === "history" ? "0" : "-1"}">History</button></div>`;
     }
 
+    function scheduleAttemptOutcome(fire) {
+      if (fire.error) return { className: "failed", label: "Failed to start" };
+      if (fire.runActorId) return { className: "run-created", label: "Run created" };
+      return { className: "accepted", label: "Accepted" };
+    }
+
     function scheduleOverviewMarkup(schedule, pending) {
       const editModel = scheduleEditModel(schedule);
       const latestAttempt = schedule.recentFires[0];
       const lastAttempt = latestAttempt
-        ? `${formatScheduleTimestamp(latestAttempt.completedAt, schedule.timezone)} · ${latestAttempt.error ? "Failed" : "Succeeded"}`
+        ? `${formatScheduleTimestamp(latestAttempt.completedAt, schedule.timezone)} · ${scheduleAttemptOutcome(latestAttempt).label}`
         : "No attempts yet";
       return `<section aria-labelledby="schedule-overview-heading"><div class="schedule-overview-intro"><div><span class="schedule-state${scheduleStateClass(schedule)}">${scheduleState(schedule)}</span><h3 id="schedule-overview-heading">${escapeHtml(editModel.humanSummary)}</h3><p>${escapeHtml(schedule.timezone)}</p></div></div><div class="schedule-actionbar"><button type="button" class="button small primary" id="schedule-run-now" ${pending ? "disabled" : ""}>Run now</button><button type="button" class="button small" id="schedule-edit" ${pending ? "disabled" : ""}>Edit schedule</button><details class="schedule-action-menu"><summary class="button small">More</summary><div class="schedule-action-popover"><button type="button" id="schedule-toggle" ${pending ? "disabled" : ""}>${schedule.enabled ? "Pause schedule" : "Enable schedule"}</button><button type="button" class="danger" id="schedule-delete" ${pending ? "disabled" : ""}>Delete schedule</button></div></details></div><div class="schedule-facts"><div class="schedule-fact"><span>Next scheduled</span><strong>${escapeHtml(schedulePreview(schedule)[0])}</strong></div><div class="schedule-fact"><span>Last attempt</span><strong>${escapeHtml(lastAttempt)}</strong></div><div class="schedule-fact"><span>Total attempts</span><strong>${schedule.fireCount}</strong></div><div class="schedule-fact"><span>Failed attempts</span><strong>${schedule.failureCount}</strong></div></div>${schedule.prompt ? `<div class="schedule-run-input"><span>Run input</span><p>${escapeHtml(schedule.prompt)}</p></div>` : ""}<details class="schedule-advanced"><summary>Advanced details</summary><div><span>Cron expression</span><code>${escapeHtml(schedule.cronExpression)}</code></div></details>${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Refreshing the observed Schedule status.</div>` : ""}</section>`;
     }
 
-    function scheduleHistoryMarkup(schedule) {
+    function scheduleHistoryMarkup(schedule, workflow) {
       const rows = schedule.recentFires.map(fire => {
         const source = fire.manual ? "Manual" : "Scheduled";
         const failed = Boolean(fire.error);
-        const result = failed ? "Failed" : "Succeeded";
+        const outcome = scheduleAttemptOutcome(fire);
+        const formattedScheduledAt = formatScheduleTimestamp(fire.scheduledFireAt, schedule.timezone);
+        const runHref = fire.runActorId ? `?prototypeRun=${encodeURIComponent(fire.runActorId)}&workflowId=${encodeURIComponent(workflow.id)}&schedule=${encodeURIComponent(schedule.scheduleId)}` : "";
+        const productionHref = fire.runActorId ? `/scopes/${encodeURIComponent(workflow.scopeId)}/workflow-activity-vnext/activity/${encodeURIComponent(fire.runActorId)}?workflowId=${encodeURIComponent(workflow.id)}&schedule=${encodeURIComponent(schedule.scheduleId)}` : "";
+        const rowLink = runHref ? `<a class="schedule-attempt-row-link" href="${runHref}" data-production-href="${productionHref}" target="_blank" rel="noopener noreferrer" aria-label="Open Run created by the Schedule attempt at ${escapeHtml(formattedScheduledAt)}"></a>` : "";
         const failure = failed ? `<div class="schedule-attempt-failure"><p>The ${source.toLowerCase()} attempt could not start the Workflow.</p><details><summary>Technical details</summary><pre>${escapeHtml(fire.error)}</pre></details></div>` : "";
-        return `<div class="schedule-attempt-row" role="row"><span role="cell">${escapeHtml(formatScheduleTimestamp(fire.scheduledFireAt, schedule.timezone))}</span><span role="cell">${source}</span><span class="schedule-attempt-result ${result.toLowerCase()}" role="cell">${result}</span><span role="cell">${escapeHtml(formatScheduleTimestamp(fire.completedAt, schedule.timezone))}</span>${failure}</div>`;
+        return `<div class="schedule-attempt-row${runHref ? " linked" : ""}" role="row">${rowLink}<span role="cell">${escapeHtml(formattedScheduledAt)}</span><span role="cell">${source}</span><span class="schedule-attempt-result ${outcome.className}" role="cell">${outcome.label}</span><span role="cell">${escapeHtml(formatScheduleTimestamp(fire.completedAt, schedule.timezone))}</span>${failure}</div>`;
       }).join("");
-      return `<section aria-labelledby="schedule-history-heading"><div class="schedule-history-heading"><h3 id="schedule-history-heading">Recent attempts</h3><button type="button" class="schedule-history-link" id="schedule-open-activity">View related runs in Activity →</button></div><p class="schedule-history-copy">Schedule attempts can fail before a Workflow Run exists.</p>${rows ? `<div class="schedule-attempts" role="table" aria-label="Recent Schedule attempts"><div class="schedule-attempt-row header" role="row"><span role="columnheader">Scheduled</span><span role="columnheader">Source</span><span role="columnheader">Result</span><span role="columnheader">Completed</span></div>${rows}</div>` : `<div class="schedule-history-state">No attempts yet</div>`}</section>`;
+      return `<section aria-labelledby="schedule-history-heading"><div class="schedule-history-heading"><h3 id="schedule-history-heading">Recent attempts</h3><button type="button" class="schedule-history-link" id="schedule-open-activity">View related runs in Activity →</button></div><p class="schedule-history-copy">Schedule attempts can fail before a Workflow Run exists.</p>${rows ? `<div class="schedule-attempts" role="table" aria-label="Recent Schedule attempts"><div class="schedule-attempt-row header" role="row"><span role="columnheader">Scheduled</span><span role="columnheader">Source</span><span role="columnheader">Schedule outcome</span><span role="columnheader">Completed</span></div>${rows}</div>` : `<div class="schedule-history-state">No attempts yet</div>`}</section>`;
     }
 
     function scheduleEditMarkup(schedule, pending) {
@@ -2076,11 +2091,11 @@ steps:
       else scheduleModalMode = mode;
     }
 
-    function scheduleSelectedMarkup(schedule, surface) {
+    function scheduleSelectedMarkup(schedule, workflow, surface) {
       const mode = selectedScheduleMode(surface);
       const pending = schedulePending(schedule);
       if (mode === "edit") return scheduleEditMarkup(schedule, pending);
-      return `${scheduleTabsMarkup(mode)}${mode === "history" ? scheduleHistoryMarkup(schedule) : scheduleOverviewMarkup(schedule, pending)}`;
+      return `${scheduleTabsMarkup(mode)}${mode === "history" ? scheduleHistoryMarkup(schedule, workflow) : scheduleOverviewMarkup(schedule, pending)}`;
     }
 
     function bindScheduleTabs(root, surface, renderSelected) {
@@ -2199,7 +2214,7 @@ steps:
       back.onclick = () => renderScheduleModalList(workflow);
       document.querySelector("#schedule-quick-title").textContent = `${schedule.displayName} · ${workflow.name}`;
       document.querySelector("#schedule-quick-subtitle").hidden = true;
-      content.innerHTML = scheduleSelectedMarkup(schedule, "modal");
+      content.innerHTML = scheduleSelectedMarkup(schedule, workflow, "modal");
       footer.hidden = scheduleModalMode !== "edit";
       footer.innerHTML = scheduleModalMode === "edit" ? `<button type="button" class="button" id="schedule-edit-cancel">Cancel</button><button type="button" class="button primary" id="schedule-save">Save changes</button>` : "";
       bindScheduleSelectedSurface(content, footer, workflow, schedule, "modal", () => renderScheduleModalSelected(workflow));
@@ -2246,7 +2261,7 @@ steps:
         return;
       }
 
-      panel.innerHTML = `<header class="studio-panel-header"><div class="schedule-selected-title"><button type="button" class="icon-button" id="schedule-back" aria-label="Back to schedules" title="Back">←</button><div><h2>${escapeHtml(schedule.displayName)} · ${escapeHtml(currentWorkflow.name)}</h2></div></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header><div class="studio-panel-body" id="schedule-selected-body">${scheduleSelectedMarkup(schedule, "panel")}</div><footer class="studio-panel-footer" id="schedule-selected-footer" ${schedulePanelMode === "edit" ? "" : "hidden"}>${schedulePanelMode === "edit" ? `<button type="button" class="button small" id="schedule-edit-cancel">Cancel</button><button type="button" class="button small primary" id="schedule-save">Save changes</button>` : ""}</footer>`;
+      panel.innerHTML = `<header class="studio-panel-header"><div class="schedule-selected-title"><button type="button" class="icon-button" id="schedule-back" aria-label="Back to schedules" title="Back">←</button><div><h2>${escapeHtml(schedule.displayName)} · ${escapeHtml(currentWorkflow.name)}</h2></div></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header><div class="studio-panel-body" id="schedule-selected-body">${scheduleSelectedMarkup(schedule, currentWorkflow, "panel")}</div><footer class="studio-panel-footer" id="schedule-selected-footer" ${schedulePanelMode === "edit" ? "" : "hidden"}>${schedulePanelMode === "edit" ? `<button type="button" class="button small" id="schedule-edit-cancel">Cancel</button><button type="button" class="button small primary" id="schedule-save">Save changes</button>` : ""}</footer>`;
       panel.querySelector("#close-schedule").onclick = closeSchedulePanel;
       panel.querySelector("#schedule-back").onclick = () => {
         schedulePanelMode = "list";
@@ -2809,7 +2824,19 @@ steps:
     renderEditor();
     renderActivity();
     renderSettings();
-    if (window.location.hash === "#schedule") openSchedulePrototype();
+    const prototypeRunParams = new URLSearchParams(window.location.search);
+    const prototypeRunId = prototypeRunParams.get("prototypeRun");
+    if (prototypeRunId) {
+      activityFilter = "Scheduled";
+      activityWorkflowId = prototypeRunParams.get("workflowId");
+      activityScheduleId = prototypeRunParams.get("schedule");
+      syncFilterButtons("activity");
+      showView("activity");
+      renderActivity();
+      openRunDetail(prototypeRunId);
+    } else if (window.location.hash === "#schedule") {
+      openSchedulePrototype();
+    }
   </script>
 </body>
 </html>
