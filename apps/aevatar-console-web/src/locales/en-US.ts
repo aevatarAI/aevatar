@@ -1137,6 +1137,24 @@ const enUSMessages = {
   'pages.runs.memberPublishedRuns.refresh': 'Refresh',
   'pages.runs.memberPublishedRuns.selectPublishedRun': 'Select a published run',
   'pages.runs.memberPublishedRuns.timeline': 'Timeline',
+  'teamMemberWorkflowStudio.aiProposal.apply': 'Apply proposal',
+  'teamMemberWorkflowStudio.aiProposal.changeRequest': 'Change request',
+  'teamMemberWorkflowStudio.aiProposal.generate': 'Generate proposal',
+  'teamMemberWorkflowStudio.aiProposal.outdated': 'Outdated proposal',
+  'teamMemberWorkflowStudio.aiProposal.panelAria':
+    'AI workflow proposal panel',
+  'teamMemberWorkflowStudio.aiProposal.promptPlaceholder':
+    'Add an approval step after triage',
+  'teamMemberWorkflowStudio.aiProposal.proposedYaml':
+    'Proposed workflow YAML',
+  'teamMemberWorkflowStudio.aiProposal.ready': 'Ready to review',
+  'teamMemberWorkflowStudio.aiProposal.reasoning': 'Reasoning',
+  'teamMemberWorkflowStudio.aiProposal.reasoningAria': 'Proposal reasoning',
+  'teamMemberWorkflowStudio.aiProposal.retry': 'Retry proposal',
+  'teamMemberWorkflowStudio.aiProposal.stale':
+    'Draft changed after this proposal was generated. Generate a new proposal from the current draft.',
+  'teamMemberWorkflowStudio.aiProposal.subtitle': 'Candidate workflow change',
+  'teamMemberWorkflowStudio.aiProposal.title': 'Ask AI',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     'You can build or edit the workflow YAML here. Saving creates a reusable workflow draft until the member link is materialized.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription':
@@ -1242,6 +1260,11 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.activation.publishing': 'Publishing',
   'teamMemberWorkflowStudio.header.activation.ready': 'Ready',
   'teamMemberWorkflowStudio.header.addNode': 'Add node',
+  'teamMemberWorkflowStudio.header.askAi': 'Ask AI',
+  'teamMemberWorkflowStudio.header.askAiTitle':
+    'Generate a reviewable workflow proposal',
+  'teamMemberWorkflowStudio.header.askAiUnavailable':
+    'Load the workflow draft before asking AI.',
   'teamMemberWorkflowStudio.header.automations.publishFirst':
     'Publish this member before adding recurring work.',
   'teamMemberWorkflowStudio.header.automations.saveFirst':
