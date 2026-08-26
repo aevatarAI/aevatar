@@ -142,6 +142,19 @@ The raw value `0 9 * * 1-5` is diagnostic configuration and stays under
 `Advanced details`. Overview does not repeat a large blue Workflow context
 strip or an empty `No prompt` field.
 
+Expanding Advanced details must not require the user to interpret cron syntax.
+It presents a compact readable-to-technical hierarchy:
+
+| Detail | Presentation |
+| --- | --- |
+| Runs | Reuse the same localized human recurrence shown by Overview, such as `Every hour` or `Every weekday at 09:00` |
+| Technical format | Show the exact cron expression in monospace for support and debugging |
+
+For a valid expression outside the human builder's supported shapes, `Runs`
+honestly says `Custom schedule` and `Technical format` retains the exact value.
+Do not add a five-field cron tutorial, duplicate Timezone, or introduce a
+second cron interpretation path just for this disclosure.
+
 Dates and times use the current application locale and the Schedule timezone.
 They must not use an independent browser-locale formatter that can create a
 mixed-language surface.
@@ -383,6 +396,8 @@ and History are separate PNGs so each state can be reviewed at readable size.
   header.
 - Back returns to the collection; Close exits the container.
 - Overview uses a human recurrence and hides raw cron under Advanced details.
+- Expanded Advanced details shows the human recurrence before the raw cron;
+  raw syntax is never the user's only local explanation of when it runs.
 - Empty optional Run input is omitted.
 - Run now and Edit schedule are direct actions; Pause/Enable and Delete live
   under More.
