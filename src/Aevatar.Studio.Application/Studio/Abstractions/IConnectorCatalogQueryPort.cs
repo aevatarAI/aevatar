@@ -9,3 +9,11 @@ public interface IConnectorCatalogQueryPort
 
     Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// Connector definitions owned by the composed Host and published in every Studio scope catalog.
+/// </summary>
+public interface IHostConnectorCatalogDefaults
+{
+    IReadOnlyList<StoredConnectorDefinition> Connectors { get; }
+}

@@ -2,6 +2,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -15,6 +16,26 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class ConnectorExternalWorkflowCapabilitySourceTests
 {
+    [Fact]
+    public void HostConnectorDefaults_ShouldPreserveScopeConnectors_AndReplaceSameNameDrift()
+    {
+        var scopeConnector = Connector("fortune-engine", authType: string.Empty);
+        var driftedDeterministicConnector = DeterministicConnector(
+            "deterministic_compute",
+            allowedOperations: ["different_algorithm"]);
+        var hostDeterministicConnector = DeterministicConnector("deterministic_compute");
+
+        var merged = ActorBackedConnectorCatalogStore.MergeHostConnectorDefaults(
+            [scopeConnector, driftedDeterministicConnector],
+            [hostDeterministicConnector]);
+
+        merged.Should().HaveCount(2);
+        merged.Should().ContainSingle(connector => connector.Name == "fortune-engine");
+        merged.Should().ContainSingle(connector => connector.Name == "deterministic_compute")
+            .Which.HostCallback.AllowedOperations.Should()
+            .Equal(TestDeterministicComputeHandler.OperationId);
+    }
+
     [Fact]
     public void AddStudioApplication_ShouldRegisterConnectorCapabilitySource()
     {

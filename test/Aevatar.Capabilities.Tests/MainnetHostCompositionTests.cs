@@ -29,6 +29,7 @@ using Aevatar.AI.ToolProviders.Workflow;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Audit.Core.DependencyInjection;
+using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Abstractions;
@@ -38,6 +39,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Projection.Runtime;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
@@ -72,6 +74,8 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Core.Modules;
@@ -480,6 +484,56 @@ public sealed class MainnetHostCompositionTests
             .Select(static executor => executor.Kind)
             .Should()
             .Contain(["aevatar_core_loop", "audit_query_index"]);
+
+        var connectorRegistry = app.Services.GetRequiredService<IConnectorRegistry>();
+        connectorRegistry.TryGet(
+            MainnetDeterministicComputeConnectorDefinition.ConnectorName,
+            out var deterministicConnector).Should().BeTrue();
+        var connectorResult = await deterministicConnector!.ExecuteAsync(new ConnectorRequest
+        {
+            Connector = MainnetDeterministicComputeConnectorDefinition.ConnectorName,
+            Operation = SHA256DeterministicComputeHandler.OperationId,
+            Payload = """{"text":"abc"}""",
+        });
+        connectorResult.Success.Should().BeTrue();
+        connectorResult.Output.Should().Be(
+            "{\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"}");
+        connectorResult.Metadata["host_callback.algorithm_version"].Should().Be("1");
+
+        var connectorCatalog = await app.Services.GetRequiredService<ConnectorService>()
+            .GetCatalogAsync();
+        var deterministicCatalogEntry = connectorCatalog.Connectors.Should()
+            .ContainSingle(connector =>
+                connector.Name == MainnetDeterministicComputeConnectorDefinition.ConnectorName)
+            .Subject;
+        deterministicCatalogEntry.Type.Should().Be("host_callback");
+        deterministicCatalogEntry.HostCallback!.Handler.Should()
+            .Be(SHA256DeterministicComputeHandler.HandlerName);
+        deterministicCatalogEntry.HostCallback.AllowedOperations.Should()
+            .Equal(SHA256DeterministicComputeHandler.OperationId);
+        deterministicCatalogEntry.HostCallback.AllowedInputKeys.Should().Equal("text");
+
+        var connectorCapabilitySource = app.Services.GetServices<IExternalWorkflowCapabilitySource>()
+            .OfType<ConnectorExternalWorkflowCapabilitySource>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        var access = new ExternalWorkflowCapabilityAccessContext(
+            "default",
+            "mainnet-composition-test");
+        var capabilityDiscovery = await connectorCapabilitySource.ListAsync(access);
+        var deterministicCapability = capabilityDiscovery.Capabilities.Should()
+            .ContainSingle(capability =>
+                capability.Selector.HostConnector.ConnectorCapabilityRef ==
+                MainnetDeterministicComputeConnectorDefinition.ConnectorName)
+            .Subject;
+        deterministicCapability.Selector.HostConnector.OperationId.Should()
+            .Be(SHA256DeterministicComputeHandler.OperationId);
+        var deterministicReadiness = await connectorCapabilitySource.InspectAsync(
+            access,
+            deterministicCapability.Selector,
+            ExternalCapabilityExecutionMode.Interactive);
+        deterministicReadiness.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
 
         var routePatterns = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)

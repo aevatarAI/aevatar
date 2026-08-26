@@ -10,7 +10,8 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of connector catalog query and command ports.
-/// Reads from the projection document store (CQRS read model).
+/// Reads scope-owned definitions from the projection document store (CQRS read model), then
+/// composes immutable Host-owned defaults supplied by the deployment Host.
 /// Writes send commands to the Write GAgent through CQRS Core dispatch.
 /// Local JSON is only an explicit import boundary, never a draft backup.
 /// Per-scope isolation: each scope gets its own <c>connector-catalog-{scopeId}</c> actor.
@@ -28,6 +29,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
     private readonly IStudioLocalConnectorCatalogImportReader _localImportReader;
     private readonly IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedConnectorCatalogStore> _logger;
+    private readonly IReadOnlyList<StoredConnectorDefinition> _hostConnectorDefaults;
 
     public ActorBackedConnectorCatalogStore(
         IStudioActorBootstrap bootstrap,
@@ -35,6 +37,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
         IAppScopeResolver scopeResolver,
         IStudioLocalConnectorCatalogImportReader localImportReader,
         IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> documentReader,
+        IEnumerable<IHostConnectorCatalogDefaults> hostConnectorDefaults,
         ILogger<ActorBackedConnectorCatalogStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
@@ -42,6 +45,9 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _localImportReader = localImportReader ?? throw new ArgumentNullException(nameof(localImportReader));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _hostConnectorDefaults = (hostConnectorDefaults ?? throw new ArgumentNullException(nameof(hostConnectorDefaults)))
+            .SelectMany(static defaults => defaults.Connectors)
+            .ToArray();
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -50,20 +56,14 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
     {
         var state = await ReadProjectedStateAsync(cancellationToken);
         var version = state?.LastAppliedEventVersion ?? 0;
-        if (state is null)
-        {
-            return new StoredConnectorCatalog(
-                HomeDirectory: ActorHomeDirectory,
-                FilePath: ActorFilePath,
-                FileExists: false,
-                Connectors: [],
-                Version: version);
-        }
-
-        var connectors = state.Connectors
+        var scopedConnectors = state?.Connectors
             .Select(ToStoredConnectorDefinition)
-            .ToList()
-            .AsReadOnly();
+            .ToList() ?? [];
+
+        // Implement (issue #3542):
+        //   Behavior: Publish deployment-owned connector defaults in every scope while preserving scope-owned entries.
+        //   Why this shape: Mainnet capabilities remain discoverable without query-time writes or a process-local scope registry.
+        var connectors = MergeHostConnectorDefaults(scopedConnectors, _hostConnectorDefaults);
 
         return new StoredConnectorCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -71,6 +71,27 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogQueryP
             FileExists: connectors.Count > 0,
             Connectors: connectors,
             Version: version);
+    }
+
+    internal static IReadOnlyList<StoredConnectorDefinition> MergeHostConnectorDefaults(
+        IReadOnlyList<StoredConnectorDefinition> scopedConnectors,
+        IReadOnlyList<StoredConnectorDefinition> hostConnectorDefaults)
+    {
+        var merged = scopedConnectors.ToList();
+        foreach (var hostConnector in hostConnectorDefaults)
+        {
+            if (string.IsNullOrWhiteSpace(hostConnector.Name))
+                throw new InvalidOperationException("Host connector catalog defaults require a name.");
+
+            var existingIndex = merged.FindIndex(connector =>
+                string.Equals(connector.Name, hostConnector.Name, StringComparison.OrdinalIgnoreCase));
+            if (existingIndex >= 0)
+                merged[existingIndex] = hostConnector;
+            else
+                merged.Add(hostConnector);
+        }
+
+        return merged.AsReadOnly();
     }
 
     public async Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(

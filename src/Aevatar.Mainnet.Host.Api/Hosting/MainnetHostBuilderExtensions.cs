@@ -28,6 +28,7 @@ using Aevatar.Authentication.ScopeServiceTokens;
 using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.Audit.Hosting;
 using Aevatar.BackendConsole.Hosting;
+using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
@@ -201,6 +202,12 @@ public static class MainnetHostBuilderExtensions
             serviceProvider.GetRequiredService<AgentProfileApplicationService>());
         builder.Services.AddAIWorkspace(builder.Configuration);
         builder.AddStudioCapability();
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IHostConnectorCatalogDefaults,
+            MainnetDeterministicComputeConnectorCatalogDefaults>());
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IHostedService,
+            MainnetDeterministicComputeConnectorHostedService>());
         builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.AddAuditTrailCapabilityBundle();
         builder.Services.AddBackendConsoleStaticAssets(builder.Configuration);
@@ -879,5 +886,126 @@ public static class MainnetHostBuilderExtensions
             DirectExternalEventTypeUrls = directEventTypeUrls,
             DirectExternalEventNoActiveSessionPolicy = options.DirectExternalEventNoActiveSessionPolicy,
         };
+    }
+}
+
+internal static class MainnetDeterministicComputeConnectorDefinition
+{
+    internal const string ConnectorName = "deterministic_compute";
+
+    internal static ConnectorConfigEntry CreateRuntimeDefinition() =>
+        new()
+        {
+            Name = ConnectorName,
+            Type = "host_callback",
+            Enabled = true,
+            TimeoutMs = 30_000,
+            Retry = 0,
+            HostCallback = new HostCallbackConnectorConfig
+            {
+                Handler = SHA256DeterministicComputeHandler.HandlerName,
+                AllowedOperations = [SHA256DeterministicComputeHandler.OperationId],
+                AllowedInputKeys = ["text"],
+            },
+        };
+
+    internal static StoredConnectorDefinition CreateCatalogDefinition() =>
+        new(
+            Name: ConnectorName,
+            Type: "host_callback",
+            Enabled: true,
+            TimeoutMs: 30_000,
+            Retry: 0,
+            Http: new StoredHttpConnectorConfig(
+                string.Empty,
+                [],
+                [],
+                [],
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                EmptyAuth()),
+            Cli: new StoredCliConnectorConfig(
+                string.Empty,
+                [],
+                [],
+                [],
+                string.Empty,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            Mcp: new StoredMcpConnectorConfig(
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                [],
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                EmptyAuth(),
+                string.Empty,
+                [],
+                []),
+            HostCallback: new StoredHostCallbackConnectorConfig(
+                SHA256DeterministicComputeHandler.HandlerName,
+                [SHA256DeterministicComputeHandler.OperationId],
+                ["text"]));
+
+    private static StoredConnectorAuthConfig EmptyAuth() =>
+        new(
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty);
+}
+
+internal sealed class MainnetDeterministicComputeConnectorCatalogDefaults : IHostConnectorCatalogDefaults
+{
+    public IReadOnlyList<StoredConnectorDefinition> Connectors { get; } =
+        [MainnetDeterministicComputeConnectorDefinition.CreateCatalogDefinition()];
+}
+
+internal sealed class MainnetDeterministicComputeConnectorHostedService : IHostedService
+{
+    private readonly IConnectorRegistry _registry;
+    private readonly IReadOnlyList<IConnectorBuilder> _connectorBuilders;
+    private readonly ILogger<MainnetDeterministicComputeConnectorHostedService> _logger;
+
+    public MainnetDeterministicComputeConnectorHostedService(
+        IConnectorRegistry registry,
+        IEnumerable<IConnectorBuilder> connectorBuilders,
+        ILogger<MainnetDeterministicComputeConnectorHostedService> logger)
+    {
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _connectorBuilders = (connectorBuilders ?? throw new ArgumentNullException(nameof(connectorBuilders)))
+            .ToArray();
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    // Implement (issue #3542):
+    //   Behavior: Register Mainnet's deterministic_compute connector independently of a node-local connectors.json.
+    //   Why this shape: The existing builder remains the fail-closed authority for descriptor/config alignment.
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        var builder = _connectorBuilders.FirstOrDefault(static candidate =>
+            string.Equals(candidate.Type, "host_callback", StringComparison.OrdinalIgnoreCase));
+        if (builder is null)
+            throw new InvalidOperationException("Mainnet requires the host_callback connector builder.");
+
+        var definition = MainnetDeterministicComputeConnectorDefinition.CreateRuntimeDefinition();
+        if (!builder.TryBuild(definition, _logger, out var connector) || connector is null)
+        {
+            throw new InvalidOperationException(
+                "Mainnet deterministic_compute connector does not match the registered algorithm descriptor.");
+        }
+
+        await _registry.RegisterAsync(
+            global::Aevatar.Foundation.Abstractions.Connectors.ConnectorRegistration.Owned(connector),
+            cancellationToken);
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        return Task.CompletedTask;
     }
 }
