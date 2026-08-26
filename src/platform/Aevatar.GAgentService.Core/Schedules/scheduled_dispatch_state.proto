@@ -279,6 +279,7 @@ message ScheduledInvocationAgentKeyCredentialReferenceState
   aevatar.credentials.SecretReference secret_reference = 1;
   string api_key_id = 2;
   int64 key_expires_at_unix_ms = 3;
+  repeated aevatar.credentials.NyxIdDurableOperationGrantRef nyx_id_durable_operation_grants = 4;
 }
 
 message ScheduledCredentialEffectLocatorState

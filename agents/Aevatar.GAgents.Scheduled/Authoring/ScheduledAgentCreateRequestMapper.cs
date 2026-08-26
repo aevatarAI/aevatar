@@ -394,7 +394,8 @@ internal sealed class ScheduledAgentCreateRequestMapper
         new(ScheduledInvocationAgentKey: new WorkflowScheduleAgentKeyCredentialReference(
             secretReference.Clone(),
             issuedKey.ApiKeyId ?? string.Empty,
-            issuedKey.KeyExpiresAtUnixMs));
+            issuedKey.KeyExpiresAtUnixMs,
+            issuedKey.DurableOperationGrants));
 
     private static IReadOnlyDictionary<string, string> BuildWorkflowHeaders(
         ScheduledAgentCreatePlannedRequest request,

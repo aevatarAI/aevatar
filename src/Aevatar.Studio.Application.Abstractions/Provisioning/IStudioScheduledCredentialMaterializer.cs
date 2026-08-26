@@ -41,7 +41,8 @@ public sealed record StudioScheduledCredential(
     string ApiKeyId,
     SecretReference SecretReference,
     DateTimeOffset ExpiresAtUtc,
-    ScheduledInvocationAuthorizationOwner Owner);
+    ScheduledInvocationAuthorizationOwner Owner,
+    IReadOnlyList<NyxIdDurableOperationGrantRef>? DurableOperationGrants = null);
 
 public sealed record StudioScheduledCredentialRevocationResult(
     bool NyxIdRevoked,

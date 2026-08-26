@@ -43,6 +43,33 @@ public sealed class CommittedStatePublicationRecoveryTests
     }
 
     [Fact]
+    public async Task ActivationPublicationRecovery_WhenSnapshotIsDeferred_ShouldResumeSnapshottingOnNextCommit()
+    {
+        const string actorId = "publication-recovery-snapshot-deferral";
+        var fixture = CreateFixture(snapshotInterval: 1);
+        var first = CreateAgent(actorId, fixture, new RecordingPublisher(failOnAttempt: 1));
+        await first.ActivateAsync();
+        await Should.ThrowAsync<CommittedStatePublicationException>(() => first.CommitAsync(4));
+        (await fixture.SnapshotStore.LoadAsync(actorId)).ShouldBeNull();
+
+        var recovered = CreateAgent(
+            actorId,
+            fixture,
+            new RecordingPublisher(),
+            persistSnapshotAfterPublicationRecovery: false);
+        await recovered.ActivateAsync();
+
+        (await fixture.SnapshotStore.LoadAsync(actorId)).ShouldBeNull(
+            "activation recovery must be able to defer a transient oversized state snapshot");
+
+        await recovered.CommitAsync(2);
+
+        var snapshot = (await fixture.SnapshotStore.LoadAsync(actorId)).ShouldNotBeNull();
+        snapshot.Version.ShouldBe(2);
+        snapshot.State.Count.ShouldBe(6);
+    }
+
+    [Fact]
     public async Task PublishSucceededBeforeCheckpoint_ActivationDuplicatesStableIdentityAndAdvancesCheckpoint()
     {
         const string actorId = "publication-after-publish";
@@ -259,12 +286,14 @@ public sealed class CommittedStatePublicationRecoveryTests
     private static RecoveryAgent CreateAgent(
         string actorId,
         RecoveryFixture fixture,
-        RecordingPublisher publisher)
+        RecordingPublisher publisher,
+        bool persistSnapshotAfterPublicationRecovery = true)
     {
         var agent = new RecoveryAgent
         {
             Services = fixture.Services,
             CommittedStateEventPublisher = publisher,
+            PersistSnapshotAfterPublicationRecovery = persistSnapshotAfterPublicationRecovery,
             EventSourcingBehaviorFactory =
                 fixture.Services.GetRequiredService<IEventSourcingBehaviorFactory<CounterState>>(),
         };
@@ -284,12 +313,17 @@ public sealed class CommittedStatePublicationRecoveryTests
 
         public string RecoveredEnvelopeId { get; private set; } = string.Empty;
 
+        public bool PersistSnapshotAfterPublicationRecovery { get; init; } = true;
+
         [EventHandler]
         public Task HandleIncrement(IncrementEvent evt) => PersistDomainEventAsync(evt);
 
         public Task CommitAsync(params int[] amounts) =>
             PersistDomainEventsAsync(
                 amounts.Select(static amount => (IMessage)new IncrementEvent { Amount = amount }));
+
+        protected override bool ShouldPersistSnapshotAfterPublicationRecovery(CounterState state) =>
+            PersistSnapshotAfterPublicationRecovery;
 
         protected override Task OnCommittedStatePublicationRecoveredAsync(
             EventEnvelope envelope,

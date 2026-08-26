@@ -461,7 +461,11 @@ public sealed class OrleansDistributedCoverageTests
     {
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
         var stateProxy = (RuntimeActorPersistentStateProxy)(object)state;
-        var grain = new RuntimeActorGrain(state);
+        var publicationState = DispatchProxy.Create<
+            IPersistentState<RuntimeActorCommittedStatePublicationGrainState>,
+            CommittedStatePublicationPersistentStateProxy>();
+        var publicationStateProxy = (CommittedStatePublicationPersistentStateProxy)(object)publicationState;
+        var grain = new RuntimeActorGrain(state, publicationState);
 
         (await grain.IsInitializedAsync()).Should().BeFalse();
         stateProxy.State.Identity = new RuntimeActorIdentity { Kind = "tests.known-kind" };
@@ -486,6 +490,7 @@ public sealed class OrleansDistributedCoverageTests
         stateProxy.State.AgentId = "actor-1";
         stateProxy.State.AgentStateTypeName = typeof(EventEnvelope).FullName;
         stateProxy.State.AgentStateSnapshot = new EventEnvelope { Id = "snapshot" }.ToByteArray();
+        publicationStateProxy.State.Checkpoint = new byte[] { 1, 2, 3 };
         await grain.PurgeAsync();
         stateProxy.State.AgentId.Should().BeEmpty();
         stateProxy.State.Identity.Should().BeNull();
@@ -494,13 +499,18 @@ public sealed class OrleansDistributedCoverageTests
         stateProxy.State.AgentStateTypeName.Should().BeNull();
         stateProxy.State.AgentStateSnapshot.Should().BeNull();
         stateProxy.ClearCount.Should().BeGreaterThan(0);
+        publicationStateProxy.State.Checkpoint.Should().BeNull();
+        publicationStateProxy.ClearCount.Should().BeGreaterThan(0);
     }
 
     [Fact]
     public async Task RuntimeActorGrain_ShouldCoverExceptionalBranches()
     {
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
-        var grain = new RuntimeActorGrain(state);
+        var publicationState = DispatchProxy.Create<
+            IPersistentState<RuntimeActorCommittedStatePublicationGrainState>,
+            CommittedStatePublicationPersistentStateProxy>();
+        var grain = new RuntimeActorGrain(state, publicationState);
 
         var initialized = await grain.InitializeAgentByKindAsync("tests.never-registered");
         initialized.Should().BeFalse();
@@ -689,6 +699,40 @@ public sealed class OrleansDistributedCoverageTests
             }
             if (name == "ReadStateAsync")
                 return Task.CompletedTask;
+            if (name == "get_RecordExists")
+                return true;
+            if (name == "get_Etag")
+                return string.Empty;
+            if (name == "set_Etag")
+                return null;
+
+            return GetDefault(targetMethod?.ReturnType);
+        }
+    }
+
+    private class CommittedStatePublicationPersistentStateProxy : DispatchProxy
+    {
+        public RuntimeActorCommittedStatePublicationGrainState State { get; set; } = new();
+
+        public int ClearCount { get; private set; }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            var name = targetMethod?.Name;
+            if (name == "get_State")
+                return State;
+            if (name == "set_State")
+            {
+                State = args?[0] as RuntimeActorCommittedStatePublicationGrainState ?? new();
+                return null;
+            }
+            if (name == "WriteStateAsync" || name == "ReadStateAsync")
+                return Task.CompletedTask;
+            if (name == "ClearStateAsync")
+            {
+                ClearCount++;
+                return Task.CompletedTask;
+            }
             if (name == "get_RecordExists")
                 return true;
             if (name == "get_Etag")

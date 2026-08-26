@@ -32,6 +32,9 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
     protected virtual bool EnablesDurableObservationRecovery => false;
 
+    protected override bool ShouldPersistSnapshotAfterPublicationRecovery(ProjectionScopeState state) =>
+        state.InFlightObservation?.Source == null || state.InFlightObservation.Envelope == null;
+
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         _logger = Services.GetService<ILoggerFactory>()?.CreateLogger(GetType()) ?? NullLogger.Instance;
@@ -501,16 +504,19 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             return ProjectionScopeDispatchResult.Skip(envelope.Payload?.TypeUrl ?? string.Empty);
         }
 
-        var sourceVersion = ResolveSourceVersion(envelope);
-        await PersistDomainEventAsync(new ProjectionScopeEnvelopeAttemptedEvent
+        if (origin != ProjectionObservationDispatchOrigin.InFlightRecovery)
         {
-            HighestSeenVersion = sourceVersion,
-            OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
-            SourceActorId = sourceActorId,
-            ObservedEnvelope = observedMetadata,
-            EventKind = eventKind,
-        });
-        ProjectionProcessingMetrics.RecordAttempted(State.ProjectionKind, eventKind);
+            var sourceVersion = ResolveSourceVersion(envelope);
+            await PersistDomainEventAsync(new ProjectionScopeEnvelopeAttemptedEvent
+            {
+                HighestSeenVersion = sourceVersion,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+                SourceActorId = sourceActorId,
+                ObservedEnvelope = observedMetadata,
+                EventKind = eventKind,
+            });
+            ProjectionProcessingMetrics.RecordAttempted(State.ProjectionKind, eventKind);
+        }
 
         if (durableSource != null &&
             (State.InFlightObservation?.Source == null ||

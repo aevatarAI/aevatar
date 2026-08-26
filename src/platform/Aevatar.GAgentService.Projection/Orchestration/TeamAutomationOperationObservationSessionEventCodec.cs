@@ -176,7 +176,10 @@ public sealed class TeamAutomationOperationObservationSessionEventCodec
             : new ScheduledInvocationAgentKeyCredentialReference(
                 credential.SecretReference?.Clone() ?? new Aevatar.Foundation.Abstractions.Credentials.SecretReference(),
                 credential.ApiKeyId ?? string.Empty,
-                credential.KeyExpiresAtUnixMs);
+                credential.KeyExpiresAtUnixMs,
+                credential.NyxIdDurableOperationGrants
+                    .Select(static grant => grant.Clone())
+                    .ToArray());
 
     private static ScheduledInvocationAuthorizationOwner? ToAuthorizationOwner(
         ScheduledInvocationAuthorizationOwnerState? owner) =>
@@ -191,12 +194,21 @@ public sealed class TeamAutomationOperationObservationSessionEventCodec
         ScheduledInvocationAgentKeyCredentialReference? credential) =>
         credential == null
             ? null
-            : new ScheduledInvocationAgentKeyCredentialReferenceState
+            : ToCredentialReferenceStateCore(credential);
+
+    private static ScheduledInvocationAgentKeyCredentialReferenceState ToCredentialReferenceStateCore(
+        ScheduledInvocationAgentKeyCredentialReference credential)
+    {
+        var state = new ScheduledInvocationAgentKeyCredentialReferenceState
             {
                 SecretReference = credential.SecretReference?.Clone(),
                 ApiKeyId = credential.ApiKeyId ?? string.Empty,
                 KeyExpiresAtUnixMs = credential.KeyExpiresAtUnixMs,
             };
+        state.NyxIdDurableOperationGrants.Add(
+            credential.DurableOperationGrants?.Select(static grant => grant.Clone()) ?? []);
+        return state;
+    }
 
     private static ScheduledInvocationAuthorizationOwnerState? ToAuthorizationOwnerState(
         ScheduledInvocationAuthorizationOwner? owner) =>

@@ -4,8 +4,10 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions.Credentials;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.AI.Infrastructure.ChronoSandbox.Tests;
 
@@ -14,6 +16,8 @@ public sealed class NyxIdDurableCodeExecutionPortTests
     private const string OperationId = "op_0123456789abcdefghijklmnopqrstuv";
     private const string IdempotencyKey =
         "tool:v1:operation:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    private static readonly DateTimeOffset Now =
+        DateTimeOffset.Parse("2026-08-14T10:00:00Z");
 
     [Fact]
     public async Task SubmitAsync_UsesPublicApiAndBuildsCanonicalPathsFromOperationId()
@@ -97,7 +101,7 @@ public sealed class NyxIdDurableCodeExecutionPortTests
     }
 
     [Fact]
-    public async Task SubmitAsync_AgentKeyUsesBearerOnPublicEndpoint()
+    public async Task SubmitAsync_AgentKeyInjectsExactDurableAuthorityHeaders()
     {
         var handler = new SequenceHandler(_ => Response(
             HttpStatusCode.Accepted,
@@ -109,13 +113,14 @@ public sealed class NyxIdDurableCodeExecutionPortTests
                 "expires_at":"2026-08-15T10:00:00Z"
               }
               """));
-        var port = CreatePort(handler);
+        var port = CreatePort(handler, timeProvider: new FakeTimeProvider(Now));
         var execution = ExecutionRequest() with
         {
             Caller = new CodeExecutionCallerContext(
                 "scheduled-agent-key",
                 null,
-                CodeExecutionNyxIdCredentialKind.AgentKey),
+                CodeExecutionNyxIdCredentialKind.AgentKey,
+                DurableGrant()),
         };
 
         var outcome = await port.SubmitAsync(new DurableCodeExecutionSubmitRequest(
@@ -127,6 +132,81 @@ public sealed class NyxIdDurableCodeExecutionPortTests
         handler.Requests[0].Headers["Authorization"].Should().Equal("Bearer scheduled-agent-key");
         handler.Requests[0].Headers.Should().NotContainKey("X-API-Key");
         handler.Requests[0].Headers["Idempotency-Key"].Should().Equal(IdempotencyKey);
+        handler.Requests[0].Headers["X-NyxID-Durable-Grant-Id"].Should().Equal("grant-executions");
+        handler.Requests[0].Headers["X-NyxID-Operation-Id"].Should().Equal(IdempotencyKey);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("route-mismatch")]
+    [InlineData("expired")]
+    [InlineData("legacy")]
+    public async Task SubmitAsync_AgentKeyWithoutOneValidExactGrant_FailsBeforeHttp(string variant)
+    {
+        var handler = new SequenceHandler(_ => throw new InvalidOperationException("must not dispatch"));
+        var grant = variant == "missing" ? null : DurableGrant();
+        switch (variant)
+        {
+            case "route-mismatch":
+                grant!.UserServiceId = "us-code-other";
+                break;
+            case "expired":
+                grant!.ExpiresAtUnixMs = Now.ToUnixTimeMilliseconds();
+                break;
+            case "legacy":
+                grant = new NyxIdDurableOperationGrantRef
+                {
+                    GrantId = "grant-legacy",
+                    ApiKeyId = "key-schedule",
+                };
+                break;
+        }
+        var port = CreatePort(handler, timeProvider: new FakeTimeProvider(Now));
+        var execution = ExecutionRequest() with
+        {
+            Caller = new CodeExecutionCallerContext(
+                "scheduled-agent-key",
+                null,
+                CodeExecutionNyxIdCredentialKind.AgentKey,
+                grant),
+        };
+
+        var outcome = await port.SubmitAsync(new DurableCodeExecutionSubmitRequest(
+            execution,
+            IdempotencyKey));
+
+        outcome.Receipt.Should().BeNull();
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = DurableCodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_durable_grant_rebind_required",
+            Retryable = false,
+        });
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("operation-alpha")]
+    [InlineData("tool:v1:operation:ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789")]
+    [InlineData("tool:v1:operation:0123456789abcdef")]
+    public async Task SubmitAsync_WithoutCanonicalStableOperationId_FailsBeforeHttp(
+        string operationId)
+    {
+        var handler = new SequenceHandler(_ => throw new InvalidOperationException("must not dispatch"));
+        var port = CreatePort(handler);
+
+        var outcome = await port.SubmitAsync(new DurableCodeExecutionSubmitRequest(
+            ExecutionRequest(),
+            operationId));
+
+        outcome.Receipt.Should().BeNull();
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = DurableCodeExecutionFailureKind.AdmissionDenied,
+            Code = "durable_code_execution_request_invalid",
+            Retryable = false,
+        });
+        handler.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -187,7 +267,7 @@ public sealed class NyxIdDurableCodeExecutionPortTests
     }
 
     [Fact]
-    public async Task GetStatusAsync_AgentKeyUsesBearerOnPublicEndpoint()
+    public async Task GetStatusAsync_AgentKeyWithoutLifecycleGrantFailsBeforeHttp()
     {
         var handler = new SequenceHandler(_ => Response(
             HttpStatusCode.NotModified,
@@ -204,11 +284,66 @@ public sealed class NyxIdDurableCodeExecutionPortTests
 
         var outcome = await port.GetStatusAsync(request);
 
-        outcome.Failure.Should().BeNull();
-        handler.Requests.Should().ContainSingle();
-        handler.Requests[0].Headers["Authorization"].Should().Equal("Bearer scheduled-agent-key");
-        handler.Requests[0].Headers.Should().NotContainKey("X-API-Key");
-        handler.Requests[0].Headers["If-None-Match"].Should().Equal("\"v6\"");
+        outcome.Snapshot.Should().BeNull();
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = DurableCodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_durable_lifecycle_authority_unavailable",
+            Retryable = false,
+        });
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetResultAsync_AgentKeyWithoutLifecycleGrantFailsBeforeHttp()
+    {
+        var handler = new SequenceHandler(_ => throw new InvalidOperationException("must not dispatch"));
+        var port = CreatePort(handler);
+        var request = OperationRequest() with
+        {
+            Caller = new CodeExecutionCallerContext(
+                "scheduled-agent-key",
+                null,
+                CodeExecutionNyxIdCredentialKind.AgentKey,
+                DurableGrant()),
+        };
+
+        var outcome = await port.GetResultAsync(request);
+
+        outcome.Outcome.Should().BeNull();
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = DurableCodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_durable_lifecycle_authority_unavailable",
+            Retryable = false,
+        });
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CancelAsync_AgentKeyWithoutLifecycleGrantFailsBeforeHttp()
+    {
+        var handler = new SequenceHandler(_ => throw new InvalidOperationException("must not dispatch"));
+        var port = CreatePort(handler);
+        var request = OperationRequest() with
+        {
+            Caller = new CodeExecutionCallerContext(
+                "scheduled-agent-key",
+                null,
+                CodeExecutionNyxIdCredentialKind.AgentKey,
+                DurableGrant()),
+        };
+
+        var outcome = await port.CancelAsync(request);
+
+        outcome.Snapshot.Should().BeNull();
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = DurableCodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_durable_lifecycle_authority_unavailable",
+            Retryable = false,
+        });
+        handler.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -525,7 +660,8 @@ public sealed class NyxIdDurableCodeExecutionPortTests
 
     private static NyxIdCodeExecutionPort CreatePort(
         HttpMessageHandler handler,
-        NyxIdToolOptions? options = null)
+        NyxIdToolOptions? options = null,
+        TimeProvider? timeProvider = null)
     {
         options ??= new NyxIdToolOptions
         {
@@ -539,8 +675,31 @@ public sealed class NyxIdDurableCodeExecutionPortTests
             new HttpClient(handler));
         return new NyxIdCodeExecutionPort(
             new TestNyxIdApiClientFactory(client),
-            NullLogger<NyxIdCodeExecutionPort>.Instance);
+            NullLogger<NyxIdCodeExecutionPort>.Instance,
+            timeProvider);
     }
+
+    private static NyxIdDurableOperationGrantRef DurableGrant() => new()
+    {
+        GrantId = "grant-executions",
+        ApiKeyId = "key-schedule",
+        UserServiceId = "us-code-alpha",
+        EndpointId = "endpoint-executions",
+        HttpMethod = NyxIdDurableOperationHttpMethod.Post,
+        NormalizedPathTemplate = "/executions",
+        ContractDigest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ValidFromUnixMs = Now.AddMinutes(-1).ToUnixTimeMilliseconds(),
+        ExpiresAtUnixMs = Now.AddDays(1).ToUnixTimeMilliseconds(),
+        ReplayPolicy = NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey,
+        ClientAuditBinding = new NyxIdDurableOperationClientAuditBinding
+        {
+            Platform = "lark",
+            ScheduleId = "schedule-alpha",
+            WorkflowRevision = "revision-7",
+            CallSite = "code_execute",
+        },
+    };
 
     private static CodeExecutionRequest ExecutionRequest() =>
         new(

@@ -19,7 +19,7 @@ owner: eanzhao
 4. 有状态 Actor 激活必须 Replay；停用必须 flush pending events。
 5. ES 行为构造走静态泛型路径，不走 Runtime 反射注入。
 6. 默认启用自动快照（可配置），并在快照成功后按版本裁剪历史事件流（可配置）。
-7. committed-state observation 使用 Runtime-owned durable publication checkpoint；checkpoint 只描述投递进度，不进入业务 `TState` 或 read model。
+7. committed-state observation 使用 Runtime-owned durable publication checkpoint；checkpoint 只描述投递进度，不进入业务 `TState` 或 read model。Orleans runtime 将 checkpoint 持久化到独立的 `committed-state-publication` row，避免每次推进投递水位都重写完整 actor snapshot。
 
 ## 2.1 与 Runtime 消息流的边界
 1. Actor 之间通过 Stream 传递的是 `EventEnvelope`，这是 runtime message envelope。
@@ -51,7 +51,7 @@ Event Sourcing 侧只保留一个内聚结论：同一 actor、同一 identity�
 - 生产持久化 EventStore（Garnet）：`src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/GarnetEventStore.cs`
 - Local Runtime 注入边界：`src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorRuntime.cs`
 - Orleans Runtime 注入边界：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs`
-- Orleans actor-owned publication state：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrainCommittedStatePublicationStateStore.cs`
+- Orleans actor-owned publication state：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrainCommittedStatePublicationStateStore.cs`。迁移期间同时读取旧 runtime-row checkpoint 与独立 row，按 published version、revision 单调选择；相同 version/revision 的内容分叉必须 fail closed。
 - 防回退门禁：`tools/ci/architecture_guards.sh`
 
 ## 4. 生命周期语义（按当前实现）
@@ -62,6 +62,7 @@ Event Sourcing 侧只保留一个内聚结论：同一 actor、同一 identity�
   - 若未设置，则必须通过已绑定的 `IEventSourcingBehaviorFactory<TState>` 创建。
 - 执行 `ReplayAsync(actorId)` 恢复 `State`，并从 durable publication checkpoint 后重建缺失的 `CommittedStateEventPublished`。
 - 缺失事实按原始 `StateEvent.event_id + version` 依次补发并逐条推进 checkpoint；全部完成后才初始化业务模块并进入 `OnActivateAsync`。
+- 对带有完整 durable in-flight observation 的 projection scope，补发完成后可延迟一次 snapshot 优化；随后恢复同一 observation 时只提交 watermark，不重复追加 attempted 事实，成功 watermark 会清除 in-flight state 并恢复正常 snapshot。
 - 缺失 committed version、snapshot 领先 checkpoint 或 checkpoint 冲突都会显式失败 activation，不允许跳过。
 
 ### 4.2 Deactivate
@@ -137,6 +138,9 @@ public async Task Handle(IncrementRequested evt)
 6. retry exhausted 后，typed failure record 保留 version/event id/attempt/error；修复 transport/storage 后通过 actor reactivation 继续，禁止越过 poison gap。
 7. 首次升级且 checkpoint 缺失的 actor 以首次 activation 观察到的 EventStore version 建立一次性 baseline；已被旧版本 compact 的历史缺口只能走 ADR 0040 的显式 DR repair。
 8. `RepublishCommittedStateAsync` 是 synthetic maintenance republish，不推进自动 checkpoint；自动 recovery 保留原始 event id，不得被 audit materializer 当作 maintenance rebuild 跳过。
+9. Orleans checkpoint 使用独立的 actor-owned `committed-state-publication` persistent-state 行；publication advance/failure 不得重写大型 `RuntimeActorGrainState` 业务快照。
+10. 滚动升级同时读取 legacy runtime-row payload 与 dedicated row，按 published version、OCC revision 对账；actor/event identity 或同坐标 failure 冲突必须 fail closed。dedicated write 只更新内存中的 legacy shadow，由下一次正常 runtime-row write 持久化，因此该次写入前回滚到旧 binary 允许稳定 event identity 的 at-least-once 重发，不允许跳过事实。
+11. durable projection 的 in-flight observation recovery 不得再次提交 `ProjectionScopeEnvelopeAttemptedEvent` 或 attempted metric；只要 in-flight observation 仍存在，activation-time snapshot optimization 必须延后到下一次正常 commit。
 
 完整决策与时序图见 [ADR 0045](../adr/0045-runtime-owned-committed-state-publication-recovery.md)。
 

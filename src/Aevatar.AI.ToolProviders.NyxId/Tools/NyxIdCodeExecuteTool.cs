@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
@@ -32,6 +33,7 @@ public sealed class NyxIdCodeExecuteTool(
         "code_execution_cancel_outcome_uncertain",
         "code_execution_cancelled",
         "code_execution_durable_context_invalid",
+        "code_execution_durable_lifecycle_authority_unavailable",
         "code_execution_durable_transport_unavailable",
         "code_execution_outcome_uncertain",
         "code_execution_outcome_invalid",
@@ -165,6 +167,18 @@ public sealed class NyxIdCodeExecuteTool(
                 TerminalFailure(request.CallId, request.ToolName, preparation.Failure));
         }
 
+        if (preparation.Request!.Caller.ExecutionCredentialKind ==
+            CodeExecutionNyxIdCredentialKind.AgentKey)
+        {
+            return AgentToolOperationStartResult.Completed(TerminalFailure(
+                request.CallId,
+                request.ToolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_durable_lifecycle_authority_unavailable",
+                    "The scheduled NyxID credential does not carry producer-issued status, result, and cancel authority.")));
+        }
+
         if (_durableExecutionPort is null)
         {
             return AgentToolOperationStartResult.Completed(TerminalFailure(
@@ -177,7 +191,7 @@ public sealed class NyxIdCodeExecuteTool(
         }
 
         var outcome = await _durableExecutionPort.SubmitAsync(
-                new DurableCodeExecutionSubmitRequest(preparation.Request!, request.OperationId),
+                new DurableCodeExecutionSubmitRequest(preparation.Request, request.OperationId),
                 ct)
             .ConfigureAwait(false);
         if (outcome.Receipt is { } receipt && outcome.Failure is null)
@@ -798,13 +812,25 @@ public sealed class NyxIdCodeExecuteTool(
         var preparation = PrepareExecution(argumentsJson);
         if (preparation.Failure is not null)
             return TerminalFailure(callId, toolName, preparation.Failure);
+        if (preparation.Request!.Caller.ExecutionCredentialKind ==
+                CodeExecutionNyxIdCredentialKind.AgentKey &&
+            preparation.Request.Caller.DurableOperationGrant is not null)
+        {
+            return TerminalFailure(
+                callId,
+                toolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "durable_operation_required",
+                    "Scheduled Agent Key code execution must use the durable operation contract."));
+        }
 
-        var outcome = await _executionPort.ExecuteAsync(preparation.Request!, ct)
+        var outcome = await _executionPort.ExecuteAsync(preparation.Request, ct)
             .ConfigureAwait(false);
         return Terminal(callId, toolName, outcome);
     }
 
-    private static CodeExecutionPreparation PrepareExecution(string argumentsJson)
+    private CodeExecutionPreparation PrepareExecution(string argumentsJson)
     {
         var args = ToolArgs.Parse(argumentsJson);
         var language = args.Str("language");
@@ -863,6 +889,14 @@ public sealed class NyxIdCodeExecuteTool(
                     "The workflow code execution admission proof is invalid."));
         }
 
+        var durableGrant = ResolveDurableOperationGrant(
+            credentials,
+            admittedUserServiceId,
+            AgentToolRequestContext.Current?.DurableNyxIdCredential,
+            _timeProvider.GetUtcNow());
+        if (durableGrant.Failure is not null)
+            return CodeExecutionPreparation.Failed(durableGrant.Failure);
+
         var sourceReadableBearerToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials);
         if (sourceReadableBearerToken is null && admittedUserServiceId is null)
         {
@@ -885,8 +919,66 @@ public sealed class NyxIdCodeExecuteTool(
             new CodeExecutionCallerContext(
                 executionCredential.Token,
                 sourceReadableBearerToken,
-                executionCredential.Kind)));
+                executionCredential.Kind,
+                durableGrant.Grant)));
     }
+
+    private static DurableGrantResolution ResolveDurableOperationGrant(
+        AgentToolCredentials? credentials,
+        string? admittedUserServiceId,
+        DurableCallerCredentialRef? durableCredential,
+        DateTimeOffset now)
+    {
+        if (credentials?.NyxIdCredentialKind != AgentToolNyxIdCredentialKind.AgentKey)
+            return DurableGrantResolution.Succeeded(null);
+
+        var providerCredentialId = NormalizeCredential(durableCredential?.ProviderCredentialId);
+        if (providerCredentialId is null || admittedUserServiceId is null)
+            return DurableGrantResolution.RebindRequired();
+
+        var matches = durableCredential!.NyxIdDurableOperationGrants
+            .Where(grant =>
+                string.Equals(grant.ApiKeyId, providerCredentialId, StringComparison.Ordinal) &&
+                string.Equals(grant.UserServiceId, admittedUserServiceId, StringComparison.Ordinal) &&
+                grant.HttpMethod == NyxIdDurableOperationHttpMethod.Post &&
+                string.Equals(grant.NormalizedPathTemplate, "/executions", StringComparison.Ordinal) &&
+                IsNormalized(grant.GrantId) &&
+                IsNormalized(grant.EndpointId) &&
+                IsValidContractDigest(grant.ContractDigest) &&
+                grant.ReplayPolicy == NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey &&
+                IsValidAuditBinding(grant.ClientAuditBinding) &&
+                grant.ValidFromUnixMs > 0 &&
+                grant.ExpiresAtUnixMs > grant.ValidFromUnixMs &&
+                grant.ValidFromUnixMs <= now.ToUnixTimeMilliseconds() &&
+                grant.ExpiresAtUnixMs > now.ToUnixTimeMilliseconds())
+            .Take(2)
+            .ToArray();
+
+        return matches.Length == 1
+            ? DurableGrantResolution.Succeeded(matches[0].Clone())
+            : DurableGrantResolution.RebindRequired();
+    }
+
+    private static bool IsNormalized(string? value) =>
+        value is { Length: > 0 and <= 256 } &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+        value.All(static character => character is >= '!' and <= '~');
+
+    private static bool IsValidContractDigest(string? value) =>
+        value is { Length: 71 } &&
+        value.StartsWith("sha256:", StringComparison.Ordinal) &&
+        value.AsSpan(7).ToArray().All(static character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static bool IsValidAuditBinding(NyxIdDurableOperationClientAuditBinding? binding) =>
+        binding is null ||
+        IsValidOptionalAuditValue(binding.Platform) &&
+        IsValidOptionalAuditValue(binding.ScheduleId) &&
+        IsValidOptionalAuditValue(binding.WorkflowRevision) &&
+        IsValidOptionalAuditValue(binding.CallSite);
+
+    private static bool IsValidOptionalAuditValue(string? value) =>
+        string.IsNullOrEmpty(value) || IsNormalized(value);
 
     private static (string? Token, CodeExecutionNyxIdCredentialKind Kind)
         ResolveExecutionCredential(AgentToolCredentials? credentials)
@@ -1368,5 +1460,21 @@ public sealed class NyxIdCodeExecuteTool(
 
         public static CodeExecutionPreparation Failed(CodeExecutionFailure failure) =>
             new(null, failure);
+    }
+
+    private sealed record DurableGrantResolution(
+        NyxIdDurableOperationGrantRef? Grant,
+        CodeExecutionFailure? Failure)
+    {
+        public static DurableGrantResolution Succeeded(NyxIdDurableOperationGrantRef? grant) =>
+            new(grant, null);
+
+        public static DurableGrantResolution RebindRequired() =>
+            new(
+                null,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_durable_grant_rebind_required",
+                    "The scheduled NyxID credential is missing one exact active code execution grant and must be rebound."));
     }
 }

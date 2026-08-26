@@ -42,3 +42,15 @@ public sealed class RuntimeActorGrainState
     [Id(8)]
     public byte[]? CommittedStatePublicationState { get; set; }
 }
+
+/// <summary>
+/// Dedicated Orleans row for committed-state publication progress. Keeping this
+/// payload out of <see cref="RuntimeActorGrainState"/> prevents checkpoint writes
+/// from rewriting an actor's potentially large business-state snapshot.
+/// </summary>
+[GenerateSerializer]
+public sealed class RuntimeActorCommittedStatePublicationGrainState
+{
+    [Id(0)]
+    public byte[]? Checkpoint { get; set; }
+}

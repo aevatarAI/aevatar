@@ -137,18 +137,24 @@ discovery, ordinary `nyxid_proxy`, LLM, or managed Codex paths. Unattended chann
 scheduled paths do not substitute such a short token for their Vault-backed Agent Key.
 
 The word "scheduled" in an Aevatar credential purpose describes who owns and reuses the Vault
-reference; it does not select NyxID's `scheduled_invocation` API-key security class. The
-asynchronous `code_execute` lifecycle requires one `POST /executions` followed by `GET` status and
-result requests. NyxID durable-operation grants bind one exact published write operation and
-require a grant ID plus operation ID on every request, so they cannot authorize this multi-request
-lifecycle. Channel, webhook, and scheduled provisioning must therefore accept only a NyxID create
-response with `purpose=general`, `scheduled_write_enabled=false`, and `durable_grants` absent or
-empty. Any other or absent class is rejected, and any incompatible key is rolled back before its
-secret is persisted. Existing incompatible channel keys require a full registration
-rebind because rotation preserves the security class; the narrower "Repair workflow replies"
-action cannot perform that conversion. Other incompatible keys must likewise be reissued through
-their owning binding flow. Aevatar must not guess durable grant headers or replace the Agent Key
-with a five-minute delegation token.
+reference; it does not by itself prove NyxID `scheduled_invocation` authority. Scheduled
+`code_execute` must carry a producer-issued exact `POST /executions` durable grant in the typed
+credential reference. Runtime selects exactly one active grant matching the API key, UserService,
+method, normalized path, contract digest, replay policy, and validity window, then sends
+`X-NyxID-Durable-Grant-Id` plus the stable tool operation identity in
+`X-NyxID-Operation-Id`. Missing, legacy, ambiguous, expired, or mismatched grants require rebind,
+and an Agent Key may not use the synchronous `/execute` path.
+
+Current scheduled authorization plans contain service/node grants but no producer-attested exact
+endpoint and request constraints. The issuer therefore fails before key creation with
+`scheduled_durable_operation_authority_unavailable`; it must not fabricate
+`selected_operations`, accept a general proxy key, guess durable headers, or substitute a
+five-minute delegation token. Even after NyxID supplies exact write-grant receipts, the
+asynchronous lifecycle still needs least-authority status/result reads. Provisioning remains
+fail-closed until that producer contract is explicit and the typed grant receipt is propagated
+through schedule state into the runtime credential. Any key returned with a missing or invalid
+security class or grant receipt is rolled back by provider credential ID before secret
+persistence; existing incompatible credentials require rebind through their owning flow.
 
 Production drift is checked independently of source conformance. The hourly
 `nyxid-code-execution-route-drift.yml` workflow runs

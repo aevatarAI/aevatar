@@ -26,6 +26,37 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public void PublicationRecoverySnapshotPolicy_ShouldDeferOnlyWhileDurableObservationIsInFlight()
+    {
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-recovery-snapshot-policy",
+            onProcess: _ => ProjectionScopeDispatchResult.Skip(),
+            enableDurableObservationRecovery: true);
+
+        agent.ShouldPersistRecoverySnapshotForTest().Should().BeTrue();
+
+        agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = 1,
+                EventId = "event-1",
+            },
+        };
+
+        agent.ShouldPersistRecoverySnapshotForTest().Should().BeTrue(
+            "an incomplete recovery coordinate cannot be resumed and must not suppress snapshots");
+
+        agent.State.InFlightObservation.Envelope = new EventEnvelope { Id = "envelope-1" };
+
+        agent.ShouldPersistRecoverySnapshotForTest().Should().BeFalse();
+
+        agent.State.InFlightObservation = null;
+        agent.ShouldPersistRecoverySnapshotForTest().Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldPropagate_RetryableOptimisticConcurrencyException()
     {
         var agent = BuildActivatedAgent(
@@ -194,6 +225,8 @@ public sealed class ProjectionScopeGAgentBaseTests
     public async Task HandleResumeInFlightObservationAsync_ShouldRecoverGraphCommitBeforeScopeWatermark()
     {
         var graphApplyCount = 0;
+        var failedEventSourcing = new TrackingEventSourcing(
+            failOnEventType: typeof(ProjectionScopeWatermarkAdvancedEvent));
         var failedScope = BuildActivatedAgent(
             scopeId: "projection-scope-crash-recovery",
             onProcess: _ =>
@@ -201,8 +234,7 @@ public sealed class ProjectionScopeGAgentBaseTests
                 graphApplyCount++;
                 return ProjectionScopeDispatchResult.Success(3, "event-type");
             },
-            eventSourcing: new TrackingEventSourcing(
-                failOnEventType: typeof(ProjectionScopeWatermarkAdvancedEvent)),
+            eventSourcing: failedEventSourcing,
             enableDurableObservationRecovery: true);
         await InitializeFailureTrackerAsync(failedScope);
         var envelope = BuildForwardedCommittedObservationEnvelope(
@@ -214,7 +246,9 @@ public sealed class ProjectionScopeGAgentBaseTests
             () => failedScope.HandleObservedEnvelopeAsync(envelope));
         failedScope.State.InFlightObservation.Should().NotBeNull();
         failedScope.State.LastSuccessfulSourceCoordinatesByActor.Should().BeEmpty();
+        failedScope.State.AttemptedEnvelopeTotal.Should().Be(1);
 
+        var recoveryEventSourcing = new TrackingEventSourcing();
         var recoveredScope = BuildActivatedAgent(
             scopeId: "projection-scope-crash-recovery",
             onProcess: _ =>
@@ -222,7 +256,7 @@ public sealed class ProjectionScopeGAgentBaseTests
                 graphApplyCount++;
                 return ProjectionScopeDispatchResult.Success(3, "event-type");
             },
-            eventSourcing: new TrackingEventSourcing(),
+            eventSourcing: recoveryEventSourcing,
             enableDurableObservationRecovery: true);
         recoveredScope.State.MergeFrom(failedScope.State);
         await InitializeFailureTrackerAsync(recoveredScope);
@@ -237,6 +271,11 @@ public sealed class ProjectionScopeGAgentBaseTests
         recoveredScope.State.InFlightObservation.Should().BeNull();
         recoveredScope.State.LastSuccessfulSourceCoordinatesByActor["publisher-actor"].EventId
             .Should().Be("evt-3");
+        recoveredScope.State.AttemptedEnvelopeTotal.Should().Be(1,
+            "the staged attempt is already the durable authority for in-flight recovery");
+        recoveryEventSourcing.CommittedEventTypes.Should().Equal(typeof(ProjectionScopeWatermarkAdvancedEvent));
+        recoveryEventSourcing.Snapshots.Should().ContainSingle()
+            .Which.InFlightObservation.Should().BeNull();
     }
 
     [Fact]
@@ -1116,6 +1155,9 @@ public sealed class ProjectionScopeGAgentBaseTests
 
         public Task InitializeForTestAsync() => OnActivateAsync(CancellationToken.None);
 
+        public bool ShouldPersistRecoverySnapshotForTest() =>
+            ShouldPersistSnapshotAfterPublicationRecovery(State);
+
         protected override ValueTask PrepareObservationContextAsync(
             TestContext context,
             EventEnvelope envelope,
@@ -1176,6 +1218,8 @@ public sealed class ProjectionScopeGAgentBaseTests
 
         public int DiscardCallCount { get; private set; }
         public long CurrentVersion { get; private set; }
+        public List<System.Type> CommittedEventTypes { get; } = [];
+        public List<ProjectionScopeState> Snapshots { get; } = [];
         public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage => _pending.Add(evt);
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
@@ -1191,6 +1235,7 @@ public sealed class ProjectionScopeGAgentBaseTests
             var result = new EventStoreCommitResult();
             foreach (var evt in _pending)
             {
+                CommittedEventTypes.Add(evt.GetType());
                 CurrentVersion++;
                 result.CommittedEvents.Add(new StateEvent
                 {
@@ -1206,8 +1251,11 @@ public sealed class ProjectionScopeGAgentBaseTests
             _pending.Clear();
             return Task.FromResult(result);
         }
-        public Task PersistSnapshotAsync(ProjectionScopeState currentState, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task PersistSnapshotAsync(ProjectionScopeState currentState, CancellationToken ct = default)
+        {
+            Snapshots.Add(currentState.Clone());
+            return Task.CompletedTask;
+        }
         public Task<ProjectionScopeState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
             Task.FromResult<ProjectionScopeState?>(null);
         public void DiscardPendingEvents()

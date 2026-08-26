@@ -158,6 +158,13 @@ public sealed class WorkflowDeliveryContinuationScanner
         if (installation == null)
             return;
         var now = _timeProvider.GetUtcNow();
+        if (delivery.LifecycleStatus != WorkflowDeliveryLifecycleStatus.Active ||
+            delivery.ExpiresAtUtc <= now)
+        {
+            await ClaimAsync(delivery, status, ct);
+            return;
+        }
+
         var claim = installation.ContinuationClaim;
         if (!ClaimMatchesActiveStage(claim, installation, status) ||
             claim!.ExpiresAtUtc <= now)

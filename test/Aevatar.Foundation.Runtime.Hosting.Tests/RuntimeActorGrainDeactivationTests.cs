@@ -61,7 +61,9 @@ public sealed class RuntimeActorGrainDeactivationTests
         IAgent agent)
     {
         var state = Substitute.For<IPersistentState<RuntimeActorGrainState>>();
-        var grain = new RuntimeActorGrain(state);
+        var publicationState = Substitute.For<
+            IPersistentState<RuntimeActorCommittedStatePublicationGrainState>>();
+        var grain = new RuntimeActorGrain(state, publicationState);
         SetPrivateField(grain, "_selfStreamHandle", handle);
         SetPrivateField(grain, "_agent", agent);
         return grain;

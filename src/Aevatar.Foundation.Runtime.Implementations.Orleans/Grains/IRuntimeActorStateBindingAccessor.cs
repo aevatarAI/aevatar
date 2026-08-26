@@ -6,5 +6,9 @@ public interface IRuntimeActorStateBindingAccessor
 {
     IPersistentState<RuntimeActorGrainState>? Current { get; }
 
-    IDisposable Bind(IPersistentState<RuntimeActorGrainState> runtimeState);
+    IPersistentState<RuntimeActorCommittedStatePublicationGrainState>? CurrentCommittedStatePublication { get; }
+
+    IDisposable Bind(
+        IPersistentState<RuntimeActorGrainState> runtimeState,
+        IPersistentState<RuntimeActorCommittedStatePublicationGrainState> committedStatePublication);
 }

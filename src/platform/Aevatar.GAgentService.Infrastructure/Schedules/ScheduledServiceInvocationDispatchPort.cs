@@ -414,15 +414,19 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 ScheduledServiceInvocationAuthorizationFailureCode.ApiKeyIdMissing,
                 "Scheduled invocation agent key id is missing.");
 
-        return new DurableCallerCredentialRef
+        var durable = new DurableCallerCredentialRef
         {
             Ref = reference.Ref,
             Purpose = reference.Purpose,
             OwnerScopeKey = reference.OwnerScopeKey,
             SubjectId = source.ApiKeyId,
+            ProviderCredentialId = source.ApiKeyId,
             SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
             ScheduledCallerNyxIdAuthority = NormalizeScheduledCallerNyxIdAuthority(callerAuthority),
         };
+        durable.NyxIdDurableOperationGrants.Add(
+            source.DurableOperationGrants?.Select(static grant => grant.Clone()) ?? []);
+        return durable;
     }
 
     private async Task<DurableCallerCredentialRef> StoreDurableCallerCredentialAsync(

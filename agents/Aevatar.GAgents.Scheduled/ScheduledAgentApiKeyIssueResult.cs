@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.GAgents.Scheduled;
@@ -22,6 +23,7 @@ public sealed class ScheduledAgentApiKeyIssueResult
         string? serviceSlug,
         string? skillRef,
         long keyExpiresAtUnixMs,
+        IReadOnlyList<NyxIdDurableOperationGrantRef>? durableOperationGrants,
         ScheduledAuthorizationPlanMismatchReason authorizationPlanMismatchReason)
     {
         Success = success;
@@ -34,10 +36,14 @@ public sealed class ScheduledAgentApiKeyIssueResult
         ServiceSlug = serviceSlug;
         SkillRef = skillRef;
         KeyExpiresAtUnixMs = keyExpiresAtUnixMs;
+        _durableOperationGrants = durableOperationGrants?
+            .Select(static grant => grant.Clone())
+            .ToArray() ?? [];
         AuthorizationPlanMismatchReason = authorizationPlanMismatchReason;
     }
 
     private readonly ScheduledAgentOpaqueSecret? _secret;
+    private readonly IReadOnlyList<NyxIdDurableOperationGrantRef> _durableOperationGrants;
 
     public bool Success { get; }
     public string? ApiKeyId { get; }
@@ -48,12 +54,15 @@ public sealed class ScheduledAgentApiKeyIssueResult
     public string? ServiceSlug { get; }
     public string? SkillRef { get; }
     public long KeyExpiresAtUnixMs { get; }
+    public IReadOnlyList<NyxIdDurableOperationGrantRef> DurableOperationGrants =>
+        _durableOperationGrants.Select(static grant => grant.Clone()).ToArray();
     public ScheduledAuthorizationPlanMismatchReason AuthorizationPlanMismatchReason { get; }
 
     public static ScheduledAgentApiKeyIssueResult Succeeded(
         string apiKeyId,
         string fullKey,
-        long keyExpiresAtUnixMs = 0) =>
+        long keyExpiresAtUnixMs = 0,
+        IReadOnlyList<NyxIdDurableOperationGrantRef>? durableOperationGrants = null) =>
         new(
             true,
             apiKeyId,
@@ -65,6 +74,7 @@ public sealed class ScheduledAgentApiKeyIssueResult
             null,
             null,
             keyExpiresAtUnixMs,
+            durableOperationGrants,
             ScheduledAuthorizationPlanMismatchReason.Unspecified);
 
     public static ScheduledAgentApiKeyIssueResult Failed(
@@ -87,6 +97,7 @@ public sealed class ScheduledAgentApiKeyIssueResult
             serviceSlug,
             skillRef,
             0,
+            null,
             authorizationPlanMismatchReason);
 
     public static ScheduledAgentApiKeyIssueResult FailedAfterIssue(
@@ -110,6 +121,7 @@ public sealed class ScheduledAgentApiKeyIssueResult
             serviceSlug,
             skillRef,
             0,
+            null,
             authorizationPlanMismatchReason);
 
     public Task<Aevatar.Foundation.Abstractions.Credentials.StoreSecretResult> StoreSecretAsync(
@@ -137,5 +149,5 @@ public sealed class ScheduledAgentApiKeyIssueResult
         }, ErrorJsonOptions);
 
     public override string ToString() =>
-        $"{nameof(ScheduledAgentApiKeyIssueResult)} {{ Success = {Success}, ApiKeyId = {ApiKeyId}, Secret = {(_secret is null ? "null" : "[redacted]")}, Error = {Error}, KeyExpiresAtUnixMs = {KeyExpiresAtUnixMs} }}";
+        $"{nameof(ScheduledAgentApiKeyIssueResult)} {{ Success = {Success}, ApiKeyId = {ApiKeyId}, Secret = {(_secret is null ? "null" : "[redacted]")}, Error = {Error}, KeyExpiresAtUnixMs = {KeyExpiresAtUnixMs}, DurableOperationGrantCount = {_durableOperationGrants.Count} }}";
 }

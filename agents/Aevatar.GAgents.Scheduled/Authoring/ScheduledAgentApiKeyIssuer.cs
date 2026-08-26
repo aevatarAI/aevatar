@@ -1,6 +1,10 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
@@ -13,6 +17,9 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
+    private static readonly Regex Rfc3339Pattern = new(
+        @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
     private readonly INyxIdApiClientFactory _nyxClientFactory;
     private readonly ILogger<ScheduledAgentApiKeyIssuer>? _logger;
@@ -249,6 +256,16 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
                 authorizationPlanMismatchReason: mismatchReason);
         }
 
+        // Service/node scope alone cannot be projected into a producer-owned
+        // endpoint, request constraint, validity, and replay selection.
+        if (!HasProducerAttestedExactOperationSelections(plan))
+        {
+            return ScheduledAgentApiKeyIssueResult.Failed(
+                "scheduled_durable_operation_authority_unavailable",
+                "The scheduled authorization plan does not contain producer-attested exact operation selections.",
+                "Rebind after the authorization plan carries exact NyxID endpoint and constraint authority.");
+        }
+
         var response = await client.CreateApiKeyAsync(
             token,
             JsonSerializer.Serialize(new
@@ -266,7 +283,10 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             }, CreateKeyJsonOptions),
             ct);
 
-        return ExtractIssuedKey(response, expiresAt.ToUnixTimeMilliseconds());
+        return ExtractIssuedKey(
+            response,
+            expiresAt.ToUnixTimeMilliseconds(),
+            _timeProvider.GetUtcNow());
     }
 
     public async Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct)
@@ -299,7 +319,10 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             ClassifyRevocationFailure(status));
     }
 
-    private static ScheduledAgentApiKeyIssueResult ExtractIssuedKey(string response, long keyExpiresAtUnixMs)
+    internal static ScheduledAgentApiKeyIssueResult ExtractIssuedKey(
+        string response,
+        long keyExpiresAtUnixMs,
+        DateTimeOffset now)
     {
         if (TryReadErrorEnvelope(response, out var status, out var body, out var message))
         {
@@ -319,8 +342,12 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         try
         {
             using var document = JsonDocument.Parse(response);
-            var id = ReadString(document.RootElement, "id");
-            var fullKey = ReadString(document.RootElement, "full_key");
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_invalid_response_shape");
+
+            var id = ReadNormalizedString(root, "id", 256);
+            var fullKey = ReadNormalizedString(root, "full_key", 4096);
             if (id is null)
                 return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_missing_id");
             if (fullKey is null)
@@ -329,24 +356,300 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
                     id,
                     "api_key_create_missing_full_key");
             }
-            if (!NyxIdApiAccessResponseParser.TryParseCreatedAgentApiKeySecurityClass(
-                    document.RootElement,
-                    out var securityClass) ||
+            if (!NyxIdApiAccessResponseParser.TryParseCreatedAgentApiKeySecurityClass(root, out var securityClass) ||
                 securityClass is null ||
-                !securityClass.IsGeneralProxyCredential)
+                securityClass.Purpose != NyxIdAgentApiKeyPurpose.ScheduledInvocation ||
+                !securityClass.ScheduledWriteEnabled)
             {
                 return ScheduledAgentApiKeyIssueResult.FailedAfterIssue(
                     id,
                     "api_key_create_credential_class_invalid",
                     "NyxID returned a credential class that cannot authorize the asynchronous code execution lifecycle.",
-                    "Reissue this Agent Key with purpose=general and scheduled_write_enabled=false.");
+                    "Reissue this Agent Key with purpose=scheduled_invocation and scheduled_write_enabled=true.");
             }
-            return ScheduledAgentApiKeyIssueResult.Succeeded(id, fullKey, keyExpiresAtUnixMs);
+            if (!TryParseDurableGrantReceipts(
+                    root,
+                    id,
+                    keyExpiresAtUnixMs,
+                    now,
+                    out var durableOperationGrants))
+            {
+                return ScheduledAgentApiKeyIssueResult.FailedAfterIssue(
+                    id,
+                    "api_key_create_durable_grants_invalid",
+                    "NyxID did not return a complete, active exact-operation grant receipt.",
+                    "Rebind the scheduled credential from producer-attested exact operations.");
+            }
+
+            return ScheduledAgentApiKeyIssueResult.Succeeded(
+                id,
+                fullKey,
+                keyExpiresAtUnixMs,
+                durableOperationGrants);
         }
         catch (JsonException)
         {
             return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_invalid_json");
         }
+    }
+
+    private static bool HasProducerAttestedExactOperationSelections(
+        ScheduledInvocationAuthorizationPlan _) => false;
+
+    private static bool TryParseDurableGrantReceipts(
+        JsonElement root,
+        string apiKeyId,
+        long keyExpiresAtUnixMs,
+        DateTimeOffset now,
+        out IReadOnlyList<NyxIdDurableOperationGrantRef> grants)
+    {
+        grants = [];
+        if (keyExpiresAtUnixMs <= now.ToUnixTimeMilliseconds() ||
+            !root.TryGetProperty("durable_grants", out var grantArray) ||
+            grantArray.ValueKind != JsonValueKind.Array ||
+            grantArray.GetArrayLength() is 0 or > 256)
+        {
+            return false;
+        }
+
+        var parsed = new List<NyxIdDurableOperationGrantRef>(grantArray.GetArrayLength());
+        var seenGrantIds = new HashSet<string>(StringComparer.Ordinal);
+        var seenOperations = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var element in grantArray.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object ||
+                ReadNormalizedString(element, "id", 256) is not { } grantId ||
+                !seenGrantIds.Add(grantId) ||
+                ReadNormalizedString(element, "api_key_id", 256) is not { } receiptApiKeyId ||
+                !string.Equals(receiptApiKeyId, apiKeyId, StringComparison.Ordinal) ||
+                ReadNormalizedString(element, "user_service_id", 256) is not { } userServiceId ||
+                ReadNormalizedString(element, "endpoint_id", 256) is not { } endpointId ||
+                !seenOperations.Add(userServiceId + "\0" + endpointId) ||
+                ReadHttpMethod(element) is not { } method ||
+                ReadNormalizedPath(element, "normalized_path_template") is not { } path ||
+                ReadContractDigest(element, "contract_digest") is not { } contractDigest ||
+                !TryReadConstraints(element) ||
+                !TryReadRfc3339(element, "valid_from", out var validFrom) ||
+                !TryReadRfc3339(element, "expires_at", out var expiresAt) ||
+                validFrom.ToUnixTimeMilliseconds() <= 0 ||
+                validFrom > now ||
+                expiresAt <= validFrom ||
+                expiresAt <= now ||
+                expiresAt.ToUnixTimeMilliseconds() > keyExpiresAtUnixMs ||
+                !TryReadActiveUsage(element) ||
+                ReadReplayPolicy(element) is not { } replayPolicy ||
+                !TryReadClientAuditBinding(element, out var auditBinding) ||
+                element.TryGetProperty("revoked_at", out var revokedAt) &&
+                revokedAt.ValueKind != JsonValueKind.Null ||
+                !TryReadPositiveInt64(element, "state_version", out _) ||
+                !TryReadRfc3339(element, "created_at", out var createdAt) ||
+                createdAt > now)
+            {
+                return false;
+            }
+
+            parsed.Add(new NyxIdDurableOperationGrantRef
+            {
+                GrantId = grantId,
+                ApiKeyId = receiptApiKeyId,
+                UserServiceId = userServiceId,
+                EndpointId = endpointId,
+                HttpMethod = method,
+                NormalizedPathTemplate = path,
+                ContractDigest = contractDigest,
+                ValidFromUnixMs = validFrom.ToUnixTimeMilliseconds(),
+                ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
+                ReplayPolicy = replayPolicy,
+                ClientAuditBinding = auditBinding,
+            });
+        }
+
+        grants = parsed;
+        return true;
+    }
+
+    private static string? ReadNormalizedString(
+        JsonElement element,
+        string name,
+        int maxUtf8Bytes)
+    {
+        if (!element.TryGetProperty(name, out var value) ||
+            value.ValueKind != JsonValueKind.String ||
+            value.GetString() is not { } text ||
+            string.IsNullOrWhiteSpace(text) ||
+            !string.Equals(text, text.Trim(), StringComparison.Ordinal) ||
+            text.Any(char.IsControl) ||
+            Encoding.UTF8.GetByteCount(text) > maxUtf8Bytes)
+        {
+            return null;
+        }
+
+        return text;
+    }
+
+    private static NyxIdDurableOperationHttpMethod? ReadHttpMethod(JsonElement element) =>
+        ReadNormalizedString(element, "method", 16) switch
+        {
+            "POST" => NyxIdDurableOperationHttpMethod.Post,
+            "PUT" => NyxIdDurableOperationHttpMethod.Put,
+            "PATCH" => NyxIdDurableOperationHttpMethod.Patch,
+            _ => null,
+        };
+
+    private static string? ReadNormalizedPath(JsonElement element, string name)
+    {
+        var path = ReadNormalizedString(element, name, 2048);
+        return path is not null &&
+               path.StartsWith("/", StringComparison.Ordinal) &&
+               !path.StartsWith("//", StringComparison.Ordinal) &&
+               !path.Contains('?') &&
+               !path.Contains('#')
+            ? path
+            : null;
+    }
+
+    private static string? ReadContractDigest(JsonElement element, string name)
+    {
+        var value = ReadNormalizedString(element, name, 71);
+        return value is { Length: 71 } &&
+               value.StartsWith("sha256:", StringComparison.Ordinal) &&
+               value.AsSpan(7).ToArray().All(static character =>
+                   character is >= '0' and <= '9' or >= 'a' and <= 'f')
+            ? value
+            : null;
+    }
+
+    private static bool TryReadRfc3339(
+        JsonElement element,
+        string name,
+        out DateTimeOffset value)
+    {
+        value = default;
+        var text = ReadNormalizedString(element, name, 64);
+        return text is not null &&
+               Rfc3339Pattern.IsMatch(text) &&
+               DateTimeOffset.TryParse(
+                   text,
+                   CultureInfo.InvariantCulture,
+                   DateTimeStyles.None,
+                   out value);
+    }
+
+    private static NyxIdDurableOperationReplayPolicy? ReadReplayPolicy(JsonElement element) =>
+        ReadNormalizedString(element, "replay_policy", 64) switch
+        {
+            "non_replayable" => NyxIdDurableOperationReplayPolicy.NonReplayable,
+            "downstream_idempotency_key" =>
+                NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey,
+            _ => null,
+        };
+
+    private static bool TryReadConstraints(JsonElement element)
+    {
+        if (!element.TryGetProperty("constraints", out var constraints) ||
+            constraints.ValueKind != JsonValueKind.Object ||
+            !HasObjectProperty(constraints, "path") ||
+            !HasObjectProperty(constraints, "query") ||
+            !HasObjectProperty(constraints, "headers"))
+        {
+            return false;
+        }
+
+        if (!constraints.TryGetProperty("body", out var body) ||
+            body.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        return body.ValueKind == JsonValueKind.Object &&
+               HasObjectProperty(body, "fields") &&
+               body.TryGetProperty("allow_additional_fields", out var allowAdditional) &&
+               allowAdditional.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+               !allowAdditional.GetBoolean();
+    }
+
+    private static bool HasObjectProperty(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var property) &&
+        property.ValueKind == JsonValueKind.Object;
+
+    private static bool TryReadActiveUsage(JsonElement element)
+    {
+        if (!TryReadPositiveInt64(element, "total_limit", out var totalLimit) ||
+            !TryReadNonNegativeInt64(element, "total_used", out var totalUsed) ||
+            totalUsed >= totalLimit ||
+            !TryReadNonNegativeInt64(element, "window_used", out var windowUsed))
+        {
+            return false;
+        }
+
+        if (!element.TryGetProperty("window", out var window) ||
+            window.ValueKind == JsonValueKind.Null)
+        {
+            return windowUsed == 0;
+        }
+
+        return window.ValueKind == JsonValueKind.Object &&
+               TryReadPositiveInt64(window, "duration_seconds", out _) &&
+               TryReadPositiveInt64(window, "max_operations", out var maxOperations) &&
+               windowUsed < maxOperations;
+    }
+
+    private static bool TryReadPositiveInt64(
+        JsonElement element,
+        string name,
+        out long value) =>
+        TryReadNonNegativeInt64(element, name, out value) && value > 0;
+
+    private static bool TryReadNonNegativeInt64(
+        JsonElement element,
+        string name,
+        out long value)
+    {
+        value = 0;
+        return element.TryGetProperty(name, out var property) &&
+               property.ValueKind == JsonValueKind.Number &&
+               property.TryGetInt64(out value) &&
+               value >= 0;
+    }
+
+    private static bool TryReadClientAuditBinding(
+        JsonElement element,
+        out NyxIdDurableOperationClientAuditBinding? binding)
+    {
+        binding = null;
+        if (!element.TryGetProperty("client_audit_binding", out var audit))
+            return true;
+        if (audit.ValueKind != JsonValueKind.Object ||
+            !TryReadOptionalNormalizedString(audit, "platform", out var platform) ||
+            !TryReadOptionalNormalizedString(audit, "schedule_id", out var scheduleId) ||
+            !TryReadOptionalNormalizedString(audit, "workflow_revision", out var workflowRevision) ||
+            !TryReadOptionalNormalizedString(audit, "call_site", out var callSite))
+        {
+            return false;
+        }
+
+        binding = new NyxIdDurableOperationClientAuditBinding
+        {
+            Platform = platform ?? string.Empty,
+            ScheduleId = scheduleId ?? string.Empty,
+            WorkflowRevision = workflowRevision ?? string.Empty,
+            CallSite = callSite ?? string.Empty,
+        };
+        return true;
+    }
+
+    private static bool TryReadOptionalNormalizedString(
+        JsonElement element,
+        string name,
+        out string? value)
+    {
+        value = null;
+        if (!element.TryGetProperty(name, out var property))
+            return true;
+        if (property.ValueKind != JsonValueKind.String)
+            return false;
+        value = ReadNormalizedString(element, name, 256);
+        return value is not null;
     }
 
     private static bool TryReadErrorEnvelope(

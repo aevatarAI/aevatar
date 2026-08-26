@@ -97,7 +97,10 @@ internal static class WorkflowScheduleConfigurationMapper
             return new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
                 agentKey.SecretReference,
                 NormalizeRequired(agentKey.ApiKeyId, nameof(agentKey.ApiKeyId)),
-                agentKey.KeyExpiresAtUnixMs));
+                agentKey.KeyExpiresAtUnixMs,
+                agentKey.DurableOperationGrants?
+                    .Select(static grant => grant.Clone())
+                    .ToArray()));
         }
 
         if (hasScopeOwnerNyxId)

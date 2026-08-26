@@ -882,7 +882,24 @@ public sealed class ScheduledDispatchServiceInvocationTests
             ScheduledInvocationAgentKey: new ScheduledInvocationAgentKeyCredentialReference(
                 reference,
                 "key-schedule",
-                expiresAt.ToUnixTimeMilliseconds()))
+                expiresAt.ToUnixTimeMilliseconds(),
+                [
+                    new NyxIdDurableOperationGrantRef
+                    {
+                        GrantId = "grant-executions",
+                        ApiKeyId = "key-schedule",
+                        UserServiceId = "us-code-alpha",
+                        EndpointId = "endpoint-executions",
+                        HttpMethod = NyxIdDurableOperationHttpMethod.Post,
+                        NormalizedPathTemplate = "/executions",
+                        ContractDigest =
+                            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        ValidFromUnixMs = expiresAt.AddDays(-2).ToUnixTimeMilliseconds(),
+                        ExpiresAtUnixMs = expiresAt.AddDays(-1).ToUnixTimeMilliseconds(),
+                        ReplayPolicy =
+                            NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey,
+                    },
+                ]))
         {
             CallerAuthority = new ScheduledCallerNyxIdAuthority
             {
@@ -913,7 +930,14 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.CallerDurableCredential.Purpose.Should().Be(reference.Purpose);
         invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be(reference.OwnerScopeKey);
         invokedChat.CallerDurableCredential.SubjectId.Should().Be("key-schedule");
+        invokedChat.CallerDurableCredential.ProviderCredentialId.Should().Be("key-schedule");
         invokedChat.CallerDurableCredential.SourceKind.Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        var durableGrant = invokedChat.CallerDurableCredential.NyxIdDurableOperationGrants
+            .Should().ContainSingle().Which;
+        durableGrant.GrantId.Should().Be("grant-executions");
+        durableGrant.ApiKeyId.Should().Be("key-schedule");
+        durableGrant.UserServiceId.Should().Be("us-code-alpha");
+        durableGrant.NormalizedPathTemplate.Should().Be("/executions");
         invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Should().BeEquivalentTo(
             new ScheduledCallerNyxIdAuthority
             {

@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -671,7 +672,7 @@ public sealed class WorkflowDeliveryGAgentTests
     }
 
     [Fact]
-    public async Task Revoke_AfterContinuationClaim_ShouldNotRetroactivelyInvalidateTheClaimedOperation()
+    public async Task Revoke_AfterContinuationClaim_ShouldWithdrawBeforeOwnedProvisioningOutcome()
     {
         var agent = await CreateAgentAsync("delivery-alpha");
         await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
@@ -688,8 +689,123 @@ public sealed class WorkflowDeliveryGAgentTests
 
         agent.EventSourcing!.CurrentVersion.Should().Be(5);
         agent.State.LifecycleStatus.Should().Be(WorkflowDeliveryLifecycleStatus.Revoked);
-        agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.ProvisioningAccepted);
-        agent.State.Installation.ContinuationClaim.ClaimId.Should().Be("claim-accepted-a1");
+        agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Failed);
+        agent.State.Installation.ErrorCode.Should().Be("delivery_revoked");
+        agent.State.Installation.ContinuationClaim.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReadyOutcome_AfterRevokeWithActiveClaim_ShouldRemainWithdrawnWithoutReadyEvent()
+    {
+        var eventStore = new InMemoryEventStore();
+        var agent = await CreateAgentAsync("delivery-alpha", eventStore: eventStore);
+        await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await agent.HandleStartInstallationAsync(StartInstallationCommand());
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.Accepted);
+        await agent.HandleProvisioningAcceptedAsync(ProvisioningAcceptedCommand());
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.ProvisioningAccepted);
+
+        await agent.HandleRevokeAsync(new RevokeWorkflowDeliveryCommand
+        {
+            DeliveryId = "delivery-alpha",
+            RevokedBy = "admin-alpha",
+            RevokedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(3).AddSeconds(30)),
+        });
+        await agent.HandleInstallationReadyAsync(ReadyCommand());
+
+        agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Failed);
+        agent.State.Installation.ErrorCode.Should().Be("delivery_revoked");
+        agent.State.Installation.FailureOriginStatus.Should()
+            .Be(WorkflowInstallationStatus.ProvisioningAccepted);
+        agent.State.Installation.ContinuationClaim.Should().BeNull();
+        var events = await eventStore.GetEventsAsync(agent.Id);
+        events.Should().NotContain(evt => evt.EventData.Is(WorkflowInstallationReadyEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task ReadyOutcome_AfterExpiryWithActiveClaim_ShouldRemainWithdrawnWithoutReadyEvent()
+    {
+        var clock = new MutableTimeProvider(CreatedAt.AddMinutes(2));
+        var eventStore = new InMemoryEventStore();
+        var agent = await CreateAgentAsync("delivery-alpha", clock, eventStore);
+        await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await agent.HandleStartInstallationAsync(StartInstallationCommand());
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.Accepted);
+        await agent.HandleProvisioningAcceptedAsync(ProvisioningAcceptedCommand());
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.ProvisioningAccepted);
+        clock.SetUtcNow(CreatedAt.AddHours(4));
+
+        await agent.HandleInstallationReadyAsync(ReadyCommand());
+
+        agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Failed);
+        agent.State.Installation.ErrorCode.Should().Be("delivery_expired");
+        agent.State.Installation.FailureOriginStatus.Should()
+            .Be(WorkflowInstallationStatus.ProvisioningAccepted);
+        agent.State.Installation.ContinuationClaim.Should().BeNull();
+        var events = await eventStore.GetEventsAsync(agent.Id);
+        events.Should().NotContain(evt => evt.EventData.Is(WorkflowInstallationReadyEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task Claim_AfterLegacyRevokedReplay_ShouldPersistWithdrawalWithoutClaiming()
+    {
+        var eventStore = new InMemoryEventStore();
+        var first = await CreateAgentAsync("delivery-alpha", eventStore: eventStore);
+        await first.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await first.HandleStartInstallationAsync(StartInstallationCommand());
+        await first.DeactivateAsync();
+        await AppendLegacyRevokedEventAsync(eventStore, first.Id, expectedVersion: 2);
+
+        var replayed = await CreateAgentAsync(
+            "delivery-alpha",
+            new MutableTimeProvider(CreatedAt.AddMinutes(4)),
+            eventStore);
+
+        replayed.State.LifecycleStatus.Should().Be(WorkflowDeliveryLifecycleStatus.Revoked);
+        replayed.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Accepted);
+        await replayed.HandleClaimInstallationContinuationAsync(
+            ContinuationClaimCommand(WorkflowInstallationStatus.Accepted));
+
+        replayed.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Failed);
+        replayed.State.Installation.ErrorCode.Should().Be("delivery_revoked");
+        replayed.State.Installation.ContinuationClaim.Should().BeNull();
+        var events = await eventStore.GetEventsAsync(replayed.Id);
+        events.Should().ContainSingle(evt =>
+            evt.EventData.Is(WorkflowInstallationWithdrawnEvent.Descriptor));
+        events.Should().NotContain(evt =>
+            evt.EventData.Is(WorkflowInstallationContinuationClaimedEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task ReadyOutcome_AfterLegacyRevokedReplay_ShouldWithdrawWithoutReadyEvent()
+    {
+        var eventStore = new InMemoryEventStore();
+        var first = await CreateAgentAsync("delivery-alpha", eventStore: eventStore);
+        await first.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await first.HandleStartInstallationAsync(StartInstallationCommand());
+        await ClaimContinuationAsync(first, WorkflowInstallationStatus.Accepted);
+        await first.HandleProvisioningAcceptedAsync(ProvisioningAcceptedCommand());
+        await ClaimContinuationAsync(first, WorkflowInstallationStatus.ProvisioningAccepted);
+        await first.DeactivateAsync();
+        await AppendLegacyRevokedEventAsync(eventStore, first.Id, expectedVersion: 5);
+
+        var replayed = await CreateAgentAsync(
+            "delivery-alpha",
+            new MutableTimeProvider(CreatedAt.AddMinutes(4)),
+            eventStore);
+
+        replayed.State.LifecycleStatus.Should().Be(WorkflowDeliveryLifecycleStatus.Revoked);
+        replayed.State.Installation.Status.Should().Be(WorkflowInstallationStatus.ProvisioningAccepted);
+        replayed.State.Installation.ContinuationClaim.Should().NotBeNull();
+        await replayed.HandleInstallationReadyAsync(ReadyCommand());
+
+        replayed.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Failed);
+        replayed.State.Installation.ErrorCode.Should().Be("delivery_revoked");
+        replayed.State.Installation.ContinuationClaim.Should().BeNull();
+        var events = await eventStore.GetEventsAsync(replayed.Id);
+        events.Should().ContainSingle(evt =>
+            evt.EventData.Is(WorkflowInstallationWithdrawnEvent.Descriptor));
+        events.Should().NotContain(evt => evt.EventData.Is(WorkflowInstallationReadyEvent.Descriptor));
     }
 
     [Fact]
@@ -1543,14 +1659,15 @@ public sealed class WorkflowDeliveryGAgentTests
 
     private static async Task<WorkflowDeliveryGAgent> CreateAgentAsync(
         string deliveryId,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        InMemoryEventStore? eventStore = null)
     {
         var agent = new WorkflowDeliveryGAgent(
             timeProvider ?? new MutableTimeProvider(CreatedAt.AddMinutes(2)))
         {
             EventSourcingBehaviorFactory =
                 new DefaultEventSourcingBehaviorFactory<WorkflowDeliveryState>(
-                    new InMemoryEventStore()),
+                    eventStore ?? new InMemoryEventStore()),
             Services = new ServiceCollection()
                 .AddSingleton<IEnumerable<IGAgentExecutionHook>>([])
                 .BuildServiceProvider(),
@@ -1558,6 +1675,30 @@ public sealed class WorkflowDeliveryGAgentTests
         SetIdMethod.Invoke(agent, [WorkflowDeliveryConventions.BuildActorId(deliveryId)]);
         await agent.ActivateAsync();
         return agent;
+    }
+
+    private static async Task AppendLegacyRevokedEventAsync(
+        InMemoryEventStore eventStore,
+        string actorId,
+        long expectedVersion)
+    {
+        var revoked = new WorkflowDeliveryRevokedEvent
+        {
+            RevokedBy = "legacy-admin",
+            RevokedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(3)),
+        };
+        await eventStore.AppendAsync(
+            actorId,
+            [new StateEvent
+            {
+                AgentId = actorId,
+                EventId = "legacy-revoked",
+                EventType = WorkflowDeliveryRevokedEvent.Descriptor.FullName,
+                EventData = Any.Pack(revoked),
+                Timestamp = revoked.RevokedAtUtc.Clone(),
+                Version = expectedVersion + 1,
+            }],
+            expectedVersion);
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider

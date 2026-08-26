@@ -11,6 +11,8 @@ internal sealed partial class NyxIdCodeExecutionPort
 {
     private const string DurableSubmitPath = "/executions";
     private const string DurableCancelBody = "{}";
+    private const string DurableGrantHeader = "X-NyxID-Durable-Grant-Id";
+    private const string DurableOperationHeader = "X-NyxID-Operation-Id";
     private static readonly TimeSpan DurableCallDeadline = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan DefaultDurableRetryDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxDurableRetryDelay = TimeSpan.FromSeconds(30);
@@ -20,7 +22,7 @@ internal sealed partial class NyxIdCodeExecutionPort
         CancellationToken ct = default)
     {
         var execution = request?.Execution;
-        if (!IsValidExecutionRequest(execution) || !IsValidIdempotencyKey(request!.IdempotencyKey))
+        if (!IsValidExecutionRequest(execution) || !IsValidDurableOperationId(request!.IdempotencyKey))
         {
             return SubmitFailed(DurableFailure(
                 DurableCodeExecutionFailureKind.AdmissionDenied,
@@ -28,8 +30,8 @@ internal sealed partial class NyxIdCodeExecutionPort
                 "The durable code execution request is invalid."));
         }
 
-        var executionCredential = NormalizeCredential(
-            execution!.Caller?.ExecutionNyxIdCredential);
+        var caller = execution!.Caller!;
+        var executionCredential = NormalizeCredential(caller.ExecutionNyxIdCredential);
         if (executionCredential is null)
         {
             return SubmitFailed(DurableFailure(
@@ -60,6 +62,20 @@ internal sealed partial class NyxIdCodeExecutionPort
         {
             ["Idempotency-Key"] = request.IdempotencyKey,
         };
+        if (caller.ExecutionCredentialKind == CodeExecutionNyxIdCredentialKind.AgentKey)
+        {
+            var grant = caller.DurableOperationGrant;
+            if (!IsValidSubmitGrant(grant, route))
+            {
+                return SubmitFailed(DurableFailure(
+                    DurableCodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_durable_grant_rebind_required",
+                    "The scheduled NyxID credential is not bound to this exact code execution operation."));
+            }
+
+            headers[DurableGrantHeader] = grant!.GrantId;
+            headers[DurableOperationHeader] = request.IdempotencyKey;
+        }
 
         NyxIdProxyTextResponse response;
         try
@@ -779,12 +795,14 @@ internal sealed partial class NyxIdCodeExecutionPort
         out string? executionCredential,
         out DurableCodeExecutionFailure? failure)
     {
+        var caller = request?.Caller;
         executionCredential = NormalizeCredential(
-            request?.Caller?.ExecutionNyxIdCredential);
+            caller?.ExecutionNyxIdCredential);
         if (request is null ||
+            caller is null ||
             !IsValidProviderOperationId(request.ProviderOperationId) ||
             !IsValidResolvedRoute(request.Route) ||
-            !IsValidExecutionCredentialKind(request.Caller?.ExecutionCredentialKind) ||
+            !IsValidExecutionCredentialKind(caller.ExecutionCredentialKind) ||
             executionCredential is null ||
             request.ETag is not null && !IsValidETag(request.ETag))
         {
@@ -792,6 +810,15 @@ internal sealed partial class NyxIdCodeExecutionPort
                 DurableCodeExecutionFailureKind.AdmissionDenied,
                 "durable_code_execution_operation_request_invalid",
                 "The durable code execution operation request is invalid.");
+            return false;
+        }
+
+        if (caller.ExecutionCredentialKind == CodeExecutionNyxIdCredentialKind.AgentKey)
+        {
+            failure = DurableFailure(
+                DurableCodeExecutionFailureKind.AdmissionDenied,
+                "code_execution_durable_lifecycle_authority_unavailable",
+                "The scheduled NyxID credential does not carry producer-issued status, result, and cancel authority.");
             return false;
         }
 
@@ -809,6 +836,51 @@ internal sealed partial class NyxIdCodeExecutionPort
         IsValidExecutionCredentialKind(request.Caller?.ExecutionCredentialKind) &&
         IsValidRequestedRoute(request.Route);
 
+    private bool IsValidSubmitGrant(
+        Aevatar.Foundation.Abstractions.Credentials.NyxIdDurableOperationGrantRef? grant,
+        CodeExecutionRouteIdentity route)
+    {
+        var nowUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        return
+        grant is not null &&
+        IsNormalizedGrantValue(grant.GrantId) &&
+        IsNormalizedGrantValue(grant.ApiKeyId) &&
+        string.Equals(grant.UserServiceId, route.UserServiceId, StringComparison.Ordinal) &&
+        grant.HttpMethod == Aevatar.Foundation.Abstractions.Credentials.NyxIdDurableOperationHttpMethod.Post &&
+        string.Equals(grant.NormalizedPathTemplate, DurableSubmitPath, StringComparison.Ordinal) &&
+        IsNormalizedGrantValue(grant.EndpointId) &&
+        IsValidContractDigest(grant.ContractDigest) &&
+        grant.ReplayPolicy ==
+            Aevatar.Foundation.Abstractions.Credentials.NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey &&
+        grant.ValidFromUnixMs > 0 &&
+        grant.ExpiresAtUnixMs > grant.ValidFromUnixMs &&
+        grant.ValidFromUnixMs <= nowUnixMs &&
+        grant.ExpiresAtUnixMs > nowUnixMs &&
+        IsValidAuditBinding(grant.ClientAuditBinding);
+    }
+
+    private static bool IsNormalizedGrantValue(string? value) =>
+        value is { Length: > 0 and <= 256 } &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+        value.All(static character => character is >= '!' and <= '~');
+
+    private static bool IsValidContractDigest(string? value) =>
+        value is { Length: 71 } &&
+        value.StartsWith("sha256:", StringComparison.Ordinal) &&
+        value.AsSpan(7).ToArray().All(static character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static bool IsValidAuditBinding(
+        Aevatar.Foundation.Abstractions.Credentials.NyxIdDurableOperationClientAuditBinding? binding) =>
+        binding is null ||
+        IsValidOptionalAuditValue(binding.Platform) &&
+        IsValidOptionalAuditValue(binding.ScheduleId) &&
+        IsValidOptionalAuditValue(binding.WorkflowRevision) &&
+        IsValidOptionalAuditValue(binding.CallSite);
+
+    private static bool IsValidOptionalAuditValue(string? value) =>
+        string.IsNullOrEmpty(value) || IsNormalizedGrantValue(value);
+
     private static bool IsValidResolvedRoute(CodeExecutionRouteIdentity? route) =>
         route is not null &&
         CodeExecutionContract.IsSupportedServiceSlug(route.ServiceSlug) &&
@@ -822,6 +894,16 @@ internal sealed partial class NyxIdCodeExecutionPort
         value is { Length: > 0 and <= 128 } &&
         !value.Contains(',') &&
         value.All(static character => character is >= '!' and <= '~');
+
+    private static bool IsValidDurableOperationId(string? value)
+    {
+        const string prefix = "tool:v1:operation:";
+        return IsValidIdempotencyKey(value) &&
+               value!.Length == prefix.Length + 64 &&
+               value.StartsWith(prefix, StringComparison.Ordinal) &&
+               value.AsSpan(prefix.Length).ToArray().All(static character =>
+                   character is >= '0' and <= '9' or >= 'a' and <= 'f');
+    }
 
     private static bool IsValidProviderOperationId(string? value) =>
         value is { Length: 35 } &&

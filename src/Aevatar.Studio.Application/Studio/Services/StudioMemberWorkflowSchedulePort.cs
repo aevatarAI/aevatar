@@ -1742,7 +1742,10 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         new(
             credential.SecretReference.Clone(),
             credential.ApiKeyId,
-            credential.ExpiresAtUtc.ToUnixTimeMilliseconds());
+            credential.ExpiresAtUtc.ToUnixTimeMilliseconds(),
+            credential.DurableOperationGrants?
+                .Select(static grant => grant.Clone())
+                .ToArray());
 
     private static StudioScheduledCredential ToStudioScheduledCredential(
         ScheduledInvocationAgentKeyCredentialReference credential,
@@ -1754,7 +1757,10 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             credential.SecretReference?.Clone()
                 ?? throw new InvalidOperationException("revocation_descriptor_missing"),
             DateTimeOffset.FromUnixTimeMilliseconds(credential.KeyExpiresAtUnixMs),
-            owner ?? throw new InvalidOperationException("credential_owner_missing"));
+            owner ?? throw new InvalidOperationException("credential_owner_missing"),
+            credential.DurableOperationGrants?
+                .Select(static grant => grant.Clone())
+                .ToArray());
     }
 
     private async Task<bool> ExecutePendingRevocationAsync(
@@ -1785,7 +1791,10 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 pending.ApiKeyId,
                 pending.SecretReference.Clone(),
                 DateTimeOffset.FromUnixTimeMilliseconds(pending.KeyExpiresAtUnixMs),
-                outcome.PendingRevocationOwner);
+                outcome.PendingRevocationOwner,
+                pending.DurableOperationGrants?
+                    .Select(static grant => grant.Clone())
+                    .ToArray());
             try
             {
                 result = await _credentialMaterializer.RevokeAsync(

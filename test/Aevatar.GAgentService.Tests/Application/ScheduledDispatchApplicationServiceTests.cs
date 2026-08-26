@@ -2151,6 +2151,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var dispatchPort = new RecordingActorDispatchPort();
         var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
         var reference = CreateScheduledInvocationAgentKeyReference();
+        var durableGrant = CreateDurableOperationGrant(
+            reference.ApiKeyId,
+            reference.KeyExpiresAtUnixMs);
+        reference = reference with { DurableOperationGrants = [durableGrant] };
         var configuration = new ScheduledDispatchConfiguration(
             "schedule-agent-key",
             "Invoke",
@@ -2189,7 +2193,14 @@ public sealed class ScheduledDispatchApplicationServiceTests
         auth.ScheduledInvocationAgentKey.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
         auth.ScheduledInvocationAgentKey.ApiKeyId.Should().Be("key-schedule");
         auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs.Should().Be(reference.KeyExpiresAtUnixMs);
+        auth.ScheduledInvocationAgentKey.NyxIdDurableOperationGrants.Should()
+            .ContainSingle()
+            .Which.Should().BeEquivalentTo(durableGrant);
         var roundTripped = ScheduledDispatchCreateCommand.Parser.ParseFrom(command.ToByteArray());
+        roundTripped.Target.ServiceInvocation.Auth.ScheduledInvocationAgentKey
+            .NyxIdDurableOperationGrants.Should()
+            .ContainSingle()
+            .Which.Should().BeEquivalentTo(durableGrant);
         roundTripped.Target.ServiceInvocation.Auth.CallerAuthority.Should().BeEquivalentTo(
             new ScheduledCallerNyxIdAuthority
             {
@@ -3517,6 +3528,23 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "key-schedule",
             expiresAtUnixMs);
     }
+
+    private static NyxIdDurableOperationGrantRef CreateDurableOperationGrant(
+        string apiKeyId,
+        long keyExpiresAtUnixMs) => new()
+    {
+        GrantId = "grant-executions",
+        ApiKeyId = apiKeyId,
+        UserServiceId = "us-code-alpha",
+        EndpointId = "endpoint-executions",
+        HttpMethod = NyxIdDurableOperationHttpMethod.Post,
+        NormalizedPathTemplate = "/executions",
+        ContractDigest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ValidFromUnixMs = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds(),
+        ExpiresAtUnixMs = keyExpiresAtUnixMs,
+        ReplayPolicy = NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey,
+    };
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {

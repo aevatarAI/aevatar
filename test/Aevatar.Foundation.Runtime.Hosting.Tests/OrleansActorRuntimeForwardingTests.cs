@@ -102,9 +102,10 @@ public sealed class OrleansActorRuntimeForwardingTests
         var stateBindingAccessor = new AsyncLocalRuntimeActorStateBindingAccessor();
         var runtime = CreateRuntime(out _, out var grains, out _);
         var boundState = CreatePersistentState("parent");
+        var publicationState = CreatePublicationState();
         var stateProxy = (RuntimeActorPersistentStateProxy)(object)boundState;
 
-        using (stateBindingAccessor.Bind(boundState))
+        using (stateBindingAccessor.Bind(boundState, publicationState))
             await runtime.LinkAsync("parent", "child");
 
         stateProxy.State.Children.Should().BeEmpty();
@@ -120,9 +121,10 @@ public sealed class OrleansActorRuntimeForwardingTests
         var stateBindingAccessor = new AsyncLocalRuntimeActorStateBindingAccessor();
         var runtime = CreateRuntime(out _, out var grains, out _);
         var boundState = CreatePersistentState("parent");
+        var publicationState = CreatePublicationState();
         var stateProxy = (RuntimeActorPersistentStateProxy)(object)boundState;
 
-        using (stateBindingAccessor.Bind(boundState))
+        using (stateBindingAccessor.Bind(boundState, publicationState))
         {
             await runtime.LinkAsync("parent", "child");
             await runtime.LinkAsync("parent", "child");
@@ -372,6 +374,12 @@ public sealed class OrleansActorRuntimeForwardingTests
         return persistentState;
     }
 
+    private static IPersistentState<RuntimeActorCommittedStatePublicationGrainState>
+        CreatePublicationState() =>
+        DispatchProxy.Create<
+            IPersistentState<RuntimeActorCommittedStatePublicationGrainState>,
+            CommittedStatePublicationPersistentStateProxy>();
+
     private class GrainFactoryProxy : DispatchProxy
     {
         public Func<string, IRuntimeActorGrain>? ResolveGrain { get; set; }
@@ -563,6 +571,35 @@ public sealed class OrleansActorRuntimeForwardingTests
             }
 
             if (name == "ReadStateAsync" || name == "ClearStateAsync")
+                return Task.CompletedTask;
+            if (name == "get_RecordExists")
+                return true;
+            if (name == "get_Etag")
+                return string.Empty;
+            if (name == "set_Etag")
+                return null;
+
+            return targetMethod?.ReturnType?.IsValueType == true
+                ? Activator.CreateInstance(targetMethod.ReturnType)
+                : null;
+        }
+    }
+
+    private class CommittedStatePublicationPersistentStateProxy : DispatchProxy
+    {
+        public RuntimeActorCommittedStatePublicationGrainState State { get; set; } = new();
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            var name = targetMethod?.Name;
+            if (name == "get_State")
+                return State;
+            if (name == "set_State")
+            {
+                State = args?[0] as RuntimeActorCommittedStatePublicationGrainState ?? new();
+                return null;
+            }
+            if (name is "WriteStateAsync" or "ReadStateAsync" or "ClearStateAsync")
                 return Task.CompletedTask;
             if (name == "get_RecordExists")
                 return true;

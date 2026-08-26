@@ -1742,8 +1742,88 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             throw new ArgumentException("Scheduled invocation agent key expiry is required.", nameof(source));
 
         reference.ExpiresAtUnixMs = expiresAtUnixMs;
-        return new ScheduledInvocationAgentKeyCredentialReference(reference, apiKeyId, expiresAtUnixMs);
+        return new ScheduledInvocationAgentKeyCredentialReference(
+            reference,
+            apiKeyId,
+            expiresAtUnixMs,
+            NormalizeDurableOperationGrants(
+                source.DurableOperationGrants,
+                apiKeyId,
+                expiresAtUnixMs));
     }
+
+    private static IReadOnlyList<NyxIdDurableOperationGrantRef> NormalizeDurableOperationGrants(
+        IReadOnlyList<NyxIdDurableOperationGrantRef>? source,
+        string apiKeyId,
+        long keyExpiresAtUnixMs)
+    {
+        if (source == null || source.Count == 0)
+            return [];
+        if (source.Count > 256)
+            throw new ArgumentException("Scheduled invocation durable grant count is invalid.", nameof(source));
+
+        var seenGrantIds = new HashSet<string>(StringComparer.Ordinal);
+        var grants = new List<NyxIdDurableOperationGrantRef>(source.Count);
+        foreach (var grant in source)
+        {
+            if (grant == null)
+            {
+                throw new ArgumentException(
+                    "Scheduled invocation durable grant is invalid.",
+                    nameof(source));
+            }
+
+            if (!IsNormalizedGrantValue(grant.GrantId) ||
+                !seenGrantIds.Add(grant.GrantId) ||
+                !string.Equals(grant.ApiKeyId, apiKeyId, StringComparison.Ordinal) ||
+                !IsNormalizedGrantValue(grant.UserServiceId) ||
+                !IsNormalizedGrantValue(grant.EndpointId) ||
+                grant.HttpMethod == NyxIdDurableOperationHttpMethod.Unspecified ||
+                !System.Enum.IsDefined(grant.HttpMethod) ||
+                string.IsNullOrWhiteSpace(grant.NormalizedPathTemplate) ||
+                !string.Equals(
+                    grant.NormalizedPathTemplate,
+                    grant.NormalizedPathTemplate.Trim(),
+                    StringComparison.Ordinal) ||
+                !IsContractDigest(grant.ContractDigest) ||
+                grant.ValidFromUnixMs <= 0 ||
+                grant.ExpiresAtUnixMs <= grant.ValidFromUnixMs ||
+                grant.ExpiresAtUnixMs > keyExpiresAtUnixMs ||
+                grant.ReplayPolicy == NyxIdDurableOperationReplayPolicy.Unspecified ||
+                !System.Enum.IsDefined(grant.ReplayPolicy) ||
+                !IsValidAuditBinding(grant.ClientAuditBinding))
+            {
+                throw new ArgumentException(
+                    "Scheduled invocation durable grant is invalid.",
+                    nameof(source));
+            }
+
+            grants.Add(grant.Clone());
+        }
+
+        return grants;
+    }
+
+    private static bool IsNormalizedGrantValue(string? value) =>
+        value is { Length: > 0 and <= 256 } &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+        !value.Any(char.IsControl);
+
+    private static bool IsContractDigest(string? value) =>
+        value is { Length: 71 } &&
+        value.StartsWith("sha256:", StringComparison.Ordinal) &&
+        value.AsSpan(7).ToArray().All(static character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static bool IsValidAuditBinding(NyxIdDurableOperationClientAuditBinding? binding) =>
+        binding is null ||
+        IsOptionalNormalizedGrantValue(binding.Platform) &&
+        IsOptionalNormalizedGrantValue(binding.ScheduleId) &&
+        IsOptionalNormalizedGrantValue(binding.WorkflowRevision) &&
+        IsOptionalNormalizedGrantValue(binding.CallSite);
+
+    private static bool IsOptionalNormalizedGrantValue(string? value) =>
+        string.IsNullOrEmpty(value) || IsNormalizedGrantValue(value);
 
     private static string ToMissingSubjectMessage(ScheduledServiceInvocationNyxIdCredentialRole role) =>
         role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner

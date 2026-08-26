@@ -8,17 +8,21 @@ using Orleans.Runtime;
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
 /// <summary>
-/// Stores publication progress inside the owning Orleans actor's durable runtime state.
+/// Stores publication progress in a dedicated Orleans row while retaining the
+/// legacy runtime-row payload as a rolling-upgrade reconciliation source.
 /// </summary>
 internal sealed class RuntimeActorGrainCommittedStatePublicationStateStore
     : ICommittedStatePublicationStateStore
 {
     private readonly IPersistentState<RuntimeActorGrainState> _runtimeState;
+    private readonly IPersistentState<RuntimeActorCommittedStatePublicationGrainState> _publicationState;
 
     public RuntimeActorGrainCommittedStatePublicationStateStore(
-        IPersistentState<RuntimeActorGrainState> runtimeState)
+        IPersistentState<RuntimeActorGrainState> runtimeState,
+        IPersistentState<RuntimeActorCommittedStatePublicationGrainState> publicationState)
     {
-        _runtimeState = runtimeState;
+        _runtimeState = runtimeState ?? throw new ArgumentNullException(nameof(runtimeState));
+        _publicationState = publicationState ?? throw new ArgumentNullException(nameof(publicationState));
     }
 
     public RuntimeActorGrainCommittedStatePublicationStateStore(
@@ -28,14 +32,17 @@ internal sealed class RuntimeActorGrainCommittedStatePublicationStateStore
         _runtimeState = accessor.Current
             ?? throw new InvalidOperationException(
                 "Runtime actor state is not bound. Resolve publication state only within RuntimeActorGrain binding context.");
+        _publicationState = accessor.CurrentCommittedStatePublication
+            ?? throw new InvalidOperationException(
+                "Runtime actor publication state is not bound. Resolve publication state only within RuntimeActorGrain binding context.");
     }
 
-    public Task<CommittedStatePublicationState?> LoadAsync(
+    public async Task<CommittedStatePublicationState?> LoadAsync(
         string actorId,
         CancellationToken ct = default)
     {
         ValidateActor(actorId, ct);
-        return Task.FromResult(Read());
+        return await ReadReconciledAsync(actorId);
     }
 
     public async Task<CommittedStatePublicationState> InitializeAsync(
@@ -45,7 +52,7 @@ internal sealed class RuntimeActorGrainCommittedStatePublicationStateStore
     {
         ValidateActor(actorId, ct);
         ArgumentOutOfRangeException.ThrowIfNegative(baselinePublishedVersion);
-        var existing = Read();
+        var existing = await ReadReconciledAsync(actorId);
         if (existing != null)
             return existing;
 
@@ -69,7 +76,7 @@ internal sealed class RuntimeActorGrainCommittedStatePublicationStateStore
     {
         ValidateActor(actorId, ct);
         ArgumentNullException.ThrowIfNull(publishedEvent);
-        var state = GetInitialized(actorId);
+        var state = await GetInitializedAsync(actorId);
         EnsureExpected(actorId, expectedPublishedVersion, state.PublishedVersion);
         EnsureNext(actorId, expectedPublishedVersion, publishedEvent);
         state.PublishedVersion = publishedEvent.Version;
@@ -92,7 +99,7 @@ internal sealed class RuntimeActorGrainCommittedStatePublicationStateStore
         ValidateActor(actorId, ct);
         ArgumentNullException.ThrowIfNull(failedEvent);
         ArgumentNullException.ThrowIfNull(error);
-        var state = GetInitialized(actorId);
+        var state = await GetInitializedAsync(actorId);
         EnsureExpected(actorId, expectedPublishedVersion, state.PublishedVersion);
         var previousAttempts = state.Failure?.Version == failedEvent.Version
             && string.Equals(state.Failure.EventId, failedEvent.EventId, StringComparison.Ordinal)
@@ -114,17 +121,28 @@ internal sealed class RuntimeActorGrainCommittedStatePublicationStateStore
         return state.Clone();
     }
 
-    private CommittedStatePublicationState? Read()
+    private async Task<CommittedStatePublicationState?> ReadReconciledAsync(string actorId)
     {
-        var payload = _runtimeState.State.CommittedStatePublicationState;
-        return payload is { Length: > 0 }
-            ? CommittedStatePublicationState.Parser.ParseFrom(payload)
-            : null;
+        var legacy = Parse(_runtimeState.State.CommittedStatePublicationState);
+        var dedicated = Parse(_publicationState.State.Checkpoint);
+        ValidateStoredActor(actorId, legacy, "legacy runtime");
+        ValidateStoredActor(actorId, dedicated, "dedicated publication");
+
+        var selected = SelectNewest(actorId, legacy, dedicated);
+        if (selected == null)
+            return null;
+
+        if (ReferenceEquals(selected, legacy))
+            await WriteAsync(selected);
+        else
+            UpdateLegacyShadow(selected);
+
+        return selected.Clone();
     }
 
-    private CommittedStatePublicationState GetInitialized(string actorId)
+    private async Task<CommittedStatePublicationState> GetInitializedAsync(string actorId)
     {
-        var state = Read();
+        var state = await ReadReconciledAsync(actorId);
         if (state?.Initialized == true)
             return state;
 
@@ -134,16 +152,109 @@ internal sealed class RuntimeActorGrainCommittedStatePublicationStateStore
 
     private async Task WriteAsync(CommittedStatePublicationState state)
     {
-        var previous = _runtimeState.State.CommittedStatePublicationState;
-        _runtimeState.State.CommittedStatePublicationState = state.ToByteArray();
+        var previous = _publicationState.State.Checkpoint;
+        _publicationState.State.Checkpoint = state.ToByteArray();
         try
         {
-            await _runtimeState.WriteStateAsync();
+            await _publicationState.WriteStateAsync();
+            UpdateLegacyShadow(state);
         }
         catch
         {
-            _runtimeState.State.CommittedStatePublicationState = previous;
+            if (await TryConfirmCommittedWriteAsync(state, previous))
+            {
+                UpdateLegacyShadow(state);
+                return;
+            }
+
             throw;
+        }
+    }
+
+    private async Task<bool> TryConfirmCommittedWriteAsync(
+        CommittedStatePublicationState expected,
+        byte[]? previous)
+    {
+        try
+        {
+            await _publicationState.ReadStateAsync();
+            return expected.Equals(Parse(_publicationState.State.Checkpoint));
+        }
+        catch
+        {
+            // Preserve the last locally known checkpoint when even the read-back
+            // outcome is unavailable. The activation will be shed and rehydrate.
+            _publicationState.State.Checkpoint = previous;
+            return false;
+        }
+    }
+
+    private static CommittedStatePublicationState? Parse(byte[]? payload) =>
+        payload is { Length: > 0 }
+            ? CommittedStatePublicationState.Parser.ParseFrom(payload)
+            : null;
+
+    private static CommittedStatePublicationState? SelectNewest(
+        string actorId,
+        CommittedStatePublicationState? legacy,
+        CommittedStatePublicationState? dedicated)
+    {
+        if (legacy == null)
+            return dedicated;
+        if (dedicated == null)
+            return legacy;
+
+        if (legacy.PublishedVersion == dedicated.PublishedVersion)
+        {
+            if (legacy.Initialized != dedicated.Initialized ||
+                !string.Equals(
+                    legacy.PublishedEventId,
+                    dedicated.PublishedEventId,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Committed-state publication checkpoints for actor '{actorId}' disagree " +
+                    $"at published version {legacy.PublishedVersion}.");
+            }
+
+            if (legacy.Revision == dedicated.Revision && !legacy.Equals(dedicated))
+            {
+                throw new InvalidOperationException(
+                    $"Committed-state publication checkpoints for actor '{actorId}' are ambiguous " +
+                    $"at published version {legacy.PublishedVersion}, revision {legacy.Revision}.");
+            }
+        }
+
+        var versionComparison = legacy.PublishedVersion.CompareTo(dedicated.PublishedVersion);
+        if (versionComparison != 0)
+            return versionComparison > 0 ? legacy : dedicated;
+
+        return legacy.Revision > dedicated.Revision ? legacy : dedicated;
+    }
+
+    private void UpdateLegacyShadow(CommittedStatePublicationState state)
+    {
+        // Do not write the runtime row here: that is the amplification boundary this
+        // store removes. The next ordinary compact snapshot/watermark write carries
+        // this rollback shadow for older binaries. Until then, rollback can observe
+        // the older durable legacy value; forward reconciliation always selects the
+        // higher publication version/revision and repairs the dedicated row.
+        _runtimeState.State.CommittedStatePublicationState = state.ToByteArray();
+    }
+
+    private static void ValidateStoredActor(
+        string actorId,
+        CommittedStatePublicationState? state,
+        string source)
+    {
+        if (state == null)
+            return;
+
+        if (!string.Equals(state.ActorId, actorId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"The {source} committed-state publication checkpoint belongs to actor " +
+                $"'{state.ActorId}', not '{actorId}'.");
         }
     }
 

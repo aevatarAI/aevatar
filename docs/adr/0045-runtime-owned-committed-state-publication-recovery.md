@@ -31,8 +31,23 @@ separate Protobuf `CommittedStatePublicationState` with:
 
 The storage port is `ICommittedStatePublicationStateStore`. Local development
 uses an in-memory implementation, file-backed runtime uses a Protobuf file, and
-Orleans stores the Protobuf bytes in the owning `RuntimeActorGrainState` row.
+Orleans stores the Protobuf bytes in a dedicated actor-owned
+`committed-state-publication` persistent-state row. Keeping this checkpoint out
+of the potentially large `RuntimeActorGrainState` row prevents one publication
+attempt or failure update from rewriting the complete business snapshot.
 No business `TState`, domain event, or read model contains this checkpoint.
+
+During rolling upgrades, Orleans reads both the legacy checkpoint embedded in
+`RuntimeActorGrainState` and the dedicated row. It selects the higher published
+version, then the higher OCC revision, and fails closed on actor identity,
+published-event identity, or equal-coordinate failure conflicts. A legacy-only
+checkpoint is copied to the dedicated row. A successful dedicated-row write
+updates the legacy payload in memory so the next ordinary runtime-state write
+carries a rollback shadow without restoring per-publication write
+amplification. Until that ordinary write occurs, rolling back to an older
+binary may observe the older durable legacy checkpoint and republish stable
+event identities; this is an explicit at-least-once rollback window, not a
+fact-loss allowance.
 
 `AdvanceAsync(actorId, expectedPublishedVersion, event)` is the OCC boundary.
 It requires the durable version to equal `expectedPublishedVersion`, requires
@@ -112,6 +127,14 @@ ahead of the checkpoint, or an unavailable committed version throws
 `CommittedStatePublicationRecoveryException`; activation fails instead of
 silently skipping the fact.
 
+Recovering an already durable projection observation does not append another
+`ProjectionScopeEnvelopeAttemptedEvent` or increment its attempted metric. If
+that projection still owns an in-flight observation, activation also defers the
+post-recovery snapshot optimization; the next normal committed event resumes
+the configured snapshot policy. This prevents a poisoned large snapshot from
+growing on every activation while the original observation remains the single
+durable attempt fact.
+
 For rollout compatibility, an actor without a checkpoint initializes once at
 the event store version observed during its first activation. This is a forward
 safety boundary: facts committed before the capability existed are assumed to
@@ -148,5 +171,6 @@ must not be filtered as maintenance rebuild traffic by audit materializers.
   describes runtime delivery progress.
 - Snapshot storage and event compaction are coupled to publication safety, but
   projection/query code does not gain EventStore access.
-- The normal path performs one durable checkpoint write per committed version.
-  Write amplification must be measured before weakening this guarantee.
+- The normal path performs one small dedicated-row checkpoint write per
+  committed version. It does not rewrite the actor business snapshot merely to
+  advance publication progress.

@@ -75,14 +75,34 @@ public sealed class WorkflowDeliveryGAgent
         if (State.LifecycleStatus == WorkflowDeliveryLifecycleStatus.Revoked)
         {
             if (string.Equals(State.RevokedBy, revokedBy, StringComparison.Ordinal))
+            {
+                var legacyWithdrawal = BuildWithdrawalEvent(
+                    State.Installation,
+                    WorkflowInstallationWithdrawalReason.DeliveryRevoked,
+                    State.RevokedAtUtc ?? revokedAt);
+                if (legacyWithdrawal != null)
+                    await PersistDomainEventAsync(legacyWithdrawal);
                 return;
+            }
             throw new InvalidOperationException("workflow delivery is already revoked by another principal.");
         }
-        await PersistDomainEventAsync(new WorkflowDeliveryRevokedEvent
+
+        var revoked = new WorkflowDeliveryRevokedEvent
         {
             RevokedBy = revokedBy,
             RevokedAtUtc = revokedAt.Clone(),
-        });
+        };
+        var withdrawal = BuildWithdrawalEvent(
+            State.Installation,
+            WorkflowInstallationWithdrawalReason.DeliveryRevoked,
+            revokedAt);
+        if (withdrawal == null)
+        {
+            await PersistDomainEventAsync(revoked);
+            return;
+        }
+
+        await PersistDomainEventsAsync([revoked, withdrawal]);
     }
 
     [EventHandler(EndpointName = "beginWorkflowDeliveryConnection")]
@@ -319,6 +339,8 @@ public sealed class WorkflowDeliveryGAgent
         var installation = RequireInstallation(command.InstallationId);
         if (!AcceptsOutcome(installation, command.Attempt, command.OperationId))
             return;
+        if (await WithdrawUnavailableOutcomeAsync(installation, actorNow))
+            return;
         var accepted = NormalizeProvisioningAccepted(command);
         if (installation.Status == WorkflowInstallationStatus.Ready)
         {
@@ -381,6 +403,8 @@ public sealed class WorkflowDeliveryGAgent
         var installation = RequireInstallation(command.InstallationId);
         if (!AcceptsOutcome(installation, command.Attempt, command.OperationId))
             return;
+        if (await WithdrawUnavailableOutcomeAsync(installation, actorNow))
+            return;
         if (installation.Status is not (WorkflowInstallationStatus.ProvisioningAccepted or
             WorkflowInstallationStatus.Ready))
             throw new InvalidOperationException("only a provisioning-accepted installation can become ready.");
@@ -423,6 +447,8 @@ public sealed class WorkflowDeliveryGAgent
         var actorNow = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var installation = RequireInstallation(command.InstallationId);
         if (!AcceptsOutcome(installation, command.Attempt, command.OperationId))
+            return;
+        if (await WithdrawUnavailableOutcomeAsync(installation, actorNow))
             return;
         var code = WorkflowDeliveryConventions.NormalizeRequired(command.ErrorCode, "error_code");
         var message = command.ErrorMessage?.Trim() ?? string.Empty;
@@ -679,6 +705,45 @@ public sealed class WorkflowDeliveryGAgent
         if (State.ExpiresAtUtc == null || at >= State.ExpiresAtUtc)
             return WorkflowInstallationWithdrawalReason.DeliveryExpired;
         return WorkflowInstallationWithdrawalReason.Unspecified;
+    }
+
+    private async Task<bool> WithdrawUnavailableOutcomeAsync(
+        WorkflowInstallationState installation,
+        Timestamp actorNow)
+    {
+        var reason = ResolveWithdrawalReason(actorNow);
+        if (reason == WorkflowInstallationWithdrawalReason.Unspecified ||
+            installation.Status == WorkflowInstallationStatus.Ready)
+        {
+            return false;
+        }
+
+        var withdrawal = BuildWithdrawalEvent(installation, reason, actorNow);
+        if (withdrawal != null)
+            await PersistDomainEventAsync(withdrawal);
+        return true;
+    }
+
+    private static WorkflowInstallationWithdrawnEvent? BuildWithdrawalEvent(
+        WorkflowInstallationState? installation,
+        WorkflowInstallationWithdrawalReason reason,
+        Timestamp withdrawnAt)
+    {
+        if (installation == null ||
+            installation.Status is not (WorkflowInstallationStatus.Accepted or
+                WorkflowInstallationStatus.ProvisioningAccepted))
+        {
+            return null;
+        }
+
+        return new WorkflowInstallationWithdrawnEvent
+        {
+            Reason = reason,
+            WithdrawnAtUtc = withdrawnAt.Clone(),
+            Attempt = installation.Attempt,
+            OperationId = installation.OperationId,
+            FailedFromStatus = installation.Status,
+        };
     }
 
     private void EnsureCanonicalActor(string deliveryId)

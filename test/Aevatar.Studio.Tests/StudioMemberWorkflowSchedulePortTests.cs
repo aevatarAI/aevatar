@@ -233,7 +233,17 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     public async Task EnsureAsync_UsesMaterializedScheduledCredentialAndStableMemberOwner()
     {
         var scheduleService = new RecordingScheduleService();
-        var sut = NewPort(scheduleService);
+        var durableGrant = DurableGrant("key-alpha", TestNow.AddHours(10));
+        var materializer = new RecordingCredentialMaterializer
+        {
+            Credential = CreateCredential(
+                TestNow.AddHours(20),
+                CredentialSecretPurposes.ScheduledInvocationAgentKey) with
+            {
+                DurableOperationGrants = [durableGrant],
+            },
+        };
+        var sut = NewPort(scheduleService, materializer: materializer);
 
         await ScheduleAsync(sut, Request("scope-1", "member-1") with
         {
@@ -259,6 +269,9 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         auth.ScheduledInvocationAgentKey.SecretReference.Ref.Should().Be("secret-alpha");
         auth.ScheduledInvocationAgentKey.SecretReference.Purpose.Should()
             .Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+        auth.ScheduledInvocationAgentKey.DurableOperationGrants.Should()
+            .ContainSingle()
+            .Which.Should().BeEquivalentTo(durableGrant);
         auth.SenderNyxId.Should().BeNull();
         auth.Durable.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().BeNull();
@@ -2767,6 +2780,23 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             },
             expiresAtUtc,
             new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "nyx-owner-alpha"));
+
+    private static NyxIdDurableOperationGrantRef DurableGrant(
+        string apiKeyId,
+        DateTimeOffset expiresAt) => new()
+    {
+        GrantId = "grant-executions",
+        ApiKeyId = apiKeyId,
+        UserServiceId = "us-code-alpha",
+        EndpointId = "endpoint-executions",
+        HttpMethod = NyxIdDurableOperationHttpMethod.Post,
+        NormalizedPathTemplate = "/executions",
+        ContractDigest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ValidFromUnixMs = TestNow.AddHours(-1).ToUnixTimeMilliseconds(),
+        ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
+        ReplayPolicy = NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey,
+    };
 
     private static ScheduledDispatchDetail CreateTeamAutomationDetail(
         string permissionDigest,

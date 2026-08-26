@@ -148,7 +148,8 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
                 issued.ApiKeyId!,
                 stored.Reference,
                 expiresAt,
-                plannedOwner);
+                plannedOwner,
+                issued.DurableOperationGrants);
         }
         catch (Exception ex)
         {

@@ -8,7 +8,8 @@ namespace Aevatar.AI.Infrastructure.ChronoSandbox;
 
 internal sealed partial class NyxIdCodeExecutionPort(
     INyxIdApiClientFactory clientFactory,
-    ILogger<NyxIdCodeExecutionPort> logger) : ICodeExecutionPort, IDurableCodeExecutionPort
+    ILogger<NyxIdCodeExecutionPort> logger,
+    TimeProvider? timeProvider = null) : ICodeExecutionPort, IDurableCodeExecutionPort
 {
     private const long MaxResponseBytes = 1_048_576;
     private const string ExecutionPath = "/execute";
@@ -35,6 +36,7 @@ internal sealed partial class NyxIdCodeExecutionPort(
         clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
     private readonly ILogger<NyxIdCodeExecutionPort> _logger =
         logger ?? throw new ArgumentNullException(nameof(logger));
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     public async Task<CodeExecutionOutcome> ExecuteAsync(
         CodeExecutionRequest request,

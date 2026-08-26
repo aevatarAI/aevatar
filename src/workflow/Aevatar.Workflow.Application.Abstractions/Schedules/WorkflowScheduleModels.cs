@@ -51,7 +51,8 @@ public sealed record WorkflowScheduleScopeOwnerNyxIdCredentialSource(
 public sealed record WorkflowScheduleAgentKeyCredentialReference(
     SecretReference SecretReference,
     string ApiKeyId,
-    long KeyExpiresAtUnixMs);
+    long KeyExpiresAtUnixMs,
+    IReadOnlyList<NyxIdDurableOperationGrantRef>? DurableOperationGrants = null);
 
 public sealed record WorkflowScheduleAuth(
     WorkflowScheduleNyxIdCredentialSource? SenderNyxId = null,

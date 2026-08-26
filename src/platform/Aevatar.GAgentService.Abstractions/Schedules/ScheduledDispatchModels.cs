@@ -204,7 +204,8 @@ public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
 public sealed record ScheduledInvocationAgentKeyCredentialReference(
     SecretReference SecretReference,
     string ApiKeyId,
-    long KeyExpiresAtUnixMs)
+    long KeyExpiresAtUnixMs,
+    IReadOnlyList<NyxIdDurableOperationGrantRef>? DurableOperationGrants = null)
     : ScheduledServiceInvocationCredentialSource;
 
 public sealed record ScheduledServiceInvocationDurableCredentialReference(

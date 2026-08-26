@@ -1,3 +1,5 @@
+using Aevatar.Foundation.Abstractions.Credentials;
+
 namespace Aevatar.AI.Abstractions.CodeExecution;
 
 /// <summary>
@@ -73,7 +75,8 @@ public sealed record CodeExecutionCallerContext(
     string? ExecutionNyxIdCredential,
     string? SourceReadableNyxIdAccessToken,
     CodeExecutionNyxIdCredentialKind ExecutionCredentialKind =
-        CodeExecutionNyxIdCredentialKind.Unspecified);
+        CodeExecutionNyxIdCredentialKind.Unspecified,
+    NyxIdDurableOperationGrantRef? DurableOperationGrant = null);
 
 public enum CodeExecutionNyxIdCredentialKind
 {

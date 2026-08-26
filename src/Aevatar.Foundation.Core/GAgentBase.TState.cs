@@ -58,7 +58,8 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         if (recoveredPublications.Count > 0)
         {
             await PublishAndCheckpointAsync(recoveredPublications, ct);
-            await eventSourcing.PersistSnapshotAsync(_state, ct);
+            if (ShouldPersistSnapshotAfterPublicationRecovery(_state))
+                await eventSourcing.PersistSnapshotAsync(_state, ct);
         }
         await InitializeLifecycleAwareModulesAsync(ct);
         await OnActivateAsync(ct);
@@ -132,6 +133,12 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         EventEnvelope envelope,
         CancellationToken ct) =>
         Task.CompletedTask;
+
+    /// <summary>
+    /// Controls the activation-time snapshot optimization after publication
+    /// recovery. Authoritative state remains the committed event stream.
+    /// </summary>
+    protected virtual bool ShouldPersistSnapshotAfterPublicationRecovery(TState state) => true;
 
     /// <summary>Activation hook for subclass initialization.</summary>
     protected virtual Task OnActivateAsync(CancellationToken ct) => Task.CompletedTask;

@@ -27,6 +27,8 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
     private readonly IPersistentState<RuntimeActorGrainState> _state;
+    private readonly IPersistentState<RuntimeActorCommittedStatePublicationGrainState>
+        _committedStatePublication;
     private IAgent? _agent;
     private string? _activeKind;
     // Set once OnActivateAsync has finished its identity-resolution attempt.
@@ -51,9 +53,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         RuntimeEnvelopeRetryPolicy.Disabled;
 
     public RuntimeActorGrain(
-        [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)] IPersistentState<RuntimeActorGrainState> state)
+        [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)]
+        IPersistentState<RuntimeActorGrainState> state,
+        [PersistentState("committed-state-publication", OrleansRuntimeConstants.GrainStateStorageName)]
+        IPersistentState<RuntimeActorCommittedStatePublicationGrainState> committedStatePublication)
     {
         _state = state;
+        _committedStatePublication = committedStatePublication;
     }
 
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
@@ -141,7 +147,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         {
             try
             {
-                using var stateBinding = _stateBindingAccessor?.Bind(_state);
+                using var stateBinding = _stateBindingAccessor?.Bind(_state, _committedStatePublication);
                 using var schemaContext = BindStateSchemaContext();
                 await agent.DeactivateAsync(cancellationToken);
             }
@@ -404,7 +410,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             using var reconcileAttestationBinding = reconcileAttestation == null
                 ? null
                 : _fleetReconcileAttestationBinder!.Bind(reconcileAttestation);
-            using var stateBinding = _stateBindingAccessor?.Bind(_state);
+            using var stateBinding = _stateBindingAccessor?.Bind(_state, _committedStatePublication);
             using var schemaContext = BindStateSchemaContext();
             await _agent!.HandleEventAsync(envelope);
         }
@@ -568,6 +574,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _activeKind = null;
         }
 
+        _committedStatePublication.State = new RuntimeActorCommittedStatePublicationGrainState();
+        await _committedStatePublication.ClearStateAsync();
         _state.State = new RuntimeActorGrainState();
         // Clearing state takes us back to "no identity configured"; let any
         // future envelope re-attempt resolution rather than treating it as
@@ -784,7 +792,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     {
         try
         {
-            using var stateBinding = _stateBindingAccessor?.Bind(_state);
+            using var stateBinding = _stateBindingAccessor?.Bind(_state, _committedStatePublication);
             using var schemaContext = BindStateSchemaContext();
             // Pass the grain's activation-time ServiceProvider so the agent's
             // constructor-injected scoped dependencies resolve in the grain's

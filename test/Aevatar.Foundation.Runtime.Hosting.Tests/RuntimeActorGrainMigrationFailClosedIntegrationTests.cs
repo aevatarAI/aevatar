@@ -284,6 +284,8 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
     private sealed class FaultInjectingAgentStateStorage : IGrainStorage
     {
         private readonly ConcurrentDictionary<string, RuntimeActorGrainState> _rows = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, RuntimeActorCommittedStatePublicationGrainState>
+            _publicationRows = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, int> _writes = new(StringComparer.Ordinal);
 
         public StorageFaultMode Mode { get; set; }
@@ -296,9 +298,18 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
 
         public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
-            if (_rows.TryGetValue(grainId.Key.ToString()!, out var row))
+            var actorId = grainId.Key.ToString()!;
+            if (typeof(T) == typeof(RuntimeActorGrainState) &&
+                _rows.TryGetValue(actorId, out var row))
             {
                 grainState.State = (T)(object)Clone(row);
+                grainState.RecordExists = true;
+                grainState.ETag = string.Empty;
+            }
+            else if (typeof(T) == typeof(RuntimeActorCommittedStatePublicationGrainState) &&
+                     _publicationRows.TryGetValue(actorId, out var publicationRow))
+            {
+                grainState.State = (T)(object)Clone(publicationRow);
                 grainState.RecordExists = true;
                 grainState.ETag = string.Empty;
             }
@@ -309,16 +320,27 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
         public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
             var actorId = grainId.Key.ToString()!;
+            if (grainState.State is RuntimeActorCommittedStatePublicationGrainState publicationState)
+            {
+                _publicationRows[actorId] = Clone(publicationState);
+                grainState.RecordExists = true;
+                grainState.ETag = string.Empty;
+                return Task.CompletedTask;
+            }
+
+            if (grainState.State is not RuntimeActorGrainState runtimeState)
+                throw new InvalidOperationException($"Unsupported test grain state '{typeof(T).FullName}'.");
+
             _writes.AddOrUpdate(actorId, 1, static (_, count) => count + 1);
             switch (Mode)
             {
                 case StorageFaultMode.FailBeforeCommit:
                     throw new IOException("actor state store unavailable before commit");
                 case StorageFaultMode.CommitThenThrow:
-                    _rows[actorId] = Clone((RuntimeActorGrainState)(object)grainState.State!);
+                    _rows[actorId] = Clone(runtimeState);
                     throw new IOException("actor state store committed but the acknowledgement was lost");
                 default:
-                    _rows[actorId] = Clone((RuntimeActorGrainState)(object)grainState.State!);
+                    _rows[actorId] = Clone(runtimeState);
                     grainState.RecordExists = true;
                     grainState.ETag = string.Empty;
                     return Task.CompletedTask;
@@ -327,7 +349,11 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
 
         public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
-            _rows.TryRemove(grainId.Key.ToString()!, out _);
+            var actorId = grainId.Key.ToString()!;
+            if (typeof(T) == typeof(RuntimeActorCommittedStatePublicationGrainState))
+                _publicationRows.TryRemove(actorId, out _);
+            else
+                _rows.TryRemove(actorId, out _);
             grainState.RecordExists = false;
             grainState.ETag = string.Empty;
             return Task.CompletedTask;
@@ -344,6 +370,13 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
                 AgentStateSnapshotVersion = state.AgentStateSnapshotVersion,
                 Identity = state.Identity?.Clone(),
                 CommittedStatePublicationState = state.CommittedStatePublicationState?.ToArray(),
+            };
+
+        private static RuntimeActorCommittedStatePublicationGrainState Clone(
+            RuntimeActorCommittedStatePublicationGrainState state) =>
+            new()
+            {
+                Checkpoint = state.Checkpoint?.ToArray(),
             };
     }
 

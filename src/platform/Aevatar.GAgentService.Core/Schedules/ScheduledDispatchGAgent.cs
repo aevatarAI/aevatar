@@ -1438,7 +1438,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
                 auth.ScheduledInvocationAgentKey.SecretReference?.Clone() ?? new SecretReference(),
                 auth.ScheduledInvocationAgentKey.ApiKeyId ?? string.Empty,
-                auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs))
+                auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs,
+                auth.ScheduledInvocationAgentKey.NyxIdDurableOperationGrants
+                    .Select(static grant => grant.Clone())
+                    .ToArray()))
             {
                 CallerAuthority = auth.CallerAuthority?.Clone(),
             };
@@ -2440,6 +2443,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         left != null && right != null &&
         string.Equals(left.ApiKeyId, right.ApiKeyId, StringComparison.Ordinal) &&
         left.KeyExpiresAtUnixMs == right.KeyExpiresAtUnixMs &&
+        left.NyxIdDurableOperationGrants.SequenceEqual(right.NyxIdDurableOperationGrants) &&
         SecretReferenceEquals(left.SecretReference, right.SecretReference);
 
     private static bool SecretReferenceEquals(SecretReference? left, SecretReference? right) =>
@@ -3322,13 +3326,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             : ScheduledServiceInvocationNyxIdCredentialRoleState.Sender;
 
     private static ScheduledInvocationAgentKeyCredentialReferenceState NormalizeScheduledInvocationAgentKey(
-        ScheduledInvocationAgentKeyCredentialReferenceState source) =>
-        new()
+        ScheduledInvocationAgentKeyCredentialReferenceState source)
+    {
+        var normalized = new ScheduledInvocationAgentKeyCredentialReferenceState
         {
             SecretReference = source.SecretReference?.Clone(),
             ApiKeyId = NormalizeOptional(source.ApiKeyId),
             KeyExpiresAtUnixMs = source.KeyExpiresAtUnixMs,
         };
+        normalized.NyxIdDurableOperationGrants.Add(
+            source.NyxIdDurableOperationGrants.Select(static grant => grant.Clone()));
+        return normalized;
+    }
 
     private static ScheduledServiceInvocationNyxIdSubjectRefState? NormalizeSubject(
         ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>

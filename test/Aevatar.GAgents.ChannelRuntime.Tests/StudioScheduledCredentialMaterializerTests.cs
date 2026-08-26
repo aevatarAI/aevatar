@@ -21,7 +21,8 @@ public sealed class StudioScheduledCredentialMaterializerTests
             IssueResult = ScheduledAgentApiKeyIssueResult.Succeeded(
                 "api-key-alpha",
                 "secret-value",
-                ExpiresAt.ToUnixTimeMilliseconds()),
+                ExpiresAt.ToUnixTimeMilliseconds(),
+                [DurableGrant()]),
         };
         var vault = new RecordingSecretVault();
         var plan = Plan(AuthorizationOwnerKind.Personal, "owner-alpha");
@@ -39,6 +40,8 @@ public sealed class StudioScheduledCredentialMaterializerTests
         credential.SecretReference.Should().BeSameAs(vault.StoredReference);
         credential.ExpiresAtUtc.Should().Be(ExpiresAt);
         credential.Owner.Should().Be(new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "owner-alpha"));
+        credential.DurableOperationGrants.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(DurableGrant());
         var issue = issuer.Issues.Should().ContainSingle().Which;
         issue.Token.Should().Be("bearer-alpha");
         issue.Plan.Should().BeSameAs(plan);
@@ -495,6 +498,21 @@ public sealed class StudioScheduledCredentialMaterializerTests
             },
             ExpiresAt,
             owner);
+
+    private static NyxIdDurableOperationGrantRef DurableGrant() => new()
+    {
+        GrantId = "grant-executions",
+        ApiKeyId = "api-key-alpha",
+        UserServiceId = "service-alpha",
+        EndpointId = "endpoint-executions",
+        HttpMethod = NyxIdDurableOperationHttpMethod.Post,
+        NormalizedPathTemplate = "/executions",
+        ContractDigest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ValidFromUnixMs = ExpiresAt.AddDays(-2).ToUnixTimeMilliseconds(),
+        ExpiresAtUnixMs = ExpiresAt.AddDays(-1).ToUnixTimeMilliseconds(),
+        ReplayPolicy = NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey,
+    };
 
     private static ScheduledCredentialEffectLocator EffectLocator(
         string scheduleId,

@@ -768,13 +768,18 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         };
 
     private static ScheduledInvocationAgentKeyCredentialReferenceState CreateScheduledInvocationAgentKeyState(
-        ScheduledInvocationAgentKeyCredentialReference source) =>
-        new()
+        ScheduledInvocationAgentKeyCredentialReference source)
+    {
+        var state = new ScheduledInvocationAgentKeyCredentialReferenceState
         {
             SecretReference = source.SecretReference.Clone(),
             ApiKeyId = source.ApiKeyId,
             KeyExpiresAtUnixMs = source.KeyExpiresAtUnixMs,
         };
+        state.NyxIdDurableOperationGrants.Add(
+            source.DurableOperationGrants?.Select(static grant => grant.Clone()) ?? []);
+        return state;
+    }
 
     private static TeamMemberAutomationOwnerState? CreateTeamOwnerState(TeamMemberAutomationOwner? owner) =>
         owner == null

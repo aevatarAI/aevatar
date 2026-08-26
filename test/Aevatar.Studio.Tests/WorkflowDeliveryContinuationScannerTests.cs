@@ -600,23 +600,35 @@ public sealed class WorkflowDeliveryContinuationScannerTests
     }
 
     [Theory]
-    [InlineData(WorkflowInstallationStatus.Accepted)]
-    [InlineData(WorkflowInstallationStatus.ProvisioningAccepted)]
-    public async Task ScanOnceAsync_WhenClaimCommittedBeforeRevoke_ShouldFinishOwnedContinuationWithinLease(
-        WorkflowInstallationStatus status)
+    [InlineData(WorkflowInstallationStatus.Accepted, true, false)]
+    [InlineData(WorkflowInstallationStatus.Accepted, false, true)]
+    [InlineData(WorkflowInstallationStatus.ProvisioningAccepted, true, false)]
+    [InlineData(WorkflowInstallationStatus.ProvisioningAccepted, false, true)]
+    public async Task ScanOnceAsync_WhenUnavailableWithActiveOwnedClaim_ShouldDispatchReconciliationWithoutExecuting(
+        WorkflowInstallationStatus status,
+        bool revoked,
+        bool expired)
     {
         var now = DateTimeOffset.Parse("2026-08-16T06:00:00Z");
         var delivery = WorkflowDeliveryProvisioningExecutorTests.Delivery(
             status,
-            pageSuffix: $"claimed-before-revoke-{status}",
+            pageSuffix: $"claimed-before-withdrawal-{status}",
             claimantId: "worker-alpha",
             claimAtUtc: now.AddMinutes(-1),
-            claimExpiresAtUtc: now.AddMinutes(1)) with
+            claimExpiresAtUtc: now.AddMinutes(1));
+        if (revoked)
         {
-            LifecycleStatus = WorkflowDeliveryLifecycleStatus.Revoked,
-            RevokedBy = "admin-alpha",
-            RevokedAtUtc = now,
-        };
+            delivery = delivery with
+            {
+                LifecycleStatus = WorkflowDeliveryLifecycleStatus.Revoked,
+                RevokedBy = "admin-alpha",
+                RevokedAtUtc = now,
+            };
+        }
+
+        if (expired)
+            delivery = delivery with { ExpiresAtUtc = now.AddMinutes(-1) };
+
         var provisioning = new RecordingProvisioningExecutor();
         var materializer = new RecordingArtifactMaterializer();
         var readiness = new RecordingReadinessReconciler();
@@ -633,19 +645,11 @@ public sealed class WorkflowDeliveryContinuationScannerTests
 
         await scanner.ScanOnceAsync();
 
-        commands.Claims.Should().BeEmpty();
-        if (status == WorkflowInstallationStatus.Accepted)
-        {
-            provisioning.Deliveries.Should().ContainSingle();
-            materializer.Deliveries.Should().BeEmpty();
-            readiness.Deliveries.Should().BeEmpty();
-        }
-        else
-        {
-            provisioning.Deliveries.Should().BeEmpty();
-            materializer.Deliveries.Should().ContainSingle();
-            readiness.Deliveries.Should().ContainSingle();
-        }
+        commands.Claims.Should().ContainSingle();
+        commands.Failures.Should().BeEmpty();
+        provisioning.Deliveries.Should().BeEmpty();
+        materializer.Deliveries.Should().BeEmpty();
+        readiness.Deliveries.Should().BeEmpty();
     }
 
     [Fact]

@@ -2156,6 +2156,24 @@ public sealed class ScheduledDispatchGAgentTests
                             },
                             ApiKeyId = "key-schedule",
                             KeyExpiresAtUnixMs = expiresAtUnixMs,
+                            NyxIdDurableOperationGrants =
+                            {
+                                new NyxIdDurableOperationGrantRef
+                                {
+                                    GrantId = "grant-executions",
+                                    ApiKeyId = "key-schedule",
+                                    UserServiceId = "us-code-alpha",
+                                    EndpointId = "endpoint-executions",
+                                    HttpMethod = NyxIdDurableOperationHttpMethod.Post,
+                                    NormalizedPathTemplate = "/executions",
+                                    ContractDigest =
+                                        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                    ValidFromUnixMs = createdAtUnixMs,
+                                    ExpiresAtUnixMs = expiresAtUnixMs,
+                                    ReplayPolicy =
+                                        NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey,
+                                },
+                            },
                         },
                     },
                 },
@@ -2183,6 +2201,12 @@ public sealed class ScheduledDispatchGAgentTests
         auth.ScheduledInvocationAgentKey.SecretReference.Fingerprint.Should().Be("sha256:abc");
         auth.ScheduledInvocationAgentKey.SecretReference.Version.Should().Be(7);
         auth.ScheduledInvocationAgentKey.SecretReference.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+        var durableGrant = auth.ScheduledInvocationAgentKey.DurableOperationGrants
+            .Should().ContainSingle().Which;
+        durableGrant.GrantId.Should().Be("grant-executions");
+        durableGrant.ApiKeyId.Should().Be("key-schedule");
+        durableGrant.UserServiceId.Should().Be("us-code-alpha");
+        durableGrant.NormalizedPathTemplate.Should().Be("/executions");
         serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
             .ContainSingle()
             .Which.Should().BeTrue();
