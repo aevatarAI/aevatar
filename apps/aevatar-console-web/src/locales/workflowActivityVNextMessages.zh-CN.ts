@@ -710,6 +710,11 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.publishBeforeOpen':
       '请先发布此工作流，再管理计划任务。',
     'workflowActivityVNext.schedule.refreshAria': '刷新计划任务',
+    'workflowActivityVNext.schedule.refreshing': '正在刷新计划任务…',
+    'workflowActivityVNext.schedule.refreshingDetail': '正在刷新计划任务详情…',
+    'workflowActivityVNext.schedule.refreshingHistory': '正在刷新计划任务历史…',
+    'workflowActivityVNext.schedule.overviewRegionAria': '计划任务概览',
+    'workflowActivityVNext.schedule.historyRegionAria': '计划任务历史',
     'workflowActivityVNext.schedule.runNowAria': '立即运行 {name}',
     'workflowActivityVNext.schedule.repeat': '重复',
     'workflowActivityVNext.schedule.repeatSummary': '{repeat} 于 {time}',

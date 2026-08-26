@@ -786,9 +786,10 @@ export const workflowActivityVNextCss = `
 .wa-vnext-schedule-modal .ant-btn, .wa-vnext-schedule-drawer .ant-btn { font-size: 12px; }
 .wa-vnext__schedule-surface-title { color: var(--wa-ink); font-size: 16px; font-weight: 650; line-height: 22px; margin: 0; }
 .wa-vnext__schedule-form-title { color: var(--wa-ink); font-size: 15px; line-height: 21px; margin: 0; }
-.wa-vnext__schedule-surface { display: grid; gap: 16px; min-width: 0; }
+.wa-vnext__schedule-surface { display: grid; gap: 16px; min-width: 0; position: relative; }
 .wa-vnext__schedule-toolbar { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .wa-vnext__schedule-toolbar p { color: var(--wa-muted); margin: 4px 0 0; }
+.wa-vnext__schedule-refresh-overlay { grid-column: 1; grid-row: 2; }
 .wa-vnext__schedule-list { display: grid; gap: 10px; }
 .wa-vnext__schedule-row { align-items: center; appearance: none; background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); color: var(--wa-ink); cursor: pointer; display: flex; font: inherit; gap: 16px; justify-content: space-between; min-width: 0; padding: 14px; text-align: left; transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease; width: 100%; }
 .wa-vnext__schedule-row:hover { background: #f2f4f7; border-color: #98a2b3; box-shadow: 0 2px 8px rgba(16, 24, 40, .06); }
@@ -807,7 +808,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-selected-heading--history { align-items: baseline; display: flex; font-weight: inherit; margin: 0; overflow: hidden; white-space: nowrap; }
 .wa-vnext__schedule-selected-heading--history strong, .wa-vnext__schedule-selected-heading--history > span[aria-hidden="true"] { flex: 0 0 auto; }
 .wa-vnext__schedule-selected-heading--history .wa-vnext__schedule-selected-heading-context { flex: 0 1 auto; font-size: 13px; line-height: 21px; min-width: 0; }
-.wa-vnext__schedule-detail { display: grid; gap: 18px; min-width: 0; }
+.wa-vnext__schedule-detail { display: grid; gap: 18px; min-width: 0; position: relative; }
 .wa-vnext__schedule-detail > .ant-tabs { margin-bottom: -2px; }
 .wa-vnext__schedule-overview { display: grid; gap: 14px; min-width: 0; }
 .wa-vnext__schedule-overview-summary { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); display: grid; gap: 8px; padding: 16px; }

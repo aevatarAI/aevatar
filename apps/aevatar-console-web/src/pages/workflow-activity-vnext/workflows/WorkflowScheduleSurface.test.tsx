@@ -555,6 +555,85 @@ describe('WorkflowScheduleSurface', () => {
     ).toHaveClass('wa-vnext__schedule-empty-title');
   });
 
+  it('keeps committed Schedule rows visible while the list refreshes', async () => {
+    const schedule = createScheduleSummary();
+    let listCallCount = 0;
+    let resolveRefresh: (value: {
+      items: ReturnType<typeof createScheduleSummary>[];
+      nextCursor: null;
+      totalCount: number;
+    }) => void = () => undefined;
+    const deferredRefresh = new Promise<{
+      items: ReturnType<typeof createScheduleSummary>[];
+      nextCursor: null;
+      totalCount: number;
+    }>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    mockedWorkflowScheduleApi.list.mockImplementation(() => {
+      listCallCount += 1;
+      return listCallCount === 1
+        ? Promise.resolve({
+            items: [schedule],
+            nextCursor: null,
+            totalCount: 1,
+          })
+        : deferredRefresh;
+    });
+
+    renderSurface(true, 'modal', jest.fn(), 'list');
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'View Daily workflow run' }),
+      ).toBeVisible(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh schedules' }));
+
+    const scheduleRegion = await screen.findByRole('region', {
+      name: 'Schedules',
+    });
+    await waitFor(() =>
+      expect(workflowScheduleApi.list).toHaveBeenCalledTimes(2),
+    );
+    expect(
+      screen.getByRole('button', { name: 'Refresh schedules' }),
+    ).toBeDisabled();
+    expect(scheduleRegion).toHaveAttribute('aria-busy', 'true');
+    expect(
+      within(scheduleRegion).getByRole('button', {
+        name: 'View Daily workflow run',
+      }),
+    ).toBeVisible();
+    const refreshStatus = within(scheduleRegion).getByRole('status', {
+      name: 'Refreshing schedules…',
+    });
+    expect(refreshStatus).toHaveClass('aevatar-loading-overlay');
+    expect(refreshStatus.querySelectorAll('.aevatar-loading-dot')).toHaveLength(
+      3,
+    );
+    expect(screen.getByRole('button', { name: 'New schedule' })).toBeEnabled();
+
+    await act(async () => {
+      resolveRefresh({
+        items: [createScheduleSummary({ displayName: 'Updated workflow run' })],
+        nextCursor: null,
+        totalCount: 1,
+      });
+      await deferredRefresh;
+    });
+
+    expect(
+      await screen.findByRole('button', { name: 'View Updated workflow run' }),
+    ).toBeVisible();
+    expect(scheduleRegion).toHaveAttribute('aria-busy', 'false');
+    expect(
+      within(scheduleRegion).queryByRole('status', {
+        name: 'Refreshing schedules…',
+      }),
+    ).not.toBeInTheDocument();
+  });
+
   it('opens a selected Schedule on Overview and returns through the stable header', async () => {
     const schedule = createScheduleSummary();
     mockedWorkflowScheduleApi.list.mockResolvedValue({
@@ -698,6 +777,80 @@ describe('WorkflowScheduleSurface', () => {
     expect(
       screen.getByText('Daily workflow run will stop running on schedule.'),
     ).toBeInTheDocument();
+  });
+
+  it('keeps committed Schedule details visible while an action refreshes them', async () => {
+    const schedule = createScheduleSummary();
+    let resolveDetailRefresh: (value: {
+      schedule: ReturnType<typeof createScheduleSummary>;
+      recentFires: never[];
+    }) => void = () => undefined;
+    const deferredDetailRefresh = new Promise<{
+      schedule: ReturnType<typeof createScheduleSummary>;
+      recentFires: never[];
+    }>((resolve) => {
+      resolveDetailRefresh = resolve;
+    });
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get
+      .mockResolvedValue({
+        schedule: createScheduleSummary({ fireCount: 13 }),
+        recentFires: [],
+      })
+      .mockResolvedValueOnce({ schedule, recentFires: [] })
+      .mockReturnValueOnce(deferredDetailRefresh);
+    mockedWorkflowScheduleApi.runNow.mockResolvedValue({
+      scheduleId: schedule.scheduleId,
+      accepted: true,
+    });
+
+    renderSurface(true, 'modal', jest.fn(), 'list');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    expect(await screen.findByText('Every weekday at 09:00')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+
+    const detailRegion = await screen.findByRole('region', {
+      name: 'Schedule overview',
+    });
+    await waitFor(() =>
+      expect(workflowScheduleApi.get).toHaveBeenCalledTimes(2),
+    );
+    expect(detailRegion).toHaveAttribute('aria-busy', 'true');
+    expect(
+      within(detailRegion).getByText('Every weekday at 09:00'),
+    ).toBeVisible();
+    const refreshStatus = within(detailRegion).getByRole('status', {
+      name: 'Refreshing schedule details…',
+    });
+    expect(refreshStatus).toHaveClass('aevatar-loading-overlay');
+    expect(refreshStatus.querySelectorAll('.aevatar-loading-dot')).toHaveLength(
+      3,
+    );
+    expect(screen.getByRole('tab', { name: 'Overview' })).toBeVisible();
+
+    await act(async () => {
+      resolveDetailRefresh({
+        schedule: createScheduleSummary({ fireCount: 13 }),
+        recentFires: [],
+      });
+      await deferredDetailRefresh;
+    });
+
+    await waitFor(() =>
+      expect(detailRegion).toHaveAttribute('aria-busy', 'false'),
+    );
+    expect(
+      within(detailRegion).queryByRole('status', {
+        name: 'Refreshing schedule details…',
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps Edit as a temporary mode that returns to Overview', async () => {

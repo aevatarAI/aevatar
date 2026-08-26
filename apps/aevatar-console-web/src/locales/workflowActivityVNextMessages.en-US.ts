@@ -755,6 +755,13 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.publishBeforeOpen':
     'Publish this Workflow before managing schedules.',
   'workflowActivityVNext.schedule.refreshAria': 'Refresh schedules',
+  'workflowActivityVNext.schedule.refreshing': 'Refreshing schedules…',
+  'workflowActivityVNext.schedule.refreshingDetail':
+    'Refreshing schedule details…',
+  'workflowActivityVNext.schedule.refreshingHistory':
+    'Refreshing schedule history…',
+  'workflowActivityVNext.schedule.overviewRegionAria': 'Schedule overview',
+  'workflowActivityVNext.schedule.historyRegionAria': 'Schedule history',
   'workflowActivityVNext.schedule.runNowAria': 'Run {name} now',
   'workflowActivityVNext.schedule.repeat': 'Repeat',
   'workflowActivityVNext.schedule.repeatSummary': '{repeat} at {time}',

@@ -33,6 +33,7 @@ import {
   workflowScheduleApi,
 } from '@/shared/api/workflowScheduleApi';
 import { t } from '@/shared/i18n/messages';
+import { AevatarLoadingOverlay } from '@/shared/ui/AevatarLoading';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import {
   buildWorkflowActivityRunHref,
@@ -334,6 +335,12 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     },
     retry: false,
   });
+  const scheduleListRefreshing =
+    schedules.isFetching && !schedules.isPending && Boolean(schedules.data);
+  const scheduleDetailRefreshing =
+    scheduleDetail.isFetching &&
+    !scheduleDetail.isPending &&
+    Boolean(scheduleDetail.data);
 
   React.useEffect(() => {
     if (!open) return;
@@ -1138,7 +1145,11 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   ) : null;
 
   const listView = (
-    <div className="wa-vnext__schedule-surface">
+    <section
+      aria-busy={scheduleListRefreshing}
+      aria-label={t('workflowActivityVNext.schedule.title', 'Schedules')}
+      className="wa-vnext__schedule-surface"
+    >
       <div className="wa-vnext__schedule-toolbar">
         <div>
           <strong>
@@ -1158,6 +1169,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
               'workflowActivityVNext.schedule.refreshAria',
               'Refresh schedules',
             )}
+            disabled={schedules.isFetching}
             icon={<ReloadOutlined />}
             loading={schedules.isFetching}
             onClick={() => void schedules.refetch()}
@@ -1183,13 +1195,16 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
           )}
           description={errorMessage(schedules.error)}
           action={
-            <Button onClick={() => void schedules.refetch()}>
+            <Button
+              loading={schedules.isFetching}
+              onClick={() => void schedules.refetch()}
+            >
               {t('workflowActivityVNext.common.retry', 'Retry')}
             </Button>
           }
         />
       ) : schedules.data?.items.length ? (
-        <div className="wa-vnext__schedule-list">
+        <div className="wa-vnext__schedule-list" inert={scheduleListRefreshing}>
           {schedules.data.items.map((schedule) => (
             <button
               aria-label={t(
@@ -1240,7 +1255,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
           ))}
         </div>
       ) : (
-        <div className="wa-vnext__schedule-empty">
+        <div
+          className="wa-vnext__schedule-empty"
+          inert={scheduleListRefreshing}
+        >
           <h3 className="wa-vnext__schedule-empty-title">
             {t('workflowActivityVNext.schedule.empty', 'No schedules yet')}
           </h3>
@@ -1252,7 +1270,16 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
           </p>
         </div>
       )}
-    </div>
+      {scheduleListRefreshing ? (
+        <AevatarLoadingOverlay
+          ariaLabel={t(
+            'workflowActivityVNext.schedule.refreshing',
+            'Refreshing schedules…',
+          )}
+          className="wa-vnext__schedule-refresh-overlay"
+        />
+      ) : null}
+    </section>
   );
 
   const activityHref = scheduleDetail.data
@@ -1265,7 +1292,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     : null;
 
   const historyView = scheduleDetail.data ? (
-    <section className="wa-vnext__schedule-history">
+    <section
+      className="wa-vnext__schedule-history"
+      inert={scheduleDetailRefreshing}
+    >
       <header className="wa-vnext__schedule-history-header">
         <div>
           <h2>
@@ -1432,7 +1462,16 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   ) : null;
 
   const detailView = (
-    <div className="wa-vnext__schedule-detail">
+    <section
+      aria-busy={scheduleDetailRefreshing}
+      aria-label={t(
+        detailTab === 'history'
+          ? 'workflowActivityVNext.schedule.historyRegionAria'
+          : 'workflowActivityVNext.schedule.overviewRegionAria',
+        detailTab === 'history' ? 'Schedule history' : 'Schedule overview',
+      )}
+      className="wa-vnext__schedule-detail"
+    >
       <Tabs
         activeKey={detailTab}
         items={[
@@ -1463,7 +1502,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
       ) : scheduleDetail.isError ? (
         <Alert
           action={
-            <Button onClick={() => void scheduleDetail.refetch()}>
+            <Button
+              loading={scheduleDetail.isFetching}
+              onClick={() => void scheduleDetail.refetch()}
+            >
               {t('workflowActivityVNext.common.retry', 'Retry')}
             </Button>
           }
@@ -1481,7 +1523,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         />
       ) : scheduleDetail.data ? (
         detailTab === 'overview' ? (
-          <div className="wa-vnext__schedule-overview">
+          <div
+            className="wa-vnext__schedule-overview"
+            inert={scheduleDetailRefreshing}
+          >
             <section className="wa-vnext__schedule-overview-summary">
               <Tag
                 color={
@@ -1682,7 +1727,20 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
           historyView
         )
       ) : null}
-    </div>
+      {scheduleDetailRefreshing ? (
+        <AevatarLoadingOverlay
+          ariaLabel={t(
+            detailTab === 'history'
+              ? 'workflowActivityVNext.schedule.refreshingHistory'
+              : 'workflowActivityVNext.schedule.refreshingDetail',
+            detailTab === 'history'
+              ? 'Refreshing schedule history…'
+              : 'Refreshing schedule details…',
+          )}
+          className="wa-vnext__schedule-refresh-overlay"
+        />
+      ) : null}
+    </section>
   );
 
   const activeBody = !available ? (
