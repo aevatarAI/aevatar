@@ -405,33 +405,6 @@ export const workflowActivityVNextCss = `
   width: 100%;
 }
 .wa-vnext-run-detail__refresh-content { display: contents; }
-.wa-vnext-run-detail__refresh-overlay {
-  align-items: center;
-  background: color-mix(in srgb, var(--wa-surface) 64%, transparent);
-  cursor: progress;
-  display: flex;
-  inset: 0;
-  justify-content: center;
-  position: absolute;
-  z-index: 20;
-}
-.wa-vnext-run-detail__refresh-indicator {
-  align-items: center;
-  background: color-mix(in srgb, var(--wa-surface) 94%, transparent);
-  border: 1px solid var(--wa-line);
-  border-radius: 6px;
-  color: var(--wa-ink);
-  display: inline-flex;
-  font-size: 12px;
-  font-weight: 600;
-  gap: 8px;
-  line-height: 17px;
-  padding: 9px 12px;
-}
-.wa-vnext-run-detail__refresh-indicator > .anticon {
-  color: var(--wa-blue);
-  font-size: 15px;
-}
 .wa-vnext-run-detail__rail {
   background: var(--wa-surface);
   border-right: 1px solid var(--wa-line);
@@ -684,10 +657,13 @@ export const workflowActivityVNextCss = `
 .wa-vnext-run-detail--loading {
   cursor: progress;
 }
+.wa-vnext-run-detail__stage--loading {
+  cursor: progress;
+}
 .wa-vnext-run-detail--loading .wa-vnext-run-detail__rail-header,
-.wa-vnext-run-detail--loading .wa-vnext-run-detail__stage-header,
-.wa-vnext-run-detail--loading .wa-vnext-run-detail__logs-header,
-.wa-vnext-run-detail--loading .wa-vnext-run-detail__inspector-header {
+.wa-vnext-run-detail__stage--loading .wa-vnext-run-detail__stage-header,
+.wa-vnext-run-detail__stage--loading .wa-vnext-run-detail__logs-header,
+.wa-vnext-run-detail__stage--loading .wa-vnext-run-detail__inspector-header {
   min-height: 54px;
 }
 .wa-vnext-run-detail__skeleton-line,

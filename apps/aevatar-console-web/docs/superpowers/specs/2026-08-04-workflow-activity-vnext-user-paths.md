@@ -587,12 +587,21 @@ GET /api/workflow/observatory/runs/:runId/graph
 **Steps:**
 
 1. Selecting an Activity row opens its real `runId`.
-2. Detail and graph load independently.
-3. The page prioritizes status, identity, final output/error, diagnostics, and
+2. Initial entry may use the complete Run-detail skeleton until committed
+   history is available. After that, selecting another Run in the history rail
+   keeps the authoritative rail mounted, preserves its scroll position, and
+   immediately marks the target Run as selected.
+3. Only the selected Run's detail and graph region enters loading during that
+   selection. The committed history rail remains visible and usable because
+   its query is unchanged. Detail and graph continue to load independently.
+4. Manual Refresh is a separate grouped operation: because it refreshes
+   detail, graph, and history together, it may block and mark the complete
+   workspace busy while preserving committed content beneath its overlay.
+5. The page prioritizes status, identity, final output/error, diagnostics, and
    step trace.
-4. The user may expand input, request parameters, full timeline content, tool
+6. The user may expand input, request parameters, full timeline content, tool
    calls, statistics, and usage.
-5. Copy/export actions operate only on returned, permitted data.
+7. Copy/export actions operate only on returned, permitted data.
 
 **Completion:** The user can identify success/failure and the relevant step
 without altering the record.

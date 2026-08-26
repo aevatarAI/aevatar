@@ -193,3 +193,33 @@ export function AevatarPageLoading({
     </div>
   );
 }
+
+export type AevatarLoadingOverlayProps = {
+  ariaLabel: string;
+  className?: string;
+  style?: React.CSSProperties;
+};
+
+export function AevatarLoadingOverlay({
+  ariaLabel,
+  className,
+  style,
+}: AevatarLoadingOverlayProps): React.ReactElement {
+  return (
+    <div
+      aria-busy="true"
+      aria-label={ariaLabel}
+      aria-live="polite"
+      className={joinClassNames('aevatar-loading-overlay', className)}
+      role="status"
+      style={style}
+    >
+      <AevatarLoadingDots
+        color="var(--ant-color-primary, #2563eb)"
+        decorative
+        size="medium"
+      />
+      <span className="aevatar-loading-visually-hidden">{ariaLabel}</span>
+    </div>
+  );
+}

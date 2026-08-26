@@ -349,6 +349,21 @@ function buildActivityRow(
   };
 }
 
+function RunDetailRouteHarness() {
+  const [selectedRunId, setSelectedRunId] = React.useState('run-source-alpha');
+
+  return (
+    <>
+      <button
+        aria-label="Route to run-source-beta"
+        onClick={() => setSelectedRunId('run-source-beta')}
+        type="button"
+      />
+      <RunDetailPage runId={selectedRunId} scopeId="scope-alpha" />
+    </>
+  );
+}
+
 describe('Workflow Activity vNext run detail console', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -471,6 +486,85 @@ describe('Workflow Activity vNext run detail console', () => {
     expect(document.querySelector('.wa-vnext__state')).not.toBeInTheDocument();
   });
 
+  it('keeps committed Run history usable while the selected Run detail loads', async () => {
+    renderWithQueryClient(<RunDetailRouteHarness />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Published runs' }),
+    ).toBeInTheDocument();
+    const alphaRun = screen.getByRole('button', {
+      name: 'Open run-source-alpha',
+    });
+    expect(
+      screen.getByRole('button', { name: 'Open run-source-beta' }),
+    ).toBeInTheDocument();
+    expect(alphaRun).toHaveAttribute('aria-current', 'true');
+    const historyRail = document.querySelector(
+      '.wa-vnext-run-detail__rail-list',
+    );
+    expect(historyRail).toBeInstanceOf(HTMLElement);
+    (historyRail as HTMLElement).scrollTop = 128;
+
+    const pendingDetail = createDeferred<WorkflowActivityRunDetailFixture>();
+    const pendingGraph = createDeferred<WorkflowActivityRunGraphFixture>();
+    mockWorkflowActivityApi.getRun.mockReturnValueOnce(pendingDetail.promise);
+    mockWorkflowActivityApi.getRunGraph.mockReturnValueOnce(
+      pendingGraph.promise,
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Route to run-source-beta' }),
+    );
+
+    expect(
+      screen.getByRole('heading', { name: 'Published runs' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Open run-source-alpha' }),
+    ).not.toHaveAttribute('aria-current');
+    expect(
+      screen.getByRole('button', { name: 'Open run-source-beta' }),
+    ).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByText('Loading run details…')).toBeInTheDocument();
+    expect(screen.queryByText('Loading run history…')).not.toBeInTheDocument();
+    expect(mockWorkflowActivityApi.listRuns).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.wa-vnext-run-detail__rail-list')).toBe(
+      historyRail,
+    );
+    expect((historyRail as HTMLElement).scrollTop).toBe(128);
+
+    const stage = document.querySelector('.wa-vnext-run-detail__stage');
+    expect(stage).toHaveAttribute('role', 'status');
+    expect(stage).toHaveAttribute('aria-busy', 'true');
+    expect(document.querySelector('.wa-vnext-run-detail')).not.toHaveAttribute(
+      'aria-busy',
+    );
+
+    const loadedBetaRun = buildRunDetail();
+    loadedBetaRun.summary = {
+      ...loadedBetaRun.summary,
+      runId: 'run-source-beta',
+      status: 'completed',
+      success: true,
+      updatedAtUtc: '2026-08-04T09:01:00Z',
+    };
+
+    await act(async () => {
+      pendingDetail.resolve(loadedBetaRun);
+      pendingGraph.resolve({
+        rootNodeId: 'node-root',
+        nodes: [{ nodeId: 'node-root', nodeType: 'step', stepId: 'step-root' }],
+        edges: [],
+      });
+      await Promise.all([pendingDetail.promise, pendingGraph.promise]);
+    });
+
+    expect(
+      await screen.findByRole('heading', { name: 'Incident review' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Loading run details…')).not.toBeInTheDocument();
+  });
+
   it('acknowledges a grouped refresh and confirms when every source succeeds', async () => {
     renderWithQueryClient(
       <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
@@ -498,15 +592,19 @@ describe('Workflow Activity vNext run detail console', () => {
     const refreshingButton = refreshingLabel?.closest('button');
     expect(refreshingButton).toBeInstanceOf(HTMLButtonElement);
     expect(refreshingButton).toBeDisabled();
-    const refreshStatus = document.querySelector(
-      '.wa-vnext-run-detail__refresh-overlay',
-    );
+    const refreshStatus = document.querySelector('.aevatar-loading-overlay');
     expect(refreshStatus).toHaveAttribute('role', 'status');
     expect(refreshStatus).toHaveAttribute(
       'aria-label',
       'Refreshing run details…',
     );
-    expect(refreshStatus).toHaveClass('wa-vnext-run-detail__refresh-overlay');
+    expect(refreshStatus).toHaveClass('aevatar-loading-overlay');
+    expect(
+      refreshStatus?.querySelectorAll('.aevatar-loading-dot'),
+    ).toHaveLength(3);
+    expect(
+      refreshStatus?.querySelector('.wa-vnext-run-detail__refresh-indicator'),
+    ).not.toBeInTheDocument();
     expect(document.querySelector('.wa-vnext-run-detail')).toHaveAttribute(
       'aria-busy',
       'true',
@@ -565,7 +663,7 @@ describe('Workflow Activity vNext run detail console', () => {
     expect(mockConsoleToast.error).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
     expect(
-      document.querySelector('.wa-vnext-run-detail__refresh-overlay'),
+      document.querySelector('.aevatar-loading-overlay'),
     ).not.toBeInTheDocument();
     expect(document.querySelector('.wa-vnext-run-detail')).toHaveAttribute(
       'aria-busy',

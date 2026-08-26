@@ -42,6 +42,7 @@ import type {
   StudioGraphEdgeData,
   StudioGraphNodeData,
 } from '@/shared/studio/graph';
+import { AevatarLoadingOverlay } from '@/shared/ui/AevatarLoading';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import {
@@ -496,24 +497,84 @@ function toHistoryEntryFromFeedRow(
   };
 }
 
-function RunDetailRefreshOverlay() {
-  const label = t(
-    'workflowActivityVNext.run.refreshingDetail',
-    'Refreshing run details…',
+function RunDetailLoadingStage({
+  announce = false,
+}: {
+  readonly announce?: boolean;
+}) {
+  const loadingLabel = t(
+    'workflowActivityVNext.run.loadingDescription',
+    'Loading run details…',
   );
 
   return (
-    <div
-      aria-label={label}
-      aria-live="polite"
-      className="wa-vnext-run-detail__refresh-overlay"
-      role="status"
+    <section
+      aria-busy={announce ? 'true' : undefined}
+      aria-hidden={announce ? undefined : 'true'}
+      aria-label={announce ? loadingLabel : undefined}
+      aria-live={announce ? 'polite' : undefined}
+      className="wa-vnext-run-detail__stage wa-vnext-run-detail__stage--loading"
+      role={announce ? 'status' : undefined}
     >
-      <span className="wa-vnext-run-detail__refresh-indicator">
-        <LoadingOutlined aria-hidden="true" spin />
-        <span>{label}</span>
-      </span>
-    </div>
+      {announce ? (
+        <span className="aevatar-loading-visually-hidden">{loadingLabel}</span>
+      ) : null}
+      <header className="wa-vnext-run-detail__stage-header">
+        <div className="wa-vnext-run-detail__stage-title">
+          <div className="wa-vnext-run-detail__skeleton-heading">
+            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--heading" />
+            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--pill" />
+          </div>
+          <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--subtitle" />
+        </div>
+      </header>
+      <div className="wa-vnext-run-detail__graph wa-vnext-run-detail__graph--loading">
+        <span className="wa-vnext-run-detail__skeleton-connector wa-vnext-run-detail__skeleton-connector--first" />
+        <span className="wa-vnext-run-detail__skeleton-connector wa-vnext-run-detail__skeleton-connector--second" />
+        {[0, 1, 2].map((index) => (
+          <div
+            className={`wa-vnext-run-detail__skeleton-node wa-vnext-run-detail__skeleton-node--${index + 1}`}
+            key={`loading-node-${index}`}
+          >
+            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--node-title" />
+            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--node-meta" />
+          </div>
+        ))}
+      </div>
+      <div className="wa-vnext-run-detail__details">
+        <section className="wa-vnext-run-detail__logs">
+          <div className="wa-vnext-run-detail__logs-header">
+            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--label" />
+            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--duration" />
+          </div>
+          <div className="wa-vnext-run-detail__step-list">
+            {[0, 1, 2].map((index) => (
+              <div
+                className="wa-vnext-run-detail__step wa-vnext-run-detail__step--loading"
+                key={`loading-step-${index}`}
+              >
+                <span className="wa-vnext-run-detail__skeleton-dot" />
+                <span className="wa-vnext-run-detail__skeleton-step-copy">
+                  <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--step" />
+                  <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--step-meta" />
+                </span>
+                <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--duration" />
+              </div>
+            ))}
+          </div>
+        </section>
+        <section className="wa-vnext-run-detail__inspector">
+          <div className="wa-vnext-run-detail__inspector-header">
+            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--inspector-title" />
+          </div>
+          <div className="wa-vnext-run-detail__inspector-body wa-vnext-run-detail__inspector-body--loading">
+            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--tabs" />
+            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--content" />
+            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--content-short" />
+          </div>
+        </section>
+      </div>
+    </section>
   );
 }
 
@@ -549,63 +610,7 @@ function RunDetailLoadingWorkspace() {
           ))}
         </div>
       </aside>
-      <section aria-hidden="true" className="wa-vnext-run-detail__stage">
-        <header className="wa-vnext-run-detail__stage-header">
-          <div className="wa-vnext-run-detail__stage-title">
-            <div className="wa-vnext-run-detail__skeleton-heading">
-              <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--heading" />
-              <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--pill" />
-            </div>
-            <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--subtitle" />
-          </div>
-        </header>
-        <div className="wa-vnext-run-detail__graph wa-vnext-run-detail__graph--loading">
-          <span className="wa-vnext-run-detail__skeleton-connector wa-vnext-run-detail__skeleton-connector--first" />
-          <span className="wa-vnext-run-detail__skeleton-connector wa-vnext-run-detail__skeleton-connector--second" />
-          {[0, 1, 2].map((index) => (
-            <div
-              className={`wa-vnext-run-detail__skeleton-node wa-vnext-run-detail__skeleton-node--${index + 1}`}
-              key={`loading-node-${index}`}
-            >
-              <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--node-title" />
-              <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--node-meta" />
-            </div>
-          ))}
-        </div>
-        <div className="wa-vnext-run-detail__details">
-          <section className="wa-vnext-run-detail__logs">
-            <div className="wa-vnext-run-detail__logs-header">
-              <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--label" />
-              <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--duration" />
-            </div>
-            <div className="wa-vnext-run-detail__step-list">
-              {[0, 1, 2].map((index) => (
-                <div
-                  className="wa-vnext-run-detail__step wa-vnext-run-detail__step--loading"
-                  key={`loading-step-${index}`}
-                >
-                  <span className="wa-vnext-run-detail__skeleton-dot" />
-                  <span className="wa-vnext-run-detail__skeleton-step-copy">
-                    <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--step" />
-                    <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--step-meta" />
-                  </span>
-                  <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--duration" />
-                </div>
-              ))}
-            </div>
-          </section>
-          <section className="wa-vnext-run-detail__inspector">
-            <div className="wa-vnext-run-detail__inspector-header">
-              <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--inspector-title" />
-            </div>
-            <div className="wa-vnext-run-detail__inspector-body wa-vnext-run-detail__inspector-body--loading">
-              <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--tabs" />
-              <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--content" />
-              <span className="wa-vnext-run-detail__skeleton-line wa-vnext-run-detail__skeleton-line--content-short" />
-            </div>
-          </section>
-        </div>
-      </section>
+      <RunDetailLoadingStage />
     </div>
   );
 }
@@ -810,6 +815,17 @@ const RunDetailPage: React.FC<{
   );
   const fallbackHistoryRun =
     historyEntries.find((entry) => entry.runId === runId) ?? null;
+  const pendingHistoryWorkflowName = trimOptional(
+    fallbackHistoryRun?.workflowName,
+  ).toLowerCase();
+  const pendingHistoryEntries =
+    routeWorkflowId || !pendingHistoryWorkflowName
+      ? historyEntries
+      : historyEntries.filter(
+          (entry) =>
+            trimOptional(entry.workflowName).toLowerCase() ===
+            pendingHistoryWorkflowName,
+        );
 
   const openRun = React.useCallback(
     (targetRunId: string) => {
@@ -919,6 +935,50 @@ const RunDetailPage: React.FC<{
   );
 
   if (detail.isPending) {
+    if (fallbackHistoryRun) {
+      return (
+        <WorkflowActivityVNextShell
+          activeSection="activity"
+          contentClassName="wa-vnext__content--run-detail"
+          description={t(
+            'workflowActivityVNext.run.description',
+            'Review the result, steps, and history for this run.',
+          )}
+          headerActions={
+            <Button
+              aria-label={t(
+                'workflowActivityVNext.run.backAria',
+                'Back to Activity',
+              )}
+              icon={<ArrowLeftOutlined />}
+              onClick={() =>
+                history.push(
+                  buildWorkflowActivitySectionHref(scopeId, 'activity'),
+                )
+              }
+            />
+          }
+          mainClassName="wa-vnext__main--run-detail"
+          scopeId={scopeId}
+          title={
+            fallbackHistoryRun.workflowName ||
+            t('workflowActivityVNext.run.title', 'Run details')
+          }
+        >
+          <div className="wa-vnext-run-detail wa-vnext-run-detail--bounded">
+            <div className="wa-vnext-run-detail__refresh-content">
+              {renderHistoryRail(
+                fallbackHistoryRun.workflowName,
+                pendingHistoryEntries,
+                runId,
+              )}
+              <RunDetailLoadingStage announce />
+            </div>
+          </div>
+        </WorkflowActivityVNextShell>
+      );
+    }
+
     return (
       <WorkflowActivityVNextShell
         activeSection="activity"
@@ -1053,7 +1113,14 @@ const RunDetailPage: React.FC<{
                 />
               </section>
             </div>
-            {refreshing ? <RunDetailRefreshOverlay /> : null}
+            {refreshing ? (
+              <AevatarLoadingOverlay
+                ariaLabel={t(
+                  'workflowActivityVNext.run.refreshingDetail',
+                  'Refreshing run details…',
+                )}
+              />
+            ) : null}
           </div>
         </WorkflowActivityVNextShell>
       );
@@ -1448,7 +1515,14 @@ const RunDetailPage: React.FC<{
             </div>
           </section>
         </div>
-        {refreshing ? <RunDetailRefreshOverlay /> : null}
+        {refreshing ? (
+          <AevatarLoadingOverlay
+            ariaLabel={t(
+              'workflowActivityVNext.run.refreshingDetail',
+              'Refreshing run details…',
+            )}
+          />
+        ) : null}
       </div>
       <Modal
         aria-label={t(
