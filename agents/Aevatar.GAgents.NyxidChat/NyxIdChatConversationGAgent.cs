@@ -3081,6 +3081,16 @@ public sealed class NyxIdChatConversationGAgent
                     toolContext,
                     llmControl,
                     CancellationToken.None);
+            Logger.LogInformation(
+                "Agent profile turn authority prepared. turn={TurnId} activation={ActivationMode} kind={AuthorityKind} ceilingCount={CeilingCount} diagnostics={Diagnostics}",
+                command.TurnId,
+                profile.ActivationMode,
+                preparation.Authority.AuthorityKind,
+                preparation.Authority.AuthorityCeilingToolNames.Count,
+                string.Join(
+                    ",",
+                    preparation.Diagnostics.Select(static diagnostic =>
+                        $"{diagnostic.Code}:{diagnostic.Detail}")));
             return profile.ActivationMode == AgentProfileActivationMode.Shadow
                 ? null
                 : preparation.Authority;

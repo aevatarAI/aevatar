@@ -510,6 +510,101 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task PrepareNyxIdChatAsync_ProfileMemberNoMatch_ShouldKeepOrdinaryBaselineWithinProfileSurface()
+    {
+        // Mirrors the production #3532 shape: an enforced profile whose members
+        // are ops skills, an empty recovery policy, and an ordinary read
+        // question that matches the ordinary task route but no exact member.
+        var tools = NewTools("nyxid_services", "use_skill", "task", "extra");
+        var profile = BuildProfile();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add(["nyxid_services", "use_skill", "task"]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        var classifier = new SequencedClassifier(
+            AgentProfileTurnClassificationResult.Matched(
+                AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+            AgentProfileTurnClassificationResult.NoMatch());
+
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                classifier,
+                fetcher: null)
+            .PrepareNyxIdChatAsync(
+                SealProfile(profile),
+                "session-member-no-match",
+                "what NyxID services are connected to my account?",
+                tools,
+                ToolContext(),
+                llmControl: null,
+                CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Recovery);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "use_skill");
+        preparation.Authority.CandidateRoute.Should().BeNull();
+        preparation.Diagnostics.Should().Contain(static diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierNoMatch);
+    }
+
+    [Fact]
+    public async Task PrepareNyxIdChatAsync_ProfileClassifierFailureWithEmptyRecovery_ShouldKeepOrdinaryBaseline()
+    {
+        var tools = NewTools("nyxid_services", "use_skill", "task", "extra");
+        var profile = BuildProfile();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add(["nyxid_services", "use_skill", "task"]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        var classifier = new SequencedClassifier(
+            AgentProfileTurnClassificationResult.Matched(
+                AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+            AgentProfileTurnClassificationResult.Failed("provider_failure"));
+
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                classifier,
+                fetcher: null)
+            .PrepareNyxIdChatAsync(
+                SealProfile(profile),
+                "session-member-classifier-failure",
+                "check the issues assigned to me on my github",
+                tools,
+                ToolContext(),
+                llmControl: null,
+                CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Recovery);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "use_skill");
+        preparation.Diagnostics.Should().Contain(static diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed);
+    }
+
+    [Fact]
+    public async Task PrepareAsync_ClassifierNoMatch_ShouldStayRestrictedEmptyOutsideNyxIdChat()
+    {
+        var tools = NewTools("nyxid_services", "use_skill", "task");
+        var profile = BuildProfile();
+        profile.MaximumToolPolicy.ToolNames.Add(["nyxid_services", "use_skill"]);
+
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                fetcher: null)
+            .PrepareAsync(
+                SealProfile(profile),
+                "session-non-chat-no-match",
+                "what NyxID services are connected to my account?",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.RestrictedEmpty);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task PrepareNyxIdChatAsync_ExplicitAlias_ShouldIntentionallyBypassBuiltInClassification()
     {
         var tools = NewTools("recovery", "task", "extra");

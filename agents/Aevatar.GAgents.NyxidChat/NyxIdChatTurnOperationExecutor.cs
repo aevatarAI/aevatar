@@ -2472,10 +2472,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             {
                 _logger.LogWarning(
                     "Unprofiled NyxID chat baseline catalog materialized empty. diagnostics={Diagnostics}",
-                    string.Join(
-                        ",",
-                        catalog.Diagnostics.Select(static diagnostic =>
-                            $"{diagnostic.Code}:{diagnostic.Detail}")));
+                    FormatDiagnostics(catalog.Diagnostics));
             }
             else
             {
@@ -2483,10 +2480,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                     "Unprofiled NyxID chat baseline catalog materialized. toolCount={ToolCount} tools={Tools} diagnostics={Diagnostics}",
                     catalog.ExactTools.Count,
                     string.Join(",", catalog.FinalAllowedToolNames.OrderBy(static name => name, StringComparer.Ordinal)),
-                    string.Join(
-                        ",",
-                        catalog.Diagnostics.Select(static diagnostic =>
-                            $"{diagnostic.Code}:{diagnostic.Detail}")));
+                    FormatDiagnostics(catalog.Diagnostics));
             }
 
             return catalog;
@@ -2528,10 +2522,24 @@ public sealed class NyxIdChatTurnOperationExecutor
                         builtInToolContext,
                         ct)
                     .ConfigureAwait(false);
-                return AgentTurnToolCatalogMaterializer.NarrowToBuiltInIntent(
+                var narrowed = AgentTurnToolCatalogMaterializer.NarrowToBuiltInIntent(
                     input.Intent,
                     builtInCatalog,
                     authority?.AuthorityCeilingToolNames);
+                if (narrowed.ExactTools.Count > 0)
+                    return narrowed;
+
+                // The built-in action surface is all-or-nothing so a partial
+                // action tool set never ships, but the turn itself must not end
+                // with zero tools: an unprofiled turn degrades to the reviewed
+                // ordinary baseline instead.
+                _logger.LogWarning(
+                    "Built-in NyxID chat intent catalog materialized empty. intent={Intent} diagnostics={Diagnostics}",
+                    input.Intent,
+                    FormatDiagnostics(builtInCatalog.Diagnostics));
+                return profile is null && authority is null
+                    ? await MaterializeUnprofiledBaselineCatalogAsync(request, ct).ConfigureAwait(false)
+                    : narrowed;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -2567,19 +2575,45 @@ public sealed class NyxIdChatTurnOperationExecutor
                     toolContext,
                     ct)
                 .ConfigureAwait(false)).Catalog;
-            return IsBuiltInIntent(input.Intent)
+            var resolved = IsBuiltInIntent(input.Intent)
                 ? AgentTurnToolCatalogMaterializer.NarrowToBuiltInIntent(
                     input.Intent,
                     catalog,
                     authority.AuthorityCeilingToolNames)
                 : catalog;
+            if (resolved.ExactTools.Count == 0)
+            {
+                _logger.LogWarning(
+                    "Profiled NyxID chat turn catalog materialized empty. intent={Intent} authorityKind={AuthorityKind} ceilingCount={CeilingCount} diagnostics={Diagnostics}",
+                    input.Intent,
+                    authority.AuthorityKind,
+                    authority.AuthorityCeilingToolNames.Count,
+                    FormatDiagnostics(resolved.Diagnostics));
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Profiled NyxID chat turn catalog materialized. intent={Intent} authorityKind={AuthorityKind} toolCount={ToolCount} tools={Tools} diagnostics={Diagnostics}",
+                    input.Intent,
+                    authority.AuthorityKind,
+                    resolved.ExactTools.Count,
+                    string.Join(
+                        ",",
+                        resolved.FinalAllowedToolNames.OrderBy(static name => name, StringComparer.Ordinal)),
+                    FormatDiagnostics(resolved.Diagnostics));
+            }
+
+            return resolved;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            _logger.LogWarning(
+                exception,
+                "Profiled NyxID chat turn catalog materialization failed closed.");
             return RestrictedEmptyCatalog();
         }
     }
@@ -2649,6 +2683,12 @@ public sealed class NyxIdChatTurnOperationExecutor
             intentId,
             StringComparison.Ordinal);
     }
+
+    private static string FormatDiagnostics(
+        IEnumerable<AgentProfileTurnDiagnostic> diagnostics) =>
+        string.Join(
+            ",",
+            diagnostics.Select(static diagnostic => $"{diagnostic.Code}:{diagnostic.Detail}"));
 
     private static AgentTurnToolCatalog RestrictedEmptyCatalog() =>
         new(

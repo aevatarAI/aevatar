@@ -243,12 +243,23 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             if (diagnostics.Any(static diagnostic =>
                     diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierNoMatch))
             {
+                // A NyxID chat message that matches no exact profile member is
+                // still an ordinary assistant turn (#3532): it keeps the reviewed
+                // ordinary baseline attenuated by the profile's eligible surface
+                // (route set, visibility, maximum policy) instead of failing
+                // closed to zero tools. Non-chat surfaces keep the strict empty
+                // no-match contract.
+                var noMatchNames = includeBuiltInNyxIdIntents
+                    ? OrdinaryDegradedNames(available, recoveryNames)
+                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 return CreatePreparation(
                     sessionId,
                     candidate: null,
                     selectedExactSkillRef: null,
-                    AgentProfileTurnAuthorityKind.RestrictedEmpty,
-                    [],
+                    noMatchNames.Count == 0
+                        ? AgentProfileTurnAuthorityKind.RestrictedEmpty
+                        : AgentProfileTurnAuthorityKind.Recovery,
+                    noMatchNames,
                     diagnostics);
             }
 
@@ -274,7 +285,9 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                 candidate: null,
                 selectedExactSkillRef: null,
                 AgentProfileTurnAuthorityKind.Recovery,
-                recoveryNames,
+                includeBuiltInNyxIdIntents
+                    ? OrdinaryDegradedNames(available, recoveryNames)
+                    : recoveryNames,
                 diagnostics);
         }
 
@@ -1905,6 +1918,28 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             _ => AgentToolOperationRiskPayload.Unspecified,
         };
         return selector.AllowedRisks.Contains(risk);
+    }
+
+    /// <summary>
+    /// The degraded ceiling for an ordinary NyxID chat turn that selected no
+    /// exact profile member: the profile's recovery tools plus the reviewed
+    /// ordinary baseline, both already attenuated by the caller's eligible
+    /// surface (route set, visibility, and maximum policy). The sealed profile
+    /// ceiling is never widened; the baseline only survives where the profile
+    /// admits it.
+    /// </summary>
+    private static HashSet<string> OrdinaryDegradedNames(
+        IReadOnlySet<string> eligibleToolNames,
+        IReadOnlySet<string> recoveryToolNames)
+    {
+        var names = new HashSet<string>(recoveryToolNames, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in eligibleToolNames)
+        {
+            if (UnprofiledBaselineToolNames.Contains(name))
+                names.Add(name);
+        }
+
+        return names;
     }
 
     private static void ApplyMaximumPolicy(
