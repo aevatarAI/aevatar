@@ -359,7 +359,7 @@
     .schedule-cadence span { padding: 7px 5px; border: 1px solid #e5e7eb; border-radius: 5px; color: var(--muted); background: #fff; font-size: 11px; text-align: center; }
     .schedule-cadence span.selected { color: var(--blue); border-color: #84adff; background: var(--blue-bg); font-weight: 700; }
     .schedule-observation { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 5px; color: var(--muted); background: #fbfcfe; font-size: 11px; line-height: 1.45; }
-    .schedule-selected-title { min-width: 0; display: flex; align-items: flex-start; gap: 10px; }
+    .schedule-selected-title { min-width: 0; display: flex; align-items: center; gap: 10px; }
     .schedule-selected-title > div { min-width: 0; }
     .schedule-selected-title h2, .schedule-selected-title p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .schedule-tabs { display: flex; gap: 22px; margin: -2px -20px 20px; padding: 0 20px; border-bottom: 1px solid #e5e7eb; }
@@ -1482,6 +1482,7 @@ steps:
       selectedScheduleId = null;
       document.querySelector("#schedule-quick-back").hidden = true;
       document.querySelector("#schedule-quick-title").textContent = "Schedules";
+      document.querySelector("#schedule-quick-subtitle").hidden = false;
       document.querySelector("#schedule-quick-subtitle").textContent = `Recurring runs owned by ${workflow.name}.`;
       content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>Published Workflow · ${schedules.length} schedule${schedules.length === 1 ? "" : "s"}</span></div><span class="schedule-state">Managed</span></div><div class="section-heading" style="margin:0 0 10px"><div><h3>Schedules</h3><p>${schedules.length ? "Select a Schedule to review its configuration." : "Create recurring work for this published Workflow."}</p></div><button type="button" class="button small primary" id="quick-schedule-new">New schedule</button></div>${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : `<div class="schedule-quick-review"><p>No schedules yet.</p></div>`}`;
       footer.hidden = false;
@@ -1584,6 +1585,7 @@ steps:
         footer = root.querySelector("#schedule-quick-footer");
         root.querySelector("#schedule-quick-back").hidden = true;
         root.querySelector("#schedule-quick-title").textContent = stepPresentation[0];
+        root.querySelector("#schedule-quick-subtitle").hidden = false;
         root.querySelector("#schedule-quick-subtitle").textContent = stepPresentation[1];
         footer.hidden = false;
       }
@@ -2195,8 +2197,8 @@ steps:
       const back = document.querySelector("#schedule-quick-back");
       back.hidden = false;
       back.onclick = () => renderScheduleModalList(workflow);
-      document.querySelector("#schedule-quick-title").textContent = schedule.displayName;
-      document.querySelector("#schedule-quick-subtitle").textContent = workflow.name;
+      document.querySelector("#schedule-quick-title").textContent = `${schedule.displayName} · ${workflow.name}`;
+      document.querySelector("#schedule-quick-subtitle").hidden = true;
       content.innerHTML = scheduleSelectedMarkup(schedule, "modal");
       footer.hidden = scheduleModalMode !== "edit";
       footer.innerHTML = scheduleModalMode === "edit" ? `<button type="button" class="button" id="schedule-edit-cancel">Cancel</button><button type="button" class="button primary" id="schedule-save">Save changes</button>` : "";
@@ -2244,7 +2246,7 @@ steps:
         return;
       }
 
-      panel.innerHTML = `<header class="studio-panel-header"><div class="schedule-selected-title"><button type="button" class="icon-button" id="schedule-back" aria-label="Back to schedules" title="Back">←</button><div><h2>${escapeHtml(schedule.displayName)}</h2><p>${escapeHtml(currentWorkflow.name)}</p></div></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header><div class="studio-panel-body" id="schedule-selected-body">${scheduleSelectedMarkup(schedule, "panel")}</div><footer class="studio-panel-footer" id="schedule-selected-footer" ${schedulePanelMode === "edit" ? "" : "hidden"}>${schedulePanelMode === "edit" ? `<button type="button" class="button small" id="schedule-edit-cancel">Cancel</button><button type="button" class="button small primary" id="schedule-save">Save changes</button>` : ""}</footer>`;
+      panel.innerHTML = `<header class="studio-panel-header"><div class="schedule-selected-title"><button type="button" class="icon-button" id="schedule-back" aria-label="Back to schedules" title="Back">←</button><div><h2>${escapeHtml(schedule.displayName)} · ${escapeHtml(currentWorkflow.name)}</h2></div></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header><div class="studio-panel-body" id="schedule-selected-body">${scheduleSelectedMarkup(schedule, "panel")}</div><footer class="studio-panel-footer" id="schedule-selected-footer" ${schedulePanelMode === "edit" ? "" : "hidden"}>${schedulePanelMode === "edit" ? `<button type="button" class="button small" id="schedule-edit-cancel">Cancel</button><button type="button" class="button small primary" id="schedule-save">Save changes</button>` : ""}</footer>`;
       panel.querySelector("#close-schedule").onclick = closeSchedulePanel;
       panel.querySelector("#schedule-back").onclick = () => {
         schedulePanelMode = "list";

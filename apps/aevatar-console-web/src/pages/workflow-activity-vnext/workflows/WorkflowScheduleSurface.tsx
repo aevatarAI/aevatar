@@ -679,8 +679,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setSurfaceView('list');
   };
 
-  const showingHistory =
-    surfaceView === 'detail' && detailTab === 'history' && selectedSchedule;
   const selectedScheduleTitle = selectedSchedule ? (
     <div className="wa-vnext__schedule-selected-title">
       <Button
@@ -692,45 +690,28 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         onClick={returnToScheduleList}
         type="text"
       />
-      {showingHistory ? (
-        <h2
-          aria-label={t(
-            'workflowActivityVNext.schedule.historyContextAria',
-            'Schedule history for schedule {scheduleName} in workflow {workflowName}',
-            {
-              scheduleName: selectedSchedule.displayName,
-              workflowName,
-            },
-          )}
-          className="wa-vnext__schedule-selected-heading wa-vnext__schedule-selected-heading--history"
+      <h2
+        aria-label={t(
+          'workflowActivityVNext.schedule.selectedContextAria',
+          'Schedule {scheduleName} in workflow {workflowName}',
+          {
+            scheduleName: selectedSchedule.displayName,
+            workflowName,
+          },
+        )}
+        className="wa-vnext__schedule-selected-heading"
+      >
+        <strong title={selectedSchedule.displayName}>
+          {selectedSchedule.displayName}
+        </strong>
+        <span aria-hidden="true"> · </span>
+        <span
+          className="wa-vnext__schedule-selected-heading-context"
+          title={workflowName}
         >
-          <strong>
-            {t(
-              'workflowActivityVNext.schedule.historyTitle',
-              'Schedule history',
-            )}
-          </strong>
-          <span aria-hidden="true"> · </span>
-          <span
-            className="wa-vnext__schedule-selected-heading-context"
-            title={selectedSchedule.displayName}
-          >
-            {selectedSchedule.displayName}
-          </span>
-          <span aria-hidden="true"> · </span>
-          <span
-            className="wa-vnext__schedule-selected-heading-context"
-            title={workflowName}
-          >
-            {workflowName}
-          </span>
-        </h2>
-      ) : (
-        <div className="wa-vnext__schedule-selected-heading">
-          <strong>{selectedSchedule.displayName}</strong>
-          <span>{workflowName}</span>
-        </div>
-      )}
+          {workflowName}
+        </span>
+      </h2>
     </div>
   ) : null;
 

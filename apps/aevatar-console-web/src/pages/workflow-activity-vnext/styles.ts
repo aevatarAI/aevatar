@@ -802,12 +802,12 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-row-arrow { color: var(--wa-muted); flex: 0 0 auto; font-size: 22px; line-height: 1; }
 .wa-vnext__schedule-selected-title { align-items: center; display: flex; gap: 8px; min-width: 0; }
 .wa-vnext__schedule-selected-title > .ant-btn { flex: 0 0 auto; margin-inline-start: -8px; }
-.wa-vnext__schedule-selected-heading { display: grid; gap: 1px; min-width: 0; }
+.wa-vnext__schedule-selected-heading { align-items: baseline; display: flex; font-weight: inherit; margin: 0; min-width: 0; overflow: hidden; white-space: nowrap; }
 .wa-vnext__schedule-selected-title strong { color: var(--wa-ink); font-size: 16px; line-height: 21px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wa-vnext__schedule-selected-title span { color: var(--wa-muted); font-size: 11px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wa-vnext__schedule-selected-heading--history { align-items: baseline; display: flex; font-weight: inherit; margin: 0; overflow: hidden; white-space: nowrap; }
-.wa-vnext__schedule-selected-heading--history strong, .wa-vnext__schedule-selected-heading--history > span[aria-hidden="true"] { flex: 0 0 auto; }
-.wa-vnext__schedule-selected-heading--history .wa-vnext__schedule-selected-heading-context { flex: 0 1 auto; font-size: 13px; line-height: 21px; min-width: 0; }
+.wa-vnext__schedule-selected-heading strong, .wa-vnext__schedule-selected-heading .wa-vnext__schedule-selected-heading-context { flex: 0 1 auto; min-width: 0; }
+.wa-vnext__schedule-selected-heading > span[aria-hidden="true"] { flex: 0 0 auto; font-size: 13px; line-height: 21px; }
+.wa-vnext__schedule-selected-heading .wa-vnext__schedule-selected-heading-context { font-size: 13px; line-height: 21px; }
 .wa-vnext__schedule-detail { display: grid; gap: 18px; min-width: 0; position: relative; }
 .wa-vnext__schedule-detail > .ant-tabs { margin-bottom: -2px; }
 .wa-vnext__schedule-overview { display: grid; gap: 14px; min-width: 0; }

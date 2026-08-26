@@ -23,13 +23,13 @@ SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PNG_SHA256 = {
-    "schedule-workflows-list-modal.png": "d505b83ca15afb55e68b244a123cc48771c41b96d29a29a8954b1deef11cb0a1",
-    "schedule-workflow-editor-panel.png": "73f22d45077b3849243e7c91185eee461d1ed6c900f1bc9987a8c3392818617c",
-    "schedule-review.png": "129beba83372ef775c1a171ec7475251332c3833bb121729c79dec1843ff7433",
-    "schedule-creation-pending.png": "5d32507eab30c31db7f91f8511ef51e4ccba5003482c3ba32577ab8001e71b70",
-    "schedule-detail.png": "4c4f5a06ca4ca15325e6692209783310800f48f8cc487edc246b5ac0fcde4041",
-    "schedule-history.png": "f3d871691e5f34648b2e00023ea8a471c81af9383f024900b988c3d2e982663d",
-    "schedule-edit.png": "29db6035c476649e8fc5a5548bcdca4bd9b2c4b82cdc9fd4ea36f6bbceb10796",
+    "schedule-workflows-list-modal.png": "c328b3fbab83e7500a4e632bbd8e9a9315fb28b2e671278664cbc6d9a8d08d6e",
+    "schedule-workflow-editor-panel.png": "e21eddf69c4dfa7aae10de7f6f8047126c07d234fe99a0cda9389d3e0f0d82d8",
+    "schedule-review.png": "123e681da9d37a587dc6024ace8cba57d22cd41a86883027622853ce33d4de34",
+    "schedule-creation-pending.png": "677a02d7f4e9c27b1c0af4b1f039b97851c3ab1f897358eaa0510e2fc1f7e923",
+    "schedule-detail.png": "69e3d666f102ce9cb802837e0d97ade3502dd9299e59983591ed50a337d0f92d",
+    "schedule-history.png": "9f6d7a85bdaa5bed6919f0f6b09deebdceaa463ea60a062a8d4fe99ad6bd8089",
+    "schedule-edit.png": "373d69cc42b1a92c6517f48133640ad8965dda1e4eb8dbb03e287a5f550166f1",
 }
 OBSOLETE_SCHEDULE_PNGS = (
     "prototype-schedule.png",
@@ -37,7 +37,7 @@ OBSOLETE_SCHEDULE_PNGS = (
     "schedule-authorization-review.png",
 )
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "688d5b14a2e1047739f3cf950a1714e256523430cf6966b1441e4b1e4344b3e0"
+EXPECTED_SCHEDULE_SHA256 = "7a4007bdfda705b4862bda88f080d3705d1576451ca200c2a45c21ebf6e9848c"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",

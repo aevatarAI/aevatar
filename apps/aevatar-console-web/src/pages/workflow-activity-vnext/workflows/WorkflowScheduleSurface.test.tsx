@@ -711,6 +711,51 @@ describe('WorkflowScheduleSurface', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('keeps one selected Schedule header while switching detail tabs', async () => {
+    const schedule = createScheduleSummary();
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get.mockResolvedValue({
+      schedule,
+      recentFires: [],
+    });
+
+    renderSurface(true, 'modal', jest.fn(), 'list');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+
+    const dialog = screen.getByRole('dialog');
+    const overviewHeader = dialog.querySelector(
+      '.wa-vnext__schedule-selected-heading',
+    );
+    await waitFor(() => expect(overviewHeader).toBeVisible());
+
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Recent attempts' }),
+    ).toBeVisible();
+
+    const historyHeader = dialog.querySelector(
+      '.wa-vnext__schedule-selected-heading',
+    );
+    expect(historyHeader).toBe(overviewHeader);
+    expect(historyHeader).toHaveTextContent(
+      'Daily workflow run · Weekly review',
+    );
+    expect(historyHeader).toHaveAccessibleName(
+      'Schedule Daily workflow run in workflow Weekly review',
+    );
+    expect(
+      within(dialog).queryByText('Schedule history', {
+        selector: '.ant-modal-title *',
+      }),
+    ).not.toBeInTheDocument();
+  });
+
   it('presents Schedule Overview with primary actions and guarded lifecycle actions', async () => {
     const schedule = createScheduleSummary({
       prompt: 'Summarize new feedback.',
@@ -934,15 +979,15 @@ describe('WorkflowScheduleSurface', () => {
     const dialog = screen.getByRole('dialog');
     await waitFor(() => {
       const historyHeading = dialog.querySelector(
-        '.wa-vnext__schedule-selected-heading--history',
+        '.wa-vnext__schedule-selected-heading',
       );
       expect(historyHeading).toBeVisible();
       expect(historyHeading).toHaveTextContent(
-        'Schedule history · Daily workflow run · Weekly review',
+        'Daily workflow run · Weekly review',
       );
       expect(historyHeading).toHaveAttribute(
         'aria-label',
-        'Schedule history for schedule Daily workflow run in workflow Weekly review',
+        'Schedule Daily workflow run in workflow Weekly review',
       );
     });
     expect(

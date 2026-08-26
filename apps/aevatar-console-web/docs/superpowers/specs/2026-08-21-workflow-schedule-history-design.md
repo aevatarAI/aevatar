@@ -78,20 +78,22 @@ action.
 ### Selected Schedule header
 
 The back/close structure and resource context are stable across Overview,
-History, and Edit. The History task uses an explicit task title:
+History, and Edit. Every selected-Schedule state uses the same one-line resource
+identity:
 
 ```text
-[Back]  Schedule history · Morning digest · Weekly Feedback Report  [Close]
+[Back]  Morning digest · Weekly Feedback Report  [Close]
 ```
 
 - Back returns to the Schedule collection inside the current container.
 - Close exits the entire Schedule management modal or panel.
-- History keeps `Schedule history`, the selected Schedule, and the owning
-  Workflow on one line. Long resource names truncate rather than increasing
-  the header height, while accessible labels and title text retain the full
-  context.
-- Overview and Edit may retain the selected Schedule name as the primary title
-  while keeping the Workflow as secondary context.
+- The selected Schedule and owning Workflow stay on one line. Long resource
+  names truncate rather than increasing the header height, while accessible
+  labels and title text retain the full context.
+- Switching Overview and History changes only the content below the tab list;
+  it never replaces or rewrites the selected-Schedule header.
+- The active tab is the sole view label. `Schedule history` is not repeated in
+  the resource title.
 - There is no footer-level `Back to schedules` action.
 
 Back and Close are separate controls because they produce different state
@@ -385,7 +387,8 @@ and History are separate PNGs so each state can be reviewed at readable size.
 - `View related runs in Activity` uses exact Workflow and Schedule filters.
 - Activity and Run links open in a new tab without closing or navigating the
   current Schedule surface.
-- The History title and its Schedule/Workflow context stay on one visual line.
+- The same `Schedule · Workflow` title stays on one visual line across Overview
+  and History.
 - Schedule is absent from Activity Source filters and no handoff sends
   `origin=schedule`.
 - A single transient Activity handoff request failure is retried once; 4xx

@@ -656,9 +656,8 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.historyLoading': 'Loading history…',
   'workflowActivityVNext.schedule.historyLoadFailed':
     "History couldn't be loaded",
-  'workflowActivityVNext.schedule.historyTitle': 'Schedule history',
-  'workflowActivityVNext.schedule.historyContextAria':
-    'Schedule history for schedule {scheduleName} in workflow {workflowName}',
+  'workflowActivityVNext.schedule.selectedContextAria':
+    'Schedule {scheduleName} in workflow {workflowName}',
   'workflowActivityVNext.schedule.scheduleContext': 'Schedule: {name}',
   'workflowActivityVNext.schedule.workflowContext': 'Workflow: {name}',
   'workflowActivityVNext.schedule.overview': 'Overview',

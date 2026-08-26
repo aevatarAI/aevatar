@@ -613,9 +613,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.detailTitle': '计划任务详情',
     'workflowActivityVNext.schedule.historyLoading': '正在加载历史记录…',
     'workflowActivityVNext.schedule.historyLoadFailed': '无法加载历史记录',
-    'workflowActivityVNext.schedule.historyTitle': '计划任务历史',
-    'workflowActivityVNext.schedule.historyContextAria':
-      '工作流 {workflowName} 中计划任务 {scheduleName} 的历史记录',
+    'workflowActivityVNext.schedule.selectedContextAria':
+      '工作流 {workflowName} 中的计划任务 {scheduleName}',
     'workflowActivityVNext.schedule.scheduleContext': '计划任务：{name}',
     'workflowActivityVNext.schedule.workflowContext': '工作流：{name}',
     'workflowActivityVNext.schedule.overview': '概览',
