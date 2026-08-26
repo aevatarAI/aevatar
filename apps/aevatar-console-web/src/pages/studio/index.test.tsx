@@ -14,6 +14,11 @@ import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
+import {
+  buildGAgentServiceRevisionCatalogFixture as mockBuildGAgentServiceRevisionCatalog,
+  buildScriptServiceRevisionCatalogFixture as mockBuildScriptServiceRevisionCatalog,
+  buildServiceRevisionCatalogFixture as mockBuildServiceRevisionCatalog,
+} from "../../../tests/studioServiceCatalogFixtures";
 import StudioPage, { buildStudioMemberBindingPendingNotice } from "./index";
 
 jest.mock("antd", () => {
@@ -137,142 +142,6 @@ function mockBuildWorkflowYaml(document: typeof mockWorkflowDocument): string {
     ...stepLines,
     "",
   ].join("\n");
-}
-
-function mockBuildServiceRevisionCatalog(
-  overrides?: Partial<{
-    scopeId: string;
-    serviceId: string;
-    displayName: string;
-    workflowName: string;
-    revisionId: string;
-    deploymentStatus: string;
-  }>
-) {
-  const scopeId = overrides?.scopeId ?? "scope-1";
-  const serviceId = overrides?.serviceId ?? "default";
-  const displayName = overrides?.displayName ?? "workspace-demo";
-  const workflowName = overrides?.workflowName ?? displayName;
-  const revisionId = overrides?.revisionId ?? "rev-2";
-  const deploymentStatus = overrides?.deploymentStatus ?? "Active";
-
-  return {
-    scopeId,
-    serviceId,
-    serviceKey: `${scopeId}:default:default:${serviceId}`,
-    displayName,
-    defaultServingRevisionId: revisionId,
-    activeServingRevisionId: revisionId,
-    deploymentId: "dep-2",
-    deploymentStatus,
-    primaryActorId: "actor-default",
-    catalogStateVersion: 2,
-    catalogLastEventId: "event-2",
-    updatedAt: "2026-03-26T08:00:00Z",
-    revisions: [
-      {
-        revisionId,
-        implementationKind: "workflow",
-        status: "Published",
-        artifactHash: "hash-2",
-        failureReason: "",
-        isDefaultServing: true,
-        isActiveServing: true,
-        isServingTarget: true,
-        allocationWeight: 100,
-        servingState: "Active",
-        deploymentId: "dep-2",
-        primaryActorId: "actor-default",
-        createdAt: "2026-03-26T07:00:00Z",
-        preparedAt: "2026-03-26T07:01:00Z",
-        publishedAt: "2026-03-26T07:02:00Z",
-        retiredAt: null,
-        workflowName,
-        workflowDefinitionActorId: "scope-workflow:scope-1:default",
-        inlineWorkflowCount: 1,
-        scriptId: "",
-        scriptRevision: "",
-        scriptDefinitionActorId: "",
-        scriptSourceHash: "",
-        staticAgentKind: "",
-      },
-    ],
-  };
-}
-
-function mockBuildScriptServiceRevisionCatalog(
-  overrides?: Partial<{
-    scopeId: string;
-    serviceId: string;
-    displayName: string;
-    scriptId: string;
-    revisionId: string;
-  }>
-) {
-  const scriptId = overrides?.scriptId ?? "script-alpha";
-  const revisionId = overrides?.revisionId ?? "rev-script-1";
-  const catalog = mockBuildServiceRevisionCatalog({
-    scopeId: overrides?.scopeId,
-    serviceId: overrides?.serviceId ?? scriptId,
-    displayName: overrides?.displayName ?? scriptId,
-    workflowName: "",
-    revisionId,
-  });
-
-  return {
-    ...catalog,
-    revisions: [
-      {
-        ...catalog.revisions[0],
-        implementationKind: "script",
-        workflowName: "",
-        workflowDefinitionActorId: "",
-        inlineWorkflowCount: 0,
-        scriptId,
-        scriptRevision: revisionId,
-        scriptDefinitionActorId: "definition-1",
-        scriptSourceHash: "hash-1",
-      },
-    ],
-  };
-}
-
-function mockBuildGAgentServiceRevisionCatalog(
-  overrides?: Partial<{
-    scopeId: string;
-    serviceId: string;
-    displayName: string;
-    agentKind: string;
-    revisionId: string;
-  }>
-) {
-  const agentKind = overrides?.agentKind ?? "Tests.OrdersGAgent";
-  const revisionId = overrides?.revisionId ?? "rev-gagent-1";
-  const catalog = mockBuildServiceRevisionCatalog({
-    scopeId: overrides?.scopeId,
-    serviceId: overrides?.serviceId ?? "gagent-1",
-    displayName: overrides?.displayName ?? "gagent-1",
-    workflowName: "",
-    revisionId,
-  });
-
-  return {
-    ...catalog,
-    revisions: [
-      {
-        ...catalog.revisions[0],
-        implementationKind: "gagent",
-        workflowName: "",
-        workflowDefinitionActorId: "",
-        inlineWorkflowCount: 0,
-        scriptId: "",
-        scriptRevision: "",
-        scriptDefinitionActorId: "",
-        scriptSourceHash: "",
-        staticAgentKind: agentKind,
-      },
-    ],
-  };
 }
 
 function mockBuildServiceRunSummary(
@@ -1721,8 +1590,21 @@ jest.mock("./components/StudioBootstrapGate", () => ({
   default: ({ children }: MockChildrenProps) => children,
 }));
 
+jest.mock("@/modules/studio/scripts/ScriptCodeEditor", () => {
+  const mockReact = require("react");
+  return {
+    __esModule: true,
+    default: () =>
+      mockReact.createElement("textarea", {
+        "aria-label": "Mock script code editor",
+        readOnly: true,
+      }),
+  };
+});
+
 jest.mock("./components/StudioBuildPanels", () => {
   const mockReact = require("react");
+  const actualBuildPanels = jest.requireActual("./components/StudioBuildPanels");
   const StudioWorkflowBuildPanel = (props: any) => {
     mockLastWorkflowBuildPanelProps = props;
     const [detailsMode, setDetailsMode] = mockReact.useState("step");
@@ -2108,85 +1990,6 @@ jest.mock("./components/StudioBuildPanels", () => {
     ]);
   };
 
-  const StudioGAgentBuildPanel = (props: any) => {
-    mockReact.useEffect(() => {
-      props.onBuildStateChange?.({
-        agentKind: props.selectedAgentKind || "Tests.OrdersGAgent",
-        displayName: props.currentMemberLabel || "orders-gagent",
-        initialPrompt: "You are the team member gagent.",
-        persistenceMode: "grain",
-        role: "intake-classifier",
-        tools: ["classify_intent", "detect_language"],
-      });
-    }, [props.currentMemberLabel, props.onBuildStateChange, props.selectedAgentKind]);
-
-    return mockReact.createElement("div", { "data-testid": "studio-gagent-build-panel" }, [
-      mockReact.createElement("div", { key: "title" }, "GAgent definition"),
-      mockReact.createElement("div", { key: "provenance" }, "template · seeded"),
-      mockReact.createElement("input", {
-        key: "type",
-        "aria-label": "GAgent type",
-        value: props.selectedAgentKind || "",
-        onChange: (event: MockValueEvent) =>
-          props.onSelectAgentKind?.(event.target.value),
-      }),
-      mockReact.createElement("input", {
-        key: "display-name",
-        "aria-label": "Display name",
-        defaultValue: "orders-gagent",
-      }),
-      mockReact.createElement("input", {
-        key: "role",
-        "aria-label": "Role",
-        defaultValue: "intake-classifier",
-      }),
-      mockReact.createElement("textarea", {
-        key: "prompt",
-        "aria-label": "Initial prompt",
-        defaultValue: "You are the team member gagent.",
-      }),
-      mockReact.createElement("input", {
-        key: "tools",
-        "aria-label": "Tools",
-        defaultValue: "classify_intent, detect_language",
-      }),
-      mockReact.createElement(
-        "label",
-        { key: "grain" },
-        [
-          mockReact.createElement("input", {
-            key: "grain-input",
-            type: "radio",
-            name: "gagent-persistence",
-            defaultChecked: true,
-          }),
-          "Orleans grain",
-        ]
-      ),
-      mockReact.createElement(
-        "label",
-        { key: "ephemeral" },
-        [
-          mockReact.createElement("input", {
-            key: "ephemeral-input",
-            type: "radio",
-            name: "gagent-persistence",
-          }),
-          "Ephemeral",
-        ]
-      ),
-      mockReact.createElement(
-        "button",
-        {
-          key: "bind",
-          type: "button",
-          onClick: () => props.onContinueToBind?.(),
-        },
-        "Continue to Bind"
-      ),
-    ]);
-  };
-
   return {
     __esModule: true,
     getDefaultBuildModeCards: (scriptsEnabled: boolean) => [
@@ -2214,7 +2017,7 @@ jest.mock("./components/StudioBuildPanels", () => {
     ],
     StudioWorkflowBuildPanel,
     StudioScriptBuildPanel,
-    StudioGAgentBuildPanel,
+    StudioGAgentBuildPanel: actualBuildPanels.StudioGAgentBuildPanel,
   };
 });
 
@@ -2295,6 +2098,20 @@ jest.mock("./components/StudioShell", () => ({
                     },
                     member.label
                   ),
+                  member.description
+                    ? React.createElement(
+                        "span",
+                        { key: `member-description-${member.key}` },
+                        member.description
+                      )
+                    : null,
+                  member.meta
+                    ? React.createElement(
+                        "span",
+                        { key: `member-meta-${member.key}` },
+                        member.meta
+                      )
+                    : null,
                 ]
               )
             ),
@@ -4013,11 +3830,12 @@ describe("StudioPage", () => {
       expect(mockRuntimeGAgentApi.listKinds).toHaveBeenCalled();
     });
 
-    expect(await screen.findByLabelText("GAgent type")).toBeTruthy();
-    expect(screen.getByLabelText("Display name")).toBeTruthy();
-    expect(screen.getByLabelText("Role")).toBeTruthy();
-    expect(screen.getByLabelText("Initial prompt")).toBeTruthy();
-    expect(screen.getByLabelText("Tools")).toBeTruthy();
+    expect((await screen.findAllByText("Orders Assistant")).length).toBeGreaterThan(0);
+    expect(await screen.findByRole("combobox", { name: "GAgent type" })).toBeTruthy();
+    expect(screen.getByLabelText("GAgent display name")).toBeTruthy();
+    expect(screen.getByLabelText("GAgent role")).toBeTruthy();
+    expect(screen.getByLabelText("GAgent initial prompt")).toBeTruthy();
+    expect(screen.getByLabelText("GAgent tools")).toBeTruthy();
     expect(screen.getByLabelText("Orleans grain")).toBeTruthy();
     expect(screen.getByLabelText("Ephemeral")).toBeTruthy();
   });
@@ -7905,7 +7723,7 @@ describe("StudioPage", () => {
     });
   });
 
-  it("fetches published revisions for each service on initial Studio rail render", async () => {
+  it("renders published revision identity for each service in the initial Studio rail", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
@@ -7945,22 +7763,28 @@ describe("StudioPage", () => {
         ],
       },
     ]);
+    mockScopeRuntimeApi.getServiceRevisions.mockImplementationOnce(async () =>
+      mockBuildServiceRevisionCatalog({
+        serviceId: "default",
+        workflowName: "workspace-demo",
+        revisionId: "rev-workspace-3",
+      })
+    );
+    mockScopeRuntimeApi.getServiceRevisions.mockImplementationOnce(async () =>
+      mockBuildServiceRevisionCatalog({
+        serviceId: "billing-api",
+        displayName: "Billing API",
+        workflowName: "billing-workflow",
+        revisionId: "rev-billing-7",
+      })
+    );
 
     renderStudioPage("/studio?scopeId=scope-1&tab=studio");
 
     const rail = await screen.findByLabelText("Team members");
     expect(await within(rail).findByRole("button", { name: "Billing API" })).toBeTruthy();
-
-    await waitFor(() => {
-      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledWith(
-        "scope-1",
-        "default"
-      );
-      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledWith(
-        "scope-1",
-        "billing-api"
-      );
-    });
+    expect(await within(rail).findByText(/billing-workflow/)).toBeTruthy();
+    expect(within(rail).getByText(/billing-api · rev-billing-7/)).toBeTruthy();
   });
 
   it("does not truncate the team member rail when more than eight members are available", async () => {
@@ -8391,25 +8215,6 @@ describe("StudioPage", () => {
       expect(screen.getByText("member:m-script-alpha")).toBeTruthy();
     });
     expect(screen.queryByText("services:member-m-script-alpha")).toBeNull();
-  });
-
-  it("loads discovered GAgent types and the published service revision catalog", async () => {
-    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
-      ...defaultStudioAppContext,
-      scopeId: "scope-1",
-      scopeResolved: true,
-    });
-    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
-
-    await waitFor(() => {
-      expect(mockRuntimeGAgentApi.listKinds).toHaveBeenCalled();
-    });
-    await waitFor(() => {
-      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledWith(
-        "scope-1",
-        "default"
-      );
-    });
   });
 
   it("stops the selected member run from the observe view", async () => {
