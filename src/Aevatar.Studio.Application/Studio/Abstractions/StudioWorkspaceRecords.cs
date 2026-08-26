@@ -53,7 +53,8 @@ public sealed record StoredConnectorDefinition(
     int Retry,
     StoredHttpConnectorConfig Http,
     StoredCliConnectorConfig Cli,
-    StoredMcpConnectorConfig Mcp);
+    StoredMcpConnectorConfig Mcp,
+    StoredHostCallbackConnectorConfig HostCallback);
 
 public sealed record StoredHttpConnectorConfig(
     string BaseUrl,
@@ -81,6 +82,11 @@ public sealed record StoredMcpConnectorConfig(
     StoredConnectorAuthConfig Auth,
     string DefaultTool,
     IReadOnlyList<string> AllowedTools,
+    IReadOnlyList<string> AllowedInputKeys);
+
+public sealed record StoredHostCallbackConnectorConfig(
+    string Handler,
+    IReadOnlyList<string> AllowedOperations,
     IReadOnlyList<string> AllowedInputKeys);
 
 public sealed record StoredConnectorAuthConfig(

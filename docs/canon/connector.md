@@ -121,6 +121,13 @@ Connector 是否需要认证不改变它的所有权。只要 operation 由部�
 
 Workflow authoring 只消费 `ConnectorExternalWorkflowCapabilitySource` 从 `IConnectorCatalogQueryPort` 读取的 typed descriptor。每个 descriptor 使用三元组 `connector_capability_ref + operation_id + contract_digest` 标识一个 exact operation；digest 是安全的 contract fingerprint，不包含 secret value。只有 connector 当前存在、启用、operation 仍在 allowlist 且 digest 匹配时，point-in-time readiness 才是 `READY`。缺失、禁用和 contract drift 返回 typed blocker 与 `studio:connectors` trusted remediation，不在 Chat 中接收凭据。
 
+`host_callback` 只有在 handler 实现 `IDeterministicComputeHandler`，且 catalog 的 `handler + allowedOperations`
+与宿主已注册的 `DeterministicAlgorithmDescriptor` 精确对齐时才会发布 typed descriptor。缺失 handler、
+空 allowlist、operation 缺失/多余、重复或无效算法签名均不发布弱 descriptor。其 contract digest 除公共 connector
+字段外，还绑定 `host-callback-operation.v1`、handler、algorithm id/version、input/output JSON Schema SHA-256
+digest 与 `allowedInputKeys`；算法版本或 schema 变化因此会在既有 admission/revalidation 主链产生
+`CONNECTOR_CONTRACT_DRIFT`，消费方必须显式重新准入。
+
 所有普通 Workflow write 仍由服务器端 `IWorkflowExternalCapabilityAdmissionService` 重新解析 YAML 和校验 readiness。Chat 的 `list_external_workflow_capabilities` / `inspect_external_workflow_capability_readiness` 只负责只读引导，不是安全边界，也不创建或刷新 Connector。Definition actor 会独立重算 capability tuple，并把 definition 与 admission digest 在同一个 actor transition 中提交。
 
 ---
@@ -313,6 +320,16 @@ Actor audit facts. Recovery then revokes both protected request and completion m
   - 同时把稳定字段展平到 metadata，例如 `host_callback.result.route=phase9-router`
 - 这类 connector 适合“host 已拥有的 published surface”，例如 GitHub label/merge/close 分类、phase9-router entry routing、vibe-map closure 等宿主职责；引擎不为这些场景新增内置控制器能力。
 
+确定性计算是 `host_callback` 的受治理子集，而不是新的 workflow primitive：
+
+- handler 实现 `IDeterministicComputeHandler`，每个 operation 声明稳定 algorithm id、正整数 version 以及
+  canonical input/output JSON Schema 的 SHA-256 digest；
+- handler 必须是纯函数，禁止读取 clock、random、环境变量、文件、网络或其他外部状态；同一输入必须得到同一输出；
+- deterministic connector 的 `allowedOperations` 必须非空，并与 handler descriptors 精确对齐，否则 builder fail closed；
+- 成功或失败响应都沿普通 connector 结果链返回；已识别算法的 metadata 包含
+  `host_callback.algorithm_version`，并由 `ConnectorCallModule` 复制到 `StepCompletedEvent.Annotations`；
+- 需要并行保留旧语义时，注册新的 algorithm id（例如后缀 `_v2`），不在运行时按版本分支。
+
 ## 3.4 Host 责任边界
 
 以下职责明确属于 host，而不是 workflow engine：
@@ -326,6 +343,15 @@ Actor audit facts. Recovery then revokes both protected request and completion m
 - `host-not-controller`：Host 可以通过 connector callback 暴露已存在的宿主能力，但 workflow engine 不为此新增 controller 式编排能力。
 - `published-surfaces-only`：workflow 只能消费 host 已正式发布的 surface，例如 `host_callback` handler 契约；不能要求 host 暴露新的内部 runtime 侧读接口。
 - `no-new-aevatar-endpoints`：这类能力不通过新增 Aevatar endpoint 进入 engine 主链。
+
+## 3.5 确定性能力选型
+
+1. 通用、内容无关且小而稳定的文本、JSON、算术、聚合或模板操作：演进现有 typed `transform_operation`。
+2. 由宿主或领域拥有、需要版本化算法签名且不应经过 LLM 的历法、编号规则、哈希派生等纯换算：使用
+   deterministic `host_callback`，经 connector catalog 与统一 admission 主链发布。
+3. HTTP、CLI、MCP 服务或其他外部能力调用：使用对应 connector；authority 由用户/org credential、OAuth
+   connection、NyxID UserService 或 local Node 拥有时继续走 NyxID capability，不能改写成 host callback。
+4. 用户上传代码：不通过 deterministic host callback 提供；继续遵守 scripting / dynamic workflow 的既有边界。
 
 ---
 

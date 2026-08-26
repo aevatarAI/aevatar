@@ -53,3 +53,26 @@ public interface IHostCallbackConnectorHandler
         HostCallbackConnectorRequest request,
         CancellationToken ct = default);
 }
+
+// Implement (issue #3526):
+//   Behavior: Give deterministic host operations a typed, versioned signature for admission and drift detection.
+//   Why this shape: The signature extends the existing host callback contract instead of creating another workflow primitive.
+/// <summary>
+/// Versioned signature for one pure deterministic algorithm exposed as a host callback operation.
+/// Schema digests are SHA-256 fingerprints of canonical JSON Schema documents.
+/// </summary>
+public sealed record DeterministicAlgorithmDescriptor(
+    string AlgorithmId,
+    int AlgorithmVersion,
+    string InputSchemaDigest,
+    string OutputSchemaDigest);
+
+/// <summary>
+/// Host callback restricted to pure deterministic computation. Implementations must not read the
+/// clock, randomness, environment, network, file system, or any other external state.
+/// </summary>
+public interface IDeterministicComputeHandler : IHostCallbackConnectorHandler
+{
+    /// <summary>Exact versioned algorithm signatures owned by this handler.</summary>
+    IReadOnlyList<DeterministicAlgorithmDescriptor> Algorithms { get; }
+}

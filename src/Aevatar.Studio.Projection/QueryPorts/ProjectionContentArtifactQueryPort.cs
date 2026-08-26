@@ -43,6 +43,8 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
         AddOptionalEqual(filters, "lifecycle_status", query.LifecycleStatus);
         AddOptionalEqual(filters, "work_order_id", query.WorkOrderId);
         AddOptionalEqual(filters, "provenance_run_ids", query.RunId);
+        if (query.LabelKey != null && query.LabelValue != null)
+            filters.Add(Equal($"labels.{query.LabelKey}", query.LabelValue));
         var pageSize = query.PageSize is > 0 and <= MaxPageSize
             ? query.PageSize.Value
             : MaxPageSize;
@@ -122,7 +124,7 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
             throw new ContentArtifactContentUnavailableException(
                 normalizedArtifactId,
                 normalizedRevisionId,
-                "artifact is tombstoned");
+                ContentArtifactContentUnavailableReason.Tombstoned);
         }
         if (revision.Availability is ContentArtifactRevisionAvailabilityNames.Redacted or
             ContentArtifactRevisionAvailabilityNames.RetentionExpired)
@@ -130,7 +132,9 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
             throw new ContentArtifactContentUnavailableException(
                 normalizedArtifactId,
                 normalizedRevisionId,
-                revision.Availability);
+                revision.Availability == ContentArtifactRevisionAvailabilityNames.Redacted
+                    ? ContentArtifactContentUnavailableReason.Redacted
+                    : ContentArtifactContentUnavailableReason.RetentionExpired);
         }
         if (!string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
             throw new InvalidDataException("ContentArtifact revision availability is invalid.");
@@ -226,7 +230,8 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
             document.CreatedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             document.ArtifactUpdatedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             NormalizeOptional(document.TombstoneReason),
-            document.TombstonedAtUtc?.ToDateTimeOffset());
+            document.TombstonedAtUtc?.ToDateTimeOffset(),
+            new Dictionary<string, string>(document.Labels, StringComparer.Ordinal));
 
     private static void EnsureReadAuthorized(
         ContentArtifactCurrentStateDocument document,

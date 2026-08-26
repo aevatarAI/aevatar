@@ -140,6 +140,7 @@ message ContentArtifactState {
   string tombstone_reason = 17;
   google.protobuf.Timestamp tombstoned_at_utc = 18;
   string creation_request_hash = 19;
+  map<string, string> labels = 20;
 }
 
 message CreateContentArtifact {
@@ -156,6 +157,7 @@ message CreateContentArtifact {
   ContentArtifactRevision first_revision = 11;
   int64 expected_concurrency_version = 12;
   google.protobuf.Timestamp requested_at_utc = 13;
+  map<string, string> labels = 14;
 }
 
 message AppendContentArtifactRevision {
@@ -228,4 +230,79 @@ message ContentArtifactRevisionExpiredEvent {
 message ContentArtifactTombstonedEvent {
   string reason = 1;
   google.protobuf.Timestamp tombstoned_at_utc = 2;
+}
+
+enum ContentArtifactPinMutationStatus {
+  CONTENT_ARTIFACT_PIN_MUTATION_STATUS_UNSPECIFIED = 0;
+  CONTENT_ARTIFACT_PIN_MUTATION_STATUS_SUCCEEDED = 1;
+  CONTENT_ARTIFACT_PIN_MUTATION_STATUS_REJECTED = 2;
+}
+
+enum ContentArtifactPinRejectionCode {
+  CONTENT_ARTIFACT_PIN_REJECTION_CODE_UNSPECIFIED = 0;
+  CONTENT_ARTIFACT_PIN_REJECTION_CODE_PIN_VERSION_CONFLICT = 1;
+}
+
+message ContentArtifactPinState {
+  string scope_id = 1;
+  string pin_key = 2;
+  string pinned_artifact_id = 3;
+  ContentArtifactPrincipal pinned_by = 4;
+  int64 pin_version = 5;
+  google.protobuf.Timestamp updated_at_utc = 6;
+  string last_mutation_id = 7;
+  bytes last_mutation_hash = 8;
+  ContentArtifactPinMutationStatus last_mutation_status = 9;
+  ContentArtifactPinRejectionCode last_rejection_code = 10;
+  ContentArtifactPrincipal last_mutation_requested_by = 11;
+}
+
+message SetContentArtifactPinCommand {
+  string scope_id = 1;
+  string pin_key = 2;
+  string artifact_id = 3;
+  ContentArtifactPrincipal requested_by = 4;
+  int64 expected_pin_version = 5;
+  string mutation_id = 6;
+  google.protobuf.Timestamp requested_at_utc = 7;
+}
+
+message ClearContentArtifactPinCommand {
+  string scope_id = 1;
+  string pin_key = 2;
+  ContentArtifactPrincipal requested_by = 3;
+  int64 expected_pin_version = 4;
+  string mutation_id = 5;
+  google.protobuf.Timestamp requested_at_utc = 6;
+}
+
+message ContentArtifactPinSetEvent {
+  string scope_id = 1;
+  string pin_key = 2;
+  string artifact_id = 3;
+  ContentArtifactPrincipal pinned_by = 4;
+  int64 pin_version = 5;
+  string mutation_id = 6;
+  bytes mutation_hash = 7;
+  google.protobuf.Timestamp updated_at_utc = 8;
+}
+
+message ContentArtifactPinClearedEvent {
+  string scope_id = 1;
+  string pin_key = 2;
+  ContentArtifactPrincipal requested_by = 3;
+  int64 pin_version = 4;
+  string mutation_id = 5;
+  bytes mutation_hash = 6;
+  google.protobuf.Timestamp updated_at_utc = 7;
+}
+
+message ContentArtifactPinMutationRejectedEvent {
+  string scope_id = 1;
+  string pin_key = 2;
+  ContentArtifactPrincipal requested_by = 3;
+  string mutation_id = 4;
+  bytes mutation_hash = 5;
+  ContentArtifactPinRejectionCode rejection_code = 6;
+  google.protobuf.Timestamp rejected_at_utc = 7;
 }

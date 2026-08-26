@@ -49,6 +49,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     private readonly NyxIdRelayOptions? _relayOptions;
     private readonly TimeProvider _timeProvider;
     private readonly AgentTurnToolCatalogMaterializer? _turnCatalogMaterializer;
+    private readonly ContentArtifactConversationPromptLayerMaterializer? _contentArtifactPromptLayerMaterializer;
+    private ConversationContextPromptLayer? _activeConversationPromptLayer;
     private AgentProfileTelemetryContext? _activeAgentProfileTelemetryContext;
     private int _systemSkillOverlayPromptLogCounter;
 
@@ -68,7 +70,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         TimeProvider? timeProvider = null,
         AgentTurnToolCatalogMaterializer? turnCatalogMaterializer = null,
         RoleChatExecutionOptions? chatExecutionOptions = null,
-        ISecretVault? chatToolRecoverySecretVault = null)
+        ISecretVault? chatToolRecoverySecretVault = null,
+        IContentArtifactQueryPort? contentArtifactQueryPort = null)
         : base(toolExecutionPort, llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources,
                remoteToolApprovalPort: remoteToolApprovalPort,
                remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort,
@@ -83,6 +86,9 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         _relayOptions = relayOptions;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _turnCatalogMaterializer = turnCatalogMaterializer;
+        _contentArtifactPromptLayerMaterializer = contentArtifactQueryPort is null
+            ? null
+            : new ContentArtifactConversationPromptLayerMaterializer(contentArtifactQueryPort);
     }
 
     protected override TimeProvider ChatRequestTimeProvider => _timeProvider;
@@ -142,7 +148,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             turnCatalog?.ProfilePromptLayer,
             turnCatalog?.SelectedSkillPromptLayer,
             runtime,
-            conversation: null);
+            _activeConversationPromptLayer);
 
         if (global is not null && _systemSkillOverlayPromptLogCounter++ % SystemSkillOverlayPromptLogSampleRate == 0)
         {
@@ -163,6 +169,20 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
+        _activeConversationPromptLayer = null;
+        // Fix (review round 1, F2):
+        //   Direct chat silently dropped sealed attachments when materialization could not run.
+        //   The shared boundary now returns one paired degraded entry per attachment.
+        _activeConversationPromptLayer =
+            await ContentArtifactConversationPromptLayerMaterializer.MaterializeOrDegradeAsync(
+                    _contentArtifactPromptLayerMaterializer,
+                    request.ContextAttachments,
+                    toolContext.Caller.ScopeId,
+                    toolContext.Caller.OwnerSubject,
+                    ct,
+                    Logger)
+                .ConfigureAwait(false);
+
         var profile = State.AgentProfile;
         if (profile is null)
             return null;

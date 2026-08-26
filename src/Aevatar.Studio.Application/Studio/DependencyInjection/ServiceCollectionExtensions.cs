@@ -70,6 +70,7 @@ public static class ServiceCollectionExtensions
             provider.GetRequiredService<WorkOrderExecutionScheduler>());
         services.TryAddSingleton<WorkOrderExecutionService>();
         services.TryAddSingleton<IContentArtifactService, ContentArtifactService>();
+        services.TryAddSingleton<IContentArtifactPinService, ContentArtifactPinService>();
         services.TryAddSingleton<IWorkOrderService, WorkOrderService>();
         services.TryAddSingleton<IStudioTeamProvisioningPort, StudioTeamProvisioningPort>();
         services.TryAddSingleton<IStudioMemberProvisioningPort, StudioMemberProvisioningPort>();

@@ -33,7 +33,8 @@ public sealed record NyxIdChatCommand(
     AgentProfileReference? AgentProfileReference = null,
     AgentToolNyxIdCredentialKind NyxIdCredentialKind =
         AgentToolNyxIdCredentialKind.Unspecified,
-    string? InputPartsFingerprint = null)
+    string? InputPartsFingerprint = null,
+    IReadOnlyList<ConversationContextAttachment>? ContextAttachments = null)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
@@ -67,7 +68,8 @@ internal static class NyxIdChatPublicIdentity
         string turnId,
         string prompt,
         IEnumerable<Aevatar.AI.Abstractions.ChatContentPart> inputParts,
-        AgentProfileReference? agentProfileReference)
+        AgentProfileReference? agentProfileReference,
+        IEnumerable<ConversationContextAttachment>? contextAttachments = null)
     {
         var payload = new NyxIdChatStartTurnCommand
         {
@@ -78,6 +80,7 @@ internal static class NyxIdChatPublicIdentity
             Prompt = prompt,
         };
         payload.InputParts.Add(inputParts.Select(static part => part.Clone()));
+        payload.ContextAttachments = ConversationContextAttachmentAdmission.CloneOptionalSet(contextAttachments);
 
         return Build(
             "command",
@@ -402,6 +405,17 @@ internal sealed class NyxIdChatCommandTargetResolver
             ScopeId = command.ScopeId,
             RequestedActorId = command.ActorId,
             AgentProfileReference = command.AgentProfileReference?.Clone(),
+            ContextAttachments = ConversationContextAttachmentAdmission.CloneOptionalSet(command.ContextAttachments),
+            FirstTurn = new NyxIdChatStartTurnCommand
+            {
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Caller = new AgentToolCallerContextPayload
+                    {
+                        OwnerSubject = command.OwnerSubject?.Trim() ?? string.Empty,
+                    },
+                },
+            },
         };
         var resolved = await _createResolver().ResolveAsync(create, ct);
         if (!resolved.Succeeded || resolved.Target is null)
@@ -527,6 +541,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         };
         startTurn.LlmControl = effectiveControl.ToPayload();
         startTurn.ToolContext = BuildToolContext(command, effectiveControl).ToPayload();
+        startTurn.ContextAttachments = ConversationContextAttachmentAdmission.CloneOptionalSet(command.ContextAttachments);
         AppendExternalContext(startTurn.ToolContext.ExternalMetadata, command.Metadata);
 
         if (!command.CreateIfMissing)
@@ -538,6 +553,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
             CreatedLocally = command.CreatedLocally,
             AgentProfile = command.AgentProfile?.Clone(),
             AgentProfileReference = command.AgentProfileReference?.Clone(),
+            ContextAttachments = ConversationContextAttachmentAdmission.CloneOptionalSet(command.ContextAttachments),
             RequestedActorId = command.ActorId,
             FirstTurn = startTurn,
         });

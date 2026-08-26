@@ -42,6 +42,7 @@ message ConversationGAgentState {
   // Immutable profile pinned by the first completed profiled run. Later runs reuse this exact
   // snapshot; route/profile binding changes apply only to new conversations.
   aevatar.ai.AgentProfileSnapshot agent_profile = 18;
+  aevatar.ai.ConversationContextAttachmentSet context_attachments = 19;
 }
 
 // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):

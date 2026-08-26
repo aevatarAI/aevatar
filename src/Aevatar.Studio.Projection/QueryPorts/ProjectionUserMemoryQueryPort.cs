@@ -3,6 +3,8 @@ using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.ReadModels;
 using ApplicationUserMemoryCategory = Aevatar.Studio.Application.Studio.Abstractions.UserMemoryCategory;
+using ApplicationRetentionPolicy = Aevatar.Studio.Application.Studio.Abstractions.UserMemoryRetentionPolicy;
+using ApplicationRetentionRule = Aevatar.Studio.Application.Studio.Abstractions.UserMemoryCategoryRetentionRule;
 using ApplicationUserMemorySource = Aevatar.Studio.Application.Studio.Abstractions.UserMemorySource;
 using ActorUserMemoryCategory = Aevatar.GAgents.UserMemory.UserMemoryCategory;
 using ActorUserMemorySource = Aevatar.GAgents.UserMemory.UserMemorySource;
@@ -50,8 +52,22 @@ public sealed class ProjectionUserMemoryQueryPort : IUserMemoryQueryPort
                 DateTimeOffset.FromUnixTimeMilliseconds(entry.UpdatedAtMs)))
             .ToList()
             .AsReadOnly();
+        var retentionPolicy = state.RetentionPolicy is null
+            ? null
+            : new ApplicationRetentionPolicy(state.RetentionPolicy.Rules
+                .Select(static rule => new ApplicationRetentionRule(
+                    MapCategory(rule.Category),
+                    rule.MaxEntries,
+                    rule.EvictionRank))
+                .ToList()
+                .AsReadOnly());
 
-        return new UserMemorySnapshot(owner, document.StateVersion, entries);
+        return new UserMemorySnapshot(
+            owner,
+            document.StateVersion,
+            entries,
+            retentionPolicy,
+            state.RetentionPolicy?.PolicyRevision ?? 0);
     }
 
     private static bool IsReadable(UserMemoryEntryProto entry) =>

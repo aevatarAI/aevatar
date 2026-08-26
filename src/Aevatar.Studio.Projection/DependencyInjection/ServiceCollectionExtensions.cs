@@ -21,6 +21,7 @@ using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.ContentArtifacts;
 using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgents.WorkflowDelivery;
+using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Workspace;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Microsoft.Extensions.Configuration;
@@ -51,6 +52,7 @@ public static class ServiceCollectionExtensions
         services.AddCqrsCore();
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(
             typeof(Aevatar.GAgents.UserConfig.UserConfigGAgent).Assembly,
+            typeof(UserMemoryGAgent).Assembly,
             typeof(Aevatar.GAgents.StudioMember.StudioMemberGAgent).Assembly,
             typeof(Aevatar.GAgents.StudioTeam.StudioTeamGAgent).Assembly,
             typeof(ContentArtifactGAgent).Assembly,
@@ -133,6 +135,10 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
             ContentArtifactCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            ContentArtifactPinCurrentStateProjector>();
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
@@ -249,6 +255,10 @@ public static class ServiceCollectionExtensions
             ContentArtifactCurrentStateDocumentMetadataProvider>();
 
         services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ContentArtifactPinCurrentStateDocument>,
+            ContentArtifactPinCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<WorkOrderCurrentStateDocument>,
             WorkOrderCurrentStateDocumentMetadataProvider>();
 
@@ -293,6 +303,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IUserMemoryQueryPort, ProjectionUserMemoryQueryPort>();
         services.TryAddSingleton<IStudioMemberQueryPort, ProjectionStudioMemberQueryPort>();
         services.TryAddSingleton<IContentArtifactQueryPort, ProjectionContentArtifactQueryPort>();
+        services.TryAddSingleton<IContentArtifactPinQueryPort, ProjectionContentArtifactPinQueryPort>();
         services.TryAddSingleton<IWorkOrderQueryPort, ProjectionWorkOrderQueryPort>();
         services.TryAddSingleton<IWorkflowDeliveryQueryPort, ProjectionWorkflowDeliveryQueryPort>();
         services.TryAddSingleton<IStudioMemberBindingRunQueryPort, ProjectionStudioMemberBindingRunQueryPort>();
@@ -309,6 +320,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             ILLMModelCatalogPolicyCommandPort,
             ActorDispatchLLMModelCatalogPolicyCommandService>();
+        services.TryAddSingleton<
+            IUserMemoryRetentionPolicyCommandPort,
+            ActorDispatchUserMemoryRetentionPolicyCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
         services.TryAddSingleton<
             IStudioWorkflowScheduleProvisioningCommandPort,
@@ -317,6 +331,7 @@ public static class ServiceCollectionExtensions
             IStudioMemberWorkflowScheduleProvisioningPort,
             StudioMemberWorkflowScheduleProvisioningExecutionPort>();
         services.TryAddSingleton<IContentArtifactCommandPort, ActorDispatchContentArtifactCommandService>();
+        services.TryAddSingleton<IContentArtifactPinCommandPort, ActorDispatchContentArtifactPinCommandService>();
         services.TryAddSingleton<IWorkOrderCommandPort, ActorDispatchWorkOrderCommandService>();
         services.TryAddSingleton<
             IWorkflowDeliveryCommandPort,

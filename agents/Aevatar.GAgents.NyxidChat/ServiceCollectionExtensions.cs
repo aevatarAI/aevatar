@@ -220,7 +220,8 @@ public static class ServiceCollectionExtensions
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>(),
                 toolExecutionPort: sp.GetRequiredService<IAgentToolExecutionPort>(),
                 remoteSkillAccessTokenResolver: sp.GetService<IRemoteSkillAccessTokenResolver>(),
-                nyxIdChatToolSources: ResolveNyxIdChatToolSources(sp)));
+                nyxIdChatToolSources: ResolveNyxIdChatToolSources(sp),
+                contentArtifactQueryPort: sp.GetService<IContentArtifactQueryPort>()));
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>

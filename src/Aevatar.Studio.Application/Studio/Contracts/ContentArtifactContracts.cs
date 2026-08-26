@@ -18,6 +18,15 @@ public static class ContentArtifactRevisionAvailabilityNames
     public const string RetentionExpired = "retention_expired";
 }
 
+public enum ContentArtifactContentUnavailableReason
+{
+    Unspecified = 0,
+    Tombstoned = 1,
+    Redacted = 2,
+    RetentionExpired = 3,
+    BackingUnavailable = 4,
+}
+
 public sealed record ContentArtifactPrincipalContract(
     string PrincipalId,
     string PrincipalKind);
@@ -91,7 +100,8 @@ public sealed record CreateContentArtifactRequest(
     ContentArtifactRevisionWriteRequest FirstRevision,
     ContentArtifactAccessPolicyContract? AccessPolicy = null,
     ContentArtifactRetentionPolicyContract? RetentionPolicy = null,
-    string? WorkOrderId = null);
+    string? WorkOrderId = null,
+    IReadOnlyDictionary<string, string>? Labels = null);
 
 public sealed record AppendContentArtifactRevisionRequest(
     ContentArtifactRevisionWriteRequest Revision);
@@ -162,7 +172,8 @@ public sealed record ContentArtifactCurrentStateResponse(
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
     string? TombstoneReason = null,
-    DateTimeOffset? TombstonedAtUtc = null);
+    DateTimeOffset? TombstonedAtUtc = null,
+    IReadOnlyDictionary<string, string>? Labels = null);
 
 public sealed record ContentArtifactListResponse(
     string ScopeId,
@@ -176,7 +187,39 @@ public sealed record ContentArtifactQueryRequest(
     string? Kind = null,
     string? LifecycleStatus = null,
     string? WorkOrderId = null,
-    string? RunId = null);
+    string? RunId = null,
+    string? LabelKey = null,
+    string? LabelValue = null);
+
+public sealed record SetContentArtifactPinRequest(
+    string ArtifactId,
+    long ExpectedPinVersion,
+    string MutationId);
+
+public sealed record ClearContentArtifactPinRequest(
+    long ExpectedPinVersion,
+    string MutationId);
+
+public sealed record ContentArtifactPinCurrentStateResponse(
+    string ScopeId,
+    string PinKey,
+    string? PinnedArtifactId,
+    ContentArtifactPrincipalContract? PinnedBy,
+    long PinVersion,
+    long StateVersion,
+    DateTimeOffset UpdatedAtUtc,
+    string LastMutationId,
+    string LastMutationStatus,
+    string? LastRejectionCode = null,
+    ContentArtifactPrincipalContract? LastMutationRequestedBy = null);
+
+public sealed record ContentArtifactPinAcceptedReceipt(
+    string ScopeId,
+    string PinKey,
+    string CommandId,
+    string CorrelationId,
+    string Stage,
+    DateTimeOffset? AcceptedAtUtc = null);
 
 public sealed record ContentArtifactRevisionContentResponse(
     ContentArtifactReferenceContract Reference,
@@ -214,10 +257,46 @@ public sealed class ContentArtifactIdentityConflictException : InvalidOperationE
     public string DedupKey { get; }
 }
 
+public sealed class ContentArtifactPinNotFoundException : InvalidOperationException
+{
+    public ContentArtifactPinNotFoundException(string scopeId, string pinKey)
+        : base($"ContentArtifact pin '{pinKey}' was not found in scope '{scopeId}'.")
+    {
+        ScopeId = scopeId;
+        PinKey = pinKey;
+    }
+
+    public string ScopeId { get; }
+    public string PinKey { get; }
+}
+
 public sealed class ContentArtifactContentUnavailableException : InvalidOperationException
 {
-    public ContentArtifactContentUnavailableException(string artifactId, string revisionId, string reason)
-        : base($"ContentArtifact '{artifactId}' revision '{revisionId}' content is unavailable: {reason}")
+    // Fix (review round 1, F4):
+    //   Unavailable control flow was parsed from exception message text.
+    //   The exception now carries a typed reason while preserving a useful message.
+    public ContentArtifactContentUnavailableException(
+        string artifactId,
+        string revisionId,
+        ContentArtifactContentUnavailableReason reason)
+        : base($"ContentArtifact '{artifactId}' revision '{revisionId}' content is unavailable: {FormatReason(reason)}")
     {
+        ArtifactId = artifactId;
+        RevisionId = revisionId;
+        Reason = reason;
     }
+
+    public string ArtifactId { get; }
+    public string RevisionId { get; }
+    public ContentArtifactContentUnavailableReason Reason { get; }
+
+    private static string FormatReason(ContentArtifactContentUnavailableReason reason) =>
+        reason switch
+        {
+            ContentArtifactContentUnavailableReason.Tombstoned => "artifact is tombstoned",
+            ContentArtifactContentUnavailableReason.Redacted => ContentArtifactRevisionAvailabilityNames.Redacted,
+            ContentArtifactContentUnavailableReason.RetentionExpired => ContentArtifactRevisionAvailabilityNames.RetentionExpired,
+            ContentArtifactContentUnavailableReason.BackingUnavailable => "backing content is unavailable",
+            _ => "unspecified",
+        };
 }

@@ -17,3 +17,10 @@ public interface IContentArtifactService
     Task<ContentArtifactAcceptedReceipt> TombstoneAsync(string scopeId, string artifactId, TombstoneContentArtifactRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default);
     Task<ContentArtifactRunAttachmentReceipt> AttachToRunAsync(string scopeId, AttachContentArtifactsToRunRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default);
 }
+
+public interface IContentArtifactPinService
+{
+    Task<ContentArtifactPinCurrentStateResponse> GetAsync(string scopeId, string pinKey, CancellationToken ct = default);
+    Task<ContentArtifactPinAcceptedReceipt> SetAsync(string scopeId, string pinKey, SetContentArtifactPinRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default);
+    Task<ContentArtifactPinAcceptedReceipt> ClearAsync(string scopeId, string pinKey, ClearContentArtifactPinRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default);
+}

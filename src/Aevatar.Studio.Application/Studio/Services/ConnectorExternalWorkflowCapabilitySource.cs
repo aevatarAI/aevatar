@@ -1,4 +1,5 @@
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf.WellKnownTypes;
@@ -10,13 +11,24 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
     private static readonly TimeSpan FreshnessWindow = TimeSpan.FromMinutes(5);
 
     private readonly IConnectorCatalogQueryPort _catalogQueryPort;
+    private readonly IReadOnlyDictionary<string, IDeterministicComputeHandler> _deterministicHandlersByName;
     private readonly TimeProvider _timeProvider;
 
     public ConnectorExternalWorkflowCapabilitySource(
         IConnectorCatalogQueryPort catalogQueryPort,
+        IEnumerable<IHostCallbackConnectorHandler>? hostCallbackHandlers = null,
         TimeProvider? timeProvider = null)
     {
         _catalogQueryPort = catalogQueryPort;
+        _deterministicHandlersByName = (hostCallbackHandlers ?? [])
+            .OfType<IDeterministicComputeHandler>()
+            .Where(static handler => !string.IsNullOrWhiteSpace(handler.Name))
+            .GroupBy(static handler => handler.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Where(static group => group.Count() == 1)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.Single(),
+                StringComparer.OrdinalIgnoreCase);
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -153,7 +165,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         };
     }
 
-    private static ExternalWorkflowCapabilityDescriptor BuildDescriptor(
+    private ExternalWorkflowCapabilityDescriptor BuildDescriptor(
         StoredConnectorDefinition connector,
         ConnectorOperation operation,
         ExternalCapabilitySourceStamp source)
@@ -207,9 +219,15 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         return result;
     }
 
-    private static IReadOnlyList<ConnectorOperation> EnumerateOperations(StoredConnectorDefinition connector)
+    // Implement (issue #3526):
+    //   Behavior: Publish deterministic host callbacks only when deployment allowlists and registered signatures exactly align.
+    //   Why this shape: Catalog listing and readiness share the existing connector admission path without publishing a weak contract.
+    private IReadOnlyList<ConnectorOperation> EnumerateOperations(StoredConnectorDefinition connector)
     {
         var type = connector.Type?.Trim().ToLowerInvariant();
+        if (string.Equals(type, "host_callback", StringComparison.Ordinal))
+            return EnumerateHostCallbackOperations(connector);
+
         var operationIds = type switch
         {
             "http" => connector.Http.AllowedMethods,
@@ -228,7 +246,48 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
             .ToArray();
     }
 
-    private static string BuildContractDigest(
+    private IReadOnlyList<ConnectorOperation> EnumerateHostCallbackOperations(
+        StoredConnectorDefinition connector)
+    {
+        var handlerName = connector.HostCallback.Handler?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(handlerName))
+            return [];
+
+        if (!_deterministicHandlersByName.TryGetValue(handlerName, out var handler))
+            return [];
+
+        var allowedOperations = connector.HostCallback.AllowedOperations
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Select(static value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (allowedOperations.Length == 0 || handler.Algorithms.Count == 0)
+            return [];
+
+        var algorithms = new Dictionary<string, DeterministicAlgorithmDescriptor>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var algorithm in handler.Algorithms)
+        {
+            if (!IsValidAlgorithmDescriptor(algorithm) ||
+                !algorithms.TryAdd(algorithm.AlgorithmId.Trim(), algorithm))
+            {
+                return [];
+            }
+        }
+
+        if (!algorithms.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase)
+                .SetEquals(allowedOperations))
+        {
+            return [];
+        }
+
+        return algorithms.Values
+            .OrderBy(static algorithm => algorithm.AlgorithmId, StringComparer.OrdinalIgnoreCase)
+            .Select(static algorithm => new ConnectorOperation(algorithm.AlgorithmId.Trim(), algorithm))
+            .ToArray();
+    }
+
+    private string BuildContractDigest(
         StoredConnectorDefinition connector,
         ConnectorOperation operation)
     {
@@ -283,16 +342,53 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
                     connector.Mcp.Auth.HeaderName?.Trim(),
                 ]);
                 break;
+            case "host_callback":
+                var algorithm = operation.Algorithm ?? throw new InvalidOperationException(
+                    "A host callback capability requires a deterministic algorithm signature.");
+                components.AddRange([
+                    "host-callback-operation.v1",
+                    connector.HostCallback.Handler?.Trim(),
+                    algorithm.AlgorithmId.Trim(),
+                    algorithm.AlgorithmVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    algorithm.InputSchemaDigest,
+                    algorithm.OutputSchemaDigest,
+                    Join(connector.HostCallback.AllowedInputKeys),
+                ]);
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"Unsupported connector type '{connector.Type}' cannot publish a capability descriptor.");
         }
 
         return ExternalWorkflowCapabilityContractDigest.Compute(components);
     }
 
     private static bool IsReadOnly(string? connectorType, string operationId) =>
-        string.Equals(connectorType?.Trim(), "http", StringComparison.OrdinalIgnoreCase) &&
-        (operationId.Equals("GET", StringComparison.OrdinalIgnoreCase) ||
-         operationId.Equals("HEAD", StringComparison.OrdinalIgnoreCase) ||
-         operationId.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase));
+        string.Equals(connectorType?.Trim(), "host_callback", StringComparison.OrdinalIgnoreCase) ||
+        (string.Equals(connectorType?.Trim(), "http", StringComparison.OrdinalIgnoreCase) &&
+         (operationId.Equals("GET", StringComparison.OrdinalIgnoreCase) ||
+          operationId.Equals("HEAD", StringComparison.OrdinalIgnoreCase) ||
+          operationId.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase)));
+
+    private static bool IsValidAlgorithmDescriptor(DeterministicAlgorithmDescriptor? algorithm) =>
+        algorithm is { AlgorithmVersion: > 0 } &&
+        !string.IsNullOrWhiteSpace(algorithm.AlgorithmId) &&
+        IsSHA256Digest(algorithm.InputSchemaDigest) &&
+        IsSHA256Digest(algorithm.OutputSchemaDigest);
+
+    private static bool IsSHA256Digest(string? value)
+    {
+        if (value is not { Length: 71 } || !value.StartsWith("sha256:", StringComparison.Ordinal))
+            return false;
+
+        foreach (var character in value.AsSpan(7))
+        {
+            if (character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))
+                return false;
+        }
+
+        return true;
+    }
 
     private static string Join(IEnumerable<string> values) =>
         string.Join(
@@ -303,5 +399,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(static value => value, StringComparer.OrdinalIgnoreCase));
 
-    private sealed record ConnectorOperation(string OperationId);
+    private sealed record ConnectorOperation(
+        string OperationId,
+        DeterministicAlgorithmDescriptor? Algorithm = null);
 }

@@ -27,3 +27,11 @@ public interface IContentArtifactQueryPort
         ContentArtifactPrincipalContract requester,
         CancellationToken ct = default);
 }
+
+public interface IContentArtifactPinQueryPort
+{
+    Task<ContentArtifactPinCurrentStateResponse?> GetAsync(
+        string scopeId,
+        string pinKey,
+        CancellationToken ct = default);
+}

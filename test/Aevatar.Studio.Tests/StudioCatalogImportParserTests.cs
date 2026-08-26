@@ -102,6 +102,59 @@ public sealed class StudioCatalogImportParserTests
     }
 
     [Fact]
+    public async Task ConnectorImportParser_ShouldParseHostCallbackConfiguration()
+    {
+        const string json = """
+        {
+          "connectors": [
+            {
+              "name": "deterministic-hash",
+              "type": "host_callback",
+              "host_callback": {
+                "handler": "deterministic_compute",
+                "allowedOperations": ["sha256_utf8"],
+                "allowedInputKeys": ["text"]
+              }
+            }
+          ]
+        }
+        """;
+
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        var result = await new ConnectorCatalogImportParser()
+            .ParseCatalogAsync(stream, CancellationToken.None);
+
+        var hostCallback = result.Should().ContainSingle().Subject.HostCallback;
+        hostCallback.Handler.Should().Be("deterministic_compute");
+        hostCallback.AllowedOperations.Should().Equal("sha256_utf8");
+        hostCallback.AllowedInputKeys.Should().Equal("text");
+    }
+
+    [Fact]
+    public void ConnectorDefinitionEntry_ShouldRoundTripHostCallbackFields()
+    {
+        var entry = new ConnectorDefinitionEntry
+        {
+            Name = "deterministic-hash",
+            Type = "host_callback",
+            HostCallback = new HostCallbackConnectorConfigEntry
+            {
+                Handler = "deterministic_compute",
+                AllowedOperations = { "sha256_utf8" },
+                AllowedInputKeys = { "text" },
+            },
+        };
+
+        var parsed = ConnectorDefinitionEntry.Parser.ParseFrom(entry.ToByteArray());
+
+        parsed.HostCallback.Handler.Should().Be("deterministic_compute");
+        parsed.HostCallback.AllowedOperations.Should().Equal("sha256_utf8");
+        parsed.HostCallback.AllowedInputKeys.Should().Equal("text");
+        ConnectorDefinitionEntry.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 9 && field.Name == "host_callback");
+    }
+
+    [Fact]
     public async Task Role_import_parser_keeps_json_catalog_boundary()
     {
         const string json = """

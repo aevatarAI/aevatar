@@ -88,6 +88,7 @@ message NeedsLlmReplyEvent {
   // transient run command so the chat LLM path can include recent image context
   // or inject an honest degradation warning.
   repeated RecentConversationAttachmentActivity recent_attachment_activities = 14;
+  aevatar.ai.ConversationContextAttachmentSet context_attachments = 18;
   // Durable handle to the encrypted, TTL-bound relay reply token. The raw token
   // remains runtime-only; this reference lets a transient actor-dispatch failure
   // retry without silently abandoning the accepted inbound turn.

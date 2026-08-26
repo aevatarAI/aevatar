@@ -2351,6 +2351,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             Activity = activity,
             ToolContext = MergeDirectInputFileRefs(chat.ToolContext, chat.InputParts),
             LlmControl = chat.LlmControl?.Clone(),
+            ContextAttachments = chat.ContextAttachments?.Clone(),
         };
         foreach (var pair in chat.Metadata)
             request.Metadata[pair.Key] = pair.Value;

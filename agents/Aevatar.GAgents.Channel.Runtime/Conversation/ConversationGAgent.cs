@@ -343,6 +343,10 @@ public sealed partial class ConversationGAgent :
             runCopy.TargetActorId = Id;
             runCopy.TargetRef = targetRef.Clone();
             runCopy.AgentProfile = State.AgentProfile?.Clone();
+            // Fix (review round 1, F6):
+            //   The transient Channel run copied its profile pin but omitted sealed attachments.
+            //   Copy the sibling authority field without adding Channel bind or admission behavior.
+            runCopy.ContextAttachments = State.ContextAttachments?.Clone();
             // Refactor (iter98/cluster-002): Old=ConversationGAgent filled run_id from correlation_id; New=producer must supply run_id before this handoff.
             runCopy.RunId = NormalizeOptional(runCopy.RunId)!;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);

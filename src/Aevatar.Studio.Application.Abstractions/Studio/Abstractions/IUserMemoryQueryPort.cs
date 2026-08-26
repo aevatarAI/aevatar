@@ -39,14 +39,30 @@ public sealed record UserMemoryEntrySnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
+public sealed record UserMemoryCategoryRetentionRule(
+    UserMemoryCategory Category,
+    int MaxEntries,
+    int EvictionRank);
+
+public sealed record UserMemoryRetentionPolicy(
+    IReadOnlyList<UserMemoryCategoryRetentionRule> Rules);
+
 public sealed record UserMemorySnapshot(
     UserMemoryOwnerKey Owner,
     long StateVersion,
-    IReadOnlyList<UserMemoryEntrySnapshot> Entries)
+    IReadOnlyList<UserMemoryEntrySnapshot> Entries,
+    UserMemoryRetentionPolicy? RetentionPolicy = null,
+    long PolicyRevision = 0)
 {
     public static UserMemorySnapshot Empty(UserMemoryOwnerKey owner) =>
         new(owner, 0, []);
 }
+
+public sealed record ReplaceUserMemoryRetentionPolicy(
+    UserMemoryOwnerKey Owner,
+    IReadOnlyList<UserMemoryCategoryRetentionRule> Rules,
+    long ExpectedStateVersion,
+    string MutationId);
 
 /// <summary>
 /// Reads the per-user current-state replica materialized from committed
@@ -56,4 +72,15 @@ public sealed record UserMemorySnapshot(
 public interface IUserMemoryQueryPort
 {
     Task<UserMemorySnapshot> GetAsync(CancellationToken ct = default);
+}
+
+/// <summary>
+/// Replaces actor-owned user-memory retention policy through the standard
+/// command dispatch path. Acceptance does not imply commit or read-model visibility.
+/// </summary>
+public interface IUserMemoryRetentionPolicyCommandPort
+{
+    Task<UserConfigSaveReceipt> ReplaceAsync(
+        ReplaceUserMemoryRetentionPolicy command,
+        CancellationToken ct = default);
 }

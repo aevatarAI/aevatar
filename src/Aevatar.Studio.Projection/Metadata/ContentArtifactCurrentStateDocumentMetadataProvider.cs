@@ -11,6 +11,13 @@ public sealed class ContentArtifactCurrentStateDocumentMetadataProvider
         Mappings: new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["dynamic"] = true,
+            ["properties"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["labels"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["type"] = "flattened",
+                },
+            },
         },
         Settings: new Dictionary<string, object?>(StringComparer.Ordinal),
         Aliases: new Dictionary<string, object?>(StringComparer.Ordinal));

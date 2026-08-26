@@ -1182,6 +1182,7 @@ message NyxIdChatConversationGAgentState {
   // joining the registry or replaying events.
   bool deleted = 46;
   google.protobuf.Timestamp deleted_at = 47;
+  aevatar.ai.ConversationContextAttachmentSet context_attachments = 48;
 }
 
 message NyxIdChatOperationResultAcknowledgementFence {
@@ -1482,6 +1483,7 @@ message NyxIdChatLLMOperationInput {
   // Safe typed fact for one verified browser-authorization continuation.
   // Runtime credentials remain exclusively in the transient request context.
   NyxIdChatVerifiedAuthorizationContinuation verified_authorization_continuation = 7;
+  aevatar.ai.ConversationContextAttachmentSet context_attachments = 8;
 }
 
 message NyxIdChatToolOperationInput {
@@ -1861,6 +1863,7 @@ message NyxIdChatStartTurnCommand {
   // Server-authored, transient execution context for a steering continuation.
   // It is never copied into actor state, projections, or transcript history.
   NyxIdChatSteeringExecutionContext steering_execution_context = 16;
+  aevatar.ai.ConversationContextAttachmentSet context_attachments = 17;
 }
 
 message NyxIdChatStopCommand {

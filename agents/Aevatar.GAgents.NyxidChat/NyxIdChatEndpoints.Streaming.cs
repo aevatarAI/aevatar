@@ -278,7 +278,8 @@ public static partial class NyxIdChatEndpoints
                     turnId,
                     prompt,
                     rawInputParts,
-                    agentProfileReference);
+                    agentProfileReference,
+                    request.ContextAttachments?.Select(static attachment => attachment.ToProto()));
 
                 // Streaming endpoints do not pre-read runtime state before command dispatch.
                 // The shared CQRS resolver owns actor lookup and attach-existing observation.
@@ -299,7 +300,8 @@ public static partial class NyxIdChatEndpoints
                         OwnerSubject: ownerSubject,
                         AgentProfileReference: agentProfileReference,
                         NyxIdCredentialKind: credentials.NyxIdCredentialKind,
-                        InputPartsFingerprint: NyxIdChatPublicIdentity.CreateInputPartsFingerprint(rawInputParts)),
+                        InputPartsFingerprint: NyxIdChatPublicIdentity.CreateInputPartsFingerprint(rawInputParts),
+                        ContextAttachments: request.ContextAttachments?.Select(static attachment => attachment.ToProto()).ToArray()),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -1147,7 +1149,28 @@ public static partial class NyxIdChatEndpoints
         string? Type = null,
         string? OriginTurnId = null,
         IReadOnlyList<NyxIdChatActionReportDto>? Actions = null,
-        NyxIdChatAgentProfileReferenceDto? AgentProfile = null);
+        NyxIdChatAgentProfileReferenceDto? AgentProfile = null,
+        IReadOnlyList<NyxIdChatContextAttachmentDto>? ContextAttachments = null);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatContextAttachmentDto(
+        string? ArtifactId,
+        string? RevisionMode,
+        string? PinnedRevisionId)
+    {
+        public ConversationContextAttachment ToProto() =>
+            new()
+            {
+                ArtifactId = ArtifactId?.Trim() ?? string.Empty,
+                RevisionMode = RevisionMode?.Trim().ToUpperInvariant() switch
+                {
+                    "FOLLOW_CURRENT" => ConversationContextAttachmentRevisionMode.FollowCurrent,
+                    "PINNED_REVISION" => ConversationContextAttachmentRevisionMode.PinnedRevision,
+                    _ => ConversationContextAttachmentRevisionMode.Unspecified,
+                },
+                PinnedRevisionId = PinnedRevisionId?.Trim() ?? string.Empty,
+            };
+    }
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record NyxIdChatAgentProfileReferenceDto(

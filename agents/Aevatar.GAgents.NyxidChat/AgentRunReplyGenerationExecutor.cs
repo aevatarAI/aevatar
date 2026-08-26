@@ -1774,7 +1774,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     ?? NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
         return new ChatAttachmentInputContext(
             request.RecentAttachmentActivities.Select(entry => entry.Clone()).ToArray(),
-            token);
+            token,
+            request.ContextAttachments?.Clone());
     }
 
     private async Task<LLMControlContext> ApplyBotOwnerLlmConfigAsync(

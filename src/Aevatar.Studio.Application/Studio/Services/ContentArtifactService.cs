@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Aevatar.ContentArtifacts.Abstractions;
+using Aevatar.GAgents.ContentArtifacts;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -95,7 +96,7 @@ public sealed class ContentArtifactService : IContentArtifactService
             throw new ContentArtifactContentUnavailableException(
                 current.ArtifactId,
                 string.Empty,
-                "artifact is tombstoned");
+                ContentArtifactContentUnavailableReason.Tombstoned);
         }
         if (string.IsNullOrWhiteSpace(current.CurrentRevisionId))
             throw new ContentArtifactNotFoundException(current.ScopeId, current.ArtifactId);
@@ -116,7 +117,7 @@ public sealed class ContentArtifactService : IContentArtifactService
             throw new ContentArtifactContentUnavailableException(
                 current.ArtifactId,
                 revision.RevisionId,
-                "artifact is tombstoned");
+                ContentArtifactContentUnavailableReason.Tombstoned);
         }
         if (revision.Availability is ContentArtifactRevisionAvailabilityNames.Redacted or
             ContentArtifactRevisionAvailabilityNames.RetentionExpired)
@@ -124,7 +125,9 @@ public sealed class ContentArtifactService : IContentArtifactService
             throw new ContentArtifactContentUnavailableException(
                 current.ArtifactId,
                 revision.RevisionId,
-                revision.Availability);
+                revision.Availability == ContentArtifactRevisionAvailabilityNames.Redacted
+                    ? ContentArtifactContentUnavailableReason.Redacted
+                    : ContentArtifactContentUnavailableReason.RetentionExpired);
         }
         if (!string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
             throw new InvalidOperationException("ContentArtifact revision availability is invalid.");
@@ -454,6 +457,7 @@ public sealed class ContentArtifactService : IContentArtifactService
                     NormalizeRequired(request.RetentionPolicy.PolicyId, "retentionPolicy.policyId"),
                     request.RetentionPolicy.ExpiresAtUtc),
             WorkOrderId = NormalizeOptional(request.WorkOrderId),
+            Labels = ContentArtifactConventions.NormalizeLabels(request.Labels),
         };
     }
 
@@ -522,6 +526,10 @@ public sealed class ContentArtifactService : IContentArtifactService
     private static ContentArtifactQueryRequest NormalizeQuery(ContentArtifactQueryRequest? query)
     {
         query ??= new ContentArtifactQueryRequest();
+        var hasLabelKey = !string.IsNullOrWhiteSpace(query.LabelKey);
+        var hasLabelValue = !string.IsNullOrWhiteSpace(query.LabelValue);
+        if (hasLabelKey != hasLabelValue)
+            throw new InvalidOperationException("labelKey and labelValue must be provided together.");
         return query with
         {
             PageToken = NormalizeOptional(query.PageToken),
@@ -530,6 +538,12 @@ public sealed class ContentArtifactService : IContentArtifactService
             LifecycleStatus = NormalizeOptional(query.LifecycleStatus),
             WorkOrderId = NormalizeOptional(query.WorkOrderId),
             RunId = NormalizeOptional(query.RunId),
+            LabelKey = hasLabelKey
+                ? ContentArtifactConventions.NormalizeLabelKey(query.LabelKey, nameof(query.LabelKey))
+                : null,
+            LabelValue = hasLabelValue
+                ? ContentArtifactConventions.NormalizeLabelValue(query.LabelValue, nameof(query.LabelValue))
+                : null,
         };
     }
 
