@@ -74,6 +74,7 @@ internal sealed class ActorDispatchContentArtifactCommandService : IContentArtif
                 RequestedBy = ToPrincipal(requester),
                 Revision = ToRevision(artifactId, revisionNumber: 0, request.Revision, now),
                 RequestedAtUtc = now,
+                AdvanceToCurrent = request.AdvanceToCurrent,
             },
             "append",
             0,

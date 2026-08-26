@@ -153,9 +153,17 @@ public sealed class ContentArtifactService : IContentArtifactService
         var current = await _queryPort.GetAsync(normalizedScopeId, normalizedArtifactId, ct);
         if (current != null)
         {
+            // Implement (issue #3541):
+            //   Behavior: append-and-advance requires the same authority as explicit pointer advance.
+            //   Why this shape: the optional atomic path must not widen writer-only permissions.
+            var isOwner = PrincipalEquals(current.Owner, principal);
             var canWrite = PrincipalEquals(current.Owner, principal) ||
                            current.WriterPrincipalIds.Contains(principal.PrincipalId, StringComparer.Ordinal);
-            if (!string.Equals(current.ScopeId, normalizedScopeId, StringComparison.Ordinal) || !canWrite)
+            var canAdvance = isOwner ||
+                             current.ReaderPrincipalIds.Contains(principal.PrincipalId, StringComparer.Ordinal) &&
+                             current.WriterPrincipalIds.Contains(principal.PrincipalId, StringComparer.Ordinal);
+            var authorized = request.AdvanceToCurrent ? canAdvance : canWrite;
+            if (!string.Equals(current.ScopeId, normalizedScopeId, StringComparison.Ordinal) || !authorized)
                 throw new ContentArtifactNotFoundException(normalizedScopeId, normalizedArtifactId);
         }
         var normalizedRevision = NormalizeRevisionWrite(

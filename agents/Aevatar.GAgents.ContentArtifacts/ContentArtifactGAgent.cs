@@ -60,7 +60,13 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(command.Revision);
-        EnsureWriter(command.RequestedBy);
+        // Implement (issue #3541):
+        //   Behavior: append may make the new revision current within the same committed event.
+        //   Why this shape: one actor-owned transition prevents a partial append/advance outcome.
+        if (command.AdvanceToCurrent)
+            EnsureReaderWriter(command.RequestedBy);
+        else
+            EnsureWriter(command.RequestedBy);
         EnsureActiveArtifact(command.ArtifactId);
         var dedupKey = ContentArtifactConventions.NormalizeRequired(
             command.Revision.DedupKey,
@@ -88,6 +94,7 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
         {
             Revision = revision,
             AppendedAtUtc = appendedAt,
+            MadeCurrent = command.AdvanceToCurrent,
         });
     }
 
@@ -339,6 +346,8 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
         var next = state.Clone();
         var revision = evt.Revision?.Clone() ?? throw new InvalidOperationException("Appended revision is required.");
         next.Revisions.Add(revision.RevisionId, revision);
+        if (evt.MadeCurrent)
+            next.CurrentRevisionId = revision.RevisionId;
         AdvanceVersion(next, evt.AppendedAtUtc);
         return next;
     }

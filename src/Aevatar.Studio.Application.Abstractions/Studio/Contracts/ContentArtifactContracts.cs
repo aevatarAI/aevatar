@@ -104,7 +104,8 @@ public sealed record CreateContentArtifactRequest(
     IReadOnlyDictionary<string, string>? Labels = null);
 
 public sealed record AppendContentArtifactRevisionRequest(
-    ContentArtifactRevisionWriteRequest Revision);
+    ContentArtifactRevisionWriteRequest Revision,
+    bool AdvanceToCurrent = false);
 
 public sealed record AdvanceContentArtifactCurrentRevisionRequest(
     long ExpectedConcurrencyVersion,

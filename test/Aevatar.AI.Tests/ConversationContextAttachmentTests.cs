@@ -49,7 +49,10 @@ public sealed class ConversationContextAttachmentTests
 
         followFirst.Content.Should().Contain("revision_id=rev-1").And.Contain("content-rev-1");
         pinnedFirst.Content.Should().Contain("revision_id=rev-1").And.Contain("content-rev-1");
-        followSecond.Content.Should().Contain("revision_id=rev-2").And.Contain("content-rev-2");
+        followSecond.Content.Should().Contain("revision_id=rev-2")
+            .And.Contain("revision_number=2")
+            .And.Contain("updated_at_utc=2026-08-25T00:01:00.0000000+00:00")
+            .And.Contain("content-rev-2");
         pinnedSecond.Content.Should().Contain("revision_id=rev-1").And.Contain("content-rev-1");
         query.ContentRevisionIds.Should().Equal("rev-1", "rev-1", "rev-2", "rev-1");
 

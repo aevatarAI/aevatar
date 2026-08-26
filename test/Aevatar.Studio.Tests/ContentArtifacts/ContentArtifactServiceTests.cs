@@ -201,6 +201,36 @@ public sealed class ContentArtifactServiceTests
 
         commandPort.AppendRequest.Should().NotBeNull();
         commandPort.AppendRequest!.Revision.ParentRevisionId.Should().Be("revision-1");
+        commandPort.AppendRequest.AdvanceToCurrent.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AppendRevisionAsync_WithAdvanceShouldRequireReadAndWriteAuthority()
+    {
+        var current = BuildCurrentState() with
+        {
+            ReaderPrincipalIds = ["reader-1", "editor-1"],
+            WriterPrincipalIds = ["writer-1", "editor-1"],
+        };
+        var commandPort = new RecordingCommandPort();
+        var service = CreateService(commandPort: commandPort, queryPort: new RecordingQueryPort(current));
+        var request = new AppendContentArtifactRevisionRequest(
+            RevisionWrite("revision two", "revision-2-dedup", parentRevisionId: "revision-1"),
+            AdvanceToCurrent: true);
+
+        var writerOnly = () => service.AppendRevisionAsync(
+            "scope-1",
+            "artifact-1",
+            request,
+            Principal("writer-1"));
+
+        await writerOnly.Should().ThrowAsync<ContentArtifactNotFoundException>();
+        await service.AppendRevisionAsync(
+            "scope-1",
+            "artifact-1",
+            request,
+            Principal("editor-1"));
+        commandPort.AppendRequest!.AdvanceToCurrent.Should().BeTrue();
     }
 
     [Fact]

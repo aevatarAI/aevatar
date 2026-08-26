@@ -173,7 +173,12 @@ public sealed class ContentArtifactConversationPromptLayerMaterializer
                     continue;
                 }
 
+                // Implement (issue #3541):
+                //   Behavior: the injected header exposes the exact revision number and artifact update time.
+                //   Why this shape: consumers can audit FOLLOW_CURRENT resolution without inferring freshness.
                 var header = $"[content-artifact artifact_id={artifactId} revision_id={revisionId} " +
+                             $"revision_number={revision.RevisionNumber} " +
+                             $"updated_at_utc={artifact.UpdatedAtUtc.ToUniversalTime():O} " +
                              $"content_hash={PrefixHash(content.Reference.ContentHash)} media_type={content.Reference.MediaType}]\n";
                 var body = Encoding.UTF8.GetString(content.Content);
                 var section = header + body + "\n[/content-artifact]\n";

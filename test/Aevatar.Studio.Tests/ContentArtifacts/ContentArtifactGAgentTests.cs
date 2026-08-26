@@ -159,6 +159,59 @@ public sealed class ContentArtifactGAgentTests
             .ContainSingle(item => item.DedupKey == "revision-2-dedup").Subject;
         appended.RevisionNumber.Should().Be(2);
         appended.RevisionId.Should().Be(ContentArtifactConventions.BuildRevisionId(ArtifactId, 2));
+        agent.State.CurrentRevisionId.Should().Be(ContentArtifactConventions.BuildRevisionId(ArtifactId, 1));
+    }
+
+    [Fact]
+    public async Task AppendWithAdvance_ShouldAtomicallyMakeNewRevisionCurrentAndRemainRetrySafe()
+    {
+        var eventStore = new InMemoryEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleCreateAsync(BuildCreate("revision one"));
+        var append = new AppendContentArtifactRevision
+        {
+            ArtifactId = ArtifactId,
+            RequestedBy = Principal("editor-1"),
+            Revision = BuildRevision(2, "revision two", "revision-2-dedup", agent.State.CurrentRevisionId),
+            AdvanceToCurrent = true,
+        };
+
+        await agent.HandleAppendRevisionAsync(append);
+
+        var appended = agent.State.Revisions.Values.Should()
+            .ContainSingle(item => item.DedupKey == "revision-2-dedup").Subject;
+        agent.State.CurrentRevisionId.Should().Be(appended.RevisionId);
+        agent.State.ConcurrencyVersion.Should().Be(2);
+
+        var recovered = await CreateAgentAsync(eventStore: eventStore);
+        await recovered.HandleAppendRevisionAsync(append.Clone());
+
+        recovered.State.CurrentRevisionId.Should().Be(appended.RevisionId);
+        recovered.State.ConcurrencyVersion.Should().Be(2);
+        recovered.State.Revisions.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task AppendWithAdvance_ShouldRejectWriterOnlyAuthority()
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate("revision one"));
+        var firstRevisionId = agent.State.CurrentRevisionId;
+        var append = new AppendContentArtifactRevision
+        {
+            ArtifactId = ArtifactId,
+            RequestedBy = Principal("writer-1"),
+            Revision = BuildRevision(2, "revision two", "revision-2-dedup", firstRevisionId),
+            AdvanceToCurrent = true,
+        };
+
+        var act = () => agent.HandleAppendRevisionAsync(append);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not authorized*");
+        agent.State.CurrentRevisionId.Should().Be(firstRevisionId);
+        agent.State.ConcurrencyVersion.Should().Be(1);
+        agent.State.Revisions.Should().ContainSingle();
     }
 
     [Fact]

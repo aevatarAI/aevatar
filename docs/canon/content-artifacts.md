@@ -81,12 +81,19 @@ later tombstoned or otherwise unavailable, consumers report
 Creation commits revision 1 and makes it current. Append assigns the next
 revision number from the authoritative revision history. Append never changes a
 prior revision's content, hash, provenance, citations, creation time, or
-supersession reason. Advancing the current pointer is a separate command.
+supersession reason. Append leaves the current pointer unchanged by default. An
+append request may set the typed `advanceToCurrent` option; the authority Actor
+then records the new revision and moves the current pointer in one committed
+append event and one concurrency-version increment. There is no observable
+state in which that append committed but its requested pointer movement failed.
+The CAS-protected current-pointer command remains available for advancing to an
+existing revision.
 
 Append carries no expected concurrency version. Its client-supplied revision
 `dedupKey` is the idempotency key: an authorized retry with identical facts is a
-no-op, while the same key with different facts fails closed. The Actor assigns
-the revision number and id from authoritative state.
+no-op, while the same key with different facts fails closed. A duplicate append
+does not re-advance a pointer that moved later. The Actor assigns the revision
+number and id from authoritative state.
 
 Pointer advance, redaction, expiry, and tombstone carry an expected artifact
 concurrency version. The Actor authorizes first, then checks CAS before duplicate
@@ -145,9 +152,10 @@ ownership.
 
 The owner can read, append, advance, redact, expire, and tombstone. Explicit
 readers can read and discover. A writer-only principal has one append-only
-capability: it can append and blindly retry without CAS, but cannot read, list,
-advance, redact, expire, attach to a Run, or tombstone. Advance, redaction, and
-expiry require owner authority or membership in both reader and writer lists.
+capability: it can append with `advanceToCurrent = false` and blindly retry
+without CAS, but cannot read, list, advance, redact, expire, attach to a Run, or
+tombstone. Atomic append-and-advance, explicit advance, redaction, and expiry
+require owner authority or membership in both reader and writer lists.
 Only the owner may tombstone. Redaction and retention expiry clear the content
 location while preserving identity, hash, provenance, citations, and typed
 reason/time facts. Tombstone clears the current pointer and all surviving
@@ -186,6 +194,8 @@ The canonical resource root is `/api/scopes/{scopeId}/content-artifacts`.
 Endpoints create and list artifacts; read artifact metadata, one exact revision,
 the current revision, or verified content; append a revision; advance current;
 redact, expire, or tombstone; and attach exact references to a Service Run.
+Append accepts optional `advanceToCurrent`, defaulting to false, for an atomic
+append-and-pointer-move mutation.
 
 Mutation responses are `202 Accepted` dispatch receipts. Clients observe
 committed state through the current-state query surface and its authoritative

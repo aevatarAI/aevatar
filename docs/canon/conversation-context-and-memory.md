@@ -47,6 +47,13 @@ for missing, inactive, unauthorized, unsupported-kind, duplicate/over-limit, or 
 pinned revisions. A turn may degrade to a typed unavailable placeholder when a later verified
 read is redacted, tombstoned, expired, over budget, or temporarily unavailable.
 
+`FOLLOW_CURRENT` resolves only the artifact read model's explicit `CurrentRevisionId` on each
+turn; it never infers the highest revision number or silently retargets to the latest append.
+Writers that intend a new revision to become current use append with `advanceToCurrent = true`
+for one atomic mutation, or the separate CAS-protected pointer command. The injected identity
+header reports the resolved `revision_id`, `revision_number`, artifact `updated_at_utc`, content
+hash, and media type so consumers can audit the exact input.
+
 ## 3. Protobuf 与写侧契约
 
 内部事实、命令、事件和 actor state 全部使用 Protobuf：
@@ -135,4 +142,4 @@ message window、`RoleGAgent` session tracking limit、user-memory 50 条上限�
 5. fixture 是否使用不同的 conversation/session/user identity？
 6. 是否把核心 category/source/recovery/control 语义建模为 Protobuf，而非 generic bag？
 7. 是否意外新增了统一 memory framework 或 LLM provider 对 user-memory lifecycle 的所有权？
-8. 附件是否只经 read model + verified read 注入，且 identity header 标明实际 revision/hash/media type？
+8. 附件是否只经 read model + verified read 注入，FOLLOW_CURRENT 是否只解析显式 current 指针，且 identity header 标明实际 revision number/id、artifact update time、hash 与 media type？

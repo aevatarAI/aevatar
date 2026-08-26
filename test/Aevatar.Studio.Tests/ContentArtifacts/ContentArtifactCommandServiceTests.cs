@@ -52,7 +52,8 @@ public sealed class ContentArtifactCommandServiceTests
             CreateCommandDispatch(dispatchPort));
         var artifactId = ContentArtifactConventions.BuildArtifactId(ScopeId, "report-dedup");
         var request = new AppendContentArtifactRevisionRequest(
-            RevisionWrite("revision four", "revision-4-dedup", "revision-3"));
+            RevisionWrite("revision four", "revision-4-dedup", "revision-3"),
+            AdvanceToCurrent: true);
 
         var receipt = await service.AppendRevisionAsync(
             ScopeId,
@@ -66,6 +67,7 @@ public sealed class ContentArtifactCommandServiceTests
         command.Revision.RevisionNumber.Should().Be(0);
         command.Revision.RevisionId.Should().BeEmpty();
         command.Revision.ParentRevisionId.Should().Be("revision-3");
+        command.AdvanceToCurrent.Should().BeTrue();
     }
 
     [Fact]

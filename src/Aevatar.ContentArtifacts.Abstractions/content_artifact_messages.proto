@@ -166,6 +166,7 @@ message AppendContentArtifactRevision {
   ContentArtifactPrincipal requested_by = 3;
   ContentArtifactRevision revision = 4;
   google.protobuf.Timestamp requested_at_utc = 5;
+  bool advance_to_current = 6;
 }
 
 message AdvanceContentArtifactCurrentRevision {
@@ -209,6 +210,7 @@ message ContentArtifactCreatedEvent {
 message ContentArtifactRevisionAppendedEvent {
   ContentArtifactRevision revision = 1;
   google.protobuf.Timestamp appended_at_utc = 2;
+  bool made_current = 3;
 }
 
 message ContentArtifactCurrentRevisionAdvancedEvent {
