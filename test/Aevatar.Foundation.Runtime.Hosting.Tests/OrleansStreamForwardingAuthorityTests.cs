@@ -4,7 +4,9 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.Topology;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Orleans;
+using Orleans.Runtime;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -147,6 +149,96 @@ public sealed class OrleansStreamForwardingAuthorityTests
     }
 
     [Fact]
+    public async Task AuthoritativeGet_WhenTargetSiloIsTemporarilyUnavailable_ShouldRetry()
+    {
+        var grain = new TopologyGrainStub();
+        grain.ListExceptions.Enqueue(CreateSiloUnavailableException());
+        var registry = new OrleansDistributedStreamForwardingRegistry(
+            CreateGrainFactory((_, _) => grain),
+            TimeSpan.Zero,
+            NullLogger<OrleansDistributedStreamForwardingRegistry>.Instance,
+            topologyAttemptLimit: 3,
+            topologyRetryDelay: TimeSpan.Zero);
+
+        var binding = await registry.GetAsync("source-retry", "target-retry");
+
+        binding.Should().BeNull();
+        grain.ListCallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task AuthoritativeGet_WhenOrleansRejectsStaleSiloRoute_ShouldRetry()
+    {
+        var grain = new TopologyGrainStub();
+        grain.ListExceptions.Enqueue(CreateMessageRejectionException());
+        var registry = new OrleansDistributedStreamForwardingRegistry(
+            CreateGrainFactory((_, _) => grain),
+            TimeSpan.Zero,
+            NullLogger<OrleansDistributedStreamForwardingRegistry>.Instance,
+            topologyAttemptLimit: 3,
+            topologyRetryDelay: TimeSpan.Zero);
+
+        await registry.GetAsync("source-retry", "target-retry");
+
+        grain.ListCallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task AuthoritativeGet_WhenOrleansDirectoryIsConverging_ShouldRetry()
+    {
+        var grain = new TopologyGrainStub();
+        grain.ListExceptions.Enqueue(CreateDirectoryConvergenceException());
+        var registry = new OrleansDistributedStreamForwardingRegistry(
+            CreateGrainFactory((_, _) => grain),
+            TimeSpan.Zero,
+            NullLogger<OrleansDistributedStreamForwardingRegistry>.Instance,
+            topologyAttemptLimit: 3,
+            topologyRetryDelay: TimeSpan.Zero);
+
+        await registry.GetAsync("source-retry", "target-retry");
+
+        grain.ListCallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task AuthoritativeGet_WhenTopologyDoesNotConverge_ShouldStopAfterAttemptLimit()
+    {
+        var grain = new TopologyGrainStub();
+        for (var i = 0; i < 3; i++)
+            grain.ListExceptions.Enqueue(CreateSiloUnavailableException());
+        var registry = new OrleansDistributedStreamForwardingRegistry(
+            CreateGrainFactory((_, _) => grain),
+            TimeSpan.Zero,
+            NullLogger<OrleansDistributedStreamForwardingRegistry>.Instance,
+            topologyAttemptLimit: 3,
+            topologyRetryDelay: TimeSpan.Zero);
+
+        var act = () => registry.GetAsync("source-retry", "target-retry");
+
+        await act.Should().ThrowAsync<SiloUnavailableException>();
+        grain.ListCallCount.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task AuthoritativeGet_WhenFailureIsNotTopologyConvergence_ShouldNotRetry()
+    {
+        var grain = new TopologyGrainStub();
+        grain.ListExceptions.Enqueue(new InvalidOperationException("topology read failure"));
+        var registry = new OrleansDistributedStreamForwardingRegistry(
+            CreateGrainFactory((_, _) => grain),
+            TimeSpan.Zero,
+            NullLogger<OrleansDistributedStreamForwardingRegistry>.Instance,
+            topologyAttemptLimit: 3,
+            topologyRetryDelay: TimeSpan.Zero);
+
+        var act = () => registry.GetAsync("source-retry", "target-retry");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("topology read failure");
+        grain.ListCallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task ListBySource_ShouldCacheByRevision()
     {
         var grains = new Dictionary<string, TopologyGrainStub>(StringComparer.Ordinal);
@@ -198,6 +290,30 @@ public sealed class OrleansStreamForwardingAuthorityTests
         return grainFactory;
     }
 
+    private static OrleansMessageRejectionException CreateMessageRejectionException() =>
+        (OrleansMessageRejectionException)Activator.CreateInstance(
+            typeof(OrleansMessageRejectionException),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: ["stale silo route"],
+            culture: null)!;
+
+    private static SiloUnavailableException CreateSiloUnavailableException() =>
+        (SiloUnavailableException)Activator.CreateInstance(
+            typeof(SiloUnavailableException),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: ["stale silo route"],
+            culture: null)!;
+
+    private static OrleansException CreateDirectoryConvergenceException() =>
+        (OrleansException)Activator.CreateInstance(
+            typeof(OrleansException),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: ["Current directory is not stable to perform the lookup. Retry later."],
+            culture: null)!;
+
     private class GrainFactoryProxy : DispatchProxy
     {
         public Func<System.Type, string, object>? Resolver { get; set; }
@@ -226,6 +342,7 @@ public sealed class OrleansStreamForwardingAuthorityTests
         public int RevisionCallCount { get; private set; }
         public StreamForwardingBindingEntry? LastUpsert { get; private set; }
         public Func<Task<IReadOnlyList<StreamForwardingBindingEntry>>>? ListHandler { get; init; }
+        public Queue<Exception> ListExceptions { get; } = new();
 
         public Task UpsertAsync(StreamForwardingBindingEntry binding)
         {
@@ -254,6 +371,8 @@ public sealed class OrleansStreamForwardingAuthorityTests
         public Task<IReadOnlyList<StreamForwardingBindingEntry>> ListAsync()
         {
             ListCallCount++;
+            if (ListExceptions.TryDequeue(out var exception))
+                return Task.FromException<IReadOnlyList<StreamForwardingBindingEntry>>(exception);
             if (ListHandler is not null)
                 return ListHandler();
             return Task.FromResult<IReadOnlyList<StreamForwardingBindingEntry>>(_bindings.Select(Clone).ToList());

@@ -74,6 +74,129 @@ public sealed class OrleansActorRuntimeForwardingTests
     }
 
     [Fact]
+    public async Task CreateByKindAsync_WhenOrleansRejectsStaleSiloRoute_ShouldRetry()
+    {
+        var runtime = CreateRuntime(
+            out _,
+            out var grains,
+            out _,
+            initializationAttemptLimit: 3,
+            initializationRetryDelay: TimeSpan.Zero);
+        await runtime.ExistsAsync("role:assistant");
+        grains["role:assistant"].InitializationExceptions.Enqueue(
+            CreateMessageRejectionException());
+
+        var actor = await runtime.CreateByKindAsync("workflow.role-agent", "role:assistant");
+
+        actor.Id.Should().Be("role:assistant");
+        grains["role:assistant"].InitializedKinds.Should().Equal(
+            "workflow.role-agent",
+            "workflow.role-agent");
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_WhenTargetSiloIsTemporarilyUnavailable_ShouldRetry()
+    {
+        var runtime = CreateRuntime(
+            out _,
+            out var grains,
+            out _,
+            initializationAttemptLimit: 3,
+            initializationRetryDelay: TimeSpan.Zero);
+        await runtime.ExistsAsync("role:assistant");
+        grains["role:assistant"].InitializationExceptions.Enqueue(
+            CreateSiloUnavailableException());
+
+        var actor = await runtime.CreateByKindAsync("workflow.role-agent", "role:assistant");
+
+        actor.Id.Should().Be("role:assistant");
+        grains["role:assistant"].InitializedKinds.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_WhenOrleansDirectoryIsConverging_ShouldRetry()
+    {
+        var runtime = CreateRuntime(
+            out _,
+            out var grains,
+            out _,
+            initializationAttemptLimit: 3,
+            initializationRetryDelay: TimeSpan.Zero);
+        await runtime.ExistsAsync("role:assistant");
+        grains["role:assistant"].InitializationExceptions.Enqueue(
+            CreateDirectoryConvergenceException());
+
+        var actor = await runtime.CreateByKindAsync("workflow.role-agent", "role:assistant");
+
+        actor.Id.Should().Be("role:assistant");
+        grains["role:assistant"].InitializedKinds.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_WhenTopologyDoesNotConverge_ShouldStopAfterAttemptLimit()
+    {
+        var runtime = CreateRuntime(
+            out _,
+            out var grains,
+            out _,
+            initializationAttemptLimit: 3,
+            initializationRetryDelay: TimeSpan.Zero);
+        await runtime.ExistsAsync("role:assistant");
+        for (var i = 0; i < 3; i++)
+            grains["role:assistant"].InitializationExceptions.Enqueue(
+                CreateSiloUnavailableException());
+
+        var act = () => runtime.CreateByKindAsync("workflow.role-agent", "role:assistant");
+
+        await act.Should().ThrowAsync<SiloUnavailableException>();
+        grains["role:assistant"].InitializedKinds.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_WhenFailureIsNotTopologyConvergence_ShouldNotRetry()
+    {
+        var runtime = CreateRuntime(
+            out _,
+            out var grains,
+            out _,
+            initializationAttemptLimit: 3,
+            initializationRetryDelay: TimeSpan.Zero);
+        await runtime.ExistsAsync("role:assistant");
+        grains["role:assistant"].InitializationExceptions.Enqueue(
+            new InvalidOperationException("initialization failure"));
+
+        var act = () => runtime.CreateByKindAsync("workflow.role-agent", "role:assistant");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("initialization failure");
+        grains["role:assistant"].InitializedKinds.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_WhenTopologyRetryIsCancelled_ShouldStopWaiting()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var runtime = CreateRuntime(
+            out _,
+            out var grains,
+            out _,
+            initializationAttemptLimit: 3,
+            initializationRetryDelay: TimeSpan.FromMinutes(1));
+        await runtime.ExistsAsync("role:assistant");
+        grains["role:assistant"].InitializationExceptions.Enqueue(
+            CreateMessageRejectionException());
+        grains["role:assistant"].OnInitialize = cancellation.Cancel;
+
+        var act = () => runtime.CreateByKindAsync(
+            "workflow.role-agent",
+            "role:assistant",
+            cancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        grains["role:assistant"].InitializedKinds.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task LinkAsync_ShouldRegisterForwardingBinding_AndUpdateTopology()
     {
         var runtime = CreateRuntime(out var registry, out var grains, out _);
@@ -324,7 +447,9 @@ public sealed class OrleansActorRuntimeForwardingTests
         out InMemoryStreamForwardingRegistry registry,
         out Dictionary<string, RecordingRuntimeActorGrain> grains,
         out Dictionary<string, RecordingCallbackSchedulerGrain> callbackSchedulerGrains,
-        IStreamLifecycleManager? streamLifecycleManager = null)
+        IStreamLifecycleManager? streamLifecycleManager = null,
+        int initializationAttemptLimit = 30,
+        TimeSpan? initializationRetryDelay = null)
     {
         var grainMap = new Dictionary<string, RecordingRuntimeActorGrain>(StringComparer.Ordinal);
         var callbackSchedulerGrainMap = new Dictionary<string, RecordingCallbackSchedulerGrain>(StringComparer.Ordinal);
@@ -362,8 +487,35 @@ public sealed class OrleansActorRuntimeForwardingTests
             streams,
             new OrleansActorRuntimeDurableCallbackScheduler(grainFactory),
             new AgentKindRegistry([]),
-            streamLifecycleManager: streamLifecycleManager);
+            streamLifecycleManager,
+            NullLogger<OrleansActorRuntime>.Instance,
+            initializationAttemptLimit,
+            initializationRetryDelay ?? TimeSpan.FromSeconds(1));
     }
+
+    private static OrleansMessageRejectionException CreateMessageRejectionException() =>
+        (OrleansMessageRejectionException)Activator.CreateInstance(
+            typeof(OrleansMessageRejectionException),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: ["stale silo route"],
+            culture: null)!;
+
+    private static SiloUnavailableException CreateSiloUnavailableException() =>
+        (SiloUnavailableException)Activator.CreateInstance(
+            typeof(SiloUnavailableException),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: ["stale silo route"],
+            culture: null)!;
+
+    private static OrleansException CreateDirectoryConvergenceException() =>
+        (OrleansException)Activator.CreateInstance(
+            typeof(OrleansException),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: ["Current directory is not stable to perform the lookup. Retry later."],
+            culture: null)!;
 
     private static IPersistentState<RuntimeActorGrainState> CreatePersistentState(string actorId)
     {
@@ -434,6 +586,10 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public bool InitializeAgentByKindResult { get; set; } = true;
 
+        public Queue<Exception> InitializationExceptions { get; } = new();
+
+        public Action? OnInitialize { get; set; }
+
         public List<string> Calls { get; } = [];
         public List<Guid> ObservedReentrancyIds { get; } = [];
         public List<string> InitializedKinds { get; } = [];
@@ -457,6 +613,11 @@ public sealed class OrleansActorRuntimeForwardingTests
         {
             InitializedKinds.Add(kind);
             ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
+
+            OnInitialize?.Invoke();
+            if (InitializationExceptions.TryDequeue(out var exception))
+                return Task.FromException<bool>(exception);
+
             return InitializeAgentByKindResult
                 ? SubscribeSelfStreamOnceAsync()
                 : Task.FromResult(false);

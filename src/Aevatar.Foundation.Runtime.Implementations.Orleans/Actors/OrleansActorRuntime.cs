@@ -13,12 +13,17 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
 public sealed class OrleansActorRuntime : IActorRuntime
 {
+    private const int DefaultInitializationAttemptLimit = 30;
+    private static readonly TimeSpan DefaultInitializationRetryDelay = TimeSpan.FromSeconds(1);
+
     private readonly IGrainFactory _grainFactory;
     private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
     private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly IActorRuntimeCallbackScheduler _callbackScheduler;
     private readonly ILogger<OrleansActorRuntime> _logger;
     private readonly IAgentKindRegistry _agentKindRegistry;
+    private readonly int _initializationAttemptLimit;
+    private readonly TimeSpan _initializationRetryDelay;
 
     public OrleansActorRuntime(
         IGrainFactory grainFactory,
@@ -27,13 +32,39 @@ public sealed class OrleansActorRuntime : IActorRuntime
         IAgentKindRegistry agentKindRegistry,
         IStreamLifecycleManager? streamLifecycleManager = null,
         ILogger<OrleansActorRuntime>? logger = null)
+        : this(
+            grainFactory,
+            streams,
+            callbackScheduler,
+            agentKindRegistry,
+            streamLifecycleManager,
+            logger,
+            DefaultInitializationAttemptLimit,
+            DefaultInitializationRetryDelay)
     {
+    }
+
+    internal OrleansActorRuntime(
+        IGrainFactory grainFactory,
+        Aevatar.Foundation.Abstractions.IStreamProvider streams,
+        IActorRuntimeCallbackScheduler callbackScheduler,
+        IAgentKindRegistry agentKindRegistry,
+        IStreamLifecycleManager? streamLifecycleManager,
+        ILogger<OrleansActorRuntime>? logger,
+        int initializationAttemptLimit,
+        TimeSpan initializationRetryDelay)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(initializationAttemptLimit, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(initializationRetryDelay, TimeSpan.Zero);
+
         _grainFactory = grainFactory;
         _streams = streams;
         _callbackScheduler = callbackScheduler ?? throw new ArgumentNullException(nameof(callbackScheduler));
         _agentKindRegistry = agentKindRegistry ?? throw new ArgumentNullException(nameof(agentKindRegistry));
         _streamLifecycleManager = streamLifecycleManager ?? NullStreamLifecycleManager.Instance;
         _logger = logger ?? NullLogger<OrleansActorRuntime>.Instance;
+        _initializationAttemptLimit = initializationAttemptLimit;
+        _initializationRetryDelay = initializationRetryDelay;
     }
 
     public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
@@ -52,7 +83,11 @@ public sealed class OrleansActorRuntime : IActorRuntime
         EnsureReservedFleetAuthorityIdentity(actorId, agentKind);
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
 
-        var initialized = await grain.InitializeAgentByKindAsync(agentKind);
+        var initialized = await InitializeAgentByKindAsync(
+            grain,
+            actorId,
+            agentKind,
+            ct);
         if (!initialized)
             throw new InvalidOperationException($"Failed to initialize Orleans actor {actorId} for kind '{agentKind}'.");
 
@@ -69,13 +104,69 @@ public sealed class OrleansActorRuntime : IActorRuntime
         var actorId = id ?? $"{agentKind.Trim()}:{Guid.NewGuid():N}";
         EnsureReservedFleetAuthorityIdentity(actorId, agentKind.Trim());
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-        var initialized = await grain.InitializeAgentByKindAsync(agentKind.Trim());
+        var initialized = await InitializeAgentByKindAsync(
+            grain,
+            actorId,
+            agentKind.Trim(),
+            ct);
         if (!initialized)
             throw new InvalidOperationException($"Failed to initialize Orleans actor {actorId} for kind '{agentKind}'.");
 
         _logger.LogInformation("Actor {Id} ({Kind}) created via Orleans runtime", actorId, agentKind);
         return new OrleansActor(actorId, grain, _streams);
     }
+
+    private async Task<bool> InitializeAgentByKindAsync(
+        IRuntimeActorGrain grain,
+        string actorId,
+        string agentKind,
+        CancellationToken ct)
+    {
+        for (var attempt = 1; attempt <= _initializationAttemptLimit; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                return await grain.InitializeAgentByKindAsync(agentKind);
+            }
+            catch (Exception ex) when (
+                attempt < _initializationAttemptLimit &&
+                IsTopologyConvergenceFailure(ex))
+            {
+                if (attempt == 1 || attempt % 5 == 0)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Orleans actor initialization was rejected during topology convergence. " +
+                        "actorId={ActorId} actorKind={ActorKind} attempt={Attempt}/{AttemptLimit}",
+                        actorId,
+                        agentKind,
+                        attempt,
+                        _initializationAttemptLimit);
+                }
+
+                await Task.Delay(_initializationRetryDelay, ct);
+            }
+        }
+
+        throw new InvalidOperationException("Orleans actor initialization retry loop exited unexpectedly.");
+    }
+
+    private static bool IsTopologyConvergenceFailure(Exception exception) =>
+        exception switch
+        {
+            OrleansMessageRejectionException => true,
+            OrleansException orleansException when
+                orleansException.Message.Contains(
+                    "is not stable to perform the lookup",
+                    StringComparison.Ordinal) &&
+                orleansException.Message.Contains("Retry later", StringComparison.Ordinal) => true,
+            AggregateException aggregate when aggregate.InnerExceptions.Count > 0 =>
+                aggregate.InnerExceptions.All(IsTopologyConvergenceFailure),
+            _ when exception.InnerException is not null =>
+                IsTopologyConvergenceFailure(exception.InnerException),
+            _ => false,
+        };
 
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
