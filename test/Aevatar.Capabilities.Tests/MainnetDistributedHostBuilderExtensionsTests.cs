@@ -36,7 +36,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var receiverHighWatermark = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaReceiverBufferHighWatermark", "72");
         using var receiverLowWatermark = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaReceiverBufferLowWatermark", "36");
         using var queueCount = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCount", "6");
-        using var queueCacheSize = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCacheSize", "512");
+        using var queueCacheSize = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCacheSize", "65536");
         using var maxEventDeliveryTime = new EnvironmentVariableScope(
             "AEVATAR_Orleans__MaxEventDeliveryTime", "00:04:00");
         using var responseTimeout = new EnvironmentVariableScope(
@@ -57,7 +57,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         var transportOptions = app.Services.GetRequiredService<KafkaProviderTransportOptions>();
 
         runtimeOptions.QueueCount.Should().Be(6);
-        runtimeOptions.QueueCacheSize.Should().Be(512);
+        runtimeOptions.QueueCacheSize.Should().Be(65536);
         runtimeOptions.MaxEventDeliveryTime.Should().Be(TimeSpan.FromMinutes(4));
         app.Services.GetRequiredService<IOptions<SiloMessagingOptions>>().Value.ResponseTimeout
             .Should().Be(TimeSpan.FromMinutes(5));
@@ -313,6 +313,25 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
 
         app.Services.GetRequiredService<AevatarOrleansRuntimeOptions>().QueueCacheSize
             .Should().BeGreaterThanOrEqualTo(AevatarOrleansRuntimeOptions.DefaultQueueCacheSize);
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_LegacyQueueCacheOverride_ShouldKeepSharedKafkaBurstHeadroom()
+    {
+        using var queueCacheSize = new EnvironmentVariableScope(
+            "AEVATAR_Orleans__QueueCacheSize", "4096");
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
+        builder.AddMainnetDistributedOrleansHost();
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<AevatarOrleansRuntimeOptions>().QueueCacheSize
+            .Should().Be(AevatarOrleansRuntimeOptions.DefaultQueueCacheSize);
     }
 
     [Fact]

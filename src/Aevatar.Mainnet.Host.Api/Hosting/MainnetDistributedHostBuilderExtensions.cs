@@ -340,7 +340,13 @@ public static class MainnetDistributedHostBuilderExtensions
 
         var configuredQueueCacheSize = configuration["Orleans:QueueCacheSize"];
         if (int.TryParse(configuredQueueCacheSize, out var queueCacheSize) && queueCacheSize > 0)
-            options.QueueCacheSize = queueCacheSize;
+        {
+            // Mounted deployment configuration can lag behind code defaults. Never let a
+            // legacy override remove the shared Kafka burst headroom reserved by Mainnet.
+            options.QueueCacheSize = Math.Max(
+                queueCacheSize,
+                AevatarOrleansRuntimeOptions.DefaultQueueCacheSize);
+        }
 
         var configuredMaxEventDeliveryTime = configuration["Orleans:MaxEventDeliveryTime"];
         if (TimeSpan.TryParse(configuredMaxEventDeliveryTime, out var maxEventDeliveryTime) &&
