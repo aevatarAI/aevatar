@@ -53,6 +53,41 @@ public sealed class NyxIdChatPublicToolReceiptResultTests
     }
 
     [Fact]
+    public void BuildDurableReceiptEvidence_WorkflowStartCompleted_ShouldKeepBoundedPartialOutput()
+    {
+        const string secret = "start-secret-must-not-persist";
+        const string partialOutput = "您好，我想预订今晚 7 点，两位，上海海底捞南京西路店。";
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "command-alpha",
+            ToolName = "aevatar_start_workflow",
+            Status = AgentToolReceiptStatus.Success,
+            SubjectId = "scope-workflow:run-alpha",
+            MutationStage = AgentToolReceiptMutationStage.ReadModelObserved,
+            ResultJson = $$"""
+                {
+                  "run_id": "scope-workflow:run-alpha",
+                  "actor_id": "scope-workflow:run-alpha",
+                  "command_id": "command-alpha",
+                  "status": "Completed",
+                  "state_version": 7,
+                  "partial_output": "{{partialOutput}}",
+                  "access_token": "{{secret}}"
+                }
+                """,
+        };
+
+        var durable = NyxIdChatConversationGAgent.BuildDurableReceiptEvidence(receipt);
+
+        durable.Should().NotBeNull();
+        durable!.ResultJson.Should().NotContain(secret).And.NotContain("access_token");
+        using var document = JsonDocument.Parse(durable.ResultJson);
+        document.RootElement.GetProperty("status").GetString().Should().Be("completed");
+        document.RootElement.GetProperty("state_version").GetInt64().Should().Be(7);
+        document.RootElement.GetProperty("partial_output").GetString().Should().Be(partialOutput);
+    }
+
+    [Fact]
     public void BuildDurableReceiptEvidence_WorkflowStart_WithMismatchedCommandIdentity_ShouldFailClosed()
     {
         var receipt = new AgentToolReceipt

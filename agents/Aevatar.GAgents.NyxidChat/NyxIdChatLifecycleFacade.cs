@@ -257,7 +257,7 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                 CallerScope = callerScope.Clone(),
                 Channel = string.Empty,
                 CommandName = string.Empty,
-                ContentHint = string.Empty,
+                ContentHint = BuildContentHint(command.FirstTurn?.Prompt),
                 ToolMode = ToolMode.None,
             },
             implicitRouteToolSetName);
@@ -277,6 +277,9 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
 
             command.AgentProfile = agentProfile.Clone();
         }
+
+        if (command.FirstTurn is not null)
+            command.FirstTurn.TargetRef = decision.Action.Clone();
 
         // Refactor (issue1321-first): ForwardToModel.tool_choice_hint is tool prefill only,
         // so conversation creation never treats hint arguments as actor addressing.
@@ -373,6 +376,15 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                 NyxIdChatLifecycleCommandStartError.AttachmentReadModelUnavailable,
             _ => NyxIdChatLifecycleCommandStartError.AdmissionUnavailable,
         };
+
+    private static string BuildContentHint(string? prompt)
+    {
+        var normalized = prompt?.Trim();
+        if (string.IsNullOrEmpty(normalized))
+            return string.Empty;
+
+        return normalized.Length <= 256 ? normalized : normalized[..256];
+    }
 }
 
 internal sealed class NyxIdChatConversationDeleteCommandTargetResolver

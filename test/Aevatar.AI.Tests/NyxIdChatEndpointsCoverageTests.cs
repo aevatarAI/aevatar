@@ -1619,7 +1619,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         var runtime = new StubActorRuntime();
         runtime.Actors[actor.Id] = actor;
         var projectionPort = new StubNyxIdChatSessionProjectionPort();
-        var services = new ServiceCollection()
+        var services = AddInMemoryStreamForwardingServices(new ServiceCollection())
             .AddLogging()
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(new ThrowingActorDispatchPort(runtime, new InvalidOperationException("dispatch failed")))
@@ -3212,6 +3212,16 @@ public partial class NyxIdChatEndpointsCoverageTests
         var actorId = doc.RootElement.GetProperty("actorId").GetString();
         actorId.Should().NotBeNullOrWhiteSpace();
         return actorId!;
+    }
+
+    private static IServiceCollection AddInMemoryStreamForwardingServices(IServiceCollection services)
+    {
+        services.AddSingleton<InMemoryStreamForwardingRegistry>();
+        services.AddSingleton<IStreamForwardingRegistry>(sp =>
+            sp.GetRequiredService<InMemoryStreamForwardingRegistry>());
+        services.AddSingleton<IStreamForwardingBindingAuthority>(sp =>
+            sp.GetRequiredService<InMemoryStreamForwardingRegistry>());
+        return services;
     }
 
     private static int GetFreeTcpPort()

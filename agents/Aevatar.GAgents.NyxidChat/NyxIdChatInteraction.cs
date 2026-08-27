@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.SkillInvocations;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -42,6 +43,8 @@ public sealed record NyxIdChatCommand(
     internal bool CreatedLocally { get; set; }
 
     internal AgentProfileSnapshot? AgentProfile { get; set; }
+
+    internal ChatRouteAction? TargetRef { get; set; }
 }
 
 internal static class NyxIdChatPublicIdentity
@@ -416,6 +419,8 @@ internal sealed class NyxIdChatCommandTargetResolver
             ContextAttachments = ConversationContextAttachmentAdmission.CloneOptionalSet(command.ContextAttachments),
             FirstTurn = new NyxIdChatStartTurnCommand
             {
+                Prompt = command.Prompt,
+                TargetRef = command.TargetRef?.Clone(),
                 ToolContext = new AgentToolExecutionContextPayload
                 {
                     Caller = new AgentToolCallerContextPayload
@@ -457,6 +462,7 @@ internal sealed class NyxIdChatCommandTargetResolver
 
         command.CreatedLocally = resolved.Target.CreatedLocally;
         command.AgentProfile = create.AgentProfile?.Clone();
+        command.TargetRef = create.FirstTurn?.TargetRef?.Clone();
         return CommandTargetResolution<NyxIdChatCommandTarget, NyxIdChatStartError>.Success(
             new NyxIdChatCommandTarget(resolved.Target.Actor, _projectionPort));
     }
@@ -566,6 +572,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         startTurn.LlmControl = effectiveControl.ToPayload();
         startTurn.ToolContext = BuildToolContext(command, effectiveControl).ToPayload();
         startTurn.ContextAttachments = ConversationContextAttachmentAdmission.CloneOptionalSet(command.ContextAttachments);
+        startTurn.TargetRef = command.TargetRef?.Clone();
         AppendExternalContext(startTurn.ToolContext.ExternalMetadata, command.Metadata);
 
         if (!command.CreateIfMissing)

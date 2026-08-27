@@ -82,13 +82,18 @@ public sealed class ChatRouteResolver
         return MatchesEnum(match.SourceKind, ChatSourceKind.Unspecified, input.SourceKind)
                && MatchesString(match.Channel, input.Channel)
                && MatchesString(match.CommandName, input.CommandName)
-               && MatchesString(match.ContentHint, input.ContentHint)
+               && MatchesContentHint(match.ContentHint, input.ContentHint)
                && MatchesEnum(match.ToolMode, ToolMode.Unspecified, input.ToolMode)
                && MatchesString(match.Model, input.Model);
     }
 
     private static bool MatchesString(string? expected, string actual) =>
         string.IsNullOrEmpty(expected) || string.Equals(expected, actual, StringComparison.Ordinal);
+
+    private static bool MatchesContentHint(string? expected, string actual) =>
+        string.IsNullOrWhiteSpace(expected) ||
+        (!string.IsNullOrWhiteSpace(actual) &&
+         actual.Contains(expected.Trim(), StringComparison.OrdinalIgnoreCase));
 
     private static bool MatchesEnum<TEnum>(TEnum expected, TEnum unspecified, TEnum actual)
         where TEnum : struct, System.Enum =>

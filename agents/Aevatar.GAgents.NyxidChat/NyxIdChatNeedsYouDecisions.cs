@@ -144,7 +144,7 @@ public static class NyxIdChatNeedsYouDecisions
         AppendBounded(next.RecentInputResolutions, resolution);
         next.ProgressSequence = checked(Math.Max(0, next.ProgressSequence) + 1);
         next.UpdatedAt = now.Clone();
-        var nextCommand = ResumeAfterInput(next, pending, normalizedAnswer, command.ToolContext, now);
+        var nextCommand = ResumeAfterInput(next, pending, command, normalizedAnswer, now);
         if (nextCommand is null)
             return NoCommit<NyxIdChatInputResolutionState>(state);
         return new(true, false, next, resolution, nextCommand);
@@ -438,8 +438,8 @@ public static class NyxIdChatNeedsYouDecisions
     private static NyxIdChatOperationDispatchCommand? ResumeAfterInput(
         NyxIdChatConversationGAgentState state,
         NyxIdChatPendingInputState pending,
+        NyxIdChatInputResolveCommand command,
         NyxIdChatInputAnswer answer,
-        AgentToolExecutionContextPayload? toolContext,
         Timestamp now)
     {
         var activeTask = state.ActiveTask;
@@ -490,7 +490,8 @@ public static class NyxIdChatNeedsYouDecisions
             RequestId = pending.RequestId,
             ToolCallId = pending.ToolCallId,
             Answer = answer.Clone(),
-            ToolContext = toolContext?.Clone(),
+            ToolContext = command.ToolContext?.Clone(),
+            TargetRef = command.TargetRef?.Clone(),
         };
         if (answer.AnswerCase == NyxIdChatInputAnswer.AnswerOneofCase.Selection)
         {

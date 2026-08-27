@@ -2,7 +2,10 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions;
@@ -73,6 +76,7 @@ public static partial class NyxIdChatEndpoints
         var turnId = CreateTurnId(actorId, clientRequestId);
         var ownerSubject = string.Empty;
         AgentProfileReference? agentProfileReference = null;
+        ChatRouteAction? targetRef = null;
         IReadOnlyList<NyxIdChatActionReport> actionReports = [];
         IReadOnlyList<ChatContentPart> inputParts = [];
 
@@ -166,6 +170,16 @@ public static partial class NyxIdChatEndpoints
                 }
 
                 inputParts = normalizedInput.Parts;
+
+                if (!createIfMissing)
+                {
+                    targetRef = await ResolveTextRouteTargetAsync(http, scopeId, prompt, ct);
+                    if (targetRef?.Reject is not null)
+                    {
+                        await ChatRouteRejected(targetRef.Reject).ExecuteAsync(http);
+                        return;
+                    }
+                }
             }
         }
         catch (OperationCanceledException)
@@ -283,25 +297,27 @@ public static partial class NyxIdChatEndpoints
 
                 // Streaming endpoints do not pre-read runtime state before command dispatch.
                 // The shared CQRS resolver owns actor lookup and attach-existing observation.
+                var command = new NyxIdChatCommand(
+                    actorId,
+                    scopeId,
+                    prompt,
+                    turnId,
+                    accessToken,
+                    inputParts,
+                    metadata,
+                    llmControl,
+                    CommandId: commandId,
+                    CorrelationId: commandId,
+                    ClientRequestId: clientRequestId,
+                    CreateIfMissing: createIfMissing,
+                    OwnerSubject: ownerSubject,
+                    AgentProfileReference: agentProfileReference,
+                    NyxIdCredentialKind: credentials.NyxIdCredentialKind,
+                    InputPartsFingerprint: NyxIdChatPublicIdentity.CreateInputPartsFingerprint(rawInputParts));
+                command.TargetRef = targetRef?.Clone();
+                command.ContextAttachments = request.ContextAttachments?.Select(static attachment => attachment.ToProto()).ToArray();
                 interactionTask = interactionService.ExecuteAsync(
-                    new NyxIdChatCommand(
-                        actorId,
-                        scopeId,
-                        prompt,
-                        turnId,
-                        accessToken,
-                        inputParts,
-                        metadata,
-                        llmControl,
-                        CommandId: commandId,
-                        CorrelationId: commandId,
-                        ClientRequestId: clientRequestId,
-                        CreateIfMissing: createIfMissing,
-                        OwnerSubject: ownerSubject,
-                        AgentProfileReference: agentProfileReference,
-                        NyxIdCredentialKind: credentials.NyxIdCredentialKind,
-                        InputPartsFingerprint: NyxIdChatPublicIdentity.CreateInputPartsFingerprint(rawInputParts),
-                        ContextAttachments: request.ContextAttachments?.Select(static attachment => attachment.ToProto()).ToArray()),
+                    command,
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -729,6 +745,42 @@ public static partial class NyxIdChatEndpoints
 
         var headerValue = http.Request.Headers["Idempotency-Key"].ToString();
         return string.IsNullOrWhiteSpace(headerValue) ? null : headerValue.Trim();
+    }
+
+    private static async Task<ChatRouteAction?> ResolveTextRouteTargetAsync(
+        HttpContext http,
+        string scopeId,
+        string prompt,
+        CancellationToken ct)
+    {
+        var queryPort = http.RequestServices.GetService<IChatRoutePolicyQueryPort>();
+        var routeResolver = http.RequestServices.GetService<ChatRouteResolver>();
+        if (queryPort is null || routeResolver is null)
+            return null;
+
+        var callerScope = OwnerScope.ForNyxIdNative(scopeId);
+        var snapshot = await queryPort.LookupForCallerAsync(callerScope, ct);
+        return routeResolver
+            .Resolve(snapshot, new ChatRouteInput
+            {
+                SourceKind = ChatSourceKind.Direct,
+                CallerScope = callerScope.Clone(),
+                Channel = string.Empty,
+                CommandName = string.Empty,
+                ContentHint = BuildContentHint(prompt),
+                ToolMode = ToolMode.None,
+            })
+            .Action
+            .Clone();
+    }
+
+    private static string BuildContentHint(string? prompt)
+    {
+        var normalized = prompt?.Trim();
+        if (string.IsNullOrEmpty(normalized))
+            return string.Empty;
+
+        return normalized.Length <= 256 ? normalized : normalized[..256];
     }
 
     private static bool TryMapAgentProfileReference(

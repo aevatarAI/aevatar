@@ -141,6 +141,67 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
+    public void Resolve_ContentHintRule_WhenInputContainsHint_ReturnsRuleAction()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "reservation-route",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { ContentHint = "订餐" },
+                    Action = ToolHintAction(
+                        "aevatar_start_workflow",
+                        new Dictionary<string, string>
+                        {
+                            ["workflow_id"] = "phone-restaurant-reservation",
+                        }),
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { ContentHint = "今晚 7 点帮我订餐" });
+
+        decision.MatchedRuleId.Should().Be("reservation-route");
+        AssertForwardToModelTool(
+            decision.Action,
+            expectedToolName: "aevatar_start_workflow",
+            expectedArguments: new Dictionary<string, string>
+            {
+                ["workflow_id"] = "phone-restaurant-reservation",
+            });
+    }
+
+    [Fact]
+    public void Resolve_ContentHintRule_WhenInputDoesNotContainHint_ReturnsDefaultTarget()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "reservation-route",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { ContentHint = "订餐" },
+                    Action = ToolHintAction(
+                        "aevatar_start_workflow",
+                        new Dictionary<string, string>
+                        {
+                            ["workflow_id"] = "phone-restaurant-reservation",
+                        }),
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { ContentHint = "随便聊聊今天的天气" });
+
+        decision.MatchedRuleId.Should().BeEmpty();
+        decision.Action.ForwardToModel.ModelName.Should().Be("default-model");
+        decision.Action.ForwardToModel.ToolChoiceHint.Should().BeNull();
+    }
+
+    [Fact]
     public void Resolve_ForwardToModelWithoutToolSetRef_WhenDefaultToolSetConfigured_ShouldInjectDefaultToolSet()
     {
         var resolver = NewResolver(defaultToolSetName: "workspace.default");

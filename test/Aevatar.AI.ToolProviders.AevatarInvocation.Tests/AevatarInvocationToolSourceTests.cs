@@ -3795,6 +3795,46 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflow_WhenNyxIdAssistantCredentialHasNoSenderBinding_ShouldNotProjectRefreshableAuthority()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-nyxid-assistant-no-binding",
+            senderBindingId: null,
+            nyxIdCredentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "owner-scope-1",
+                "proxy"),
+            chatContext: new AgentChatInvocationContext(
+                AgentChatInvocationSurface.NyxIdAssistant,
+                "conversation-1",
+                "turn-1",
+                "task-1",
+                null,
+                null));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        var callerCredential = harness.WorkflowDispatch.Command!.CallerCredential;
+        callerCredential.Should().NotBeNull();
+        callerCredential!.BearerToken.Should().Be("access-token");
+        callerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.SourceReadableUserBearer);
+        callerCredential.NyxIdAuthority.Should().BeNull();
+    }
+
+    [Fact]
     public async Task StartWorkflow_ShouldKeepTrustedControlInTypedFields_NotMetadataBag()
     {
         var harness = new Harness();
@@ -5126,7 +5166,8 @@ public sealed class AevatarInvocationToolSourceTests
         string? sourceReadableAccessToken = null,
         AgentToolNyxIdAuthorityContext? nyxIdAuthority = null,
         AgentToolExecutionOwner? executionOwner = null,
-        DurableCallerCredentialRef? durableNyxIdCredential = null) =>
+        DurableCallerCredentialRef? durableNyxIdCredential = null,
+        AgentChatInvocationContext? chatContext = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId),
             new AgentToolCredentials(
@@ -5157,6 +5198,7 @@ public sealed class AevatarInvocationToolSourceTests
                              AgentToolExecutionOwners.HostService(nameof(AevatarInvocationToolSourceTests)),
             NyxIdAuthority = nyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty,
             DurableNyxIdCredential = durableNyxIdCredential,
+            Chat = chatContext ?? AgentChatInvocationContext.Empty,
         });
 
     private sealed class StartingAdmissionLedger : IAgentToolAdmissionLedger

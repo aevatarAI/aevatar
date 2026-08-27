@@ -21,6 +21,8 @@ using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -158,6 +160,194 @@ public class NyxIdChatGAgentTests
         result.Target!.CreatedLocally.Should().BeTrue();
         source.Requests.Select(static request => request.ScopeId).Should().Equal("scope-a");
         AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ChatCommandResolver_WhenCreatingConversation_ShouldCarryFirstTurnRouteHintToEnvelope()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "profile.route"));
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ToolSetRef = new ChatRouteToolSetRef { Name = "profile.route" },
+                },
+            },
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "reservation-route",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { ContentHint = "订餐" },
+                    Action = new ChatRouteAction
+                    {
+                        ForwardToModel = new ForwardToModel
+                        {
+                            ToolSetRef = new ChatRouteToolSetRef { Name = "profile.route" },
+                            ToolChoiceHint = new ChatRouteToolChoiceHint
+                            {
+                                ToolName = "aevatar_start_workflow",
+                                PrefilledArguments = new Struct
+                                {
+                                    Fields =
+                                    {
+                                        ["workflow_id"] = Google.Protobuf.WellKnownTypes.Value.ForString("phone-restaurant-reservation"),
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            ]));
+        var createResolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            routeQueryPort,
+            NewChatRouteResolver(),
+            source);
+        var resolver = new NyxIdChatCommandTargetResolver(
+            runtime,
+            new UnusedNyxIdChatSessionProjectionPort(),
+            () => createResolver);
+        var command = new NyxIdChatCommand(
+            "nyxid-chat-route",
+            "scope-a",
+            "今晚 7 点帮我订餐，两位",
+            "turn-route",
+            "token-a",
+            [],
+            null,
+            ClientRequestId: "client-route",
+            CreateIfMissing: true,
+            OwnerSubject: "owner-a");
+
+        var result = await resolver.ResolveAsync(command);
+        var envelope = new NyxIdChatCommandEnvelopeFactory().CreateEnvelope(
+            command,
+            new CommandContext(result.Target!.TargetId, "command-route", "correlation-route", new Dictionary<string, string>()));
+
+        result.Succeeded.Should().BeTrue();
+        command.TargetRef.Should().NotBeNull();
+        var createCommand = envelope.Payload.Unpack<NyxIdChatConversationCreateCommand>();
+        createCommand.FirstTurn.TargetRef.ForwardToModel.ToolChoiceHint.ToolName.Should()
+            .Be("aevatar_start_workflow");
+        createCommand.FirstTurn.TargetRef.ForwardToModel.ToolChoiceHint.PrefilledArguments
+            .Fields["workflow_id"].StringValue.Should().Be("phone-restaurant-reservation");
+    }
+
+    [Fact]
+    public async Task CreateTargetResolver_WhenContentRuleMatches_ShouldCopyToolHintToFirstTurnTargetRef()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "profile.route"));
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ToolSetRef = new ChatRouteToolSetRef { Name = "profile.route" },
+                },
+            },
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "reservation-route",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { ContentHint = "订餐" },
+                    Action = new ChatRouteAction
+                    {
+                        ForwardToModel = new ForwardToModel
+                        {
+                            ToolSetRef = new ChatRouteToolSetRef { Name = "profile.route" },
+                            ToolChoiceHint = new ChatRouteToolChoiceHint
+                            {
+                                ToolName = "aevatar_start_workflow",
+                                PrefilledArguments = new Struct
+                                {
+                                    Fields =
+                                    {
+                                        ["workflow_id"] = Google.Protobuf.WellKnownTypes.Value.ForString("phone-restaurant-reservation"),
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            ]));
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            routeQueryPort,
+            NewChatRouteResolver(),
+            source);
+        var command = new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            FirstTurn = new NyxIdChatStartTurnCommand
+            {
+                Prompt = "今晚 7 点帮我订餐，两位",
+            },
+        };
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeTrue();
+        command.FirstTurn.TargetRef.ForwardToModel.ToolChoiceHint.ToolName.Should()
+            .Be("aevatar_start_workflow");
+        command.FirstTurn.TargetRef.ForwardToModel.ToolChoiceHint.PrefilledArguments
+            .Fields["workflow_id"].StringValue.Should().Be("phone-restaurant-reservation");
+    }
+
+    [Fact]
+    public async Task CreateTargetResolver_WhenContentRuleDoesNotMatch_ShouldLeaveFirstTurnWithoutToolHint()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "profile.route"));
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ToolSetRef = new ChatRouteToolSetRef { Name = "profile.route" },
+                },
+            },
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "reservation-route",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { ContentHint = "订餐" },
+                    Action = new ChatRouteAction
+                    {
+                        ForwardToModel = new ForwardToModel
+                        {
+                            ToolSetRef = new ChatRouteToolSetRef { Name = "profile.route" },
+                            ToolChoiceHint = new ChatRouteToolChoiceHint
+                            {
+                                ToolName = "aevatar_start_workflow",
+                            },
+                        },
+                    },
+                },
+            ]));
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            routeQueryPort,
+            NewChatRouteResolver(),
+            source);
+        var command = new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            FirstTurn = new NyxIdChatStartTurnCommand
+            {
+                Prompt = "随便聊聊今天的天气",
+            },
+        };
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeTrue();
+        command.FirstTurn.TargetRef.ForwardToModel.ToolChoiceHint.Should().BeNull();
     }
 
     [Fact]
@@ -3219,6 +3409,34 @@ public class NyxIdChatGAgentTests
             UsedFallback = true,
             ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
+    }
+
+    private sealed class UnusedNyxIdChatSessionProjectionPort : INyxIdChatSessionProjectionPort
+    {
+        public bool ProjectionEnabled => false;
+
+        public Task<EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>?> AttachExistingChatProjectionAsync(
+            string actorId,
+            string sessionId,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default) =>
+            Task.FromResult<EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>?>(null);
+
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
+            INyxIdChatSessionProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default) =>
+            Task.FromResult<IAsyncDisposable?>(null);
+
+        public Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task ReleaseActorProjectionAsync(
+            INyxIdChatSessionProjectionLease lease,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class StaticChatRoutePolicyQueryPort(ChatRoutePolicySnapshot? snapshot)

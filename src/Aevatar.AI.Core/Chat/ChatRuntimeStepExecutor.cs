@@ -159,7 +159,7 @@ public sealed class ChatRuntimeStepExecutor
             ct);
     }
 
-    private async Task<ChatRuntimeStepRecoveryToolCall?> TryAuthorizePlannedToolCallAsync(
+    public async Task<ChatRuntimeStepRecoveryToolCall?> TryAuthorizePlannedToolCallAsync(
         LLMRequest request,
         Func<LLMRequest, ToolCall?> resolveToolCall,
         CancellationToken ct)

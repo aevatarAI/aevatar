@@ -10,6 +10,7 @@ internal static class NyxIdChatPublicToolReceiptResult
     private const int MaxIdentifierBytes = 512;
     private const int MaxWorkflowNameBytes = 512;
     private const int MaxProjectedResultBytes = 4 * 1024;
+    private const int MaxPartialOutputBytes = 3 * 1024;
     private const string PublicReceiptUnavailableCode = "PUBLIC_RECEIPT_UNAVAILABLE";
 
     public static string Project(AgentToolReceipt receipt)
@@ -94,7 +95,7 @@ internal static class NyxIdChatPublicToolReceiptResult
         var runId = ReadBoundedString(root, "run_id", MaxIdentifierBytes);
         var actorId = ReadBoundedString(root, "actor_id", MaxIdentifierBytes);
         var commandId = ReadBoundedString(root, "command_id", MaxIdentifierBytes);
-        var status = ReadBoundedString(root, "status", 32)?.ToLowerInvariant();
+        var status = NormalizeWorkflowStartStatus(ReadBoundedString(root, "status", 32));
         var mutationStage = receipt.MutationStage switch
         {
             AgentToolReceiptMutationStage.Accepted => "accepted",
@@ -105,7 +106,7 @@ internal static class NyxIdChatPublicToolReceiptResult
             actorId is null ||
             commandId is null ||
             mutationStage is null ||
-            status is not ("accepted" or "streaming") ||
+            !IsWorkflowStartStatus(status) ||
             !HasValidWorkflowStartIdentity(receipt, runId, actorId) ||
             !string.Equals(runId, receipt.SubjectId, StringComparison.Ordinal) ||
             !string.Equals(commandId, receipt.CallId, StringComparison.Ordinal))
@@ -113,7 +114,7 @@ internal static class NyxIdChatPublicToolReceiptResult
             return null;
         }
 
-        return new Dictionary<string, object?>(StringComparer.Ordinal)
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["run_id"] = runId,
             ["actor_id"] = actorId,
@@ -121,6 +122,16 @@ internal static class NyxIdChatPublicToolReceiptResult
             ["status"] = status,
             ["mutation_stage"] = mutationStage,
         };
+        if (IsTerminalWorkflowStartStatus(status))
+        {
+            var stateVersion = ReadPositiveInt64(root, "state_version");
+            if (stateVersion.HasValue)
+                result["state_version"] = stateVersion.Value;
+            if (ReadOptionalBoundedString(root, "partial_output", MaxPartialOutputBytes) is { } partialOutput)
+                result["partial_output"] = partialOutput;
+        }
+
+        return result;
     }
 
     private static Dictionary<string, object?>? ProjectWorkflowRunArtifact(
@@ -236,6 +247,21 @@ internal static class NyxIdChatPublicToolReceiptResult
     private static bool IsMaterializedNonTerminalStatus(string? status) =>
         status is "running" or "awaiting_tool_approval" or "waiting_for_signal";
 
+    private static bool IsWorkflowStartStatus(string? status) =>
+        status is "accepted" or "streaming" or "completed" or "failed" or "stopped" or "timed_out" or
+            "not_found" or "disabled";
+
+    private static bool IsTerminalWorkflowStartStatus(string? status) =>
+        status is "completed" or "failed" or "stopped" or "timed_out" or "not_found" or "disabled";
+
+    private static string? NormalizeWorkflowStartStatus(string? status) =>
+        status?.Trim().ToLowerInvariant() switch
+        {
+            "timedout" or "timed_out" => "timed_out",
+            "notfound" or "not_found" => "not_found",
+            var normalized => normalized,
+        };
+
     private static string? NormalizeArtifactStatus(string? status) =>
         status?.Trim().ToLowerInvariant() switch
         {
@@ -269,6 +295,17 @@ internal static class NyxIdChatPublicToolReceiptResult
         return !string.IsNullOrEmpty(text) && Encoding.UTF8.GetByteCount(text) <= maxBytes
             ? text
             : null;
+    }
+
+    private static string? ReadOptionalBoundedString(JsonElement root, string name, int maxBytes)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String)
+            return null;
+
+        var text = value.GetString()?.Trim();
+        return string.IsNullOrEmpty(text) || Encoding.UTF8.GetByteCount(text) > maxBytes
+            ? null
+            : text;
     }
 
     private static bool TryReadBoolean(JsonElement root, string name, out bool result)

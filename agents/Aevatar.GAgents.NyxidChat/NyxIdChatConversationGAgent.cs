@@ -1667,6 +1667,7 @@ public sealed class NyxIdChatConversationGAgent
                 AgentProfileTurnAuthority = turnAuthority?.Clone(),
                 Intent = intent,
                 ContextAttachments = State.ContextAttachments?.Clone(),
+                TargetRef = command.TargetRef?.Clone(),
             },
         };
         await DispatchFirstOperationAsync(
