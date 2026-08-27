@@ -297,7 +297,18 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
 
         var routeHintAlreadyStarted = HasRouteToolChoiceHintReceipt(workItem.StepState);
-        var routeHintToolCall = requiredToolCall is not null || workItem.StepState.FinalNoToolsStep || routeHintAlreadyStarted
+        var recoveryToolCall = requiredToolCall is not null || workItem.StepState.FinalNoToolsStep
+            ? null
+            : await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
+                    llmRequest,
+                    skillRecoveryMessages,
+                    finalContent: null,
+                    ct)
+                .ConfigureAwait(false);
+        var routeHintToolCall = requiredToolCall is not null ||
+                                recoveryToolCall is not null ||
+                                workItem.StepState.FinalNoToolsStep ||
+                                routeHintAlreadyStarted
             ? null
             : await plan.StepExecutor.TryAuthorizePlannedToolCallAsync(
                     llmRequest,
@@ -310,15 +321,20 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             llmResult = BuildSkillRecoveryLlmResult(requiredToolCall);
         }
+        else if (recoveryToolCall is not null)
+        {
+            llmResult = BuildSkillRecoveryLlmResult(recoveryToolCall);
+        }
         else if (routeHintToolCall is not null)
         {
             llmResult = BuildSkillRecoveryLlmResult(routeHintToolCall);
         }
         else
         {
-            var recoveryToolCall = workItem.StepState.FinalNoToolsStep
-                ? null
-                : await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
+            llmRequest = await MaterializeFileRefMessagesAsync(llmRequest, ct).ConfigureAwait(false);
+            using var interactiveScope = TryBeginInteractiveScope(request);
+            llmResult = await plan.StepExecutor.ExecuteLlmStepAsync(
+                        plan.StepExecutor.ResolveProvider(),
                         llmRequest,
                         async (chunk, token) =>
                         {
@@ -355,30 +371,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                         },
                         ct)
                     .ConfigureAwait(false);
-            if (recoveryToolCall is not null)
-            {
-                llmResult = BuildSkillRecoveryLlmResult(recoveryToolCall);
-            }
-            else
-            {
-                llmRequest = await MaterializeFileRefMessagesAsync(llmRequest, ct).ConfigureAwait(false);
-                using var interactiveScope = TryBeginInteractiveScope(request);
-                llmResult = await plan.StepExecutor.ExecuteLlmStepAsync(
-                            plan.StepExecutor.ResolveProvider(),
-                            llmRequest,
-                            async (chunk, token) =>
-                            {
-                                if (deferredLlmChunks is not null)
-                                {
-                                    deferredLlmChunks.Add(chunk);
-                                    return;
-                                }
-
-                                await DeliverLlmChunkAsync(chunk, token).ConfigureAwait(false);
-                            },
-                            ct)
-                        .ConfigureAwait(false);
-            }
         }
 
         // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown

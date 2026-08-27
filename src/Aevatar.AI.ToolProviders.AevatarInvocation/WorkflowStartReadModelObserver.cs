@@ -1,4 +1,6 @@
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 
@@ -12,17 +14,20 @@ internal sealed class WorkflowStartReadModelObserver
     private readonly TimeSpan _observationTimeout;
     private readonly TimeSpan _completionObservationTimeout;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<WorkflowStartReadModelObserver> _logger;
 
     public WorkflowStartReadModelObserver(
         IWorkflowExecutionQueryApplicationService queryService,
         TimeSpan? observationTimeout = null,
         TimeSpan? completionObservationTimeout = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<WorkflowStartReadModelObserver>? logger = null)
     {
         _queryService = queryService ?? throw new ArgumentNullException(nameof(queryService));
         _observationTimeout = observationTimeout ?? DefaultObservationTimeout;
         _completionObservationTimeout = completionObservationTimeout ?? DefaultCompletionObservationTimeout;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _logger = logger ?? NullLogger<WorkflowStartReadModelObserver>.Instance;
     }
 
     public async Task<bool> ObserveAsync(
@@ -93,8 +98,13 @@ internal sealed class WorkflowStartReadModelObserver
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogWarning(
+                    ex,
+                    "Workflow start read model observation failed for actor {ActorId} command {CommandId}.",
+                    normalizedActorId,
+                    normalizedCommandId);
                 return null;
             }
 

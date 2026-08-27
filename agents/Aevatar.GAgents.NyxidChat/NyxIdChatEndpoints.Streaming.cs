@@ -313,9 +313,9 @@ public static partial class NyxIdChatEndpoints
                     OwnerSubject: ownerSubject,
                     AgentProfileReference: agentProfileReference,
                     NyxIdCredentialKind: credentials.NyxIdCredentialKind,
-                    InputPartsFingerprint: NyxIdChatPublicIdentity.CreateInputPartsFingerprint(rawInputParts));
+                    InputPartsFingerprint: NyxIdChatPublicIdentity.CreateInputPartsFingerprint(rawInputParts),
+                    ContextAttachments: request.ContextAttachments?.Select(static attachment => attachment.ToProto()).ToArray());
                 command.TargetRef = targetRef?.Clone();
-                command.ContextAttachments = request.ContextAttachments?.Select(static attachment => attachment.ToProto()).ToArray();
                 interactionTask = interactionService.ExecuteAsync(
                     command,
                     EmitAsync,

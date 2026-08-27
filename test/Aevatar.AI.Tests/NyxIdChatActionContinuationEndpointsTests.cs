@@ -316,7 +316,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         };
         var stateQuery = new FixedNyxIdChatStateQueryPort(
             NyxIdChatConversationStateQueryResult.NotFound());
-        using var services = AddInMemoryStreamForwardingServices(new ServiceCollection())
+        var services = AddInMemoryStreamForwardingServices(new ServiceCollection())
             .AddLogging()
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(new StubActorDispatchPort(runtime))
