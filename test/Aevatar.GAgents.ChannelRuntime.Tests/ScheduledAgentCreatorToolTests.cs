@@ -552,8 +552,7 @@ public sealed class ScheduledAgentCreatorToolTests
         var now = DateTimeOffset.UtcNow;
         var issueResult = ScheduledAgentApiKeyIssuer.ExtractIssuedKey(
             createResponseJson,
-            now.AddDays(30).ToUnixTimeMilliseconds(),
-            now);
+            now.AddDays(30).ToUnixTimeMilliseconds());
         var harness = CreateHarness(apiKeyIssueResult: issueResult);
 
         await WithToolContext(async () =>
@@ -595,7 +594,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WithProductionIssuerAndNoExactSelections_ShouldFailBeforeKeyCreation()
+    public async Task ExecuteAsync_WithProductionIssuer_ShouldMintOrdinaryScopedKeyFromAttestedPlan()
     {
         var handler = CreateSuccessHandler();
         var harness = CreateHarness(
@@ -607,13 +606,12 @@ public sealed class ScheduledAgentCreatorToolTests
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString()
-                .Should().Be("scheduled_durable_operation_authority_unavailable");
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             handler.Requests.Should().ContainSingle(request =>
                 request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys/scope-plan");
-            handler.Requests.Should().NotContain(request =>
+            handler.Requests.Should().ContainSingle(request =>
                 request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
-            await harness.CreationPort.DidNotReceive().CreateAsync(
+            await harness.CreationPort.Received(1).CreateAsync(
                 Arg.Any<ScheduledWorkflowAgentCreateRequest>(),
                 Arg.Any<CancellationToken>());
         });

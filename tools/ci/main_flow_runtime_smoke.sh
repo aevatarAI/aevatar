@@ -211,9 +211,14 @@ class Handler(BaseHTTPRequestHandler):
                 "name": request.get("name") or "",
                 "is_active": True,
             }
+            # Mirror the real CreateApiKeyResponse credential-class fields: an
+            # ordinary create (no selected_operations) returns a general proxy
+            # credential and omits the empty durable_grants receipt list.
             self.send_json(200, {
                 "id": key_id,
                 "full_key": "main-flow-smoke-scheduled-secret",
+                "purpose": "general",
+                "scheduled_write_enabled": False,
             })
             return
         self.send_json(404, {"error": "not_found"})

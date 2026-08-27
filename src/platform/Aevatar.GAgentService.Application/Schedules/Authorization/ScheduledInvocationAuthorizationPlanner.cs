@@ -312,12 +312,18 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         IReadOnlyList<NyxIdServiceGrant> serviceGrants,
         NyxIdCatalogAuthorityStamp? catalogAuthority)
     {
+        // BuildPlan only runs after every admitted NyxID operation passed
+        // ValidateDurableExplicitRequestEvidence and the scheduled operation
+        // authorization evaluation, so the planner can attest that per-call
+        // NyxID proxy policy is the enforcement point for this credential.
         var plan = new ScheduledInvocationAuthorizationPlan
         {
             SchemaVersion = SchemaVersion,
             InvocationTarget = request.InvocationTarget.Clone(),
             Owner = request.Owner.Clone(),
             AuthenticatedActor = authenticatedActor.Clone(),
+            DurableOperationAuthorityMode =
+                ScheduledDurableOperationAuthorityMode.PerCallPolicy,
             CredentialPolicy = new ScheduledInvocationCredentialPolicy
             {
                 AllowAllServices = false,

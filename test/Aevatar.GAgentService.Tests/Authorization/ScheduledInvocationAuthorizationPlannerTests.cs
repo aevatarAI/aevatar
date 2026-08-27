@@ -47,6 +47,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Plan.NyxIdServiceGrants.Should().BeEmpty();
         result.Plan.CredentialPolicy.ServiceGrantRequirement.Should()
             .Be(AuthorizationGrantRequirement.NotRequired);
+        result.Plan.DurableOperationAuthorityMode.Should()
+            .Be(ScheduledDurableOperationAuthorityMode.PerCallPolicy);
         catalog.QueryCount.Should().Be(0);
     }
 
@@ -85,6 +87,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Success.Should().BeTrue();
         result.Plan!.NyxIdServiceGrants.Should().ContainSingle()
             .Which.UserServiceId.Should().Be("svc-a");
+        result.Plan.DurableOperationAuthorityMode.Should()
+            .Be(ScheduledDurableOperationAuthorityMode.PerCallPolicy);
         evidence.OwnerLLMQueries.Should().Be(0);
     }
 

@@ -13,6 +13,19 @@ enum NyxIdCredentialScope {
   NYX_ID_CREDENTIAL_SCOPE_PROXY = 2;
 }
 
+// Producer-attested statement of how the admitted NyxID operations are
+// authorized for unattended execution. The planner seals a mode into every
+// plan it builds; a plan without a mode predates this contract and cannot
+// authorize scheduled credential issuance.
+enum ScheduledDurableOperationAuthorityMode {
+  SCHEDULED_DURABLE_OPERATION_AUTHORITY_MODE_UNSPECIFIED = 0;
+  // Every admitted operation is enforceable per call at the NyxID proxy:
+  // reads are binder-attested and authored mutations passed the owner's
+  // evaluated approval policy at plan time. The scheduled credential is an
+  // ordinary scoped key and no NyxID-side durable operation grants exist.
+  SCHEDULED_DURABLE_OPERATION_AUTHORITY_MODE_PER_CALL_POLICY = 1;
+}
+
 enum ScheduledInvocationDisclosure {
   SCHEDULED_INVOCATION_DISCLOSURE_UNSPECIFIED = 0;
   SCHEDULED_INVOCATION_DISCLOSURE_DEDICATED_CREDENTIAL = 1;
@@ -153,6 +166,7 @@ message ScheduledInvocationAuthorizationPlan {
   string permission_digest = 10;
   AuthorizationOwnerIdentity authenticated_actor = 11;
   ScheduledInvocationOwnerLLMSelection owner_llm_selection = 12;
+  ScheduledDurableOperationAuthorityMode durable_operation_authority_mode = 13;
 }
 
 message ScheduledInvocationAuthorizationConfirmation {
