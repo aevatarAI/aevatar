@@ -4,6 +4,8 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AGUI.Contracts;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -270,6 +272,52 @@ public sealed class NyxIdChatPublicEndpointsTests
             target.ScopeId == "scope-alpha" &&
             target.ActorId == "conversation-alpha" &&
             target.Operation == ScopeResourceOperation.Stream);
+    }
+
+    [Fact]
+    public async Task ContinuedText_WhenRoutePolicyMatches_ShouldAttachTargetRef()
+    {
+        var chat = new RecordingInteraction<NyxIdChatCommand>();
+        var admission = new RecordingAdmissionPort();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(chat)
+            .AddSingleton<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(new RecordingInteraction<NyxIdActionContinuationCommand>())
+            .AddSingleton<IScopeResourceAdmissionPort>(admission)
+            .AddSingleton<IChatRoutePolicyQueryPort>(StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+                ForwardToModelAction(string.Empty),
+                [
+                    new ChatRouteRule
+                    {
+                        RuleId = "reservation-detail",
+                        Priority = 10,
+                        Match = new ChatRouteMatch { ContentHint = "餐厅是" },
+                        Action = ToolHintAction(
+                            "aevatar_start_workflow",
+                            new Dictionary<string, string>
+                            {
+                                ["workflow_id"] = "phone-restaurant-reservation",
+                            }),
+                    },
+                ])))
+            .AddSingleton(NewChatRouteResolver()));
+        context.Request.Headers.Authorization = "Bearer delegated-token";
+        context.Response.Body = new MemoryStream();
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
+            {
+              "type": "text",
+              "conversationId": "conversation-alpha",
+              "clientRequestId": "request-beta",
+              "prompt": "餐厅是海底捞，城市上海"
+            }
+            """));
+
+        var command = chat.Commands.Should().ContainSingle().Which;
+        command.CreateIfMissing.Should().BeFalse();
+        command.TargetRef.Should().NotBeNull();
+        command.TargetRef!.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("aevatar_start_workflow");
+        command.TargetRef.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["workflow_id"].StringValue
+            .Should().Be("phone-restaurant-reservation");
     }
 
     [Fact]
@@ -569,6 +617,54 @@ public sealed class NyxIdChatPublicEndpointsTests
         command.Answer.Selection.OptionIds.Should().Equal("option-a", "option-b");
         command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("delegated-token");
         command.ExpectedStateVersion.Should().Be(19);
+    }
+
+    [Fact]
+    public async Task Input_WhenRoutePolicyMatchesFreeText_ShouldAttachTargetRef()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort())
+            .AddSingleton<IActorDispatchPort>(dispatch)
+            .AddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>()
+            .AddSingleton<IChatRoutePolicyQueryPort>(StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+                ForwardToModelAction(string.Empty),
+                [
+                    new ChatRouteRule
+                    {
+                        RuleId = "reservation-options",
+                        Priority = 10,
+                        Match = new ChatRouteMatch { ContentHint = "三家餐厅" },
+                        Action = ToolHintAction(
+                            "aevatar_start_workflow",
+                            new Dictionary<string, string>
+                            {
+                                ["workflow_id"] = "phone-restaurant-reservation",
+                            }),
+                    },
+                ])))
+            .AddSingleton(NewChatRouteResolver()));
+        context.Request.Headers.Authorization = "Bearer delegated-token";
+        context.Response.Body = new MemoryStream();
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
+            {
+              "type": "input.resolve",
+              "conversationId": "conversation-alpha",
+              "requestId": "input-alpha",
+              "clientRequestId": "body-input-route",
+              "answer": {"freeText": "请给我三家餐厅选择，城市上海，今晚7点，两位。"},
+              "expectedStateVersion": 19
+            }
+            """));
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var command = dispatch.Dispatches.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatInputResolveCommand>();
+        command.TargetRef.Should().NotBeNull();
+        command.TargetRef!.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("aevatar_start_workflow");
+        command.TargetRef.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["workflow_id"].StringValue
+            .Should().Be("phone-restaurant-reservation");
     }
 
     [Fact]
@@ -875,6 +971,37 @@ public sealed class NyxIdChatPublicEndpointsTests
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
+    private static ChatRouteResolver NewChatRouteResolver() =>
+        new(new StaticChatRouteFallbackProvider(string.Empty));
+
+    private static ChatRouteAction ForwardToModelAction(string modelName) => new()
+    {
+        ForwardToModel = new ForwardToModel { ModelName = modelName },
+    };
+
+    private static ChatRouteAction ToolHintAction(
+        string toolName,
+        IReadOnlyDictionary<string, string> arguments,
+        string toolSetName = "workspace.default")
+    {
+        var fields = new Google.Protobuf.WellKnownTypes.Struct();
+        foreach (var (key, value) in arguments)
+            fields.Fields[key] = Google.Protobuf.WellKnownTypes.Value.ForString(value);
+
+        return new ChatRouteAction
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ToolSetRef = new ChatRouteToolSetRef { Name = toolSetName },
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = toolName,
+                    PrefilledArguments = fields,
+                },
+            },
+        };
+    }
+
     private static DefaultHttpContext CreateContext(
         string scopeId,
         Func<IServiceCollection, IServiceCollection>? configure = null)
@@ -934,6 +1061,27 @@ public sealed class NyxIdChatPublicEndpointsTests
             .Single(endpoint =>
                 string.Equals(endpoint.RoutePattern.RawText, routePattern, StringComparison.Ordinal) &&
                 endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.Contains(method));
+    }
+
+    private sealed class StaticChatRoutePolicyQueryPort(ChatRoutePolicySnapshot? snapshot) : IChatRoutePolicyQueryPort
+    {
+        public static StaticChatRoutePolicyQueryPort ForSnapshot(ChatRoutePolicySnapshot? snapshot) => new(snapshot);
+
+        public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(
+            OwnerScope callerScope,
+            CancellationToken ct = default) =>
+            Task.FromResult(snapshot);
+    }
+
+    private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
+    {
+        public ChatRouteDecision GetFallbackDecision() => new()
+        {
+            Action = ForwardToModelAction(modelName),
+            MatchedRuleId = string.Empty,
+            UsedFallback = true,
+            ResolvedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
     }
 
     private sealed class RecordingInteraction<TCommand>

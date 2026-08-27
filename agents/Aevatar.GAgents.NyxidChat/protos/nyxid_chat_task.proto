@@ -5,6 +5,7 @@ package aevatar.gagents.nyxid_chat;
 option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
 import "ai_messages.proto";
+import "chat_route_policy.proto";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
 import "ToolProviders/agent_tool_admission.proto";
@@ -1484,6 +1485,10 @@ message NyxIdChatLLMOperationInput {
   // Runtime credentials remain exclusively in the transient request context.
   NyxIdChatVerifiedAuthorizationContinuation verified_authorization_continuation = 7;
   aevatar.ai.ConversationContextAttachmentSet context_attachments = 8;
+  // Server-selected chat route action for this LLM operation. It is copied only
+  // into the transient run request so policy-owned tool hints can be enforced
+  // by the run executor without becoming actor addressing.
+  aevatar.chat_routing.v1.ChatRouteAction target_ref = 9;
 }
 
 message NyxIdChatToolOperationInput {
@@ -1540,6 +1545,10 @@ message NyxIdChatInputContinuationInput {
   NyxIdChatInputAnswer answer = 3;
   repeated NyxIdChatInputOption selected_options = 4;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 5;
+  // Server-selected chat route action for this input continuation. It is copied
+  // only into the transient run request so policy-owned tool hints can remain
+  // active after a pending user-input step is resolved.
+  aevatar.chat_routing.v1.ChatRouteAction target_ref = 6;
 }
 
 message NyxIdChatConditionContinuationInput {
@@ -1864,6 +1873,9 @@ message NyxIdChatStartTurnCommand {
   // It is never copied into actor state, projections, or transcript history.
   NyxIdChatSteeringExecutionContext steering_execution_context = 16;
   aevatar.ai.ConversationContextAttachmentSet context_attachments = 17;
+  // Server-selected direct-chat route action for this turn. It is command-owned
+  // execution context and is not copied into conversation state.
+  aevatar.chat_routing.v1.ChatRouteAction target_ref = 19;
 }
 
 message NyxIdChatStopCommand {
@@ -1952,6 +1964,9 @@ message NyxIdChatInputResolveCommand {
   string command_id = 7;
   string correlation_id = 8;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 9;
+  // Server-selected direct-chat route action for this input resolution. It is
+  // command-owned execution context and is not copied into conversation state.
+  aevatar.chat_routing.v1.ChatRouteAction target_ref = 10;
 }
 
 message NyxIdChatApprovalResolveCommand {

@@ -699,6 +699,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         var request = isContinuation
             ? session.Request!.Clone()
             : BuildReplyRequest(command);
+        if (command.Llm.TargetRef is not null)
+            request.TargetRef = command.Llm.TargetRef.Clone();
         if (await EnsureDelegationCredentialAsync(command.Key, session, request, ct).ConfigureAwait(false) is
             { } credentialFailure)
         {
@@ -1532,7 +1534,11 @@ public sealed class NyxIdChatTurnOperationExecutor
                 new NyxIdChatOperationDispatchCommand
                 {
                     Key = command.Key.Clone(),
-                    Llm = new NyxIdChatLLMOperationInput { ContinueSession = true },
+                    Llm = new NyxIdChatLLMOperationInput
+                    {
+                        ContinueSession = true,
+                        TargetRef = input.TargetRef?.Clone(),
+                    },
                 },
                 session,
                 reportProgressAsync,
@@ -2352,6 +2358,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             ToolContext = MergeDirectInputFileRefs(chat.ToolContext, chat.InputParts),
             LlmControl = chat.LlmControl?.Clone(),
             ContextAttachments = chat.ContextAttachments?.Clone(),
+            TargetRef = command.Llm.TargetRef?.Clone(),
         };
         foreach (var pair in chat.Metadata)
             request.Metadata[pair.Key] = pair.Value;

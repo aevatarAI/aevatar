@@ -2,6 +2,8 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Capabilities;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Google.Protobuf.WellKnownTypes;
@@ -9,6 +11,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -308,6 +311,10 @@ public static partial class NyxIdChatEndpoints
         if (admissionError is not null)
             return admissionError;
 
+        var targetRef = await ResolveInputRouteTargetAsync(http, identity.ScopeId, answer, ct).ConfigureAwait(false);
+        if (targetRef?.Reject is not null)
+            return ChatRouteRejected(targetRef.Reject);
+
         var (commandId, correlationId) = CreateControlTraceIdentity();
         var receipt = await commandPort.DispatchInputResolveAsync(new NyxIdChatInputResolveCommand
         {
@@ -320,6 +327,7 @@ public static partial class NyxIdChatEndpoints
             CommandId = commandId,
             CorrelationId = correlationId,
             ToolContext = ToToolContextPayload(credentials!),
+            TargetRef = targetRef?.Clone(),
         }, ct).ConfigureAwait(false);
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
@@ -496,6 +504,36 @@ public static partial class NyxIdChatEndpoints
             ExecutionOwner = AgentToolExecutionOwners.Actor(conversationActorId),
         };
         return (control ?? LLMControlContext.Empty).ToToolContext(context).ToPayload();
+    }
+
+    private static async Task<ChatRouteAction?> ResolveInputRouteTargetAsync(
+        HttpContext http,
+        string scopeId,
+        NyxIdChatInputAnswer answer,
+        CancellationToken ct)
+    {
+        if (answer.AnswerCase != NyxIdChatInputAnswer.AnswerOneofCase.FreeText)
+            return null;
+
+        var queryPort = http.RequestServices.GetService<IChatRoutePolicyQueryPort>();
+        var routeResolver = http.RequestServices.GetService<ChatRouteResolver>();
+        if (queryPort is null || routeResolver is null)
+            return null;
+
+        var callerScope = OwnerScope.ForNyxIdNative(scopeId);
+        var snapshot = await queryPort.LookupForCallerAsync(callerScope, ct).ConfigureAwait(false);
+        return routeResolver
+            .Resolve(snapshot, new ChatRouteInput
+            {
+                SourceKind = ChatSourceKind.Direct,
+                CallerScope = callerScope.Clone(),
+                Channel = string.Empty,
+                CommandName = string.Empty,
+                ContentHint = BuildContentHint(answer.FreeText),
+                ToolMode = ToolMode.None,
+            })
+            .Action
+            .Clone();
     }
 
     private static AgentToolExecutionContextPayload ToToolContextPayload(AgentToolCredentials credentials) =>

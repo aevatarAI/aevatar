@@ -752,12 +752,21 @@ public sealed class AevatarInvocationDispatcher
                 .ConfigureAwait(false);
         }
 
-        var mutationStage = await _workflowStartReadModelObserver.ObserveAsync(
-                scopeId,
-                receipt.ActorId,
-                receipt.CommandId,
-                ct)
-            .ConfigureAwait(false)
+        var completionSnapshot = wait == InvocationWaitMode.Complete
+            ? await _workflowStartReadModelObserver.ObserveCompletionAsync(
+                    scopeId,
+                    receipt.ActorId,
+                    receipt.CommandId,
+                    ct)
+                .ConfigureAwait(false)
+            : null;
+        var mutationStage = completionSnapshot != null ||
+                            await _workflowStartReadModelObserver.ObserveAsync(
+                                    scopeId,
+                                    receipt.ActorId,
+                                    receipt.CommandId,
+                                    ct)
+                                .ConfigureAwait(false)
             ? AgentToolReceiptMutationStage.ReadModelObserved
             : AgentToolReceiptMutationStage.Accepted;
         if (mutationStage != AgentToolReceiptMutationStage.ReadModelObserved)
@@ -770,11 +779,16 @@ public sealed class AevatarInvocationDispatcher
                 receipt.CommandId);
         }
 
+        var completionResultJson = completionSnapshot == null
+            ? string.Empty
+            : AevatarInvocationJson.Serialize(MapWorkflowSnapshot(completionSnapshot, receipt.ActorId));
+
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
             RunId = receipt.ActorId,
-            Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
+            Status = completionSnapshot?.CompletionStatus.ToString() ?? (wait == InvocationWaitMode.Ack ? "accepted" : "streaming"),
             StreamTopic = streamTopic,
+            ResultJson = completionResultJson,
             ActorId = receipt.ActorId,
             CommandId = receipt.CommandId,
             CorrelationId = receipt.CorrelationId,
@@ -2164,9 +2178,14 @@ public sealed class AevatarInvocationDispatcher
         var supportsProxyDelegation = credentialKind is
             NyxIdCallerCredentialKind.SourceReadableUserBearer or
             NyxIdCallerCredentialKind.ProxyDelegation;
-        var authority = supportsProxyDelegation && context?.NyxIdAuthority.IsComplete == true
+        var hasSenderBinding = !string.IsNullOrWhiteSpace(context?.SenderBinding.BindingId);
+        var canRefreshCallerCredential = supportsProxyDelegation &&
+                                         context?.NyxIdAuthority.IsComplete == true &&
+                                         (context.Chat.Surface != AgentChatInvocationSurface.NyxIdAssistant ||
+                                          hasSenderBinding);
+        var authority = canRefreshCallerCredential
             ? new WorkflowRunCallerNyxIdAuthority(
-                context.NyxIdAuthority.Platform!.Trim(),
+                context!.NyxIdAuthority.Platform!.Trim(),
                 context.NyxIdAuthority.Tenant?.Trim() ?? string.Empty,
                 context.NyxIdAuthority.ExternalUserId!.Trim(),
                 string.IsNullOrWhiteSpace(context.NyxIdAuthority.Scope)

@@ -35,6 +35,7 @@ internal sealed class AgentProfileRequiredToolUnavailableException()
 public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
 {
     private const string InvalidGrantRevokeReason = "nyx_invalid_grant";
+    private const string RouteToolChoiceHintCallId = "route_tool_choice_hint";
     internal const string ToolCatalogPolicyVersion = "agent-turn-tool-catalog/v1";
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IConversationReplyGenerator _replyGenerator;
@@ -295,12 +296,23 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 throw new AgentProfileRequiredToolUnavailableException();
         }
 
+        var routeHintAlreadyStarted = HasRouteToolChoiceHintReceipt(workItem.StepState);
         var recoveryToolCall = requiredToolCall is not null || workItem.StepState.FinalNoToolsStep
             ? null
             : await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
                     llmRequest,
                     skillRecoveryMessages,
                     finalContent: null,
+                    ct)
+                .ConfigureAwait(false);
+        var routeHintToolCall = requiredToolCall is not null ||
+                                recoveryToolCall is not null ||
+                                workItem.StepState.FinalNoToolsStep ||
+                                routeHintAlreadyStarted
+            ? null
+            : await plan.StepExecutor.TryAuthorizePlannedToolCallAsync(
+                    llmRequest,
+                    authorizedRequest => TryBuildRouteToolChoiceHintCall(request, authorizedRequest.Tools ?? []),
                     ct)
                 .ConfigureAwait(false);
         ChatRuntimeStepLlmResult llmResult;
@@ -312,6 +324,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         else if (recoveryToolCall is not null)
         {
             llmResult = BuildSkillRecoveryLlmResult(recoveryToolCall);
+        }
+        else if (routeHintToolCall is not null)
+        {
+            llmResult = BuildSkillRecoveryLlmResult(routeHintToolCall);
         }
         else
         {
@@ -392,6 +408,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 effectiveToolCalls = llmResult.ToolCalls;
                 deferredLlmChunks?.Clear();
             }
+        }
+
+        if (effectiveToolCalls is not { Count: > 0 } &&
+            !workItem.StepState.FinalNoToolsStep &&
+            !routeHintAlreadyStarted &&
+            TryBuildRouteToolChoiceHintCall(request, llmResult.AuthorizedTools) is { } routeHintCall)
+        {
+            effectiveContent = null;
+            effectiveToolCalls = [routeHintCall];
+            deferredLlmChunks?.Clear();
         }
 
         var hasToolCalls = effectiveToolCalls is { Count: > 0 };
@@ -517,6 +543,55 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Usage: usage,
             recovery.AuthorizedTools,
             recovery.AuthorizedToolContext);
+
+    private static bool HasRouteToolChoiceHintReceipt(AgentRunReplyStepState stepState) =>
+        stepState.ToolReceipts.Any(static receipt =>
+            string.Equals(receipt.CallId, RouteToolChoiceHintCallId, StringComparison.Ordinal));
+
+    private static ToolCall? TryBuildRouteToolChoiceHintCall(
+        NeedsLlmReplyEvent request,
+        IReadOnlyList<IAgentTool> authorizedTools)
+    {
+        var hint = request.TargetRef?.ForwardToModel?.ToolChoiceHint;
+        var toolName = NormalizeOptional(hint?.ToolName);
+        if (toolName is null ||
+            !authorizedTools.Any(tool => string.Equals(tool.Name, toolName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+
+        return new ToolCall
+        {
+            Id = RouteToolChoiceHintCallId,
+            Name = toolName,
+            ArgumentsJson = RouteToolChoiceHintArgumentsJson(toolName, hint!, request),
+        };
+    }
+
+    private static string RouteToolChoiceHintArgumentsJson(
+        string toolName,
+        ChatRouteToolChoiceHint hint,
+        NeedsLlmReplyEvent request)
+    {
+        var arguments = hint.PrefilledArguments?.Clone() ?? new Google.Protobuf.WellKnownTypes.Struct();
+        if (string.Equals(toolName, "aevatar_start_workflow", StringComparison.Ordinal) &&
+            !arguments.Fields.ContainsKey("inputs") &&
+            NormalizeOptional(request.Activity?.Content?.Text) is { } prompt)
+        {
+            arguments.Fields["inputs"] = Google.Protobuf.WellKnownTypes.Value.ForStruct(
+                new Google.Protobuf.WellKnownTypes.Struct
+                {
+                    Fields =
+                    {
+                        ["prompt"] = Google.Protobuf.WellKnownTypes.Value.ForString(prompt),
+                    },
+                });
+        }
+
+        return arguments.Fields.Count > 0
+            ? JsonFormatter.Default.Format(arguments)
+            : "{}";
+    }
 
     private static IReadOnlyList<ChatMessage> BuildSkillRecoveryMessages(AgentRunReplyStepState stepState)
     {

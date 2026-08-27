@@ -1,6 +1,7 @@
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
@@ -13,6 +14,7 @@ using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -651,6 +653,96 @@ public sealed class AgentRunReplyGenerationExecutorTests
             .Which.ToolName.Should().Be("ornn_search_skills");
         useSkill.ExecuteCount.Should().Be(0);
         searchSkills.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenRouteToolHintExists_ShouldPreferHintBeforeSkillRecovery()
+    {
+        var startWorkflow = new CountingTool("aevatar_start_workflow");
+        var searchSkills = new CountingTool("ornn_search_skills");
+        var provider = new RecordingProvider();
+        var recovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "phone-restaurant-reservation",
+            OriginalCommand: "今晚 7 点帮我订餐，两位，餐厅是海底捞",
+            PrimarySkillName: "phone-restaurant-reservation",
+            MaxOrnnSearchAttempts: 2);
+        var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
+        var executor = CreateToolEnabledExecutor([startWorkflow, searchSkills], provider, toolContext: toolContext);
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.ToolContext = toolContext.ToPayload();
+        workItem.Request.TargetRef = new ChatRouteAction
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = startWorkflow.Name,
+                    PrefilledArguments = new Struct
+                    {
+                        Fields =
+                        {
+                            ["workflow_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(
+                                "phone-restaurant-reservation"),
+                        },
+                    },
+                },
+            },
+        };
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().BeEmpty();
+        var call = execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle().Which;
+        call.Name.Should().Be(startWorkflow.Name);
+        using var arguments = JsonDocument.Parse(call.ArgumentsJson);
+        arguments.RootElement.GetProperty("workflow_id").GetString().Should().Be("phone-restaurant-reservation");
+        arguments.RootElement.GetProperty("inputs").GetProperty("prompt").GetString().Should().Be("run");
+        execution.AuthorizedToolStep.Should().NotBeNull();
+        execution.AuthorizedToolCallSafeties.Should().ContainSingle()
+            .Which.ToolName.Should().Be(startWorkflow.Name);
+        startWorkflow.ExecuteCount.Should().Be(0);
+        searchSkills.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenRouteToolHintAlreadyHasReceipt_ShouldNotRepeatHintCall()
+    {
+        var startWorkflow = new CountingTool("aevatar_start_workflow");
+        var provider = new RecordingProvider();
+        var executor = CreateToolEnabledExecutor(startWorkflow, provider);
+        var workItem = BuildToolEnabledWorkItem(new AgentToolReceipt
+        {
+            CallId = "route_tool_choice_hint",
+            ToolName = startWorkflow.Name,
+            Status = AgentToolReceiptStatus.Success,
+            Effect = AgentToolReceiptEffect.Mutating,
+        });
+        workItem.Request.TargetRef = new ChatRouteAction
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = startWorkflow.Name,
+                    PrefilledArguments = new Struct
+                    {
+                        Fields =
+                        {
+                            ["workflow_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(
+                                "phone-restaurant-reservation"),
+                        },
+                    },
+                },
+            },
+        };
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().ContainSingle();
+        execution.Continuation.LlmStepResult.ToolCalls.Should().BeEmpty();
+        startWorkflow.ExecuteCount.Should().Be(0);
     }
 
     [Fact]
@@ -2623,7 +2715,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 return safetyOverride;
 
             if (AgentToolRequestContext.Current?.ExternalMetadata.TryGetValue("tool_safety_mode", out var mode) == true &&
-                Enum.TryParse<SafetyMode>(mode, ignoreCase: false, out var parsed))
+                System.Enum.TryParse<SafetyMode>(mode, ignoreCase: false, out var parsed))
             {
                 return parsed;
             }
