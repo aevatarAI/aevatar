@@ -2250,6 +2250,15 @@ public sealed class AevatarInvocationToolSourceTests
         var harness = new Harness();
         harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
             .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        harness.WorkflowQuery.Snapshot = new WorkflowActorSnapshot
+        {
+            ScopeId = "scope-1",
+            ActorId = "workflow-actor",
+            LastCommandId = "call-workflow-wait-complete",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 7,
+            LastOutput = "done",
+        };
         harness.WorkflowRunDelivery.DeliveryActorId = "delivery-wait-complete";
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
 
@@ -2272,7 +2281,12 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command!.CompletionNotificationTarget.Should().BeNull();
         harness.WorkflowDispatch.Command.CommandIdSeed.Should().Be("call-workflow-wait-complete");
         using var result = JsonDocument.Parse(output);
+        result.RootElement.GetProperty("run_id").GetString().Should().Be("workflow-actor");
         result.RootElement.GetProperty("command_id").GetString()
+            .Should().Be("call-workflow-wait-complete");
+        result.RootElement.GetProperty("result").GetProperty("run_id").GetString()
+            .Should().Be("workflow-actor");
+        result.RootElement.GetProperty("result").GetProperty("command_id").GetString()
             .Should().Be("call-workflow-wait-complete");
     }
 

@@ -781,7 +781,7 @@ public sealed class AevatarInvocationDispatcher
 
         var completionResultJson = completionSnapshot == null
             ? string.Empty
-            : AevatarInvocationJson.Serialize(MapWorkflowSnapshot(completionSnapshot, receipt.CommandId));
+            : AevatarInvocationJson.Serialize(MapWorkflowSnapshot(completionSnapshot, receipt.ActorId));
 
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {

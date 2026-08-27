@@ -124,10 +124,11 @@ internal static class NyxIdChatPublicToolReceiptResult
         };
         if (IsTerminalWorkflowStartStatus(status))
         {
-            var stateVersion = ReadPositiveInt64(root, "state_version");
+            var completionRoot = ReadObject(root, "result") ?? root;
+            var stateVersion = ReadPositiveInt64(completionRoot, "state_version");
             if (stateVersion.HasValue)
                 result["state_version"] = stateVersion.Value;
-            if (ReadOptionalBoundedString(root, "partial_output", MaxPartialOutputBytes) is { } partialOutput)
+            if (ReadOptionalBoundedString(completionRoot, "partial_output", MaxPartialOutputBytes) is { } partialOutput)
                 result["partial_output"] = partialOutput;
         }
 
@@ -285,6 +286,11 @@ internal static class NyxIdChatPublicToolReceiptResult
                string.Equals(runId, handoff.ChildRunId, StringComparison.Ordinal) &&
                string.Equals(actorId, handoff.ParentActorId, StringComparison.Ordinal);
     }
+
+    private static JsonElement? ReadObject(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Object
+            ? value
+            : null;
 
     private static string? ReadBoundedString(JsonElement root, string name, int maxBytes)
     {

@@ -699,6 +699,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         var request = isContinuation
             ? session.Request!.Clone()
             : BuildReplyRequest(command);
+        if (command.Llm.TargetRef is not null)
+            request.TargetRef = command.Llm.TargetRef.Clone();
         if (await EnsureDelegationCredentialAsync(command.Key, session, request, ct).ConfigureAwait(false) is
             { } credentialFailure)
         {

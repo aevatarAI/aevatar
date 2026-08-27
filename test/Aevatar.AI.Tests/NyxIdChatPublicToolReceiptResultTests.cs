@@ -70,9 +70,13 @@ public sealed class NyxIdChatPublicToolReceiptResultTests
                   "actor_id": "scope-workflow:run-alpha",
                   "command_id": "command-alpha",
                   "status": "Completed",
-                  "state_version": 7,
-                  "partial_output": "{{partialOutput}}",
-                  "access_token": "{{secret}}"
+                  "result": {
+                    "run_id": "scope-workflow:run-alpha",
+                    "status": "Completed",
+                    "state_version": 7,
+                    "partial_output": "{{partialOutput}}",
+                    "access_token": "{{secret}}"
+                  }
                 }
                 """,
         };
