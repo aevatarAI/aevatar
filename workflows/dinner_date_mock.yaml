@@ -1,9 +1,34 @@
 name: dinner_date_mock
-description: Executable mock workflow for the UC5 dinner-date restaurant discovery and phone reservation flow. Restaurant research and phone outcomes are deterministic mock assign nodes.
-when_to_use: Use to validate shortlist, option gate, selected hold, timeout hold-all/release, deposit-blocked, ambiguous-outcome, and proof artifact flow before replacing connector boundary nodes.
+description: Executable workflow for the UC5 dinner-date restaurant discovery and phone reservation flow. Restaurant discovery uses web_search; phone outcomes are deterministic mock assign nodes.
+when_to_use: Use to validate NyxID-backed web_search discovery, shortlist, option gate, selected hold, timeout hold-all/release, deposit-blocked, ambiguous-outcome, and proof artifact flow before replacing phone connector boundary nodes.
 configuration:
   closed_world_mode: true
-roles: []
+roles:
+  - id: shortlist_builder
+    name: Dinner Shortlist Builder
+    system_prompt: >-
+      You extract three dinner-date candidates strictly from web_search results.
+      Output STRICT JSON only, no markdown fences. The JSON shape is exactly
+      {"source":"web_search","search_step_success":true,"option_1_name":"string","option_1_url":"string","option_1_note":"string","option_2_name":"string","option_2_url":"string","option_2_note":"string","option_3_name":"string","option_3_url":"string","option_3_note":"string"}.
+      Each option URL must come from one of the provided search result items.
+      Each option name must be either a search result title or a restaurant name explicitly present in that result title or snippet.
+      Do not add restaurants, venues, or URLs that are absent from the raw search output.
+      Prefer precise restaurant reservation or book-table pages over hotel dining pages, guide pages, listicles, or travel itinerary pages.
+      The note must state whether the option came from the title or snippet, and why it is suitable or weaker.
+      Keep every field non-empty. Do not invent phone calls, deposits, or confirmations.
+    allowed_tools: []
+  - id: choice_normalizer
+    name: Choice Normalizer
+    system_prompt: >-
+      You normalize dinner-date reservation user input for a deterministic workflow.
+      Output STRICT JSON only, no markdown fences. The JSON shape is exactly
+      {"choice":"await_choice|deposit|deposit_required|ambiguous|option_1|option_2|option_3"}.
+      If the user clearly chooses the first, second, or third shown option, return option_1, option_2, or option_3.
+      If a restaurant requires a deposit or payment, return deposit_required. If a call outcome
+      is unclear or unverified, return ambiguous. If the user is only asking to book dinner or
+      has not chosen one of the listed venues yet, return await_choice. Do not output timeout;
+      timeout is triggered by the workflow after the user choice wait expires.
+    allowed_tools: []
 steps:
   - id: capture_user_choice
     type: assign
@@ -20,17 +45,18 @@ steps:
     next: discover_restaurant_candidates
 
   - id: discover_restaurant_candidates
-    type: assign
+    type: tool_call
     parameters:
-      target: venue_research_context
-      value: '{"mocked_services":["web-search","api-firecrawl"],"query":"romantic indoor dinner near Keong Saik or Duxton Friday 19:30","candidate_count":3,"side_effects_allowed":false}'
+      tool: web_search
+      arguments: '{"query":"Keong Saik Duxton Singapore romantic dinner restaurant reservation book table Friday 7:30pm","max_results":8}'
     next: build_shortlist_from_candidates
 
   - id: build_shortlist_from_candidates
-    type: assign
+    type: llm_call
+    target_role: shortlist_builder
     parameters:
-      target: dinner_shortlist
-      value: '{"venues":[{"id":"ember_oak","name":"Ember & Oak","phone":"mock-phone-ember-oak","time":"19:30","note":"nut-free kitchen claim; verify by phone"},{"id":"casa_nera","name":"Casa Nera","phone":"mock-phone-casa-nera","time":"19:30","note":"verify pine nuts by phone"},{"id":"atlas_row","name":"Atlas Row","phone":"mock-phone-atlas-row","time":"20:00","note":"verify availability and nuts by phone"}]}'
+      prompt_prefix: >-
+        Build three selectable dinner-date options using only items present in these web_search results. Do not infer or add restaurants outside the raw search output. Raw search output:
     next: mark_options_shown
 
   - id: mark_options_shown
@@ -45,56 +71,128 @@ steps:
     parameters:
       event_type: "dinner_date.options_shown"
       payload: "${steps.build_shortlist_from_candidates.output}"
+    next: normalize_user_choice
+
+  - id: normalize_user_choice
+    type: llm_call
+    target_role: choice_normalizer
+    parameters:
+      prompt_prefix: >-
+        Available options JSON: ${steps.build_shortlist_from_candidates.output}.
+        Raw user input: ${steps.capture_user_choice.output}.
+        Normalize the raw user input to one workflow choice key. Ignore the workflow state JSON below unless it helps with context:
     next: route_user_choice_before_timeout
 
   - id: route_user_choice_before_timeout
     type: switch
     parameters:
-      on: "${steps.capture_user_choice.output}"
-      branch.timeout: wait_for_silence_timeout
-      branch.no_reply: wait_for_silence_timeout
+      on: "${steps.normalize_user_choice.json.choice}"
+      branch.await_choice: wait_for_user_choice_timeout
+      branch.option_1: hold_selected_option_1
+      branch.option_2: hold_selected_option_2
+      branch.option_3: hold_selected_option_3
       branch.deposit: final_artifact_payment_blocked
       branch.deposit_required: final_artifact_payment_blocked
       branch.ambiguous: handle_ambiguous_hold_outcome
-      branch._default: hold_selected_venue
+      branch._default: wait_for_user_choice_timeout
     branches:
-      timeout: wait_for_silence_timeout
-      no_reply: wait_for_silence_timeout
+      await_choice: wait_for_user_choice_timeout
+      option_1: hold_selected_option_1
+      option_2: hold_selected_option_2
+      option_3: hold_selected_option_3
       deposit: final_artifact_payment_blocked
       deposit_required: final_artifact_payment_blocked
       ambiguous: handle_ambiguous_hold_outcome
-      _default: hold_selected_venue
+      _default: wait_for_user_choice_timeout
 
-  - id: hold_selected_venue
+  - id: hold_selected_option_1
     type: assign
-    idempotency_key: "${run_id}:hold:selected_venue"
+    idempotency_key: "${run_id}:hold:option_1"
     parameters:
       target: selected_only_hold
-      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${steps.capture_user_choice.output}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-selected-venue","elevenlabs_transcript":"mock-transcript-hold-selected-venue","confirmed_time":"19:30","allergy_answer":"availability and allergy notes verified for selected venue","payment_requested":false}'
-    next: verify_selected_hold_record
+      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${steps.build_shortlist_from_candidates.json.option_1_name}","venue_id":"option_1","source_url":"${steps.build_shortlist_from_candidates.json.option_1_url}","raw_user_input":"${steps.capture_user_choice.output}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-option-1","elevenlabs_transcript":"mock-transcript-hold-option-1","confirmed_time":"19:30","allergy_answer":"availability and allergy notes verified for selected venue","payment_requested":false}'
+    next: verify_selected_hold_option_1
 
-  - id: verify_selected_hold_record
+  - id: verify_selected_hold_option_1
     type: assign
     parameters:
       target: selected_hold_verification
       value: '{"hold_confirmed":true,"call_record_present":true,"transcript_present":true,"payment_requested":false,"result":"pass"}'
-    next: emit_selected_only_completed
+    next: emit_selected_only_completed_option_1
 
-  - id: emit_selected_only_completed
+  - id: emit_selected_only_completed_option_1
     type: emit
     parameters:
       event_type: "dinner_date.completed"
-      payload: "${steps.verify_selected_hold_record.output}"
-    next: final_artifact_selected_only
+      payload: "${steps.verify_selected_hold_option_1.output}"
+    next: final_artifact_selected_option_1
 
-  - id: final_artifact_selected_only
+  - id: final_artifact_selected_option_1
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"selected_venue_mainline","kept":"${steps.hold_selected_venue.json.venue}","released":[],"proof":{"call_records":["${steps.hold_selected_venue.json.twilio_call_record}"],"transcripts":["${steps.hold_selected_venue.json.elevenlabs_transcript}"],"verification":"${steps.verify_selected_hold_record.output}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
+      value: '{"workflow_status":"completed","path":"selected_venue_mainline","kept":"${steps.hold_selected_option_1.json.venue}","kept_option":"option_1","released":[],"proof":{"call_records":["${steps.hold_selected_option_1.json.twilio_call_record}"],"transcripts":["${steps.hold_selected_option_1.json.elevenlabs_transcript}"],"verification_result":"${steps.verify_selected_hold_option_1.json.result}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
     next: ""
 
-  - id: wait_for_silence_timeout
+  - id: hold_selected_option_2
+    type: assign
+    idempotency_key: "${run_id}:hold:option_2"
+    parameters:
+      target: selected_only_hold
+      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${steps.build_shortlist_from_candidates.json.option_2_name}","venue_id":"option_2","source_url":"${steps.build_shortlist_from_candidates.json.option_2_url}","raw_user_input":"${steps.capture_user_choice.output}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-option-2","elevenlabs_transcript":"mock-transcript-hold-option-2","confirmed_time":"19:30","allergy_answer":"availability and allergy notes verified for selected venue","payment_requested":false}'
+    next: verify_selected_hold_option_2
+
+  - id: verify_selected_hold_option_2
+    type: assign
+    parameters:
+      target: selected_hold_verification
+      value: '{"hold_confirmed":true,"call_record_present":true,"transcript_present":true,"payment_requested":false,"result":"pass"}'
+    next: emit_selected_only_completed_option_2
+
+  - id: emit_selected_only_completed_option_2
+    type: emit
+    parameters:
+      event_type: "dinner_date.completed"
+      payload: "${steps.verify_selected_hold_option_2.output}"
+    next: final_artifact_selected_option_2
+
+  - id: final_artifact_selected_option_2
+    type: assign
+    parameters:
+      target: dinner_date_artifact
+      value: '{"workflow_status":"completed","path":"selected_venue_mainline","kept":"${steps.hold_selected_option_2.json.venue}","kept_option":"option_2","released":[],"proof":{"call_records":["${steps.hold_selected_option_2.json.twilio_call_record}"],"transcripts":["${steps.hold_selected_option_2.json.elevenlabs_transcript}"],"verification_result":"${steps.verify_selected_hold_option_2.json.result}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
+    next: ""
+
+  - id: hold_selected_option_3
+    type: assign
+    idempotency_key: "${run_id}:hold:option_3"
+    parameters:
+      target: selected_only_hold
+      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${steps.build_shortlist_from_candidates.json.option_3_name}","venue_id":"option_3","source_url":"${steps.build_shortlist_from_candidates.json.option_3_url}","raw_user_input":"${steps.capture_user_choice.output}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-option-3","elevenlabs_transcript":"mock-transcript-hold-option-3","confirmed_time":"20:00","allergy_answer":"availability and allergy notes verified for selected venue","payment_requested":false}'
+    next: verify_selected_hold_option_3
+
+  - id: verify_selected_hold_option_3
+    type: assign
+    parameters:
+      target: selected_hold_verification
+      value: '{"hold_confirmed":true,"call_record_present":true,"transcript_present":true,"payment_requested":false,"result":"pass"}'
+    next: emit_selected_only_completed_option_3
+
+  - id: emit_selected_only_completed_option_3
+    type: emit
+    parameters:
+      event_type: "dinner_date.completed"
+      payload: "${steps.verify_selected_hold_option_3.output}"
+    next: final_artifact_selected_option_3
+
+  - id: final_artifact_selected_option_3
+    type: assign
+    parameters:
+      target: dinner_date_artifact
+      value: '{"workflow_status":"completed","path":"selected_venue_mainline","kept":"${steps.hold_selected_option_3.json.venue}","kept_option":"option_3","released":[],"proof":{"call_records":["${steps.hold_selected_option_3.json.twilio_call_record}"],"transcripts":["${steps.hold_selected_option_3.json.elevenlabs_transcript}"],"verification_result":"${steps.verify_selected_hold_option_3.json.result}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
+    next: ""
+
+  - id: wait_for_user_choice_timeout
     type: delay
     parameters:
       duration_ms: "2000"
@@ -105,81 +203,44 @@ steps:
     parameters:
       target: user_gate_result
       value: '{"status":"timeout","next_branch":"hold_all","message":"Holding all three because no choice arrived before timeout."}'
-    next: hold_candidate_ember_oak
+    next: hold_candidate_option_1
 
-  - id: hold_candidate_ember_oak
+  - id: hold_candidate_option_1
     type: assign
-    idempotency_key: "${run_id}:hold:ember_oak:timeout"
+    idempotency_key: "${run_id}:hold:option_1:timeout"
     parameters:
-      target: hold_ember_oak
-      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"Ember & Oak","venue_id":"ember_oak","action":"hold","external_effect":"confirmed","restaurant_message":"temporary hold; decision comes tonight; unselected holds will be released immediately","twilio_call_record":"mock-call-hold-ember-oak","elevenlabs_transcript":"mock-transcript-hold-ember-oak","confirmed_time":"19:30","allergy_answer":"no nuts in the kitchen at all","payment_requested":false}'
-    next: hold_candidate_casa_nera
+      target: hold_option_1
+      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${steps.build_shortlist_from_candidates.json.option_1_name}","venue_id":"option_1","source_url":"${steps.build_shortlist_from_candidates.json.option_1_url}","action":"hold","external_effect":"confirmed","restaurant_message":"temporary hold; decision comes tonight; unselected holds will be released after user confirmation","twilio_call_record":"mock-call-hold-option-1-timeout","elevenlabs_transcript":"mock-transcript-hold-option-1-timeout","confirmed_time":"19:30","allergy_answer":"mock allergy verification for option 1","payment_requested":false}'
+    next: hold_candidate_option_2
 
-  - id: hold_candidate_casa_nera
+  - id: hold_candidate_option_2
     type: assign
-    idempotency_key: "${run_id}:hold:casa_nera:timeout"
+    idempotency_key: "${run_id}:hold:option_2:timeout"
     parameters:
-      target: hold_casa_nera
-      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"Casa Nera","venue_id":"casa_nera","action":"hold","external_effect":"confirmed","restaurant_message":"temporary hold; decision comes tonight; unselected holds will be released immediately","twilio_call_record":"mock-call-hold-casa-nera","elevenlabs_transcript":"mock-transcript-hold-casa-nera","confirmed_time":"19:30","allergy_answer":"pesto has pine nuts; kitchen can omit on request","payment_requested":false}'
-    next: hold_candidate_atlas_row
+      target: hold_option_2
+      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${steps.build_shortlist_from_candidates.json.option_2_name}","venue_id":"option_2","source_url":"${steps.build_shortlist_from_candidates.json.option_2_url}","action":"hold","external_effect":"confirmed","restaurant_message":"temporary hold; decision comes tonight; unselected holds will be released after user confirmation","twilio_call_record":"mock-call-hold-option-2-timeout","elevenlabs_transcript":"mock-transcript-hold-option-2-timeout","confirmed_time":"19:30","allergy_answer":"mock allergy verification for option 2","payment_requested":false}'
+    next: hold_candidate_option_3
 
-  - id: hold_candidate_atlas_row
+  - id: hold_candidate_option_3
     type: assign
-    idempotency_key: "${run_id}:hold:atlas_row:timeout"
+    idempotency_key: "${run_id}:hold:option_3:timeout"
     parameters:
-      target: hold_atlas_row
-      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"Atlas Row","venue_id":"atlas_row","action":"hold","external_effect":"confirmed","restaurant_message":"temporary hold; decision comes tonight; unselected holds will be released immediately","twilio_call_record":"mock-call-hold-atlas-row","elevenlabs_transcript":"mock-transcript-hold-atlas-row","confirmed_time":"20:00","allergy_answer":"pesto is nut-free; evening special is not","payment_requested":false}'
+      target: hold_option_3
+      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${steps.build_shortlist_from_candidates.json.option_3_name}","venue_id":"option_3","source_url":"${steps.build_shortlist_from_candidates.json.option_3_url}","action":"hold","external_effect":"confirmed","restaurant_message":"temporary hold; decision comes tonight; unselected holds will be released after user confirmation","twilio_call_record":"mock-call-hold-option-3-timeout","elevenlabs_transcript":"mock-transcript-hold-option-3-timeout","confirmed_time":"20:00","allergy_answer":"mock allergy verification for option 3","payment_requested":false}'
     next: publish_holds_wait_state
 
   - id: publish_holds_wait_state
     type: assign
     parameters:
       target: post_timeout_wait_state
-      value: '{"status":"waiting_for_user_confirmation_after_holds","held":["ember_oak","casa_nera","atlas_row"],"accepted_signals":["ember_oak","casa_nera","atlas_row"],"message":"All three mock holds are confirmed. Workflow is waiting for the user to confirm one venue before releasing the other two.","mock_resume_signal":"ember_oak","hold_proofs":["mock-call-hold-ember-oak","mock-transcript-hold-ember-oak","mock-call-hold-casa-nera","mock-transcript-hold-casa-nera","mock-call-hold-atlas-row","mock-transcript-hold-atlas-row"]}'
-    next: mock_user_choice_signal_after_holds
+      value: '{"status":"waiting_for_user_confirmation_after_holds","held":["option_1","option_2","option_3"],"accepted_signals":["option_1","option_2","option_3"],"message":"All three mock holds are confirmed. Workflow is waiting for the user to confirm one venue before releasing the other two.","hold_proofs":["${steps.hold_candidate_option_1.json.twilio_call_record}","${steps.hold_candidate_option_1.json.elevenlabs_transcript}","${steps.hold_candidate_option_2.json.twilio_call_record}","${steps.hold_candidate_option_2.json.elevenlabs_transcript}","${steps.hold_candidate_option_3.json.twilio_call_record}","${steps.hold_candidate_option_3.json.elevenlabs_transcript}"]}'
+    next: final_artifact_waiting_after_holds
 
-  - id: mock_user_choice_signal_after_holds
-    type: assign
-    parameters:
-      target: user_choice_after_holds
-      value: '{"selected_venue":"Ember & Oak","selected_venue_id":"ember_oak","source":"test_only_resume_signal","mode":"mock_user_confirmation_after_holds"}'
-    next: release_unselected_casa_nera
-
-  - id: release_unselected_casa_nera
-    type: assign
-    idempotency_key: "${run_id}:release:casa_nera"
-    parameters:
-      target: release_casa_nera
-      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"Casa Nera","venue_id":"casa_nera","action":"release","external_effect":"confirmed","twilio_call_record":"mock-call-release-casa-nera","elevenlabs_transcript":"mock-transcript-release-casa-nera"}'
-    next: release_unselected_atlas_row
-
-  - id: release_unselected_atlas_row
-    type: assign
-    idempotency_key: "${run_id}:release:atlas_row"
-    parameters:
-      target: release_atlas_row
-      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"Atlas Row","venue_id":"atlas_row","action":"release","external_effect":"confirmed","twilio_call_record":"mock-call-release-atlas-row","elevenlabs_transcript":"mock-transcript-release-atlas-row"}'
-    next: verify_final_contract_after_holds
-
-  - id: verify_final_contract_after_holds
-    type: assign
-    parameters:
-      target: final_contract_check
-      value: '{"selected_venue_kept":true,"unselected_confirmed_holds_released":true,"all_effectful_calls_have_proof":true,"money_spent":false,"result":"pass"}'
-    next: emit_hold_all_completed
-
-  - id: emit_hold_all_completed
-    type: emit
-    parameters:
-      event_type: "dinner_date.completed"
-      payload: "${steps.verify_final_contract_after_holds.output}"
-    next: final_artifact_after_holds
-
-  - id: final_artifact_after_holds
+  - id: final_artifact_waiting_after_holds
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"silence_timeout_hold_all_then_user_confirmed","kept":"Ember & Oak","released":["Casa Nera","Atlas Row"],"user_confirmation":"${steps.mock_user_choice_signal_after_holds.json.source}","proof":{"call_records":["mock-call-hold-ember-oak","mock-call-hold-casa-nera","mock-call-hold-atlas-row","mock-call-release-casa-nera","mock-call-release-atlas-row"],"transcripts":["mock-transcript-hold-ember-oak","mock-transcript-hold-casa-nera","mock-transcript-hold-atlas-row","mock-transcript-release-casa-nera","mock-transcript-release-atlas-row"],"verification":"${steps.verify_final_contract_after_holds.output}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"all_three_venues_held_after_timeout":true,"awaits_user_confirmation_before_release":true,"selected_venue_confirmed":true,"unselected_holds_released":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
+      value: '{"workflow_status":"waiting","path":"silence_timeout_hold_all_waiting_for_user_confirmation","held":["${steps.hold_candidate_option_1.json.venue}","${steps.hold_candidate_option_2.json.venue}","${steps.hold_candidate_option_3.json.venue}"],"held_options":["option_1","option_2","option_3"],"released":[],"waiting_for":"user_confirmation_to_keep_one_venue","proof":{"call_records":["${steps.hold_candidate_option_1.json.twilio_call_record}","${steps.hold_candidate_option_2.json.twilio_call_record}","${steps.hold_candidate_option_3.json.twilio_call_record}"],"transcripts":["${steps.hold_candidate_option_1.json.elevenlabs_transcript}","${steps.hold_candidate_option_2.json.elevenlabs_transcript}","${steps.hold_candidate_option_3.json.elevenlabs_transcript}"]},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"all_three_venues_held_after_timeout":true,"awaits_user_confirmation_before_release":true,"unselected_holds_not_released_before_confirmation":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
     next: ""
 
   - id: final_artifact_payment_blocked

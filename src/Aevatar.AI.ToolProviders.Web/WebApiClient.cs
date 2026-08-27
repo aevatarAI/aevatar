@@ -11,6 +11,7 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
 {
     private const string FirecrawlNyxIdSearchSlug = "api-firecrawl";
     private const string TavilyNyxIdSearchSlug = "tavily-search";
+    private const string TavilyChronoAiNyxIdSearchSlug = "tavily-search-chrono-ai";
 
     private readonly HttpClient _http;
     private readonly WebToolOptions _options;
@@ -40,14 +41,14 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
         {
             var slug = _options.NyxIdSearchSlug.Trim();
             var proxyBaseUrl = $"{_options.NyxIdBaseUrl.TrimEnd('/')}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}";
-            if (string.Equals(slug, FirecrawlNyxIdSearchSlug, StringComparison.OrdinalIgnoreCase))
+            if (IsFirecrawlSearchProvider(slug, _options.NyxIdSearchProvider))
             {
                 var url = $"{proxyBaseUrl}/v2/search";
                 return WebToolResultBoundaryJson.ParseSearchPayload(
                     await PostJsonAsync(token, url, new { query, limit = maxResults }, ct));
             }
 
-            if (string.Equals(slug, TavilyNyxIdSearchSlug, StringComparison.OrdinalIgnoreCase))
+            if (IsTavilySearchProvider(slug, _options.NyxIdSearchProvider))
             {
                 var url = $"{proxyBaseUrl}/search";
                 return WebToolResultBoundaryJson.ParseSearchPayload(
@@ -66,6 +67,17 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
 
         return ErrorResult("search_backend_not_configured", "No search backend configured. Set NyxIdSearchSlug or SearchApiBaseUrl in WebToolOptions.");
     }
+
+    private static bool IsFirecrawlSearchProvider(string slug, string? provider) =>
+        string.Equals(provider, "firecrawl", StringComparison.OrdinalIgnoreCase) ||
+        (string.IsNullOrWhiteSpace(provider) &&
+         string.Equals(slug, FirecrawlNyxIdSearchSlug, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsTavilySearchProvider(string slug, string? provider) =>
+        string.Equals(provider, "tavily", StringComparison.OrdinalIgnoreCase) ||
+        (string.IsNullOrWhiteSpace(provider) &&
+         (string.Equals(slug, TavilyNyxIdSearchSlug, StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(slug, TavilyChronoAiNyxIdSearchSlug, StringComparison.OrdinalIgnoreCase)));
 
     /// <summary>Fetch a URL and return the response body as text.</summary>
     public async Task<WebFetchResult> FetchUrlAsync(string token, string url, CancellationToken ct)

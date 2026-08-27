@@ -18,6 +18,12 @@ public sealed class WebToolOptions
     /// <summary>NyxID API base URL for proxy requests.</summary>
     public string? NyxIdBaseUrl { get; set; }
 
+    /// <summary>
+    /// Explicit NyxID search provider contract for custom or duplicated service slugs.
+    /// Supported values: firecrawl, tavily.
+    /// </summary>
+    public string? NyxIdSearchProvider { get; set; }
+
     /// <summary>Maximum number of search results to return (default: 10).</summary>
     public int MaxSearchResults { get; set; } = 10;
 
