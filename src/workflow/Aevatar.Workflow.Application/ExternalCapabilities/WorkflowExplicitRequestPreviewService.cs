@@ -120,7 +120,7 @@ public sealed class WorkflowExplicitRequestPreviewService(
         var invocations = new List<ExternalToolInvocationSpec>();
         foreach (var yaml in yamls)
         {
-            var parse = await parser.ParseWorkflowYamlAsync(yaml ?? string.Empty, cancellationToken);
+            var parse = await parser.ParseWorkflowYamlForPublicationAsync(yaml ?? string.Empty, cancellationToken);
             if (!parse.Succeeded)
             {
                 if (parse.ExternalCapabilityReadiness is not null)

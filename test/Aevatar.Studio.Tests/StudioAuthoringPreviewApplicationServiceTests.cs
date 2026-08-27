@@ -6,9 +6,13 @@ using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Services;
 using Aevatar.Studio.Infrastructure.Serialization;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using RuntimeWorkflowValidator = Aevatar.Workflow.Core.Validation.WorkflowValidator;
+using StudioWorkflowValidator = Aevatar.Studio.Domain.Studio.Services.WorkflowValidator;
 
 namespace Aevatar.Studio.Tests;
 
@@ -17,7 +21,7 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
     [Fact]
     public async Task PreviewAsync_WhenWorkflowRequest_ShouldStreamReasoningProgressContentAndCompletion()
     {
-        var llm = new FakeLLMStreamPort(["name: generated\nsteps:\n  - id: chat\n    type: llm_call"], ["thinking"]);
+        var llm = new FakeLLMStreamPort(["name: generated\nsteps:\n  - id: chat\n    type: llm_call\n    allowed_tools: []"], ["thinking"]);
         var service = CreateService(llm);
 
         var events = await service.PreviewAsync(
@@ -60,9 +64,11 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
               - id: chat
                 type: llm_call
                 target_role: assistant
+                allowed_tools: []
             """
         ], oneContentPerCall: true);
-        var service = CreateService(llm);
+        var publicationParser = new PublicationPolicyParser();
+        var service = CreateService(llm, publicationParser: publicationParser);
 
         var events = await service.PreviewAsync(
                 new StudioAuthoringPreviewRequest(
@@ -78,6 +84,46 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
         var parsed = new WorkflowParser().Parse(yaml);
         parsed.Name.Should().Be("generated");
         parsed.Steps.Should().ContainSingle(step => step.Id == "chat");
+        var publicationParse = await publicationParser.ParseWorkflowYamlForPublicationAsync(yaml);
+        publicationParse.Succeeded.Should().BeTrue(publicationParse.Error);
+        publicationParser.PublicationParseCount.Should().BeGreaterThan(0);
+        llm.StreamCallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenWorkflowGeneratedWithoutAllowedTools_ShouldRepairToPublicationReadyYaml()
+    {
+        var llm = new FakeLLMStreamPort([
+            """
+            name: generated
+            steps:
+              - id: chat
+                type: llm_call
+            """,
+            """
+            name: generated
+            steps:
+              - id: chat
+                type: llm_call
+                allowed_tools: []
+            """
+        ], oneContentPerCall: true);
+        var publicationParser = new PublicationPolicyParser();
+        var service = CreateService(llm, publicationParser: publicationParser);
+
+        var events = await service.PreviewAsync(
+                new StudioAuthoringPreviewRequest(
+                    StudioAuthoringKind.Workflow,
+                    "Create a simple workflow",
+                    AvailableWorkflowNames: []),
+                CancellationToken.None)
+            .ToListAsync();
+
+        var yaml = events.OfType<StudioAuthoringPreviewEvent.WorkflowCompleted>().Single().Result.Yaml;
+        yaml.Should().Contain("allowed_tools: []");
+        var publicationParse = await publicationParser.ParseWorkflowYamlForPublicationAsync(yaml);
+        publicationParse.Succeeded.Should().BeTrue(publicationParse.Error);
+        publicationParser.PublicationParseCount.Should().Be(3);
         llm.StreamCallCount.Should().Be(2);
     }
 
@@ -159,19 +205,22 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
 
     private static StudioAuthoringPreviewApplicationService CreateService(
         IStudioAuthoringLLMStreamPort llm,
-        IScriptBehaviorCompiler? compiler = null)
+        IScriptBehaviorCompiler? compiler = null,
+        IWorkflowDefinitionParser? publicationParser = null)
     {
         var profile = WorkflowCompatibilityProfile.AevatarV1;
         var editor = new WorkflowEditorService(
             new YamlWorkflowDocumentService(profile),
             new WorkflowDocumentNormalizer(profile),
-            new WorkflowValidator(profile),
+            new StudioWorkflowValidator(profile),
             new WorkflowGraphMapper(profile),
             new TextDiffService());
 
         return new StudioAuthoringPreviewApplicationService(
             llm,
-            new WorkflowAuthoringPreviewGenerator(editor),
+            new WorkflowAuthoringPreviewGenerator(
+                editor,
+                publicationParser ?? new PublicationPolicyParser()),
             new ScriptAuthoringPreviewGenerator(compiler ?? new FakeCompiler(CreateSuccessResult())));
     }
 
@@ -180,6 +229,59 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
             true,
             null,
             Array.Empty<string>());
+
+    private sealed class PublicationPolicyParser : IWorkflowDefinitionParser
+    {
+        private readonly WorkflowParser _parser = new();
+
+        public int PublicationParseCount { get; private set; }
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default) =>
+            ParseCore(workflowYaml, requireExplicitLlmAgentToolScopes: false, ct);
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlForPublicationAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            PublicationParseCount++;
+            return ParseCore(workflowYaml, requireExplicitLlmAgentToolScopes: true, ct);
+        }
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        private Task<WorkflowYamlParseResult> ParseCore(
+            string workflowYaml,
+            bool requireExplicitLlmAgentToolScopes,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var workflow = _parser.Parse(workflowYaml);
+                var errors = RuntimeWorkflowValidator.Validate(
+                    workflow,
+                    new RuntimeWorkflowValidator.WorkflowValidationOptions
+                    {
+                        RequireExplicitLlmAgentToolScopes = requireExplicitLlmAgentToolScopes,
+                    },
+                    availableWorkflowNames: null);
+                return Task.FromResult(errors.Count == 0
+                    ? WorkflowYamlParseResult.Success(
+                        workflow.Name,
+                        WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow))
+                    : WorkflowYamlParseResult.Invalid(string.Join("; ", errors)));
+            }
+            catch (Exception exception)
+            {
+                return Task.FromResult(WorkflowYamlParseResult.Invalid(exception.Message));
+            }
+        }
+    }
 
     private sealed class FakeLLMStreamPort(
         IReadOnlyList<string> contentChunks,
@@ -238,7 +340,7 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
             {
                 await Release.Task.WaitAsync(ct);
                 yield return new StudioAuthoringLLMChunk(
-                    "name: generated\nsteps:\n  - id: chat\n    type: llm_call",
+                    "name: generated\nsteps:\n  - id: chat\n    type: llm_call\n    allowed_tools: []",
                     null);
             }
             finally

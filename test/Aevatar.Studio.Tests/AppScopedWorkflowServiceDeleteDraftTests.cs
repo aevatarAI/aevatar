@@ -488,6 +488,35 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
+    public async Task CreateDraftAsync_WhenPublicationReadinessRejectsWorkflowYaml_ShouldRejectBeforeWorkspaceSave()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspacePort = new RecordingStudioWorkspacePorts();
+        var parser = new StubWorkflowDefinitionParser(
+            result: WorkflowYamlParseResult.Success("workflow-1"),
+            publicationResult: WorkflowYamlParseResult.Invalid(
+                "Step 'reply' can invoke llm_call and must declare an explicit allowed_tools scope on the step or its target role."));
+        var service = environment.CreateService(
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: workspacePort,
+            workflowDefinitionParser: parser);
+
+        var act = () => service.CreateDraftAsync(
+            "scope-1",
+            new SaveWorkflowDraftRequest(
+                DirectoryId: "scope:scope-1",
+                WorkflowName: "workflow-1",
+                FileName: null,
+                Yaml: "name: workflow-1\nsteps:\n  - id: reply\n    type: llm_call\n"));
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("*must declare an explicit allowed_tools scope*");
+        parser.PublicationParseCount.Should().Be(1);
+        workspacePort.QueriedScopes.Should().BeEmpty();
+        workspacePort.SavedDrafts.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task SaveDraftAsync_ShouldUseExplicitWorkflowNameAndAlignYaml()
     {
         using var environment = new ScopedWorkflowEnvironment();
@@ -693,24 +722,38 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     private sealed class StubWorkflowDefinitionParser(
-        WorkflowYamlParseResult? result = null) : IWorkflowDefinitionParser
+        WorkflowYamlParseResult? result = null,
+        WorkflowYamlParseResult? publicationResult = null) : IWorkflowDefinitionParser
     {
+        public int PublicationParseCount { get; private set; }
+
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
             string workflowYaml,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            var workflowName = workflowYaml.Split('\n')
-                .Select(static line => line.Trim())
-                .First(static line => line.StartsWith("name:", StringComparison.Ordinal))[5..]
-                .Trim();
-            return Task.FromResult(result ?? WorkflowYamlParseResult.Success(workflowName));
+            return Task.FromResult(result ?? WorkflowYamlParseResult.Success(ReadWorkflowName(workflowYaml)));
+        }
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlForPublicationAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            PublicationParseCount++;
+            return Task.FromResult(publicationResult ?? result ?? WorkflowYamlParseResult.Success(ReadWorkflowName(workflowYaml)));
         }
 
         public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
             IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        private static string ReadWorkflowName(string workflowYaml) =>
+            workflowYaml.Split('\n')
+                .Select(static line => line.Trim())
+                .First(static line => line.StartsWith("name:", StringComparison.Ordinal))[5..]
+                .Trim();
     }
 
     private sealed class ThrowingWorkspaceQueryPort : IStudioWorkspaceQueryPort

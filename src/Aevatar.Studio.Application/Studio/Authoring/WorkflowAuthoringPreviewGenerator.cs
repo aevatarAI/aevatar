@@ -4,6 +4,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Models;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Studio.Application.Studio.Authoring;
 
@@ -24,16 +25,20 @@ internal sealed class WorkflowAuthoringPreviewGenerator
         "Do not use steps[*].messages.",
         "Do not use steps[*].params. Put step options under steps[*].parameters.",
         "If you need to shape LLM input, use steps[*].parameters.prompt_prefix.",
+        "Every llm_call-capable step must have an explicit allowed_tools scope on the step or target role. Use allowed_tools: [] when no tools are needed.",
     ];
 
     private readonly WorkflowEditorService _editorService;
+    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
     private readonly WorkflowCompatibilityProfile _profile;
 
     public WorkflowAuthoringPreviewGenerator(
         WorkflowEditorService editorService,
+        IWorkflowDefinitionParser workflowDefinitionParser,
         WorkflowCompatibilityProfile? profile = null)
     {
         _editorService = editorService;
+        _workflowDefinitionParser = workflowDefinitionParser;
         _profile = profile ?? WorkflowCompatibilityProfile.AevatarV1;
     }
 
@@ -159,6 +164,23 @@ internal sealed class WorkflowAuthoringPreviewGenerator
                 continue;
             }
 
+            var publicationFindings = await ValidatePublicationReadinessAsync(normalized.Yaml, ct);
+            if (HasErrors(publicationFindings))
+            {
+                lastCandidate = normalized.Yaml;
+                lastFindings = publicationFindings;
+                if (onProgress != null && attempt < MaxAttempts)
+                {
+                    await onProgress(
+                        new StudioAuthoringPreviewEvent.Progress(
+                            StudioAuthoringProgressStage.RepairingDraft,
+                            attempt,
+                            BuildRepairStatusMessage(lastFindings, attempt)),
+                        ct);
+                }
+                continue;
+            }
+
             if (onProgress != null)
             {
                 await onProgress(
@@ -173,6 +195,23 @@ internal sealed class WorkflowAuthoringPreviewGenerator
         }
 
         throw new InvalidOperationException(BuildFailureMessage(lastFindings));
+    }
+
+    private async Task<IReadOnlyList<ValidationFinding>> ValidatePublicationReadinessAsync(
+        string yaml,
+        CancellationToken ct)
+    {
+        var parse = await _workflowDefinitionParser.ParseWorkflowYamlForPublicationAsync(yaml, ct);
+        return parse.Succeeded
+            ? []
+            :
+            [
+                ValidationFinding.Error(
+                    "/",
+                    parse.Error ?? "Publication readiness rejected this YAML.",
+                    "Publication readiness rejected this YAML.",
+                    code: "publication_readiness"),
+            ];
     }
 
     internal static bool TryExtractYamlCandidate(string content, out string yaml)
