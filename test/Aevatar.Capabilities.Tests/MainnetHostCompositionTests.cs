@@ -1580,11 +1580,10 @@ public sealed class MainnetHostCompositionTests
     public async Task AddAevatarMainnetHost_ShouldShipConnectedServiceEffects()
     {
         using var home = new TemporaryAevatarHomeScope();
+        using var searchSlug = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__Web__NyxIdSearchSlug", "api-firecrawl");
         var webSearchHandler = new MainnetWebSearchHandler();
-        var builder = CreateBuilder(new Dictionary<string, string?>
-        {
-            ["Aevatar:Web:NyxIdSearchSlug"] = "api-firecrawl",
-        });
+        var builder = CreateBuilder();
 
         builder.AddAevatarMainnetHost(options =>
         {
@@ -1603,17 +1602,17 @@ public sealed class MainnetHostCompositionTests
             .Should()
             .BeOfType<WebToolOptions>()
             .Subject;
-        registeredWebOptions.NyxIdSearchSlug.Should().Be("tavily-search");
+        registeredWebOptions.NyxIdSearchSlug.Should().Be("api-firecrawl");
 
         using var app = builder.Build();
         var options = app.Services.GetRequiredService<NyxIdToolOptions>();
-        app.Services.GetRequiredService<WebToolOptions>().NyxIdSearchSlug.Should().Be("tavily-search");
+        app.Services.GetRequiredService<WebToolOptions>().NyxIdSearchSlug.Should().Be("api-firecrawl");
         var searchResult = await app.Services.GetRequiredService<WebApiClient>()
             .SearchAsync("caller-token", "Aevatar", 1, CancellationToken.None);
         searchResult.Error.Should().BeNull();
         webSearchHandler.Method.Should().Be(HttpMethod.Post);
         webSearchHandler.RequestUri.Should().EndWith(
-            "/api/v1/proxy/s/tavily-search/search");
+            "/api/v1/proxy/s/api-firecrawl/v2/search");
         options.EnableAssistantConnectedServiceEffects.Should().BeTrue();
         options.AssistantOperationReadBackBindings.Should().HaveCount(3);
         var readBack = options.AssistantOperationReadBackBindings.Single(binding =>

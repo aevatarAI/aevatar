@@ -493,9 +493,17 @@ public static class MainnetHostBuilderExtensions
                     builder.Configuration,
                     "Aevatar:Web:NyxIdBaseUrl")
                 ?? NyxIdEndpointResolver.ResolvePublicApiBaseUrl(builder.Configuration),
-            // Mainnet Milestone 40 has one admitted search capability. Stale deployment
-            // overrides must not silently route the mounted web_search tool to another service.
-            NyxIdSearchSlug = "tavily-search",
+            NyxIdSearchSlug = FirstConfiguredValue(
+                    builder.Configuration,
+                    "Aevatar:Web:NyxIdSearchSlug",
+                    "Aevatar:Web:SearchSlug",
+                    "Aevatar:WebSearch:NyxIdSlug")
+                ?? "tavily-search",
+            NyxIdSearchProvider = FirstConfiguredValue(
+                builder.Configuration,
+                "Aevatar:Web:NyxIdSearchProvider",
+                "Aevatar:Web:SearchProvider",
+                "Aevatar:WebSearch:Provider"),
             SearchApiBaseUrl = FirstConfiguredValue(
                 builder.Configuration,
                 "Aevatar:Web:SearchApiBaseUrl",

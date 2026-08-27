@@ -274,7 +274,63 @@ public sealed class WebSearchToolExecutionTests
     }
 
     [Fact]
-    public async Task SearchAsync_WithTavilyNyxIdSlug_ShouldUseNyxIdSlugProxyAndMapResults()
+    public async Task SearchAsync_WithFirecrawlProviderOverride_ShouldUseCustomNyxIdSlugAsFirecrawl()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """
+                {
+                  "success": true,
+                  "data": {
+                    "web": [
+                      {
+                        "title": "Duxton dinner",
+                        "url": "https://example.test/duxton-dinner",
+                        "description": "Phone reservation available."
+                      }
+                    ]
+                  }
+                }
+                """),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                NyxIdBaseUrl = "https://nyxid.example.test",
+                NyxIdSearchSlug = "api-firecrawl-personal",
+                NyxIdSearchProvider = "firecrawl",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-7", "duxton dinner", 2, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Results.Should().ContainSingle().Which.Should().Be(
+            new WebSearchResultItem(
+                "Duxton dinner",
+                "https://example.test/duxton-dinner",
+                "Phone reservation available."));
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Post);
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyxid.example.test/api/v1/proxy/s/api-firecrawl-personal/v2/search");
+        request.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        request.Headers.Authorization!.Parameter.Should().Be("token-7");
+        request.Content.Should().NotBeNull();
+        var body = await request.Content!.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        root.GetProperty("query").GetString().Should().Be("duxton dinner");
+        root.GetProperty("limit").GetInt32().Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData("tavily-search")]
+    [InlineData("tavily-search-chrono-ai")]
+    public async Task SearchAsync_WithTavilyNyxIdSlug_ShouldUseNyxIdSlugProxyAndMapResults(string slug)
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -286,7 +342,7 @@ public sealed class WebSearchToolExecutionTests
             new WebToolOptions
             {
                 NyxIdBaseUrl = "https://nyxid.example.test",
-                NyxIdSearchSlug = "tavily-search",
+                NyxIdSearchSlug = slug,
             },
             http);
 
@@ -298,7 +354,7 @@ public sealed class WebSearchToolExecutionTests
         var request = handler.Requests.Should().ContainSingle().Subject;
         request.Method.Should().Be(HttpMethod.Post);
         request.RequestUri!.AbsoluteUri.Should().Be(
-            "https://nyxid.example.test/api/v1/proxy/s/tavily-search/search");
+            $"https://nyxid.example.test/api/v1/proxy/s/{slug}/search");
         request.Headers.Authorization!.Parameter.Should().Be("token-6");
         using var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
         document.RootElement.GetProperty("query").GetString().Should().Be("aevatar actor framework");
