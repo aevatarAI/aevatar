@@ -24,12 +24,28 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import { getRunStatusPresentation } from './runPresentation';
 
 const supportedRunStatuses = new Set(['running', 'completed', 'failed']);
+const supportedRunOrigins = new Set([
+  'draft',
+  'member-invoke',
+  'default-invoke',
+  'team-invoke',
+  'service-invoke',
+  'webhook',
+  'work-order',
+  'ad-hoc-chat',
+  'provisioned',
+]);
 const activityPageSize = 25;
 const activityRunsQueryPrefix = ['workflow-activity-vnext', 'activity-runs'];
 
 function normalizeRunStatusFilter(value: string | null): string {
   const normalized = value?.trim().toLowerCase() ?? '';
   return supportedRunStatuses.has(normalized) ? normalized : '';
+}
+
+function normalizeRunOriginFilter(value: string | null): string {
+  const normalized = value?.trim().toLowerCase() ?? '';
+  return supportedRunOrigins.has(normalized) ? normalized : '';
 }
 
 function formatDate(value: string | null): string {
@@ -95,6 +111,12 @@ function failureTitle(error: unknown): string {
   );
 }
 
+function isRetryableActivityRunsError(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  if (!(error instanceof WorkflowActivityApiError)) return false;
+  return error.status === 408 || error.status === 429 || error.status >= 500;
+}
+
 interface ActivityPaginationState {
   readonly filterKey: string;
   readonly page: number;
@@ -134,7 +156,8 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   );
   const rawStatus = params.get('status');
   const status = normalizeRunStatusFilter(rawStatus);
-  const origin = params.get('origin') ?? '';
+  const rawOrigin = params.get('origin');
+  const origin = normalizeRunOriginFilter(rawOrigin);
   const definition = params.get('definition')?.trim() ?? '';
   const schedule = params.get('schedule')?.trim() ?? '';
   const workflowFilterPresent = params.has('workflowId');
@@ -190,6 +213,9 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     unknown | null
   >(null);
   const [pendingPage, setPendingPage] = React.useState<number | null>(null);
+  const [pendingSearchTarget, setPendingSearchTarget] = React.useState<
+    string | null
+  >(null);
   const navigationRequestId = React.useRef(0);
   const currentFilterKey = React.useRef(filterKey);
   currentFilterKey.current = filterKey;
@@ -224,11 +250,83 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       }),
     [replaceParams],
   );
+  const clearScheduleFilter = React.useCallback(
+    () => replaceParam('schedule', ''),
+    [replaceParam],
+  );
+  const clearOriginFilter = React.useCallback(
+    () => replaceParam('origin', ''),
+    [replaceParam],
+  );
+
+  const originLabel = origin;
+
+  const filterContext =
+    workflowFilterPresent || schedule || originLabel ? (
+      <Space className="wa-vnext__activity-filter-context" wrap>
+        {workflowFilterPresent ? (
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.activity.removeWorkflowFilterAria',
+              'Remove workflow filter {workflowId}',
+              { workflowId: workflowId || 'invalid' },
+            )}
+            icon={<CloseOutlined />}
+            onClick={clearWorkflowFilter}
+          >
+            {t(
+              'workflowActivityVNext.activity.workflowFilterLabel',
+              'Workflow: {workflowId}',
+              { workflowId: workflowId || 'Invalid' },
+            )}
+          </Button>
+        ) : null}
+        {schedule ? (
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.activity.removeScheduleFilterAria',
+              'Remove schedule filter {scheduleId}',
+              { scheduleId: schedule },
+            )}
+            icon={<CloseOutlined />}
+            onClick={clearScheduleFilter}
+          >
+            {t(
+              'workflowActivityVNext.activity.scheduleFilterLabel',
+              'Schedule: {scheduleId}',
+              { scheduleId: schedule },
+            )}
+          </Button>
+        ) : null}
+        {originLabel ? (
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.activity.removeOriginFilterAria',
+              'Remove source filter {origin}',
+              { origin },
+            )}
+            icon={<CloseOutlined />}
+            onClick={clearOriginFilter}
+          >
+            {t(
+              'workflowActivityVNext.activity.originFilterContextLabel',
+              'Source: {origin}',
+              { origin: originLabel },
+            )}
+          </Button>
+        ) : null}
+      </Space>
+    ) : null;
 
   React.useEffect(() => {
     if (!rawStatus || status) return;
     replaceParam('status', '');
   }, [rawStatus, replaceParam, status]);
+
+  React.useEffect(() => {
+    if (!rawOrigin || origin) return;
+    replaceParam('origin', '');
+  }, [origin, rawOrigin, replaceParam]);
 
   React.useEffect(() => {
     setDraftFilters(
@@ -286,10 +384,14 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     queryFn: () => fetchActivityPage(currentCursor),
     enabled: canQueryActivityRuns,
     refetchOnMount: 'always',
-    retry: false,
+    retry: (failureCount, error) =>
+      failureCount < 1 && isRetryableActivityRunsError(error),
+    retryDelay: 250,
   });
 
   const commitDraftFilters = React.useCallback(() => {
+    if (pendingSearchTarget !== null) return;
+
     const next = new URLSearchParams(location.search);
     const apply = (name: string, value: string) => {
       if (value) next.set(name, value);
@@ -304,8 +406,9 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
     const currentSearch = new URLSearchParams(location.search).toString();
     const nextSearch = next.toString();
+    setPendingSearchTarget(nextSearch);
     if (nextSearch === currentSearch) {
-      void runs.refetch();
+      void runs.refetch().finally(() => setPendingSearchTarget(null));
       return;
     }
 
@@ -320,8 +423,21 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     draftFilters.toUtc,
     location.pathname,
     location.search,
+    pendingSearchTarget,
     runs,
   ]);
+
+  React.useEffect(() => {
+    if (
+      pendingSearchTarget === null ||
+      pendingSearchTarget !== params.toString() ||
+      runs.isFetching
+    ) {
+      return;
+    }
+
+    setPendingSearchTarget(null);
+  }, [params, pendingSearchTarget, runs.isFetching]);
 
   const currentRuns = runs.data?.items ?? [];
   const runDetailQuery = React.useCallback(
@@ -452,7 +568,10 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       )}
       headerActions={
         <Button
+          aria-busy={pendingSearchTarget !== null}
+          disabled={pendingSearchTarget !== null}
           icon={<SearchOutlined />}
+          loading={pendingSearchTarget !== null}
           onClick={commitDraftFilters}
           type="primary"
         >
@@ -462,25 +581,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       scopeId={scopeId}
       title={t('workflowActivityVNext.activity.title', 'Activity')}
     >
-      {workflowFilterPresent ? (
-        <Space wrap>
-          <Button
-            aria-label={t(
-              'workflowActivityVNext.activity.removeWorkflowFilterAria',
-              'Remove workflow filter {workflowId}',
-              { workflowId: workflowId || 'invalid' },
-            )}
-            icon={<CloseOutlined />}
-            onClick={clearWorkflowFilter}
-          >
-            {t(
-              'workflowActivityVNext.activity.workflowFilterLabel',
-              'Workflow: {workflowId}',
-              { workflowId: workflowId || 'Invalid' },
-            )}
-          </Button>
-        </Space>
-      ) : null}
+      {filterContext}
       <div className="wa-vnext__toolbar">
         <Input
           allowClear
@@ -587,13 +688,6 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   'Service',
                 ),
                 value: 'service-invoke',
-              },
-              {
-                label: t(
-                  'workflowActivityVNext.activity.originSchedule',
-                  'Schedule',
-                ),
-                value: 'schedule',
               },
             ]}
             value={draftFilters.origin}

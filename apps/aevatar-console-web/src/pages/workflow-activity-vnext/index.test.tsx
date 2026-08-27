@@ -18,6 +18,21 @@ import {
   renderWithQueryClient,
 } from '../../../tests/reactQueryTestUtils';
 import WorkflowActivityVNextPage from './index';
+import { workflowActivityVNextCss } from './styles';
+
+jest.mock('@/shared/api/workflowScheduleApi', () => ({
+  workflowScheduleApi: {
+    create: jest.fn(),
+    delete: jest.fn(),
+    disable: jest.fn(),
+    enable: jest.fn(),
+    get: jest.fn(),
+    list: jest.fn(),
+    preview: jest.fn(),
+    runNow: jest.fn(),
+    update: jest.fn(),
+  },
+}));
 
 type SerializableWorkflowDocument = {
   readonly name?: string;
@@ -506,6 +521,11 @@ const mockWorkflowActivityApi = jest.requireMock(
 ).workflowActivityApi as {
   getRun: jest.Mock;
 };
+const mockWorkflowScheduleApi = jest.requireMock(
+  '@/shared/api/workflowScheduleApi',
+).workflowScheduleApi as {
+  list: jest.Mock;
+};
 const mockObserveUserLlmSave = jest.requireMock(
   '@/pages/settings/userLlmSaveObservation',
 ).observeUserLlmSave as jest.Mock;
@@ -518,6 +538,11 @@ describe('Workflow Activity vNext catalogue', () => {
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
       createCatalogueResponse([]),
     );
+    mockWorkflowScheduleApi.list.mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      totalCount: 0,
+    });
     mockScopesApi.archiveWorkflow.mockResolvedValue({
       scopeId: 'scope-alpha',
       workflowId: 'wf-alpha',
@@ -591,6 +616,82 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(
       screen.getByRole('option', { name: 'Show archived workflows' }),
     ).toBeInTheDocument();
+  });
+
+  it('reserves a stable action column for published workflow schedules', async () => {
+    mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
+      createCatalogueResponse([
+        createCatalogueRow({
+          workflowId: 'wf-published',
+          name: 'Published workflow',
+          committed: {
+            serviceKey: 'svc-published',
+            workflowName: 'published_workflow',
+            actorId: 'actor-published',
+            activeRevisionId: 'revision-published',
+            deploymentId: 'deployment-published',
+            deploymentStatus: 'Running',
+          },
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const table = await screen.findByRole('table');
+    const columns = table.querySelectorAll('col');
+    expect(table).toHaveClass('wa-vnext__table--workflow-catalogue');
+    expect(columns).toHaveLength(4);
+    expect(columns[3]).toHaveStyle({ width: '500px' });
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__table--workflow-catalogue { min-width: 1160px; }',
+    );
+  });
+
+  it('opens the published Workflow Schedule action as a management modal', async () => {
+    mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
+      createCatalogueResponse([
+        createCatalogueRow({
+          workflowId: 'wf-published',
+          name: 'Published workflow',
+          committed: {
+            serviceKey: 'svc-published',
+            workflowName: 'published_workflow',
+            actorId: 'actor-published',
+            activeRevisionId: 'revision-published',
+            deploymentId: 'deployment-published',
+            deploymentStatus: 'Running',
+          },
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Manage schedules for Published workflow',
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Schedules for Published workflow', {
+          selector: '.ant-modal-title',
+        }),
+      ).toBeVisible(),
+    );
+    expect(screen.getByText('No schedules yet')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'New schedule' })).toBeVisible();
+    expect(
+      screen.queryByText('Recurring runs for Published workflow'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('WORKFLOW SCHEDULE')).not.toBeInTheDocument();
+    expect(screen.queryByText('What will happen')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Review schedule' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
   });
 
   it('refreshes the workflow catalogue when returning from the editor', async () => {

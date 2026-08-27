@@ -6,6 +6,7 @@ import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from '../../../../tests/reactQueryTestUtils';
+import { workflowActivityVNextCss } from '../styles';
 import ActivityPage from './ActivityPage';
 
 let mockSearch = '';
@@ -43,6 +44,8 @@ jest.mock('@/shared/api/workflowActivityApi', () => {
 
     constructor(message: string, status: number, code?: string) {
       super(message);
+      this.name = 'WorkflowActivityApiError';
+      Object.setPrototypeOf(this, WorkflowActivityApiError.prototype);
       this.code = code;
       this.status = status;
     }
@@ -74,6 +77,13 @@ jest.mock('../hooks/useConsoleLocation', () => ({
 const mockListActivityRuns = jest.requireMock(
   '@/shared/api/workflowActivityApi',
 ).workflowActivityApi.listActivityRuns as jest.Mock;
+const MockWorkflowActivityApiError = jest.requireMock(
+  '@/shared/api/workflowActivityApi',
+).WorkflowActivityApiError as new (
+  message: string,
+  status: number,
+  code?: string,
+) => Error;
 
 describe('Workflow Activity vNext Activity ledger', () => {
   beforeEach(() => {
@@ -125,6 +135,35 @@ describe('Workflow Activity vNext Activity ledger', () => {
     await waitFor(() => expect(mockListActivityRuns).toHaveBeenCalledTimes(2));
   });
 
+  it('retries one transient Activity feed failure before showing an error', async () => {
+    mockSearch = '?workflowId=wf-alpha&schedule=schedule-alpha';
+    mockListActivityRuns
+      .mockRejectedValueOnce(
+        new MockWorkflowActivityApiError(
+          'Error occurred while trying to proxy: localhost:5175/api/workflow/observatory/activity-runs',
+          502,
+        ),
+      )
+      .mockResolvedValueOnce(feedPage([]));
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(await screen.findByText('No matching runs')).toBeInTheDocument();
+    expect(mockListActivityRuns).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Activity unavailable')).not.toBeInTheDocument();
+  });
+
+  it('does not retry an unauthorized Activity feed request', async () => {
+    mockListActivityRuns.mockRejectedValueOnce(
+      new MockWorkflowActivityApiError('Unauthorized', 401),
+    );
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
+  });
+
   it('passes a URL workflow identity directly to the Activity feed', async () => {
     mockSearch = '?workflowId=wf-alpha';
 
@@ -152,6 +191,99 @@ describe('Workflow Activity vNext Activity ledger', () => {
     expect(history.replace).toHaveBeenLastCalledWith(
       '/scopes/scope-alpha/workflow-activity-vnext/activity',
     );
+  });
+
+  it('filters by Schedule without inventing a Run source', async () => {
+    mockSearch = '?workflowId=wf-alpha&schedule=schedule-alpha';
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    await waitFor(() =>
+      expect(mockListActivityRuns).toHaveBeenCalledWith('scope-alpha', {
+        status: undefined,
+        origins: undefined,
+        definitionActorIds: undefined,
+        scheduleIds: ['schedule-alpha'],
+        workflowId: 'wf-alpha',
+        searchText: undefined,
+        fromUtc: undefined,
+        toUtc: undefined,
+        take: 25,
+        cursor: undefined,
+        includeTotalCount: true,
+      }),
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Remove workflow filter wf-alpha' }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole('button', {
+        name: 'Remove schedule filter schedule-alpha',
+      }),
+    ).toBeVisible();
+    const scopeContext = document.querySelector(
+      '.wa-vnext__activity-filter-context',
+    );
+    expect(scopeContext).toBeInTheDocument();
+    expect(scopeContext).toContainElement(
+      screen.getByRole('button', {
+        name: 'Remove workflow filter wf-alpha',
+      }),
+    );
+    expect(scopeContext).toContainElement(
+      screen.getByRole('button', {
+        name: 'Remove schedule filter schedule-alpha',
+      }),
+    );
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__activity-filter-context { margin-bottom: 12px; }',
+    );
+    expect(
+      screen.queryByRole('button', { name: /Remove source filter/ }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Run source' }));
+    await screen.findByText('Chat', {
+      selector: '.ant-select-item-option-content',
+    });
+    expect(
+      screen.queryByText('Schedule', {
+        selector: '.ant-select-item-option-content',
+      }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Remove schedule filter schedule-alpha',
+      }),
+    );
+    expect(history.replace).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha',
+    );
+  });
+
+  it('drops the legacy Schedule origin from Activity links', async () => {
+    mockSearch = '?workflowId=wf-alpha&schedule=schedule-alpha&origin=schedule';
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    await waitFor(() =>
+      expect(mockListActivityRuns).toHaveBeenCalledWith(
+        'scope-alpha',
+        expect.objectContaining({
+          origins: undefined,
+          scheduleIds: ['schedule-alpha'],
+          workflowId: 'wf-alpha',
+        }),
+      ),
+    );
+    expect(history.replace).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha',
+    );
+    expect(
+      screen.queryByRole('button', { name: /Remove source filter/ }),
+    ).not.toBeInTheDocument();
   });
 
   it('does not query global runs when the workflow filter is empty', async () => {
@@ -261,6 +393,120 @@ describe('Workflow Activity vNext Activity ledger', () => {
       '/scopes/scope-alpha/workflow-activity-vnext/activity?q=support&status=failed',
     );
     expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows pending feedback for an unchanged Activity Search', async () => {
+    mockListActivityRuns.mockResolvedValueOnce(
+      feedPage([
+        activityRow({
+          runId: 'run-current',
+          workflowName: 'Current results',
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    await screen.findByText('Current results');
+    let resolveSearch!: (value: ReturnType<typeof feedPage>) => void;
+    const deferredSearch = new Promise<ReturnType<typeof feedPage>>(
+      (resolve) => {
+        resolveSearch = resolve;
+      },
+    );
+    mockListActivityRuns.mockReturnValueOnce(deferredSearch);
+
+    const searchButton = screen.getByRole('button', { name: 'Search' });
+    fireEvent.click(searchButton);
+
+    await waitFor(() => expect(mockListActivityRuns).toHaveBeenCalledTimes(2));
+    expect(searchButton).toHaveAttribute('aria-busy', 'true');
+    expect(searchButton).toHaveClass('ant-btn-loading');
+    expect(searchButton).toBeDisabled();
+    expect(screen.getByText('Current results')).toBeInTheDocument();
+
+    fireEvent.click(searchButton);
+    expect(mockListActivityRuns).toHaveBeenCalledTimes(2);
+
+    resolveSearch(
+      feedPage([
+        activityRow({
+          runId: 'run-current',
+          workflowName: 'Current results',
+        }),
+      ]),
+    );
+
+    await waitFor(() => expect(searchButton).toBeEnabled());
+    expect(searchButton).toHaveAttribute('aria-busy', 'false');
+    await waitFor(() =>
+      expect(searchButton).not.toHaveClass('ant-btn-loading'),
+    );
+  });
+
+  it('keeps Search pending while URL-backed Activity filters load', async () => {
+    mockListActivityRuns.mockResolvedValueOnce(
+      feedPage([
+        activityRow({
+          runId: 'run-before-search',
+          workflowName: 'Before search',
+        }),
+      ]),
+    );
+
+    let applyHistoryTarget!: (target: string) => void;
+    const ActivityLocationHarness = () => {
+      const [, rerenderLocation] = React.useReducer((value) => value + 1, 0);
+      applyHistoryTarget = (target: string) => {
+        mockSearch = new URL(target, 'http://console.local').search;
+        rerenderLocation();
+      };
+      return <ActivityPage scopeId="scope-alpha" />;
+    };
+
+    renderWithQueryClient(<ActivityLocationHarness />);
+
+    await screen.findByText('Before search');
+    let resolveSearch!: (value: ReturnType<typeof feedPage>) => void;
+    const deferredSearch = new Promise<ReturnType<typeof feedPage>>(
+      (resolve) => {
+        resolveSearch = resolve;
+      },
+    );
+    mockListActivityRuns.mockReturnValueOnce(deferredSearch);
+    (history.replace as jest.Mock).mockImplementation((target: string) => {
+      applyHistoryTarget(target);
+    });
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search runs' }), {
+      target: { value: 'support' },
+    });
+    const searchButton = screen.getByRole('button', { name: 'Search' });
+    fireEvent.click(searchButton);
+
+    expect(history.replace).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?q=support',
+    );
+    await waitFor(() => expect(mockListActivityRuns).toHaveBeenCalledTimes(2));
+    expect(searchButton).toHaveAttribute('aria-busy', 'true');
+    expect(searchButton).toHaveClass('ant-btn-loading');
+    expect(searchButton).toBeDisabled();
+
+    resolveSearch(
+      feedPage([
+        activityRow({
+          runId: 'run-support',
+          workflowName: 'Support workflow',
+        }),
+      ]),
+    );
+
+    await screen.findByText('Support workflow');
+    await waitFor(() => expect(searchButton).toBeEnabled());
+    expect(searchButton).toHaveAttribute('aria-busy', 'false');
+    await waitFor(() =>
+      expect(searchButton).not.toHaveClass('ant-btn-loading'),
+    );
   });
 
   it('keeps the activity list focused on user-facing run facts', async () => {

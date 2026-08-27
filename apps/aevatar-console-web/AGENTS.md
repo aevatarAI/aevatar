@@ -200,6 +200,21 @@ pnpm --dir apps/aevatar-console-web build
   magic values.
 - Treat the console as an operational tool: prioritize scannability, clear
   hierarchy, predictable navigation, and efficient repeated actions.
+- Every visible title or heading must add distinct orientation, resource
+  identity, current-state, or task meaning. Do not repeat the same noun at the
+  modal/drawer shell and content levels, and do not add helper copy that merely
+  paraphrases an adjacent heading. Prefer one resource-owned container title;
+  add a nested heading only when it names a genuinely different state, view,
+  or user task.
+- Scope asynchronous loading feedback to the data region owned by the query or
+  command. Keep committed sibling regions mounted and usable, preserving their
+  selection and scroll position when they are not being reloaded. Use a
+  whole-workspace loading state only when the initiating operation actually
+  invalidates or blocks the whole workspace.
+- Reuse the shared loading language instead of composing page-local spinners or
+  indicator cards: use `AevatarContentSkeleton` for an initial structured data
+  surface, `AevatarLoadingOverlay` when a command temporarily blocks committed
+  content, and `AevatarLoadingDots` only for compact inline progress.
 - Default user-facing surfaces must show only information needed to understand
   the current task, result, or next action. Do not expose backend architecture,
   transport, storage, or consistency terminology such as `read model`,

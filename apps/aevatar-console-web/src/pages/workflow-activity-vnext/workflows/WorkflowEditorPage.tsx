@@ -1,5 +1,6 @@
 import {
   ArrowLeftOutlined,
+  CalendarOutlined,
   CodeOutlined,
   NodeIndexOutlined,
   PlayCircleOutlined,
@@ -50,6 +51,7 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import WorkflowNodeInspector, {
   type WorkflowNodeInspectorHandle,
 } from './WorkflowNodeInspector';
+import WorkflowScheduleSurface from './WorkflowScheduleSurface';
 
 const PUBLISHED_RUN_CONSOLE_ID = 'workflow-published-run-console';
 
@@ -142,6 +144,7 @@ const WorkflowEditorPage: React.FC<{
   const [publishedDocumentVersion, setPublishedDocumentVersion] =
     React.useState<number | null>(null);
   const [runPanelOpen, setRunPanelOpen] = React.useState(false);
+  const [schedulePanelOpen, setSchedulePanelOpen] = React.useState(false);
   const [runConsoleVisible, setRunConsoleVisible] = React.useState(false);
   const [runConsoleExpanded, setRunConsoleExpanded] = React.useState(false);
   const [activeRunLogIndex, setActiveRunLogIndex] = React.useState<
@@ -330,6 +333,7 @@ const WorkflowEditorPage: React.FC<{
       setHasUnappliedNodeChanges(false);
       setNodeLibraryOpen(false);
       setRunPanelOpen(false);
+      setSchedulePanelOpen(false);
       setRunConsoleVisible(false);
       setRunConsoleExpanded(false);
       setActiveRunLogIndex(null);
@@ -1007,6 +1011,26 @@ const WorkflowEditorPage: React.FC<{
           >
             {t('workflowActivityVNext.common.run', 'Run')}
           </Button>
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.schedule.openAria',
+              'Manage schedules for {name}',
+              { name: editor.workflowTitle },
+            )}
+            disabled={!publicationCurrent}
+            icon={<CalendarOutlined />}
+            onClick={() => setSchedulePanelOpen(true)}
+            title={
+              publicationCurrent
+                ? undefined
+                : t(
+                    'workflowActivityVNext.schedule.publishBeforeOpen',
+                    'Publish this Workflow before managing schedules.',
+                  )
+            }
+          >
+            {t('workflowActivityVNext.schedule.open', 'Schedules')}
+          </Button>
           {!publicationCurrent &&
             (publishReadinessIssues.length > 0 ? (
               <AevatarTooltip
@@ -1345,6 +1369,15 @@ const WorkflowEditorPage: React.FC<{
           width={sidePanelWidth}
         />
       </div>
+      <WorkflowScheduleSurface
+        available={publicationCurrent}
+        mode="panel"
+        onClose={() => setSchedulePanelOpen(false)}
+        open={schedulePanelOpen}
+        scopeId={activeScopeId}
+        workflowId={activeWorkflowId}
+        workflowName={editor.workflowTitle}
+      />
       <Modal
         aria-label={t(
           'workflowActivityVNext.editor.unsavedTitle',

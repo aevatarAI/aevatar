@@ -1,4 +1,5 @@
 import {
+  CalendarOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -33,6 +34,7 @@ import {
 } from '../navigation';
 import TableScrollRegion from '../TableScrollRegion';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import WorkflowScheduleSurface from './WorkflowScheduleSurface';
 import {
   canArchiveWorkflow,
   isWorkflowArchived,
@@ -173,6 +175,8 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const [deleteFailed, setDeleteFailed] = React.useState(false);
   const [deleteSucceeded, setDeleteSucceeded] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
+  const [scheduleTarget, setScheduleTarget] =
+    React.useState<WorkflowRow | null>(null);
   const catalogue = useInfiniteQuery({
     queryKey: [
       'workflow-activity-vnext',
@@ -672,7 +676,13 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         <TableScrollRegion
           ariaLabel={t('workflowActivityVNext.workflows.title', 'Workflows')}
         >
-          <table className="wa-vnext__table">
+          <table className="wa-vnext__table wa-vnext__table--workflow-catalogue">
+            <colgroup>
+              <col />
+              <col style={{ width: '120px' }} />
+              <col style={{ width: '190px' }} />
+              <col style={{ width: '500px' }} />
+            </colgroup>
             <thead>
               <tr>
                 <th>
@@ -852,6 +862,23 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                             'View activity',
                           )}
                         </Button>
+                        {isPublished && !isArchived ? (
+                          <Button
+                            aria-label={t(
+                              'workflowActivityVNext.schedule.openAria',
+                              'Manage schedules for {name}',
+                              { name: row.name },
+                            )}
+                            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                            icon={<CalendarOutlined />}
+                            onClick={() => setScheduleTarget(row)}
+                          >
+                            {t(
+                              'workflowActivityVNext.schedule.open',
+                              'Schedule',
+                            )}
+                          </Button>
+                        ) : null}
                         <Dropdown
                           menu={{
                             items: [
@@ -1074,6 +1101,16 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           )}
         </p>
       </Modal>
+      <WorkflowScheduleSurface
+        available={Boolean(scheduleTarget?.activeRevisionId)}
+        initialView="list"
+        mode="modal"
+        onClose={() => setScheduleTarget(null)}
+        open={Boolean(scheduleTarget)}
+        scopeId={scopeId}
+        workflowId={scheduleTarget?.workflowId ?? ''}
+        workflowName={scheduleTarget?.name ?? ''}
+      />
     </WorkflowActivityVNextShell>
   );
 };

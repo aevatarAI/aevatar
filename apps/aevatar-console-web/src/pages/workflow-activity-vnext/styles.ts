@@ -110,8 +110,10 @@ export const workflowActivityVNextCss = `
 .wa-vnext__header h1 { font-size: 28px; font-weight: 700; line-height: 28px; margin: 0; text-wrap: balance; }
 .wa-vnext__header p { color: var(--wa-muted); font-size: 12px; line-height: 17px; margin: 7px 0 0; max-width: 760px; text-wrap: pretty; }
 .wa-vnext__header-actions { align-items: center; display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.wa-vnext__run-detail-refresh { min-width: 132px; }
 .wa-vnext__content { min-width: 0; padding: 18px 40px 48px; }
 .wa-vnext__content--run-detail { display: flex; min-height: 0; overflow: hidden; padding-bottom: 40px; }
+.wa-vnext__activity-filter-context { margin-bottom: 12px; }
 .wa-vnext__toolbar { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; min-height: 32px; }
 .wa-vnext__toolbar-search { flex: 0 1 320px; max-width: 100%; width: 320px; }
 .wa-vnext__toolbar-filters { justify-content: flex-end; }
@@ -134,6 +136,7 @@ export const workflowActivityVNextCss = `
   height: clamp(420px, calc(100dvh - 300px), 720px);
 }
 .wa-vnext__table { border-collapse: separate; border-spacing: 0; font-size: 12px; line-height: 17px; min-width: 900px; table-layout: fixed; width: 100%; }
+.wa-vnext__table--workflow-catalogue { min-width: 1160px; }
 .wa-vnext__table th {
   background: var(--wa-subtle);
   border-bottom: 1px solid var(--wa-line);
@@ -402,8 +405,10 @@ export const workflowActivityVNextCss = `
   max-height: 100%;
   min-height: 0;
   overflow: hidden;
+  position: relative;
   width: 100%;
 }
+.wa-vnext-run-detail__refresh-content { display: contents; }
 .wa-vnext-run-detail__rail {
   background: var(--wa-surface);
   border-right: 1px solid var(--wa-line);
@@ -649,6 +654,103 @@ export const workflowActivityVNextCss = `
 .wa-vnext-run-detail .ant-tag {
   margin-inline-end: 0;
 }
+@keyframes wa-vnext-run-detail-skeleton-pulse {
+  0%, 100% { opacity: .55; }
+  50% { opacity: 1; }
+}
+.wa-vnext-run-detail--loading {
+  cursor: progress;
+}
+.wa-vnext-run-detail__stage--loading {
+  cursor: progress;
+}
+.wa-vnext-run-detail--loading .wa-vnext-run-detail__rail-header,
+.wa-vnext-run-detail__stage--loading .wa-vnext-run-detail__stage-header,
+.wa-vnext-run-detail__stage--loading .wa-vnext-run-detail__logs-header,
+.wa-vnext-run-detail__stage--loading .wa-vnext-run-detail__inspector-header {
+  min-height: 54px;
+}
+.wa-vnext-run-detail__skeleton-line,
+.wa-vnext-run-detail__skeleton-dot,
+.wa-vnext-run-detail__skeleton-node {
+  animation: wa-vnext-run-detail-skeleton-pulse 1.5s ease-in-out infinite;
+}
+.wa-vnext-run-detail__skeleton-line {
+  background: color-mix(in srgb, var(--wa-line) 64%, var(--wa-subtle));
+  border-radius: 4px;
+  display: block;
+  height: 10px;
+  max-width: 100%;
+}
+.wa-vnext-run-detail__skeleton-line--title { height: 14px; width: 112px; }
+.wa-vnext-run-detail__skeleton-line--short { width: 72px; }
+.wa-vnext-run-detail__skeleton-line--run { width: 76%; }
+.wa-vnext-run-detail__skeleton-line--meta { height: 9px; width: 48%; }
+.wa-vnext-run-detail__skeleton-line--heading { height: 16px; width: 148px; }
+.wa-vnext-run-detail__skeleton-line--pill { border-radius: 10px; height: 20px; width: 64px; }
+.wa-vnext-run-detail__skeleton-line--subtitle { width: 196px; }
+.wa-vnext-run-detail__skeleton-line--node-title { height: 12px; width: 62%; }
+.wa-vnext-run-detail__skeleton-line--node-meta { height: 9px; width: 42%; }
+.wa-vnext-run-detail__skeleton-line--label { height: 12px; width: 44px; }
+.wa-vnext-run-detail__skeleton-line--duration { height: 9px; width: 42px; }
+.wa-vnext-run-detail__skeleton-line--step { width: 68%; }
+.wa-vnext-run-detail__skeleton-line--step-meta { height: 8px; width: 44%; }
+.wa-vnext-run-detail__skeleton-line--inspector-title { height: 12px; width: 132px; }
+.wa-vnext-run-detail__skeleton-line--tabs { height: 12px; margin-bottom: 10px; width: 180px; }
+.wa-vnext-run-detail__skeleton-line--content { width: 82%; }
+.wa-vnext-run-detail__skeleton-line--content-short { width: 58%; }
+.wa-vnext-run-detail__skeleton-heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+.wa-vnext-run-detail__run--loading {
+  cursor: progress;
+  min-height: 53px;
+}
+.wa-vnext-run-detail__graph--loading {
+  overflow: hidden;
+  position: relative;
+}
+.wa-vnext-run-detail__skeleton-node {
+  background: var(--wa-surface);
+  border: 1px solid var(--wa-line);
+  border-radius: 6px;
+  display: grid;
+  gap: 9px;
+  left: 50%;
+  padding: 14px;
+  position: absolute;
+  transform: translateX(-50%);
+  width: clamp(160px, 28%, 220px);
+  z-index: 1;
+}
+.wa-vnext-run-detail__skeleton-node--1 { top: 10%; }
+.wa-vnext-run-detail__skeleton-node--2 { top: 42%; }
+.wa-vnext-run-detail__skeleton-node--3 { top: 74%; }
+.wa-vnext-run-detail__skeleton-connector {
+  background: var(--wa-line);
+  height: 18%;
+  left: 50%;
+  position: absolute;
+  top: 27%;
+  width: 1px;
+}
+.wa-vnext-run-detail__skeleton-connector--second { top: 59%; }
+.wa-vnext-run-detail__step--loading { cursor: progress; }
+.wa-vnext-run-detail__skeleton-dot {
+  background: color-mix(in srgb, var(--wa-line) 72%, var(--wa-subtle));
+  border-radius: 50%;
+  height: 12px;
+  justify-self: center;
+  width: 12px;
+}
+.wa-vnext-run-detail__skeleton-step-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.wa-vnext-run-detail__inspector-body--loading { gap: 10px; }
 .wa-vnext__node-inspector { background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); bottom: 16px; box-shadow: 0 16px 36px rgba(16, 24, 40, .16); display: flex; flex-direction: column; max-width: calc(100% - 32px); min-height: 0; overflow: hidden; position: absolute; right: 16px; top: 16px; width: min(400px, calc(100% - 32px)); z-index: 20; }
 .wa-vnext__node-inspector-header { align-items: flex-start; border-bottom: 1px solid var(--wa-line); display: flex; gap: 12px; justify-content: space-between; padding: 16px 16px 14px; }
 .wa-vnext__node-inspector-title.ant-typography { font-size: 15px; line-height: 1.35; margin: 0; }
@@ -672,6 +774,147 @@ export const workflowActivityVNextCss = `
 .wa-vnext__node-inspector-advanced { display: grid; gap: 10px; }
 .wa-vnext__node-inspector-advanced .ant-input { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wa-vnext__node-inspector-actions { align-items: center; border-top: 1px solid var(--wa-line); display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
+.wa-vnext-schedule-modal, .wa-vnext-schedule-drawer {
+  --wa-ink: #17202a;
+  --wa-muted: #667085;
+  --wa-line: #d0d5dd;
+  --wa-surface: #ffffff;
+  --wa-subtle: #f8fafc;
+  --wa-blue: #175cd3;
+  --wa-blue-bg: #eff8ff;
+  --wa-red: #b42318;
+  --wa-red-bg: #fef3f2;
+  --wa-radius: 8px;
+  color: var(--wa-ink);
+  font-family: AlibabaSans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 12px;
+}
+.wa-vnext-schedule-modal .ant-modal-content { border-radius: var(--wa-radius); }
+.wa-vnext-schedule-modal .ant-btn, .wa-vnext-schedule-drawer .ant-btn { font-size: 12px; }
+.wa-vnext__schedule-surface-title { color: var(--wa-ink); font-size: 16px; font-weight: 650; line-height: 22px; margin: 0; }
+.wa-vnext__schedule-form-title { color: var(--wa-ink); font-size: 15px; line-height: 21px; margin: 0; }
+.wa-vnext__schedule-surface { display: grid; gap: 16px; min-width: 0; position: relative; }
+.wa-vnext__schedule-toolbar { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
+.wa-vnext__schedule-toolbar--actions { justify-content: flex-end; }
+.wa-vnext__schedule-refresh-overlay { grid-column: 1; grid-row: 2; }
+.wa-vnext__schedule-failure { max-width: 100%; min-width: 0; width: 100%; }
+.wa-vnext__schedule-failure .ant-alert-section, .wa-vnext__schedule-failure .ant-alert-content, .wa-vnext__schedule-failure .ant-alert-description { max-width: 100%; min-width: 0; }
+.wa-vnext__schedule-failure-copy { display: grid; gap: 10px; max-width: 100%; min-width: 0; }
+.wa-vnext__schedule-failure-copy > p { margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__schedule-failure-copy .wa-vnext__technical-details { margin-top: 0; min-width: 0; }
+.wa-vnext__schedule-failure-copy .wa-vnext__technical-details-body { max-height: 132px; overflow: auto; white-space: pre-wrap; }
+.wa-vnext__schedule-list { display: grid; gap: 10px; }
+.wa-vnext__schedule-row { align-items: center; appearance: none; background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); color: var(--wa-ink); cursor: pointer; display: flex; font: inherit; gap: 16px; justify-content: space-between; min-width: 0; padding: 14px; text-align: left; transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease; width: 100%; }
+.wa-vnext__schedule-row:hover { background: #f2f4f7; border-color: #98a2b3; box-shadow: 0 2px 8px rgba(16, 24, 40, .06); }
+.wa-vnext__schedule-row:focus-visible { outline: 3px solid rgba(23, 92, 211, .25); outline-offset: 2px; }
+.wa-vnext__schedule-row-main { display: grid; gap: 5px; min-width: 0; }
+.wa-vnext__schedule-row-heading { align-items: center; display: flex; gap: 8px; min-width: 0; }
+.wa-vnext__schedule-row-heading strong { overflow-wrap: anywhere; }
+.wa-vnext__schedule-row-main code { color: var(--wa-ink); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.wa-vnext__schedule-row-main > span { color: var(--wa-muted); font-size: 11px; overflow-wrap: anywhere; }
+.wa-vnext__schedule-row-arrow { color: var(--wa-muted); flex: 0 0 auto; font-size: 22px; line-height: 1; }
+.wa-vnext__schedule-selected-title { align-items: center; display: flex; gap: 8px; min-width: 0; }
+.wa-vnext__schedule-selected-title > .ant-btn { flex: 0 0 auto; margin-inline-start: -8px; }
+.wa-vnext__schedule-selected-heading { align-items: baseline; display: flex; font-weight: inherit; margin: 0; min-width: 0; overflow: hidden; white-space: nowrap; }
+.wa-vnext__schedule-selected-title strong { color: var(--wa-ink); font-size: 16px; line-height: 21px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-vnext__schedule-selected-title span { color: var(--wa-muted); font-size: 11px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-vnext__schedule-selected-heading strong, .wa-vnext__schedule-selected-heading .wa-vnext__schedule-selected-heading-context { flex: 0 1 auto; min-width: 0; }
+.wa-vnext__schedule-selected-heading > span[aria-hidden="true"] { flex: 0 0 auto; font-size: 13px; line-height: 21px; }
+.wa-vnext__schedule-selected-heading .wa-vnext__schedule-selected-heading-context { font-size: 13px; line-height: 21px; }
+.wa-vnext__schedule-detail { display: grid; gap: 18px; min-width: 0; position: relative; }
+.wa-vnext__schedule-detail > .ant-tabs { margin-bottom: -2px; }
+.wa-vnext__schedule-overview { display: grid; gap: 14px; min-width: 0; }
+.wa-vnext__schedule-overview-summary { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); display: grid; gap: 8px; padding: 16px; }
+.wa-vnext__schedule-overview-summary .ant-tag { justify-self: start; margin-inline-end: 0; }
+.wa-vnext__schedule-overview-summary h2 { color: var(--wa-ink); font-size: 18px; line-height: 24px; margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__schedule-overview-summary p { color: var(--wa-muted); font-size: 12px; line-height: 17px; margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__schedule-overview-summary p span { font-weight: 650; }
+.wa-vnext__schedule-overview-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.wa-vnext__schedule-detail-facts { background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; overflow: hidden; }
+.wa-vnext__schedule-detail-facts div { display: grid; gap: 4px; min-width: 0; padding: 12px 14px; }
+.wa-vnext__schedule-detail-facts div:nth-child(odd) { border-right: 1px solid var(--wa-line); }
+.wa-vnext__schedule-detail-facts div:nth-child(n + 3) { border-top: 1px solid var(--wa-line); }
+.wa-vnext__schedule-detail-facts dt { color: var(--wa-muted); font-size: 11px; font-weight: 650; }
+.wa-vnext__schedule-detail-facts dd { color: var(--wa-ink); font-size: 12px; margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__schedule-detail-facts code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.wa-vnext__schedule-run-input { display: grid; gap: 6px; }
+.wa-vnext__schedule-run-input h3 { color: var(--wa-ink); font-size: 12px; line-height: 17px; margin: 0; }
+.wa-vnext__schedule-run-input p { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: 6px; color: var(--wa-ink); line-height: 18px; margin: 0; max-height: 120px; overflow: auto; padding: 10px 12px; white-space: pre-wrap; }
+.wa-vnext__schedule-advanced-details { color: var(--wa-muted); padding: 2px; }
+.wa-vnext__schedule-advanced-details summary { cursor: pointer; font-size: 11px; font-weight: 650; }
+.wa-vnext__schedule-advanced-details dl { display: grid; gap: 8px; margin: 10px 0 0; }
+.wa-vnext__schedule-advanced-details div { align-items: baseline; display: grid; gap: 10px; grid-template-columns: max-content minmax(0, 1fr); }
+.wa-vnext__schedule-advanced-details dt { font-size: 11px; }
+.wa-vnext__schedule-advanced-details dd { color: var(--wa-ink); margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__schedule-advanced-details code { background: var(--wa-subtle); border-radius: 4px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 5px; }
+.wa-vnext__schedule-history { display: grid; gap: 14px; min-width: 0; }
+.wa-vnext__schedule-history-header { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
+.wa-vnext__schedule-history-header h2 { color: var(--wa-ink); font-size: 15px; line-height: 21px; margin: 0; }
+.wa-vnext__schedule-history-header p { color: var(--wa-muted); line-height: 17px; margin: 4px 0 0; max-width: 520px; }
+.wa-vnext__schedule-history-header a { flex: 0 0 auto; font-size: 12px; line-height: 17px; }
+.wa-vnext__schedule-history-table-wrap { border: 1px solid var(--wa-line); border-radius: var(--wa-radius); max-height: min(440px, calc(100dvh - 320px)); max-width: 100%; overflow: auto; scrollbar-gutter: stable; }
+.wa-vnext__schedule-history-table { border-collapse: separate; border-spacing: 0; font-size: 12px; min-width: 720px; table-layout: fixed; width: 100%; }
+.wa-vnext__schedule-history-table th { background: var(--wa-subtle); border-bottom: 1px solid var(--wa-line); color: var(--wa-muted); font-size: 10px; font-weight: 650; letter-spacing: 1px; padding: 9px 12px; position: sticky; text-align: left; text-transform: uppercase; top: 0; z-index: 1; }
+.wa-vnext__schedule-history-table td { border-bottom: 1px solid var(--wa-line); color: var(--wa-ink); line-height: 17px; padding: 11px 12px; vertical-align: top; }
+.wa-vnext__schedule-history-table tbody tr:last-child td { border-bottom: 0; }
+.wa-vnext__schedule-history-table tbody tr { position: relative; }
+.wa-vnext__schedule-history-row--linked { cursor: pointer; }
+.wa-vnext__schedule-history-row--linked td { transition: background-color .15s ease; }
+.wa-vnext__schedule-history-row--linked:hover td { background: var(--wa-blue-bg); }
+.wa-vnext__schedule-history-row--linked:focus-within td { background: var(--wa-blue-bg); }
+.wa-vnext__schedule-history-row-link { border-radius: var(--wa-radius); inset: 0; position: absolute; z-index: 1; }
+.wa-vnext__schedule-history-row-link:focus-visible { outline: 3px solid rgba(23, 92, 211, .3); outline-offset: -3px; }
+.wa-vnext__schedule-history-row--linked details { position: relative; z-index: 2; }
+.wa-vnext__schedule-history-table th:nth-child(1), .wa-vnext__schedule-history-table td:nth-child(1) { width: 28%; }
+.wa-vnext__schedule-history-table th:nth-child(2), .wa-vnext__schedule-history-table td:nth-child(2) { width: 14%; }
+.wa-vnext__schedule-history-table th:nth-child(3), .wa-vnext__schedule-history-table td:nth-child(3) { width: 28%; }
+.wa-vnext__schedule-history-table th:nth-child(4), .wa-vnext__schedule-history-table td:nth-child(4) { width: 30%; }
+.wa-vnext__schedule-history-result { display: grid; gap: 6px; min-width: 0; }
+.wa-vnext__schedule-history-result .ant-tag { justify-self: start; margin-inline-end: 0; }
+.wa-vnext__schedule-history-failure { color: var(--wa-red); font-size: 11px; margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__schedule-history-result details { color: var(--wa-muted); }
+.wa-vnext__schedule-history-result summary { cursor: pointer; font-size: 11px; font-weight: 650; }
+.wa-vnext__schedule-history-result code { background: var(--wa-red-bg); border-radius: 4px; color: #7a271a; display: block; font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 6px; max-height: 96px; overflow: auto; overflow-wrap: anywhere; padding: 7px 8px; white-space: pre-wrap; }
+.wa-vnext__schedule-history-completed { white-space: nowrap; }
+.wa-vnext__schedule-empty--history { padding: 14px; }
+.wa-vnext__schedule-empty { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); padding: 20px 22px; }
+.wa-vnext__schedule-empty-title { font-size: 15px; line-height: 22px; margin: 0 0 6px; }
+.wa-vnext__schedule-empty p { color: var(--wa-muted); margin: 0; max-width: 560px; }
+.wa-vnext__schedule-form { display: grid; gap: 14px; }
+.wa-vnext__schedule-enabled { align-items: center; display: flex; gap: 10px; justify-content: space-between; }
+.wa-vnext__schedule-preview-list { margin: 0; padding-left: 18px; }
+.wa-vnext__schedule-preview-list li { margin: 3px 0; }
+.wa-vnext__schedule-create, .wa-vnext__schedule-review, .wa-vnext__schedule-accepted { display: grid; gap: 18px; min-width: 0; }
+.wa-vnext__schedule-context { align-items: center; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; display: flex; gap: 10px; justify-content: space-between; padding: 12px 14px; }
+.wa-vnext__schedule-context strong { color: #172554; font-size: 13px; overflow-wrap: anywhere; text-align: right; }
+.wa-vnext__schedule-section { border-bottom: 1px solid var(--wa-line); display: grid; gap: 12px; padding-bottom: 18px; }
+.wa-vnext__schedule-section:last-of-type { border-bottom: 0; padding-bottom: 0; }
+.wa-vnext__schedule-section h3 { color: var(--wa-ink); font-size: 13px; line-height: 18px; margin: 0; }
+.wa-vnext__schedule-repeat-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) minmax(120px, .7fr) minmax(0, 1fr); }
+.wa-vnext__schedule-cron-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.wa-vnext__schedule-repeat-grid .ant-select { width: 100%; }
+.wa-vnext__schedule-repeat-detail { grid-column: 1 / -1; max-width: 260px; }
+.wa-vnext__schedule-cron-toggle { justify-self: start; padding-inline: 0; }
+.wa-vnext__schedule-previewing { color: #166534; font-size: 12px; font-weight: 650; }
+.wa-vnext__schedule-footer { align-items: center; border-top: 1px solid var(--wa-line); display: flex; gap: 8px; justify-content: flex-end; padding-top: 14px; }
+.wa-vnext__schedule-review-panel { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; display: grid; gap: 16px; padding: 16px; }
+.wa-vnext__schedule-review-panel h2, .wa-vnext__schedule-accepted-panel h2 { color: var(--wa-ink); font-size: 15px; line-height: 21px; margin: 0; }
+.wa-vnext__schedule-review-details { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
+.wa-vnext__schedule-review-details div { display: grid; gap: 3px; min-width: 0; }
+.wa-vnext__schedule-review-details dt { color: var(--wa-muted); font-size: 11px; font-weight: 650; }
+.wa-vnext__schedule-review-details dd { color: var(--wa-ink); font-size: 12px; margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__schedule-fire-preview { border-top: 1px solid #bbf7d0; display: grid; gap: 8px; padding-top: 14px; }
+.wa-vnext__schedule-fire-preview strong { color: #166534; font-size: 12px; }
+.wa-vnext__schedule-accepted-panel { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; display: grid; gap: 8px; padding: 18px; }
+.wa-vnext__schedule-accepted-panel p { color: #166534; font-size: 13px; font-weight: 650; margin: 0; }
+.wa-vnext__schedule-accepted-panel span { color: #475467; font-size: 12px; line-height: 18px; }
+.wa-vnext-schedule-drawer .ant-drawer-content { background: var(--wa-surface); }
+.wa-vnext-schedule-drawer .ant-drawer-header { border-bottom-color: var(--wa-line); }
+.wa-vnext-schedule-drawer .ant-drawer-title, .wa-vnext-schedule-drawer .ant-drawer-close { color: var(--wa-ink); }
+.wa-vnext-schedule-drawer .ant-drawer-body { padding: 20px; }
+.wa-vnext-schedule-modal .ant-modal-close { color: var(--wa-muted); }
+.wa-vnext-schedule-modal .ant-modal-close:hover { background: var(--wa-subtle); color: var(--wa-ink); }
+.wa-vnext-schedule-modal .ant-modal-close:focus-visible { outline: 2px solid color-mix(in srgb, var(--wa-blue) 45%, transparent); outline-offset: 1px; }
 .wa-vnext button:focus-visible, .wa-vnext a:focus-visible, .wa-vnext input:focus-visible, .wa-vnext textarea:focus-visible, .wa-vnext select:focus-visible, .wa-vnext__table-wrap:focus-visible { outline: 3px solid rgba(23, 92, 211, .25); outline-offset: 2px; }
 .wa-vnext-drawer .ant-drawer-content { background: var(--wa-sidebar, #101828); color: #fff; }
 .wa-vnext-drawer .ant-drawer-header { border-bottom-color: #344054; min-height: 52px; padding: 0 16px; }
@@ -752,16 +995,35 @@ export const workflowActivityVNextCss = `
   .wa-vnext__account-profile, .wa-vnext__account-section-heading { align-items: stretch; flex-direction: column; }
   .wa-vnext__account-profile > .ant-btn, .wa-vnext__account-section-heading > .ant-btn { width: 100%; }
   .wa-vnext__state--compact { padding: 18px; }
+  .wa-vnext__schedule-toolbar, .wa-vnext__schedule-row { align-items: stretch; flex-direction: column; }
+  .wa-vnext__schedule-toolbar--actions { align-items: flex-end; flex-direction: row; }
+  .wa-vnext__schedule-toolbar .ant-space, .wa-vnext__schedule-row .ant-space { width: 100%; }
+  .wa-vnext__schedule-toolbar--actions .ant-space { width: auto; }
+  .wa-vnext__schedule-toolbar .ant-btn, .wa-vnext__schedule-row .ant-btn { flex: 1 1 auto; }
   .wa-vnext__template-toolbar { align-items: stretch; flex-direction: column; }
   .wa-vnext__template-search { flex-basis: auto; max-width: none; width: 100%; }
   .wa-vnext__template-sort { align-items: stretch; display: grid; gap: 6px; width: 100%; }
   .wa-vnext__template-sort .ant-select { min-width: 0; width: 100%; }
   .wa-vnext__publish-review-item { gap: 6px; padding-block: 10px; }
 }
+@media (max-width: 767px) {
+  .wa-vnext-schedule-modal .ant-modal-content { padding: 18px; }
+  .wa-vnext__schedule-failure { align-items: flex-start; display: grid; grid-template-columns: auto minmax(0, 1fr); }
+  .wa-vnext__schedule-failure .ant-alert-icon { grid-column: 1; grid-row: 1; }
+  .wa-vnext__schedule-failure .ant-alert-section, .wa-vnext__schedule-failure .ant-alert-content { grid-column: 2; grid-row: 1; }
+  .wa-vnext__schedule-failure .ant-alert-action, .wa-vnext__schedule-failure .ant-alert-actions { grid-column: 2; margin-inline-start: 0; margin-top: 10px; }
+  .wa-vnext__schedule-repeat-grid, .wa-vnext__schedule-cron-grid, .wa-vnext__schedule-review-details, .wa-vnext__schedule-detail-facts { grid-template-columns: 1fr; }
+  .wa-vnext__schedule-context { align-items: flex-start; flex-direction: column; }
+  .wa-vnext__schedule-context strong { text-align: left; }
+  .wa-vnext__schedule-history-header { flex-direction: column; }
+  .wa-vnext__schedule-history-header a { align-self: flex-start; }
+  .wa-vnext__schedule-footer { align-items: stretch; flex-direction: column-reverse; }
+  .wa-vnext__schedule-footer .ant-btn { width: 100%; }
+}
 @media (max-width: 360px) {
   .wa-vnext__settings-actions.ant-space { grid-template-columns: 1fr; }
   .wa-vnext__state--compact .ant-alert { align-items: flex-start; }
   .wa-vnext__state--compact .ant-alert-action { margin-inline-start: 0; margin-top: 8px; }
 }
-@media (prefers-reduced-motion: reduce) { .wa-vnext *, .wa-vnext *::before, .wa-vnext *::after { scroll-behavior: auto !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { .wa-vnext *, .wa-vnext *::before, .wa-vnext *::after { animation: none !important; scroll-behavior: auto !important; transition: none !important; } }
 `;

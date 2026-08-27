@@ -487,6 +487,22 @@ or unavailable state and does not issue an unfiltered Runs query. Removing the
 filter returns to global Activity. The UI must not substitute Workflow name,
 `memberId`, `publishedServiceId`, or a parsed actor string.
 
+Applied Workflow, Schedule, and source scope chips form a contextual row above
+the editable Activity search, status, source, and date controls. These two
+groups must not visually collapse into one control row: when contextual chips
+exist, keep a 12px vertical interval before the editable toolbar, including
+when chips wrap on narrower viewports. When no contextual chip exists, do not
+render an empty context row or reserve its interval.
+
+Submitting the editable Activity controls is an explicit Search command. The
+Search button enters a stable pending state immediately, blocks duplicate
+submission, and remains pending until the request for that submitted filter
+set settles. Keep already committed ledger rows mounted while Search is
+pending when the active query already owns those rows; a new URL-backed filter
+key may use the existing ledger loading surface. Initial page loading and
+background query revalidation must not impersonate a user-issued Search
+command.
+
 ### Immutable Run Detail
 
 Run detail loads summary/detail and graph independently so a graph failure does
@@ -664,10 +680,11 @@ hierarchy and density while using production tokens and real data states.
 | Run | Observation delayed | Accepted receipt plus projection-delay copy | Retry observation/Open Activity |
 | Run | Submission failed | Safe error, editable input | Retry |
 | Activity | Loading | Stable ledger skeleton | Wait |
+| Activity | Searching | Committed ledger remains visible; Search is pending and disabled | Wait |
 | Activity | Empty | No observed Runs for active server filters | Clear filters or Run a Workflow |
 | Activity | Error | Query failure distinct from empty | Retry |
 | Activity | Unknown status | Neutral Unknown label plus raw value | Open detail |
-| Run detail | Loading | Identity shell and independent detail/graph loading | Wait |
+| Run detail | Loading | Stable Run detail workspace skeleton with one accessible status; history, graph, logs, and inspector geometry stay visible without invented facts or repeated loading copy | Wait or return to Activity |
 | Run detail | Not found | Scoped non-disclosure-safe not-found state | Back to Activity |
 | Run detail | Running | Partial committed trace | Refresh through bounded polling |
 | Run detail | Completed | Final output and immutable trace | Run again when eligible |
@@ -699,6 +716,9 @@ hierarchy and density while using production tokens and real data states.
   another scope's workbench.
 - Mutations disable duplicate submission and preserve a request receipt. They
   do not optimistically synthesize authoritative IDs or projection versions.
+- User-issued async commands acknowledge immediately, remain pending until
+  their own request settles, and reject duplicate submission. Background
+  fetching does not activate an unrelated command's pending presentation.
 - Save and Run failures keep user-authored input. A retry repeats only the
   user's explicit action.
 - `Open Activity` from a Workflow carries the catalogue row's authoritative
@@ -707,6 +727,16 @@ hierarchy and density while using production tokens and real data states.
   trustworthy association; name matching is insufficient.
 - Browser back closes modal/detail layers before leaving the owning workbench
   when those layers are URL-addressable.
+- Manual Run detail refresh preserves the currently committed history, graph,
+  logs, and inspector while revalidating all three sources. The Refresh action
+  changes to a disabled `Refreshing…` state immediately. The full Run workspace
+  simultaneously enters one accessible busy state that keeps committed content
+  visible beneath a light interaction-blocking overlay and a single centered
+  refresh indicator. It never returns to the initial skeleton, never shifts the
+  page shell, and leaves global navigation available. Completion removes the
+  overlay and reports complete success or any partial failure through one toast;
+  unchanged data is still a successful refresh and never causes a blank-state
+  flash.
 - Copy actions report success or failure without changing layout. Export uses
   structured serialization where available rather than string concatenation.
 
