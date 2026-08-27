@@ -1,0 +1,54 @@
+name: long_running_task_handoff
+description: >-
+  Emit a durable work request, suspend until an external worker returns the task_completed signal, and review the callback payload before completing. Use this starter when work cannot finish inside one workflow turn and the external worker can preserve the run ID, signal name, and callback payload required to resume the waiting step. A worker or callback adapter must be connected separately.
+roles:
+  - id: result_reviewer
+    name: Result Reviewer
+    system_prompt: >-
+      Review an external worker callback for completion status, evidence, deliverables, errors, and unresolved risks. Never invent missing artifacts or claim success when the payload is ambiguous. Return concise Markdown with accepted deliverables and required follow-up.
+    temperature: 0.1
+    max_tokens: 1200
+    allowed_tools: []
+steps:
+  - id: capture_handoff_request
+    type: assign
+    parameters:
+      target: handoff_request
+      value: "$input"
+    next: request_external_work
+
+  - id: request_external_work
+    type: emit
+    parameters:
+      event_type: starter.long_running_task.requested
+      payload: "${handoff_request}"
+    next: initialize_callback_payload
+
+  - id: initialize_callback_payload
+    type: assign
+    parameters:
+      target: callback_payload
+      value: "[NO CALLBACK PAYLOAD RECEIVED]"
+    next: wait_for_task_completion
+
+  - id: wait_for_task_completion
+    type: wait_signal
+    parameters:
+      signal_name: task_completed
+      prompt: Waiting for the external worker to return task_completed.
+      timeout_seconds: "86400"
+    next: review_callback
+
+  - id: review_callback
+    type: llm_call
+    target_role: result_reviewer
+    parameters:
+      prompt_prefix: >-
+        Compare this task_completed callback payload with the original request and report whether the requested deliverables are actually present. Treat [NO CALLBACK PAYLOAD RECEIVED] as a missing result that cannot be accepted. Original request: ${handoff_request} Callback payload:
+    next: record_handoff_result
+
+  - id: record_handoff_result
+    type: assign
+    parameters:
+      target: long_running_task_result
+      value: "${steps.review_callback.output}"
