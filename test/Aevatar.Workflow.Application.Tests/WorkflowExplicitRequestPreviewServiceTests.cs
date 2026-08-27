@@ -3,6 +3,9 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.ExternalCapabilities;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Validation;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Application.Tests;
@@ -307,6 +310,68 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
         await action.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
     }
 
+    [Fact]
+    public async Task PreviewAsync_WhenLlmCallOmitsAllowedTools_ShouldRejectWithPublicationReadinessSemantics()
+    {
+        var service = new WorkflowExplicitRequestPreviewService(
+            new PublicationPolicyParser(),
+            new ThrowingReadinessPort());
+
+        var action = () => service.PreviewAsync(new WorkflowExplicitRequestPreviewRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-alpha",
+                "authenticated-owner-alpha",
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer("bearer-preview-secret")),
+            """
+            name: main
+            roles:
+              - id: assistant
+                name: Assistant
+            steps:
+              - id: reply
+                type: llm_call
+                target_role: assistant
+            """,
+            null,
+            ExternalCapabilityExecutionMode.Interactive,
+            WorkflowId: "wf-alpha",
+            RevisionId: "rev-alpha"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*must declare an explicit allowed_tools scope*");
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenLlmCallDeclaresEmptyAllowedTools_ShouldAcceptPublicationReadiness()
+    {
+        var service = new WorkflowExplicitRequestPreviewService(
+            new PublicationPolicyParser(),
+            new ThrowingReadinessPort());
+
+        var result = await service.PreviewAsync(new WorkflowExplicitRequestPreviewRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-alpha",
+                "authenticated-owner-alpha",
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer("bearer-preview-secret")),
+            """
+            name: main
+            roles:
+              - id: assistant
+                name: Assistant
+            steps:
+              - id: reply
+                type: llm_call
+                target_role: assistant
+                allowed_tools: []
+            """,
+            null,
+            ExternalCapabilityExecutionMode.Interactive,
+            WorkflowId: "wf-alpha",
+            RevisionId: "rev-alpha"));
+
+        result.Items.Should().BeEmpty();
+    }
+
     private static NyxIdRequestSelector RequestSelector(
         string pathTemplate,
         NyxIdRequestMethod method,
@@ -368,6 +433,58 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
             IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class PublicationPolicyParser : IWorkflowDefinitionParser
+    {
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default) =>
+            ParseCore(workflowYaml, requireExplicitLlmAgentToolScopes: false);
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlForPublicationAsync(
+            string workflowYaml,
+            CancellationToken ct = default) =>
+            ParseCore(workflowYaml, requireExplicitLlmAgentToolScopes: true);
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        private static Task<WorkflowYamlParseResult> ParseCore(
+            string workflowYaml,
+            bool requireExplicitLlmAgentToolScopes)
+        {
+            try
+            {
+                var workflow = new WorkflowParser().Parse(workflowYaml);
+                var errors = WorkflowValidator.Validate(
+                    workflow,
+                    new WorkflowValidator.WorkflowValidationOptions
+                    {
+                        RequireExplicitLlmAgentToolScopes = requireExplicitLlmAgentToolScopes,
+                    },
+                    availableWorkflowNames: null);
+                return Task.FromResult(errors.Count == 0
+                    ? WorkflowYamlParseResult.Success(
+                        workflow.Name,
+                        WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow))
+                    : WorkflowYamlParseResult.Invalid(string.Join("; ", errors)));
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult(WorkflowYamlParseResult.Invalid(ex.Message));
+            }
+        }
+    }
+
+    private sealed class ThrowingReadinessPort : IExternalWorkflowCapabilityReadinessPort
+    {
+        public Task<ExternalCapabilityReadiness> InspectAsync(
+            InspectExternalWorkflowCapabilityReadinessRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Readiness should not be inspected for this test.");
     }
 
     private sealed class RecordingReadinessPort(ExternalCapabilityReadiness result) :

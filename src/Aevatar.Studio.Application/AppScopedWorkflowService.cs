@@ -119,7 +119,7 @@ public sealed class AppScopedWorkflowService
 
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedYaml = NormalizeRequired(request.Yaml, nameof(request.Yaml));
-        var parsed = await _workflowDefinitionParser.ParseWorkflowYamlAsync(normalizedYaml, ct);
+        var parsed = await _workflowDefinitionParser.ParseWorkflowYamlForPublicationAsync(normalizedYaml, ct);
         if (!parsed.Succeeded)
             throw new InvalidOperationException(parsed.Error);
 
