@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Persistence;
 using Google.Protobuf;
 using Orleans.Storage;
@@ -12,7 +13,8 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 internal sealed class RuntimeActorGrainStateStorageSerializer(
     IGrainStorageSerializer rollingCompatibleJsonSerializer) : IGrainStorageSerializer
 {
-    private static ReadOnlySpan<byte> LegacyJsonReferenceToken => "\"$id\""u8;
+    private static ReadOnlySpan<byte> LegacyJsonReferenceTokenValue => "$id"u8;
+    private static ReadOnlySpan<byte> Utf8ByteOrderMark => "\uFEFF"u8;
 
     public BinaryData Serialize<T>(T input)
     {
@@ -42,7 +44,7 @@ internal sealed class RuntimeActorGrainStateStorageSerializer(
 
         var bytes = input.ToArray();
         if (typeof(T) == typeof(RuntimeActorGrainState) &&
-            bytes.AsSpan().SequenceEqual(LegacyJsonReferenceToken))
+            IsLegacyJsonReferenceToken(bytes))
         {
             var recoveryState = new RuntimeActorGrainState
             {
@@ -56,6 +58,30 @@ internal sealed class RuntimeActorGrainStateStorageSerializer(
         }
 
         return rollingCompatibleJsonSerializer.Deserialize<T>(input);
+    }
+
+    private static bool IsLegacyJsonReferenceToken(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.StartsWith(Utf8ByteOrderMark))
+            bytes = bytes[Utf8ByteOrderMark.Length..];
+
+        try
+        {
+            var reader = new Utf8JsonReader(bytes, new JsonReaderOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+            });
+
+            return reader.Read() &&
+                   reader.TokenType == JsonTokenType.String &&
+                   reader.ValueTextEquals(LegacyJsonReferenceTokenValue) &&
+                   !reader.Read();
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static void EnsureJsonObject(BinaryData serialized, Type stateType)

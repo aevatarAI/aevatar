@@ -112,15 +112,42 @@ public sealed class RuntimeActorGrainStateStorageSerializerTests
         serializer.Serialize(state).ToArray().Should().Equal(source);
     }
 
-    [Fact]
-    public void Serializer_WhenLegacyRowHasAnyOtherInvalidShape_ShouldFailClosed()
+    [Theory]
+    [InlineData(" \t\"$id\"\r\n")]
+    [InlineData("\uFEFF\"$id\"")]
+    [InlineData("\"\\u0024id\"")]
+    public void Serializer_WhenLegacyReferenceTokenHasEquivalentJsonEncoding_ShouldPreserveSourcePayload(
+        string json)
+    {
+        var serializer = new RuntimeActorGrainStateStorageSerializer(new RejectingLegacySerializer());
+        var source = Encoding.UTF8.GetBytes(json);
+
+        var state = serializer.Deserialize<RuntimeActorGrainState>(BinaryData.FromBytes(source));
+
+        state.StorageRecovery.Should().NotBeNull();
+        state.StorageRecovery!.Reason.Should().Be(
+            RuntimeActorStateStorageRecoveryReason.LegacyJsonReferenceToken);
+        state.StorageRecovery.SourcePayload.ToByteArray().Should().Equal(source);
+        serializer.Serialize(state).ToArray().Should().Equal(source);
+    }
+
+    [Theory]
+    [InlineData("\"unexpected\"")]
+    [InlineData("null")]
+    [InlineData("42")]
+    [InlineData("[\"$id\"]")]
+    [InlineData("{\"value\":\"$id\"}")]
+    [InlineData("\"$id\" true")]
+    [InlineData("/* comment */ \"$id\"")]
+    [InlineData("\"$id")]
+    public void Serializer_WhenLegacyRowHasAnyOtherInvalidShape_ShouldFailClosed(string json)
     {
         var expected = new InvalidOperationException("legacy parser rejected payload");
         var serializer = new RuntimeActorGrainStateStorageSerializer(
             new RejectingLegacySerializer(expected));
 
         var act = () => serializer.Deserialize<RuntimeActorGrainState>(
-            BinaryData.FromBytes(Encoding.UTF8.GetBytes("\"unexpected\"")));
+            BinaryData.FromBytes(Encoding.UTF8.GetBytes(json)));
 
         act.Should().Throw<InvalidOperationException>().Which.Should().BeSameAs(expected);
     }

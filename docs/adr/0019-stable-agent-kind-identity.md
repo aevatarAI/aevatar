@@ -71,8 +71,8 @@ wire. This separation permits a narrow serializer recovery policy without
 changing `StreamTopologyGrain` storage or making rows unreadable to an older
 silo during a rolling deploy.
 
-An outer row whose payload is exactly the invalid legacy JSON reference token
-`"$id"` materializes as the typed Protobuf
+An outer row whose complete JSON document semantically consists of exactly the
+invalid legacy root string `$id` materializes as the typed Protobuf
 `RuntimeActorStateStorageRecovery` marker. The grain reports itself as
 uninitialized, subscribes to its inbox, and rejects delivery until a caller
 supplies an authoritative Agent Kind. It never acknowledges or drops the
