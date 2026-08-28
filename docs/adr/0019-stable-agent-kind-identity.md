@@ -71,8 +71,8 @@ wire. This separation permits a narrow serializer recovery policy without
 changing `StreamTopologyGrain` storage or making rows unreadable to an older
 silo during a rolling deploy.
 
-An outer row whose rolling-compatible Orleans JSON reader yields exactly one
-root string token `$id` materializes as the typed Protobuf
+An outer row whose rolling-compatible Orleans JSON reader yields the root
+string token `$id` materializes as the typed Protobuf
 `RuntimeActorStateStorageRecovery` marker. The grain reports itself as
 uninitialized, subscribes to its inbox, and rejects delivery until a caller
 supplies an authoritative Agent Kind. It never acknowledges or drops the
@@ -80,7 +80,10 @@ pending envelope. For projection scope actors, automatic failure recovery may
 read that kind only from the durable, exact stream-forwarding binding and then
 call `CreateByKindAsync` with the same opaque actor ID. Successful activation
 replays business state from committed events and replaces the invalid row;
-failed reconstruction preserves the original bytes for a later retry. No
+failed reconstruction preserves the original bytes for a later retry. Orleans
+attempts to convert the first root value before it validates trailing content;
+the recovery matcher follows that exact boundary. Any trailing corrupt bytes
+remain preserved evidence and never become state. No
 actor-ID parsing, process-local identity registry, or query-time event replay
 is permitted in this path.
 

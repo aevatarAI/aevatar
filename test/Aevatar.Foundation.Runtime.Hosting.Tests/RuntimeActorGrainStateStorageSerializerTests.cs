@@ -8,6 +8,7 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Storage;
@@ -118,7 +119,10 @@ public sealed class RuntimeActorGrainStateStorageSerializerTests
     [InlineData("\"\\u0024id\"")]
     [InlineData("\0\"$id\"\0")]
     [InlineData("\u00A0\"$id\"\u00A0")]
-    public void Serializer_WhenLegacyReferenceTokenHasEquivalentJsonEncoding_ShouldPreserveSourcePayload(
+    [InlineData("\"$id\" true")]
+    [InlineData("\0\"$id\"\0true")]
+    [InlineData("\"$id\" trailing-corruption")]
+    public void Serializer_WhenLegacyReferenceTokenIsFirstOrleansRootValue_ShouldPreserveSourcePayload(
         string json)
     {
         var serializer = new RuntimeActorGrainStateStorageSerializer(new RejectingLegacySerializer());
@@ -134,13 +138,32 @@ public sealed class RuntimeActorGrainStateStorageSerializerTests
     }
 
     [Theory]
+    [InlineData("\"$id\" true")]
+    [InlineData("\"$id\" trailing-corruption")]
+    public void RollingOrleansJsonSerializer_WhenLegacyRootHasTrailingContent_ShouldFailOnRootConversionFirst(
+        string json)
+    {
+        using var host = BuildRuntimeHost();
+        var options = host.Services.GetRequiredService<IOptionsMonitor<MemoryGrainStorageOptions>>();
+        var rollingSerializer = options
+            .Get(OrleansRuntimeConstants.GrainStateStorageName)
+            .GrainStorageSerializer;
+
+        var act = () => rollingSerializer.Deserialize<RuntimeActorGrainState>(
+            BinaryData.FromBytes(Encoding.UTF8.GetBytes(json)));
+
+        act.Should().Throw<JsonSerializationException>()
+            .WithMessage("Error converting value \"$id\"*");
+    }
+
+    [Theory]
     [InlineData("\"unexpected\"")]
     [InlineData("null")]
     [InlineData("42")]
     [InlineData("[\"$id\"]")]
     [InlineData("{\"value\":\"$id\"}")]
-    [InlineData("\"$id\" true")]
-    [InlineData("\0\"$id\"\0true")]
+    [InlineData("true \"$id\"")]
+    [InlineData("\"unexpected\" \"$id\"")]
     [InlineData("/* comment */ \"$id\"")]
     [InlineData("\"$id")]
     public void Serializer_WhenLegacyRowHasAnyOtherInvalidShape_ShouldFailClosed(string json)

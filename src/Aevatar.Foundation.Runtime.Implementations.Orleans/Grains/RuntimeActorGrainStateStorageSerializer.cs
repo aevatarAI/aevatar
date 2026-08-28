@@ -64,6 +64,9 @@ internal sealed class RuntimeActorGrainStateStorageSerializer(
         // Orleans' JSON storage serializer crosses the same BinaryData.ToString()
         // boundary and uses Newtonsoft. Reusing that reader family matters for
         // legacy rows with reader-ignored NUL or non-breaking-space padding.
+        // Its typed conversion fails on the first root value before it validates
+        // any trailing corrupt content, so only that root token is authoritative
+        // for recognizing this otherwise unreadable legacy row.
         var text = input.ToString();
         if (text.Length > 0 && text[0] == '\uFEFF')
             text = text[1..];
@@ -74,7 +77,6 @@ internal sealed class RuntimeActorGrainStateStorageSerializer(
             using var reader = new JsonTextReader(textReader)
             {
                 DateParseHandling = DateParseHandling.None,
-                SupportMultipleContent = false,
             };
 
             return reader.Read() &&
@@ -82,8 +84,7 @@ internal sealed class RuntimeActorGrainStateStorageSerializer(
                    string.Equals(
                        reader.Value as string,
                        LegacyJsonReferenceTokenValue,
-                       StringComparison.Ordinal) &&
-                   !reader.Read();
+                       StringComparison.Ordinal);
         }
         catch (JsonReaderException)
         {
