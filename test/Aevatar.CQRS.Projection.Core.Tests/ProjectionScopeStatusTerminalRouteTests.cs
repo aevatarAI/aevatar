@@ -227,6 +227,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             .ThrowAsync<ProjectionScopeStatusPhaseBProofUnavailableException>();
         exception.Which.MaterializerActorId.Should().Be(TerminalActorId);
         exception.Which.SourceScopeActorId.Should().Be(SourceScopeActorId);
+        exception.Which.SourceEventId.Should().Be("evt-bound-live-proof-unavailable");
         exception.Which.RouteEpoch.Should().Be(5);
         exception.Which.Phase.Should().Be(phase);
         exception.Which.WriterRole.Should().Be(ProjectionScopeStatusActorRole.TerminalWriter);
@@ -242,6 +243,38 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             recovered.Outbox.Sent.Should().ContainSingle(message =>
                 message.Message is ProjectionScopeStatusWriterCaughtUpEvent);
         }
+    }
+
+    [Fact]
+    public async Task RetryCompletionCursor_ShouldFingerprintCommittedPublicationBytes()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync();
+        var sourceState = BuildSourceState();
+        sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(5);
+        var stateEvent = BuildStateEvent(
+            version: 12,
+            eventId: "evt-same-coordinate",
+            new ProjectionScopeWatermarkAdvancedEvent());
+        var firstEnvelope = BuildForwardedEnvelope(sourceState, stateEvent.Clone());
+        var duplicateEnvelope = BuildForwardedEnvelope(sourceState.Clone(), stateEvent.Clone());
+        var conflictingState = sourceState.Clone();
+        conflictingState.HighestSeenVersion = 12;
+        var conflictingEnvelope = BuildForwardedEnvelope(conflictingState, stateEvent.Clone());
+
+        var first = harness.Agent.ResolveHandledRetryCoalescingCursor(firstEnvelope);
+        var duplicate = harness.Agent.ResolveHandledRetryCoalescingCursor(duplicateEnvelope);
+        var conflicting = harness.Agent.ResolveHandledRetryCoalescingCursor(conflictingEnvelope);
+
+        first.Should().NotBeNull();
+        duplicate.Should().NotBeNull();
+        conflicting.Should().NotBeNull();
+        first!.ValueIdentity.Should().StartWith("sha256:");
+        RuntimeEnvelopeRetryCoalescingCursor.Compare(first, duplicate!)
+            .Should().Be(RuntimeEnvelopeRetryCoalescingComparison.Exact,
+                "transport envelope identity is not part of the committed value");
+        RuntimeEnvelopeRetryCoalescingCursor.Compare(first, conflicting!)
+            .Should().Be(RuntimeEnvelopeRetryCoalescingComparison.Conflict,
+                "the same version and event id cannot hide different committed state bytes");
     }
 
     [Fact]

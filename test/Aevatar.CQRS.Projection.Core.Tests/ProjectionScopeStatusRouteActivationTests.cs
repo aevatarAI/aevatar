@@ -1563,6 +1563,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             .ThrowAsync<ProjectionScopeStatusPhaseBProofUnavailableException>();
         exception.Which.MaterializerActorId.Should().Be(LegacyActorId);
         exception.Which.SourceScopeActorId.Should().Be(SourceScopeActorId);
+        exception.Which.SourceEventId.Should().Be("source-evt-3");
         exception.Which.RouteEpoch.Should().Be(8);
         exception.Which.Phase.Should().Be(phase);
         exception.Which.WriterRole.Should().Be(ProjectionScopeStatusActorRole.LegacyWriter);

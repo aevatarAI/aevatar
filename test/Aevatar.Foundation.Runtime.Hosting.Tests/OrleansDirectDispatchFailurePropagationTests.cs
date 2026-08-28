@@ -440,13 +440,59 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             secondRequest.DueTime.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(24));
             secondRequest.DueTime.Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(30));
             firstRequest.CoalescingCursor.Should().Be(
-                new RuntimeEnvelopeRetryCoalescingCursor("source-phase-b-proof", 11));
+                new RuntimeEnvelopeRetryCoalescingCursor(
+                    "source-phase-b-proof",
+                    11,
+                    "phase-b-proof-event"));
             secondRequest.CoalescingCursor.Should().Be(firstRequest.CoalescingCursor);
             firstRequest.TriggerEnvelope.Runtime.Retry.Attempt.Should().Be(4);
             secondRequest.TriggerEnvelope.Runtime.Retry.Attempt.Should().Be(5);
             firstRequest.TriggerEnvelope.Runtime.Retry.OriginEventId.Should().Be("phase-b-proof-lineage");
             secondRequest.TriggerEnvelope.Runtime.Retry.OriginEventId.Should().Be("phase-b-proof-lineage");
             RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_WhenNewerAuthoritativeObservationSucceeds_ShouldCompleteOlderCoalescedRetry()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var callbackScheduler = new CredentialGuardedRecordingCallbackScheduler();
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "3",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "0",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+        var host = await StartSiloHostAsync(
+            ReserveTcpPort(),
+            ReserveTcpPort(),
+            callbackScheduler: callbackScheduler);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(actorId);
+
+            await grain.HandleEnvelopeAsync(
+                CreateEnvelope("retry-until-resolved").ToByteArray());
+            await grain.HandleEnvelopeAsync(
+                CreateEnvelope("retry-coalescing-complete").ToByteArray());
+
+            callbackScheduler.TimeoutRequests.Should().ContainSingle();
+            callbackScheduler.CompletedRetries.Should().ContainSingle().Which.Should().Be(
+                new RuntimeEnvelopeRetryCoalescingCursor(
+                    "source-phase-b-proof",
+                    12,
+                    "phase-b-proof-event-12"));
         }
         finally
         {
@@ -624,6 +670,55 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         }
     }
 
+    [Fact]
+    public async Task HandleEnvelopeAsync_SourceCoordinateConflict_ShouldPropagateShedAndRedeliver()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "0",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(siloPort, gatewayPort);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = CreateEnvelope("projection-source-coordinate-conflict");
+
+            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
+                .Should().ThrowExactlyAsync<ProjectionSourceCoordinateConflictException>()
+                .WithMessage("*cannot accept conflicting event*");
+            await RetryAwareDirectDispatchAgent.WaitForDeactivationAsync(TimeSpan.FromSeconds(20));
+
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(1);
+            RetryAwareDirectDispatchAgent.DeactivationCount.Should().Be(1,
+                "the stream delivery must remain unacknowledged after a source-coordinate conflict");
+
+            await grain.HandleEnvelopeAsync(envelope.ToByteArray());
+            await RetryAwareDirectDispatchAgent.WaitForSuccessAsync(
+                envelope.Id,
+                TimeSpan.FromSeconds(20));
+
+            RetryAwareDirectDispatchAgent.ActivationCount.Should().Be(2);
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
     private static async Task<IHost> StartSiloHostAsync(
         int siloPort,
         int gatewayPort,
@@ -736,9 +831,13 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         }
     }
 
-    private sealed class CredentialGuardedRecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    private sealed class CredentialGuardedRecordingCallbackScheduler
+        : IActorRuntimeCallbackScheduler,
+          IRuntimeEnvelopeRetryCoalescingCallbackScheduler
     {
         public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+
+        public List<RuntimeEnvelopeRetryCoalescingCursor> CompletedRetries { get; } = [];
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
@@ -777,6 +876,17 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         {
             _ = actorId;
             ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task CompleteRuntimeEnvelopeRetryAsync(
+            string actorId,
+            RuntimeEnvelopeRetryCoalescingCursor cursor,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            CompletedRetries.Add(cursor);
             return Task.CompletedTask;
         }
     }
@@ -933,7 +1043,8 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
     }
 
     [GAgent("tests.retry-aware-direct-dispatch")]
-    public sealed class RetryAwareDirectDispatchAgent : IAgent
+    public sealed class RetryAwareDirectDispatchAgent : IAgent,
+        IRuntimeEnvelopeRetryCoalescingCompletionSource
     {
         private static readonly Lock SyncLock = new();
         private static readonly Dictionary<string, int> AttemptsByEnvelopeId = new(StringComparer.Ordinal);
@@ -946,6 +1057,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         private static int _runtimeRetryableFailuresRemaining;
         private static int _retryUntilResolvedSchedulerFailuresRemaining;
         private static int _projectionWriteRejectionsRemaining;
+        private static int _projectionSourceConflictsRemaining;
 
         public static void Reset()
         {
@@ -960,6 +1072,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 _runtimeRetryableFailuresRemaining = 1;
                 _retryUntilResolvedSchedulerFailuresRemaining = 1;
                 _projectionWriteRejectionsRemaining = 1;
+                _projectionSourceConflictsRemaining = 1;
             }
         }
 
@@ -1044,6 +1157,24 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             if (payload == "always-fail-retry-exhausted")
                 throw new InvalidOperationException("always-fail-retry-exhausted");
 
+            if (payload == "projection-source-coordinate-conflict" &&
+                Interlocked.Exchange(ref _projectionSourceConflictsRemaining, 0) == 1)
+            {
+                throw new ProjectionSourceCoordinateConflictException(
+                    new ProjectionSourceCoordinate
+                    {
+                        ActorId = "source-conflict",
+                        StateVersion = 23,
+                        EventId = "evt-committed-23",
+                    },
+                    new ProjectionSourceCoordinate
+                    {
+                        ActorId = "source-conflict",
+                        StateVersion = 23,
+                        EventId = "evt-received-23",
+                    });
+            }
+
             if (payload == "retry-until-resolved" ||
                 (payload == "retry-until-resolved-scheduler-failure" &&
                  Interlocked.Exchange(ref _retryUntilResolvedSchedulerFailuresRemaining, 0) == 1))
@@ -1052,6 +1183,8 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                     Id,
                     "source-phase-b-proof",
                     11,
+                    "phase-b-proof-event",
+                    "phase-b-proof-event",
                     7,
                     ProjectionScopeStatusRoutePhase.Warming,
                     ProjectionScopeStatusActorRole.TerminalWriter);
@@ -1102,6 +1235,24 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             }
 
             return Task.CompletedTask;
+        }
+
+        public RuntimeEnvelopeRetryCoalescingCursor? ResolveHandledRetryCoalescingCursor(
+            EventEnvelope envelope)
+        {
+            if (envelope.Payload?.Is(StringValue.Descriptor) != true ||
+                !string.Equals(
+                    envelope.Payload.Unpack<StringValue>().Value,
+                    "retry-coalescing-complete",
+                    StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return new RuntimeEnvelopeRetryCoalescingCursor(
+                "source-phase-b-proof",
+                12,
+                "phase-b-proof-event-12");
         }
 
         public Task<string> GetDescriptionAsync() =>

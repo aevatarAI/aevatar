@@ -74,15 +74,27 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
     public async Task ScheduleTimeoutAsync_WithCoalescingCursor_ShouldReuseOrSupersedeBySourceVersion()
     {
         using var scheduler = new InMemoryActorRuntimeCallbackScheduler(new RecordingStreamProvider());
-        var firstRequest = CreateCoalescedRequest(sequence: 10, envelopeId: "source-v10");
+        var firstRequest = CreateCoalescedRequest(
+            sequence: 10,
+            envelopeId: "source-v10",
+            valueIdentity: "evt-v10");
 
         var first = await scheduler.ScheduleTimeoutAsync(firstRequest);
         var duplicate = await scheduler.ScheduleTimeoutAsync(
-            CreateCoalescedRequest(sequence: 10, envelopeId: "duplicate-source-v10"));
+            CreateCoalescedRequest(
+                sequence: 10,
+                envelopeId: "duplicate-source-v10",
+                valueIdentity: "evt-v10"));
         var newer = await scheduler.ScheduleTimeoutAsync(
-            CreateCoalescedRequest(sequence: 11, envelopeId: "source-v11"));
+            CreateCoalescedRequest(
+                sequence: 11,
+                envelopeId: "source-v11",
+                valueIdentity: "evt-v11"));
         var stale = await scheduler.ScheduleTimeoutAsync(
-            CreateCoalescedRequest(sequence: 10, envelopeId: "stale-source-v10"));
+            CreateCoalescedRequest(
+                sequence: 10,
+                envelopeId: "stale-source-v10",
+                valueIdentity: "evt-v10"));
 
         duplicate.Generation.Should().Be(first.Generation);
         newer.Generation.Should().Be(first.Generation + 1);
@@ -90,13 +102,133 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         var current = GetScheduledCallback(scheduler, "status-materializer", "latest-source-observation");
         GetEnvelope(current!, "TriggerEnvelope")!.Id.Should().Be("source-v11");
 
-        await scheduler.CancelAsync(newer);
-        var rescheduled = await scheduler.ScheduleTimeoutAsync(
-            CreateCoalescedRequest(sequence: 11, envelopeId: "retry-source-v11"));
+        await FluentActions.Awaiting(() => scheduler.CancelAsync(newer))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*coalesced timeout contract*");
+        await FluentActions.Awaiting(() => scheduler.ScheduleTimeoutAsync(
+                CreateCoalescedRequest(
+                    sequence: 11,
+                    envelopeId: "conflicting-source-v11",
+                    valueIdentity: "evt-conflict-v11")))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*conflicting identities*");
+    }
 
-        rescheduled.Generation.Should().Be(newer.Generation + 1);
-        current = GetScheduledCallback(scheduler, "status-materializer", "latest-source-observation");
-        GetEnvelope(current!, "TriggerEnvelope")!.Id.Should().Be("retry-source-v11");
+    [Fact]
+    public async Task CompleteRuntimeEnvelopeRetryAsync_ShouldCancelPendingAndFenceDelayedOlderRetry()
+    {
+        using var scheduler = new InMemoryActorRuntimeCallbackScheduler(new RecordingStreamProvider());
+        var callbackId = RuntimeEnvelopeRetryCoalescingCallbackSlot.BuildCallbackId("source-scope");
+        var first = await scheduler.ScheduleTimeoutAsync(
+            CreateCoalescedRequest(
+                sequence: 10,
+                envelopeId: "source-v10",
+                valueIdentity: "evt-v10",
+                callbackId: callbackId));
+
+        await scheduler.CompleteRuntimeEnvelopeRetryAsync(
+            "status-materializer",
+            new RuntimeEnvelopeRetryCoalescingCursor("source-scope", 11, "evt-v11"));
+
+        GetScheduledCallback(scheduler, "status-materializer", callbackId).Should().BeNull();
+        await FluentActions.Awaiting(() => scheduler.CancelAsync(first))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*coalesced timeout contract*");
+        var delayed = await scheduler.ScheduleTimeoutAsync(
+            CreateCoalescedRequest(
+                sequence: 10,
+                envelopeId: "delayed-source-v10",
+                valueIdentity: "evt-v10",
+                callbackId: callbackId));
+        delayed.Generation.Should().Be(first.Generation);
+        GetScheduledCallback(scheduler, "status-materializer", callbackId).Should().BeNull();
+
+        var newerFailure = await scheduler.ScheduleTimeoutAsync(
+            CreateCoalescedRequest(
+                sequence: 12,
+                envelopeId: "source-v12",
+                valueIdentity: "evt-v12",
+                callbackId: callbackId));
+        newerFailure.Generation.Should().Be(first.Generation + 1);
+        GetScheduledCallback(scheduler, "status-materializer", callbackId).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task CompleteRuntimeEnvelopeRetryAsync_AtSameSequenceWithDifferentIdentity_ShouldFailClosed()
+    {
+        using var scheduler = new InMemoryActorRuntimeCallbackScheduler(new RecordingStreamProvider());
+        var callbackId = RuntimeEnvelopeRetryCoalescingCallbackSlot.BuildCallbackId("source-scope");
+        await scheduler.ScheduleTimeoutAsync(
+            CreateCoalescedRequest(
+                sequence: 10,
+                envelopeId: "source-v10",
+                valueIdentity: "evt-v10",
+                callbackId: callbackId));
+
+        await FluentActions.Awaiting(() => scheduler.CompleteRuntimeEnvelopeRetryAsync(
+                "status-materializer",
+                new RuntimeEnvelopeRetryCoalescingCursor(
+                    "source-scope",
+                    10,
+                    "evt-conflict-v10")))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*conflicting identities*");
+
+        GetScheduledCallback(scheduler, "status-materializer", callbackId).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task CompleteRuntimeEnvelopeRetryAsync_NewerSuccess_ShouldAdvanceCompletedWatermark()
+    {
+        using var scheduler = new InMemoryActorRuntimeCallbackScheduler(new RecordingStreamProvider());
+        var callbackId = RuntimeEnvelopeRetryCoalescingCallbackSlot.BuildCallbackId("source-scope");
+        await scheduler.ScheduleTimeoutAsync(CreateCoalescedRequest(
+            sequence: 10,
+            envelopeId: "source-v10",
+            valueIdentity: "evt-v10",
+            callbackId: callbackId));
+        await scheduler.CompleteRuntimeEnvelopeRetryAsync(
+            "status-materializer",
+            new RuntimeEnvelopeRetryCoalescingCursor("source-scope", 10, "evt-v10"));
+
+        await scheduler.CompleteRuntimeEnvelopeRetryAsync(
+            "status-materializer",
+            new RuntimeEnvelopeRetryCoalescingCursor("source-scope", 11, "evt-v11"));
+        var delayed = await scheduler.ScheduleTimeoutAsync(CreateCoalescedRequest(
+            sequence: 11,
+            envelopeId: "delayed-source-v11",
+            valueIdentity: "evt-v11",
+            callbackId: callbackId));
+
+        delayed.Generation.Should().Be(1);
+        GetScheduledCallback(scheduler, "status-materializer", callbackId).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CompleteRuntimeEnvelopeRetryAsync_BeforeAnyFailure_ShouldFenceDelayedOlderRetry()
+    {
+        using var scheduler = new InMemoryActorRuntimeCallbackScheduler(new RecordingStreamProvider());
+        var callbackId = RuntimeEnvelopeRetryCoalescingCallbackSlot.BuildCallbackId("source-scope");
+
+        await scheduler.CompleteRuntimeEnvelopeRetryAsync(
+            "status-materializer",
+            new RuntimeEnvelopeRetryCoalescingCursor("source-scope", 11, "evt-v11"));
+        var delayed = await scheduler.ScheduleTimeoutAsync(CreateCoalescedRequest(
+            sequence: 10,
+            envelopeId: "delayed-source-v10",
+            valueIdentity: "evt-v10",
+            callbackId: callbackId));
+
+        delayed.Generation.Should().Be(1);
+        GetScheduledCallback(scheduler, "status-materializer", callbackId).Should().BeNull();
+
+        var newerFailure = await scheduler.ScheduleTimeoutAsync(CreateCoalescedRequest(
+            sequence: 12,
+            envelopeId: "source-v12",
+            valueIdentity: "evt-v12",
+            callbackId: callbackId));
+        newerFailure.Generation.Should().Be(2);
+        GetScheduledCallback(scheduler, "status-materializer", callbackId).Should().NotBeNull();
     }
 
     [Fact]
@@ -109,11 +241,15 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
             CreateCoalescedRequest(
                 sequence: 11,
                 envelopeId: "firing-source-v11",
+                valueIdentity: "evt-v11",
                 dueTime: TimeSpan.FromMilliseconds(1)));
         await streams.LastStreamProduced.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         var retry = await scheduler.ScheduleTimeoutAsync(
-            CreateCoalescedRequest(sequence: 11, envelopeId: "retry-source-v11"));
+            CreateCoalescedRequest(
+                sequence: 11,
+                envelopeId: "retry-source-v11",
+                valueIdentity: "evt-v11"));
 
         retry.Generation.Should().Be(first.Generation + 1);
         var current = GetScheduledCallback(scheduler, "status-materializer", "latest-source-observation");
@@ -248,6 +384,8 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
     private static RuntimeCallbackTimeoutRequest CreateCoalescedRequest(
         long sequence,
         string envelopeId,
+        string? valueIdentity = null,
+        string callbackId = "latest-source-observation",
         TimeSpan? dueTime = null)
     {
         var envelope = CreateEnvelope();
@@ -255,10 +393,13 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         return new RuntimeCallbackTimeoutRequest
         {
             ActorId = "status-materializer",
-            CallbackId = "latest-source-observation",
+            CallbackId = callbackId,
             DueTime = dueTime ?? TimeSpan.FromMinutes(1),
             TriggerEnvelope = envelope,
-            CoalescingCursor = new RuntimeEnvelopeRetryCoalescingCursor("source-scope", sequence),
+            CoalescingCursor = new RuntimeEnvelopeRetryCoalescingCursor(
+                "source-scope",
+                sequence,
+                valueIdentity ?? envelopeId),
         };
     }
 

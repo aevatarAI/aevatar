@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -988,9 +989,10 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
         if (!CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
                 envelope,
-                out _,
+                out var published,
                 out var stateEvent,
                 out var sourceState) ||
+            published == null ||
             sourceState == null)
         {
             return false;
@@ -1013,10 +1015,15 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
             if (!await HasLegacyWriterLivePhaseBProofsAsync())
             {
+                var retryCursor = ProjectionScopeStatusRetryCoalescingCursor.Create(
+                    sourceScopeActorId,
+                    published);
                 throw new ProjectionScopeStatusPhaseBProofUnavailableException(
                     Id,
                     sourceScopeActorId,
                     stateEvent!.Version,
+                    stateEvent.EventId ?? string.Empty,
+                    retryCursor.ValueIdentity,
                     route.RouteEpoch,
                     route.Phase,
                     ProjectionScopeStatusActorRole.LegacyWriter);
@@ -1279,6 +1286,42 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         return new TerminalQuiescenceRead(true, receipt);
     }
 
+    public RuntimeEnvelopeRetryCoalescingCursor? ResolveHandledRetryCoalescingCursor(
+        EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (RuntimeMode != ProjectionRuntimeMode.DurableMaterialization ||
+            !string.Equals(
+                State.ProjectionKind,
+                ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
+                StringComparison.Ordinal) ||
+            !envelope.Route.IsObserverPublication() ||
+            !StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, Id) ||
+            StreamForwardingRules.IsTransitOnlyForwarding(envelope) ||
+            !CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
+                envelope,
+                out var published,
+                out var stateEvent,
+                out var sourceState) ||
+            published == null ||
+            stateEvent?.EventData == null ||
+            sourceState == null)
+        {
+            return null;
+        }
+
+        var sourceScopeActorId = BuildObservedSourceScopeActorId(sourceState);
+        if (!string.Equals(sourceScopeActorId, State.RootActorId, StringComparison.Ordinal) ||
+            !IsAuthenticForwardedSourcePublication(envelope, stateEvent, sourceScopeActorId))
+        {
+            return null;
+        }
+
+        return ProjectionScopeStatusRetryCoalescingCursor.TryCreate(
+            sourceScopeActorId,
+            published);
+    }
+
     private DateTimeOffset Now() =>
         (Services.GetService<TimeProvider>() ?? TimeProvider.System).GetUtcNow();
 }
@@ -1307,11 +1350,13 @@ public sealed class ProjectionScopeStatusPhaseBProofUnavailableException(
     string materializerActorId,
     string sourceScopeActorId,
     long sourceStateVersion,
+    string sourceEventId,
+    string sourceValueIdentity,
     long routeEpoch,
     ProjectionScopeStatusRoutePhase phase,
     ProjectionScopeStatusActorRole writerRole)
     : InvalidOperationException(
-        $"Status materializer '{materializerActorId}' cannot prove Phase-B admission for source '{sourceScopeActorId}' at committed version {sourceStateVersion}, route epoch {routeEpoch}, phase {phase}, writer role {writerRole}; the observation is redelivered."),
+        $"Status materializer '{materializerActorId}' cannot prove Phase-B admission for source '{sourceScopeActorId}' at committed version {sourceStateVersion} event '{sourceEventId}', route epoch {routeEpoch}, phase {phase}, writer role {writerRole}; the observation is redelivered."),
         IRuntimeEnvelopeRetryCoalescingException
 {
     public string MaterializerActorId { get; } = materializerActorId;
@@ -1320,12 +1365,67 @@ public sealed class ProjectionScopeStatusPhaseBProofUnavailableException(
 
     public long SourceStateVersion { get; } = sourceStateVersion;
 
+    public string SourceEventId { get; } = sourceEventId;
+
+    public string SourceValueIdentity { get; } = sourceValueIdentity;
+
     public RuntimeEnvelopeRetryCoalescingCursor RetryCoalescingCursor { get; } =
-        new(sourceScopeActorId, sourceStateVersion);
+        ProjectionScopeStatusRetryCoalescingCursor.Create(
+            sourceScopeActorId,
+            sourceStateVersion,
+            sourceEventId,
+            sourceValueIdentity);
 
     public long RouteEpoch { get; } = routeEpoch;
 
     public ProjectionScopeStatusRoutePhase Phase { get; } = phase;
 
     public ProjectionScopeStatusActorRole WriterRole { get; } = writerRole;
+}
+
+internal static class ProjectionScopeStatusRetryCoalescingCursor
+{
+    public static RuntimeEnvelopeRetryCoalescingCursor? TryCreate(
+        string sourceScopeActorId,
+        CommittedStateEventPublished published)
+    {
+        ArgumentNullException.ThrowIfNull(published);
+        var stateEvent = published.StateEvent;
+        if (stateEvent == null)
+            return null;
+
+        return stateEvent.Version > 0 && !string.IsNullOrWhiteSpace(stateEvent.EventId)
+            ? Create(sourceScopeActorId, published)
+            : null;
+    }
+
+    public static RuntimeEnvelopeRetryCoalescingCursor Create(
+        string sourceScopeActorId,
+        CommittedStateEventPublished published)
+    {
+        ArgumentNullException.ThrowIfNull(published);
+        var stateEvent = published.StateEvent ??
+                         throw new ArgumentException(
+                             "Committed publication is missing its state event.",
+                             nameof(published));
+        return Create(
+            sourceScopeActorId,
+            stateEvent.Version,
+            stateEvent.EventId,
+            BuildValueIdentity(published));
+    }
+
+    public static RuntimeEnvelopeRetryCoalescingCursor Create(
+        string sourceScopeActorId,
+        long sourceStateVersion,
+        string sourceEventId,
+        string sourceValueIdentity) =>
+        new(
+            sourceScopeActorId,
+            sourceStateVersion,
+            sourceValueIdentity,
+            CommittedStateRepublish.IsRepublishEventId(sourceEventId) ? 1 : 0);
+
+    private static string BuildValueIdentity(CommittedStateEventPublished published)
+        => RuntimeEnvelopeRetryCoalescingValueIdentity.Create(published);
 }

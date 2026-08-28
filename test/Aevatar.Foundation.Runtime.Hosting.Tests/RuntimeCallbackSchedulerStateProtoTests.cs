@@ -29,6 +29,9 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
                 {
                     CallbackId = "cb-1",
                     Sequence = 42,
+                    ValueIdentity = "evt-42",
+                    Precedence = 1,
+                    Completed = true,
                 },
             },
             ReminderCallbacks =
@@ -49,6 +52,8 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
                     OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
                     CoalescingKey = "source-actor",
                     CoalescingSequence = 42,
+                    CoalescingValueIdentity = "evt-42",
+                    CoalescingPrecedence = 1,
                 },
             },
         };
@@ -72,8 +77,13 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         callback.OverduePolicy.Should().Be(RuntimeCallbackOverduePolicy.Deliver);
         callback.CoalescingKey.Should().Be("source-actor");
         callback.CoalescingSequence.Should().Be(42);
+        callback.CoalescingValueIdentity.Should().Be("evt-42");
+        callback.CoalescingPrecedence.Should().Be(1);
         roundTripped.CoalescingWatermarks["source-actor"].CallbackId.Should().Be("cb-1");
         roundTripped.CoalescingWatermarks["source-actor"].Sequence.Should().Be(42);
+        roundTripped.CoalescingWatermarks["source-actor"].ValueIdentity.Should().Be("evt-42");
+        roundTripped.CoalescingWatermarks["source-actor"].Precedence.Should().Be(1);
+        roundTripped.CoalescingWatermarks["source-actor"].Completed.Should().BeTrue();
         roundTripped.PendingReminderUnregistrations.Should().ContainSingle()
             .Which.Should().Be("cb-pending");
     }

@@ -26,7 +26,8 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// </summary>
 [GAgent(AgentKind, StateSchemaVersion = SupportedStateSchemaVersion)]
 public sealed class ProjectionScopeStatusGAgent
-    : GAgentBase<ProjectionScopeStatusTerminalState>
+    : GAgentBase<ProjectionScopeStatusTerminalState>,
+      IRuntimeEnvelopeRetryCoalescingCompletionSource
 {
     public const string AgentKind = "projection.scope-status-terminal";
     public const int SupportedStateSchemaVersion = 1;
@@ -217,9 +218,10 @@ public sealed class ProjectionScopeStatusGAgent
 
         if (!CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
                 envelope,
-                out _,
+                out var published,
                 out var stateEvent,
                 out var sourceState) ||
+            published == null ||
             stateEvent?.EventData == null ||
             sourceState == null)
         {
@@ -257,10 +259,15 @@ public sealed class ProjectionScopeStatusGAgent
 
             if (!await HasTerminalWriterLivePhaseBProofsAsync())
             {
+                var retryCursor = ProjectionScopeStatusRetryCoalescingCursor.Create(
+                    sourceScopeActorId,
+                    published);
                 throw new ProjectionScopeStatusPhaseBProofUnavailableException(
                     Id,
                     sourceScopeActorId,
                     stateEvent.Version,
+                    stateEvent.EventId ?? string.Empty,
+                    retryCursor.ValueIdentity,
                     route!.RouteEpoch,
                     route.Phase,
                     ProjectionScopeStatusActorRole.TerminalWriter);
@@ -689,6 +696,40 @@ public sealed class ProjectionScopeStatusGAgent
         string.Equals(stateEvent.AgentId, sourceScopeActorId, StringComparison.Ordinal) &&
         (string.IsNullOrWhiteSpace(envelope.Runtime?.SourceActorId) ||
          string.Equals(envelope.Runtime.SourceActorId, sourceScopeActorId, StringComparison.Ordinal));
+
+    public RuntimeEnvelopeRetryCoalescingCursor? ResolveHandledRetryCoalescingCursor(
+        EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (!envelope.Route.IsObserverPublication() ||
+            !StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, Id) ||
+            StreamForwardingRules.IsTransitOnlyForwarding(envelope) ||
+            !CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
+                envelope,
+                out var published,
+                out var stateEvent,
+                out var sourceState) ||
+            published == null ||
+            stateEvent?.EventData == null ||
+            sourceState == null)
+        {
+            return null;
+        }
+
+        var sourceScopeActorId = BuildSourceScopeActorId(sourceState);
+        if (!string.Equals(
+                sourceScopeActorId,
+                State.SourceScopeActorId,
+                StringComparison.Ordinal) ||
+            !IsAuthenticForwardedSourcePublication(envelope, stateEvent, sourceScopeActorId))
+        {
+            return null;
+        }
+
+        return ProjectionScopeStatusRetryCoalescingCursor.TryCreate(
+            sourceScopeActorId,
+            published);
+    }
 
     private Task EnsureObservationRelayAsync(string sourceScopeActorId, CancellationToken ct)
     {

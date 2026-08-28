@@ -1,3 +1,5 @@
+using Aevatar.Foundation.Abstractions;
+
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 public sealed class ProjectionScopeInFlightObservationPendingException : InvalidOperationException
@@ -15,7 +17,8 @@ public sealed class ProjectionScopeInFlightObservationPendingException : Invalid
         $"{source.ActorId}@{source.StateVersion}:{source.EventId}";
 }
 
-public sealed class ProjectionSourceCoordinateConflictException : InvalidOperationException
+public sealed class ProjectionSourceCoordinateConflictException : InvalidOperationException,
+    IRuntimeEnvelopeRetryableException
 {
     public ProjectionSourceCoordinateConflictException(
         ProjectionSourceCoordinate committed,

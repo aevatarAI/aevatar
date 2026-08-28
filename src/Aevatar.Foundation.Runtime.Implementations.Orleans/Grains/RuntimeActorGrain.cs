@@ -430,6 +430,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             using var stateBinding = _stateBindingAccessor?.Bind(_state, _committedStatePublication);
             using var schemaContext = BindStateSchemaContext();
             await _agent!.HandleEventAsync(envelope);
+            await CompleteHandledRetryCoalescingCursorAsync(envelope);
         }
         catch (Exception ex)
         {
@@ -1039,24 +1040,115 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(retryEnvelope);
         }
 
+        LogScheduledRuntimeEnvelopeRetry(ex, nextAttempt, retryUntilResolved);
+        return true;
+    }
+
+    private void LogScheduledRuntimeEnvelopeRetry(
+        Exception exception,
+        int nextAttempt,
+        bool retryUntilResolved)
+    {
+        var disposition = RuntimeEnvelopeRetryPolicy.ResolveRetryLogDisposition(nextAttempt);
         if (retryUntilResolved)
         {
-            _logger.LogWarning(
-                ex,
-                "Runtime envelope durable retry-until-resolved scheduled for actor {ActorId}, attempt {Attempt}.",
-                this.GetPrimaryKeyString(),
-                nextAttempt);
+            switch (disposition)
+            {
+                case RuntimeEnvelopeRetryLogDisposition.WarningWithException:
+                    _logger.LogWarning(
+                        exception,
+                        "Runtime envelope durable retry-until-resolved scheduled for actor {ActorId}, attempt {Attempt}.",
+                        this.GetPrimaryKeyString(),
+                        nextAttempt);
+                    break;
+                case RuntimeEnvelopeRetryLogDisposition.Warning:
+                    _logger.LogWarning(
+                        "Runtime envelope durable retry-until-resolved remains pending for actor {ActorId}, attempt {Attempt}; exception={ExceptionType}.",
+                        this.GetPrimaryKeyString(),
+                        nextAttempt,
+                        exception.GetType().Name);
+                    break;
+                case RuntimeEnvelopeRetryLogDisposition.Debug:
+                    _logger.LogDebug(
+                        "Runtime envelope durable retry-until-resolved remains pending for actor {ActorId}, attempt {Attempt}; exception={ExceptionType}.",
+                        this.GetPrimaryKeyString(),
+                        nextAttempt,
+                        exception.GetType().Name);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(
+                        nameof(disposition),
+                        disposition,
+                        "Unknown runtime envelope retry log disposition.");
+            }
+
+            return;
         }
-        else
+
+        switch (disposition)
         {
-            _logger.LogWarning(
-                ex,
-                "Runtime envelope retry scheduled for actor {ActorId}, attempt {Attempt}/{MaxAttempts}.",
-                this.GetPrimaryKeyString(),
-                nextAttempt,
-                _runtimeEnvelopeRetryPolicy.MaxAttempts);
+            case RuntimeEnvelopeRetryLogDisposition.WarningWithException:
+                _logger.LogWarning(
+                    exception,
+                    "Runtime envelope retry scheduled for actor {ActorId}, attempt {Attempt}/{MaxAttempts}.",
+                    this.GetPrimaryKeyString(),
+                    nextAttempt,
+                    _runtimeEnvelopeRetryPolicy.MaxAttempts);
+                break;
+            case RuntimeEnvelopeRetryLogDisposition.Warning:
+                _logger.LogWarning(
+                    "Runtime envelope retry scheduled for actor {ActorId}, attempt {Attempt}/{MaxAttempts}; exception={ExceptionType}.",
+                    this.GetPrimaryKeyString(),
+                    nextAttempt,
+                    _runtimeEnvelopeRetryPolicy.MaxAttempts,
+                    exception.GetType().Name);
+                break;
+            case RuntimeEnvelopeRetryLogDisposition.Debug:
+                _logger.LogDebug(
+                    "Runtime envelope retry scheduled for actor {ActorId}, attempt {Attempt}/{MaxAttempts}; exception={ExceptionType}.",
+                    this.GetPrimaryKeyString(),
+                    nextAttempt,
+                    _runtimeEnvelopeRetryPolicy.MaxAttempts,
+                    exception.GetType().Name);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(
+                    nameof(disposition),
+                    disposition,
+                    "Unknown runtime envelope retry log disposition.");
         }
-        return true;
+    }
+
+    private async Task CompleteHandledRetryCoalescingCursorAsync(EventEnvelope envelope)
+    {
+        if (_agent is not IRuntimeEnvelopeRetryCoalescingCompletionSource completionSource)
+            return;
+
+        var cursor = completionSource.ResolveHandledRetryCoalescingCursor(envelope);
+        if (cursor == null)
+            return;
+
+        try
+        {
+            var scheduler = ServiceProvider.GetRequiredService<IActorRuntimeCallbackScheduler>();
+            if (scheduler is not IRuntimeEnvelopeRetryCoalescingCallbackScheduler completionScheduler)
+            {
+                throw new InvalidOperationException(
+                    $"Runtime callback scheduler '{scheduler.GetType().FullName}' does not support coalesced retry completion.");
+            }
+
+            await completionScheduler.CompleteRuntimeEnvelopeRetryAsync(
+                this.GetPrimaryKeyString(),
+                cursor,
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            throw new RuntimeEnvelopeRetryCoalescingCompletionException(
+                this.GetPrimaryKeyString(),
+                cursor,
+                ex);
+        }
     }
 
     private string BuildRuntimeRetryCallbackId(
@@ -1067,8 +1159,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     {
         if (retryCoalescingCursor != null)
         {
-            return RuntimeCallbackKeyComposer.BuildCallbackId(
-                "runtime-envelope-retry-until-resolved-coalesced",
+            return RuntimeEnvelopeRetryCoalescingCallbackSlot.BuildCallbackId(
                 retryCoalescingCursor.Key);
         }
 
@@ -1159,4 +1250,16 @@ public sealed class RuntimeActorStateStorageRecoveryRequiredException(
     public string ActorId { get; } = actorId;
 
     public RuntimeActorStateStorageRecoveryReason RecoveryReason { get; } = recoveryReason;
+}
+
+internal sealed class RuntimeEnvelopeRetryCoalescingCompletionException(
+    string actorId,
+    RuntimeEnvelopeRetryCoalescingCursor cursor,
+    Exception innerException)
+    : InvalidOperationException(
+        $"Actor '{actorId}' handled authoritative source '{cursor.Key}' at sequence {cursor.Sequence}, but its durable retry completion could not be committed.",
+        innerException),
+      IRuntimeEnvelopeRetryCoalescingException
+{
+    public RuntimeEnvelopeRetryCoalescingCursor RetryCoalescingCursor { get; } = cursor;
 }

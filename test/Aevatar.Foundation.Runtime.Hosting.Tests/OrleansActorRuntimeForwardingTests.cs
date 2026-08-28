@@ -808,6 +808,8 @@ public sealed class OrleansActorRuntimeForwardingTests
             int dueTimeMs,
             string coalescingKey,
             long coalescingSequence,
+            string coalescingValueIdentity,
+            int coalescingPrecedence,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
@@ -815,7 +817,24 @@ public sealed class OrleansActorRuntimeForwardingTests
             _ = dueTimeMs;
             _ = coalescingKey;
             _ = coalescingSequence;
+            _ = coalescingValueIdentity;
+            _ = coalescingPrecedence;
             _ = deliveryMode;
+            throw new NotSupportedException();
+        }
+
+        public Task CompleteCoalescedTimeoutAsync(
+            string callbackId,
+            string coalescingKey,
+            long coalescingSequence,
+            string coalescingValueIdentity,
+            int coalescingPrecedence)
+        {
+            _ = callbackId;
+            _ = coalescingKey;
+            _ = coalescingSequence;
+            _ = coalescingValueIdentity;
+            _ = coalescingPrecedence;
             throw new NotSupportedException();
         }
 

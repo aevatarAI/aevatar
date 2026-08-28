@@ -4,6 +4,7 @@ using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.Runtime;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
@@ -23,6 +24,7 @@ public sealed class LocalActor : IActor
     private readonly IRuntimeActorStateSchemaContextBinder? _stateSchemaContextBinder;
     private readonly IRuntimeFleetReconcileDeliveryVerifier? _fleetReconcileVerifier;
     private readonly IRuntimeFleetReconcileDeliveryAttestationBinder? _fleetReconcileAttestationBinder;
+    private readonly IActorRuntimeCallbackScheduler? _callbackScheduler;
     private Task? _mailboxPump;
     private IAsyncDisposable? _selfSubscription;
     private string? _parentId;
@@ -36,7 +38,8 @@ public sealed class LocalActor : IActor
         RuntimeActorIdentity? identity = null,
         IRuntimeActorStateSchemaContextBinder? stateSchemaContextBinder = null,
         IRuntimeFleetReconcileDeliveryVerifier? fleetReconcileVerifier = null,
-        IRuntimeFleetReconcileDeliveryAttestationBinder? fleetReconcileAttestationBinder = null)
+        IRuntimeFleetReconcileDeliveryAttestationBinder? fleetReconcileAttestationBinder = null,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
         Agent = agent;
         Id = id;
@@ -47,6 +50,7 @@ public sealed class LocalActor : IActor
         _stateSchemaContextBinder = stateSchemaContextBinder;
         _fleetReconcileVerifier = fleetReconcileVerifier;
         _fleetReconcileAttestationBinder = fleetReconcileAttestationBinder;
+        _callbackScheduler = callbackScheduler;
     }
 
     public string Id { get; }
@@ -215,6 +219,7 @@ public sealed class LocalActor : IActor
                 : _fleetReconcileAttestationBinder!.Bind(reconcileAttestation);
             using var schemaContext = BindStateSchemaContext();
             await Agent.HandleEventAsync(item.Envelope);
+            await CompleteHandledRetryCoalescingCursorAsync(item.Envelope);
             item.Completion.SetResult();
         }
         catch (Exception ex)
@@ -253,6 +258,33 @@ public sealed class LocalActor : IActor
 
     private IDisposable? BindStateSchemaContext() =>
         _identity == null ? null : _stateSchemaContextBinder?.Bind(_identity);
+
+    private async Task CompleteHandledRetryCoalescingCursorAsync(EventEnvelope envelope)
+    {
+        if (Agent is not IRuntimeEnvelopeRetryCoalescingCompletionSource completionSource)
+            return;
+
+        var cursor = completionSource.ResolveHandledRetryCoalescingCursor(envelope);
+        if (cursor == null)
+            return;
+        if (_callbackScheduler == null)
+        {
+            // A bare LocalActorRuntime has no runtime-owned retry scheduler, so it cannot have
+            // a coalesced retry slot to complete. Standard local hosting always registers the
+            // in-memory scheduler; keeping this path optional preserves lightweight embeddings.
+            return;
+        }
+        if (_callbackScheduler is not IRuntimeEnvelopeRetryCoalescingCallbackScheduler completionScheduler)
+        {
+            throw new InvalidOperationException(
+                "The local runtime callback scheduler does not support coalesced retry completion.");
+        }
+
+        await completionScheduler.CompleteRuntimeEnvelopeRetryAsync(
+            Id,
+            cursor,
+            CancellationToken.None);
+    }
 
     private async Task<RuntimeFleetReconcileDeliveryAttestation?> VerifyFleetReconcileAttestationAsync(
         EventEnvelope envelope)

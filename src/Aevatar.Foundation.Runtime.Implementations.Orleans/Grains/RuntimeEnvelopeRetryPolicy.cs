@@ -273,6 +273,18 @@ internal sealed class RuntimeEnvelopeRetryPolicy
         }
     }
 
+    internal static RuntimeEnvelopeRetryLogDisposition ResolveRetryLogDisposition(int attempt)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(attempt, 1);
+        if (attempt == 1)
+            return RuntimeEnvelopeRetryLogDisposition.WarningWithException;
+
+        if (attempt <= 4 || (attempt & (attempt - 1)) == 0)
+            return RuntimeEnvelopeRetryLogDisposition.Warning;
+
+        return RuntimeEnvelopeRetryLogDisposition.Debug;
+    }
+
     private static int GetAttempt(EventEnvelope envelope)
     {
         return RuntimeEnvelopeDeliveryIdentity.GetAttempt(envelope);
@@ -289,4 +301,11 @@ internal sealed class RuntimeEnvelopeRetryPolicy
     {
         return RuntimeEnvelopeDeliveryIdentity.ResolveDeliveryLineageId(envelope);
     }
+}
+
+internal enum RuntimeEnvelopeRetryLogDisposition
+{
+    WarningWithException = 0,
+    Warning = 1,
+    Debug = 2,
 }

@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Runtime.Callbacks;
@@ -47,7 +48,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
         ThrowIfGenericMutationTargetsReservedSlot(callbackId);
-        ThrowIfGenericScheduleTargetsCoalescedSlot(callbackId);
+        ThrowIfGenericMutationTargetsCoalescedSlot(callbackId);
         ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
         await RecoverPendingReminderUnregistrationsAsync();
         var dueTime = TimeSpan.FromMilliseconds(dueTimeMs);
@@ -71,9 +72,38 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         long coalescingSequence,
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
+        var cursor = ResolveRollingUpgradeCoalescingCursor(
+            triggerEnvelope,
+            coalescingKey,
+            coalescingSequence);
+        return await ScheduleCoalescedTimeoutAsync(
+            callbackId,
+            triggerEnvelope,
+            dueTimeMs,
+            cursor.Key,
+            cursor.Sequence,
+            cursor.ValueIdentity,
+            cursor.Precedence,
+            deliveryMode);
+    }
+
+    public async Task<long> ScheduleCoalescedTimeoutAsync(
+        string callbackId,
+        EventEnvelope triggerEnvelope,
+        int dueTimeMs,
+        string coalescingKey,
+        long coalescingSequence,
+        string coalescingValueIdentity,
+        int coalescingPrecedence,
+        RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
+    {
         ThrowIfGenericMutationTargetsReservedSlot(callbackId);
         ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
-        ValidateCoalescingCursor(coalescingKey, coalescingSequence);
+        ValidateCoalescingCursor(
+            coalescingKey,
+            coalescingSequence,
+            coalescingValueIdentity,
+            coalescingPrecedence);
         await RecoverPendingReminderUnregistrationsAsync();
 
         var stateBeforeMutation = _state.State.Clone();
@@ -89,6 +119,8 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
                 dueTimeMs,
                 coalescingKey,
                 coalescingSequence,
+                coalescingValueIdentity,
+                coalescingPrecedence,
                 deliveryMode,
                 DateTimeOffset.UtcNow,
                 out generation);
@@ -120,6 +152,59 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         return generation;
     }
 
+    public async Task CompleteCoalescedTimeoutAsync(
+        string callbackId,
+        string coalescingKey,
+        long coalescingSequence,
+        string coalescingValueIdentity,
+        int coalescingPrecedence)
+    {
+        ThrowIfGenericMutationTargetsReservedSlot(callbackId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ValidateCoalescingCursor(
+            coalescingKey,
+            coalescingSequence,
+            coalescingValueIdentity,
+            coalescingPrecedence);
+        await RecoverPendingReminderUnregistrationsAsync();
+
+        var stateBeforeMutation = _state.State.Clone();
+        bool stateChanged;
+        bool reminderUnregistrationRequired;
+        try
+        {
+            stateChanged = TryCompleteCoalescedTimeout(
+                _state.State,
+                callbackId,
+                coalescingKey,
+                coalescingSequence,
+                coalescingValueIdentity,
+                coalescingPrecedence,
+                out reminderUnregistrationRequired);
+            if (stateChanged)
+            {
+                if (reminderUnregistrationRequired &&
+                    !_state.State.PendingReminderUnregistrations.Contains(
+                        callbackId,
+                        StringComparer.Ordinal))
+                {
+                    _state.State.PendingReminderUnregistrations.Add(callbackId);
+                }
+
+                await _state.WriteStateAsync();
+            }
+        }
+        catch
+        {
+            _state.State = stateBeforeMutation;
+            DeactivateOnIdle();
+            throw;
+        }
+
+        if (stateChanged && reminderUnregistrationRequired)
+            await RecoverPendingReminderUnregistrationsAsync();
+    }
+
     public async Task<long> ScheduleTimerAsync(
         string callbackId,
         EventEnvelope triggerEnvelope,
@@ -128,7 +213,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
         ThrowIfGenericMutationTargetsReservedSlot(callbackId);
-        ThrowIfGenericScheduleTargetsCoalescedSlot(callbackId);
+        ThrowIfGenericMutationTargetsCoalescedSlot(callbackId);
         ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(periodMs, 0);
         await RecoverPendingReminderUnregistrationsAsync();
@@ -153,6 +238,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
         ThrowIfGenericMutationTargetsReservedSlot(callbackId);
+        ThrowIfGenericMutationTargetsCoalescedSlot(callbackId);
         await RecoverPendingReminderUnregistrationsAsync();
         if (!_state.State.ReminderCallbacks.TryGetValue(callbackId, out var reminderCallback))
             return;
@@ -443,13 +529,55 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(triggerEnvelope);
     }
 
-    private static void ValidateCoalescingCursor(string coalescingKey, long coalescingSequence)
+    private static void ValidateCoalescingCursor(
+        string coalescingKey,
+        long coalescingSequence,
+        string coalescingValueIdentity,
+        int coalescingPrecedence)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(coalescingKey);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(coalescingSequence, 0);
+        _ = new RuntimeEnvelopeRetryCoalescingCursor(
+            coalescingKey,
+            coalescingSequence,
+            coalescingValueIdentity,
+            coalescingPrecedence);
     }
 
-    private void ThrowIfGenericScheduleTargetsCoalescedSlot(string callbackId)
+    internal static RuntimeEnvelopeRetryCoalescingCursor ResolveRollingUpgradeCoalescingCursor(
+        EventEnvelope triggerEnvelope,
+        string coalescingKey,
+        long coalescingSequence)
+    {
+        ArgumentNullException.ThrowIfNull(triggerEnvelope);
+        var payload = triggerEnvelope.Payload ??
+                      throw new InvalidOperationException(
+                          "A rolling-upgrade coalesced retry is missing its committed payload.");
+
+        if (payload.Is(CommittedStateEventPublished.Descriptor))
+        {
+            var published = payload.Unpack<CommittedStateEventPublished>();
+            var stateEvent = published.StateEvent ??
+                             throw new InvalidOperationException(
+                                 "A rolling-upgrade coalesced retry is missing its committed state event.");
+            if (stateEvent.Version != coalescingSequence)
+            {
+                throw new InvalidOperationException(
+                    $"Rolling-upgrade coalescing sequence {coalescingSequence} does not match committed version {stateEvent.Version}.");
+            }
+
+            return new RuntimeEnvelopeRetryCoalescingCursor(
+                coalescingKey,
+                coalescingSequence,
+                RuntimeEnvelopeRetryCoalescingValueIdentity.Create(published),
+                CommittedStateRepublish.IsRepublishEventId(stateEvent.EventId) ? 1 : 0);
+        }
+
+        return new RuntimeEnvelopeRetryCoalescingCursor(
+            coalescingKey,
+            coalescingSequence,
+            RuntimeEnvelopeRetryCoalescingValueIdentity.Create(payload));
+    }
+
+    private void ThrowIfGenericMutationTargetsCoalescedSlot(string callbackId)
     {
         if (_state.State.CoalescingWatermarks.Values.Any(
                 watermark => string.Equals(
@@ -458,7 +586,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
                     StringComparison.Ordinal)))
         {
             throw new InvalidOperationException(
-                $"Callback '{callbackId}' is owned by the coalesced timeout contract and cannot be replaced by a generic schedule.");
+                $"Callback '{callbackId}' is owned by the coalesced timeout contract and cannot be mutated through the generic callback API.");
         }
     }
 
@@ -553,6 +681,8 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         int dueTimeMs,
         string coalescingKey,
         long coalescingSequence,
+        string coalescingValueIdentity,
+        int coalescingPrecedence,
         RuntimeCallbackDeliveryMode deliveryMode,
         DateTimeOffset scheduledAtUtc,
         out long generation)
@@ -560,7 +690,11 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         ArgumentNullException.ThrowIfNull(state);
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
-        ValidateCoalescingCursor(coalescingKey, coalescingSequence);
+        var incomingCursor = new RuntimeEnvelopeRetryCoalescingCursor(
+            coalescingKey,
+            coalescingSequence,
+            coalescingValueIdentity,
+            coalescingPrecedence);
 
         state.CoalescingWatermarks.TryGetValue(coalescingKey, out var watermark);
         if (watermark != null &&
@@ -570,21 +704,38 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
                 $"Coalescing key '{coalescingKey}' is already bound to callback '{watermark.CallbackId}'.");
         }
 
-        if (watermark != null && coalescingSequence < watermark.Sequence)
+        var comparison = watermark == null
+            ? RuntimeEnvelopeRetryCoalescingComparison.Superseding
+            : CompareCoalescingWatermark(
+                coalescingKey,
+                watermark,
+                incomingCursor);
+        if (comparison == RuntimeEnvelopeRetryCoalescingComparison.Stale)
+        {
+            generation = ResolveKnownCoalescedGeneration(state, callbackId, watermark!);
+            return false;
+        }
+
+        if (comparison == RuntimeEnvelopeRetryCoalescingComparison.Conflict)
+        {
+            throw new InvalidOperationException(
+                $"Coalescing key '{coalescingKey}' received conflicting identities at sequence {coalescingSequence}.");
+        }
+
+        if (watermark?.Completed == true &&
+            comparison == RuntimeEnvelopeRetryCoalescingComparison.Exact)
         {
             generation = ResolveKnownCoalescedGeneration(state, callbackId, watermark);
             return false;
         }
 
-        if (watermark != null &&
-            coalescingSequence == watermark.Sequence &&
+        if (comparison == RuntimeEnvelopeRetryCoalescingComparison.Exact &&
             state.ReminderCallbacks.TryGetValue(callbackId, out var pending) &&
             pending.PendingDeliveryEnvelope == null)
         {
             EnsurePendingCallbackMatchesCursor(
                 pending,
-                coalescingKey,
-                coalescingSequence);
+                incomingCursor);
             generation = pending.Generation;
             return false;
         }
@@ -624,13 +775,99 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
             CoalescingKey = coalescingKey,
             CoalescingSequence = coalescingSequence,
+            CoalescingValueIdentity = coalescingValueIdentity,
+            CoalescingPrecedence = coalescingPrecedence,
         };
         state.CallbackGenerations[callbackId] = generation;
         state.CoalescingWatermarks[coalescingKey] = new RuntimeCallbackCoalescingWatermark
         {
             CallbackId = callbackId,
             Sequence = coalescingSequence,
+            ValueIdentity = coalescingValueIdentity,
+            Precedence = coalescingPrecedence,
+            Completed = false,
         };
+        return true;
+    }
+
+    internal static bool TryCompleteCoalescedTimeout(
+        RuntimeCallbackSchedulerState state,
+        string callbackId,
+        string coalescingKey,
+        long coalescingSequence,
+        string coalescingValueIdentity,
+        int coalescingPrecedence,
+        out bool reminderUnregistrationRequired)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        var incomingCursor = new RuntimeEnvelopeRetryCoalescingCursor(
+            coalescingKey,
+            coalescingSequence,
+            coalescingValueIdentity,
+            coalescingPrecedence);
+        reminderUnregistrationRequired = false;
+
+        if (!state.CoalescingWatermarks.TryGetValue(coalescingKey, out var watermark))
+        {
+            if (state.ReminderCallbacks.ContainsKey(callbackId))
+            {
+                throw new InvalidOperationException(
+                    $"Callback '{callbackId}' has a pending schedule without a coalescing watermark.");
+            }
+
+            var generation = Math.Max(
+                state.CallbackGenerations.GetValueOrDefault(callbackId),
+                1L);
+            state.CallbackGenerations[callbackId] = generation;
+            state.CoalescingWatermarks[coalescingKey] = new RuntimeCallbackCoalescingWatermark
+            {
+                CallbackId = callbackId,
+                Sequence = coalescingSequence,
+                ValueIdentity = coalescingValueIdentity,
+                Precedence = coalescingPrecedence,
+                Completed = true,
+            };
+            return true;
+        }
+        if (!string.Equals(watermark.CallbackId, callbackId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Coalescing key '{coalescingKey}' is already bound to callback '{watermark.CallbackId}'.");
+        }
+
+        var comparison = CompareCoalescingWatermark(
+            coalescingKey,
+            watermark,
+            incomingCursor);
+        if (comparison == RuntimeEnvelopeRetryCoalescingComparison.Conflict)
+        {
+            throw new InvalidOperationException(
+                $"Coalescing key '{coalescingKey}' received conflicting identities at sequence {coalescingSequence}.");
+        }
+        if (comparison == RuntimeEnvelopeRetryCoalescingComparison.Stale ||
+            (comparison == RuntimeEnvelopeRetryCoalescingComparison.Exact && watermark.Completed))
+            return false;
+
+        if (state.ReminderCallbacks.TryGetValue(callbackId, out var pending))
+        {
+            EnsurePendingCallbackMatchesWatermark(
+                pending,
+                coalescingKey,
+                watermark);
+
+            state.ReminderCallbacks.Remove(callbackId);
+            state.CallbackGenerations[callbackId] = Math.Max(
+                state.CallbackGenerations.GetValueOrDefault(callbackId),
+                pending.Generation);
+            reminderUnregistrationRequired = true;
+        }
+
+        watermark.Sequence = coalescingSequence;
+        watermark.ValueIdentity = coalescingValueIdentity;
+        watermark.Precedence = coalescingPrecedence;
+        watermark.Completed = true;
+        state.CoalescingWatermarks[coalescingKey] = watermark;
         return true;
     }
 
@@ -653,16 +890,68 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 
     private static void EnsurePendingCallbackMatchesCursor(
         RuntimeScheduledCallback pending,
-        string coalescingKey,
-        long coalescingSequence)
+        RuntimeEnvelopeRetryCoalescingCursor cursor)
     {
-        if (!string.Equals(pending.CoalescingKey, coalescingKey, StringComparison.Ordinal) ||
-            pending.CoalescingSequence != coalescingSequence ||
+        if (!string.Equals(pending.CoalescingKey, cursor.Key, StringComparison.Ordinal) ||
+            pending.CoalescingSequence != cursor.Sequence ||
+            !string.Equals(
+                pending.CoalescingValueIdentity,
+                cursor.ValueIdentity,
+                StringComparison.Ordinal) ||
+            pending.CoalescingPrecedence != cursor.Precedence ||
             pending.Periodic)
         {
             throw new InvalidOperationException(
                 $"Pending callback '{pending.CallbackId}' does not match its coalescing watermark.");
         }
+    }
+
+    private static void EnsurePendingCallbackMatchesWatermark(
+        RuntimeScheduledCallback pending,
+        string coalescingKey,
+        RuntimeCallbackCoalescingWatermark watermark)
+    {
+        if (!string.Equals(pending.CoalescingKey, coalescingKey, StringComparison.Ordinal) ||
+            pending.CoalescingSequence != watermark.Sequence ||
+            !string.Equals(
+                pending.CoalescingValueIdentity,
+                watermark.ValueIdentity,
+                StringComparison.Ordinal) ||
+            pending.CoalescingPrecedence != watermark.Precedence ||
+            pending.Periodic)
+        {
+            throw new InvalidOperationException(
+                $"Pending callback '{pending.CallbackId}' does not match its coalescing watermark.");
+        }
+    }
+
+    private static RuntimeEnvelopeRetryCoalescingCursor ReadCoalescingCursor(
+        string coalescingKey,
+        RuntimeCallbackCoalescingWatermark watermark) =>
+        new(
+            coalescingKey,
+            watermark.Sequence,
+            watermark.ValueIdentity,
+            watermark.Precedence);
+
+    private static RuntimeEnvelopeRetryCoalescingComparison CompareCoalescingWatermark(
+        string coalescingKey,
+        RuntimeCallbackCoalescingWatermark watermark,
+        RuntimeEnvelopeRetryCoalescingCursor incoming)
+    {
+        // Watermarks written by the immediately previous binary carried only key + sequence.
+        // Preserve rolling-upgrade safety: lower versions stay fenced, higher versions supersede,
+        // and the first equal-version operation upgrades the watermark to the typed value identity.
+        if (string.IsNullOrWhiteSpace(watermark.ValueIdentity))
+        {
+            return incoming.Sequence < watermark.Sequence
+                ? RuntimeEnvelopeRetryCoalescingComparison.Stale
+                : RuntimeEnvelopeRetryCoalescingComparison.Superseding;
+        }
+
+        return RuntimeEnvelopeRetryCoalescingCursor.Compare(
+            ReadCoalescingCursor(coalescingKey, watermark),
+            incoming);
     }
 
     private async Task EnsurePhysicalOneShotReminderAsync(string callbackId)

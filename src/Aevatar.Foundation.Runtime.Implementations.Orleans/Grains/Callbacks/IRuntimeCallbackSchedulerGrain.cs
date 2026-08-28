@@ -17,7 +17,26 @@ public interface IRuntimeCallbackSchedulerGrain : IGrainWithStringKey
         int dueTimeMs,
         string coalescingKey,
         long coalescingSequence,
+        RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent) =>
+        Task.FromException<long>(new NotSupportedException(
+            "This callback scheduler grain does not implement the rolling-upgrade coalesced timeout contract."));
+
+    Task<long> ScheduleCoalescedTimeoutAsync(
+        string callbackId,
+        EventEnvelope triggerEnvelope,
+        int dueTimeMs,
+        string coalescingKey,
+        long coalescingSequence,
+        string coalescingValueIdentity,
+        int coalescingPrecedence,
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent);
+
+    Task CompleteCoalescedTimeoutAsync(
+        string callbackId,
+        string coalescingKey,
+        long coalescingSequence,
+        string coalescingValueIdentity,
+        int coalescingPrecedence);
 
     Task<long> ScheduleTimerAsync(
         string callbackId,

@@ -22,6 +22,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 public abstract partial class ProjectionScopeGAgentBase<TContext>
     : GAgentBase<ProjectionScopeState>
     , IEventSourcingVersionDriftRecoverableActor
+    , IRuntimeEnvelopeRetryCoalescingCompletionSource
     where TContext : class, IProjectionMaterializationContext
 {
     private ILogger _logger = NullLogger.Instance;

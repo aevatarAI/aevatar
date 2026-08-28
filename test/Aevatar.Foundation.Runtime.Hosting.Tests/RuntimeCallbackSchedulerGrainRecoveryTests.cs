@@ -1,5 +1,6 @@
 using System.Globalization;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -45,6 +46,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                 dueTimeMs: 5000,
                 coalescingKey,
                 coalescingSequence: 10,
+                coalescingValueIdentity: "evt-v10",
+                coalescingPrecedence: 0,
                 RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
                 scheduledAt,
                 out var firstGeneration)
@@ -62,6 +65,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                 dueTimeMs: 10000,
                 coalescingKey,
                 coalescingSequence: 10,
+                coalescingValueIdentity: "evt-v10",
+                coalescingPrecedence: 0,
                 RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
                 scheduledAt,
                 out var reusedGeneration)
@@ -78,6 +83,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                 dueTimeMs: 5000,
                 coalescingKey,
                 coalescingSequence: 11,
+                coalescingValueIdentity: "evt-v11",
+                coalescingPrecedence: 0,
                 RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
                 scheduledAt,
                 out var newerGeneration)
@@ -95,6 +102,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                 dueTimeMs: 5000,
                 coalescingKey,
                 coalescingSequence: 10,
+                coalescingValueIdentity: "evt-v10",
+                coalescingPrecedence: 0,
                 RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
                 scheduledAt,
                 out var staleGeneration)
@@ -113,6 +122,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                 dueTimeMs: 10000,
                 coalescingKey,
                 coalescingSequence: 11,
+                coalescingValueIdentity: "evt-v11",
+                coalescingPrecedence: 0,
                 RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
                 scheduledAt,
                 out var firingRaceGeneration)
@@ -138,6 +149,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                 dueTimeMs: 10000,
                 coalescingKey,
                 coalescingSequence: 11,
+                coalescingValueIdentity: "evt-v11",
+                coalescingPrecedence: 0,
                 RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
                 scheduledAt,
                 out var rescheduledGeneration)
@@ -145,6 +158,249 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
 
         rescheduledGeneration.Should().Be(4);
         state.ReminderCallbacks[callbackId].TriggerEnvelope.Id.Should().Be("retry-source-v11");
+    }
+
+    [Fact]
+    public void TryCompleteCoalescedTimeout_ShouldCancelPendingAndFenceDelayedOlderRetry()
+    {
+        const string actorId = "status-materializer";
+        const string callbackId = "latest-source-observation";
+        const string coalescingKey = "source-scope";
+        var state = new RuntimeCallbackSchedulerState();
+        var scheduledAt = DateTimeOffset.Parse(
+            "2026-08-28T00:00:00Z",
+            CultureInfo.InvariantCulture);
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("source-v10"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 10,
+                coalescingValueIdentity: "evt-v10",
+                coalescingPrecedence: 0,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var firstGeneration)
+            .Should().BeTrue();
+
+        RuntimeCallbackSchedulerGrain.TryCompleteCoalescedTimeout(
+                state,
+                callbackId,
+                coalescingKey,
+                coalescingSequence: 11,
+                coalescingValueIdentity: "evt-v11",
+                coalescingPrecedence: 0,
+                out var reminderUnregistrationRequired)
+            .Should().BeTrue();
+
+        reminderUnregistrationRequired.Should().BeTrue();
+        state.ReminderCallbacks.Should().NotContainKey(callbackId);
+        state.CoalescingWatermarks[coalescingKey].Sequence.Should().Be(11);
+        state.CoalescingWatermarks[coalescingKey].ValueIdentity.Should().Be("evt-v11");
+        state.CoalescingWatermarks[coalescingKey].Completed.Should().BeTrue();
+
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("delayed-source-v10"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 10,
+                coalescingValueIdentity: "evt-v10",
+                coalescingPrecedence: 0,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var delayedGeneration)
+            .Should().BeFalse();
+        delayedGeneration.Should().Be(firstGeneration);
+        state.ReminderCallbacks.Should().NotContainKey(callbackId);
+
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("source-v12"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 12,
+                coalescingValueIdentity: "evt-v12",
+                coalescingPrecedence: 0,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var newerGeneration)
+            .Should().BeTrue();
+        newerGeneration.Should().Be(firstGeneration + 1);
+        state.CoalescingWatermarks[coalescingKey].Completed.Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryCompleteCoalescedTimeout_AtSameSequenceWithDifferentIdentity_ShouldFailClosed()
+    {
+        const string actorId = "status-materializer";
+        const string callbackId = "latest-source-observation";
+        const string coalescingKey = "source-scope";
+        var state = new RuntimeCallbackSchedulerState();
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+            state,
+            actorId,
+            callbackId,
+            CreateEnvelope("source-v10"),
+            dueTimeMs: 5000,
+            coalescingKey,
+            coalescingSequence: 10,
+            coalescingValueIdentity: "evt-v10",
+            coalescingPrecedence: 0,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+            DateTimeOffset.UtcNow,
+            out _);
+
+        var complete = () => RuntimeCallbackSchedulerGrain.TryCompleteCoalescedTimeout(
+            state,
+            callbackId,
+            coalescingKey,
+            coalescingSequence: 10,
+            coalescingValueIdentity: "evt-conflict-v10",
+            coalescingPrecedence: 0,
+            out _);
+
+        complete.Should().Throw<InvalidOperationException>()
+            .WithMessage("*conflicting identities*");
+        state.ReminderCallbacks.Should().ContainKey(callbackId);
+    }
+
+    [Fact]
+    public void TryCompleteCoalescedTimeout_WhenPendingCursorDriftsFromWatermark_ShouldFailClosed()
+    {
+        const string actorId = "status-materializer";
+        const string callbackId = "latest-source-observation";
+        const string coalescingKey = "source-scope";
+        var state = new RuntimeCallbackSchedulerState();
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+            state,
+            actorId,
+            callbackId,
+            CreateEnvelope("source-v10"),
+            dueTimeMs: 5000,
+            coalescingKey,
+            coalescingSequence: 10,
+            coalescingValueIdentity: "publication-v10",
+            coalescingPrecedence: 0,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+            DateTimeOffset.UtcNow,
+            out _);
+        state.ReminderCallbacks[callbackId].CoalescingValueIdentity =
+            "corrupted-pending-publication-v10";
+
+        var complete = () => RuntimeCallbackSchedulerGrain.TryCompleteCoalescedTimeout(
+            state,
+            callbackId,
+            coalescingKey,
+            coalescingSequence: 11,
+            coalescingValueIdentity: "publication-v11",
+            coalescingPrecedence: 0,
+            out _);
+
+        complete.Should().Throw<InvalidOperationException>()
+            .WithMessage("*does not match its coalescing watermark*");
+        state.ReminderCallbacks.Should().ContainKey(callbackId);
+        state.CoalescingWatermarks[coalescingKey].Sequence.Should().Be(10);
+        state.CoalescingWatermarks[coalescingKey].Completed.Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryCompleteCoalescedTimeout_NewerSuccess_ShouldAdvanceCompletedWatermark()
+    {
+        const string callbackId = "latest-source-observation";
+        const string coalescingKey = "source-scope";
+        var state = new RuntimeCallbackSchedulerState
+        {
+            CallbackGenerations = { [callbackId] = 3 },
+            CoalescingWatermarks =
+            {
+                [coalescingKey] = new RuntimeCallbackCoalescingWatermark
+                {
+                    CallbackId = callbackId,
+                    Sequence = 10,
+                    ValueIdentity = "evt-v10",
+                    Completed = true,
+                },
+            },
+        };
+
+        RuntimeCallbackSchedulerGrain.TryCompleteCoalescedTimeout(
+                state,
+                callbackId,
+                coalescingKey,
+                coalescingSequence: 11,
+                coalescingValueIdentity: "evt-v11",
+                coalescingPrecedence: 0,
+                out var reminderUnregistrationRequired)
+            .Should().BeTrue();
+
+        reminderUnregistrationRequired.Should().BeFalse();
+        state.CoalescingWatermarks[coalescingKey].Sequence.Should().Be(11);
+        state.CoalescingWatermarks[coalescingKey].ValueIdentity.Should().Be("evt-v11");
+        state.CoalescingWatermarks[coalescingKey].Completed.Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryCompleteCoalescedTimeout_BeforeAnyFailure_ShouldFenceDelayedOlderRetry()
+    {
+        const string actorId = "status-materializer";
+        const string callbackId = "latest-source-observation";
+        const string coalescingKey = "source-scope";
+        var state = new RuntimeCallbackSchedulerState();
+
+        RuntimeCallbackSchedulerGrain.TryCompleteCoalescedTimeout(
+                state,
+                callbackId,
+                coalescingKey,
+                coalescingSequence: 11,
+                coalescingValueIdentity: "evt-v11",
+                coalescingPrecedence: 0,
+                out var reminderUnregistrationRequired)
+            .Should().BeTrue();
+
+        reminderUnregistrationRequired.Should().BeFalse();
+        state.CallbackGenerations[callbackId].Should().Be(1);
+        state.CoalescingWatermarks[coalescingKey].Completed.Should().BeTrue();
+        state.CoalescingWatermarks[coalescingKey].Sequence.Should().Be(11);
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("delayed-source-v10"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 10,
+                coalescingValueIdentity: "evt-v10",
+                coalescingPrecedence: 0,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                DateTimeOffset.UtcNow,
+                out var delayedGeneration)
+            .Should().BeFalse();
+        delayedGeneration.Should().Be(1);
+        state.ReminderCallbacks.Should().NotContainKey(callbackId);
+
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("source-v12"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 12,
+                coalescingValueIdentity: "evt-v12",
+                coalescingPrecedence: 0,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                DateTimeOffset.UtcNow,
+                out var newerGeneration)
+            .Should().BeTrue();
+        newerGeneration.Should().Be(2);
+        state.ReminderCallbacks.Should().ContainKey(callbackId);
     }
 
     [Fact]
@@ -171,6 +427,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                         dueTimeMs: 5000,
                         coalescingKey,
                         coalescingSequence: sequence,
+                        coalescingValueIdentity: $"evt-{coalescingKey}-v{sequence}",
+                        coalescingPrecedence: 0,
                         RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
                         scheduledAt,
                         out _)
@@ -184,6 +442,113 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
             .OnlyContain(watermark => watermark.Sequence == versionsPerSource);
         state.ReminderCallbacks.Values.Should()
             .OnlyContain(callback => callback.CoalescingSequence == versionsPerSource);
+    }
+
+    [Fact]
+    public void TryUpsertCoalescedTimeout_AtSameSequence_ShouldFenceConflictAndOrderPrecedence()
+    {
+        const string actorId = "status-materializer";
+        const string callbackId = "latest-source-observation";
+        const string coalescingKey = "source-scope";
+        var state = new RuntimeCallbackSchedulerState();
+        var scheduledAt = DateTimeOffset.Parse(
+            "2026-08-28T00:00:00Z",
+            CultureInfo.InvariantCulture);
+
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("ordinary-v10"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 10,
+                coalescingValueIdentity: "evt-ordinary-v10",
+                coalescingPrecedence: 0,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out _)
+            .Should().BeTrue();
+
+        var conflict = () => RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+            state,
+            actorId,
+            callbackId,
+            CreateEnvelope("conflicting-v10"),
+            dueTimeMs: 5000,
+            coalescingKey,
+            coalescingSequence: 10,
+            coalescingValueIdentity: "evt-conflicting-v10",
+            coalescingPrecedence: 0,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+            scheduledAt,
+            out _);
+
+        conflict.Should().Throw<InvalidOperationException>()
+            .WithMessage("*conflicting identities*");
+
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("maintenance-v10"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 10,
+                coalescingValueIdentity: "rebuild:source-scope:10",
+                coalescingPrecedence: 1,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var maintenanceGeneration)
+            .Should().BeTrue();
+
+        state.CoalescingWatermarks[coalescingKey].ValueIdentity.Should()
+            .Be("rebuild:source-scope:10");
+        state.CoalescingWatermarks[coalescingKey].Precedence.Should().Be(1);
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("delayed-ordinary-v10"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 10,
+                coalescingValueIdentity: "evt-ordinary-v10",
+                coalescingPrecedence: 0,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var staleGeneration)
+            .Should().BeFalse();
+        staleGeneration.Should().Be(maintenanceGeneration);
+    }
+
+    [Fact]
+    public void ResolveRollingUpgradeCoalescingCursor_ShouldUseCanonicalCommittedPublicationIdentity()
+    {
+        var published = new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                AgentId = "source-scope",
+                EventId = CommittedStateRepublish.BuildEventId("source-scope", 10),
+                Version = 10,
+                EventData = Any.Pack(new StringValue { Value = "maintenance" }),
+            },
+            StateRoot = Any.Pack(new StringValue { Value = "current-state" }),
+        };
+        var envelope = CreateEnvelope("rolling-upgrade-v10");
+        envelope.Payload = Any.Pack(published);
+
+        var cursor = RuntimeCallbackSchedulerGrain.ResolveRollingUpgradeCoalescingCursor(
+            envelope,
+            "source-scope",
+            10);
+
+        cursor.Should().Be(new RuntimeEnvelopeRetryCoalescingCursor(
+            "source-scope",
+            10,
+            RuntimeEnvelopeRetryCoalescingValueIdentity.Create(published),
+            precedence: 1));
     }
 
     [Fact]
@@ -338,6 +703,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
             dueTimeMs: 600_000,
             coalescingKey,
             coalescingSequence: 10,
+            coalescingValueIdentity: "evt-v10",
+            coalescingPrecedence: 0,
             RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
         var duplicate = await grain.ScheduleCoalescedTimeoutAsync(
             callbackId,
@@ -345,6 +712,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
             dueTimeMs: 600_000,
             coalescingKey,
             coalescingSequence: 10,
+            coalescingValueIdentity: "evt-v10",
+            coalescingPrecedence: 0,
             RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
         var newer = await grain.ScheduleCoalescedTimeoutAsync(
             callbackId,
@@ -352,6 +721,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
             dueTimeMs: 600_000,
             coalescingKey,
             coalescingSequence: 11,
+            coalescingValueIdentity: "evt-v11",
+            coalescingPrecedence: 0,
             RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
         var stale = await grain.ScheduleCoalescedTimeoutAsync(
             callbackId,
@@ -359,6 +730,8 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
             dueTimeMs: 600_000,
             coalescingKey,
             coalescingSequence: 10,
+            coalescingValueIdentity: "evt-v10",
+            coalescingPrecedence: 0,
             RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
 
         duplicate.Should().Be(first);
@@ -369,6 +742,126 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         state.ReminderCallbacks[callbackId].CoalescingSequence.Should().Be(11);
         state.ReminderCallbacks[callbackId].TriggerEnvelope.Id.Should().Be("source-v11");
         reminderTable.Contains(grain.GetGrainId(), callbackId).Should().BeTrue();
+        await FluentActions.Awaiting(() => grain.CancelAsync(
+                callbackId,
+                newer,
+                RuntimeCallbackSlotEpoch.OrleansSchedulerV2))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*coalesced timeout contract*");
+        await grain.PurgeAsync();
+    }
+
+    [Fact]
+    public async Task CompleteCoalescedTimeoutAsync_WhenUnregistrationFails_ShouldKeepCompletedFenceAndRecover()
+    {
+        const string actorId = "status-materializer-completion-recovery";
+        const string callbackId = "latest-source-observation";
+        const string coalescingKey = "source-scope";
+        var streamProvider = new RecordingStreamProvider();
+        var storage = new TestRuntimeCallbackSchedulerStateStorage();
+        var reminderTable = new RecordingReminderTable();
+        using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
+        var grain = host.Services
+            .GetRequiredService<IGrainFactory>()
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+        var grainId = grain.GetGrainId();
+
+        await grain.ScheduleCoalescedTimeoutAsync(
+            callbackId,
+            CreateEnvelope("source-v10"),
+            dueTimeMs: 600_000,
+            coalescingKey,
+            coalescingSequence: 10,
+            coalescingValueIdentity: "publication-v10",
+            coalescingPrecedence: 0,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+        reminderTable.FailNextRemoval(callbackId);
+
+        var firstCompletion = () => grain.CompleteCoalescedTimeoutAsync(
+            callbackId,
+            coalescingKey,
+            coalescingSequence: 10,
+            coalescingValueIdentity: "publication-v10",
+            coalescingPrecedence: 0);
+
+        await firstCompletion.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage($"forced unregister failure: {callbackId}");
+        var committedFence = storage.ReadSchedulerState(grainId);
+        committedFence.ReminderCallbacks.Should().NotContainKey(callbackId);
+        committedFence.CoalescingWatermarks[coalescingKey].Completed.Should().BeTrue();
+        committedFence.PendingReminderUnregistrations.Should().ContainSingle()
+            .Which.Should().Be(callbackId);
+        reminderTable.Contains(grainId, callbackId).Should().BeTrue();
+
+        await grain.CompleteCoalescedTimeoutAsync(
+            callbackId,
+            coalescingKey,
+            coalescingSequence: 10,
+            coalescingValueIdentity: "publication-v10",
+            coalescingPrecedence: 0);
+
+        var recovered = storage.ReadSchedulerState(grainId);
+        recovered.ReminderCallbacks.Should().NotContainKey(callbackId);
+        recovered.CoalescingWatermarks[coalescingKey].Completed.Should().BeTrue();
+        recovered.PendingReminderUnregistrations.Should().BeEmpty();
+        reminderTable.Contains(grainId, callbackId).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CompleteCoalescedTimeoutAsync_BeforeAnyFailure_ShouldPersistFenceForDelayedOlderRetry()
+    {
+        const string actorId = "status-materializer-success-first";
+        const string coalescingKey = "source-scope";
+        var callbackId = RuntimeEnvelopeRetryCoalescingCallbackSlot.BuildCallbackId(coalescingKey);
+        var streamProvider = new RecordingStreamProvider();
+        var storage = new TestRuntimeCallbackSchedulerStateStorage();
+        var reminderTable = new RecordingReminderTable();
+        using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
+        var grain = host.Services
+            .GetRequiredService<IGrainFactory>()
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+        var grainId = grain.GetGrainId();
+
+        await grain.CompleteCoalescedTimeoutAsync(
+            callbackId,
+            coalescingKey,
+            coalescingSequence: 11,
+            coalescingValueIdentity: "evt-v11",
+            coalescingPrecedence: 0);
+
+        var completed = storage.ReadSchedulerState(grainId);
+        completed.CallbackGenerations[callbackId].Should().Be(1);
+        completed.CoalescingWatermarks[coalescingKey].Completed.Should().BeTrue();
+        completed.CoalescingWatermarks[coalescingKey].Sequence.Should().Be(11);
+        var delayedGeneration = await grain.ScheduleCoalescedTimeoutAsync(
+            callbackId,
+            CreateEnvelope("delayed-source-v10"),
+            dueTimeMs: 600_000,
+            coalescingKey,
+            coalescingSequence: 10,
+            coalescingValueIdentity: "evt-v10",
+            coalescingPrecedence: 0,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+
+        delayedGeneration.Should().Be(1);
+        storage.ReadSchedulerState(grainId).ReminderCallbacks.Should().NotContainKey(callbackId);
+        reminderTable.Contains(grainId, callbackId).Should().BeFalse();
+
+        var newerGeneration = await grain.ScheduleCoalescedTimeoutAsync(
+            callbackId,
+            CreateEnvelope("source-v12"),
+            dueTimeMs: 600_000,
+            coalescingKey,
+            coalescingSequence: 12,
+            coalescingValueIdentity: "evt-v12",
+            coalescingPrecedence: 0,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+
+        newerGeneration.Should().Be(2);
+        storage.ReadSchedulerState(grainId).ReminderCallbacks.Should().ContainKey(callbackId);
+        reminderTable.Contains(grainId, callbackId).Should().BeTrue();
+        await grain.PurgeAsync();
     }
 
     [Fact]

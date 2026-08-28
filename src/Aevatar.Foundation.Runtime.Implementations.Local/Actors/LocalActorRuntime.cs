@@ -162,7 +162,8 @@ public sealed class LocalActorRuntime : IActorRuntime
             identity,
             _services.GetService<IRuntimeActorStateSchemaContextBinder>(),
             _services.GetService<IRuntimeFleetReconcileDeliveryVerifier>(),
-            _services.GetService<IRuntimeFleetReconcileDeliveryAttestationBinder>());
+            _services.GetService<IRuntimeFleetReconcileDeliveryAttestationBinder>(),
+            _callbackScheduler);
         var publisher = new LocalActorPublisher(
             actorId,
             () => actor.ParentId,

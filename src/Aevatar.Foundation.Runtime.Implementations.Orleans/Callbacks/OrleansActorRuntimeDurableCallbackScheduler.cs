@@ -7,6 +7,7 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 
 public sealed class OrleansActorRuntimeDurableCallbackScheduler
     : IActorRuntimeCallbackScheduler,
+      IRuntimeEnvelopeRetryCoalescingCallbackScheduler,
       IRuntimeFleetReconcileScheduleOwner,
       IRuntimeFleetReconcileDeliveryVerifier
 {
@@ -114,6 +115,24 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         return _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId).PurgeAsync();
     }
 
+    public Task CompleteRuntimeEnvelopeRetryAsync(
+        string actorId,
+        RuntimeEnvelopeRetryCoalescingCursor cursor,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ArgumentNullException.ThrowIfNull(cursor);
+        ct.ThrowIfCancellationRequested();
+        return _grainFactory
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId)
+            .CompleteCoalescedTimeoutAsync(
+                RuntimeEnvelopeRetryCoalescingCallbackSlot.BuildCallbackId(cursor.Key),
+                cursor.Key,
+                cursor.Sequence,
+                cursor.ValueIdentity,
+                cursor.Precedence);
+    }
+
     public async Task EnsureScheduledAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -190,7 +209,21 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         RuntimeEnvelopeRetryCoalescingCursor coalescingCursor,
         RuntimeCallbackDeliveryMode deliveryMode)
     {
+        var rollingUpgradeCursor = RuntimeCallbackSchedulerGrain.ResolveRollingUpgradeCoalescingCursor(
+            envelope,
+            coalescingCursor.Key,
+            coalescingCursor.Sequence);
+        if (rollingUpgradeCursor != coalescingCursor)
+        {
+            throw new InvalidOperationException(
+                "The rolling-upgrade coalesced timeout wire contract cannot preserve the supplied typed cursor.");
+        }
+
         var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+        // Keep the wire call on the previous signature for this rollout. A new runtime can then
+        // persist the authoritative version fence even when this grain is still activated on an
+        // older silo. The new grain derives the typed value identity and maintenance precedence
+        // from the exact committed envelope before entering the typed implementation.
         return await grain.ScheduleCoalescedTimeoutAsync(
             callbackId,
             envelope,

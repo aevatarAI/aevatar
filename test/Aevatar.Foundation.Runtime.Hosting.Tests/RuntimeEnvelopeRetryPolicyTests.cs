@@ -151,6 +151,24 @@ public sealed class RuntimeEnvelopeRetryPolicyTests
         delays.Should().OnlyContain(delay => delay >= 5000 && delay <= 6000);
     }
 
+    [Theory]
+    [InlineData(1, nameof(RuntimeEnvelopeRetryLogDisposition.WarningWithException))]
+    [InlineData(2, nameof(RuntimeEnvelopeRetryLogDisposition.Warning))]
+    [InlineData(3, nameof(RuntimeEnvelopeRetryLogDisposition.Warning))]
+    [InlineData(4, nameof(RuntimeEnvelopeRetryLogDisposition.Warning))]
+    [InlineData(5, nameof(RuntimeEnvelopeRetryLogDisposition.Debug))]
+    [InlineData(6, nameof(RuntimeEnvelopeRetryLogDisposition.Debug))]
+    [InlineData(7, nameof(RuntimeEnvelopeRetryLogDisposition.Debug))]
+    [InlineData(8, nameof(RuntimeEnvelopeRetryLogDisposition.Warning))]
+    [InlineData(15, nameof(RuntimeEnvelopeRetryLogDisposition.Debug))]
+    [InlineData(16, nameof(RuntimeEnvelopeRetryLogDisposition.Warning))]
+    public void RetryLogDisposition_ShouldKeepFullFailureOnceAndThenUseCappedCadence(
+        int attempt,
+        string expected)
+    {
+        RuntimeEnvelopeRetryPolicy.ResolveRetryLogDisposition(attempt).ToString().Should().Be(expected);
+    }
+
     [Fact]
     public void RetryUntilResolvedMarker_ShouldRemainSafelyDelayedWhenOrdinaryRetryIsDisabled()
     {
@@ -175,7 +193,7 @@ public sealed class RuntimeEnvelopeRetryPolicyTests
     [Fact]
     public void ResolveRetryCoalescingCursor_ShouldReadWrappedAuthoritativeCursor()
     {
-        var cursor = new RuntimeEnvelopeRetryCoalescingCursor("source-scope", 17);
+        var cursor = new RuntimeEnvelopeRetryCoalescingCursor("source-scope", 17, "evt-17");
         var exception = new AggregateException(
             new InvalidOperationException(
                 "wrapper",

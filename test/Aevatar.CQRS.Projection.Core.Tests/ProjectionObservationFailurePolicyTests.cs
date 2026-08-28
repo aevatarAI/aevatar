@@ -14,6 +14,8 @@ public sealed class ProjectionObservationFailurePolicyTests
             "projection-status-terminal:source",
             "source",
             23,
+            "evt-23",
+            "evt-23",
             7,
             ProjectionScopeStatusRoutePhase.Warming,
             ProjectionScopeStatusActorRole.TerminalWriter);
@@ -22,7 +24,7 @@ public sealed class ProjectionObservationFailurePolicyTests
         exception.Should().BeAssignableTo<IRuntimeEnvelopeRetryUntilResolvedException>();
         exception.Should().BeAssignableTo<IRuntimeEnvelopeRetryCoalescingException>();
         exception.RetryCoalescingCursor.Should().Be(
-            new RuntimeEnvelopeRetryCoalescingCursor("source", 23));
+            new RuntimeEnvelopeRetryCoalescingCursor("source", 23, "evt-23"));
         new ProjectionScopeStatusRouteBlockedException("source", 7)
             .Should().NotBeAssignableTo<IRuntimeEnvelopeRetryUntilResolvedException>();
         new ProjectionScopeStatusWriteRejectedException(
