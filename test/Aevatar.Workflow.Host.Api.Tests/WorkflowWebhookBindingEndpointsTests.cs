@@ -1472,7 +1472,7 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         const string scheme = "NyxIdIdentityAssertion";
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
         [
-            new Claim("sub", subject),
+            new Claim("uid", subject),
             new Claim("scope_id", scopeId),
         ], scheme));
         http.User = principal;

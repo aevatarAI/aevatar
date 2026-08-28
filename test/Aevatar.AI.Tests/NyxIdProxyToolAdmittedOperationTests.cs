@@ -878,7 +878,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             ApprovalStatusResponseBody = statusBody,
         };
         var tool = CreateTool(handler);
-        using var scope = PushContext(CreateApprovalAdmission());
+        using var scope = PushContext(CreateApprovalRequiredAdmission());
 
         var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
             "call-effect-alpha",
@@ -922,7 +922,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             }),
         };
         var tool = CreateTool(handler);
-        using var scope = PushContext(CreateApprovalAdmission());
+        using var scope = PushContext(CreateApprovalRequiredAdmission());
 
         await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
             "call-effect-alpha",
@@ -1482,7 +1482,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         using (PushContext(CreateApprovalAdmission()))
         {
             tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
-                RequiresApproval: true,
+                RequiresApproval: false,
                 IsReadOnly: false,
                 IsDestructive: false));
         }
@@ -1499,7 +1499,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         }
 
         using (PushContext(
-                   CreateApprovalAdmission(),
+                   CreateApprovalRequiredAdmission(),
                    invocationSurface: AgentToolInvocationSurface.HumanSession))
         {
             tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
@@ -1510,11 +1510,11 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public async Task ProofBoundWorkflowWrite_ShouldReachNyxIdOnlyAfterExactPerRunApproval()
+    public async Task ExplicitApprovalProofBoundWorkflowWrite_ShouldReachNyxIdOnlyAfterExactPerRunApproval()
     {
         var handler = new RecordingHandler();
         var tool = CreateTool(handler);
-        using var scope = PushContext(CreateApprovalAdmission());
+        using var scope = PushContext(CreateApprovalRequiredAdmission());
         const string argumentsJson = """{"body":{"approval_code":"AC-1","form":"{}"}}""";
         var executionContext = (AgentToolRequestContext.Current
                                 ?? throw new InvalidOperationException("Tool context was not established.")) with
@@ -1793,6 +1793,12 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             AgentToolOperationResponsePolicy.TextOnly,
             WritePolicy());
 
+    private static AgentToolOperationAdmission CreateApprovalRequiredAdmission() =>
+        CreateApprovalAdmission() with
+        {
+            ExecutionPolicy = ApprovalRequiredWritePolicy(),
+        };
+
     private static AgentToolOperationAdmission GetApprovalInstanceAdmission() =>
         new(
             "us-lark-alpha",
@@ -1868,6 +1874,13 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     private static AgentToolOperationExecutionPolicy WritePolicy() =>
         new(
             AgentToolOperationRisk.Write,
+            AgentToolOperationApproval.None,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive]);
+
+    private static AgentToolOperationExecutionPolicy ApprovalRequiredWritePolicy() =>
+        new(
+            AgentToolOperationRisk.Write,
             AgentToolOperationApproval.Required,
             AgentToolOperationEnforcementOwner.Aevatar,
             [AgentToolOperationExecutionMode.Interactive]);
@@ -1875,7 +1888,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     private static AgentToolOperationExecutionPolicy DurableWritePolicy() =>
         new(
             AgentToolOperationRisk.Write,
-            AgentToolOperationApproval.Required,
+            AgentToolOperationApproval.None,
             AgentToolOperationEnforcementOwner.Aevatar,
             [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]);
 
