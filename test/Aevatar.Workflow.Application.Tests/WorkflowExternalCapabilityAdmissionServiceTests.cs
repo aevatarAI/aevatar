@@ -2245,9 +2245,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         var policy = new NyxIdOperationExecutionPolicy
         {
             Risk = risk,
-            Approval = risk == NyxIdOperationRisk.ReadOnly
-                ? NyxIdOperationApproval.None
-                : NyxIdOperationApproval.Required,
+            Approval = NyxIdOperationApproval.None,
             EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
         };
         policy.AllowedExecutionModes.Add(modes);

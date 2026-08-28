@@ -921,8 +921,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         return policy.Risk switch
         {
             NyxIdOperationRisk.ReadOnly => policy.Approval == NyxIdOperationApproval.None,
-            NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive =>
-                policy.Approval == NyxIdOperationApproval.Required,
+            NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive => true,
             _ => false,
         };
     }

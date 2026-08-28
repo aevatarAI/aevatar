@@ -297,22 +297,23 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
 
         var routeHintAlreadyStarted = HasRouteToolChoiceHintReceipt(workItem.StepState);
-        var recoveryToolCall = requiredToolCall is not null || workItem.StepState.FinalNoToolsStep
-            ? null
-            : await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
-                    llmRequest,
-                    skillRecoveryMessages,
-                    finalContent: null,
-                    ct)
-                .ConfigureAwait(false);
         var routeHintToolCall = requiredToolCall is not null ||
-                                recoveryToolCall is not null ||
                                 workItem.StepState.FinalNoToolsStep ||
                                 routeHintAlreadyStarted
             ? null
             : await plan.StepExecutor.TryAuthorizePlannedToolCallAsync(
                     llmRequest,
                     authorizedRequest => TryBuildRouteToolChoiceHintCall(request, authorizedRequest.Tools ?? []),
+                    ct)
+                .ConfigureAwait(false);
+        var recoveryToolCall = requiredToolCall is not null ||
+                               routeHintToolCall is not null ||
+                               workItem.StepState.FinalNoToolsStep
+            ? null
+            : await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
+                    llmRequest,
+                    skillRecoveryMessages,
+                    finalContent: null,
                     ct)
                 .ConfigureAwait(false);
         ChatRuntimeStepLlmResult llmResult;
@@ -654,8 +655,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (tool.ApprovalMode == ToolApprovalMode.NeverRequire)
             return false;
         return safety.RequiresApproval ??
-               (tool.ApprovalMode == ToolApprovalMode.AlwaysRequire ||
-                (!safety.IsReadOnly && safety.IsDestructive));
+               tool.ApprovalMode == ToolApprovalMode.AlwaysRequire;
     }
 
     private static AgentToolCallSafety ResolveEffectiveCallSafety(

@@ -340,9 +340,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         admittedCapability.NyxIdUserRequest.ExecutionPolicy = new NyxIdOperationExecutionPolicy
         {
             Risk = grant.Risk,
-            Approval = grant.Risk == NyxIdOperationRisk.ReadOnly
-                ? NyxIdOperationApproval.None
-                : NyxIdOperationApproval.Required,
+            Approval = NyxIdOperationApproval.None,
             EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
         };
         admittedCapability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Add(

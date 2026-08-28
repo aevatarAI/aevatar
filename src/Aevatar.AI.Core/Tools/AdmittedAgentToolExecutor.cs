@@ -1676,7 +1676,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             return callSafety.RequiresApproval.Value;
         if (tool.ApprovalMode == ToolApprovalMode.AlwaysRequire)
             return true;
-        return !callSafety.IsReadOnly && callSafety.IsDestructive;
+        return false;
     }
 
     private static bool MatchesGrant(

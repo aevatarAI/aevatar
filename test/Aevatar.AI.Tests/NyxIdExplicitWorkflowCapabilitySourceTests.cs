@@ -329,7 +329,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     [InlineData(NyxIdRequestMethod.Put, NyxIdOperationRisk.Write)]
     [InlineData(NyxIdRequestMethod.Patch, NyxIdOperationRisk.Write)]
     [InlineData(NyxIdRequestMethod.Delete, NyxIdOperationRisk.Destructive)]
-    public async Task InspectAsync_ShouldAdmitMutatingDurableRequestsFromExactCatalogGrant(
+    public async Task InspectAsync_ShouldAdmitMutatingDurableRequestsWithoutDefaultApproval(
         NyxIdRequestMethod method,
         NyxIdOperationRisk expectedRisk)
     {
@@ -343,7 +343,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         result.Blockers.Should().BeEmpty();
         result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.Risk.Should().Be(expectedRisk);
         result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.Approval.Should()
-            .Be(NyxIdOperationApproval.Required);
+            .Be(NyxIdOperationApproval.None);
         result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Should()
             .Equal(
                 ExternalCapabilityExecutionMode.Interactive,
