@@ -61,9 +61,11 @@ internal sealed class RuntimeEnvelopeRetryPolicy
         out int nextAttempt)
     {
         nextAttempt = GetAttempt(originalEnvelope) + 1;
-        if (!Enabled ||
-            nextAttempt > MaxAttempts ||
-            !ShouldRetry(exception))
+        var retryUntilResolved = ContainsRuntimeEnvelopeRetryUntilResolvedFailure(exception);
+        if (!retryUntilResolved &&
+            (!Enabled ||
+             nextAttempt > MaxAttempts ||
+             !ShouldRetry(exception)))
         {
             retryEnvelope = null!;
             return false;
@@ -134,6 +136,23 @@ internal sealed class RuntimeEnvelopeRetryPolicy
                 aggregate.InnerExceptions.Any(ContainsRuntimeEnvelopeRetryableFailure),
             _ when exception.InnerException is not null =>
                 ContainsRuntimeEnvelopeRetryableFailure(exception.InnerException),
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// True when the handler is waiting on a transient gate that must be retried from an
+    /// actor-owned durable continuation even after the ordinary attempt budget is exhausted.
+    /// </summary>
+    internal static bool ContainsRuntimeEnvelopeRetryUntilResolvedFailure(Exception exception)
+    {
+        return exception switch
+        {
+            IRuntimeEnvelopeRetryUntilResolvedException => true,
+            AggregateException aggregate =>
+                aggregate.InnerExceptions.Any(ContainsRuntimeEnvelopeRetryUntilResolvedFailure),
+            _ when exception.InnerException is not null =>
+                ContainsRuntimeEnvelopeRetryUntilResolvedFailure(exception.InnerException),
             _ => false,
         };
     }

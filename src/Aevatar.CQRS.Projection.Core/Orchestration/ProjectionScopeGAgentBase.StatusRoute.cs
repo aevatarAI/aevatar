@@ -1310,7 +1310,7 @@ public sealed class ProjectionScopeStatusPhaseBProofUnavailableException(
     ProjectionScopeStatusActorRole writerRole)
     : InvalidOperationException(
         $"Status materializer '{materializerActorId}' cannot prove Phase-B admission for source '{sourceScopeActorId}', route epoch {routeEpoch}, phase {phase}, writer role {writerRole}; the observation is redelivered."),
-        IRuntimeEnvelopeRetryableException
+        IRuntimeEnvelopeRetryUntilResolvedException
 {
     public string MaterializerActorId { get; } = materializerActorId;
 

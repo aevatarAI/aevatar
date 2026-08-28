@@ -386,6 +386,127 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
     }
 
     [Fact]
+    public async Task HandleEnvelopeAsync_WhenRetryUntilResolvedExceedsBudget_ShouldPersistStableLineageContinuation()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        var callbackScheduler = new CredentialGuardedRecordingCallbackScheduler();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "3",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "0",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(
+            siloPort,
+            gatewayPort,
+            callbackScheduler: callbackScheduler);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = CreateEnvelope("retry-until-resolved");
+            envelope.Runtime = new EnvelopeRuntime
+            {
+                DeliveryIdentity = new DeliveryIdentity
+                {
+                    OperationId = "phase-b-proof-lineage",
+                },
+                Retry = new EnvelopeRetryContext { Attempt = 3 },
+            };
+
+            await grain.HandleEnvelopeAsync(envelope.ToByteArray());
+            callbackScheduler.TimeoutRequests.Should().ContainSingle();
+            var firstRequest = callbackScheduler.TimeoutRequests.Single();
+
+            await grain.HandleEnvelopeAsync(firstRequest.TriggerEnvelope.ToByteArray());
+
+            callbackScheduler.TimeoutRequests.Should().HaveCount(2);
+            var secondRequest = callbackScheduler.TimeoutRequests[1];
+            firstRequest.CallbackId.Should().Be(secondRequest.CallbackId);
+            firstRequest.CallbackId.Should().StartWith("runtime-envelope-retry-until-resolved:");
+            firstRequest.DeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+            secondRequest.DeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+            firstRequest.DueTime.Should().BeGreaterThan(TimeSpan.Zero,
+                "retry-until-resolved always uses a durable callback even when the configured delay is zero");
+            firstRequest.TriggerEnvelope.Runtime.Retry.Attempt.Should().Be(4);
+            secondRequest.TriggerEnvelope.Runtime.Retry.Attempt.Should().Be(5);
+            firstRequest.TriggerEnvelope.Runtime.Retry.OriginEventId.Should().Be("phase-b-proof-lineage");
+            secondRequest.TriggerEnvelope.Runtime.Retry.OriginEventId.Should().Be("phase-b-proof-lineage");
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_WhenRetryUntilResolvedSchedulerFailsAfterBudget_ShouldPreserveFailureAndReactivate()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        var callbackScheduler = new AlwaysFailingCallbackScheduler();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "1",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "0",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(
+            siloPort,
+            gatewayPort,
+            callbackScheduler: callbackScheduler);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = CreateEnvelope("retry-until-resolved-scheduler-failure");
+            envelope.Runtime = new EnvelopeRuntime
+            {
+                Retry = new EnvelopeRetryContext { Attempt = 1 },
+            };
+
+            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
+                .Should().ThrowExactlyAsync<ProjectionScopeStatusPhaseBProofUnavailableException>()
+                .WithMessage("*cannot prove Phase-B admission*");
+            await RetryAwareDirectDispatchAgent.WaitForDeactivationAsync(TimeSpan.FromSeconds(20));
+
+            callbackScheduler.ScheduleTimeoutCallCount.Should().Be(1);
+            RetryAwareDirectDispatchAgent.DeactivationCount.Should().Be(1,
+                "a failed durable handoff must preserve transport redelivery semantics");
+
+            await grain.HandleEnvelopeAsync(envelope.ToByteArray());
+            await RetryAwareDirectDispatchAgent.WaitForSuccessAsync(envelope.Id, TimeSpan.FromSeconds(20));
+
+            RetryAwareDirectDispatchAgent.ActivationCount.Should().Be(2);
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task HandleEnvelopeAsync_WhenRetrySchedulerFailsForRequiredRedelivery_ShouldPreserveFailureAndReactivate()
     {
         RetryAwareDirectDispatchAgent.Reset();
@@ -818,6 +939,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         private static int _activationCount;
         private static int _deactivationCount;
         private static int _runtimeRetryableFailuresRemaining;
+        private static int _retryUntilResolvedSchedulerFailuresRemaining;
         private static int _projectionWriteRejectionsRemaining;
 
         public static void Reset()
@@ -831,6 +953,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 _activationCount = 0;
                 _deactivationCount = 0;
                 _runtimeRetryableFailuresRemaining = 1;
+                _retryUntilResolvedSchedulerFailuresRemaining = 1;
                 _projectionWriteRejectionsRemaining = 1;
             }
         }
@@ -915,6 +1038,18 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
             if (payload == "always-fail-retry-exhausted")
                 throw new InvalidOperationException("always-fail-retry-exhausted");
+
+            if (payload == "retry-until-resolved" ||
+                (payload == "retry-until-resolved-scheduler-failure" &&
+                 Interlocked.Exchange(ref _retryUntilResolvedSchedulerFailuresRemaining, 0) == 1))
+            {
+                throw new ProjectionScopeStatusPhaseBProofUnavailableException(
+                    Id,
+                    "source-phase-b-proof",
+                    7,
+                    ProjectionScopeStatusRoutePhase.Warming,
+                    ProjectionScopeStatusActorRole.TerminalWriter);
+            }
 
             if ((payload == "runtime-retryable-exhausted" ||
                  payload == "runtime-retryable-scheduler-failure") &&

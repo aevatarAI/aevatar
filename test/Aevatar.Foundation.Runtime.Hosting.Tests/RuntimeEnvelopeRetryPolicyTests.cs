@@ -54,6 +54,64 @@ public sealed class RuntimeEnvelopeRetryPolicyTests
         retry.Runtime.Retry.LastErrorType.Should().Be(nameof(AggregateException));
     }
 
+    [Fact]
+    public void RetryUntilResolvedMarker_ShouldContinuePastOrdinaryAttemptBudgetThroughWrappers()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("3", "10");
+        var source = new EventEnvelope
+        {
+            Id = "retry-until-resolved-source",
+            Runtime = new EnvelopeRuntime
+            {
+                Retry = new EnvelopeRetryContext
+                {
+                    Attempt = 3,
+                    OriginEventId = "retry-until-resolved-lineage",
+                },
+            },
+        };
+
+        policy.TryBuildRetryEnvelope(
+                source,
+                new AggregateException(new RuntimeRetryUntilResolvedTestException()),
+                out var retry,
+                out var nextAttempt)
+            .Should().BeTrue();
+
+        nextAttempt.Should().Be(4);
+        retry.Runtime.Retry.Attempt.Should().Be(4);
+        retry.Runtime.Retry.OriginEventId.Should().Be("retry-until-resolved-lineage");
+        RuntimeEnvelopeRetryPolicy
+            .ContainsRuntimeEnvelopeRetryUntilResolvedFailure(
+                new InvalidOperationException(
+                    "wrapper",
+                    new RuntimeRetryUntilResolvedTestException()))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void OrdinaryRuntimeRetryableMarker_ShouldStopAtAttemptBudget()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("3", "10");
+        var source = new EventEnvelope
+        {
+            Id = "ordinary-runtime-retryable-source",
+            Runtime = new EnvelopeRuntime
+            {
+                Retry = new EnvelopeRetryContext { Attempt = 3 },
+            },
+        };
+
+        policy.TryBuildRetryEnvelope(
+                source,
+                new RuntimeRetryableTestException(),
+                out _,
+                out var nextAttempt)
+            .Should().BeFalse();
+
+        nextAttempt.Should().Be(4);
+    }
+
     [Theory]
     [InlineData(typeof(EventStoreOptimisticConcurrencyException))]
     [InlineData(typeof(EventStoreVersionDriftException))]
@@ -124,6 +182,11 @@ public sealed class RuntimeEnvelopeRetryPolicyTests
     }
 
     private sealed class RuntimeRetryableTestException : Exception, IRuntimeEnvelopeRetryableException
+    {
+    }
+
+    private sealed class RuntimeRetryUntilResolvedTestException
+        : Exception, IRuntimeEnvelopeRetryUntilResolvedException
     {
     }
 }

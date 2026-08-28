@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
 
@@ -17,6 +18,19 @@ public sealed class ProjectionObservationFailurePolicyTests
             ProjectionScopeStatusActorRole.TerminalWriter);
 
         ProjectionObservationFailurePolicy.ShouldPropagate(exception).Should().BeTrue();
+        exception.Should().BeAssignableTo<IRuntimeEnvelopeRetryUntilResolvedException>();
+        new ProjectionScopeStatusRouteBlockedException("source", 7)
+            .Should().NotBeAssignableTo<IRuntimeEnvelopeRetryUntilResolvedException>();
+        new ProjectionScopeStatusWriteRejectedException(
+                "projection-status-terminal:source",
+                new ProjectionSourceCoordinate
+                {
+                    ActorId = "source",
+                    StateVersion = 3,
+                    EventId = "event-3",
+                },
+                ProjectionWriteDisposition.Gap)
+            .Should().NotBeAssignableTo<IRuntimeEnvelopeRetryUntilResolvedException>();
     }
 
     [Fact]

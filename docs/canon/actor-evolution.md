@@ -96,6 +96,7 @@ flowchart LR
 5. 每次 open/revoke 都基于已提交值单调增加 capability epoch；actor restart 不重置 epoch。Authority 不直接读写 read-model store，CQRS 只消费其 committed current-state publication 并物化、查询 current state。
 6. Admission 只读 Authority 的 actor-scoped current-state replica，并同时核对 authority state version、capability epoch、freshness、membership/deployment digest、全员确认数，以及本地 member id + incarnation。缺失、过期或不一致全部 fail closed；query path 不触发 reconcile、projection priming 或 actor lifecycle。
 7. Authority read model 是最终一致副本：live membership 的 epoch、digest、deployment revision 或本地 incarnation 一旦与副本不一致，admission 立即拒绝；同一 membership 下尚未投影的 revoke 只能在该 committed proof 的 `valid_until` 前形成 bounded stale-open window，到期必须拒绝。Orleans membership evidence 默认 TTL 为 30 秒，runtime policy 同时拒绝超过 `MaxMembershipEvidenceTtl` 的 proof；不得为消除该窗口在 query path 侧读 Authority actor。
+8. Proof-gated observation 在 live proof 尚不可见时，必须把 exact failed envelope 持久化为 actor-owned durable continuation；持久化成功后 transport delivery 才可 ACK，随后以 delivery lineage 稳定的 callback id 重投直到 gate 可见。普通 retry budget 不得把这类等待降级为长期占住 broker offset 的 transport redelivery；只有 durable scheduler 写入失败时才保留原 delivery 未确认并传播原 handler failure。
 
 ## 5. 关联 canon
 

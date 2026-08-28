@@ -982,6 +982,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private async Task<bool> TryScheduleRetryAsync(EventEnvelope envelope, Exception ex)
     {
+        var retryUntilResolved =
+            RuntimeEnvelopeRetryPolicy.ContainsRuntimeEnvelopeRetryUntilResolvedFailure(ex);
         if (!_runtimeEnvelopeRetryPolicy.TryBuildRetryEnvelope(
                 envelope,
                 ex,
@@ -989,7 +991,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 out var nextAttempt))
             return false;
 
-        if (_runtimeEnvelopeRetryPolicy.RetryDelayMs > 0)
+        if (retryUntilResolved || _runtimeEnvelopeRetryPolicy.RetryDelayMs > 0)
         {
             if (DurableCallbackEnvelopeCredentialGuard.TryFindRuntimeCredential(retryEnvelope, out var credentialFieldPath))
             {
@@ -1012,8 +1014,12 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 new RuntimeCallbackTimeoutRequest
                 {
                     ActorId = this.GetPrimaryKeyString(),
-                    CallbackId = BuildRuntimeRetryCallbackId(envelope, nextAttempt),
-                    DueTime = TimeSpan.FromMilliseconds(_runtimeEnvelopeRetryPolicy.RetryDelayMs),
+                    CallbackId = BuildRuntimeRetryCallbackId(
+                        envelope,
+                        nextAttempt,
+                        retryUntilResolved),
+                    DueTime = TimeSpan.FromMilliseconds(
+                        Math.Max(_runtimeEnvelopeRetryPolicy.RetryDelayMs, 1)),
                     TriggerEnvelope = retryEnvelope,
                     DeliveryMode = RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
                 });
@@ -1023,21 +1029,42 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(retryEnvelope);
         }
 
-        _logger.LogWarning(
-            ex,
-            "Runtime envelope retry scheduled for actor {ActorId}, attempt {Attempt}/{MaxAttempts}.",
-            this.GetPrimaryKeyString(),
-            nextAttempt,
-            _runtimeEnvelopeRetryPolicy.MaxAttempts);
+        if (retryUntilResolved)
+        {
+            _logger.LogWarning(
+                ex,
+                "Runtime envelope durable retry-until-resolved scheduled for actor {ActorId}, attempt {Attempt}.",
+                this.GetPrimaryKeyString(),
+                nextAttempt);
+        }
+        else
+        {
+            _logger.LogWarning(
+                ex,
+                "Runtime envelope retry scheduled for actor {ActorId}, attempt {Attempt}/{MaxAttempts}.",
+                this.GetPrimaryKeyString(),
+                nextAttempt,
+                _runtimeEnvelopeRetryPolicy.MaxAttempts);
+        }
         return true;
     }
 
-    private string BuildRuntimeRetryCallbackId(EventEnvelope envelope, int nextAttempt)
+    private string BuildRuntimeRetryCallbackId(
+        EventEnvelope envelope,
+        int nextAttempt,
+        bool retryUntilResolved)
     {
         var originId = RuntimeEnvelopeDeliveryIdentity.ResolveDeliveryLineageId(envelope) ?? envelope.Id;
 
         if (string.IsNullOrWhiteSpace(originId))
             originId = envelope.Id ?? Guid.NewGuid().ToString("N");
+
+        if (retryUntilResolved)
+        {
+            return RuntimeCallbackKeyComposer.BuildCallbackId(
+                "runtime-envelope-retry-until-resolved",
+                originId);
+        }
 
         return RuntimeCallbackKeyComposer.BuildCallbackId(
             "runtime-envelope-retry",
