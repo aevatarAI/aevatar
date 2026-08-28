@@ -898,7 +898,6 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
                 evidenceId,
                 normalizedStepId,
                 normalizedExecutionId,
-                normalizedSourceEventId,
                 retained);
             return ToRequestEvidenceReference(existing);
         }
@@ -923,13 +922,14 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         string evidenceId,
         string stepId,
         string executionId,
-        string sourceEventId,
         IReadOnlyDictionary<string, string> retainedParameters)
     {
+        // A pending dispatch can be committed again with a new source event id. The execution
+        // identity and request parameters are immutable; SourceEventId remains the provenance of
+        // the first committed request evidence and is intentionally not part of this comparison.
         var identityMatches = string.Equals(evidence.EvidenceId, evidenceId, StringComparison.Ordinal) &&
                               string.Equals(evidence.StepId, stepId, StringComparison.Ordinal) &&
-                              string.Equals(evidence.ExecutionId, executionId, StringComparison.Ordinal) &&
-                              string.Equals(evidence.SourceEventId, sourceEventId, StringComparison.Ordinal);
+                              string.Equals(evidence.ExecutionId, executionId, StringComparison.Ordinal);
         var parametersMatch = evidence.ParametersMap.Count == retainedParameters.Count &&
                               retainedParameters.All(parameter =>
                                   evidence.ParametersMap.TryGetValue(parameter.Key, out var value) &&

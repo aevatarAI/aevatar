@@ -873,6 +873,43 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public void ApplyObservedPayloadToReport_ShouldReuseRequestEvidenceWhenPendingDispatchIsRecommitted()
+    {
+        var report = new WorkflowRunInsightReportDocument();
+        var request = new StepRequestEvent
+        {
+            StepId = "pending-step",
+            ExecutionId = "execution-1",
+            StepType = "assign",
+            Parameters = { ["value"] = "stable" },
+        };
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(request, 1, "evt-first"),
+            DateTimeOffset.UnixEpoch);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(request.Clone(), 2, "evt-recommitted"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        var evidence = report.RequestEvidenceById.Values.Should().ContainSingle().Subject;
+        evidence.SourceEventId.Should().Be("evt-first");
+        evidence.ParametersMap.Should().Contain("value", "stable");
+        report.Steps.Should().ContainSingle()
+            .Which.RequestEvidenceReference.Should().BeEquivalentTo(
+                new WorkflowStepRequestEvidenceReference
+                {
+                    EvidenceId = evidence.EvidenceId,
+                    ExecutionId = "execution-1",
+                    SourceEventId = "evt-first",
+                });
+        report.Timeline.Where(item => item.Stage == "step.request")
+            .Should().HaveCount(2)
+            .And.OnlyContain(item => item.RequestEvidenceReference!.EvidenceId == evidence.EvidenceId);
+    }
+
+    [Fact]
     public void ApplyObservedPayloadToReport_ShouldRejectDifferentParametersForTheSameExecutionEvidence()
     {
         var report = new WorkflowRunInsightReportDocument();
