@@ -177,7 +177,8 @@ public static class ScopeWorkflowEndpoints
                     http,
                     ParseSaveAndBindExecutionMode(request.ExecutionMode),
                     explicitRequestConfirmations: request.ExplicitRequestConfirmations,
-                    ct: ct),
+                    ct: ct,
+                    authenticationDisabledCallerId: scopeId),
             }, ct);
             return Results.Accepted(result.ReadModelUrl, result);
         }
@@ -228,7 +229,8 @@ public static class ScopeWorkflowEndpoints
                         http,
                         ParseSaveAndBindExecutionMode(request.ExecutionMode),
                         explicitRequestConfirmations: request.ExplicitRequestConfirmations,
-                        ct: ct),
+                        ct: ct,
+                        authenticationDisabledCallerId: scopeId),
                 },
                 ct);
             return Results.Accepted(result.Workflow.ReadModelUrl, result);
@@ -345,7 +347,8 @@ public static class ScopeWorkflowEndpoints
             var admissionContext = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
                 http,
                 executionMode,
-                ct: ct);
+                ct: ct,
+                authenticationDisabledCallerId: scopeId);
             var result = await previewService.PreviewAsync(
                 new WorkflowExplicitRequestPreviewRequest(
                     new ExternalWorkflowCapabilityAccessContext(

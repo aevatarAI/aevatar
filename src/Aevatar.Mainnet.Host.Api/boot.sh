@@ -27,6 +27,9 @@ Modes:
   local             fully local dev mode. read/write state are both ephemeral,
                     which avoids "write-side remains but read-side is empty"
                     after a backend restart.
+  orleans-memory    Orleans localhost clustering with in-memory streams,
+                    persistence, secrets, document projections, and graph
+                    projections. no Kafka, Garnet, Elasticsearch, or Neo4j.
   persistent-local  Orleans + Garnet + in-memory projections. keeps actor state
                     across restarts, but read models are still ephemeral.
   distributed       Orleans + Kafka + Elasticsearch profile. Graph projection
@@ -36,7 +39,7 @@ Environment:
   AEVATAR_APP_CONFIGURATION   dotnet configuration, default: Debug
   AEVATAR_APP_HOST            bind host, default: 127.0.0.1
   AEVATAR_APP_PORT            bind port, default: 5080
-  AEVATAR_APP_MODE            local | persistent-local | distributed
+  AEVATAR_APP_MODE            local | orleans-memory | persistent-local | distributed
 
 Files:
   boot.log    runtime output
@@ -88,7 +91,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "${APP_MODE}" in
-  local|persistent-local|distributed)
+  local|orleans-memory|persistent-local|distributed)
     ;;
   *)
     echo "Unsupported mode: ${APP_MODE}" >&2
@@ -291,6 +294,61 @@ case "${APP_MODE}" in
       AEVATAR_Projection__Graph__Providers__Neo4j__Password
     )
     ;;
+  orleans-memory)
+    effective_environment_name="Development"
+    effective_neo4j_enabled="false"
+    launch_env+=(
+      "ASPNETCORE_ENVIRONMENT=Development"
+      "DOTNET_ENVIRONMENT=Development"
+      "AEVATAR_Aevatar__Authentication__Enabled=false"
+      "AEVATAR_Aevatar__NyxId__AssistantActions__Enabled=false"
+      "AEVATAR_Aevatar__Status__UseBuiltInTargets=false"
+      "AEVATAR_Audit__ActorIdentityHasher__ActiveKeyId=${AEVATAR_Audit__ActorIdentityHasher__ActiveKeyId:-local-development-key}"
+      "AEVATAR_Audit__ActorIdentityHasher__Keys__0__KeyId=${AEVATAR_Audit__ActorIdentityHasher__Keys__0__KeyId:-local-development-key}"
+      "AEVATAR_Audit__ActorIdentityHasher__Keys__0__Key=${AEVATAR_Audit__ActorIdentityHasher__Keys__0__Key:-local-development-audit-identity-key}"
+      "AEVATAR_ActorRuntime__Provider=Orleans"
+      "AEVATAR_ActorRuntime__OrleansStreamBackend=InMemory"
+      "AEVATAR_ActorRuntime__OrleansPersistenceBackend=InMemory"
+      "AEVATAR_ActorRuntime__SecretStoreBackend=InMemory"
+      "AEVATAR_ActorRuntime__Policies__Environment=Development"
+      "AEVATAR_ActorRuntime__Policies__DenyInMemoryBackends=false"
+      "AEVATAR_Orleans__ClusteringMode=Localhost"
+      "AEVATAR_ChannelIdentity__OAuthClient__Bootstrap__Enabled=false"
+      "AEVATAR_Cli__App__NyxId__Enabled=false"
+      "AEVATAR_Cli__App__Connectors__ChronoStorage__Enabled=false"
+      "AEVATAR_Projection__Document__Providers__InMemory__Enabled=true"
+      "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled=false"
+      "AEVATAR_Projection__Graph__Providers__InMemory__Enabled=true"
+      "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled=false"
+      "AEVATAR_Projection__Policies__Environment=Development"
+      "AEVATAR_Projection__Policies__DenyInMemoryDocumentReadStore=false"
+      "AEVATAR_Projection__Policies__DenyInMemoryGraphFactStore=false"
+      "AEVATAR_GAgentService__Demo__Enabled=false"
+    )
+    unset_env+=(
+      ASPNETCORE_ENVIRONMENT
+      DOTNET_ENVIRONMENT
+      ActorRuntime__Provider
+      ActorRuntime__OrleansStreamBackend
+      ActorRuntime__OrleansPersistenceBackend
+      ActorRuntime__OrleansGarnetConnectionString
+      ActorRuntime__SecretStoreBackend
+      ActorRuntime__KafkaBootstrapServers
+      ActorRuntime__KafkaTopicName
+      ActorRuntime__KafkaConsumerGroup
+      Orleans__ClusteringMode
+      Projection__Document__Providers__Elasticsearch__Enabled
+      Projection__Document__Providers__InMemory__Enabled
+      Projection__Graph__Providers__Neo4j__Enabled
+      Projection__Graph__Providers__Neo4j__Password
+      Projection__Graph__Providers__InMemory__Enabled
+      AEVATAR_ActorRuntime__OrleansGarnetConnectionString
+      AEVATAR_ActorRuntime__KafkaBootstrapServers
+      AEVATAR_ActorRuntime__KafkaTopicName
+      AEVATAR_ActorRuntime__KafkaConsumerGroup
+      AEVATAR_Projection__Graph__Providers__Neo4j__Password
+    )
+    ;;
   persistent-local)
     effective_environment_name="PersistentLocal"
     effective_neo4j_enabled="${Projection__Graph__Providers__Neo4j__Enabled:-${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-false}}"
@@ -318,6 +376,7 @@ fi
 env_cmd+=("${launch_env[@]}")
 
 nohup "${env_cmd[@]}" "${DOTNET_CMD}" run \
+  --nologo \
   --project "${PROJECT_FILE}" \
   -c "${CONFIGURATION}" \
   --urls "${API_URL}" \

@@ -51,6 +51,8 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
                 DurableCallerCredential = credential!.DurableCallerCredential.Clone(),
                 NyxIdAuthority = authority,
                 Kind = credential.Kind,
+                DurableCredentialCleanupResponsibility =
+                    WorkflowCallerCredentialCleanupResponsibility.Owner,
             };
             return delta;
         }

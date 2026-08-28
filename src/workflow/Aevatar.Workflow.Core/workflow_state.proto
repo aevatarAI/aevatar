@@ -43,6 +43,11 @@ message WorkflowState
     int64 binding_generation = 18;
     string parent_execution_id = 19;
     WorkflowExecutionValueRepresentation value_representation = 20;
+    string revision_id = 21;
+    string tool_catalog_policy_version = 22;
+    WorkflowCapabilityAdmissionPlan capability_admission_plan = 23;
+    string workflow_id = 24;
+    ExternalCapabilityExecutionMode expected_execution_mode = 25;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -132,6 +137,11 @@ message WorkflowRunState
     int64 binding_generation = 18;
     string parent_execution_id = 19;
     WorkflowExecutionValueRepresentation value_representation = 20;
+    string revision_id = 21;
+    string tool_catalog_policy_version = 22;
+    WorkflowCapabilityAdmissionPlan capability_admission_plan = 23;
+    string workflow_id = 24;
+    ExternalCapabilityExecutionMode expected_execution_mode = 25;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -322,6 +332,7 @@ message WorkflowCallerCredentialState
   aevatar.credentials.RuntimeSecretReference source_readable_user_bearer_runtime_secret_reference = 7;
   reserved 8;
   reserved "unattended_effect_authorization";
+  WorkflowCallerCredentialCleanupResponsibility durable_credential_cleanup_responsibility = 9;
 }
 
 message WorkflowToolRuntimeContextState

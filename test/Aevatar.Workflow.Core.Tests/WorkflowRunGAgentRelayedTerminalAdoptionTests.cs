@@ -59,8 +59,13 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
                     SubjectId = "nyxid::scope-1",
                     SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
                 },
+                DurableCredentialCleanupResponsibility =
+                    WorkflowCallerCredentialCleanupResponsibility.Borrowed,
             },
         }));
+        harness.Agent.State.ExecutionContext.CallerCredential
+            .DurableCredentialCleanupResponsibility.Should()
+            .Be(WorkflowCallerCredentialCleanupResponsibility.Owner);
 
         await harness.Agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
@@ -78,6 +83,187 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             "verify-terminal-cleanup"));
         resolved.Resolved.Should().BeFalse();
         resolved.FailureReason.Should().Be(SecretResolutionFailureReason.Revoked);
+    }
+
+    [Fact]
+    public async Task CompletedChildRun_ShouldNotRevokeBorrowedDurableCallerCredential()
+    {
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            "schedule:schedule-parent",
+            "nyxid::scope-parent",
+            "caller-token",
+            "test",
+            DateTimeOffset.UtcNow.AddMinutes(5)));
+        var runId = "run-child-" + Guid.NewGuid().ToString("N");
+        const string parentActorId = "workflow-run:parent";
+        var harness = await CreateRunAsync(
+            runId,
+            secretVault: vault,
+            initialLineage: new WorkflowRunLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                SubWorkflow = new WorkflowRunSubWorkflowLineage
+                {
+                    Availability = WorkflowRunLineageAvailability.Available,
+                    ParentActorId = parentActorId,
+                    ParentRunId = "parent-run",
+                    ParentStepId = "call-child",
+                    RootRunId = "parent-run",
+                    Depth = 1,
+                },
+            });
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(parentActorId, new StartWorkflowEvent
+        {
+            WorkflowName = "wf_relayed",
+            RunId = runId,
+            Input = "hello",
+            ExecutionContextDelta = new WorkflowRunExecutionContextDelta
+            {
+                ClearCallerCredential = true,
+                CallerCredential = new WorkflowCallerCredential
+                {
+                    DurableCallerCredential = new DurableCallerCredentialRef
+                    {
+                        Ref = stored.Reference.Ref,
+                        Purpose = stored.Reference.Purpose,
+                        OwnerScopeKey = stored.Reference.OwnerScopeKey,
+                        SubjectId = "nyxid::scope-parent",
+                        SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                    },
+                    DurableCredentialCleanupResponsibility =
+                        WorkflowCallerCredentialCleanupResponsibility.Borrowed,
+                },
+            },
+        }));
+        harness.Agent.State.ExecutionContext.CallerCredential
+            .DurableCredentialCleanupResponsibility.Should()
+            .Be(WorkflowCallerCredentialCleanupResponsibility.Borrowed);
+
+        await harness.Agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            RunId = runId,
+            WorkflowName = "wf_relayed",
+            Success = true,
+            Output = "done",
+        });
+
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Reference.Ref,
+            stored.Reference.Purpose,
+            stored.Reference.OwnerScopeKey,
+            "nyxid::scope-parent",
+            "verify-borrowed-credential-retained"));
+        resolved.Resolved.Should().BeTrue();
+        resolved.Secret.Should().Be("caller-token");
+    }
+
+    [Fact]
+    public async Task InheritedStartContext_ShouldRequireCommittedParentPublisher()
+    {
+        const string trustedParentActorId = "workflow-run:trusted-parent";
+        var runId = "run-child-start-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(
+            runId,
+            initialLineage: new WorkflowRunLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                SubWorkflow = new WorkflowRunSubWorkflowLineage
+                {
+                    Availability = WorkflowRunLineageAvailability.Available,
+                    ParentActorId = trustedParentActorId,
+                    ParentRunId = "parent-run",
+                    ParentStepId = "call-child",
+                    RootRunId = "parent-run",
+                    Depth = 1,
+                },
+            });
+        var start = new StartWorkflowEvent
+        {
+            WorkflowName = "wf_relayed",
+            RunId = runId,
+            Input = "hello",
+            ExecutionContextDelta = new WorkflowRunExecutionContextDelta
+            {
+                ClearCallerCredential = true,
+                CallerCredential = new WorkflowCallerCredential
+                {
+                    RuntimeSecretReference = new RuntimeSecretReference
+                    {
+                        Ref = "borrowed-runtime-secret",
+                        Purpose = CredentialSecretPurposes.WorkflowCallerBearerToken,
+                        OwnerRunId = "parent-run",
+                        OwnerStepId = "workflow.caller",
+                    },
+                },
+            },
+        };
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("workflow-run:attacker", start.Clone()));
+
+        harness.Publisher.Published.Select(x => x.Event).OfType<StepRequestEvent>()
+            .Should().BeEmpty();
+        harness.Agent.State.ExecutionContext.CallerCredential.Should().BeNull();
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(trustedParentActorId, start.Clone()));
+
+        harness.Publisher.Published.Select(x => x.Event).OfType<StepRequestEvent>()
+            .Should().ContainSingle();
+        harness.Agent.State.ExecutionContext.CallerCredential.RuntimeSecretReference.Ref
+            .Should().Be("borrowed-runtime-secret");
+    }
+
+    [Fact]
+    public async Task InheritedStartContext_ShouldRejectOwnedDurableCallerCredential()
+    {
+        const string trustedParentActorId = "workflow-run:trusted-parent";
+        var runId = "run-child-owned-credential-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(
+            runId,
+            initialLineage: new WorkflowRunLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                SubWorkflow = new WorkflowRunSubWorkflowLineage
+                {
+                    Availability = WorkflowRunLineageAvailability.Available,
+                    ParentActorId = trustedParentActorId,
+                    ParentRunId = "parent-run",
+                    ParentStepId = "call-child",
+                    RootRunId = "parent-run",
+                    Depth = 1,
+                },
+            });
+        var start = new StartWorkflowEvent
+        {
+            WorkflowName = "wf_relayed",
+            RunId = runId,
+            Input = "hello",
+            ExecutionContextDelta = new WorkflowRunExecutionContextDelta
+            {
+                ClearCallerCredential = true,
+                CallerCredential = new WorkflowCallerCredential
+                {
+                    DurableCallerCredential = new DurableCallerCredentialRef
+                    {
+                        Ref = "parent-durable-secret",
+                        Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                        OwnerScopeKey = "scope-parent",
+                        SubjectId = "nyxid::scope-parent",
+                        SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                    },
+                    DurableCredentialCleanupResponsibility =
+                        WorkflowCallerCredentialCleanupResponsibility.Owner,
+                },
+            },
+        };
+
+        Func<Task> act = () => harness.Agent.HandleEventAsync(
+            EnvelopeFrom(trustedParentActorId, start));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*must be marked as borrowed*");
+        harness.Agent.State.ExecutionContext.CallerCredential.Should().BeNull();
     }
 
     [Theory]
@@ -1038,7 +1224,8 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         string? workflowYaml = null,
         Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort? fileOwnershipPort = null,
         ISecretVault? secretVault = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        WorkflowRunLineage? initialLineage = null)
     {
         eventStore ??= new RecordingEventStore();
         var committedHook = new RecordingCommittedStatePublicationHook();
@@ -1068,7 +1255,7 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         // Bind only on first activation; on reactivation the definition rehydrates from the event store.
         if (string.IsNullOrWhiteSpace(agent.State.WorkflowYaml))
         {
-            await agent.HandleEventAsync(EnvelopeFrom("workflow-run-actor-port", new BindWorkflowRunDefinitionEvent
+            var binding = new BindWorkflowRunDefinitionEvent
             {
                 DefinitionActorId = "definition-relayed",
                 WorkflowName = "wf_relayed",
@@ -1076,7 +1263,10 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
                 RunId = runId,
                 ScopeId = "scope-1",
                 ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
-            }));
+            };
+            if (initialLineage != null)
+                binding.InitialLineage = initialLineage.Clone();
+            await agent.HandleEventAsync(EnvelopeFrom("workflow-run-actor-port", binding));
         }
 
         return new RunHarness(agent, runId, eventStore, committedHook, topologyPublisher, scheduler);

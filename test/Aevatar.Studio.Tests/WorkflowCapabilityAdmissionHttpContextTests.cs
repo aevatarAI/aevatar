@@ -7,7 +7,10 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Primitives;
 
 namespace Aevatar.Studio.Tests;
@@ -149,6 +152,28 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
         }
     }
 
+    [Fact]
+    public async Task CreateAsync_WhenAuthenticationIsDisabled_ShouldUseExplicitScopeCallerFallback()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:Authentication:Enabled"] = "false",
+            })
+            .Build();
+        var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(configuration)
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
+            .BuildServiceProvider();
+        var http = new DefaultHttpContext { RequestServices = services };
+
+        var admission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
+            http,
+            authenticationDisabledCallerId: " scope-alpha ");
+
+        admission.CallerId.Should().Be("scope-alpha");
+    }
+
     private static IReadOnlyList<(
         string Name,
         Func<HttpContext, ValueTask<WorkflowCapabilityAdmissionContext>> Create)>
@@ -181,6 +206,17 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
             Authority = authority;
             return Task.FromResult(accessToken);
         }
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+
+        public string ApplicationName { get; set; } = nameof(WorkflowCapabilityAdmissionHttpContextTests);
+
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 
     private static void ApplyScenario(DefaultHttpContext http, string scenario)

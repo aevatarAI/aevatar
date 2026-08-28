@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Aevatar.Capabilities;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -19,7 +20,8 @@ internal static class WorkflowCapabilityAdmissionHttpContext
         ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive,
         WorkflowCapabilityAdmissionPlan? existingPlan = null,
         IEnumerable<NyxIdExplicitRequestConfirmationInput>? explicitRequestConfirmations = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? authenticationDisabledCallerId = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         var extraction = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
@@ -27,7 +29,7 @@ internal static class WorkflowCapabilityAdmissionHttpContext
             throw new WorkflowCallerCredentialSelectionException();
 
         return new WorkflowCapabilityAdmissionContext(
-            ResolveCallerId(http.User),
+            ResolveCallerId(http, authenticationDisabledCallerId),
             extraction.NyxIdCredentialSelection,
             executionMode: executionMode,
             existingPlan: existingPlan,
@@ -35,11 +37,13 @@ internal static class WorkflowCapabilityAdmissionHttpContext
                 explicitRequestConfirmations));
     }
 
-    private static string ResolveCallerId(ClaimsPrincipal? user)
+    private static string ResolveCallerId(
+        HttpContext http,
+        string? authenticationDisabledCallerId)
     {
         foreach (var claimType in s_callerIdClaimTypes)
         {
-            var values = user?.Claims
+            var values = http.User?.Claims
                 .Where(claim => string.Equals(claim.Type, claimType, StringComparison.OrdinalIgnoreCase))
                 .Select(claim => claim.Value?.Trim())
                 .Where(value => !string.IsNullOrWhiteSpace(value))
@@ -47,6 +51,13 @@ internal static class WorkflowCapabilityAdmissionHttpContext
                 .ToArray() ?? [];
             if (values.Length == 1)
                 return values[0]!;
+        }
+
+        var normalizedFallback = authenticationDisabledCallerId?.Trim();
+        if (!string.IsNullOrWhiteSpace(normalizedFallback) &&
+            !AevatarScopeAccessGuard.IsAuthenticationEnabled(http.RequestServices))
+        {
+            return normalizedFallback;
         }
 
         return string.Empty;

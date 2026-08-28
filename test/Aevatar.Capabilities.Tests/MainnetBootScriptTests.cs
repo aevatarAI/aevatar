@@ -175,6 +175,70 @@ public sealed class MainnetBootScriptTests
     }
 
     [Fact]
+    public async Task BootScript_OrleansMemoryMode_ShouldSetPureInMemoryBoundary()
+    {
+        var repoRoot = FindRepoRoot();
+        var sourceDir = Path.Combine(repoRoot, "src", "Aevatar.Mainnet.Host.Api");
+
+        using var tempDir = new TemporaryDirectory();
+        var scriptPath = Path.Combine(tempDir.Path, "boot.sh");
+        var projectPath = Path.Combine(tempDir.Path, "Aevatar.Mainnet.Host.Api.csproj");
+        var fakeDotnetPath = Path.Combine(tempDir.Path, "record-dotnet-env.sh");
+        var recordedEnvironmentPath = Path.Combine(tempDir.Path, "dotnet-env.txt");
+        var recordedArgumentsPath = Path.Combine(tempDir.Path, "dotnet-args.txt");
+        File.Copy(Path.Combine(sourceDir, "boot.sh"), scriptPath);
+        File.Copy(Path.Combine(sourceDir, "Aevatar.Mainnet.Host.Api.csproj"), projectPath);
+        File.WriteAllText(
+            fakeDotnetPath,
+            $"#!/usr/bin/env bash\nenv > '{recordedEnvironmentPath}'\nprintf '%s\\n' \"$@\" > '{recordedArgumentsPath}'\nexit 1\n");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                fakeDotnetPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        using var process = Process.Start(CreateProcessStartInfo(
+            scriptPath,
+            tempDir.Path,
+            "orleans-memory",
+            new Dictionary<string, string?>
+            {
+                ["DOTNET_CMD"] = fakeDotnetPath,
+                ["AEVATAR_ActorRuntime__OrleansGarnetConnectionString"] = "localhost:6379",
+                ["AEVATAR_ActorRuntime__KafkaBootstrapServers"] = "localhost:9092",
+                ["AEVATAR_Projection__Graph__Providers__Neo4j__Password"] = "stale-password",
+            }));
+        process.Should().NotBeNull();
+
+        await process!.WaitForExitAsync();
+
+        process.ExitCode.Should().NotBe(0);
+        var environment = await File.ReadAllTextAsync(recordedEnvironmentPath);
+        environment.Should().Contain("ASPNETCORE_ENVIRONMENT=Development");
+        environment.Should().Contain("DOTNET_ENVIRONMENT=Development");
+        environment.Should().Contain("AEVATAR_Aevatar__Authentication__Enabled=false");
+        environment.Should().Contain("AEVATAR_Aevatar__NyxId__AssistantActions__Enabled=false");
+        environment.Should().Contain("AEVATAR_Aevatar__Status__UseBuiltInTargets=false");
+        environment.Should().Contain("AEVATAR_ActorRuntime__Provider=Orleans");
+        environment.Should().Contain("AEVATAR_ActorRuntime__OrleansStreamBackend=InMemory");
+        environment.Should().Contain("AEVATAR_ActorRuntime__OrleansPersistenceBackend=InMemory");
+        environment.Should().Contain("AEVATAR_ActorRuntime__SecretStoreBackend=InMemory");
+        environment.Should().Contain("AEVATAR_Orleans__ClusteringMode=Localhost");
+        environment.Should().Contain("AEVATAR_Projection__Document__Providers__InMemory__Enabled=true");
+        environment.Should().Contain("AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled=false");
+        environment.Should().Contain("AEVATAR_Projection__Graph__Providers__InMemory__Enabled=true");
+        environment.Should().Contain("AEVATAR_Projection__Graph__Providers__Neo4j__Enabled=false");
+        environment.Should().Contain("AEVATAR_GAgentService__Demo__Enabled=false");
+        environment.Should().NotContain("AEVATAR_ActorRuntime__OrleansGarnetConnectionString=");
+        environment.Should().NotContain("AEVATAR_ActorRuntime__KafkaBootstrapServers=");
+        environment.Should().NotContain("AEVATAR_Projection__Graph__Providers__Neo4j__Password=");
+
+        var arguments = await File.ReadAllLinesAsync(recordedArgumentsPath);
+        arguments.Should().ContainInOrder("run", "--nologo", "--project");
+    }
+
+    [Fact]
     public async Task BootScript_LocalMode_ShouldNotRequireNeo4jPasswordFromInheritedDistributedEnv()
     {
         var repoRoot = FindRepoRoot();

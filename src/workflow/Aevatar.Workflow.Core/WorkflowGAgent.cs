@@ -488,6 +488,9 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             DefinitionVersion = State.Version,
             RevisionId = State.RevisionId ?? string.Empty,
             ToolCatalogPolicyVersion = State.ToolCatalogPolicyVersion ?? string.Empty,
+            CapabilityAdmissionPlan = State.CapabilityAdmissionPlan?.Clone(),
+            WorkflowId = State.WorkflowId ?? string.Empty,
+            ExpectedExecutionMode = State.ExpectedExecutionMode,
         };
 
         foreach (var (workflowName, workflowYaml) in State.InlineWorkflowYamls)

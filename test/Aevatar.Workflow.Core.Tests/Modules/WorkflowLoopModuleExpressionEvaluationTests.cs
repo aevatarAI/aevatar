@@ -444,6 +444,89 @@ public class WorkflowLoopModuleExpressionEvaluationTests
     }
 
     [Fact]
+    public async Task StartWorkflow_ShouldHydrateReferenceOnlyCallerCredentialBeforeFirstStepDispatch()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "tool",
+                    Type = "tool_call",
+                },
+            ],
+        };
+        var ctx = new CapturingContext();
+        var stateHost = (IWorkflowExecutionStateHost)ctx.Agent;
+        var module = new WorkflowExecutionKernel(workflow, stateHost);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "child-run",
+            Input = "hello",
+            ExecutionContextDelta = new WorkflowRunExecutionContextDelta
+            {
+                ClearCallerCredential = true,
+                CallerCredential = new WorkflowCallerCredential
+                {
+                    RuntimeSecretReference = new Aevatar.Foundation.Abstractions.Credentials.RuntimeSecretReference
+                    {
+                        Ref = "runtime-secret-ref",
+                        Purpose = "workflow-caller-bearer-token",
+                        OwnerRunId = "parent-run",
+                        OwnerStepId = "workflow.caller",
+                    },
+                    Kind = NyxIdCallerCredentialKind.AgentKey,
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        stateHost.ExecutionContextSnapshot.CallerCredential.Should().NotBeNull();
+        stateHost.ExecutionContextSnapshot.CallerCredential!.BearerToken.Should().BeEmpty();
+        stateHost.ExecutionContextSnapshot.CallerCredential.RuntimeSecretReference.Ref
+            .Should().Be("runtime-secret-ref");
+        stateHost.ExecutionContextSnapshot.CallerCredential.Kind
+            .Should().Be(NyxIdCallerCredentialKind.AgentKey);
+        ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Which.StepId.Should().Be("tool");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenInheritedContextContainsBearerString_ShouldRejectBeforeDispatch()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps = [new StepDefinition { Id = "tool", Type = "tool_call" }],
+        };
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        var act = () => module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "child-run",
+            Input = "hello",
+            ExecutionContextDelta = new WorkflowRunExecutionContextDelta
+            {
+                CallerCredential = new WorkflowCallerCredential
+                {
+                    BearerToken = "must-not-cross-start-boundary",
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*credential references instead of bearer strings*");
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task DispatchStep_WhenNotifyTemplateUsesExpressions_ShouldEvaluateBeforeNotifyModulePublishesNotification()
     {
         var workflow = new WorkflowDefinition
@@ -765,6 +848,13 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
+                SourceReadableUserBearerToken = delta.CallerCredential.SourceReadableUserBearerToken,
+                RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
+                SourceReadableUserBearerRuntimeSecretReference =
+                    delta.CallerCredential.SourceReadableUserBearerRuntimeSecretReference?.Clone(),
+                DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
+                NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
+                Kind = delta.CallerCredential.Kind,
             };
         }
 

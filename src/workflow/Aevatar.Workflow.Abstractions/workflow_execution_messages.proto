@@ -188,6 +188,12 @@ enum NyxIdCallerCredentialKind {
   NYX_ID_CALLER_CREDENTIAL_KIND_AGENT_KEY = 3;
 }
 
+enum WorkflowCallerCredentialCleanupResponsibility {
+  WORKFLOW_CALLER_CREDENTIAL_CLEANUP_RESPONSIBILITY_UNSPECIFIED = 0;
+  WORKFLOW_CALLER_CREDENTIAL_CLEANUP_RESPONSIBILITY_OWNER = 1;
+  WORKFLOW_CALLER_CREDENTIAL_CLEANUP_RESPONSIBILITY_BORROWED = 2;
+}
+
 message WorkflowCallerCredential {
   string bearer_token = 1;
   aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
@@ -197,6 +203,9 @@ message WorkflowCallerCredential {
   string source_readable_user_bearer_token = 6;
   aevatar.credentials.RuntimeSecretReference source_readable_user_bearer_runtime_secret_reference = 7;
   WorkflowUnattendedEffectAuthorization unattended_effect_authorization = 8;
+  // Cleanup authority for the durable credential handle. Legacy/unspecified
+  // credentials remain owner-cleaned; workflow_call children explicitly borrow.
+  WorkflowCallerCredentialCleanupResponsibility durable_credential_cleanup_responsibility = 9;
 }
 
 message WorkflowCallerNyxIdAuthority {
@@ -586,6 +595,10 @@ message StartWorkflowEvent
   // generation does not match the actor's committed binding.
   int64 binding_generation = 8;
   WorkflowExecutionValueRepresentation value_representation = 9;
+  // workflow_call children continue the parent's execution authority through
+  // reference-only context. Plain bearer strings are rejected at the kernel
+  // boundary; secrets remain in the runtime secret store.
+  WorkflowRunExecutionContextDelta execution_context_delta = 10;
 }
 
 // Actor-owned activation continuation. It does not start a new logical run;
@@ -1132,6 +1145,9 @@ message WorkflowDefinitionSnapshot
   int32 definition_version = 6;
   string revision_id = 7;
   string tool_catalog_policy_version = 8;
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 9;
+  string workflow_id = 10;
+  ExternalCapabilityExecutionMode expected_execution_mode = 11;
 }
 message SubWorkflowDefinitionResolveRequestedEvent
 {
@@ -1220,6 +1236,11 @@ message SubWorkflowInvocationRegisteredEvent
   int64 binding_generation = 18;
   string parent_execution_id = 19;
   WorkflowExecutionValueRepresentation value_representation = 20;
+  string revision_id = 21;
+  string tool_catalog_policy_version = 22;
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 23;
+  string workflow_id = 24;
+  ExternalCapabilityExecutionMode expected_execution_mode = 25;
 }
 message SubWorkflowInvocationHandoffAdvancedEvent
 {

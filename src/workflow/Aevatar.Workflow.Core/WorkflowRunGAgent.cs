@@ -2089,6 +2089,8 @@ public sealed partial class WorkflowRunGAgent
                     start.BindingGeneration == State.BindingGeneration &&
                     !IsTerminalStatus(State.Status) &&
                     IsValidCommittedReuseBinding(State);
+        if (valid)
+            valid = HasValidInheritedStartPublisher(start, envelope, State);
         if (valid && State.ReusePolicy == WorkflowRunActorReusePolicy.SerialSingleton)
         {
             var publisherActorId = envelope.Route?.PublisherActorId?.Trim() ?? string.Empty;
@@ -2108,6 +2110,23 @@ public sealed partial class WorkflowRunGAgent
             start.BindingGeneration,
             State.Status);
         return false;
+    }
+
+    private static bool HasValidInheritedStartPublisher(
+        StartWorkflowEvent start,
+        EventEnvelope envelope,
+        WorkflowRunState state)
+    {
+        if (start.ExecutionContextDelta == null)
+            return true;
+
+        var publisherActorId = envelope.Route?.PublisherActorId?.Trim() ?? string.Empty;
+        var committedParentActorId =
+            state.Lineage?.SubWorkflow?.Availability == WorkflowRunLineageAvailability.Available
+                ? state.Lineage.SubWorkflow.ParentActorId?.Trim() ?? string.Empty
+                : string.Empty;
+        return !string.IsNullOrWhiteSpace(committedParentActorId) &&
+               string.Equals(publisherActorId, committedParentActorId, StringComparison.Ordinal);
     }
 
     [EventHandler]
@@ -3089,13 +3108,21 @@ public sealed partial class WorkflowRunGAgent
     [EventHandler]
     public async Task HandleSubWorkflowDefinitionResolved(SubWorkflowDefinitionResolvedEvent resolved)
     {
-        await _subWorkflowOrchestrator.HandleDefinitionResolvedAsync(resolved, State, CancellationToken.None);
+        await _subWorkflowOrchestrator.HandleDefinitionResolvedAsync(
+            resolved,
+            ActiveInboundEnvelope?.Route?.PublisherActorId,
+            State,
+            CancellationToken.None);
     }
 
     [EventHandler]
     public async Task HandleSubWorkflowDefinitionResolveFailed(SubWorkflowDefinitionResolveFailedEvent failed)
     {
-        await _subWorkflowOrchestrator.HandleDefinitionResolveFailedAsync(failed, State, CancellationToken.None);
+        await _subWorkflowOrchestrator.HandleDefinitionResolveFailedAsync(
+            failed,
+            ActiveInboundEnvelope?.Route?.PublisherActorId,
+            State,
+            CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -4748,6 +4775,8 @@ public sealed partial class WorkflowRunGAgent
                 DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
                 NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
                 Kind = delta.CallerCredential.Kind,
+                DurableCredentialCleanupResponsibility =
+                    delta.CallerCredential.DurableCredentialCleanupResponsibility,
             };
         }
 
@@ -6381,6 +6410,9 @@ public sealed partial class WorkflowRunGAgent
             .CallerCredential?
             .DurableCallerCredential;
         if (reference == null ||
+            stateBeforeTerminal.ExecutionContext!.CallerCredential!
+                .DurableCredentialCleanupResponsibility ==
+                WorkflowCallerCredentialCleanupResponsibility.Borrowed ||
             reference.SourceKind != DurableCallerCredentialSourceKind.ScheduledDispatch ||
             !string.Equals(
                 reference.Purpose,

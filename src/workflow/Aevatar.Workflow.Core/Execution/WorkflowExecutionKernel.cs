@@ -207,6 +207,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             throw new InvalidOperationException(
                 "A normalized workflow fork seed cannot be downgraded to the legacy value representation.");
         }
+        ValidateStartExecutionContextDelta(evt.ExecutionContextDelta);
         if (WorkflowValueLifecyclePolicy.HasDeclarations(_workflow) &&
             (representation != WorkflowExecutionValueRepresentation.Normalized ||
              !WorkflowNormalizedStateWriteAdmission.IsValueLifecycleGranted(
@@ -257,6 +258,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.CompensationPhaseDeadlineLease = null;
         state.CompensationTerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         state.PendingCompensationOutcome = null;
+        if (evt.ExecutionContextDelta != null)
+        {
+            await _stateHost.UpdateExecutionContextAsync(
+                evt.ExecutionContextDelta.Clone(),
+                ct);
+        }
         if (evt.WorkflowRuntime != null)
         {
             await _stateHost.UpdateExecutionContextAsync(
@@ -342,6 +349,24 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             ctx,
             ct,
             startInputValueId);
+    }
+
+    private static void ValidateStartExecutionContextDelta(WorkflowRunExecutionContextDelta? delta)
+    {
+        if (!string.IsNullOrWhiteSpace(delta?.CallerCredential?.BearerToken) ||
+            !string.IsNullOrWhiteSpace(delta?.CallerCredential?.SourceReadableUserBearerToken))
+        {
+            throw new InvalidOperationException(
+                "Workflow start execution context must use credential references instead of bearer strings.");
+        }
+
+        if (delta?.CallerCredential?.DurableCallerCredential != null &&
+            delta.CallerCredential.DurableCredentialCleanupResponsibility !=
+            WorkflowCallerCredentialCleanupResponsibility.Borrowed)
+        {
+            throw new InvalidOperationException(
+                "Inherited durable caller credentials must be marked as borrowed.");
+        }
     }
 
     private async Task HandleExecutionRecoveryRequestedAsync(

@@ -5,11 +5,15 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Capabilities;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 
 namespace Aevatar.Mainnet.Host.Api.Scheduled;
 
 internal static class DevelopmentNyxIdApiKeyEndpoints
 {
+    internal const string ActiveUserServicesSectionName =
+        "Aevatar:NyxId:DevelopmentActiveUserServices";
+
     public static WebApplication MapDevelopmentNyxIdApiKeyEndpoints(this WebApplication app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -18,6 +22,8 @@ internal static class DevelopmentNyxIdApiKeyEndpoints
 
         app.MapGet("/api/v1/api-keys", () => Results.Ok(new { keys = Array.Empty<object>() }))
             .WithTags("DevelopmentNyxId");
+        app.MapGet("/api/v1/keys", HandleUserServiceKeys)
+            .WithTags("DevelopmentNyxId");
         app.MapPost("/api/v1/api-keys/scope-plan", HandleScopePlanAsync)
             .WithTags("DevelopmentNyxId");
         app.MapPost("/api/v1/api-keys", HandleCreateApiKeyAsync)
@@ -25,6 +31,40 @@ internal static class DevelopmentNyxIdApiKeyEndpoints
         app.MapDelete("/api/v1/api-keys/{apiKeyId}", () => Results.Ok(new { revoked = true }))
             .WithTags("DevelopmentNyxId");
         return app;
+    }
+
+    private static IResult HandleUserServiceKeys(
+        HttpContext http,
+        IConfiguration configuration)
+    {
+        if (!TryResolveDevelopmentSubject(http, out _))
+            return Results.Json(Error(401, "unauthorized"), statusCode: StatusCodes.Status401Unauthorized);
+
+        var configured = configuration
+            .GetSection(ActiveUserServicesSectionName)
+            .Get<DevelopmentNyxIdActiveUserService[]>() ?? [];
+        if (!TryNormalizeActiveUserServices(configured, out var services))
+        {
+            return Results.Json(
+                Error(500, "development_user_service_configuration_invalid"),
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        return Results.Ok(new
+        {
+            keys = services.Select(static service => new
+            {
+                id = service.UserServiceId,
+                slug = service.ServiceSlug,
+                label = service.DisplayName,
+                catalog_service_name = service.DisplayName,
+                catalog_service_slug = service.ServiceSlug,
+                status = "active",
+                is_active = true,
+                credential_source = new { type = "personal" },
+                connected = true,
+            }),
+        });
     }
 
     private static IResult HandleScopePlanAsync(
@@ -125,10 +165,49 @@ internal static class DevelopmentNyxIdApiKeyEndpoints
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
+    private static bool TryNormalizeActiveUserServices(
+        IReadOnlyList<DevelopmentNyxIdActiveUserService> configured,
+        out IReadOnlyList<DevelopmentNyxIdActiveUserService> services)
+    {
+        var normalized = new List<DevelopmentNyxIdActiveUserService>(configured.Count);
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var service in configured)
+        {
+            var userServiceId = service.UserServiceId?.Trim();
+            var serviceSlug = service.ServiceSlug?.Trim();
+            if (string.IsNullOrWhiteSpace(userServiceId) ||
+                string.IsNullOrWhiteSpace(serviceSlug) ||
+                !ids.Add(userServiceId))
+            {
+                services = [];
+                return false;
+            }
+
+            normalized.Add(new DevelopmentNyxIdActiveUserService
+            {
+                UserServiceId = userServiceId,
+                ServiceSlug = serviceSlug,
+                DisplayName = NormalizeOptional(service.DisplayName) ?? serviceSlug,
+            });
+        }
+
+        services = normalized;
+        return true;
+    }
+
     private sealed record ScopePlanRequest(
         [property: JsonPropertyName("selected_service_ids")] string[]? SelectedServiceIds,
         [property: JsonPropertyName("target_org_id")] string? TargetOrganizationId);
 
     private sealed record CreateApiKeyRequest(
         [property: JsonPropertyName("name")] string? Name);
+}
+
+internal sealed class DevelopmentNyxIdActiveUserService
+{
+    public string? UserServiceId { get; init; }
+
+    public string? ServiceSlug { get; init; }
+
+    public string? DisplayName { get; init; }
 }

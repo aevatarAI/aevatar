@@ -190,6 +190,77 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
+    public async Task ExistingRegisteredInvocation_ShouldRecoverDefinitionOwnedAdmissionPlan()
+    {
+        var childPlan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+            AdmissionDigest = "registered-child-plan",
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+        };
+        var state = SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered(
+            new WorkflowRunState
+            {
+                RunId = "parent-run",
+                CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                {
+                    SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+                    AdmissionDigest = "parent-plan",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                },
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
+            new SubWorkflowInvocationRegisteredEvent
+            {
+                InvocationId = "invoke-recover-registered",
+                ParentRunId = "parent-run",
+                ParentStepId = "call-child",
+                WorkflowName = "sub_flow",
+                ChildActorId = "owner-1:workflow:registered-recovery",
+                ChildRunId = "invoke-recover-registered",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+                DefinitionActorId = "workflow-definition:sub_flow",
+                DefinitionVersion = 9,
+                DefinitionYaml = ValidSubFlowYaml,
+                ScopeId = "scope-child",
+                WorkflowId = "wf-registered-child",
+                RevisionId = "rev-registered-child-9",
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                CapabilityAdmissionPlan = childPlan,
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                HandoffPhase = (int)SubWorkflowInvocationHandoffPhase.Registered,
+                ValueRepresentation = WorkflowExecutionValueRepresentation.Legacy,
+            });
+        state.InlineWorkflowYamls["parent_only"] = ValidSubFlowYaml;
+        var harness = CreateHarness();
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-recover-registered",
+                ParentRunId = "parent-run",
+                ParentStepId = "call-child",
+                WorkflowName = "sub_flow",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+                ValueRepresentation = WorkflowExecutionValueRepresentation.Legacy,
+            },
+            state,
+            CancellationToken.None);
+
+        var childActor = harness.Runtime.StoredActors["owner-1:workflow:registered-recovery"];
+        var binding = childActor.LastHandledEnvelope!.Payload!
+            .Unpack<BindWorkflowRunDefinitionEvent>();
+        binding.DefinitionActorId.Should().Be("workflow-definition:sub_flow");
+        binding.DefinitionVersion.Should().Be(9);
+        binding.WorkflowId.Should().Be("wf-registered-child");
+        binding.RevisionId.Should().Be("rev-registered-child-9");
+        binding.CapabilityAdmissionPlan.Should().BeEquivalentTo(childPlan);
+        binding.CapabilityAdmissionPlan.AdmissionDigest.Should().NotBe("parent-plan");
+        binding.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        binding.InlineWorkflowYamls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleInvokeRequestedAsync_WhenDefinitionActorMustBeResolved_ShouldRegisterResolutionAndScheduleTimeout()
     {
         var harness = CreateHarness();
@@ -250,6 +321,46 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
+    public async Task HandleDefinitionResolvedAsync_WhenPublisherIsNotRequestedDefinitionActor_ShouldIgnoreReply()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState();
+        state.PendingSubWorkflowDefinitionResolutions.Add(
+            new WorkflowRunState.Types.PendingSubWorkflowDefinitionResolution
+            {
+                InvocationId = "invoke-spoofed-definition",
+                ParentRunId = "parent-run",
+                ParentStepId = "call-child",
+                WorkflowName = "sub_flow",
+                DefinitionActorId = "workflow-definition:sub_flow",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+            });
+        state.PendingSubWorkflowDefinitionResolutionIndexByInvocationId[
+            "invoke-spoofed-definition"] = 0;
+
+        await harness.Orchestrator.HandleDefinitionResolvedAsync(
+            new SubWorkflowDefinitionResolvedEvent
+            {
+                InvocationId = "invoke-spoofed-definition",
+                Definition = new WorkflowDefinitionSnapshot
+                {
+                    DefinitionActorId = "workflow-definition:sub_flow",
+                    WorkflowName = "sub_flow",
+                    WorkflowYaml = ValidSubFlowYaml,
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                },
+            },
+            "workflow-run:attacker",
+            state,
+            CancellationToken.None);
+
+        harness.Persisted.Should().BeEmpty();
+        harness.Runtime.CreateRequests.Should().BeEmpty();
+        harness.Sent.Should().BeEmpty();
+        harness.Published.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleDefinitionResolvedAsync_WhenSingletonBindingExistsAndActorIsAlive_ShouldReuseActor()
     {
         const string definitionActorId = "workflow-definition:sub_flow";
@@ -258,7 +369,44 @@ public sealed class SubWorkflowOrchestratorTests
         harness.Runtime.StoredActors[definitionActorId] = new RecordingActor(definitionActorId);
         harness.Runtime.StoredActors[childActorId] = new RecordingActor(childActorId);
 
-        var state = new WorkflowRunState();
+        var parentPlan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+            AdmissionDigest = "parent-plan",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+        };
+        var childPlan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+            AdmissionDigest = "registered-child-plan",
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+        };
+        var state = new WorkflowRunState
+        {
+            CapabilityAdmissionPlan = parentPlan,
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            ExecutionContext = new WorkflowRunExecutionContextState
+            {
+                CallerCredential = new WorkflowCallerCredentialState
+                {
+                    DurableCallerCredential = new Aevatar.Foundation.Abstractions.Credentials.DurableCallerCredentialRef
+                    {
+                        Ref = "scheduled-secret",
+                        Purpose = Aevatar.Foundation.Abstractions.Credentials.CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                        OwnerScopeKey = "scope-parent",
+                        SubjectId = "subject-parent",
+                        SourceKind = Aevatar.Foundation.Abstractions.Credentials.DurableCallerCredentialSourceKind.ScheduledDispatch,
+                    },
+                    DurableCredentialCleanupResponsibility =
+                        WorkflowCallerCredentialCleanupResponsibility.Owner,
+                },
+                UnattendedEffectAuthorization = new WorkflowUnattendedEffectAuthorization
+                {
+                    AuthorizationDigest = "parent-only-authorization",
+                },
+            },
+        };
+        state.InlineWorkflowYamls["parent_only"] = ValidSubFlowYaml;
         state.SubWorkflowBindings.Add(new WorkflowRunState.Types.SubWorkflowBinding
         {
             WorkflowName = "sub_flow",
@@ -314,12 +462,18 @@ public sealed class SubWorkflowOrchestratorTests
                 InvocationId = "invoke-1",
                 Definition = new WorkflowDefinitionSnapshot
                 {
-                DefinitionActorId = definitionActorId,
-                WorkflowName = "sub_flow",
-                WorkflowYaml = ValidSubFlowYaml,
-                DefinitionVersion = 7,
+                    DefinitionActorId = definitionActorId,
+                    WorkflowName = "sub_flow",
+                    WorkflowYaml = ValidSubFlowYaml,
+                    DefinitionVersion = 7,
+                    WorkflowId = "wf-registered-child",
+                    RevisionId = "rev-registered-child",
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                    CapabilityAdmissionPlan = childPlan,
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                },
             },
-            },
+            definitionActorId,
             resolutionState,
             CancellationToken.None);
 
@@ -333,6 +487,10 @@ public sealed class SubWorkflowOrchestratorTests
         registeredInvocation.Depth.Should().Be(2);
         registeredInvocation.BindingGeneration.Should().Be(2);
         registeredInvocation.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-sub-1");
+        registeredInvocation.WorkflowId.Should().Be("wf-registered-child");
+        registeredInvocation.RevisionId.Should().Be("rev-registered-child");
+        registeredInvocation.CapabilityAdmissionPlan.Should().BeEquivalentTo(childPlan);
+        registeredInvocation.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
         harness.Persisted.OfType<SubWorkflowBindingUpsertedEvent>()
             .Should().ContainSingle(x => x.BindingGeneration == 2);
         harness.CancelledLeases.Should().ContainSingle(x => x.CallbackId == resolutionState.PendingSubWorkflowDefinitionResolutions[0].TimeoutCallbackId);
@@ -349,6 +507,110 @@ public sealed class SubWorkflowOrchestratorTests
         start.WorkflowRuntime.Depth.Should().Be(2);
         start.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-sub-1");
         start.Parameters.Keys.Should().NotContain(key => key.StartsWith("workflow_runtime.", StringComparison.Ordinal));
+        start.ExecutionContextDelta.CallerCredential.DurableCredentialCleanupResponsibility
+            .Should().Be(WorkflowCallerCredentialCleanupResponsibility.Borrowed);
+        start.ExecutionContextDelta.UnattendedEffectAuthorization.Should().BeNull();
+        var childBinding = harness.Runtime.StoredActors[childActorId].LastHandledEnvelope!.Payload!
+            .Unpack<BindWorkflowRunDefinitionEvent>();
+        childBinding.WorkflowId.Should().Be("wf-registered-child");
+        childBinding.RevisionId.Should().Be("rev-registered-child");
+        childBinding.CapabilityAdmissionPlan.Should().BeEquivalentTo(childPlan);
+        childBinding.CapabilityAdmissionPlan.Should().NotBeEquivalentTo(parentPlan);
+        childBinding.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        childBinding.InlineWorkflowYamls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenInlineChildIsBound_ShouldCarryParentAdmissionAndBindingIdentity()
+    {
+        var harness = CreateHarness();
+        var parentPlan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+            DefinitionDigest = "root-definition-digest",
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            AdmissionDigest = "root-admission-digest",
+        };
+        parentPlan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = "sub_flow/poll_conversation",
+        });
+        parentPlan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = "sibling_flow/read_status",
+        });
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+            DefinitionActorId = "workflow-definition:parent",
+            DefinitionVersion = 42,
+            RunOrigin = WorkflowRunOrigins.Webhook,
+            ScheduleId = "schedule-parent",
+            WorkflowId = "wf-parent",
+            RevisionId = "rev-parent-1",
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            CapabilityAdmissionPlan = parentPlan,
+            ExecutionContext = new WorkflowRunExecutionContextState
+            {
+                CallerCredential = new WorkflowCallerCredentialState
+                {
+                    RuntimeSecretReference = new Aevatar.Foundation.Abstractions.Credentials.RuntimeSecretReference
+                    {
+                        Ref = "runtime-secret-ref",
+                        Purpose = "workflow-caller-bearer-token",
+                        OwnerRunId = "parent-run",
+                        OwnerStepId = "workflow.caller",
+                    },
+                    Kind = NyxIdCallerCredentialKind.AgentKey,
+                },
+                UnattendedEffectAuthorization = new WorkflowUnattendedEffectAuthorization
+                {
+                    AuthorizationDigest = "parent-authorization",
+                },
+            },
+        };
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-admitted-child",
+                ParentRunId = "parent-run",
+                ParentStepId = "call-child",
+                WorkflowName = "sub_flow",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+            },
+            state,
+            CancellationToken.None);
+
+        var childActor = harness.Runtime.StoredActors.Values
+            .Should().ContainSingle(actor => actor.Id.Contains(":workflow:", StringComparison.Ordinal))
+            .Subject;
+        var binding = childActor.LastHandledEnvelope!.Payload!
+            .Unpack<BindWorkflowRunDefinitionEvent>();
+        binding.WorkflowId.Should().Be("wf-parent");
+        binding.RevisionId.Should().Be("rev-parent-1");
+        binding.DefinitionActorId.Should().Be("workflow-definition:parent");
+        binding.DefinitionVersion.Should().Be(42);
+        binding.RunOrigin.Should().Be(WorkflowRunOrigins.Webhook);
+        binding.ScheduleId.Should().Be("schedule-parent");
+        binding.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        binding.CapabilityAdmissionPlan.Should().NotBeSameAs(parentPlan);
+        binding.CapabilityAdmissionPlan.Should().BeEquivalentTo(parentPlan);
+        binding.CapabilityAdmissionPlan.InvocationAdmissions.Select(x => x.CallSiteId)
+            .Should().Equal("sub_flow/poll_conversation", "sibling_flow/read_status");
+        var start = harness.Sent.Should().ContainSingle().Subject.Message
+            .Should().BeOfType<StartWorkflowEvent>().Subject;
+        start.ExecutionContextDelta.Should().NotBeNull();
+        start.ExecutionContextDelta.ClearCallerCredential.Should().BeTrue();
+        start.ExecutionContextDelta.CallerCredential.BearerToken.Should().BeEmpty();
+        start.ExecutionContextDelta.CallerCredential.RuntimeSecretReference.Ref
+            .Should().Be("runtime-secret-ref");
+        start.ExecutionContextDelta.CallerCredential.RuntimeSecretReference
+            .Should().NotBeSameAs(state.ExecutionContext.CallerCredential.RuntimeSecretReference);
+        start.ExecutionContextDelta.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
+        start.ExecutionContextDelta.UnattendedEffectAuthorization.AuthorizationDigest
+            .Should().Be("parent-authorization");
     }
 
     [Fact]
@@ -464,6 +726,7 @@ public sealed class SubWorkflowOrchestratorTests
                     DefinitionVersion = 2,
                 },
             },
+            definitionActorId,
             state,
             CancellationToken.None);
 
@@ -494,7 +757,7 @@ public sealed class SubWorkflowOrchestratorTests
         bindEvent.WorkflowName.Should().Be("sub flow");
         bindEvent.DefinitionActorId.Should().Be(definitionActorId);
         bindEvent.BindingGeneration.Should().Be(1);
-        bindEvent.InlineWorkflowYamls.Should().ContainKey("sub flow");
+        bindEvent.InlineWorkflowYamls.Should().BeEmpty();
     }
 
     [Fact]
@@ -952,8 +1215,10 @@ public sealed class SubWorkflowOrchestratorTests
             new SubWorkflowDefinitionResolveFailedEvent
             {
                 InvocationId = "invoke-failed",
+                DefinitionActorId = "workflow-definition:sub_flow",
                 Error = "definition lookup failed",
             },
+            "workflow-definition:sub_flow",
             state,
             CancellationToken.None);
 

@@ -68,6 +68,8 @@ internal static class WorkflowRunExecutionContextStateAccess
                 DurableCallerCredential = credential!.DurableCallerCredential.Clone(),
                 NyxIdAuthority = authority,
                 Kind = credential.Kind,
+                DurableCredentialCleanupResponsibility =
+                    WorkflowCallerCredentialCleanupResponsibility.Owner,
             };
             return delta;
         }
@@ -191,6 +193,8 @@ internal static class WorkflowRunExecutionContextStateAccess
             DurableCallerCredential = callerCredential!.DurableCallerCredential.Clone(),
             NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
             Kind = callerCredential.Kind,
+            DurableCredentialCleanupResponsibility =
+                callerCredential.DurableCredentialCleanupResponsibility,
         };
         return true;
     }
@@ -238,6 +242,8 @@ internal static class WorkflowRunExecutionContextStateAccess
                     DurableCallerCredential = callerCredential.DurableCallerCredential.Clone(),
                     NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
                     Kind = callerCredential.Kind,
+                    DurableCredentialCleanupResponsibility =
+                        callerCredential.DurableCredentialCleanupResponsibility,
                 })
                 : (false, new WorkflowCallerCredential());
         }
