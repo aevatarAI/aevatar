@@ -16,6 +16,7 @@ using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Delivery;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Streams;
@@ -53,9 +54,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         RuntimeEnvelopeRetryPolicy.Disabled;
 
     public RuntimeActorGrain(
-        [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)]
+        [PersistentState("agent", OrleansRuntimeConstants.RuntimeActorGrainStateStorageName)]
         IPersistentState<RuntimeActorGrainState> state,
-        [PersistentState("committed-state-publication", OrleansRuntimeConstants.GrainStateStorageName)]
+        [PersistentState("committed-state-publication", OrleansRuntimeConstants.RuntimeActorGrainStateStorageName)]
         IPersistentState<RuntimeActorCommittedStatePublicationGrainState> committedStatePublication)
     {
         _state = state;
@@ -84,7 +85,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         await ResumeFromPersistedIdentityAsync(cancellationToken);
-        if (_agent != null)
+        if (_agent != null || _state.State.StorageRecovery != null)
             await SubscribeSelfStreamAsync();
     }
 
@@ -95,6 +96,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private async Task ResumeFromPersistedIdentityAsync(CancellationToken ct)
     {
         _identityResolutionAttempted = true;
+
+        if (_state.State.StorageRecovery != null)
+            return;
 
         var identity = _state.State.Identity;
         if (identity == null)
@@ -227,8 +231,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     public Task<bool> IsInitializedAsync() =>
         Task.FromResult(
-            _agent != null
-            || !string.IsNullOrWhiteSpace(_state.State.Identity?.Kind));
+            _state.State.StorageRecovery == null &&
+            (_agent != null || !string.IsNullOrWhiteSpace(_state.State.Identity?.Kind)));
 
     public Task HandleEnvelopeAsync(byte[] envelopeBytes) =>
         HandleEnvelopeAsyncCore(envelopeBytes, propagateFailure: false);
@@ -310,6 +314,19 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     {
         if (_agent != null)
             return true;
+
+        var storageRecovery = _state.State.StorageRecovery;
+        if (storageRecovery != null)
+        {
+            _logger.LogError(
+                "Runtime actor {ActorId} requires durable state recovery; envelope {EnvelopeId} remains unacknowledged until an authoritative Agent Kind re-establishes the actor. recoveryReason={RecoveryReason}",
+                SafeGetActorIdForLog(),
+                envelope.Id,
+                storageRecovery.Reason);
+            throw new RuntimeActorStateStorageRecoveryRequiredException(
+                SafeGetActorIdForLog(),
+                storageRecovery.Reason);
+        }
 
         // Only attempt resolution when OnActivateAsync has not already tried. Otherwise a
         // persistent missing registration would amplify into per-envelope registry I/O.
@@ -631,6 +648,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         var originalRecordExists = _state.RecordExists;
         _state.State ??= new RuntimeActorGrainState();
         var originalState = CloneState(_state.State);
+        var isStorageRecovery = originalState.StorageRecovery != null;
         var createdIdentity = false;
         if (_state.State.Identity == null)
         {
@@ -646,6 +664,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 Kind = implementation.Metadata.Kind,
                 StateSchemaVersion = 0,
             };
+            _state.State.StorageRecovery = null;
             createdIdentity = true;
         }
 
@@ -665,11 +684,31 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             if (createdIdentity)
             {
                 _state.State = originalState;
+                if (isStorageRecovery)
+                    DeactivateOnIdle();
             }
             throw;
         }
 
-        if (!await BindAgentAsync(implementation, ct, throwOnFailure))
+        bool bound;
+        try
+        {
+            bound = await BindAgentAsync(
+                implementation,
+                ct,
+                throwOnFailure || isStorageRecovery);
+        }
+        catch when (isStorageRecovery)
+        {
+            // The authoritative kind is already durable. Shed this activation
+            // so the next attempt re-reads that row and retries business-state
+            // replay; never restore the unreadable source payload after the
+            // identity write has succeeded.
+            DeactivateOnIdle();
+            throw;
+        }
+
+        if (!bound)
         {
             if (createdIdentity)
             {
@@ -680,6 +719,15 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                     await _state.ClearStateAsync(ct);
             }
             return null;
+        }
+
+        if (isStorageRecovery)
+        {
+            _logger.LogWarning(
+                "Runtime actor durable state recovery completed. actorId={ActorId} kind={Kind} recoveryReason={RecoveryReason}",
+                SafeGetActorIdForLog(),
+                implementation.Metadata.Kind,
+                originalState.StorageRecovery!.Reason);
         }
 
         // Track the *canonical* kind from the registry, not the caller's
@@ -763,6 +811,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             AgentStateSnapshotVersion = state.AgentStateSnapshotVersion,
             Identity = state.Identity?.Clone(),
             CommittedStatePublicationState = state.CommittedStatePublicationState?.ToArray(),
+            StorageRecovery = state.StorageRecovery?.Clone(),
         };
 #pragma warning restore CS0612, CS0618
     }
@@ -1053,4 +1102,16 @@ public sealed class RuntimeActorStateSchemaTurnoverRequiredException(
     public int PersistedStateSchemaVersion { get; } = persistedStateSchemaVersion;
 
     public int TargetStateSchemaVersion { get; } = targetStateSchemaVersion;
+}
+
+public sealed class RuntimeActorStateStorageRecoveryRequiredException(
+    string actorId,
+    RuntimeActorStateStorageRecoveryReason recoveryReason)
+    : InvalidOperationException(
+        $"Actor '{actorId}' requires durable runtime state recovery ({recoveryReason}) before handling inbox delivery."),
+      IRuntimeEnvelopeRetryableException
+{
+    public string ActorId { get; } = actorId;
+
+    public RuntimeActorStateStorageRecoveryReason RecoveryReason { get; } = recoveryReason;
 }

@@ -196,11 +196,16 @@ public sealed class OrleansRuntimeServiceCollectionExtensionsTests
 
         var schedulerOptions = options.Get(OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName);
         var sharedOptions = options.Get(OrleansRuntimeConstants.GrainStateStorageName);
+        var runtimeActorOptions = options.Get(OrleansRuntimeConstants.RuntimeActorGrainStateStorageName);
 
         schedulerOptions.GrainStorageSerializer.Should()
             .BeOfType<RuntimeCallbackSchedulerStateGrainStorageSerializer>();
+        runtimeActorOptions.GrainStorageSerializer.Should()
+            .BeOfType<RuntimeActorGrainStateStorageSerializer>();
         sharedOptions.GrainStorageSerializer.Should()
             .NotBeOfType<RuntimeCallbackSchedulerStateGrainStorageSerializer>();
+        runtimeActorOptions.GetStorageKey.Should().BeNull(
+            "the dedicated serializer must keep Orleans' existing runtime actor Redis keys");
         schedulerOptions.GetStorageKey.Should().NotBeNull();
 
         var schedulerKey = schedulerOptions
@@ -231,9 +236,12 @@ public sealed class OrleansRuntimeServiceCollectionExtensionsTests
 
         var schedulerOptions = options.Get(OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName);
         var sharedOptions = options.Get(OrleansRuntimeConstants.GrainStateStorageName);
+        var runtimeActorOptions = options.Get(OrleansRuntimeConstants.RuntimeActorGrainStateStorageName);
 
         schedulerOptions.GrainStorageSerializer.Should()
             .BeOfType<RuntimeCallbackSchedulerStateGrainStorageSerializer>();
+        runtimeActorOptions.GrainStorageSerializer.Should()
+            .BeOfType<RuntimeActorGrainStateStorageSerializer>();
         sharedOptions.GrainStorageSerializer.Should()
             .NotBeOfType<RuntimeCallbackSchedulerStateGrainStorageSerializer>();
     }

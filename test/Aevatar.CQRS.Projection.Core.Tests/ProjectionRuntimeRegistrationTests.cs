@@ -534,7 +534,7 @@ public sealed class ProjectionRuntimeRegistrationTests
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new RecordingActorDispatchPort(runtime);
-        var service = new ProjectionFailureReplayService(runtime, dispatchPort);
+        var service = new ProjectionFailureReplayService(runtime, dispatchPort, dispatchPort);
         var scopeKey = new ProjectionRuntimeScopeKey("actor-3", "projection-c", ProjectionRuntimeMode.DurableMaterialization);
         runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(scopeKey));
 
@@ -556,7 +556,7 @@ public sealed class ProjectionRuntimeRegistrationTests
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new RecordingActorDispatchPort(runtime);
-        var service = new ProjectionFailureReplayService(runtime, dispatchPort);
+        var service = new ProjectionFailureReplayService(runtime, dispatchPort, dispatchPort);
         var scopeKey = new ProjectionRuntimeScopeKey(
             "actor-automatic",
             "projection-automatic",
@@ -580,6 +580,56 @@ public sealed class ProjectionRuntimeRegistrationTests
         command.MaxItems.Should().Be(1);
         command.AutomaticRecovery.Should().BeTrue();
         command.ObservedScopeStateVersion.Should().Be(17);
+    }
+
+    [Fact]
+    public async Task ProjectionFailureReplayService_WhenScopeStateNeedsRecovery_ShouldRecreateFromDurableRelayKindBeforeReplay()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var service = new ProjectionFailureReplayService(runtime, dispatchPort, dispatchPort);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-recovery",
+            "projection-recovery",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var actorId = ProjectionScopeActorId.Build(scopeKey);
+        await dispatchPort.UpsertAsync(ProjectionScopeObservationRelayBinding.Create(
+            scopeKey.RootActorId,
+            actorId,
+            "projection.materialization-scope.recovery-test",
+            12));
+
+        var replayed = await service.ReplayAutomaticallyAsync(
+            scopeKey,
+            observedScopeStateVersion: 23,
+            maxItems: 5);
+
+        replayed.Should().BeTrue();
+        runtime.CreatedByKind.Should().ContainSingle().Which.Should().Be(
+            ("projection.materialization-scope.recovery-test", actorId));
+        dispatchPort.Dispatched.Should().ContainSingle();
+        dispatchPort.Dispatched[0].actorId.Should().Be(actorId);
+    }
+
+    [Fact]
+    public async Task ProjectionFailureReplayService_WhenMissingScopeHasNoTypedDurableRelay_ShouldNotGuessIdentity()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var service = new ProjectionFailureReplayService(runtime, dispatchPort, dispatchPort);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-without-recovery-evidence",
+            "projection-without-recovery-evidence",
+            ProjectionRuntimeMode.DurableMaterialization);
+
+        var replayed = await service.ReplayAutomaticallyAsync(
+            scopeKey,
+            observedScopeStateVersion: 1,
+            maxItems: 1);
+
+        replayed.Should().BeFalse();
+        runtime.CreatedByKind.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
     }
 
     [Fact]

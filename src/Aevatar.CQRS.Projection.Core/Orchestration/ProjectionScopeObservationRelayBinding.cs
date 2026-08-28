@@ -73,6 +73,24 @@ internal static class ProjectionScopeObservationRelayBinding
         binding.Version == 0 &&
         binding.LeaseId?.StartsWith(LegacyReadinessProbeLeasePrefix, StringComparison.Ordinal) == true;
 
+    public static bool TryGetRecoveryTargetActorKind(
+        StreamForwardingBinding? binding,
+        string rootActorId,
+        string targetActorId,
+        out string targetActorKind)
+    {
+        if (HasStableRelayShape(binding, rootActorId, targetActorId) &&
+            !string.IsNullOrWhiteSpace(binding!.TargetActorKind) &&
+            binding.ActivationGeneration > 0)
+        {
+            targetActorKind = binding.TargetActorKind;
+            return true;
+        }
+
+        targetActorKind = string.Empty;
+        return false;
+    }
+
     private static bool HasStableRelayShape(
         StreamForwardingBinding? binding,
         string rootActorId,

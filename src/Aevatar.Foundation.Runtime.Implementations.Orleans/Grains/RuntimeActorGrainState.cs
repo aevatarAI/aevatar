@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Runtime;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Persistence;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
@@ -41,6 +42,14 @@ public sealed class RuntimeActorGrainState
     /// </summary>
     [Id(8)]
     public byte[]? CommittedStatePublicationState { get; set; }
+
+    /// <summary>
+    /// Typed evidence that this row needs an authoritative Agent Kind before
+    /// it can be reconstructed. While present, inbox delivery must fail and
+    /// remain eligible for transport redelivery.
+    /// </summary>
+    [Id(9)]
+    public RuntimeActorStateStorageRecovery? StorageRecovery { get; set; }
 }
 
 /// <summary>

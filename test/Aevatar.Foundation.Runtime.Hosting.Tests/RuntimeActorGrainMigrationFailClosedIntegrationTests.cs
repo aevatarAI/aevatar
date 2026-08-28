@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Tests.Shared;
 using FluentAssertions;
@@ -29,6 +30,7 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
 {
     private const string MigratedKind = "integrationtests.migrated-fail-closed";
+    private const string RecoveryKind = "integrationtests.runtime-state-recovery";
     private const string ContractId = "test.contract.v1";
 
     [Fact]
@@ -200,6 +202,54 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task CorruptedStateRecovery_ShouldRejectInboxUntilAuthoritativeKindReestablishesActorThenAcceptRedeliveryOnce()
+    {
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var storage = new FaultInjectingAgentStateStorage();
+        var recorder = new MigrationFixtureRecorder();
+        storage.Seed(actorId, new RuntimeActorGrainState
+        {
+            StorageRecovery = new RuntimeActorStateStorageRecovery
+            {
+                Reason = RuntimeActorStateStorageRecoveryReason.LegacyJsonReferenceToken,
+                SourcePayload = ByteString.CopyFromUtf8("\"$id\""),
+            },
+        });
+        var host = await StartSiloHostAsync(storage, recorder);
+
+        try
+        {
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = new EventEnvelope
+            {
+                Id = "state-recovery-envelope",
+                Route = EnvelopeRouteSemantics.CreateDirect("test-publisher", actorId),
+            };
+
+            var blockedDelivery = () => grain.HandleEnvelopeAsync(envelope.ToByteArray());
+            var blocked = await blockedDelivery.Should().ThrowAsync<Exception>();
+            ContainsStorageRecoveryRequired(blocked.Which).Should().BeTrue();
+            recorder.HandledEnvelopes.Should().BeEmpty();
+            (await grain.IsInitializedAsync()).Should().BeFalse();
+
+            (await grain.InitializeAgentByKindAsync(RecoveryKind)).Should().BeTrue();
+            var repaired = storage.Read(actorId);
+            repaired.StorageRecovery.Should().BeNull();
+            repaired.Identity.Should().NotBeNull();
+            repaired.Identity!.Kind.Should().Be(RecoveryKind);
+
+            await grain.HandleEnvelopeAsync(envelope.ToByteArray());
+            recorder.HandledEnvelopes.Should().Equal("state-recovery-envelope");
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
     private static async Task TryCallAsync(Func<Task> call)
     {
         try
@@ -219,6 +269,13 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
          aggregate.InnerExceptions.Any(ContainsTurnoverRequired)) ||
         (exception.InnerException != null &&
          ContainsTurnoverRequired(exception.InnerException));
+
+    private static bool ContainsStorageRecoveryRequired(Exception exception) =>
+        exception is RuntimeActorStateStorageRecoveryRequiredException ||
+        (exception is AggregateException aggregate &&
+         aggregate.InnerExceptions.Any(ContainsStorageRecoveryRequired)) ||
+        (exception.InnerException != null &&
+         ContainsStorageRecoveryRequired(exception.InnerException));
 
     private static RuntimeActorGrainState LegacyRow(string actorId) =>
         new()
@@ -250,20 +307,27 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
                 {
                     services.AddSingleton(recorder);
                     services.AddAevatarAgentKindRegistry(builder =>
+                    {
                         builder.Register(new AgentRegistration(
-                            MigratedKind,
-                            typeof(MigrationFixtureAgent),
-                            typeof(EventEnvelope),
-                            StateSchemaVersion: 1,
-                            StateMigrationTypes: [typeof(MigrationFixtureV0ToV1Migration)])));
+                                MigratedKind,
+                                typeof(MigrationFixtureAgent),
+                                typeof(EventEnvelope),
+                                StateSchemaVersion: 1,
+                                StateMigrationTypes: [typeof(MigrationFixtureV0ToV1Migration)]))
+                            .Register(new AgentRegistration(
+                                RecoveryKind,
+                                typeof(RecoveryFixtureAgent),
+                                typeof(EventEnvelope)));
+                    });
                     services.Replace(ServiceDescriptor.Singleton<IRuntimeFleetCapabilityAdmissionReader>(
                         admissionReader ?? new OpenAdmissionReader()));
                     services.Replace(ServiceDescriptor.Singleton<IRuntimeLocalMembershipIdentityReader>(
                         new FixedMembershipReader()));
-                    services.RemoveAllKeyed<IGrainStorage>(OrleansRuntimeConstants.GrainStateStorageName);
+                    services.RemoveAllKeyed<IGrainStorage>(
+                        OrleansRuntimeConstants.RuntimeActorGrainStateStorageName);
                     services.AddSingleton(storage);
                     services.AddGrainStorage<FaultInjectingAgentStateStorage>(
-                        OrleansRuntimeConstants.GrainStateStorageName,
+                        OrleansRuntimeConstants.RuntimeActorGrainStateStorageName,
                         (sp, _) => sp.GetRequiredService<FaultInjectingAgentStateStorage>());
                 });
             })
@@ -370,6 +434,7 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
                 AgentStateSnapshotVersion = state.AgentStateSnapshotVersion,
                 Identity = state.Identity?.Clone(),
                 CommittedStatePublicationState = state.CommittedStatePublicationState?.ToArray(),
+                StorageRecovery = state.StorageRecovery?.Clone(),
             };
 
         private static RuntimeActorCommittedStatePublicationGrainState Clone(
@@ -453,6 +518,38 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
             _recorder.RecordEnvelope(envelope.Id);
             return Task.CompletedTask;
         }
+    }
+
+    public sealed class RecoveryFixtureAgent : IAgent
+    {
+        private readonly MigrationFixtureRecorder _recorder;
+
+        public RecoveryFixtureAgent(MigrationFixtureRecorder recorder)
+        {
+            _recorder = recorder;
+            _recorder.RecordConstruction(0);
+        }
+
+        public string Id => "runtime-state-recovery-fixture";
+
+        public Task ActivateAsync(CancellationToken ct = default)
+        {
+            _recorder.RecordActivation(0);
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _recorder.RecordEnvelope(envelope.Id);
+            return Task.CompletedTask;
+        }
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(nameof(RecoveryFixtureAgent));
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<Type>>([]);
     }
 
     [ActorStateMigration(

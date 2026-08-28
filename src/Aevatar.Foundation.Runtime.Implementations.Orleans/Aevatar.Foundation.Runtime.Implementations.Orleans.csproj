@@ -30,6 +30,13 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
     <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Grains/runtime_actor_grain_state.proto" GrpcServices="None" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Aevatar.Foundation.Runtime.Hosting.Tests" />

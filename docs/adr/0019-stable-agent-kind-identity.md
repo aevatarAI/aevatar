@@ -63,6 +63,32 @@ the existing fields predate this PR. Migrating the outer record to
 Protobuf is tracked as a separate storage-layer follow-up; this PR
 intentionally limits its blast radius to the new identity field.
 
+### Unreadable outer-row recovery
+
+The runtime actor state slots resolve through a dedicated Orleans storage
+provider name, but retain Orleans' default Redis key derivation and JSON object
+wire. This separation permits a narrow serializer recovery policy without
+changing `StreamTopologyGrain` storage or making rows unreadable to an older
+silo during a rolling deploy.
+
+An outer row whose payload is exactly the invalid legacy JSON reference token
+`"$id"` materializes as the typed Protobuf
+`RuntimeActorStateStorageRecovery` marker. The grain reports itself as
+uninitialized, subscribes to its inbox, and rejects delivery until a caller
+supplies an authoritative Agent Kind. It never acknowledges or drops the
+pending envelope. For projection scope actors, automatic failure recovery may
+read that kind only from the durable, exact stream-forwarding binding and then
+call `CreateByKindAsync` with the same opaque actor ID. Successful activation
+replays business state from committed events and replaces the invalid row;
+failed reconstruction preserves the original bytes for a later retry. No
+actor-ID parsing, process-local identity registry, or query-time event replay
+is permitted in this path.
+
+All ordinary writes remain rolling-compatible JSON objects and are checked
+before persistence; a serializer result with a scalar root is rejected before
+it can overwrite a valid row. A future outer-envelope Protobuf cutover still
+requires its own fleet-gated rollout and is not implied by this recovery path.
+
 ### Registry contract
 
 ```csharp

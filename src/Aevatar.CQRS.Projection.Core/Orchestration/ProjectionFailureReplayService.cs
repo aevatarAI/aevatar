@@ -1,16 +1,26 @@
+using Aevatar.Foundation.Abstractions.Streaming;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 public sealed class ProjectionFailureReplayService : IProjectionFailureReplayService
 {
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IStreamForwardingBindingAuthority _bindingAuthority;
+    private readonly ILogger<ProjectionFailureReplayService> _logger;
 
     public ProjectionFailureReplayService(
         IActorRuntime runtime,
-        IActorDispatchPort dispatchPort)
+        IActorDispatchPort dispatchPort,
+        IStreamForwardingBindingAuthority bindingAuthority,
+        ILogger<ProjectionFailureReplayService>? logger = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _bindingAuthority = bindingAuthority ?? throw new ArgumentNullException(nameof(bindingAuthority));
+        _logger = logger ?? NullLogger<ProjectionFailureReplayService>.Instance;
     }
 
     public async Task<bool> ReplayAsync(
@@ -51,7 +61,33 @@ public sealed class ProjectionFailureReplayService : IProjectionFailureReplaySer
 
         var actorId = ProjectionScopeActorId.Build(scopeKey);
         if (!await _runtime.ExistsAsync(actorId).ConfigureAwait(false))
-            return false;
+        {
+            var binding = await _bindingAuthority
+                .GetAsync(scopeKey.RootActorId, actorId, ct)
+                .ConfigureAwait(false);
+            if (!ProjectionScopeObservationRelayBinding.TryGetRecoveryTargetActorKind(
+                    binding,
+                    scopeKey.RootActorId,
+                    actorId,
+                    out var targetActorKind))
+            {
+                return false;
+            }
+
+            // The durable relay is actor-owned activation evidence and carries the
+            // exact registered kind. Re-establishing by that typed fact repairs a
+            // state row that the runtime deliberately reports as uninitialized;
+            // the original stream delivery remains pending and is then redelivered.
+            _logger.LogWarning(
+                "Projection failure replay is re-establishing an uninitialized scope actor from durable relay evidence. actorId={ActorId} rootActorId={RootActorId} projectionKind={ProjectionKind} targetActorKind={TargetActorKind}",
+                actorId,
+                scopeKey.RootActorId,
+                scopeKey.ProjectionKind,
+                targetActorKind);
+            _ = await _runtime
+                .CreateByKindAsync(targetActorKind, actorId, ct)
+                .ConfigureAwait(false);
+        }
 
         var envelope = ProjectionScopeCommandEnvelopeFactory.Create(
             new ReplayProjectionFailuresCommand

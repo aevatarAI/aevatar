@@ -19,6 +19,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Streaming;
 using Orleans.Runtime;
+using Orleans.Storage;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 
@@ -199,6 +200,17 @@ public static class ServiceCollectionExtensions
         if (IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet))
         {
             builder.AddRedisGrainStorage(
+                OrleansRuntimeConstants.RuntimeActorGrainStateStorageName,
+                optionsBuilder =>
+                {
+                    optionsBuilder.Configure(redisOptions =>
+                        redisOptions.ConfigurationOptions =
+                            StackExchange.Redis.ConfigurationOptions.Parse(options.GarnetConnectionString));
+                    optionsBuilder.Configure<OrleansJsonSerializer>((redisOptions, jsonSerializer) =>
+                        redisOptions.GrainStorageSerializer = new RuntimeActorGrainStateStorageSerializer(
+                            new JsonGrainStorageSerializer(jsonSerializer)));
+                });
+            builder.AddRedisGrainStorage(
                 OrleansRuntimeConstants.GrainStateStorageName,
                 redisOptions => redisOptions.ConfigurationOptions = StackExchange.Redis.ConfigurationOptions.Parse(options.GarnetConnectionString));
             builder.AddRedisGrainStorage(
@@ -214,6 +226,11 @@ public static class ServiceCollectionExtensions
             return;
         }
 
+        builder.AddMemoryGrainStorage(
+            OrleansRuntimeConstants.RuntimeActorGrainStateStorageName,
+            optionsBuilder => optionsBuilder.Configure<OrleansJsonSerializer>((storageOptions, jsonSerializer) =>
+                storageOptions.GrainStorageSerializer = new RuntimeActorGrainStateStorageSerializer(
+                    new JsonGrainStorageSerializer(jsonSerializer))));
         builder.AddMemoryGrainStorage(OrleansRuntimeConstants.GrainStateStorageName);
         builder.AddMemoryGrainStorage(
             OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName,

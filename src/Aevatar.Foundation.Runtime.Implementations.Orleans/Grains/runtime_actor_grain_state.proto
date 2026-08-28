@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package aevatar.foundation.runtime.orleans.persistence;
+
+option csharp_namespace = "Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Persistence";
+
+enum RuntimeActorStateStorageRecoveryReason {
+  RUNTIME_ACTOR_STATE_STORAGE_RECOVERY_REASON_UNSPECIFIED = 0;
+  RUNTIME_ACTOR_STATE_STORAGE_RECOVERY_REASON_LEGACY_JSON_REFERENCE_TOKEN = 1;
+}
+
+// Typed evidence that the runtime state row could be read only through a
+// narrowly defined recovery path. The original bytes stay attached until a
+// caller with an authoritative Agent Kind successfully re-establishes the
+// actor; inbox delivery remains unacknowledged while this marker is present.
+message RuntimeActorStateStorageRecovery {
+  RuntimeActorStateStorageRecoveryReason reason = 1;
+  bytes source_payload = 2;
+}
