@@ -13,6 +13,8 @@ namespace Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 /// </summary>
 public sealed class GarnetEventStore : IEventStore, IEventStoreMaintenance
 {
+    private const int PayloadReadBatchSize = 64;
+
     private const string AppendScript = """
                                       local currentRaw = redis.call('GET', KEYS[1])
                                       local current = 0
@@ -185,7 +187,7 @@ public sealed class GarnetEventStore : IEventStore, IEventStoreMaintenance
         if (versions.Length == 0)
             return [];
 
-        var payloads = await _database.HashGetAsync(keys.EventDataKey, versions);
+        var payloads = await ReadPayloadsAsync(keys.EventDataKey, versions, ct);
         ct.ThrowIfCancellationRequested();
         if (payloads.Length != versions.Length)
         {
@@ -214,6 +216,33 @@ public sealed class GarnetEventStore : IEventStore, IEventStoreMaintenance
         }
 
         return events;
+    }
+
+    private async Task<RedisValue[]> ReadPayloadsAsync(
+        RedisKey eventDataKey,
+        RedisValue[] versions,
+        CancellationToken ct)
+    {
+        var payloads = new RedisValue[versions.Length];
+        for (var offset = 0; offset < versions.Length; offset += PayloadReadBatchSize)
+        {
+            ct.ThrowIfCancellationRequested();
+            var count = Math.Min(PayloadReadBatchSize, versions.Length - offset);
+            var pendingReads = new Task<RedisValue>[count];
+            for (var i = 0; i < count; i++)
+            {
+                pendingReads[i] = _database.HashGetAsync(eventDataKey, versions[offset + i]);
+            }
+
+            // Garnet 1.1.x can terminate the Redis session while materializing a large
+            // multi-field HMGET response. Keep pipelining bounded, but use the stable
+            // single-field HGET path so one large actor history cannot reset the shared
+            // multiplexer and prevent every persisted actor from recovering.
+            var batch = await Task.WhenAll(pendingReads);
+            batch.CopyTo(payloads, offset);
+        }
+
+        return payloads;
     }
 
     public async Task<long> GetVersionAsync(string agentId, CancellationToken ct = default)
