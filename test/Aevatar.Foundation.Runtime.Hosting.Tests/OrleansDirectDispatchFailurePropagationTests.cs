@@ -432,11 +432,16 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             callbackScheduler.TimeoutRequests.Should().HaveCount(2);
             var secondRequest = callbackScheduler.TimeoutRequests[1];
             firstRequest.CallbackId.Should().Be(secondRequest.CallbackId);
-            firstRequest.CallbackId.Should().StartWith("runtime-envelope-retry-until-resolved:");
+            firstRequest.CallbackId.Should().StartWith("runtime-envelope-retry-until-resolved-coalesced:");
             firstRequest.DeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
             secondRequest.DeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
-            firstRequest.DueTime.Should().BeGreaterThan(TimeSpan.Zero,
-                "retry-until-resolved always uses a durable callback even when the configured delay is zero");
+            firstRequest.DueTime.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(24));
+            firstRequest.DueTime.Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(30));
+            secondRequest.DueTime.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(24));
+            secondRequest.DueTime.Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(30));
+            firstRequest.CoalescingCursor.Should().Be(
+                new RuntimeEnvelopeRetryCoalescingCursor("source-phase-b-proof", 11));
+            secondRequest.CoalescingCursor.Should().Be(firstRequest.CoalescingCursor);
             firstRequest.TriggerEnvelope.Runtime.Retry.Attempt.Should().Be(4);
             secondRequest.TriggerEnvelope.Runtime.Retry.Attempt.Should().Be(5);
             firstRequest.TriggerEnvelope.Runtime.Retry.OriginEventId.Should().Be("phase-b-proof-lineage");
@@ -1046,6 +1051,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 throw new ProjectionScopeStatusPhaseBProofUnavailableException(
                     Id,
                     "source-phase-b-proof",
+                    11,
                     7,
                     ProjectionScopeStatusRoutePhase.Warming,
                     ProjectionScopeStatusActorRole.TerminalWriter);

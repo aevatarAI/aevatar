@@ -47,6 +47,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
         ThrowIfGenericMutationTargetsReservedSlot(callbackId);
+        ThrowIfGenericScheduleTargetsCoalescedSlot(callbackId);
         ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
         await RecoverPendingReminderUnregistrationsAsync();
         var dueTime = TimeSpan.FromMilliseconds(dueTimeMs);
@@ -62,6 +63,63 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         return nextGeneration;
     }
 
+    public async Task<long> ScheduleCoalescedTimeoutAsync(
+        string callbackId,
+        EventEnvelope triggerEnvelope,
+        int dueTimeMs,
+        string coalescingKey,
+        long coalescingSequence,
+        RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
+    {
+        ThrowIfGenericMutationTargetsReservedSlot(callbackId);
+        ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
+        ValidateCoalescingCursor(coalescingKey, coalescingSequence);
+        await RecoverPendingReminderUnregistrationsAsync();
+
+        var stateBeforeMutation = _state.State.Clone();
+        long generation;
+        bool stateChanged;
+        try
+        {
+            stateChanged = TryUpsertCoalescedTimeout(
+                _state.State,
+                this.GetPrimaryKeyString(),
+                callbackId,
+                triggerEnvelope,
+                dueTimeMs,
+                coalescingKey,
+                coalescingSequence,
+                deliveryMode,
+                DateTimeOffset.UtcNow,
+                out generation);
+            if (stateChanged)
+                await _state.WriteStateAsync();
+        }
+        catch
+        {
+            _state.State = stateBeforeMutation;
+            // A failed write can have an unknown commit outcome. Turn the scheduler over so the
+            // transport retry reloads the durable watermark instead of trusting restored memory.
+            DeactivateOnIdle();
+            throw;
+        }
+
+        if (!stateChanged)
+        {
+            await EnsurePhysicalOneShotReminderAsync(callbackId);
+            return generation;
+        }
+
+        // State and its high watermark are committed together before the physical reminder is
+        // registered. If registration fails, keep the durable schedule: transport redelivery
+        // will retry this call and repair the missing reminder without another state write.
+        await this.RegisterOrUpdateReminder(
+            BuildReminderName(callbackId),
+            TimeSpan.FromMilliseconds(dueTimeMs),
+            OneShotReminderRetryPeriod);
+        return generation;
+    }
+
     public async Task<long> ScheduleTimerAsync(
         string callbackId,
         EventEnvelope triggerEnvelope,
@@ -70,6 +128,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
         ThrowIfGenericMutationTargetsReservedSlot(callbackId);
+        ThrowIfGenericScheduleTargetsCoalescedSlot(callbackId);
         ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(periodMs, 0);
         await RecoverPendingReminderUnregistrationsAsync();
@@ -123,6 +182,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         var persistedIds = _state.State.PendingReminderUnregistrations
             .Concat(_state.State.ReminderCallbacks.Keys)
             .Concat(_state.State.CallbackGenerations.Keys)
+            .Concat(_state.State.CoalescingWatermarks.Values.Select(static x => x.CallbackId))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         if (StagePendingReminderUnregistrations(persistedIds))
@@ -336,7 +396,8 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
                 pending,
                 StringComparer.Ordinal) ||
             _state.State.ReminderCallbacks.Count != 0 ||
-            _state.State.CallbackGenerations.Count != 0;
+            _state.State.CallbackGenerations.Count != 0 ||
+            _state.State.CoalescingWatermarks.Count != 0;
         if (!changed)
             return false;
 
@@ -344,6 +405,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         _state.State.PendingReminderUnregistrations.Add(pending);
         _state.State.ReminderCallbacks.Clear();
         _state.State.CallbackGenerations.Clear();
+        _state.State.CoalescingWatermarks.Clear();
         return true;
     }
 
@@ -379,6 +441,25 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         ArgumentNullException.ThrowIfNull(triggerEnvelope.Payload);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTimeMs, 0);
         DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(triggerEnvelope);
+    }
+
+    private static void ValidateCoalescingCursor(string coalescingKey, long coalescingSequence)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(coalescingKey);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(coalescingSequence, 0);
+    }
+
+    private void ThrowIfGenericScheduleTargetsCoalescedSlot(string callbackId)
+    {
+        if (_state.State.CoalescingWatermarks.Values.Any(
+                watermark => string.Equals(
+                    watermark.CallbackId,
+                    callbackId,
+                    StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                $"Callback '{callbackId}' is owned by the coalesced timeout contract and cannot be replaced by a generic schedule.");
+        }
     }
 
     private void ThrowIfGenericMutationTargetsReservedSlot(string callbackId)
@@ -462,6 +543,145 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         }
 
         return nextGeneration;
+    }
+
+    internal static bool TryUpsertCoalescedTimeout(
+        RuntimeCallbackSchedulerState state,
+        string actorId,
+        string callbackId,
+        EventEnvelope triggerEnvelope,
+        int dueTimeMs,
+        string coalescingKey,
+        long coalescingSequence,
+        RuntimeCallbackDeliveryMode deliveryMode,
+        DateTimeOffset scheduledAtUtc,
+        out long generation)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
+        ValidateCoalescingCursor(coalescingKey, coalescingSequence);
+
+        state.CoalescingWatermarks.TryGetValue(coalescingKey, out var watermark);
+        if (watermark != null &&
+            !string.Equals(watermark.CallbackId, callbackId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Coalescing key '{coalescingKey}' is already bound to callback '{watermark.CallbackId}'.");
+        }
+
+        if (watermark != null && coalescingSequence < watermark.Sequence)
+        {
+            generation = ResolveKnownCoalescedGeneration(state, callbackId, watermark);
+            return false;
+        }
+
+        if (watermark != null &&
+            coalescingSequence == watermark.Sequence &&
+            state.ReminderCallbacks.TryGetValue(callbackId, out var pending) &&
+            pending.PendingDeliveryEnvelope == null)
+        {
+            EnsurePendingCallbackMatchesCursor(
+                pending,
+                coalescingKey,
+                coalescingSequence);
+            generation = pending.Generation;
+            return false;
+        }
+
+        if (state.ReminderCallbacks.TryGetValue(callbackId, out var existing))
+        {
+            if (string.IsNullOrWhiteSpace(existing.CoalescingKey))
+            {
+                throw new InvalidOperationException(
+                    $"Callback '{callbackId}' is already owned by a non-coalesced schedule.");
+            }
+
+            if (!string.Equals(existing.CoalescingKey, coalescingKey, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Callback '{callbackId}' is already bound to coalescing key '{existing.CoalescingKey}'.");
+            }
+        }
+
+        var previousGeneration = Math.Max(
+            state.CallbackGenerations.GetValueOrDefault(callbackId),
+            existing?.Generation ?? 0);
+        generation = checked(previousGeneration + 1);
+        state.ReminderCallbacks[callbackId] = new RuntimeScheduledCallback
+        {
+            ActorId = actorId,
+            CallbackId = callbackId,
+            Generation = generation,
+            SlotEpoch = SchedulerSlotEpoch,
+            Periodic = false,
+            DueTimeMillis = dueTimeMs,
+            PeriodMillis = 0,
+            FireIndex = 0,
+            DeliveryMode = ToProtoDeliveryMode(deliveryMode),
+            TriggerEnvelope = triggerEnvelope.Clone(),
+            NextDueAtUnixTimeMs = scheduledAtUtc.AddMilliseconds(dueTimeMs).ToUnixTimeMilliseconds(),
+            OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
+            CoalescingKey = coalescingKey,
+            CoalescingSequence = coalescingSequence,
+        };
+        state.CallbackGenerations[callbackId] = generation;
+        state.CoalescingWatermarks[coalescingKey] = new RuntimeCallbackCoalescingWatermark
+        {
+            CallbackId = callbackId,
+            Sequence = coalescingSequence,
+        };
+        return true;
+    }
+
+    private static long ResolveKnownCoalescedGeneration(
+        RuntimeCallbackSchedulerState state,
+        string callbackId,
+        RuntimeCallbackCoalescingWatermark watermark)
+    {
+        var generation = state.ReminderCallbacks.TryGetValue(callbackId, out var pending)
+            ? pending.Generation
+            : state.CallbackGenerations.GetValueOrDefault(callbackId);
+        if (generation <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Coalescing key for callback '{watermark.CallbackId}' has no durable generation.");
+        }
+
+        return generation;
+    }
+
+    private static void EnsurePendingCallbackMatchesCursor(
+        RuntimeScheduledCallback pending,
+        string coalescingKey,
+        long coalescingSequence)
+    {
+        if (!string.Equals(pending.CoalescingKey, coalescingKey, StringComparison.Ordinal) ||
+            pending.CoalescingSequence != coalescingSequence ||
+            pending.Periodic)
+        {
+            throw new InvalidOperationException(
+                $"Pending callback '{pending.CallbackId}' does not match its coalescing watermark.");
+        }
+    }
+
+    private async Task EnsurePhysicalOneShotReminderAsync(string callbackId)
+    {
+        if (!_state.State.ReminderCallbacks.TryGetValue(callbackId, out var pending) ||
+            pending.Periodic ||
+            string.IsNullOrWhiteSpace(pending.CoalescingKey) ||
+            await this.GetReminder(BuildReminderName(callbackId)) != null)
+        {
+            return;
+        }
+
+        var remainingMs = Math.Max(
+            pending.NextDueAtUnixTimeMs - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            1L);
+        await this.RegisterOrUpdateReminder(
+            BuildReminderName(callbackId),
+            TimeSpan.FromMilliseconds(remainingMs),
+            OneShotReminderRetryPeriod);
     }
 
     public async Task ReceiveReminder(string reminderName, TickStatus status)

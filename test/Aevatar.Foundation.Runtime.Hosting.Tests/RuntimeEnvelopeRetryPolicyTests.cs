@@ -89,6 +89,105 @@ public sealed class RuntimeEnvelopeRetryPolicyTests
             .Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(1, 5000)]
+    [InlineData(2, 10000)]
+    [InlineData(3, 20000)]
+    [InlineData(4, 30000)]
+    [InlineData(40, 30000)]
+    public void RetryUntilResolvedDelay_ShouldUseBoundedExponentialBackoff(
+        int nextAttempt,
+        int expectedDelayMs)
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("0", "0");
+
+        policy.ResolveRetryDelayMs(nextAttempt, retryUntilResolved: true)
+            .Should().Be(expectedDelayMs);
+        policy.ResolveRetryDelayMs(nextAttempt, retryUntilResolved: false)
+            .Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(1, 5000, 6000)]
+    [InlineData(2, 10000, 12000)]
+    [InlineData(3, 20000, 24000)]
+    [InlineData(4, 24000, 30000)]
+    [InlineData(40, 24000, 30000)]
+    public void RetryUntilResolvedDelay_WithStableIdentity_ShouldUseBoundedJitterBand(
+        int nextAttempt,
+        int minimumDelayMs,
+        int maximumDelayMs)
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("0", "0");
+        const string jitterIdentity = "status-materializer|source-scope";
+
+        var first = policy.ResolveRetryDelayMs(
+            nextAttempt,
+            retryUntilResolved: true,
+            jitterIdentity);
+        var repeated = policy.ResolveRetryDelayMs(
+            nextAttempt,
+            retryUntilResolved: true,
+            jitterIdentity);
+
+        first.Should().BeInRange(minimumDelayMs, maximumDelayMs);
+        repeated.Should().Be(first, "the same durable retry must keep its delay across redelivery and restart");
+    }
+
+    [Fact]
+    public void RetryUntilResolvedDelay_ShouldSpreadIndependentCallbackIdentities()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("0", "0");
+
+        var delays = Enumerable.Range(0, 64)
+            .Select(index => policy.ResolveRetryDelayMs(
+                nextAttempt: 1,
+                retryUntilResolved: true,
+                $"status-materializer|source-{index}"))
+            .Distinct()
+            .ToArray();
+
+        delays.Should().HaveCountGreaterThan(16);
+        delays.Should().OnlyContain(delay => delay >= 5000 && delay <= 6000);
+    }
+
+    [Fact]
+    public void RetryUntilResolvedMarker_ShouldRemainSafelyDelayedWhenOrdinaryRetryIsDisabled()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("0", "0");
+
+        policy.TryBuildRetryEnvelope(
+                new EventEnvelope { Id = "retry-until-resolved-disabled-policy" },
+                new RuntimeRetryUntilResolvedTestException(),
+                out _,
+                out var nextAttempt)
+            .Should().BeTrue();
+
+        nextAttempt.Should().Be(1);
+        policy.ResolveRetryDelayMs(nextAttempt, retryUntilResolved: true).Should().Be(5000);
+        policy.ResolveRetryDelayMs(
+                nextAttempt,
+                retryUntilResolved: true,
+                stableJitterIdentity: "disabled-policy-callback")
+            .Should().BeInRange(5000, 6000);
+    }
+
+    [Fact]
+    public void ResolveRetryCoalescingCursor_ShouldReadWrappedAuthoritativeCursor()
+    {
+        var cursor = new RuntimeEnvelopeRetryCoalescingCursor("source-scope", 17);
+        var exception = new AggregateException(
+            new InvalidOperationException(
+                "wrapper",
+                new RuntimeRetryCoalescingTestException(cursor)));
+
+        RuntimeEnvelopeRetryPolicy.ResolveRetryCoalescingCursor(exception)
+            .Should().Be(cursor);
+        RuntimeEnvelopeRetryPolicy.ResolveRetryCoalescingCursor(
+                new RuntimeRetryUntilResolvedTestException())
+            .Should().BeNull();
+    }
+
     [Fact]
     public void OrdinaryRuntimeRetryableMarker_ShouldStopAtAttemptBudget()
     {
@@ -188,5 +287,12 @@ public sealed class RuntimeEnvelopeRetryPolicyTests
     private sealed class RuntimeRetryUntilResolvedTestException
         : Exception, IRuntimeEnvelopeRetryUntilResolvedException
     {
+    }
+
+    private sealed class RuntimeRetryCoalescingTestException(
+        RuntimeEnvelopeRetryCoalescingCursor cursor)
+        : Exception, IRuntimeEnvelopeRetryCoalescingException
+    {
+        public RuntimeEnvelopeRetryCoalescingCursor RetryCoalescingCursor { get; } = cursor;
     }
 }

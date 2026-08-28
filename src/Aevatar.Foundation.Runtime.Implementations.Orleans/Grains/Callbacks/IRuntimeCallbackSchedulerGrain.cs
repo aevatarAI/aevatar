@@ -11,6 +11,14 @@ public interface IRuntimeCallbackSchedulerGrain : IGrainWithStringKey
         int dueTimeMs,
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent);
 
+    Task<long> ScheduleCoalescedTimeoutAsync(
+        string callbackId,
+        EventEnvelope triggerEnvelope,
+        int dueTimeMs,
+        string coalescingKey,
+        long coalescingSequence,
+        RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent);
+
     Task<long> ScheduleTimerAsync(
         string callbackId,
         EventEnvelope triggerEnvelope,

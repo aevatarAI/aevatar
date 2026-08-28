@@ -69,6 +69,31 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
     }
 
     [Fact]
+    public async Task DurableScheduleTimeoutAsync_WithCoalescingCursor_ShouldUseTypedGrainOperation()
+    {
+        var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 10 };
+        var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
+        var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
+        grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
+        var scheduler = new OrleansActorRuntimeDurableCallbackScheduler(grainFactory);
+
+        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = "status-materializer",
+            CallbackId = "latest-status-observation",
+            DueTime = TimeSpan.FromSeconds(5),
+            TriggerEnvelope = CreateEnvelope(),
+            CoalescingCursor = new RuntimeEnvelopeRetryCoalescingCursor("source-scope", 42),
+        });
+
+        lease.Generation.Should().Be(10);
+        dedicatedGrain.ScheduleTimeoutCalls.Should().Be(0);
+        dedicatedGrain.ScheduleCoalescedTimeoutCalls.Should().Be(1);
+        dedicatedGrain.LastCoalescingKey.Should().Be("source-scope");
+        dedicatedGrain.LastCoalescingSequence.Should().Be(42);
+    }
+
+    [Fact]
     public async Task DurableScheduleTimerAsync_ShouldAlwaysUseDedicatedReminderScheduler()
     {
         var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 13 };
@@ -321,6 +346,8 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
 
         public int ScheduleTimeoutCalls { get; private set; }
 
+        public int ScheduleCoalescedTimeoutCalls { get; private set; }
+
         public int ScheduleTimerCalls { get; private set; }
 
         public int CancelCalls { get; private set; }
@@ -335,6 +362,10 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
 
         public EventEnvelope LastTimeoutTriggerEnvelope { get; private set; } = new();
 
+        public string LastCoalescingKey { get; private set; } = string.Empty;
+
+        public long LastCoalescingSequence { get; private set; }
+
         public RuntimeCallbackDeliveryMode LastDeliveryMode { get; private set; } = RuntimeCallbackDeliveryMode.FiredSelfEvent;
 
         public Task<long> ScheduleTimeoutAsync(
@@ -348,6 +379,24 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             LastDeliveryMode = deliveryMode;
             LastTimeoutTriggerEnvelope = triggerEnvelope.Clone();
             ScheduleTimeoutCalls++;
+            return Task.FromResult(NextGeneration);
+        }
+
+        public Task<long> ScheduleCoalescedTimeoutAsync(
+            string callbackId,
+            EventEnvelope triggerEnvelope,
+            int dueTimeMs,
+            string coalescingKey,
+            long coalescingSequence,
+            RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
+        {
+            _ = callbackId;
+            _ = dueTimeMs;
+            LastDeliveryMode = deliveryMode;
+            LastTimeoutTriggerEnvelope = triggerEnvelope.Clone();
+            LastCoalescingKey = coalescingKey;
+            LastCoalescingSequence = coalescingSequence;
+            ScheduleCoalescedTimeoutCalls++;
             return Task.FromResult(NextGeneration);
         }
 

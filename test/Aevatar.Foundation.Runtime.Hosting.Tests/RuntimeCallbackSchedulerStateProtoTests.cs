@@ -23,6 +23,14 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         var state = new RuntimeCallbackSchedulerState
         {
             PendingReminderUnregistrations = { "cb-pending" },
+            CoalescingWatermarks =
+            {
+                ["source-actor"] = new RuntimeCallbackCoalescingWatermark
+                {
+                    CallbackId = "cb-1",
+                    Sequence = 42,
+                },
+            },
             ReminderCallbacks =
             {
                 ["cb-1"] = new RuntimeScheduledCallback
@@ -39,6 +47,8 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
                     TriggerEnvelope = CreateEnvelope("evt-1"),
                     NextDueAtUnixTimeMs = 1_780_000_000_000,
                     OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
+                    CoalescingKey = "source-actor",
+                    CoalescingSequence = 42,
                 },
             },
         };
@@ -60,6 +70,10 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         callback.TriggerEnvelope.Payload.Unpack<StringValue>().Value.Should().Be("payload");
         callback.NextDueAtUnixTimeMs.Should().Be(1_780_000_000_000);
         callback.OverduePolicy.Should().Be(RuntimeCallbackOverduePolicy.Deliver);
+        callback.CoalescingKey.Should().Be("source-actor");
+        callback.CoalescingSequence.Should().Be(42);
+        roundTripped.CoalescingWatermarks["source-actor"].CallbackId.Should().Be("cb-1");
+        roundTripped.CoalescingWatermarks["source-actor"].Sequence.Should().Be(42);
         roundTripped.PendingReminderUnregistrations.Should().ContainSingle()
             .Which.Should().Be("cb-pending");
     }

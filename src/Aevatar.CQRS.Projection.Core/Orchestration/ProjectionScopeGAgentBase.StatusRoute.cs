@@ -1016,6 +1016,7 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
                 throw new ProjectionScopeStatusPhaseBProofUnavailableException(
                     Id,
                     sourceScopeActorId,
+                    stateEvent!.Version,
                     route.RouteEpoch,
                     route.Phase,
                     ProjectionScopeStatusActorRole.LegacyWriter);
@@ -1305,16 +1306,22 @@ public sealed class ProjectionScopeStatusRouteBlockedException(string scopeActor
 public sealed class ProjectionScopeStatusPhaseBProofUnavailableException(
     string materializerActorId,
     string sourceScopeActorId,
+    long sourceStateVersion,
     long routeEpoch,
     ProjectionScopeStatusRoutePhase phase,
     ProjectionScopeStatusActorRole writerRole)
     : InvalidOperationException(
-        $"Status materializer '{materializerActorId}' cannot prove Phase-B admission for source '{sourceScopeActorId}', route epoch {routeEpoch}, phase {phase}, writer role {writerRole}; the observation is redelivered."),
-        IRuntimeEnvelopeRetryUntilResolvedException
+        $"Status materializer '{materializerActorId}' cannot prove Phase-B admission for source '{sourceScopeActorId}' at committed version {sourceStateVersion}, route epoch {routeEpoch}, phase {phase}, writer role {writerRole}; the observation is redelivered."),
+        IRuntimeEnvelopeRetryCoalescingException
 {
     public string MaterializerActorId { get; } = materializerActorId;
 
     public string SourceScopeActorId { get; } = sourceScopeActorId;
+
+    public long SourceStateVersion { get; } = sourceStateVersion;
+
+    public RuntimeEnvelopeRetryCoalescingCursor RetryCoalescingCursor { get; } =
+        new(sourceScopeActorId, sourceStateVersion);
 
     public long RouteEpoch { get; } = routeEpoch;
 

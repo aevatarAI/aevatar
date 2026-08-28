@@ -11,4 +11,10 @@ public sealed class RuntimeCallbackTimeoutRequest
     public required TimeSpan DueTime { get; init; }
 
     public RuntimeCallbackDeliveryMode DeliveryMode { get; init; } = RuntimeCallbackDeliveryMode.FiredSelfEvent;
+
+    /// <summary>
+    /// Optional authoritative cursor for a one-shot callback where only the latest pending
+    /// sequence for the same key remains relevant.
+    /// </summary>
+    public RuntimeEnvelopeRetryCoalescingCursor? CoalescingCursor { get; init; }
 }

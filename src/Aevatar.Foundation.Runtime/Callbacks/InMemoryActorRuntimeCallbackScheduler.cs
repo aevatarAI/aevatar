@@ -19,6 +19,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
     private readonly IStreamProvider _streams;
     private readonly ConcurrentDictionary<CallbackKey, ScheduledCallback> _callbacks = [];
     private readonly ConcurrentDictionary<CallbackKey, long> _callbackGenerations = [];
+    private readonly Lock _coalescingGate = new();
+    private readonly Dictionary<CoalescingKey, CoalescingWatermark> _coalescingWatermarks = [];
     private readonly ICollection<KeyValuePair<CallbackKey, ScheduledCallback>> _callbackEntries;
 
     public InMemoryActorRuntimeCallbackScheduler(IStreamProvider streams)
@@ -33,6 +35,11 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         ThrowIfGenericMutationTargetsReservedSlot(request.ActorId, request.CallbackId);
         ValidateScheduleRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
         ct.ThrowIfCancellationRequested();
+
+        if (request.CoalescingCursor != null)
+            return ScheduleCoalescedTimeout(request, request.CoalescingCursor);
+
+        ThrowIfGenericScheduleTargetsCoalescedSlot(request.ActorId, request.CallbackId);
 
         var key = new CallbackKey(request.ActorId, request.CallbackId);
         var generation = _callbackGenerations.AddOrUpdate(key, 1, (_, current) => current + 1);
@@ -61,6 +68,94 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             RuntimeCallbackBackend.InMemory));
     }
 
+    private Task<RuntimeCallbackLease> ScheduleCoalescedTimeout(
+        RuntimeCallbackTimeoutRequest request,
+        RuntimeEnvelopeRetryCoalescingCursor cursor)
+    {
+        ScheduledCallback? callbackToStart = null;
+        long generation;
+        lock (_coalescingGate)
+        {
+            var coalescingKey = new CoalescingKey(request.ActorId, cursor.Key);
+            _coalescingWatermarks.TryGetValue(coalescingKey, out var watermark);
+            if (watermark != null &&
+                !string.Equals(watermark.CallbackId, request.CallbackId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Coalescing key '{cursor.Key}' is already bound to callback '{watermark.CallbackId}'.");
+            }
+
+            if (watermark != null && cursor.Sequence < watermark.Sequence)
+            {
+                generation = watermark.Generation;
+            }
+            else
+            {
+                var callbackKey = new CallbackKey(request.ActorId, request.CallbackId);
+                if (watermark != null &&
+                    cursor.Sequence == watermark.Sequence &&
+                    _callbacks.TryGetValue(callbackKey, out var pending) &&
+                    !pending.HasFired)
+                {
+                    if (pending.CoalescingCursor != cursor || pending.IsPeriodic)
+                    {
+                        throw new InvalidOperationException(
+                            $"Pending callback '{request.CallbackId}' does not match its coalescing watermark.");
+                    }
+
+                    generation = pending.Generation;
+                }
+                else
+                {
+                    if (_callbacks.TryGetValue(callbackKey, out var existing) &&
+                        existing.CoalescingCursor?.Key != cursor.Key)
+                    {
+                        throw new InvalidOperationException(
+                            $"Callback '{request.CallbackId}' is already owned by another schedule.");
+                    }
+
+                    generation = _callbackGenerations.AddOrUpdate(
+                        callbackKey,
+                        1,
+                        (_, current) => current + 1);
+                    callbackToStart = _callbacks.AddOrUpdate(
+                        callbackKey,
+                        _ => ScheduledCallback.Create(
+                            request.ActorId,
+                            request.CallbackId,
+                            request.TriggerEnvelope.Clone(),
+                            request.DeliveryMode,
+                            isPeriodic: false,
+                            TimeSpan.Zero,
+                            generation,
+                            coalescingCursor: cursor),
+                        (_, current) => current.Replace(
+                            request.TriggerEnvelope.Clone(),
+                            request.DeliveryMode,
+                            isPeriodic: false,
+                            TimeSpan.Zero,
+                            generation,
+                            coalescingCursor: cursor));
+                    _coalescingWatermarks[coalescingKey] = new CoalescingWatermark(
+                        request.CallbackId,
+                        cursor.Sequence,
+                        generation);
+                }
+            }
+
+            // Start while the coalescing gate still owns the slot. Otherwise a newer sequence
+            // can replace an as-yet-unstarted callback, after which the stale caller could start
+            // it outside the gate and deliver the superseded envelope.
+            callbackToStart?.Start(this, request.DueTime);
+        }
+
+        return Task.FromResult(new RuntimeCallbackLease(
+            request.ActorId,
+            request.CallbackId,
+            generation,
+            RuntimeCallbackBackend.InMemory));
+    }
+
     public Task<RuntimeCallbackLease> ScheduleTimerAsync(RuntimeCallbackTimerRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -68,6 +163,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         ValidateScheduleRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(request.Period, TimeSpan.Zero);
         ct.ThrowIfCancellationRequested();
+        ThrowIfGenericScheduleTargetsCoalescedSlot(request.ActorId, request.CallbackId);
 
         var key = new CallbackKey(request.ActorId, request.CallbackId);
         var generation = _callbackGenerations.AddOrUpdate(key, 1, (_, current) => current + 1);
@@ -149,6 +245,15 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         foreach (var key in generations)
             _callbackGenerations.TryRemove(key, out _);
 
+        lock (_coalescingGate)
+        {
+            var coalescingKeys = _coalescingWatermarks.Keys
+                .Where(x => string.Equals(x.ActorId, actorId, StringComparison.Ordinal))
+                .ToArray();
+            foreach (var key in coalescingKeys)
+                _coalescingWatermarks.Remove(key);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -158,6 +263,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             callback.Stop();
         _callbacks.Clear();
         _callbackGenerations.Clear();
+        lock (_coalescingGate)
+            _coalescingWatermarks.Clear();
         GC.SuppressFinalize(this);
     }
 
@@ -274,6 +381,22 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         }
     }
 
+    private void ThrowIfGenericScheduleTargetsCoalescedSlot(
+        string actorId,
+        string callbackId)
+    {
+        lock (_coalescingGate)
+        {
+            if (_coalescingWatermarks.Any(entry =>
+                    string.Equals(entry.Key.ActorId, actorId, StringComparison.Ordinal) &&
+                    string.Equals(entry.Value.CallbackId, callbackId, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    $"Callback '{callbackId}' is owned by the coalesced timeout contract and cannot be replaced by a generic schedule.");
+            }
+        }
+    }
+
     private static EventEnvelope CreateFleetReconcileTriggerEnvelope() => new()
     {
         Id = Guid.NewGuid().ToString("N"),
@@ -320,6 +443,13 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
 
     private readonly record struct CallbackKey(string ActorId, string CallbackId);
 
+    private readonly record struct CoalescingKey(string ActorId, string Key);
+
+    private sealed record CoalescingWatermark(
+        string CallbackId,
+        long Sequence,
+        long Generation);
+
     private sealed class ScheduledCallback
     {
         private readonly Lock _gate = new();
@@ -335,7 +465,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             bool isPeriodic,
             TimeSpan period,
             long generation,
-            bool isFleetReconcile = false)
+            bool isFleetReconcile = false,
+            RuntimeEnvelopeRetryCoalescingCursor? coalescingCursor = null)
         {
             ActorId = actorId;
             CallbackId = callbackId;
@@ -345,6 +476,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             Period = period;
             Generation = generation;
             IsFleetReconcile = isFleetReconcile;
+            CoalescingCursor = coalescingCursor;
         }
 
         public string ActorId { get; }
@@ -362,6 +494,17 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         public long Generation { get; }
 
         public bool IsFleetReconcile { get; }
+
+        public RuntimeEnvelopeRetryCoalescingCursor? CoalescingCursor { get; }
+
+        public bool HasFired
+        {
+            get
+            {
+                lock (_gate)
+                    return _fireIndex > 0;
+            }
+        }
 
         public EventEnvelope? PendingDeliveryEnvelope { get; private set; }
 
@@ -434,7 +577,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             bool isPeriodic,
             TimeSpan period,
             long generation,
-            bool isFleetReconcile = false)
+            bool isFleetReconcile = false,
+            RuntimeEnvelopeRetryCoalescingCursor? coalescingCursor = null)
         {
             return new ScheduledCallback(
                 actorId,
@@ -444,7 +588,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
                 isPeriodic,
                 period,
                 generation,
-                isFleetReconcile);
+                isFleetReconcile,
+                coalescingCursor);
         }
 
         public ScheduledCallback Replace(
@@ -453,7 +598,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             bool isPeriodic,
             TimeSpan period,
             long generation,
-            bool isFleetReconcile = false)
+            bool isFleetReconcile = false,
+            RuntimeEnvelopeRetryCoalescingCursor? coalescingCursor = null)
         {
             Stop();
             return new ScheduledCallback(
@@ -464,7 +610,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
                 isPeriodic,
                 period,
                 generation,
-                isFleetReconcile);
+                isFleetReconcile,
+                coalescingCursor);
         }
 
         public void Start(InMemoryActorRuntimeCallbackScheduler owner, TimeSpan dueTime)

@@ -71,6 +71,59 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
     }
 
     [Fact]
+    public async Task ScheduleTimeoutAsync_WithCoalescingCursor_ShouldReuseOrSupersedeBySourceVersion()
+    {
+        using var scheduler = new InMemoryActorRuntimeCallbackScheduler(new RecordingStreamProvider());
+        var firstRequest = CreateCoalescedRequest(sequence: 10, envelopeId: "source-v10");
+
+        var first = await scheduler.ScheduleTimeoutAsync(firstRequest);
+        var duplicate = await scheduler.ScheduleTimeoutAsync(
+            CreateCoalescedRequest(sequence: 10, envelopeId: "duplicate-source-v10"));
+        var newer = await scheduler.ScheduleTimeoutAsync(
+            CreateCoalescedRequest(sequence: 11, envelopeId: "source-v11"));
+        var stale = await scheduler.ScheduleTimeoutAsync(
+            CreateCoalescedRequest(sequence: 10, envelopeId: "stale-source-v10"));
+
+        duplicate.Generation.Should().Be(first.Generation);
+        newer.Generation.Should().Be(first.Generation + 1);
+        stale.Generation.Should().Be(newer.Generation);
+        var current = GetScheduledCallback(scheduler, "status-materializer", "latest-source-observation");
+        GetEnvelope(current!, "TriggerEnvelope")!.Id.Should().Be("source-v11");
+
+        await scheduler.CancelAsync(newer);
+        var rescheduled = await scheduler.ScheduleTimeoutAsync(
+            CreateCoalescedRequest(sequence: 11, envelopeId: "retry-source-v11"));
+
+        rescheduled.Generation.Should().Be(newer.Generation + 1);
+        current = GetScheduledCallback(scheduler, "status-materializer", "latest-source-observation");
+        GetEnvelope(current!, "TriggerEnvelope")!.Id.Should().Be("retry-source-v11");
+    }
+
+    [Fact]
+    public async Task ScheduleTimeoutAsync_WhenSameSequenceIsFiring_ShouldCreateNextGeneration()
+    {
+        var streams = new RecordingStreamProvider(blockProduce: true);
+        using var scheduler = new InMemoryActorRuntimeCallbackScheduler(streams);
+
+        var first = await scheduler.ScheduleTimeoutAsync(
+            CreateCoalescedRequest(
+                sequence: 11,
+                envelopeId: "firing-source-v11",
+                dueTime: TimeSpan.FromMilliseconds(1)));
+        await streams.LastStreamProduced.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var retry = await scheduler.ScheduleTimeoutAsync(
+            CreateCoalescedRequest(sequence: 11, envelopeId: "retry-source-v11"));
+
+        retry.Generation.Should().Be(first.Generation + 1);
+        var current = GetScheduledCallback(scheduler, "status-materializer", "latest-source-observation");
+        current.Should().NotBeNull();
+        GetGeneration(current!).Should().Be(retry.Generation);
+        GetEnvelope(current!, "TriggerEnvelope")!.Id.Should().Be("retry-source-v11");
+        streams.ReleaseProduce();
+    }
+
+    [Fact]
     public async Task ScheduleTimeoutAsync_ShouldReturnInMemoryBackendLease()
     {
         var scheduler = new InMemoryActorRuntimeCallbackScheduler(new RecordingStreamProvider());
@@ -192,6 +245,23 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         Route = EnvelopeRouteSemantics.CreateDirect("actor-1", "actor-1"),
     };
 
+    private static RuntimeCallbackTimeoutRequest CreateCoalescedRequest(
+        long sequence,
+        string envelopeId,
+        TimeSpan? dueTime = null)
+    {
+        var envelope = CreateEnvelope();
+        envelope.Id = envelopeId;
+        return new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = "status-materializer",
+            CallbackId = "latest-source-observation",
+            DueTime = dueTime ?? TimeSpan.FromMinutes(1),
+            TriggerEnvelope = envelope,
+            CoalescingCursor = new RuntimeEnvelopeRetryCoalescingCursor("source-scope", sequence),
+        };
+    }
+
     private static object? GetScheduledCallback(
         InMemoryActorRuntimeCallbackScheduler scheduler,
         string actorId,
@@ -238,24 +308,31 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         return (EventEnvelope?)property!.GetValue(scheduledCallback);
     }
 
-    private sealed class RecordingStreamProvider : IStreamProvider
+    private sealed class RecordingStreamProvider(bool blockProduce = false) : IStreamProvider
     {
+        private readonly bool _blockProduce = blockProduce;
+        private readonly TaskCompletionSource<bool> _produceRelease =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public EventEnvelope? LastProduced { get; private set; }
 
         public TaskCompletionSource<bool> LastStreamProduced { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public IStream GetStream(string actorId) => new RecordingStream(actorId, this);
 
+        public void ReleaseProduce() => _produceRelease.TrySetResult(true);
+
         private sealed class RecordingStream(string actorId, RecordingStreamProvider owner) : IStream
         {
             public string StreamId { get; } = actorId;
 
-            public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
+            public async Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
             {
                 ct.ThrowIfCancellationRequested();
                 owner.LastProduced = message as EventEnvelope;
                 owner.LastStreamProduced.TrySetResult(true);
-                return Task.CompletedTask;
+                if (owner._blockProduce)
+                    await owner._produceRelease.Task.WaitAsync(ct);
             }
 
             public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)

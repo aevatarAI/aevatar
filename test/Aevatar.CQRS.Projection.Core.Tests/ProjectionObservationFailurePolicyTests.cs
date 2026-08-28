@@ -13,12 +13,16 @@ public sealed class ProjectionObservationFailurePolicyTests
         var exception = new ProjectionScopeStatusPhaseBProofUnavailableException(
             "projection-status-terminal:source",
             "source",
+            23,
             7,
             ProjectionScopeStatusRoutePhase.Warming,
             ProjectionScopeStatusActorRole.TerminalWriter);
 
         ProjectionObservationFailurePolicy.ShouldPropagate(exception).Should().BeTrue();
         exception.Should().BeAssignableTo<IRuntimeEnvelopeRetryUntilResolvedException>();
+        exception.Should().BeAssignableTo<IRuntimeEnvelopeRetryCoalescingException>();
+        exception.RetryCoalescingCursor.Should().Be(
+            new RuntimeEnvelopeRetryCoalescingCursor("source", 23));
         new ProjectionScopeStatusRouteBlockedException("source", 7)
             .Should().NotBeAssignableTo<IRuntimeEnvelopeRetryUntilResolvedException>();
         new ProjectionScopeStatusWriteRejectedException(

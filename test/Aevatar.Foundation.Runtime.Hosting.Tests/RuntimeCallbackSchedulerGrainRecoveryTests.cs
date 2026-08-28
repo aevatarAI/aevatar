@@ -27,6 +27,166 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
 {
     [Fact]
+    public void TryUpsertCoalescedTimeout_ShouldKeepOnlyLatestPendingAuthoritativeSequence()
+    {
+        const string actorId = "status-materializer";
+        const string callbackId = "latest-source-observation";
+        const string coalescingKey = "source-scope";
+        var state = new RuntimeCallbackSchedulerState();
+        var scheduledAt = DateTimeOffset.Parse(
+            "2026-08-28T00:00:00Z",
+            CultureInfo.InvariantCulture);
+
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("source-v10"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 10,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var firstGeneration)
+            .Should().BeTrue();
+
+        firstGeneration.Should().Be(1);
+        state.CoalescingWatermarks[coalescingKey].Sequence.Should().Be(10);
+        state.ReminderCallbacks[callbackId].TriggerEnvelope.Id.Should().Be("source-v10");
+
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("duplicate-source-v10"),
+                dueTimeMs: 10000,
+                coalescingKey,
+                coalescingSequence: 10,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var reusedGeneration)
+            .Should().BeFalse();
+
+        reusedGeneration.Should().Be(firstGeneration);
+        state.ReminderCallbacks[callbackId].TriggerEnvelope.Id.Should().Be("source-v10");
+
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("source-v11"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 11,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var newerGeneration)
+            .Should().BeTrue();
+
+        newerGeneration.Should().Be(2);
+        state.CoalescingWatermarks[coalescingKey].Sequence.Should().Be(11);
+        state.ReminderCallbacks[callbackId].TriggerEnvelope.Id.Should().Be("source-v11");
+
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("stale-source-v10"),
+                dueTimeMs: 5000,
+                coalescingKey,
+                coalescingSequence: 10,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var staleGeneration)
+            .Should().BeFalse();
+
+        staleGeneration.Should().Be(newerGeneration);
+        state.ReminderCallbacks[callbackId].TriggerEnvelope.Id.Should().Be("source-v11");
+
+        var fired = state.ReminderCallbacks[callbackId].Clone();
+        state.ReminderCallbacks[callbackId].PendingDeliveryEnvelope = CreateEnvelope("fired-source-v11");
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("retry-while-source-v11-is-firing"),
+                dueTimeMs: 10000,
+                coalescingKey,
+                coalescingSequence: 11,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var firingRaceGeneration)
+            .Should().BeTrue();
+
+        firingRaceGeneration.Should().Be(3);
+        RuntimeCallbackSchedulerGrain.TryClearCompletedOneShotCallback(
+                state,
+                callbackId,
+                fired)
+            .Should().BeFalse("a fired generation cannot clear the retry scheduled by its handler");
+        var current = state.ReminderCallbacks[callbackId].Clone();
+        RuntimeCallbackSchedulerGrain.TryClearCompletedOneShotCallback(
+                state,
+                callbackId,
+                current)
+            .Should().BeTrue();
+        RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                state,
+                actorId,
+                callbackId,
+                CreateEnvelope("retry-source-v11"),
+                dueTimeMs: 10000,
+                coalescingKey,
+                coalescingSequence: 11,
+                RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                scheduledAt,
+                out var rescheduledGeneration)
+            .Should().BeTrue();
+
+        rescheduledGeneration.Should().Be(4);
+        state.ReminderCallbacks[callbackId].TriggerEnvelope.Id.Should().Be("retry-source-v11");
+    }
+
+    [Fact]
+    public void TryUpsertCoalescedTimeout_WithManyLineages_ShouldRemainBoundedByAuthoritativeSource()
+    {
+        const int sourceCount = 32;
+        const int versionsPerSource = 64;
+        var state = new RuntimeCallbackSchedulerState();
+        var scheduledAt = DateTimeOffset.Parse(
+            "2026-08-28T00:00:00Z",
+            CultureInfo.InvariantCulture);
+
+        for (var sourceIndex = 0; sourceIndex < sourceCount; sourceIndex++)
+        {
+            var coalescingKey = $"source-scope-{sourceIndex}";
+            var callbackId = $"latest-source-observation-{sourceIndex}";
+            for (var sequence = 1; sequence <= versionsPerSource; sequence++)
+            {
+                RuntimeCallbackSchedulerGrain.TryUpsertCoalescedTimeout(
+                        state,
+                        "status-materializer",
+                        callbackId,
+                        CreateEnvelope($"{coalescingKey}-v{sequence}"),
+                        dueTimeMs: 5000,
+                        coalescingKey,
+                        coalescingSequence: sequence,
+                        RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                        scheduledAt,
+                        out _)
+                    .Should().BeTrue();
+            }
+        }
+
+        state.ReminderCallbacks.Should().HaveCount(sourceCount);
+        state.CoalescingWatermarks.Should().HaveCount(sourceCount);
+        state.CoalescingWatermarks.Values.Should()
+            .OnlyContain(watermark => watermark.Sequence == versionsPerSource);
+        state.ReminderCallbacks.Values.Should()
+            .OnlyContain(callback => callback.CoalescingSequence == versionsPerSource);
+    }
+
+    [Fact]
     public void TryClearCompletedOneShotCallback_WhenCallbackWasRescheduled_ShouldKeepNewGeneration()
     {
         const string callbackId = "scheduled-dispatch-next-fire";
@@ -156,6 +316,59 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         state.ReminderCallbacks.Should().ContainKey(callbackId);
         state.ReminderCallbacks[callbackId].Generation.Should().Be(8);
         state.CallbackGenerations[callbackId].Should().Be(8);
+    }
+
+    [Fact]
+    public async Task ScheduleCoalescedTimeoutAsync_ShouldPersistLatestEnvelopeAndHighWatermarkTogether()
+    {
+        const string actorId = "status-materializer-coalescing";
+        const string callbackId = "latest-source-observation";
+        const string coalescingKey = "source-scope";
+        var streamProvider = new RecordingStreamProvider();
+        var storage = new TestRuntimeCallbackSchedulerStateStorage();
+        var reminderTable = new RecordingReminderTable();
+        using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
+        var grain = host.Services
+            .GetRequiredService<IGrainFactory>()
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+
+        var first = await grain.ScheduleCoalescedTimeoutAsync(
+            callbackId,
+            CreateEnvelope("source-v10"),
+            dueTimeMs: 600_000,
+            coalescingKey,
+            coalescingSequence: 10,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+        var duplicate = await grain.ScheduleCoalescedTimeoutAsync(
+            callbackId,
+            CreateEnvelope("duplicate-source-v10"),
+            dueTimeMs: 600_000,
+            coalescingKey,
+            coalescingSequence: 10,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+        var newer = await grain.ScheduleCoalescedTimeoutAsync(
+            callbackId,
+            CreateEnvelope("source-v11"),
+            dueTimeMs: 600_000,
+            coalescingKey,
+            coalescingSequence: 11,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+        var stale = await grain.ScheduleCoalescedTimeoutAsync(
+            callbackId,
+            CreateEnvelope("stale-source-v10"),
+            dueTimeMs: 600_000,
+            coalescingKey,
+            coalescingSequence: 10,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+
+        duplicate.Should().Be(first);
+        newer.Should().Be(first + 1);
+        stale.Should().Be(newer);
+        var state = storage.ReadSchedulerState(grain.GetGrainId());
+        state.CoalescingWatermarks[coalescingKey].Sequence.Should().Be(11);
+        state.ReminderCallbacks[callbackId].CoalescingSequence.Should().Be(11);
+        state.ReminderCallbacks[callbackId].TriggerEnvelope.Id.Should().Be("source-v11");
+        reminderTable.Contains(grain.GetGrainId(), callbackId).Should().BeTrue();
     }
 
     [Fact]

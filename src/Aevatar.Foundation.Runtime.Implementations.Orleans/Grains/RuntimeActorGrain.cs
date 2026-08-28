@@ -984,6 +984,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     {
         var retryUntilResolved =
             RuntimeEnvelopeRetryPolicy.ContainsRuntimeEnvelopeRetryUntilResolvedFailure(ex);
+        var retryCoalescingCursor = retryUntilResolved
+            ? RuntimeEnvelopeRetryPolicy.ResolveRetryCoalescingCursor(ex)
+            : null;
         if (!_runtimeEnvelopeRetryPolicy.TryBuildRetryEnvelope(
                 envelope,
                 ex,
@@ -1010,18 +1013,25 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             }
 
             var scheduler = ServiceProvider.GetRequiredService<IActorRuntimeCallbackScheduler>();
+            var actorId = this.GetPrimaryKeyString();
+            var callbackId = BuildRuntimeRetryCallbackId(
+                envelope,
+                nextAttempt,
+                retryUntilResolved,
+                retryCoalescingCursor);
             await scheduler.ScheduleTimeoutAsync(
                 new RuntimeCallbackTimeoutRequest
                 {
-                    ActorId = this.GetPrimaryKeyString(),
-                    CallbackId = BuildRuntimeRetryCallbackId(
-                        envelope,
-                        nextAttempt,
-                        retryUntilResolved),
+                    ActorId = actorId,
+                    CallbackId = callbackId,
                     DueTime = TimeSpan.FromMilliseconds(
-                        Math.Max(_runtimeEnvelopeRetryPolicy.RetryDelayMs, 1)),
+                        _runtimeEnvelopeRetryPolicy.ResolveRetryDelayMs(
+                            nextAttempt,
+                            retryUntilResolved,
+                            RuntimeCallbackKeyComposer.BuildKey('|', actorId, callbackId))),
                     TriggerEnvelope = retryEnvelope,
                     DeliveryMode = RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                    CoalescingCursor = retryCoalescingCursor,
                 });
         }
         else
@@ -1052,8 +1062,16 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private string BuildRuntimeRetryCallbackId(
         EventEnvelope envelope,
         int nextAttempt,
-        bool retryUntilResolved)
+        bool retryUntilResolved,
+        RuntimeEnvelopeRetryCoalescingCursor? retryCoalescingCursor)
     {
+        if (retryCoalescingCursor != null)
+        {
+            return RuntimeCallbackKeyComposer.BuildCallbackId(
+                "runtime-envelope-retry-until-resolved-coalesced",
+                retryCoalescingCursor.Key);
+        }
+
         var originId = RuntimeEnvelopeDeliveryIdentity.ResolveDeliveryLineageId(envelope) ?? envelope.Id;
 
         if (string.IsNullOrWhiteSpace(originId))

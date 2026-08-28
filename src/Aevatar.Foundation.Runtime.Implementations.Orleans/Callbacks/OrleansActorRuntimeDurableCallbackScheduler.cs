@@ -26,12 +26,20 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         ValidateRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
         ct.ThrowIfCancellationRequested();
 
-        var generation = await ScheduleViaDedicatedGrainTimeoutAsync(
-            request.ActorId,
-            request.CallbackId,
-            request.TriggerEnvelope,
-            request.DueTime,
-            request.DeliveryMode);
+        var generation = request.CoalescingCursor == null
+            ? await ScheduleViaDedicatedGrainTimeoutAsync(
+                request.ActorId,
+                request.CallbackId,
+                request.TriggerEnvelope,
+                request.DueTime,
+                request.DeliveryMode)
+            : await ScheduleViaDedicatedGrainCoalescedTimeoutAsync(
+                request.ActorId,
+                request.CallbackId,
+                request.TriggerEnvelope,
+                request.DueTime,
+                request.CoalescingCursor,
+                request.DeliveryMode);
 
         return new RuntimeCallbackLease(
             request.ActorId,
@@ -171,6 +179,24 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
             callbackId,
             envelope,
             ToPositiveMilliseconds(dueTime),
+            deliveryMode);
+    }
+
+    private async Task<long> ScheduleViaDedicatedGrainCoalescedTimeoutAsync(
+        string actorId,
+        string callbackId,
+        EventEnvelope envelope,
+        TimeSpan dueTime,
+        RuntimeEnvelopeRetryCoalescingCursor coalescingCursor,
+        RuntimeCallbackDeliveryMode deliveryMode)
+    {
+        var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+        return await grain.ScheduleCoalescedTimeoutAsync(
+            callbackId,
+            envelope,
+            ToPositiveMilliseconds(dueTime),
+            coalescingCursor.Key,
+            coalescingCursor.Sequence,
             deliveryMode);
     }
 

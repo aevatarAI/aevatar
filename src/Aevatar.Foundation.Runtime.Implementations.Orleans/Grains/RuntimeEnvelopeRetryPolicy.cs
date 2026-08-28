@@ -8,6 +8,9 @@ internal sealed class RuntimeEnvelopeRetryPolicy
 {
     private const int DefaultMaxAttempts = 3;
     private const int DefaultRetryDelayMs = 1000;
+    internal const int RetryUntilResolvedInitialDelayMs = 5000;
+    internal const int RetryUntilResolvedMaximumDelayMs = 30000;
+    private const int RetryUntilResolvedJitterDivisor = 5;
 
     private RuntimeEnvelopeRetryPolicy(
         int maxAttempts,
@@ -25,6 +28,83 @@ internal sealed class RuntimeEnvelopeRetryPolicy
     public bool RetryOnlyRecoverableConcurrencyFailures { get; }
 
     public static RuntimeEnvelopeRetryPolicy Disabled { get; } = new(0, 0, true);
+
+    internal int ResolveRetryDelayMs(
+        int nextAttempt,
+        bool retryUntilResolved,
+        string? stableJitterIdentity = null)
+    {
+        if (!retryUntilResolved)
+            return RetryDelayMs;
+
+        var exponent = Math.Clamp(nextAttempt - 1, 0, 30);
+        var multiplier = 1L << exponent;
+        var nominalDelayMs = checked((int)Math.Min(
+            RetryUntilResolvedInitialDelayMs * multiplier,
+            RetryUntilResolvedMaximumDelayMs));
+        if (string.IsNullOrWhiteSpace(stableJitterIdentity))
+            return nominalDelayMs;
+
+        return ResolveStableJitteredDelayMs(
+            nominalDelayMs,
+            nextAttempt,
+            stableJitterIdentity);
+    }
+
+    private static int ResolveStableJitteredDelayMs(
+        int nominalDelayMs,
+        int nextAttempt,
+        string stableJitterIdentity)
+    {
+        int minimumDelayMs;
+        int maximumDelayMs;
+        if (nominalDelayMs < RetryUntilResolvedMaximumDelayMs)
+        {
+            minimumDelayMs = nominalDelayMs;
+            maximumDelayMs = Math.Min(
+                RetryUntilResolvedMaximumDelayMs,
+                nominalDelayMs + Math.Max(
+                    nominalDelayMs / RetryUntilResolvedJitterDivisor,
+                    1));
+        }
+        else
+        {
+            maximumDelayMs = RetryUntilResolvedMaximumDelayMs;
+            minimumDelayMs = Math.Max(
+                RetryUntilResolvedInitialDelayMs,
+                maximumDelayMs - Math.Max(
+                    maximumDelayMs / RetryUntilResolvedJitterDivisor,
+                    1));
+        }
+
+        var width = checked(maximumDelayMs - minimumDelayMs + 1);
+        var offset = (int)(ComputeStableJitterSeed(stableJitterIdentity, nextAttempt) % (uint)width);
+        return checked(minimumDelayMs + offset);
+    }
+
+    private static uint ComputeStableJitterSeed(string stableJitterIdentity, int nextAttempt)
+    {
+        const uint offsetBasis = 2166136261;
+        const uint prime = 16777619;
+        unchecked
+        {
+            var hash = offsetBasis;
+            foreach (var character in stableJitterIdentity)
+            {
+                hash ^= character;
+                hash *= prime;
+            }
+
+            var attempt = (uint)nextAttempt;
+            for (var byteIndex = 0; byteIndex < sizeof(int); byteIndex++)
+            {
+                hash ^= (byte)(attempt >> (byteIndex * 8));
+                hash *= prime;
+            }
+
+            return hash;
+        }
+    }
 
     public static RuntimeEnvelopeRetryPolicy FromEnvironment()
     {
@@ -155,6 +235,42 @@ internal sealed class RuntimeEnvelopeRetryPolicy
                 ContainsRuntimeEnvelopeRetryUntilResolvedFailure(exception.InnerException),
             _ => false,
         };
+    }
+
+    internal static RuntimeEnvelopeRetryCoalescingCursor? ResolveRetryCoalescingCursor(
+        Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        RuntimeEnvelopeRetryCoalescingCursor? resolved = null;
+        Visit(exception);
+        return resolved;
+
+        void Visit(Exception candidate)
+        {
+            if (candidate is IRuntimeEnvelopeRetryCoalescingException coalescing)
+            {
+                var cursor = coalescing.RetryCoalescingCursor ??
+                    throw new InvalidOperationException(
+                        "Runtime retry coalescing exception returned no authoritative cursor.");
+                if (resolved != null && resolved != cursor)
+                {
+                    throw new InvalidOperationException(
+                        "One envelope failure cannot coalesce retries for multiple authoritative cursors.");
+                }
+
+                resolved = cursor;
+            }
+
+            if (candidate is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions)
+                    Visit(inner);
+                return;
+            }
+
+            if (candidate.InnerException != null)
+                Visit(candidate.InnerException);
+        }
     }
 
     private static int GetAttempt(EventEnvelope envelope)

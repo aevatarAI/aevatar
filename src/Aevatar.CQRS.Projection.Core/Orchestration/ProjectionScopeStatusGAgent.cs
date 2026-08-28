@@ -260,6 +260,7 @@ public sealed class ProjectionScopeStatusGAgent
                 throw new ProjectionScopeStatusPhaseBProofUnavailableException(
                     Id,
                     sourceScopeActorId,
+                    stateEvent.Version,
                     route!.RouteEpoch,
                     route.Phase,
                     ProjectionScopeStatusActorRole.TerminalWriter);

@@ -21,6 +21,12 @@ message RuntimeCallbackSchedulerState {
   map<string, RuntimeScheduledCallback> reminder_callbacks = 1;
   map<string, int64> callback_generations = 2;
   repeated string pending_reminder_unregistrations = 3;
+  map<string, RuntimeCallbackCoalescingWatermark> coalescing_watermarks = 4;
+}
+
+message RuntimeCallbackCoalescingWatermark {
+  string callback_id = 1;
+  int64 sequence = 2;
 }
 
 message RuntimeScheduledCallback {
@@ -40,4 +46,6 @@ message RuntimeScheduledCallback {
   string last_delivery_envelope_id = 14;
   int64 last_delivery_fire_index = 15;
   aevatar.EventEnvelope last_delivery_envelope = 16;
+  string coalescing_key = 17;
+  int64 coalescing_sequence = 18;
 }

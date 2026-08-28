@@ -802,6 +802,23 @@ public sealed class OrleansActorRuntimeForwardingTests
             throw new NotSupportedException();
         }
 
+        public Task<long> ScheduleCoalescedTimeoutAsync(
+            string callbackId,
+            EventEnvelope triggerEnvelope,
+            int dueTimeMs,
+            string coalescingKey,
+            long coalescingSequence,
+            RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
+        {
+            _ = callbackId;
+            _ = triggerEnvelope;
+            _ = dueTimeMs;
+            _ = coalescingKey;
+            _ = coalescingSequence;
+            _ = deliveryMode;
+            throw new NotSupportedException();
+        }
+
         public Task<long> ScheduleTimerAsync(
             string callbackId,
             EventEnvelope triggerEnvelope,
