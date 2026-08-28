@@ -1,6 +1,6 @@
-using System.Text.Json;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Persistence;
 using Google.Protobuf;
+using Newtonsoft.Json;
 using Orleans.Storage;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -13,8 +13,7 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 internal sealed class RuntimeActorGrainStateStorageSerializer(
     IGrainStorageSerializer rollingCompatibleJsonSerializer) : IGrainStorageSerializer
 {
-    private static ReadOnlySpan<byte> LegacyJsonReferenceTokenValue => "$id"u8;
-    private static ReadOnlySpan<byte> Utf8ByteOrderMark => "\uFEFF"u8;
+    private const string LegacyJsonReferenceTokenValue = "$id";
 
     public BinaryData Serialize<T>(T input)
     {
@@ -44,7 +43,7 @@ internal sealed class RuntimeActorGrainStateStorageSerializer(
 
         var bytes = input.ToArray();
         if (typeof(T) == typeof(RuntimeActorGrainState) &&
-            IsLegacyJsonReferenceToken(bytes))
+            IsLegacyJsonReferenceToken(input))
         {
             var recoveryState = new RuntimeActorGrainState
             {
@@ -60,25 +59,33 @@ internal sealed class RuntimeActorGrainStateStorageSerializer(
         return rollingCompatibleJsonSerializer.Deserialize<T>(input);
     }
 
-    private static bool IsLegacyJsonReferenceToken(ReadOnlySpan<byte> bytes)
+    private static bool IsLegacyJsonReferenceToken(BinaryData input)
     {
-        if (bytes.StartsWith(Utf8ByteOrderMark))
-            bytes = bytes[Utf8ByteOrderMark.Length..];
+        // Orleans' JSON storage serializer crosses the same BinaryData.ToString()
+        // boundary and uses Newtonsoft. Reusing that reader family matters for
+        // legacy rows with reader-ignored NUL or non-breaking-space padding.
+        var text = input.ToString();
+        if (text.Length > 0 && text[0] == '\uFEFF')
+            text = text[1..];
 
         try
         {
-            var reader = new Utf8JsonReader(bytes, new JsonReaderOptions
+            using var textReader = new StringReader(text);
+            using var reader = new JsonTextReader(textReader)
             {
-                AllowTrailingCommas = false,
-                CommentHandling = JsonCommentHandling.Disallow,
-            });
+                DateParseHandling = DateParseHandling.None,
+                SupportMultipleContent = false,
+            };
 
             return reader.Read() &&
-                   reader.TokenType == JsonTokenType.String &&
-                   reader.ValueTextEquals(LegacyJsonReferenceTokenValue) &&
+                   reader.TokenType == JsonToken.String &&
+                   string.Equals(
+                       reader.Value as string,
+                       LegacyJsonReferenceTokenValue,
+                       StringComparison.Ordinal) &&
                    !reader.Read();
         }
-        catch (JsonException)
+        catch (JsonReaderException)
         {
             return false;
         }

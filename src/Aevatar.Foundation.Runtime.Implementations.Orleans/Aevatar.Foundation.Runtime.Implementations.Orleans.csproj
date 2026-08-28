@@ -30,6 +30,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
     <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Newtonsoft.Json" />
     <PackageReference Include="Grpc.Tools">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

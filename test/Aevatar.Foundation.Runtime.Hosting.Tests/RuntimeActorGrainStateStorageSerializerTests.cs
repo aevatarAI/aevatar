@@ -116,6 +116,8 @@ public sealed class RuntimeActorGrainStateStorageSerializerTests
     [InlineData(" \t\"$id\"\r\n")]
     [InlineData("\uFEFF\"$id\"")]
     [InlineData("\"\\u0024id\"")]
+    [InlineData("\0\"$id\"\0")]
+    [InlineData("\u00A0\"$id\"\u00A0")]
     public void Serializer_WhenLegacyReferenceTokenHasEquivalentJsonEncoding_ShouldPreserveSourcePayload(
         string json)
     {
@@ -138,6 +140,7 @@ public sealed class RuntimeActorGrainStateStorageSerializerTests
     [InlineData("[\"$id\"]")]
     [InlineData("{\"value\":\"$id\"}")]
     [InlineData("\"$id\" true")]
+    [InlineData("\0\"$id\"\0true")]
     [InlineData("/* comment */ \"$id\"")]
     [InlineData("\"$id")]
     public void Serializer_WhenLegacyRowHasAnyOtherInvalidShape_ShouldFailClosed(string json)
