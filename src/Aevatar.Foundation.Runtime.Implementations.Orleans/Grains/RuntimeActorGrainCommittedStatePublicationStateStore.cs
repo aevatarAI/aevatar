@@ -219,9 +219,15 @@ internal sealed class RuntimeActorGrainCommittedStatePublicationStateStore
 
             if (legacy.Revision == dedicated.Revision && !legacy.Equals(dedicated))
             {
-                throw new InvalidOperationException(
-                    $"Committed-state publication checkpoints for actor '{actorId}' are ambiguous " +
-                    $"at published version {legacy.PublishedVersion}, revision {legacy.Revision}.");
+                // Authoritative publication progress is already proven identical here:
+                // ValidateStoredActor pinned the actor id, the guard above pinned
+                // Initialized and PublishedEventId, and this branch pins PublishedVersion
+                // and Revision. Only advisory failure telemetry (Failure, UpdatedAt) can
+                // still differ, which is exactly what a crash inside the window between
+                // the dedicated write and the deferred legacy-shadow persist leaves
+                // behind. Converge on the dedicated row — the authoritative write target
+                // — so the caller repairs the shadow instead of poisoning the actor.
+                return dedicated;
             }
         }
 

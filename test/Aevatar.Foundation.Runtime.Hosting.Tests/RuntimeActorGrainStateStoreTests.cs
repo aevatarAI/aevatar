@@ -357,7 +357,7 @@ public sealed class RuntimeActorGrainStateStoreTests
     }
 
     [Fact]
-    public async Task RuntimeActorPublicationStateStore_WhenEqualRevisionPayloadsConflict_ShouldFailClosed()
+    public async Task RuntimeActorPublicationStateStore_WhenEqualRevisionTelemetryDiverges_ShouldConvergeOnDedicatedRow()
     {
         const string actorId = "actor-conflicting-publication-payload";
         var runtimeState = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
@@ -381,10 +381,39 @@ public sealed class RuntimeActorGrainStateStoreTests
         publicationProxy.State.Checkpoint = dedicated.ToByteArray();
         var store = new RuntimeActorGrainCommittedStatePublicationStateStore(runtimeState, publicationState);
 
+        var loaded = await store.LoadAsync(actorId);
+
+        loaded.Should().BeEquivalentTo(
+            dedicated,
+            "authoritative progress already matches, so only advisory failure telemetry diverged "
+            + "and the dedicated row is the authoritative write target");
+        CommittedStatePublicationState.Parser.ParseFrom(stateProxy.State.CommittedStatePublicationState)
+            .Should().BeEquivalentTo(dedicated, "the rollback shadow is repaired in place");
+        publicationProxy.WriteCount.Should().Be(0);
+        stateProxy.WriteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RuntimeActorPublicationStateStore_WhenEqualRevisionAuthoritativeFieldsDisagree_ShouldStillFailClosed()
+    {
+        const string actorId = "actor-conflicting-publication-authority";
+        var runtimeState = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
+        var stateProxy = (RuntimeActorPersistentStateProxy)(object)runtimeState;
+        var publicationState = DispatchProxy.Create<
+            IPersistentState<RuntimeActorCommittedStatePublicationGrainState>,
+            CommittedStatePublicationPersistentStateProxy>();
+        var publicationProxy = (CommittedStatePublicationPersistentStateProxy)(object)publicationState;
+        stateProxy.State.AgentId = actorId;
+        var legacy = BuildPublicationCheckpoint(actorId, 6, "event-6", revision: 8);
+        var dedicated = BuildPublicationCheckpoint(actorId, 6, "event-6-other", revision: 8);
+        stateProxy.State.CommittedStatePublicationState = legacy.ToByteArray();
+        publicationProxy.State.Checkpoint = dedicated.ToByteArray();
+        var store = new RuntimeActorGrainCommittedStatePublicationStateStore(runtimeState, publicationState);
+
         var act = () => store.LoadAsync(actorId);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ambiguous*published version 6*revision 8*");
+            .WithMessage("*disagree*published version 6*");
         publicationProxy.WriteCount.Should().Be(0);
         stateProxy.WriteCount.Should().Be(0);
     }
