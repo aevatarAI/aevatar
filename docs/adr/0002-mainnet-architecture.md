@@ -694,7 +694,11 @@ Orleans 模式的核心配置项（通过环境变量或 `appsettings.Distribute
 | `Orleans:SiloPort` | Silo 通信端口 | `11111` |
 | `Orleans:GatewayPort` | 网关端口 | `30000` |
 | `Orleans:QueueCount` | 流队列并行度（影响消费吞吐） | `8` |
-| `Orleans:QueueCacheSize` | 队列缓存大小（影响突发吸收） | `32768` |
+| `Orleans:QueueCacheSize` | 单队列缓存上限（限制 backlog 反序列化后的堆驻留） | `4096` |
+
+Mainnet 会在代码装配层把 `QueueCacheSize` 限制到最多 `4096`，因此旧 ConfigMap 中的
+`32768`/`65536` 不会重新放大堆驻留。该上限不改变 Kafka 的 at-least-once 语义：未成功
+交付的 offset 仍不会提前提交，重启后会继续重放，但每次只物化有界窗口。
 
 说明：上表给的是 Mainnet `Distributed` 模式模板值。`AevatarActorRuntimeOptions` 的全局默认值仍偏向本地开发（例如 `Provider=InMemory`、`OrleansStreamBackend=InMemory`）。
 
@@ -1005,7 +1009,7 @@ flowchart TB
 
     subgraph vertical ["垂直调优"]
         V1["QueueCount (默认 8)"]
-        V2["QueueCacheSize (默认 32768)"]
+        V2["QueueCacheSize (默认及主网上限 4096)"]
         V3["Pod Resource Limits"]
     end
 

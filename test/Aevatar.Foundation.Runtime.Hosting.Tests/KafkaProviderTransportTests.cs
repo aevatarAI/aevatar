@@ -118,11 +118,11 @@ public sealed class KafkaProviderTransportTests
     }
 
     [Fact]
-    public void OrleansRuntimeOptions_ShouldReserveSharedKafkaBurstHeadroom()
+    public void OrleansRuntimeOptions_ShouldBoundSharedKafkaCacheRetention()
     {
         var options = new AevatarOrleansRuntimeOptions();
 
-        options.QueueCacheSize.Should().BeGreaterThanOrEqualTo(32 * 1024);
+        options.QueueCacheSize.Should().Be(4 * 1024);
         options.MaxEventDeliveryTime.Should().BeGreaterThan(TimeSpan.FromMinutes(2));
     }
 

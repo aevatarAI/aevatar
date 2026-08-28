@@ -341,9 +341,10 @@ public static class MainnetDistributedHostBuilderExtensions
         var configuredQueueCacheSize = configuration["Orleans:QueueCacheSize"];
         if (int.TryParse(configuredQueueCacheSize, out var queueCacheSize) && queueCacheSize > 0)
         {
-            // Mounted deployment configuration can lag behind code defaults. Never let a
-            // legacy override remove the shared Kafka burst headroom reserved by Mainnet.
-            options.QueueCacheSize = Math.Max(
+            // SimpleQueueCache limits retained envelopes by count, not bytes. A stale large
+            // override can materialize the entire Kafka backlog into the container heap before
+            // count-based backpressure engages, so Mainnet must enforce the safe ceiling in code.
+            options.QueueCacheSize = Math.Min(
                 queueCacheSize,
                 AevatarOrleansRuntimeOptions.DefaultQueueCacheSize);
         }
