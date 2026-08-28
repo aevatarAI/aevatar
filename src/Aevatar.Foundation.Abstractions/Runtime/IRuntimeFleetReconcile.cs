@@ -7,6 +7,15 @@ namespace Aevatar.Foundation.Abstractions.Runtime;
 public interface IRuntimeFleetReconcileScheduleOwner
 {
     Task EnsureScheduledAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Confirms that the authority committed the exact runtime-attested delivery. Until this
+    /// acknowledgement reaches the scheduler, the reserved slot keeps re-publishing the same
+    /// envelope instead of advancing to a moving latest delivery.
+    /// </summary>
+    Task AcknowledgeDeliveryAsync(
+        RuntimeFleetReconcileDeliveryAttestation attestation,
+        CancellationToken ct = default);
 }
 
 /// <summary>

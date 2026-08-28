@@ -56,11 +56,17 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
                 attestation.EnvelopeId,
                 StringComparison.Ordinal))
         {
+            await _scheduleOwner.AcknowledgeDeliveryAsync(
+                attestation,
+                CancellationToken.None);
             return;
         }
 
         EnsureNewerDelivery(attestation);
         await HandleReconcileAsync(attestation);
+        await _scheduleOwner.AcknowledgeDeliveryAsync(
+            attestation,
+            CancellationToken.None);
     }
 
     private async Task HandleReconcileAsync(

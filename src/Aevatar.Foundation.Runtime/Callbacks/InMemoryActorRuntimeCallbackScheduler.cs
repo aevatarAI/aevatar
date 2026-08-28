@@ -194,6 +194,27 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         return Task.CompletedTask;
     }
 
+    public Task AcknowledgeDeliveryAsync(
+        RuntimeFleetReconcileDeliveryAttestation attestation,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(attestation);
+        ct.ThrowIfCancellationRequested();
+        if (!_callbacks.TryGetValue(
+                new CallbackKey(
+                    RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                    RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId),
+                out var scheduled) ||
+            !scheduled.IsFleetReconcile ||
+            !scheduled.TryAcknowledge(attestation))
+        {
+            throw new InvalidOperationException(
+                "Runtime fleet reconcile acknowledgement does not match scheduler-owned delivery state.");
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task<RuntimeFleetReconcileDeliveryAttestation?> VerifyAsync(
         EventEnvelope envelope,
         CancellationToken ct = default)
@@ -219,8 +240,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             return Task.FromResult<RuntimeFleetReconcileDeliveryAttestation?>(null);
         }
 
-        var valid = HasExactEnvelope(scheduled.PendingDeliveryEnvelope, envelope) ||
-                    HasExactEnvelope(scheduled.LastDeliveryEnvelope, envelope);
+        var valid = scheduled.HasExactDelivery(envelope);
         return Task.FromResult<RuntimeFleetReconcileDeliveryAttestation?>(valid
             ? new RuntimeFleetReconcileDeliveryAttestation(
                 envelope.Id,
@@ -229,10 +249,6 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
                 callback.SlotEpoch)
             : null);
     }
-
-    private static bool HasExactEnvelope(EventEnvelope? persisted, EventEnvelope delivered) =>
-        persisted != null &&
-        persisted.ToByteString().Equals(delivered.ToByteString());
 
     private static void ValidateScheduleRequest(
         string actorId,
@@ -276,11 +292,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         if (!_callbacks.TryGetValue(key, out var current) || !ReferenceEquals(current, callback))
             return;
 
-        var envelope = callback.PendingDeliveryEnvelope;
-        if (envelope == null)
-        {
-            var fireIndex = callback.IncrementFireIndex();
-            envelope = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
+        var envelope = callback.GetOrCreateDeliveryEnvelope(fireIndex =>
+            RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
                 callback.ActorId,
                 callback.CallbackId,
                 callback.Generation,
@@ -289,18 +302,9 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
                 callback.DeliveryMode,
                 callback.IsFleetReconcile
                     ? FleetReconcileSlotEpoch
-                    : RuntimeCallbackSlotEpoch.Unspecified);
-        }
-        if (callback.IsFleetReconcile)
-            callback.PendingDeliveryEnvelope = envelope.Clone();
+                    : RuntimeCallbackSlotEpoch.Unspecified));
 
         await _streams.GetStream(callback.ActorId).ProduceAsync(envelope.Clone(), ct);
-
-        if (callback.IsFleetReconcile)
-        {
-            callback.LastDeliveryEnvelope = envelope.Clone();
-            callback.PendingDeliveryEnvelope = null;
-        }
 
         if (!callback.IsPeriodic)
         {
@@ -359,9 +363,68 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
 
         public bool IsFleetReconcile { get; }
 
-        public EventEnvelope? PendingDeliveryEnvelope { get; set; }
+        public EventEnvelope? PendingDeliveryEnvelope { get; private set; }
 
-        public EventEnvelope? LastDeliveryEnvelope { get; set; }
+        public EventEnvelope? LastDeliveryEnvelope { get; private set; }
+
+        public EventEnvelope GetOrCreateDeliveryEnvelope(Func<long, EventEnvelope> factory)
+        {
+            ArgumentNullException.ThrowIfNull(factory);
+            lock (_gate)
+            {
+                if (IsFleetReconcile && PendingDeliveryEnvelope != null)
+                    return PendingDeliveryEnvelope.Clone();
+
+                var envelope = factory(checked(++_fireIndex));
+                if (IsFleetReconcile)
+                    PendingDeliveryEnvelope = envelope.Clone();
+                return envelope;
+            }
+        }
+
+        public bool HasExactDelivery(EventEnvelope delivered)
+        {
+            ArgumentNullException.ThrowIfNull(delivered);
+            lock (_gate)
+            {
+                return HasExactEnvelope(PendingDeliveryEnvelope, delivered) ||
+                       HasExactEnvelope(LastDeliveryEnvelope, delivered);
+            }
+        }
+
+        public bool TryAcknowledge(RuntimeFleetReconcileDeliveryAttestation attestation)
+        {
+            ArgumentNullException.ThrowIfNull(attestation);
+            lock (_gate)
+            {
+                if (MatchesAttestation(LastDeliveryEnvelope, attestation))
+                    return true;
+                if (!MatchesAttestation(PendingDeliveryEnvelope, attestation))
+                    return false;
+
+                LastDeliveryEnvelope = PendingDeliveryEnvelope!.Clone();
+                PendingDeliveryEnvelope = null;
+                return true;
+            }
+        }
+
+        private static bool HasExactEnvelope(EventEnvelope? persisted, EventEnvelope delivered) =>
+            persisted != null &&
+            persisted.ToByteString().Equals(delivered.ToByteString());
+
+        private static bool MatchesAttestation(
+            EventEnvelope? envelope,
+            RuntimeFleetReconcileDeliveryAttestation attestation) =>
+            envelope?.Payload?.Is(RuntimeFleetReconcileRequested.Descriptor) == true &&
+            string.Equals(envelope.Id, attestation.EnvelopeId, StringComparison.Ordinal) &&
+            envelope.Runtime?.Callback is { } callback &&
+            string.Equals(
+                callback.CallbackId,
+                RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+                StringComparison.Ordinal) &&
+            callback.Generation == attestation.Generation &&
+            callback.FireIndex == attestation.FireIndex &&
+            callback.SlotEpoch == attestation.SlotEpoch;
 
         public static ScheduledCallback Create(
             string actorId,
@@ -435,8 +498,6 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
                 cts.Dispose();
             }
         }
-
-        public long IncrementFireIndex() => Interlocked.Increment(ref _fireIndex);
 
         private async Task RunLoopAsync(
             InMemoryActorRuntimeCallbackScheduler owner,

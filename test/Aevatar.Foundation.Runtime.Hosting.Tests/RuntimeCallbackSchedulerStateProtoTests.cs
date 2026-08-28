@@ -121,11 +121,43 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             .IsExactRuntimeFleetReconcileDelivery(state, forgedWithPersistedIdentity)
             .Should().BeFalse();
 
-        scheduled.LastDeliveryEnvelope = delivered.Clone();
-        scheduled.PendingDeliveryEnvelope = null;
+        RuntimeCallbackSchedulerGrain.TryAcknowledgeRuntimeFleetReconcileDelivery(
+                state,
+                delivered.Id,
+                generation,
+                fireIndex,
+                RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+                out var recognized)
+            .Should().BeTrue();
+        recognized.Should().BeTrue();
+        scheduled.FireIndex.Should().Be(fireIndex);
+        scheduled.LastDeliveryEnvelopeId.Should().Be(delivered.Id);
+        scheduled.LastDeliveryFireIndex.Should().Be(fireIndex);
+        scheduled.PendingDeliveryEnvelope.Should().BeNull();
+        scheduled.LastDeliveryEnvelope.Should().BeEquivalentTo(delivered);
         RuntimeCallbackSchedulerGrain
             .IsExactRuntimeFleetReconcileDelivery(state, delivered.Clone())
             .Should().BeTrue();
+
+        RuntimeCallbackSchedulerGrain.TryAcknowledgeRuntimeFleetReconcileDelivery(
+                state,
+                delivered.Id,
+                generation,
+                fireIndex,
+                RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+                out recognized)
+            .Should().BeFalse();
+        recognized.Should().BeTrue("an acknowledgement of the committed delivery is idempotent");
+
+        RuntimeCallbackSchedulerGrain.TryAcknowledgeRuntimeFleetReconcileDelivery(
+                state,
+                "forged-delivery",
+                generation,
+                fireIndex,
+                RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+                out recognized)
+            .Should().BeFalse();
+        recognized.Should().BeFalse();
     }
 
     [Fact]

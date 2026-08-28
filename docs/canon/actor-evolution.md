@@ -78,8 +78,9 @@ Fleet rollout 由一个固定身份的长期 capability Authority actor、runtim
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    SC["Runtime durable callback scheduler"] -->|"Persist exact delivery envelope before publish"| DS["Reserved reconcile slot"]
+    SC["Runtime durable callback scheduler"] -->|"Persist one exact pending envelope before publish"| DS["Reserved reconcile slot"]
     DS -->|"Verified delivery + runtime-only attestation"| AU["Fixed capability Authority actor"]
+    AU -->|"Committed-delivery acknowledgement"| DS
     AU -->|"Read and immediately reread exact membership"| MS["Trusted runtime membership source"]
     AU -->|"Commit observation + gate transitions"| AS["Authority committed state"]
     AS -->|"Committed current-state publication"| RM["Capability authority read model"]
@@ -88,8 +89,8 @@ flowchart LR
 
 约束如下：
 
-1. Runtime durable callback scheduler 是 reserved reconcile slot 的唯一 owner；它必须先持久化 exact delivery envelope，再发布到 Authority inbox。通用 schedule、cancel、purge API 均不得修改或删除该 reserved slot。
-2. Local 与 Orleans runtime ingress 必须根据 scheduler-owned durable delivery state 验证 reconcile envelope，并在本次处理上下文中绑定不可序列化的 runtime attestation。Authority 只接受携带该 attestation 且与当前 envelope 精确匹配的 reconcile；外部 publisher 不能直接 open/revoke gate，也不能伪造 scheduler delivery。
+1. Runtime durable callback scheduler 是 reserved reconcile slot 的唯一 owner；它必须先持久化 exact pending delivery envelope，再发布到 Authority inbox。该 pending delivery 在 Authority 提交 reconcile 并以同一 runtime attestation 确认前保持不变，周期 tick 只能重发同一 envelope，不能在积压消费者前方持续前滚 verification window。通用 schedule、cancel、purge API 均不得修改或删除该 reserved slot。
+2. Local 与 Orleans runtime ingress 必须根据 scheduler-owned durable delivery state 验证 reconcile envelope，并在本次处理上下文中绑定不可序列化的 runtime attestation。Authority 只接受携带该 attestation 且与当前 envelope 精确匹配的 reconcile；提交成功后必须确认该 attestation，重复 delivery 必须幂等重试确认。外部 publisher 不能直接 open/revoke gate，也不能伪造 scheduler delivery。
 3. Authority 每次 reconcile 先读取 trusted exact membership，在 gate transition 前立即再次读取，并要求 `membership_epoch`、重算后的 `membership_digest` 与 `deployment_revision` 完全一致。任一次读取失败、证明变化、epoch 回退或同 epoch digest 冲突都 fail closed。
 4. `Observed / Unavailable / Invalid / SourceFailed / RegressedOrConflicted` 是 typed observation outcome；除 `Observed` 外均撤销当前 open gates。Gate 仅在每个 active member 对 exact capability + contract id + minimum version 唯一达标时打开。
 5. 每次 open/revoke 都基于已提交值单调增加 capability epoch；actor restart 不重置 epoch。Authority 不直接读写 read-model store，CQRS 只消费其 committed current-state publication 并物化、查询 current state。

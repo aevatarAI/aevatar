@@ -951,9 +951,40 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
 
         (await fixture.Store.GetVersionAsync(RuntimeFleetCapabilityAuthorityIdentity.ActorId))
             .Should().Be(committedVersion);
+        fixture.Scheduler.Acknowledged.Should().HaveCount(2);
+        fixture.Scheduler.Acknowledged.Should().OnlyContain(attestation =>
+            string.Equals(attestation.EnvelopeId, accepted.Id, StringComparison.Ordinal));
         await FluentActions.Awaiting(() => authority.HandleEventAsync(
                 fixture.ReconcileEnvelope(sequence: 1, token: "different-token")))
             .Should().ThrowAsync<InvalidOperationException>();
+        fixture.Scheduler.Acknowledged.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Reconcile_WhenAcknowledgementFails_ShouldRetryItWithoutRecommitting()
+    {
+        var fixture = new AuthorityFixture();
+        fixture.Membership.Current = fixture.CreateMembership(epoch: 1, supportsCapability: true);
+        fixture.Scheduler.AcknowledgementFailures.Enqueue(
+            new IOException("scheduler acknowledgement unavailable"));
+        var authority = await fixture.CreateAuthorityAsync();
+        var accepted = fixture.ReconcileEnvelope(sequence: 1, token: "schedule-1");
+
+        await FluentActions.Awaiting(() => authority.HandleEventAsync(accepted))
+            .Should().ThrowAsync<IOException>();
+        var committedVersion = await fixture.Store.GetVersionAsync(
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId);
+        committedVersion.Should().BeGreaterThan(0);
+        fixture.Scheduler.AcknowledgeAttempts.Should().Be(1);
+        fixture.Scheduler.Acknowledged.Should().BeEmpty();
+
+        await authority.HandleEventAsync(accepted.Clone());
+
+        (await fixture.Store.GetVersionAsync(RuntimeFleetCapabilityAuthorityIdentity.ActorId))
+            .Should().Be(committedVersion);
+        fixture.Scheduler.AcknowledgeAttempts.Should().Be(2);
+        fixture.Scheduler.Acknowledged.Should().ContainSingle()
+            .Which.Should().Be(fixture.Attestation.Current);
     }
 
     [Fact]
@@ -1745,10 +1776,29 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
     {
         internal int EnsureCount { get; private set; }
 
+        internal int AcknowledgeAttempts { get; private set; }
+
+        internal Queue<Exception> AcknowledgementFailures { get; } = new();
+
+        internal List<RuntimeFleetReconcileDeliveryAttestation> Acknowledged { get; } = [];
+
         public Task EnsureScheduledAsync(CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             EnsureCount++;
+            return Task.CompletedTask;
+        }
+
+        public Task AcknowledgeDeliveryAsync(
+            RuntimeFleetReconcileDeliveryAttestation attestation,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(attestation);
+            ct.ThrowIfCancellationRequested();
+            AcknowledgeAttempts++;
+            if (AcknowledgementFailures.TryDequeue(out var failure))
+                throw failure;
+            Acknowledged.Add(attestation);
             return Task.CompletedTask;
         }
     }

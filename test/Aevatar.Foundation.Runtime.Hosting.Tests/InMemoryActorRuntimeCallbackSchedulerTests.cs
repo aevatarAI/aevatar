@@ -148,7 +148,7 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
     }
 
     [Fact]
-    public async Task ProtectedFleetReconcileDelivery_ShouldVerifyOnlyExactPersistedEnvelope()
+    public async Task ProtectedFleetReconcileDelivery_ShouldStayPendingUntilExactAcknowledgement()
     {
         var streams = new RecordingStreamProvider();
         using var scheduler = new InMemoryActorRuntimeCallbackScheduler(streams);
@@ -161,6 +161,13 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         var attestation = await scheduler.VerifyAsync(delivered);
         attestation.Should().NotBeNull();
         attestation!.EnvelopeId.Should().Be(delivered.Id);
+        var scheduled = GetScheduledCallback(
+            scheduler,
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId);
+        scheduled.Should().NotBeNull();
+        GetEnvelope(scheduled!, "PendingDeliveryEnvelope")!.Id.Should().Be(delivered.Id);
+        GetEnvelope(scheduled!, "LastDeliveryEnvelope").Should().BeNull();
 
         var forged = delivered.Clone();
         forged.Id = "forged-delivery";
@@ -169,7 +176,14 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         forgedWithPersistedIdentity.Route.PublisherActorId = "forged-publisher";
         (await scheduler.VerifyAsync(forgedWithPersistedIdentity)).Should().BeNull();
 
+        await scheduler.AcknowledgeDeliveryAsync(attestation);
+
+        GetEnvelope(scheduled!, "PendingDeliveryEnvelope").Should().BeNull();
+        GetEnvelope(scheduled!, "LastDeliveryEnvelope")!.Id.Should().Be(delivered.Id);
         (await scheduler.VerifyAsync(delivered.Clone())).Should().Be(attestation);
+        await FluentActions.Awaiting(() => scheduler.AcknowledgeDeliveryAsync(
+                attestation with { EnvelopeId = "forged-delivery" }))
+            .Should().ThrowAsync<InvalidOperationException>();
     }
 
     private static EventEnvelope CreateEnvelope() => new()
@@ -215,6 +229,13 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         var property = scheduledCallback.GetType().GetProperty("Generation");
         property.Should().NotBeNull();
         return (long)property!.GetValue(scheduledCallback)!;
+    }
+
+    private static EventEnvelope? GetEnvelope(object scheduledCallback, string propertyName)
+    {
+        var property = scheduledCallback.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull();
+        return (EventEnvelope?)property!.GetValue(scheduledCallback);
     }
 
     private sealed class RecordingStreamProvider : IStreamProvider

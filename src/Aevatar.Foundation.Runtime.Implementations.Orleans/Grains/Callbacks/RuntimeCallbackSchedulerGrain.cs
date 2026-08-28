@@ -195,6 +195,36 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         return Task.FromResult(IsExactRuntimeFleetReconcileDelivery(_state.State, envelope));
     }
 
+    public async Task AcknowledgeRuntimeFleetReconcileDeliveryAsync(
+        string envelopeId,
+        long generation,
+        long fireIndex,
+        int slotEpoch)
+    {
+        EnsureFleetAuthoritySchedulerIdentity();
+        ArgumentException.ThrowIfNullOrWhiteSpace(envelopeId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(generation, 0);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(fireIndex, 0);
+        if (slotEpoch == RuntimeCallbackSlotEpoch.Unspecified)
+            throw new ArgumentOutOfRangeException(nameof(slotEpoch));
+
+        var changed = TryAcknowledgeRuntimeFleetReconcileDelivery(
+            _state.State,
+            envelopeId,
+            generation,
+            fireIndex,
+            slotEpoch,
+            out var recognized);
+        if (!recognized)
+        {
+            throw new InvalidOperationException(
+                "Runtime fleet reconcile acknowledgement does not match scheduler-owned delivery state.");
+        }
+
+        if (changed)
+            await _state.WriteStateAsync();
+    }
+
     internal static bool IsExactRuntimeFleetReconcileDelivery(
         RuntimeCallbackSchedulerState state,
         EventEnvelope envelope)
@@ -224,6 +254,74 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private static bool HasExactEnvelope(EventEnvelope? persisted, EventEnvelope delivered) =>
         persisted != null &&
         persisted.ToByteString().Equals(delivered.ToByteString());
+
+    internal static bool TryAcknowledgeRuntimeFleetReconcileDelivery(
+        RuntimeCallbackSchedulerState state,
+        string envelopeId,
+        long generation,
+        long fireIndex,
+        int slotEpoch,
+        out bool recognized)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        recognized = false;
+        if (!state.ReminderCallbacks.TryGetValue(
+                RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+                out var scheduled) ||
+            scheduled.Generation != generation ||
+            scheduled.SlotEpoch != slotEpoch)
+        {
+            return false;
+        }
+
+        if (MatchesFleetReconcileAttestation(
+                scheduled.LastDeliveryEnvelope,
+                envelopeId,
+                generation,
+                fireIndex,
+                slotEpoch))
+        {
+            recognized = true;
+            return false;
+        }
+
+        var pending = scheduled.PendingDeliveryEnvelope;
+        if (!MatchesFleetReconcileAttestation(
+                pending,
+                envelopeId,
+                generation,
+                fireIndex,
+                slotEpoch))
+        {
+            return false;
+        }
+
+        recognized = true;
+        scheduled.FireIndex = fireIndex;
+        scheduled.LastDeliveryEnvelopeId = envelopeId;
+        scheduled.LastDeliveryFireIndex = fireIndex;
+        scheduled.LastDeliveryEnvelope = pending!.Clone();
+        scheduled.PendingDeliveryEnvelope = null;
+        state.ReminderCallbacks[RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId] = scheduled;
+        return true;
+    }
+
+    private static bool MatchesFleetReconcileAttestation(
+        EventEnvelope? envelope,
+        string envelopeId,
+        long generation,
+        long fireIndex,
+        int slotEpoch) =>
+        envelope?.Payload?.Is(RuntimeFleetReconcileRequested.Descriptor) == true &&
+        string.Equals(envelope.Id, envelopeId, StringComparison.Ordinal) &&
+        envelope.Runtime?.Callback is { } callback &&
+        string.Equals(
+            callback.CallbackId,
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+            StringComparison.Ordinal) &&
+        callback.Generation == generation &&
+        callback.FireIndex == fireIndex &&
+        callback.SlotEpoch == slotEpoch;
 
     private bool StagePendingReminderUnregistrations(IEnumerable<string> callbackIds)
     {
@@ -314,6 +412,16 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
                 "The protected fleet reconcile operation is only valid for the fixed fleet authority scheduler.");
         }
     }
+
+    private bool IsFleetReconcileSlot(string callbackId) =>
+        string.Equals(
+            this.GetPrimaryKeyString(),
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            callbackId,
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+            StringComparison.Ordinal);
 
     private static bool IsValidFleetReconcileSchedule(RuntimeScheduledCallback callback) =>
         callback.Periodic &&
@@ -440,6 +548,13 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(
             deliveryEnvelope.Clone(),
             ct);
+
+        // The reserved fleet callback is level-triggered. Keep its exact pending envelope stable
+        // until the authority commits and acknowledges it; otherwise a lagging Kafka consumer can
+        // only ever see deliveries older than the scheduler's moving one-envelope verification
+        // window and the admission gate can never reconcile.
+        if (IsFleetReconcileSlot(callbackId))
+            return;
 
         if (!scheduled.Periodic)
         {

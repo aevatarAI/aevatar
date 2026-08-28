@@ -115,6 +115,22 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
             .EnsureRuntimeFleetReconcileTimerAsync();
     }
 
+    public async Task AcknowledgeDeliveryAsync(
+        RuntimeFleetReconcileDeliveryAttestation attestation,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(attestation);
+        ct.ThrowIfCancellationRequested();
+        await _grainFactory
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId)
+            .AcknowledgeRuntimeFleetReconcileDeliveryAsync(
+                attestation.EnvelopeId,
+                attestation.Generation,
+                attestation.FireIndex,
+                attestation.SlotEpoch);
+    }
+
     public async Task<RuntimeFleetReconcileDeliveryAttestation?> VerifyAsync(
         EventEnvelope envelope,
         CancellationToken ct = default)

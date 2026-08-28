@@ -219,6 +219,11 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
         dedicatedGrain.VerifyFleetReconcileDeliveryCalls.Should().Be(1);
         dedicatedGrain.LastVerifiedFleetReconcileEnvelope.Should().BeEquivalentTo(delivered);
 
+        await scheduler.AcknowledgeDeliveryAsync(attestation);
+
+        dedicatedGrain.AcknowledgeFleetReconcileDeliveryCalls.Should().Be(1);
+        dedicatedGrain.LastAcknowledgedFleetReconcileDelivery.Should().Be(attestation);
+
         dedicatedGrain.FleetReconcileDeliveryVerified = false;
         (await scheduler.VerifyAsync(delivered)).Should().BeNull();
     }
@@ -310,6 +315,10 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
 
         public EventEnvelope? LastVerifiedFleetReconcileEnvelope { get; private set; }
 
+        public int AcknowledgeFleetReconcileDeliveryCalls { get; private set; }
+
+        public RuntimeFleetReconcileDeliveryAttestation? LastAcknowledgedFleetReconcileDelivery { get; private set; }
+
         public int ScheduleTimeoutCalls { get; private set; }
 
         public int ScheduleTimerCalls { get; private set; }
@@ -381,6 +390,21 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             VerifyFleetReconcileDeliveryCalls++;
             LastVerifiedFleetReconcileEnvelope = envelope.Clone();
             return Task.FromResult(FleetReconcileDeliveryVerified);
+        }
+
+        public Task AcknowledgeRuntimeFleetReconcileDeliveryAsync(
+            string envelopeId,
+            long generation,
+            long fireIndex,
+            int slotEpoch)
+        {
+            AcknowledgeFleetReconcileDeliveryCalls++;
+            LastAcknowledgedFleetReconcileDelivery = new RuntimeFleetReconcileDeliveryAttestation(
+                envelopeId,
+                generation,
+                fireIndex,
+                slotEpoch);
+            return Task.CompletedTask;
         }
     }
 }

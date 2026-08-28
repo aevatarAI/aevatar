@@ -31,4 +31,12 @@ public interface IRuntimeCallbackSchedulerGrain : IGrainWithStringKey
 
     Task<bool> VerifyRuntimeFleetReconcileDeliveryAsync(EventEnvelope envelope) =>
         Task.FromResult(false);
+
+    Task AcknowledgeRuntimeFleetReconcileDeliveryAsync(
+        string envelopeId,
+        long generation,
+        long fireIndex,
+        int slotEpoch) =>
+        Task.FromException(new NotSupportedException(
+            "This callback scheduler grain does not implement protected fleet reconcile acknowledgement."));
 }
