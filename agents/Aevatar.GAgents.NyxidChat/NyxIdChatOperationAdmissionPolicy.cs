@@ -70,7 +70,9 @@ internal static class NyxIdChatOperationAdmissionPolicy
                 admission.ReadBack is null,
             AgentToolOperationRiskPayload.Write =>
                 admission.HttpMethod is "POST" or "PUT" or "PATCH" &&
-                admission.ExecutionPolicy.Approval == AgentToolOperationApprovalPayload.Required &&
+                admission.ExecutionPolicy.Approval is
+                    AgentToolOperationApprovalPayload.None or
+                    AgentToolOperationApprovalPayload.Required &&
                 !safety.IsReadOnly &&
                 !safety.IsDestructive &&
                 safety.MayChangeExternalState,
