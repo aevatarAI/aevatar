@@ -2,7 +2,8 @@ using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-public sealed class ProjectionScopeInFlightObservationPendingException : InvalidOperationException
+public sealed class ProjectionScopeInFlightObservationPendingException : InvalidOperationException,
+    IRuntimeEnvelopeRetryableException
 {
     public ProjectionScopeInFlightObservationPendingException(
         ProjectionSourceCoordinate pending,
@@ -31,7 +32,8 @@ public sealed class ProjectionSourceCoordinateConflictException : InvalidOperati
     }
 }
 
-public sealed class ProjectionSourceCoordinateInvalidException : InvalidOperationException
+public sealed class ProjectionSourceCoordinateInvalidException : InvalidOperationException,
+    IRuntimeEnvelopeRetryableException
 {
     public ProjectionSourceCoordinateInvalidException(string reason)
         : base($"Projection source coordinate is invalid: {reason}")

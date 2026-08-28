@@ -719,6 +719,58 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         }
     }
 
+    [Theory]
+    [InlineData("projection-in-flight-observation-pending")]
+    [InlineData("projection-source-coordinate-invalid")]
+    public async Task HandleEnvelopeAsync_ProjectionRecoveryFailure_ShouldPropagateShedAndRedeliver(
+        string payload)
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "0",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(siloPort, gatewayPort);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = CreateEnvelope(payload);
+
+            var failure = await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
+                .Should().ThrowAsync<Exception>();
+            failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+            await RetryAwareDirectDispatchAgent.WaitForDeactivationAsync(TimeSpan.FromSeconds(20));
+
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(1);
+            RetryAwareDirectDispatchAgent.DeactivationCount.Should().Be(1,
+                "the stream delivery must remain unacknowledged for projection recovery failures");
+
+            await grain.HandleEnvelopeAsync(envelope.ToByteArray());
+            await RetryAwareDirectDispatchAgent.WaitForSuccessAsync(
+                envelope.Id,
+                TimeSpan.FromSeconds(20));
+
+            RetryAwareDirectDispatchAgent.ActivationCount.Should().Be(2);
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
     private static async Task<IHost> StartSiloHostAsync(
         int siloPort,
         int gatewayPort,
@@ -1057,7 +1109,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         private static int _runtimeRetryableFailuresRemaining;
         private static int _retryUntilResolvedSchedulerFailuresRemaining;
         private static int _projectionWriteRejectionsRemaining;
-        private static int _projectionSourceConflictsRemaining;
+        private static int _projectionRecoveryFailuresRemaining;
 
         public static void Reset()
         {
@@ -1072,7 +1124,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 _runtimeRetryableFailuresRemaining = 1;
                 _retryUntilResolvedSchedulerFailuresRemaining = 1;
                 _projectionWriteRejectionsRemaining = 1;
-                _projectionSourceConflictsRemaining = 1;
+                _projectionRecoveryFailuresRemaining = 1;
             }
         }
 
@@ -1158,7 +1210,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 throw new InvalidOperationException("always-fail-retry-exhausted");
 
             if (payload == "projection-source-coordinate-conflict" &&
-                Interlocked.Exchange(ref _projectionSourceConflictsRemaining, 0) == 1)
+                Interlocked.Exchange(ref _projectionRecoveryFailuresRemaining, 0) == 1)
             {
                 throw new ProjectionSourceCoordinateConflictException(
                     new ProjectionSourceCoordinate
@@ -1173,6 +1225,30 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                         StateVersion = 23,
                         EventId = "evt-received-23",
                     });
+            }
+
+            if (payload == "projection-in-flight-observation-pending" &&
+                Interlocked.Exchange(ref _projectionRecoveryFailuresRemaining, 0) == 1)
+            {
+                throw new ProjectionScopeInFlightObservationPendingException(
+                    new ProjectionSourceCoordinate
+                    {
+                        ActorId = "source-pending",
+                        StateVersion = 23,
+                        EventId = "evt-pending-23",
+                    },
+                    new ProjectionSourceCoordinate
+                    {
+                        ActorId = "source-received",
+                        StateVersion = 24,
+                        EventId = "evt-received-24",
+                    });
+            }
+
+            if (payload == "projection-source-coordinate-invalid" &&
+                Interlocked.Exchange(ref _projectionRecoveryFailuresRemaining, 0) == 1)
+            {
+                throw new ProjectionSourceCoordinateInvalidException("event id is missing");
             }
 
             if (payload == "retry-until-resolved" ||
