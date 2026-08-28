@@ -122,7 +122,15 @@ public sealed record NyxIdChatConversationStateSnapshot(
     IReadOnlyList<NyxIdChatActionSnapshot>? RecentActions = null,
     NyxIdChatStepControlResultSnapshot? LatestStepControlResult = null,
     IReadOnlyList<NyxIdChatStepControlResultSnapshot>? RecentStepControlResults = null,
-    NyxIdChatCanaryEffectFaultSnapshot? CanaryEffectFault = null);
+    NyxIdChatCanaryEffectFaultSnapshot? CanaryEffectFault = null,
+    IReadOnlyList<NyxIdChatContextAttachmentSnapshot>? ContextAttachments = null);
+
+// Issue #3543: the sealed create-time context attachment set. Identities and
+// revision selection only — attachment bodies never enter this projection.
+public sealed record NyxIdChatContextAttachmentSnapshot(
+    string ArtifactId,
+    string RevisionMode,
+    string? PinnedRevisionId = null);
 
 public sealed record NyxIdChatCanaryEffectFaultSnapshot(
     string ArmId,

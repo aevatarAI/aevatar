@@ -907,6 +907,17 @@ message NyxIdChatConversationCurrentStateDocument {
   NyxIdChatConversationCanaryEffectFaultDocument canary_effect_fault = 42;
   bool deleted = 43;
   google.protobuf.Timestamp deleted_at = 44;
+  // Issue #3543: the sealed create-time context attachment set (identities and
+  // revision selection only — attachment bodies never enter any read model).
+  repeated NyxIdChatConversationContextAttachmentDocument context_attachments = 45;
+}
+
+message NyxIdChatConversationContextAttachmentDocument {
+  string artifact_id = 1;
+  // Wire name of ConversationContextAttachmentRevisionMode:
+  // FOLLOW_CURRENT or PINNED_REVISION.
+  string revision_mode = 2;
+  string pinned_revision_id = 3;
 }
 
 message NyxIdChatConversationCanaryEffectFaultDocument {

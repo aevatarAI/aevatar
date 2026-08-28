@@ -187,7 +187,23 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             document.RecentActions.Select(ToAction).ToArray(),
             ToStepControlResult(document.LatestStepControlResult),
             document.RecentStepControlResults.Select(result => ToStepControlResult(result)!).ToArray(),
-            ToCanaryEffectFault(document.CanaryEffectFault));
+            ToCanaryEffectFault(document.CanaryEffectFault),
+            ToContextAttachments(document.ContextAttachments));
+
+    private static IReadOnlyList<NyxIdChatContextAttachmentSnapshot>? ToContextAttachments(
+        IEnumerable<NyxIdChatConversationContextAttachmentDocument> attachments)
+    {
+        var list = attachments
+            .Where(static attachment => !string.IsNullOrWhiteSpace(attachment.ArtifactId))
+            .Select(static attachment => new NyxIdChatContextAttachmentSnapshot(
+                attachment.ArtifactId.Trim(),
+                string.Equals(attachment.RevisionMode, "PINNED_REVISION", StringComparison.Ordinal)
+                    ? "PINNED_REVISION"
+                    : "FOLLOW_CURRENT",
+                string.IsNullOrWhiteSpace(attachment.PinnedRevisionId) ? null : attachment.PinnedRevisionId.Trim()))
+            .ToArray();
+        return list.Length == 0 ? null : list;
+    }
 
     private static NyxIdChatCanaryEffectFaultSnapshot? ToCanaryEffectFault(
         NyxIdChatConversationCanaryEffectFaultDocument? fault) =>

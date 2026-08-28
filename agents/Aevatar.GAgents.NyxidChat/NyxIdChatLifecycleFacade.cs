@@ -52,6 +52,15 @@ public enum NyxIdChatLifecycleCommandStartError
     AdmissionUnavailable = 2,
     TargetNotFound = 3,
     AccessDenied = 4,
+    // Issue #3543: typed context-attachment admission failures. Consumers map
+    // each value to a distinct wire code instead of collapsing every rejected
+    // attachment into one opaque ADMISSION_UNAVAILABLE.
+    AttachmentSetInvalid = 5,
+    AttachmentAdmissionUnavailable = 6,
+    AttachmentNotFound = 7,
+    AttachmentKindUnsupported = 8,
+    AttachmentAccessDenied = 9,
+    AttachmentRevisionUnavailable = 10,
 }
 
 public sealed class NyxIdChatLifecycleFacade
@@ -229,10 +238,11 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
             }
         }
 
-        if (!await ValidateContextAttachmentsAsync(command, ct))
+        var attachmentError = await ValidateContextAttachmentsAsync(command, ct);
+        if (attachmentError != NyxIdChatLifecycleCommandStartError.None)
         {
             return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
-                NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+                attachmentError);
         }
 
         var callerScope = OwnerScope.ForNyxIdNative(command.ScopeId);
@@ -281,23 +291,23 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                 NyxIdChatConversationCreateStatus.Accepted));
     }
 
-    private async Task<bool> ValidateContextAttachmentsAsync(
+    private async Task<NyxIdChatLifecycleCommandStartError> ValidateContextAttachmentsAsync(
         NyxIdChatConversationCreateCommand command,
         CancellationToken ct)
     {
         if (!ConversationContextAttachmentAdmission.TryNormalize(
                 command.ContextAttachments,
                 out var normalized))
-            return false;
+            return NyxIdChatLifecycleCommandStartError.AttachmentSetInvalid;
         command.ContextAttachments = normalized;
         if (normalized.Attachments.Count == 0)
-            return true;
+            return NyxIdChatLifecycleCommandStartError.None;
         if (_contentArtifactQueryPort is null)
-            return false;
+            return NyxIdChatLifecycleCommandStartError.AttachmentAdmissionUnavailable;
 
         var requester = command.FirstTurn?.ToolContext?.Caller?.OwnerSubject?.Trim();
         if (string.IsNullOrWhiteSpace(requester))
-            return false;
+            return NyxIdChatLifecycleCommandStartError.AttachmentAccessDenied;
 
         foreach (var attachment in normalized.Attachments)
         {
@@ -311,14 +321,16 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
             }
             catch
             {
-                return false;
+                return NyxIdChatLifecycleCommandStartError.AttachmentAdmissionUnavailable;
             }
 
             if (artifact is null ||
-                !string.Equals(artifact.LifecycleStatus, ContentArtifactLifecycleStatusNames.Active, StringComparison.Ordinal) ||
-                !ConversationContextAttachmentAdmission.IsAllowedKind(artifact.Kind) ||
-                !ConversationContextAttachmentAdmission.IsAuthorized(artifact, requester))
-                return false;
+                !string.Equals(artifact.LifecycleStatus, ContentArtifactLifecycleStatusNames.Active, StringComparison.Ordinal))
+                return NyxIdChatLifecycleCommandStartError.AttachmentNotFound;
+            if (!ConversationContextAttachmentAdmission.IsAllowedKind(artifact.Kind))
+                return NyxIdChatLifecycleCommandStartError.AttachmentKindUnsupported;
+            if (!ConversationContextAttachmentAdmission.IsAuthorized(artifact, requester))
+                return NyxIdChatLifecycleCommandStartError.AttachmentAccessDenied;
 
             if (attachment.RevisionMode == ConversationContextAttachmentRevisionMode.PinnedRevision)
             {
@@ -326,11 +338,11 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                     string.Equals(item.RevisionId, attachment.PinnedRevisionId, StringComparison.Ordinal));
                 if (revision is null ||
                     !string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
-                    return false;
+                    return NyxIdChatLifecycleCommandStartError.AttachmentRevisionUnavailable;
             }
         }
 
-        return true;
+        return NyxIdChatLifecycleCommandStartError.None;
     }
 }
 

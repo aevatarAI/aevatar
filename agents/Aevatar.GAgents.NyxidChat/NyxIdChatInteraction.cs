@@ -189,6 +189,14 @@ public enum NyxIdChatStartError
     ActorNotFound = 1,
     ProjectionUnavailable = 2,
     AdmissionUnavailable = 3,
+    // Issue #3543: typed context-attachment admission failures, kept distinct
+    // from profile/route admission so consumers can explain and recover.
+    AttachmentSetInvalid = 4,
+    AttachmentAdmissionUnavailable = 5,
+    AttachmentNotFound = 6,
+    AttachmentKindUnsupported = 7,
+    AttachmentAccessDenied = 8,
+    AttachmentRevisionUnavailable = 9,
 }
 
 public readonly record struct NyxIdChatCompletionStatus
@@ -427,6 +435,12 @@ internal sealed class NyxIdChatCommandTargetResolver
                     NyxIdChatLifecycleCommandStartError.AdmissionUnavailable or
                         NyxIdChatLifecycleCommandStartError.RouteRejected or
                         NyxIdChatLifecycleCommandStartError.AccessDenied => NyxIdChatStartError.AdmissionUnavailable,
+                    NyxIdChatLifecycleCommandStartError.AttachmentSetInvalid => NyxIdChatStartError.AttachmentSetInvalid,
+                    NyxIdChatLifecycleCommandStartError.AttachmentAdmissionUnavailable => NyxIdChatStartError.AttachmentAdmissionUnavailable,
+                    NyxIdChatLifecycleCommandStartError.AttachmentNotFound => NyxIdChatStartError.AttachmentNotFound,
+                    NyxIdChatLifecycleCommandStartError.AttachmentKindUnsupported => NyxIdChatStartError.AttachmentKindUnsupported,
+                    NyxIdChatLifecycleCommandStartError.AttachmentAccessDenied => NyxIdChatStartError.AttachmentAccessDenied,
+                    NyxIdChatLifecycleCommandStartError.AttachmentRevisionUnavailable => NyxIdChatStartError.AttachmentRevisionUnavailable,
                     _ => NyxIdChatStartError.ProjectionUnavailable,
                 });
         }

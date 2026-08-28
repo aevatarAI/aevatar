@@ -42,10 +42,16 @@ Conversation structured attachments are create-only, immutable references. Each 
 `FOLLOW_CURRENT` or `PINNED_REVISION`; the set is bounded to four artifact identities and is
 sealed by `ConversationContextAttachmentsBoundEvent`. Replaying the same deterministic protobuf
 bytes is idempotent; a different or missing set cannot replace an existing binding. Create
-admission reads only the ContentArtifact read model and fails closed with `ADMISSION_UNAVAILABLE`
-for missing, inactive, unauthorized, unsupported-kind, duplicate/over-limit, or unavailable
-pinned revisions. A turn may degrade to a typed unavailable placeholder when a later verified
-read is redacted, tombstoned, expired, over budget, or temporarily unavailable.
+admission reads only the ContentArtifact read model and fails closed with a typed reason per
+case (#3543): `ATTACHMENT_SET_INVALID` (duplicate/over-limit/inconsistent revision selection),
+`ATTACHMENT_ADMISSION_UNAVAILABLE` (read model down), `ATTACHMENT_NOT_FOUND` (missing or
+inactive artifact), `ATTACHMENT_KIND_UNSUPPORTED`, `ATTACHMENT_ACCESS_DENIED`, or
+`ATTACHMENT_REVISION_UNAVAILABLE` (pinned revision missing or not available). Profile/route
+admission failures keep the separate `ADMISSION_UNAVAILABLE` code. The sealed set is projected
+(identity and revision selection only, never the body) onto the conversation current-state read
+model as `contextAttachments`, so consumers can reconcile what a conversation is bound to. A
+turn may degrade to a typed unavailable placeholder when a later verified read is redacted,
+tombstoned, expired, over budget, or temporarily unavailable.
 
 ## 3. Protobuf 与写侧契约
 

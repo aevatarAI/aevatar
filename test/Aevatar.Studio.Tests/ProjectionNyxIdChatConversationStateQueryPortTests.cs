@@ -128,6 +128,55 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         reader.Keys.Should().ContainSingle("conversation-alpha");
     }
 
+    // Issue #3543: the sealed create-time attachment set must survive the
+    // document → snapshot projection so consumers can reconcile what a
+    // conversation is actually bound to.
+    [Fact]
+    public async Task GetAsync_ShouldProjectSealedContextAttachments()
+    {
+        var document = BuildDocument(stateVersion: 8);
+        document.ContextAttachments.Add(new NyxIdChatConversationContextAttachmentDocument
+        {
+            ArtifactId = "artifact-chart",
+            RevisionMode = "PINNED_REVISION",
+            PinnedRevisionId = "artifact-chart-revision-2",
+        });
+        document.ContextAttachments.Add(new NyxIdChatConversationContextAttachmentDocument
+        {
+            ArtifactId = "artifact-journal",
+            RevisionMode = "FOLLOW_CURRENT",
+            PinnedRevisionId = string.Empty,
+        });
+        var port = new ProjectionNyxIdChatConversationStateQueryPort(
+            new RecordingReader { Document = document });
+
+        var result = await port.GetAsync(new NyxIdChatConversationStateQuery(
+            "scope-alpha",
+            "conversation-alpha"));
+
+        result.Status.Should().Be(NyxIdChatConversationStateQueryStatus.Current);
+        result.Snapshot!.ContextAttachments.Should().Equal(
+            new NyxIdChatContextAttachmentSnapshot(
+                "artifact-chart",
+                "PINNED_REVISION",
+                "artifact-chart-revision-2"),
+            new NyxIdChatContextAttachmentSnapshot("artifact-journal", "FOLLOW_CURRENT"));
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldOmitContextAttachmentsWhenConversationHasNone()
+    {
+        var port = new ProjectionNyxIdChatConversationStateQueryPort(
+            new RecordingReader { Document = BuildDocument(stateVersion: 8) });
+
+        var result = await port.GetAsync(new NyxIdChatConversationStateQuery(
+            "scope-alpha",
+            "conversation-alpha"));
+
+        result.Status.Should().Be(NyxIdChatConversationStateQueryStatus.Current);
+        result.Snapshot!.ContextAttachments.Should().BeNull();
+    }
+
     [Fact]
     public async Task GetAsync_ShouldExposeTypedPostconditionCheck()
     {

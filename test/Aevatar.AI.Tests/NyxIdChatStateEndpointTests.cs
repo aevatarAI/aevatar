@@ -184,6 +184,65 @@ public sealed class NyxIdChatStateEndpointTests
             .GetValue<string>().Should().Be("repository-alpha");
     }
 
+    // Issue #3543: the sealed create-time attachment set must reach the public
+    // state JSON so consumers can reconcile conversation bindings.
+    [Fact]
+    public async Task GetState_ShouldProjectSealedContextAttachments()
+    {
+        var state = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = "conversation-alpha",
+            ScopeId = "scope-alpha",
+            ProgressSequence = 2,
+            ContextAttachments = new ConversationContextAttachmentSet
+            {
+                Attachments =
+                {
+                    new ConversationContextAttachment
+                    {
+                        ArtifactId = "artifact-chart",
+                        RevisionMode = ConversationContextAttachmentRevisionMode.PinnedRevision,
+                        PinnedRevisionId = "artifact-chart-revision-2",
+                    },
+                    new ConversationContextAttachment
+                    {
+                        ArtifactId = "artifact-journal",
+                        RevisionMode = ConversationContextAttachmentRevisionMode.FollowCurrent,
+                    },
+                },
+            },
+        };
+
+        var store = new InMemoryProjectionDocumentStore<
+            NyxIdChatConversationCurrentStateDocument,
+            string>(static document => document.ActorId);
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            new StoreTaskStateWriteDispatcher(store),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-07T12:26:00Z")));
+        await projector.ProjectAsync(
+            new StudioMaterializationContext
+            {
+                RootActorId = state.ConversationActorId,
+                ProjectionKind = "nyxid-chat-conversation",
+            },
+            WrapCommittedState(state));
+
+        var response = await ExecuteAsync(
+            new ProjectionNyxIdChatConversationStateQueryPort(store),
+            string.Empty);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        var attachments = JsonNode.Parse(response.Body)!["snapshot"]!["contextAttachments"]!
+            .AsArray();
+        attachments.Count.Should().Be(2);
+        attachments[0]!["artifactId"]!.GetValue<string>().Should().Be("artifact-chart");
+        attachments[0]!["revisionMode"]!.GetValue<string>().Should().Be("PINNED_REVISION");
+        attachments[0]!["pinnedRevisionId"]!.GetValue<string>().Should()
+            .Be("artifact-chart-revision-2");
+        attachments[1]!["artifactId"]!.GetValue<string>().Should().Be("artifact-journal");
+        attachments[1]!["revisionMode"]!.GetValue<string>().Should().Be("FOLLOW_CURRENT");
+    }
+
     [Fact]
     public async Task GetState_ShouldReloadConditionGuardAndNumericThresholdFacts()
     {

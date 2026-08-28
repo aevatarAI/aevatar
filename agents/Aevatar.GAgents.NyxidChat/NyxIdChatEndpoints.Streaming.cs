@@ -629,6 +629,12 @@ public static partial class NyxIdChatEndpoints
                     NyxIdChatStartError.ProjectionUnavailable => "PROJECTION_UNAVAILABLE",
                     NyxIdChatStartError.AdmissionUnavailable => "ADMISSION_UNAVAILABLE",
                     NyxIdChatStartError.ActorNotFound => "ACTOR_NOT_FOUND",
+                    NyxIdChatStartError.AttachmentSetInvalid => "ATTACHMENT_SET_INVALID",
+                    NyxIdChatStartError.AttachmentAdmissionUnavailable => "ATTACHMENT_ADMISSION_UNAVAILABLE",
+                    NyxIdChatStartError.AttachmentNotFound => "ATTACHMENT_NOT_FOUND",
+                    NyxIdChatStartError.AttachmentKindUnsupported => "ATTACHMENT_KIND_UNSUPPORTED",
+                    NyxIdChatStartError.AttachmentAccessDenied => "ATTACHMENT_ACCESS_DENIED",
+                    NyxIdChatStartError.AttachmentRevisionUnavailable => "ATTACHMENT_REVISION_UNAVAILABLE",
                     _ => "COMMAND_START_FAILED",
                 },
                 result.Error switch
@@ -637,6 +643,18 @@ public static partial class NyxIdChatEndpoints
                     NyxIdChatStartError.AdmissionUnavailable =>
                         "NyxID chat admission is unavailable for the requested Agent Profile or route.",
                     NyxIdChatStartError.ActorNotFound => "NyxID chat conversation was not found.",
+                    NyxIdChatStartError.AttachmentSetInvalid =>
+                        "The context attachment set is invalid (duplicate artifact, over the 4-attachment limit, or an inconsistent revision selection).",
+                    NyxIdChatStartError.AttachmentAdmissionUnavailable =>
+                        "The content artifact read model is unavailable for context attachment admission.",
+                    NyxIdChatStartError.AttachmentNotFound =>
+                        "A context attachment artifact was not found or is not active.",
+                    NyxIdChatStartError.AttachmentKindUnsupported =>
+                        "A context attachment artifact kind is not supported (allowed: text, markdown, structured_document).",
+                    NyxIdChatStartError.AttachmentAccessDenied =>
+                        "The caller is not authorized to attach one of the requested artifacts.",
+                    NyxIdChatStartError.AttachmentRevisionUnavailable =>
+                        "A pinned context attachment revision is missing or not available.",
                     _ => message,
                 },
                 0,

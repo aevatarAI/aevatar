@@ -284,14 +284,18 @@ public class NyxIdChatGAgentTests
     // Fix (review round 1, F1):
     //   Create admission rejection cases were not proven to stop actor creation.
     //   The matrix now asserts the typed error and an empty runtime create ledger.
+    // Issue #3543: every rejection carries its own typed reason instead of one
+    // opaque AdmissionUnavailable, so the wire can say what failed closed.
     [Theory]
-    [InlineData("missing")]
-    [InlineData("unauthorized")]
-    [InlineData("other-content")]
-    [InlineData("over-limit")]
-    [InlineData("pinned-unavailable")]
+    [InlineData("missing", NyxIdChatLifecycleCommandStartError.AttachmentNotFound)]
+    [InlineData("unauthorized", NyxIdChatLifecycleCommandStartError.AttachmentAccessDenied)]
+    [InlineData("other-content", NyxIdChatLifecycleCommandStartError.AttachmentKindUnsupported)]
+    [InlineData("over-limit", NyxIdChatLifecycleCommandStartError.AttachmentSetInvalid)]
+    [InlineData("pinned-unavailable", NyxIdChatLifecycleCommandStartError.AttachmentRevisionUnavailable)]
+    [InlineData("read-model-down", NyxIdChatLifecycleCommandStartError.AttachmentAdmissionUnavailable)]
     public async Task CreateTargetResolver_ShouldRejectUnavailableContextAttachmentsBeforeCreatingActor(
-        string failure)
+        string failure,
+        NyxIdChatLifecycleCommandStartError expectedError)
     {
         var runtime = new RecordingActorRuntime();
         var artifact = BuildAdmissionArtifact();
@@ -339,6 +343,9 @@ public class NyxIdChatGAgentTests
                         ConversationContextAttachmentRevisionMode.PinnedRevision,
                         "rev-1"));
                 break;
+            case "read-model-down":
+                query.ThrowsOnGet = true;
+                break;
         }
 
         var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
@@ -351,7 +358,7 @@ public class NyxIdChatGAgentTests
         var result = await resolver.ResolveAsync(command);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+        result.Error.Should().Be(expectedError);
         runtime.CreateCalls.Should().BeEmpty();
     }
 
@@ -3421,6 +3428,8 @@ public class NyxIdChatGAgentTests
     {
         public ContentArtifactCurrentStateResponse? Artifact { get; set; } = artifact;
 
+        public bool ThrowsOnGet { get; set; }
+
         public Task<ContentArtifactListResponse> ListAsync(
             string scopeId,
             string requesterPrincipalId,
@@ -3434,11 +3443,14 @@ public class NyxIdChatGAgentTests
             string scopeId,
             string artifactId,
             CancellationToken ct = default) =>
-            Task.FromResult(
-                Artifact is not null &&
-                string.Equals(Artifact.ArtifactId, artifactId, StringComparison.Ordinal)
-                    ? Artifact
-                    : null);
+            ThrowsOnGet
+                ? Task.FromException<ContentArtifactCurrentStateResponse?>(
+                    new InvalidOperationException("read model down"))
+                : Task.FromResult(
+                    Artifact is not null &&
+                    string.Equals(Artifact.ArtifactId, artifactId, StringComparison.Ordinal)
+                        ? Artifact
+                        : null);
 
         public Task<ContentArtifactCurrentStateResponse?> GetByDedupKeyAsync(
             string scopeId,

@@ -95,6 +95,9 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         document.RecentActions.AddRange(state.RecentActions.Select(ToAction));
         document.RecentStepControlResults.AddRange(
             state.RecentStepControlResults.Select(result => ToStepControlResult(result)!));
+        document.ContextAttachments.AddRange(
+            (state.ContextAttachments?.Attachments ?? Enumerable.Empty<ConversationContextAttachment>())
+                .Select(ToContextAttachment));
 
         var result = await _writeDispatcher.UpsertAsync(document, ct).ConfigureAwait(false);
         if (result.IsRejected)
@@ -119,6 +122,17 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                 TerminalAt = turn.TerminalAt?.Clone(),
                 CommandId = turn.CommandId,
             };
+
+    private static NyxIdChatConversationContextAttachmentDocument ToContextAttachment(
+        ConversationContextAttachment attachment) =>
+        new()
+        {
+            ArtifactId = attachment.ArtifactId,
+            RevisionMode = attachment.RevisionMode == ConversationContextAttachmentRevisionMode.PinnedRevision
+                ? "PINNED_REVISION"
+                : "FOLLOW_CURRENT",
+            PinnedRevisionId = attachment.PinnedRevisionId,
+        };
 
     private static NyxIdChatConversationCanaryEffectFaultDocument? ToCanaryEffectFault(
         NyxIdChatCanaryEffectFaultState? fault)
