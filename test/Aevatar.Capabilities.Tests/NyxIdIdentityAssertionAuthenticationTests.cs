@@ -116,7 +116,7 @@ public sealed class NyxIdIdentityAssertionAuthenticationTests
         body.GetProperty("subject").GetString().Should().Be("identity-caller");
         body.GetProperty("authenticationType").GetString().Should().Be(
             NyxIdIdentityAssertionAuthentication.Scheme);
-        body.GetProperty("workflowAuthoritySubject").GetString().Should().Be("identity-caller");
+        body.GetProperty("workflowAuthoritySubject").ValueKind.Should().Be(JsonValueKind.Null);
         body.GetProperty("workflowBearerPreserved").GetBoolean().Should().BeTrue();
     }
 

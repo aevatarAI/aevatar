@@ -132,6 +132,7 @@ public sealed class AevatarInvocationDispatcher
         _workflowQueryService = workflowQueryService ?? throw new ArgumentNullException(nameof(workflowQueryService));
         _workflowStartReadModelObserver = new WorkflowStartReadModelObserver(
             _workflowQueryService,
+            workflowStartObservationTimeout,
             workflowStartObservationTimeout);
         _workflowRunDeliveryRegistrationPort = workflowRunDeliveryRegistrationPort;
         _channelAgentKeyReadinessPort = channelAgentKeyReadinessPort;
@@ -760,13 +761,14 @@ public sealed class AevatarInvocationDispatcher
                     ct)
                 .ConfigureAwait(false)
             : null;
-        var mutationStage = completionSnapshot != null ||
-                            await _workflowStartReadModelObserver.ObserveAsync(
-                                    scopeId,
-                                    receipt.ActorId,
-                                    receipt.CommandId,
-                                    ct)
-                                .ConfigureAwait(false)
+        var observedSnapshot = completionSnapshot ??
+                               await _workflowStartReadModelObserver.ObserveSnapshotAsync(
+                                       scopeId,
+                                       receipt.ActorId,
+                                       receipt.CommandId,
+                                       ct)
+                                   .ConfigureAwait(false);
+        var mutationStage = observedSnapshot != null
             ? AgentToolReceiptMutationStage.ReadModelObserved
             : AgentToolReceiptMutationStage.Accepted;
         if (mutationStage != AgentToolReceiptMutationStage.ReadModelObserved)
@@ -779,9 +781,9 @@ public sealed class AevatarInvocationDispatcher
                 receipt.CommandId);
         }
 
-        var completionResultJson = completionSnapshot == null
+        var completionResultJson = observedSnapshot == null
             ? string.Empty
-            : AevatarInvocationJson.Serialize(MapWorkflowSnapshot(completionSnapshot, receipt.ActorId));
+            : AevatarInvocationJson.Serialize(MapWorkflowSnapshot(observedSnapshot, receipt.ActorId));
 
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {

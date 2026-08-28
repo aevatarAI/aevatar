@@ -7,7 +7,7 @@ namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 internal sealed class WorkflowStartReadModelObserver
 {
     internal static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(8);
-    internal static readonly TimeSpan DefaultCompletionObservationTimeout = TimeSpan.FromSeconds(20);
+    internal static readonly TimeSpan DefaultCompletionObservationTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan ObservationInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly IWorkflowExecutionQueryApplicationService _queryService;
@@ -35,6 +35,13 @@ internal sealed class WorkflowStartReadModelObserver
         string actorId,
         string commandId,
         CancellationToken ct) =>
+        await ObserveSnapshotAsync(scopeId, actorId, commandId, ct).ConfigureAwait(false) != null;
+
+    public async Task<WorkflowActorSnapshot?> ObserveSnapshotAsync(
+        string scopeId,
+        string actorId,
+        string commandId,
+        CancellationToken ct) =>
         await ObserveMatchingSnapshotAsync(
                 scopeId,
                 actorId,
@@ -42,7 +49,7 @@ internal sealed class WorkflowStartReadModelObserver
                 static _ => true,
                 _observationTimeout,
                 ct)
-            .ConfigureAwait(false) != null;
+            .ConfigureAwait(false);
 
     public async Task<WorkflowActorSnapshot?> ObserveCompletionAsync(
         string scopeId,

@@ -53,6 +53,45 @@ public sealed class NyxIdChatPublicToolReceiptResultTests
     }
 
     [Fact]
+    public void BuildDurableReceiptEvidence_WorkflowStartStreaming_ShouldKeepBoundedPartialOutput()
+    {
+        const string secret = "start-secret-must-not-persist";
+        const string partialOutput = "{\"workflow_status\":\"needs_input\",\"message\":\"choose one\"}";
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "command-alpha",
+            ToolName = "aevatar_start_workflow",
+            Status = AgentToolReceiptStatus.Success,
+            SubjectId = "scope-workflow:run-alpha",
+            MutationStage = AgentToolReceiptMutationStage.ReadModelObserved,
+            ResultJson = JsonSerializer.Serialize(new
+            {
+                run_id = "scope-workflow:run-alpha",
+                actor_id = "scope-workflow:run-alpha",
+                command_id = "command-alpha",
+                status = "streaming",
+                result = new
+                {
+                    run_id = "scope-workflow:run-alpha",
+                    status = "Running",
+                    state_version = 7,
+                    partial_output = partialOutput,
+                    access_token = secret,
+                },
+            }),
+        };
+
+        var durable = NyxIdChatConversationGAgent.BuildDurableReceiptEvidence(receipt);
+
+        durable.Should().NotBeNull();
+        durable!.ResultJson.Should().NotContain(secret).And.NotContain("access_token");
+        using var document = JsonDocument.Parse(durable.ResultJson);
+        document.RootElement.GetProperty("status").GetString().Should().Be("streaming");
+        document.RootElement.GetProperty("partial_output").GetString().Should().Be(partialOutput);
+        document.RootElement.TryGetProperty("state_version", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public void BuildDurableReceiptEvidence_WorkflowStartCompleted_ShouldKeepBoundedPartialOutput()
     {
         const string secret = "start-secret-must-not-persist";

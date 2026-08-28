@@ -173,7 +173,7 @@ public static partial class NyxIdChatEndpoints
 
                 if (!createIfMissing)
                 {
-                    targetRef = await ResolveTextRouteTargetAsync(http, scopeId, prompt, ct);
+                    targetRef = await ResolveTextRouteTargetAsync(http, scopeId, actorId, prompt, ct);
                     if (targetRef?.Reject is not null)
                     {
                         await ChatRouteRejected(targetRef.Reject).ExecuteAsync(http);
@@ -750,6 +750,7 @@ public static partial class NyxIdChatEndpoints
     private static async Task<ChatRouteAction?> ResolveTextRouteTargetAsync(
         HttpContext http,
         string scopeId,
+        string actorId,
         string prompt,
         CancellationToken ct)
     {
@@ -760,18 +761,53 @@ public static partial class NyxIdChatEndpoints
 
         var callerScope = OwnerScope.ForNyxIdNative(scopeId);
         var snapshot = await queryPort.LookupForCallerAsync(callerScope, ct);
-        return routeResolver
-            .Resolve(snapshot, new ChatRouteInput
-            {
-                SourceKind = ChatSourceKind.Direct,
-                CallerScope = callerScope.Clone(),
-                Channel = string.Empty,
-                CommandName = string.Empty,
-                ContentHint = BuildContentHint(prompt),
-                ToolMode = ToolMode.None,
-            })
-            .Action
-            .Clone();
+        var currentTurnDecision = ResolveTextRouteTarget(routeResolver, snapshot, callerScope, prompt);
+        if (!string.IsNullOrWhiteSpace(currentTurnDecision.MatchedRuleId))
+            return currentTurnDecision.Action.Clone();
+
+        var conversationHint = await BuildConversationContentHintAsync(http, scopeId, actorId, prompt, ct)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(conversationHint))
+            return currentTurnDecision?.Action.Clone();
+
+        return ResolveTextRouteTarget(routeResolver, snapshot, callerScope, conversationHint).Action.Clone();
+    }
+
+    private static ChatRouteDecision ResolveTextRouteTarget(
+        ChatRouteResolver routeResolver,
+        ChatRoutePolicySnapshot? snapshot,
+        OwnerScope callerScope,
+        string contentHint) =>
+        routeResolver.Resolve(snapshot, new ChatRouteInput
+        {
+            SourceKind = ChatSourceKind.Direct,
+            CallerScope = callerScope.Clone(),
+            Channel = string.Empty,
+            CommandName = string.Empty,
+            ContentHint = BuildContentHint(contentHint),
+            ToolMode = ToolMode.None,
+        });
+
+    private static async Task<string> BuildConversationContentHintAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        string prompt,
+        CancellationToken ct)
+    {
+        var historyQueryPort = http.RequestServices.GetService<IChatHistoryQueryPort>();
+        if (historyQueryPort is null)
+            return string.Empty;
+
+        var messages = await historyQueryPort.GetMessagesAsync(scopeId, actorId, ct).ConfigureAwait(false);
+        if (messages.Status == ChatHistoryConversationResultStatus.NotFound || messages.Messages.Count == 0)
+            return string.Empty;
+
+        var recentText = messages.Messages
+            .TakeLast(4)
+            .Select(static message => message.Content)
+            .Where(static content => !string.IsNullOrWhiteSpace(content));
+        return string.Join('\n', recentText.Append(prompt));
     }
 
     private static string BuildContentHint(string? prompt)

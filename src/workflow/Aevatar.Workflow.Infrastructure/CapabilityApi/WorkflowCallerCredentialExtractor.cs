@@ -17,6 +17,7 @@ public static class WorkflowCallerCredentialExtractor
 {
     private const string BearerPrefix = "Bearer ";
     private const string JwtBearerAuthenticationScheme = "Bearer";
+    private const string NyxIdIdentityAssertionAuthenticationScheme = "NyxIdIdentityAssertion";
     private const string NyxIdDelegationTokenHeader = "X-NyxID-Delegation-Token";
     private const string DefaultNyxIdCapabilityScope = "proxy";
 
@@ -227,12 +228,7 @@ public static class WorkflowCallerCredentialExtractor
         if (principal?.Identity?.IsAuthenticated != true)
             return null;
 
-        var externalUserId = ReadFirstClaim(
-            principal,
-            "uid",
-            "sub",
-            ClaimTypes.NameIdentifier,
-            "user_id");
+        var externalUserId = ReadNyxIdExternalUserId(principal);
         return string.IsNullOrWhiteSpace(externalUserId)
             ? null
             : new WorkflowCallerNyxIdAuthority(
@@ -252,12 +248,7 @@ public static class WorkflowCallerCredentialExtractor
         if (principal?.Identity?.IsAuthenticated != true)
             return null;
 
-        var externalUserId = ReadFirstClaim(
-            principal,
-            "uid",
-            "sub",
-            ClaimTypes.NameIdentifier,
-            "user_id");
+        var externalUserId = ReadNyxIdExternalUserId(principal);
         if (string.IsNullOrWhiteSpace(externalUserId))
             return null;
 
@@ -321,6 +312,23 @@ public static class WorkflowCallerCredentialExtractor
         }
 
         return null;
+    }
+
+    private static string? ReadNyxIdExternalUserId(ClaimsPrincipal principal)
+    {
+        var userId = ReadFirstClaim(principal, "uid", "user_id");
+        if (!string.IsNullOrWhiteSpace(userId))
+            return userId;
+
+        if (string.Equals(
+                principal.Identity?.AuthenticationType,
+                NyxIdIdentityAssertionAuthenticationScheme,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return ReadFirstClaim(principal, "sub", ClaimTypes.NameIdentifier);
     }
 
     private static WorkflowCallerCredentialExtractionResult Invalid() =>
