@@ -123,6 +123,20 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
     }
 
     [Fact]
+    public void WorkflowScopeInactiveRecoveryProjectionKind_ShouldBeExact()
+    {
+        var agent = new WorkflowExecutionMaterializationScopeGAgent();
+
+        var projectionKind = typeof(WorkflowExecutionMaterializationScopeGAgent)
+            .GetProperty(
+                "InactiveDurableRecoveryProjectionKind",
+                BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(agent);
+
+        projectionKind.Should().Be(WorkflowProjectionKinds.ExecutionMaterialization);
+    }
+
+    [Fact]
     public async Task WorkflowScopeMigration_ShouldCloneStateAndCreateExactAdoptionReceipt()
     {
         var implementation = ResolveImplementation();

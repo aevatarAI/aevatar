@@ -27,6 +27,9 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
         WorkflowProjectionIncrementalGraphSchemaAdoption.IsGranted(
             Services.GetService<IRuntimeActorStateSchemaContextReader>());
 
+    protected override string InactiveDurableRecoveryProjectionKind =>
+        WorkflowProjectionKinds.ExecutionMaterialization;
+
     private bool IsGraphProjectionEnabled =>
         Services.GetService<ProjectionGraphProviderStatus>() is not { Enabled: false };
 

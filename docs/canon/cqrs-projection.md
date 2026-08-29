@@ -135,6 +135,8 @@ CQRS 不应只提供零散 helper，而应定义所有 capability 复用的标�
     11. V3 schema adoption 是 forward-only deployment boundary。任一 Authority/source/writer row 已写入 Phase-B schema receipt 后，reader 4 binary 成为该环境永久最低回滚版本；Phase-A reader 3、旧 reader 2 及更早 binary 均不得重新加入 membership，也不得作为 rollback target。合法 rollback 只允许仍实现 exact reader-4 activation seal、active-turnover 和 newer-schema refusal 的 V3+ binary。dormant schema-0 source 无需全量扫描，但首次收到 envelope 时必须只落到 V3+ runtime 并在 handler 前迁移；部署系统必须把低于该 floor 的 image/member admission 作为硬拒绝，而不是依赖 V3 gate 的最终一致 revoke。若该准入门禁无法保证，禁止启用 Phase-B cutover。
     12. Phase-B seal 只解决 binary/schema ownership，不替代 per-source route authority、drain watermark、same-version epoch takeover 或 provider redelivery。ACTIVE terminal route、历史 WARMING/BLOCKED repair、legacy cleanup 与 rollback 仍必须服从同一 source-owned route epoch；Conflict/Gap、unproved route mismatch 和基础设施失败仍须越过 runtime boundary 触发 redelivery，或先提交 actor-owned durable retry。
 
+对第 9 条“非空 scope identity”要求的唯一收敛例外是：若 durable scope 的 `mode / rootActorId / projectionKind / sessionId` 四项整体缺失，而 actor 同时保留 schema-adoption 解锁、retained failures，以及坐标互相精确匹配的 staged source/envelope，具体 scope actor 类型可以用其代码内固定声明的 `ProjectionKind` 与 staged `source.actorId` 组成 typed scope key；只有该 key 经 `ProjectionScopeActorId.Build` 重建后与当前 actor address 完全相等，才允许提交 `ProjectionScopeStartedEvent` 恢复身份。任一身份字段部分残留、source/envelope 坐标不一致、固定 kind 缺失或 canonical address 不匹配都必须 fail closed；该路径不得解析 actor id，也不得采用 status readmodel 中复制的 identity。
+
 ### 5.1 Projection-driven Split / Merge / Re-key
 
 Projection-driven bootstrap 只服务 actor 事实拥有者变化的演进：split、merge、re-key、replace。它不是查询优化，也不是 lazy state migration 的替代品。完整 actor 演进判定树见 [actor-evolution.md](actor-evolution.md)。

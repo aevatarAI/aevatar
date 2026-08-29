@@ -1217,12 +1217,248 @@ public sealed class ProjectionScopeGAgentBaseTests
         resume.ExpectedSource.EventId.Should().Be("source-event-7");
     }
 
+    [Fact]
+    public async Task HandleReplayAsync_AutomaticRecovery_ShouldRestoreEntirelyMissingIdentityFromTypedSourceAndScopeKind()
+    {
+        const string rootActorId = "publisher-actor";
+        const string projectionKind = "test-recovery-kind";
+        var scopeId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            rootActorId,
+            projectionKind,
+            ProjectionRuntimeMode.DurableMaterialization,
+            string.Empty));
+        var eventSourcing = new TrackingEventSourcing(initialVersion: 41);
+        var publisher = new RecordingEventPublisher();
+        var agent = BuildActivatedAgent(
+            scopeId,
+            _ => ProjectionScopeDispatchResult.Success(7, "event-type"),
+            eventSourcing,
+            enableDurableObservationRecovery: true,
+            inactiveDurableRecoveryProjectionKind: projectionKind);
+        agent.EventPublisher = publisher;
+        agent.State.Active = false;
+        agent.State.Released = false;
+        agent.State.RootActorId = string.Empty;
+        agent.State.ProjectionKind = string.Empty;
+        agent.State.SessionId = string.Empty;
+        agent.State.Mode = ProjectionScopeMode.Unspecified;
+        agent.State.ObservationAttached = false;
+        agent.State.ActivationGeneration = 2;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-missing-identity",
+            Envelope = BuildForwardedCommittedObservationEnvelope(scopeId, version: 6),
+        });
+        agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = rootActorId,
+                StateVersion = 7,
+                EventId = "source-event-7",
+            },
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                scopeId,
+                version: 7,
+                eventId: "source-event-7"),
+        };
+
+        await agent.InitializeForTestAsync();
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 1,
+            AutomaticRecovery = true,
+            ObservedScopeStateVersion = 41,
+        });
+
+        agent.State.RootActorId.Should().Be(rootActorId);
+        agent.State.ProjectionKind.Should().Be(projectionKind);
+        agent.State.SessionId.Should().BeEmpty();
+        agent.State.Mode.Should().Be(ProjectionScopeMode.DurableMaterialization);
+        agent.State.Active.Should().BeTrue();
+        agent.State.Released.Should().BeFalse();
+        agent.State.ObservationAttached.Should().BeTrue();
+        agent.State.ActivationGeneration.Should().Be(3);
+        eventSourcing.CommittedEventTypes.Should().ContainInOrder(
+            typeof(ProjectionScopeStartedEvent),
+            typeof(ProjectionObservationAttachmentUpdatedEvent));
+        publisher.Published.Should().ContainSingle().Which.Message
+            .Should().BeOfType<ResumeProjectionInFlightObservationCommand>();
+    }
+
+    [Fact]
+    public async Task HandleReplayAsync_AutomaticRecovery_ShouldNotRestoreMissingIdentityWhenTypedKeyDoesNotRebuildActorId()
+    {
+        const string scopeId = "projection-scope-wrong-recovery-identity";
+        var eventSourcing = new TrackingEventSourcing(initialVersion: 41);
+        var publisher = new RecordingEventPublisher();
+        var agent = BuildActivatedAgent(
+            scopeId,
+            _ => ProjectionScopeDispatchResult.Success(7, "event-type"),
+            eventSourcing,
+            enableDurableObservationRecovery: true,
+            inactiveDurableRecoveryProjectionKind: "test-recovery-kind");
+        agent.EventPublisher = publisher;
+        agent.State.Active = false;
+        agent.State.RootActorId = string.Empty;
+        agent.State.ProjectionKind = string.Empty;
+        agent.State.SessionId = string.Empty;
+        agent.State.Mode = ProjectionScopeMode.Unspecified;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-wrong-recovery-identity",
+            Envelope = BuildForwardedCommittedObservationEnvelope(scopeId, version: 6),
+        });
+        agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = 7,
+                EventId = "source-event-7",
+            },
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                scopeId,
+                version: 7,
+                eventId: "source-event-7"),
+        };
+
+        await agent.InitializeForTestAsync();
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 1,
+            AutomaticRecovery = true,
+            ObservedScopeStateVersion = 41,
+        });
+
+        agent.State.Active.Should().BeFalse();
+        agent.State.Mode.Should().Be(ProjectionScopeMode.Unspecified);
+        eventSourcing.CommittedEventTypes.Should().BeEmpty();
+        publisher.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleReplayAsync_AutomaticRecovery_ShouldNotRestoreMissingIdentityWithoutFixedProjectionKind()
+    {
+        const string rootActorId = "publisher-actor";
+        const string projectionKind = "test-recovery-kind";
+        var scopeId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            rootActorId,
+            projectionKind,
+            ProjectionRuntimeMode.DurableMaterialization,
+            string.Empty));
+        var eventSourcing = new TrackingEventSourcing(initialVersion: 41);
+        var publisher = new RecordingEventPublisher();
+        var agent = BuildActivatedAgent(
+            scopeId,
+            _ => ProjectionScopeDispatchResult.Success(7, "event-type"),
+            eventSourcing,
+            enableDurableObservationRecovery: true);
+        agent.EventPublisher = publisher;
+        agent.State.Active = false;
+        agent.State.RootActorId = string.Empty;
+        agent.State.ProjectionKind = string.Empty;
+        agent.State.SessionId = string.Empty;
+        agent.State.Mode = ProjectionScopeMode.Unspecified;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-missing-recovery-kind",
+            Envelope = BuildForwardedCommittedObservationEnvelope(scopeId, version: 6),
+        });
+        agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = rootActorId,
+                StateVersion = 7,
+                EventId = "source-event-7",
+            },
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                scopeId,
+                version: 7,
+                eventId: "source-event-7"),
+        };
+
+        await agent.InitializeForTestAsync();
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 1,
+            AutomaticRecovery = true,
+            ObservedScopeStateVersion = 41,
+        });
+
+        agent.State.Active.Should().BeFalse();
+        agent.State.Mode.Should().Be(ProjectionScopeMode.Unspecified);
+        eventSourcing.CommittedEventTypes.Should().BeEmpty();
+        publisher.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleReplayAsync_AutomaticRecovery_ShouldNotOverwritePartialScopeIdentity()
+    {
+        const string rootActorId = "publisher-actor";
+        const string projectionKind = "test-recovery-kind";
+        var scopeId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            rootActorId,
+            projectionKind,
+            ProjectionRuntimeMode.DurableMaterialization,
+            string.Empty));
+        var eventSourcing = new TrackingEventSourcing(initialVersion: 41);
+        var publisher = new RecordingEventPublisher();
+        var agent = BuildActivatedAgent(
+            scopeId,
+            _ => ProjectionScopeDispatchResult.Success(7, "event-type"),
+            eventSourcing,
+            enableDurableObservationRecovery: true,
+            inactiveDurableRecoveryProjectionKind: projectionKind);
+        agent.EventPublisher = publisher;
+        agent.State.Active = false;
+        agent.State.RootActorId = rootActorId;
+        agent.State.ProjectionKind = string.Empty;
+        agent.State.SessionId = string.Empty;
+        agent.State.Mode = ProjectionScopeMode.Unspecified;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-partial-identity",
+            Envelope = BuildForwardedCommittedObservationEnvelope(scopeId, version: 6),
+        });
+        agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = rootActorId,
+                StateVersion = 7,
+                EventId = "source-event-7",
+            },
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                scopeId,
+                version: 7,
+                eventId: "source-event-7"),
+        };
+
+        await agent.InitializeForTestAsync();
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 1,
+            AutomaticRecovery = true,
+            ObservedScopeStateVersion = 41,
+        });
+
+        agent.State.Active.Should().BeFalse();
+        agent.State.RootActorId.Should().Be(rootActorId);
+        agent.State.ProjectionKind.Should().BeEmpty();
+        eventSourcing.CommittedEventTypes.Should().BeEmpty();
+        publisher.Published.Should().BeEmpty();
+    }
+
     [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
     public async Task HandleReplayAsync_AutomaticRecovery_ShouldNotRestoreWithoutCompleteUnreleasedEvidence(
         bool released,
-        bool omitInFlightEnvelope)
+        bool omitInFlightEnvelope,
+        bool mismatchInFlightEnvelope)
     {
         var eventSourcing = new TrackingEventSourcing(initialVersion: 41);
         var publisher = new RecordingEventPublisher();
@@ -1259,7 +1495,7 @@ public sealed class ProjectionScopeGAgentBaseTests
                 : BuildForwardedCommittedObservationEnvelope(
                     "projection-scope-incomplete-durable-recovery",
                     version: 7,
-                    eventId: "source-event-7"),
+                    eventId: mismatchInFlightEnvelope ? "source-event-other" : "source-event-7"),
         };
 
         await agent.InitializeForTestAsync();
@@ -1298,14 +1534,16 @@ public sealed class ProjectionScopeGAgentBaseTests
         ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization,
         bool recordFailureBeforeThrow = false,
         bool enableDurableObservationRecovery = false,
-        ICollection<string>? dispatchStages = null)
+        ICollection<string>? dispatchStages = null,
+        string? inactiveDurableRecoveryProjectionKind = null)
     {
         var agent = new TestScopeAgent(
             onProcess,
             runtimeMode,
             recordFailureBeforeThrow,
             enableDurableObservationRecovery,
-            dispatchStages);
+            dispatchStages,
+            inactiveDurableRecoveryProjectionKind);
 
         typeof(GAgentBase)
             .GetProperty(nameof(GAgentBase.Id), BindingFlags.Instance | BindingFlags.Public)!
@@ -1448,25 +1686,31 @@ public sealed class ProjectionScopeGAgentBaseTests
         private readonly bool _recordFailureBeforeThrow;
         private readonly bool _enableDurableObservationRecovery;
         private readonly ICollection<string>? _dispatchStages;
+        private readonly string? _inactiveDurableRecoveryProjectionKind;
 
         public TestScopeAgent(
             Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
             ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization,
             bool recordFailureBeforeThrow = false,
             bool enableDurableObservationRecovery = false,
-            ICollection<string>? dispatchStages = null)
+            ICollection<string>? dispatchStages = null,
+            string? inactiveDurableRecoveryProjectionKind = null)
         {
             _onProcess = onProcess;
             _runtimeMode = runtimeMode;
             _recordFailureBeforeThrow = recordFailureBeforeThrow;
             _enableDurableObservationRecovery = enableDurableObservationRecovery;
             _dispatchStages = dispatchStages;
+            _inactiveDurableRecoveryProjectionKind = inactiveDurableRecoveryProjectionKind;
         }
 
         protected override ProjectionRuntimeMode RuntimeMode => _runtimeMode;
 
         protected override bool EnablesDurableObservationRecovery =>
             _enableDurableObservationRecovery;
+
+        protected override string? InactiveDurableRecoveryProjectionKind =>
+            _inactiveDurableRecoveryProjectionKind;
 
         public Task InitializeForTestAsync() => OnActivateAsync(CancellationToken.None);
 

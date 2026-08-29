@@ -35,6 +35,12 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
     protected virtual bool EnablesDurableObservationRecovery => false;
 
+    // A concrete durable scope may bind its stable projection kind to the runtime-verified
+    // actor implementation. This is used only when an impossible legacy snapshot retained a
+    // complete staged source/envelope but lost the entire scope identity. The root actor still
+    // comes from the staged source, and the reconstructed key must rebuild this actor's exact id.
+    protected virtual string? InactiveDurableRecoveryProjectionKind => null;
+
     protected override bool ShouldPersistSnapshotAfterPublicationRecovery(ProjectionScopeState state) =>
         state.InFlightObservation?.Source == null || state.InFlightObservation.Envelope == null;
 
@@ -336,42 +342,33 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             return;
         }
 
-        var durableObservationRecoveryEnabled = EnablesDurableObservationRecovery;
-        var rootActorIdPresent = !string.IsNullOrWhiteSpace(State.RootActorId);
-        var projectionKindPresent = !string.IsNullOrWhiteSpace(State.ProjectionKind);
-        var inFlightSourcePresent = pending?.Source != null;
-        var inFlightEnvelopePresent = pending?.Envelope != null;
-        if (RuntimeMode != ProjectionRuntimeMode.DurableMaterialization ||
-            State.Mode != ProjectionScopeMode.DurableMaterialization ||
-            !durableObservationRecoveryEnabled ||
-            State.Failures.Count == 0 ||
-            !inFlightSourcePresent ||
-            !inFlightEnvelopePresent ||
-            !rootActorIdPresent ||
-            !projectionKindPresent)
+        var evidence = BuildInactiveDurableRecoveryEvidence(pending);
+        if (!evidence.CanRestore(RuntimeMode, State.Failures.Count))
         {
             _logger.LogWarning(
-                "Projection automatic recovery refused an inactive unreleased manifest without complete actor-owned recovery evidence. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} runtimeMode={RuntimeMode} stateMode={StateMode} durableObservationRecoveryEnabled={DurableObservationRecoveryEnabled} unresolvedFailureCount={UnresolvedFailureCount} rootActorIdPresent={RootActorIdPresent} projectionKindPresent={ProjectionKindPresent} inFlightSourcePresent={InFlightSourcePresent} inFlightEnvelopePresent={InFlightEnvelopePresent} sourceActorIdPresent={SourceActorIdPresent} sourceStateVersion={SourceStateVersion} sourceEventIdPresent={SourceEventIdPresent}",
+                "Projection automatic recovery refused an inactive unreleased manifest without complete actor-owned recovery evidence. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} runtimeMode={RuntimeMode} stateMode={StateMode} durableObservationRecoveryEnabled={DurableObservationRecoveryEnabled} unresolvedFailureCount={UnresolvedFailureCount} rootActorIdPresent={RootActorIdPresent} projectionKindPresent={ProjectionKindPresent} inFlightSourcePresent={InFlightSourcePresent} inFlightEnvelopePresent={InFlightEnvelopePresent} inFlightSourceMatchesEnvelope={InFlightSourceMatchesEnvelope} persistedScopeIdentityComplete={PersistedScopeIdentityComplete} persistedScopeIdentityEntirelyAbsent={PersistedScopeIdentityEntirelyAbsent} recoveryProjectionKindPresent={RecoveryProjectionKindPresent} canonicalRecoveryActorIdMatches={CanonicalRecoveryActorIdMatches} sourceActorIdPresent={SourceActorIdPresent} sourceStateVersion={SourceStateVersion} sourceEventIdPresent={SourceEventIdPresent}",
                 Id,
                 commandId,
                 correlationId,
                 RuntimeMode,
                 State.Mode,
-                durableObservationRecoveryEnabled,
+                evidence.DurableObservationRecoveryEnabled,
                 State.Failures.Count,
-                rootActorIdPresent,
-                projectionKindPresent,
-                inFlightSourcePresent,
-                inFlightEnvelopePresent,
+                evidence.RootActorIdPresent,
+                evidence.ProjectionKindPresent,
+                evidence.InFlightSourcePresent,
+                evidence.InFlightEnvelopePresent,
+                evidence.InFlightSourceMatchesEnvelope,
+                evidence.PersistedScopeIdentityComplete,
+                evidence.PersistedScopeIdentityEntirelyAbsent,
+                evidence.RecoveryProjectionKindPresent,
+                evidence.CanonicalRecoveryActorIdMatches,
                 !string.IsNullOrWhiteSpace(pending?.Source?.ActorId),
                 pending?.Source?.StateVersion ?? 0,
                 !string.IsNullOrWhiteSpace(pending?.Source?.EventId));
             return;
         }
 
-        var rootActorId = State.RootActorId;
-        var projectionKind = State.ProjectionKind;
-        var sessionId = State.SessionId;
         var previousActivationGeneration = State.ActivationGeneration;
         var source = pending!.Source!.Clone();
 
@@ -382,16 +379,16 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         // eventually consistent status document which requested this replay.
         await PersistDomainEventAsync(new ProjectionScopeStartedEvent
         {
-            RootActorId = rootActorId,
-            ProjectionKind = projectionKind,
-            SessionId = sessionId,
+            RootActorId = evidence.RootActorId,
+            ProjectionKind = evidence.ProjectionKind,
+            SessionId = evidence.SessionId,
             Mode = ProjectionScopeMode.DurableMaterialization,
             OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             ActivationGeneration = Math.Max(1, previousActivationGeneration + 1),
         });
 
         await AdvanceStatusRouteAsync(CancellationToken.None);
-        await EnsureObservationRelayAsync(rootActorId, CancellationToken.None);
+        await EnsureObservationRelayAsync(evidence.RootActorId, CancellationToken.None);
         if (!State.ObservationAttached)
         {
             await PersistDomainEventAsync(new ProjectionObservationAttachmentUpdatedEvent
@@ -404,15 +401,118 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         await OnScopeReadyAsync(CancellationToken.None);
 
         _logger.LogWarning(
-            "Projection automatic recovery restored an inactive unreleased durable manifest from actor-owned recovery facts. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} activationGeneration={ActivationGeneration} unresolvedFailureCount={UnresolvedFailureCount} sourceActorId={SourceActorId} sourceStateVersion={SourceStateVersion} sourceEventId={SourceEventId}",
+            "Projection automatic recovery restored an inactive unreleased durable manifest from actor-owned recovery facts. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} recoveredMissingScopeIdentity={RecoveredMissingScopeIdentity} activationGeneration={ActivationGeneration} unresolvedFailureCount={UnresolvedFailureCount} sourceActorId={SourceActorId} sourceStateVersion={SourceStateVersion} sourceEventId={SourceEventId}",
             Id,
             commandId,
             correlationId,
+            evidence.RecoveredMissingScopeIdentity,
             State.ActivationGeneration,
             State.Failures.Count,
             source.ActorId,
             source.StateVersion,
             source.EventId);
+    }
+
+    private InactiveDurableRecoveryEvidence BuildInactiveDurableRecoveryEvidence(
+        ProjectionScopeInFlightObservation? pending)
+    {
+        var rootActorIdPresent = !string.IsNullOrWhiteSpace(State.RootActorId);
+        var projectionKindPresent = !string.IsNullOrWhiteSpace(State.ProjectionKind);
+        var persistedScopeIdentityComplete =
+            State.Mode == ProjectionScopeMode.DurableMaterialization &&
+            rootActorIdPresent &&
+            projectionKindPresent;
+        var persistedScopeIdentityEntirelyAbsent =
+            State.Mode == ProjectionScopeMode.Unspecified &&
+            !rootActorIdPresent &&
+            !projectionKindPresent &&
+            string.IsNullOrWhiteSpace(State.SessionId);
+        var recoveryProjectionKind = InactiveDurableRecoveryProjectionKind?.Trim() ?? string.Empty;
+        var canonicalRecoveryActorIdMatches = CanRecoverMissingScopeIdentity(
+            pending,
+            persistedScopeIdentityEntirelyAbsent,
+            recoveryProjectionKind);
+        var recoveredMissingScopeIdentity =
+            !persistedScopeIdentityComplete && canonicalRecoveryActorIdMatches;
+
+        return new InactiveDurableRecoveryEvidence(
+            EnablesDurableObservationRecovery,
+            rootActorIdPresent,
+            projectionKindPresent,
+            pending?.Source != null,
+            pending?.Envelope != null,
+            HasMatchingInFlightSourceAndEnvelope(pending),
+            persistedScopeIdentityComplete,
+            persistedScopeIdentityEntirelyAbsent,
+            recoveryProjectionKind.Length > 0,
+            canonicalRecoveryActorIdMatches,
+            recoveredMissingScopeIdentity,
+            recoveredMissingScopeIdentity ? pending!.Source!.ActorId : State.RootActorId,
+            recoveredMissingScopeIdentity ? recoveryProjectionKind : State.ProjectionKind,
+            recoveredMissingScopeIdentity ? string.Empty : State.SessionId);
+    }
+
+    private bool CanRecoverMissingScopeIdentity(
+        ProjectionScopeInFlightObservation? pending,
+        bool persistedScopeIdentityEntirelyAbsent,
+        string recoveryProjectionKind)
+    {
+        if (!persistedScopeIdentityEntirelyAbsent ||
+            recoveryProjectionKind.Length == 0 ||
+            pending?.Source == null ||
+            string.IsNullOrWhiteSpace(pending.Source.ActorId))
+        {
+            return false;
+        }
+
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            pending.Source.ActorId,
+            recoveryProjectionKind,
+            ProjectionRuntimeMode.DurableMaterialization,
+            string.Empty);
+        return string.Equals(ProjectionScopeActorId.Build(scopeKey), Id, StringComparison.Ordinal);
+    }
+
+    private static bool HasMatchingInFlightSourceAndEnvelope(
+        ProjectionScopeInFlightObservation? pending)
+    {
+        if (pending?.Source == null || pending.Envelope == null)
+            return false;
+
+        var observed = BuildObservedEnvelopeMetadata(pending.Envelope);
+        var sourceActorId = ResolveSourceActorId(pending.Envelope);
+        return observed != null &&
+               observed.StateVersion > 0 &&
+               !string.IsNullOrWhiteSpace(observed.EventId) &&
+               pending.Source.StateVersion == observed.StateVersion &&
+               string.Equals(pending.Source.ActorId, sourceActorId, StringComparison.Ordinal) &&
+               string.Equals(pending.Source.EventId, observed.EventId, StringComparison.Ordinal);
+    }
+
+    private sealed record InactiveDurableRecoveryEvidence(
+        bool DurableObservationRecoveryEnabled,
+        bool RootActorIdPresent,
+        bool ProjectionKindPresent,
+        bool InFlightSourcePresent,
+        bool InFlightEnvelopePresent,
+        bool InFlightSourceMatchesEnvelope,
+        bool PersistedScopeIdentityComplete,
+        bool PersistedScopeIdentityEntirelyAbsent,
+        bool RecoveryProjectionKindPresent,
+        bool CanonicalRecoveryActorIdMatches,
+        bool RecoveredMissingScopeIdentity,
+        string RootActorId,
+        string ProjectionKind,
+        string SessionId)
+    {
+        public bool CanRestore(ProjectionRuntimeMode runtimeMode, int failureCount) =>
+            runtimeMode == ProjectionRuntimeMode.DurableMaterialization &&
+            DurableObservationRecoveryEnabled &&
+            failureCount > 0 &&
+            InFlightSourcePresent &&
+            InFlightEnvelopePresent &&
+            InFlightSourceMatchesEnvelope &&
+            (PersistedScopeIdentityComplete || CanonicalRecoveryActorIdMatches);
     }
 
     [EventHandler(AllowSelfHandling = true)]
