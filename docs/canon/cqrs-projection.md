@@ -70,7 +70,7 @@ CQRS 不应只提供零散 helper，而应定义所有 capability 复用的标�
 4. `Build Envelope`
    把应用命令映射成统一 `EventEnvelope`，但 payload 的业务语义仍由 capability 自己定义。
 5. `Dispatch via IActorDispatchPort`
-   通过 `IActorDispatchPort` 完成 mailbox 语义下的 envelope 投递；目标 actor 的获取/创建与拓扑仍由 `IActorRuntime` 负责。具体 runtime adapter 不得在 dispatch 内追加目标 grain 存在性调用；例如 Orleans adapter 在 stream handoff 完成后即可返回 accepted，由 Orleans 在消费侧解析当前 activation。
+   通过 `IActorDispatchPort` 完成 mailbox 语义下的 envelope 投递；目标 actor 的获取/创建与拓扑仍由 `IActorRuntime` 负责。具体 runtime adapter 默认不得在 dispatch 内追加目标 grain 存在性调用；例如 Orleans adapter 在 stream handoff 完成后即可返回 accepted，由 Orleans 在消费侧解析当前 activation。仅 recovery/control command 可通过强类型 `EnvelopeDispatchControl.RequireTargetActorAdmission` 要求 adapter 先进入目标 actor turn，并确认 inbox subscription，再执行 durable stream handoff；该模式只加强 admission 证据，不把 ACK 提升为 handled/committed/observed。
 6. `Create Accepted Receipt`
    统一返回 `Accepted + commandId (+ actorId/correlationId)`，只承诺可追踪，不承诺 committed / observed。
 7. `Observe Result`

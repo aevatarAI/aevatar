@@ -14,6 +14,13 @@ public interface IRuntimeActorGrain : IGrainWithStringKey
     [AlwaysInterleave]
     Task<bool> IsInitializedAsync();
 
+    /// <summary>
+    /// Admits an external envelope through this actor's own turn, then publishes it to the
+    /// actor stream for normal next-turn handling. Completion proves that the target actor was
+    /// initialized and that its durable stream accepted the envelope; it does not mean handled.
+    /// </summary>
+    Task AdmitEnvelopeAsync(byte[] envelopeBytes);
+
     Task HandleEnvelopeAsync(byte[] envelopeBytes);
 
     Task AddChildAsync(string childId);

@@ -32,7 +32,15 @@ public sealed record ProjectionScopeIntrospectionSnapshot(
     DateTimeOffset? OldestUnresolvedFailureAt,
     long FailureDiagnosticDroppedTotal,
     IReadOnlyList<ProjectionSourceVersionSnapshot> SourceVersions,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt)
+{
+    public ProjectionInFlightSourceSnapshot? InFlightSource { get; init; }
+}
+
+public sealed record ProjectionInFlightSourceSnapshot(
+    string SourceActorId,
+    long StateVersion,
+    string EventId);
 
 public sealed record ProjectionSourceVersionSnapshot(
     string SourceActorId,

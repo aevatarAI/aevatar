@@ -534,9 +534,23 @@ public sealed class ProjectionRuntimeRegistrationTests
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new RecordingActorDispatchPort(runtime);
-        var service = new ProjectionFailureReplayService(runtime, dispatchPort, dispatchPort);
         var scopeKey = new ProjectionRuntimeScopeKey("actor-3", "projection-c", ProjectionRuntimeMode.DurableMaterialization);
-        runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(scopeKey));
+        var actorId = ProjectionScopeActorId.Build(scopeKey);
+        const string expectedKind = "projection.scope.operator-test";
+        runtime.ExistingActorIds.Add(actorId);
+        await dispatchPort.UpsertAsync(ProjectionScopeObservationRelayBinding.Create(
+            scopeKey.RootActorId,
+            actorId,
+            expectedKind,
+            1));
+        var kindVerifier = new RecordingAgentKindVerifier(
+            (candidateActorId, candidateKind) =>
+                candidateActorId == actorId && candidateKind == expectedKind);
+        var service = new ProjectionFailureReplayService(
+            runtime,
+            dispatchPort,
+            dispatchPort,
+            agentKindVerifier: kindVerifier);
 
         var replayed = await service.ReplayRetryExhaustedAsync(
             new ProjectionRetryExhaustedFailuresRequest(
@@ -564,6 +578,7 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         replayed.Should().BeTrue();
         missing.Should().BeFalse();
+        kindVerifier.Calls.Should().ContainSingle().Which.Should().Be((actorId, expectedKind));
         dispatchPort.Dispatched.Should().ContainSingle();
         var replay = dispatchPort.Dispatched[0].command.Payload!
             .Unpack<ReplayRetryExhaustedProjectionFailuresCommand>();
@@ -574,6 +589,7 @@ public sealed class ProjectionRuntimeRegistrationTests
         replay.RequestId.Should().Be("operator-replay-1");
         replay.Reason.Should().Be("storage recovery completed");
         replay.RequestedBySubjectId.Should().Be("operator-alpha");
+        dispatchPort.Dispatched[0].command.Runtime!.Dispatch!.RequireTargetActorAdmission.Should().BeTrue();
     }
 
     [Fact]
@@ -581,14 +597,27 @@ public sealed class ProjectionRuntimeRegistrationTests
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new RecordingActorDispatchPort(runtime);
-        var service = new ProjectionFailureReplayService(runtime, dispatchPort, dispatchPort);
         var scopeKey = new ProjectionRuntimeScopeKey(
             "actor-automatic",
             "projection-automatic",
             ProjectionRuntimeMode.SessionObservation,
             "session-automatic");
         var actorId = ProjectionScopeActorId.Build(scopeKey);
+        const string expectedKind = "projection.scope.automatic-test";
         runtime.ExistingActorIds.Add(actorId);
+        await dispatchPort.UpsertAsync(ProjectionScopeObservationRelayBinding.Create(
+            scopeKey.RootActorId,
+            actorId,
+            expectedKind,
+            1));
+        var kindVerifier = new RecordingAgentKindVerifier(
+            (candidateActorId, candidateKind) =>
+                candidateActorId == actorId && candidateKind == expectedKind);
+        var service = new ProjectionFailureReplayService(
+            runtime,
+            dispatchPort,
+            dispatchPort,
+            agentKindVerifier: kindVerifier);
 
         var replayed = await service.ReplayAutomaticallyAsync(
             scopeKey,
@@ -596,6 +625,7 @@ public sealed class ProjectionRuntimeRegistrationTests
             maxItems: 0);
 
         replayed.Should().BeTrue();
+        kindVerifier.Calls.Should().ContainSingle().Which.Should().Be((actorId, expectedKind));
         dispatchPort.Dispatched.Should().ContainSingle();
         var dispatched = dispatchPort.Dispatched[0];
         dispatched.actorId.Should().Be(actorId);
@@ -605,6 +635,70 @@ public sealed class ProjectionRuntimeRegistrationTests
         command.MaxItems.Should().Be(1);
         command.AutomaticRecovery.Should().BeTrue();
         command.ObservedScopeStateVersion.Should().Be(17);
+        dispatched.command.Runtime!.Dispatch!.RequireTargetActorAdmission.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProjectionFailureReplayService_WhenExistingScopeKindConflicts_ShouldFailClosed()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-existing-kind-conflict",
+            "projection-existing-kind-conflict",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var actorId = ProjectionScopeActorId.Build(scopeKey);
+        const string expectedKind = "projection.scope.expected";
+        runtime.ExistingActorIds.Add(actorId);
+        await dispatchPort.UpsertAsync(ProjectionScopeObservationRelayBinding.Create(
+            scopeKey.RootActorId,
+            actorId,
+            expectedKind,
+            3));
+        var kindVerifier = new RecordingAgentKindVerifier((_, _) => false);
+        var service = new ProjectionFailureReplayService(
+            runtime,
+            dispatchPort,
+            dispatchPort,
+            agentKindVerifier: kindVerifier);
+
+        var replayed = await service.ReplayAutomaticallyAsync(
+            scopeKey,
+            observedScopeStateVersion: 7,
+            maxItems: 1);
+
+        replayed.Should().BeFalse();
+        kindVerifier.Calls.Should().ContainSingle().Which.Should().Be((actorId, expectedKind));
+        runtime.CreatedByKind.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectionFailureReplayService_WhenExistingScopeCannotVerifyKind_ShouldFailClosed()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-existing-without-verifier",
+            "projection-existing-without-verifier",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var actorId = ProjectionScopeActorId.Build(scopeKey);
+        runtime.ExistingActorIds.Add(actorId);
+        await dispatchPort.UpsertAsync(ProjectionScopeObservationRelayBinding.Create(
+            scopeKey.RootActorId,
+            actorId,
+            "projection.scope.exact",
+            2));
+        var service = new ProjectionFailureReplayService(runtime, dispatchPort, dispatchPort);
+
+        var replayed = await service.ReplayAutomaticallyAsync(
+            scopeKey,
+            observedScopeStateVersion: 9,
+            maxItems: 1);
+
+        replayed.Should().BeFalse();
+        runtime.CreatedByKind.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
     }
 
     [Fact]
@@ -992,6 +1086,22 @@ public sealed class ProjectionRuntimeRegistrationTests
 
             resolvedAgentKind = string.Empty;
             return false;
+        }
+    }
+
+    private sealed class RecordingAgentKindVerifier(
+        Func<string, string, bool> verifier) : IAgentKindVerifier
+    {
+        public List<(string ActorId, string AgentKind)> Calls { get; } = [];
+
+        public Task<bool> IsExpectedKindAsync(
+            string actorId,
+            string expectedKind,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Calls.Add((actorId, expectedKind));
+            return Task.FromResult(verifier(actorId, expectedKind));
         }
     }
 

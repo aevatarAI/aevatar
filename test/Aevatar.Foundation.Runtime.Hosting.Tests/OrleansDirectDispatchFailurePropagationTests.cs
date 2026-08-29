@@ -57,8 +57,12 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
             var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
             var envelope = CreateEnvelope("always-fail-no-retry");
+            envelope.EnsureRuntime().EnsureDispatch().RequireTargetActorAdmission = true;
 
-            await dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
+            var admission = await dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
+            admission.Accepted.Should().BeTrue();
+            admission.ActorId.Should().Be(actorId);
+            admission.CommandId.Should().Be(envelope.Id);
             await RetryAwareDirectDispatchAgent.WaitForAttemptAsync(envelope.Id, TimeSpan.FromSeconds(20));
             await logProbe.WaitForRuntimeHandlingFailureAsync(TimeSpan.FromSeconds(20));
             RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(1);

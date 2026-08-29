@@ -46,8 +46,9 @@ public sealed class ProjectionScopeIntrospectionQueryPort : IProjectionScopeIntr
             .ToList();
     }
 
-    private static ProjectionScopeIntrospectionSnapshot Map(ProjectionScopeStatusDocument document) =>
-        new(
+    private static ProjectionScopeIntrospectionSnapshot Map(ProjectionScopeStatusDocument document)
+    {
+        var snapshot = new ProjectionScopeIntrospectionSnapshot(
             document.ScopeActorId,
             document.RootActorId,
             document.ProjectionKind,
@@ -72,4 +73,14 @@ public sealed class ProjectionScopeIntrospectionQueryPort : IProjectionScopeIntr
                 source.LastSuccessfulVersion,
                 source.VersionGap)).ToList(),
             document.UpdatedAt);
+        return snapshot with
+        {
+            InFlightSource = document.InFlightSource == null
+                ? null
+                : new ProjectionInFlightSourceSnapshot(
+                    document.InFlightSource.ActorId,
+                    document.InFlightSource.StateVersion,
+                    document.InFlightSource.EventId),
+        };
+    }
 }

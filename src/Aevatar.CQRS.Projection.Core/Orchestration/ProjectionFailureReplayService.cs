@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -10,6 +11,7 @@ public sealed class ProjectionFailureReplayService : IProjectionFailureReplaySer
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IStreamForwardingBindingAuthority _bindingAuthority;
     private readonly IReadOnlyList<IProjectionScopeRecoveryAgentKindResolver> _recoveryAgentKindResolvers;
+    private readonly IAgentKindVerifier? _agentKindVerifier;
     private readonly ILogger<ProjectionFailureReplayService> _logger;
 
     public ProjectionFailureReplayService(
@@ -17,12 +19,14 @@ public sealed class ProjectionFailureReplayService : IProjectionFailureReplaySer
         IActorDispatchPort dispatchPort,
         IStreamForwardingBindingAuthority bindingAuthority,
         ILogger<ProjectionFailureReplayService>? logger = null,
-        IEnumerable<IProjectionScopeRecoveryAgentKindResolver>? recoveryAgentKindResolvers = null)
+        IEnumerable<IProjectionScopeRecoveryAgentKindResolver>? recoveryAgentKindResolvers = null,
+        IAgentKindVerifier? agentKindVerifier = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _bindingAuthority = bindingAuthority ?? throw new ArgumentNullException(nameof(bindingAuthority));
         _recoveryAgentKindResolvers = recoveryAgentKindResolvers?.ToArray() ?? [];
+        _agentKindVerifier = agentKindVerifier;
         _logger = logger ?? NullLogger<ProjectionFailureReplayService>.Instance;
     }
 
@@ -53,8 +57,9 @@ public sealed class ProjectionFailureReplayService : IProjectionFailureReplaySer
         envelope.Route = EnvelopeRouteSemantics.CreateDirect(
             "projection.scope.operator.replay-retry-exhausted",
             actorId);
-        await _dispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
-        return true;
+        envelope.EnsureRuntime().EnsureDispatch().RequireTargetActorAdmission = true;
+        var admission = await _dispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
+        return RecordDispatchAdmission("operator", actorId, admission);
     }
 
     public async Task<bool> ReplayAutomaticallyAsync(
@@ -80,8 +85,9 @@ public sealed class ProjectionFailureReplayService : IProjectionFailureReplaySer
         envelope.Route = EnvelopeRouteSemantics.CreateDirect(
             "projection.scope.automatic-recovery",
             actorId);
-        await _dispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
-        return true;
+        envelope.EnsureRuntime().EnsureDispatch().RequireTargetActorAdmission = true;
+        var admission = await _dispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
+        return RecordDispatchAdmission("automatic", actorId, admission);
     }
 
     private async Task<bool> EnsureActorExistsAsync(
@@ -89,59 +95,117 @@ public sealed class ProjectionFailureReplayService : IProjectionFailureReplaySer
         string actorId,
         CancellationToken ct)
     {
-        if (!await _runtime.ExistsAsync(actorId).ConfigureAwait(false))
+        var actorExists = await _runtime.ExistsAsync(actorId).ConfigureAwait(false);
+        var binding = await _bindingAuthority
+            .GetAsync(scopeKey.RootActorId, actorId, ct)
+            .ConfigureAwait(false);
+        var recoveredFromDurableRelay = ProjectionScopeObservationRelayBinding.TryGetRecoveryTargetActorKind(
+            binding,
+            scopeKey.RootActorId,
+            actorId,
+            out var targetActorKind);
+        if (!recoveredFromDurableRelay)
         {
-            var binding = await _bindingAuthority
-                .GetAsync(scopeKey.RootActorId, actorId, ct)
-                .ConfigureAwait(false);
-            if (!ProjectionScopeObservationRelayBinding.TryGetRecoveryTargetActorKind(
-                    binding,
-                    scopeKey.RootActorId,
-                    actorId,
-                    out var targetActorKind))
+            // A non-null binding is authoritative distributed state. If its shape or
+            // identity is inconsistent, a module registration must not override that
+            // conflict with a process-local capability mapping.
+            if (binding != null)
             {
-                // A non-null binding is authoritative distributed state. If its shape or
-                // identity is inconsistent, a module registration must not override that
-                // conflict with a process-local capability mapping.
-                if (binding != null)
-                {
-                    _logger.LogError(
-                        "Projection failure replay found invalid durable relay evidence and refused registered Agent Kind recovery. actorId={ActorId} rootActorId={RootActorId} projectionKind={ProjectionKind}",
-                        actorId,
-                        scopeKey.RootActorId,
-                        scopeKey.ProjectionKind);
-                    return false;
-                }
+                _logger.LogError(
+                    "Projection failure replay found invalid durable relay evidence and refused registered Agent Kind recovery. actorId={ActorId} rootActorId={RootActorId} projectionKind={ProjectionKind}",
+                    actorId,
+                    scopeKey.RootActorId,
+                    scopeKey.ProjectionKind);
+                return false;
+            }
 
-                if (!TryResolveRegisteredRecoveryAgentKind(scopeKey, out targetActorKind))
-                    return false;
-
-                _logger.LogWarning(
-                    "Projection failure replay is using a registered recovery Agent Kind because the scope runtime identity and durable relay evidence are unavailable. actorId={ActorId} rootActorId={RootActorId} projectionKind={ProjectionKind} targetActorKind={TargetActorKind}",
+            if (!TryResolveRegisteredRecoveryAgentKind(scopeKey, out targetActorKind))
+            {
+                _logger.LogError(
+                    "Projection failure replay could not resolve an authoritative recovery Agent Kind. actorId={ActorId} rootActorId={RootActorId} projectionKind={ProjectionKind} mode={Mode}",
                     actorId,
                     scopeKey.RootActorId,
                     scopeKey.ProjectionKind,
-                    targetActorKind);
-            }
-            else
-            {
-                // The durable relay is actor-owned activation evidence and carries the
-                // exact registered kind. Re-establishing by that typed fact repairs a
-                // state row that the runtime deliberately reports as uninitialized;
-                // the original stream delivery remains pending and is then redelivered.
-                _logger.LogWarning(
-                    "Projection failure replay is re-establishing an uninitialized scope actor from durable relay evidence. actorId={ActorId} rootActorId={RootActorId} projectionKind={ProjectionKind} targetActorKind={TargetActorKind}",
-                    actorId,
-                    scopeKey.RootActorId,
-                    scopeKey.ProjectionKind,
-                    targetActorKind);
+                    scopeKey.Mode);
+                return false;
             }
 
-            _ = await _runtime
-                .CreateByKindAsync(targetActorKind, actorId, ct)
-                .ConfigureAwait(false);
+            _logger.LogWarning(
+                "Projection failure replay is using a registered recovery Agent Kind because durable relay evidence is unavailable. actorId={ActorId} rootActorId={RootActorId} projectionKind={ProjectionKind} targetActorKind={TargetActorKind}",
+                actorId,
+                scopeKey.RootActorId,
+                scopeKey.ProjectionKind,
+                targetActorKind);
         }
 
+        if (actorExists)
+        {
+            if (_agentKindVerifier == null)
+            {
+                _logger.LogError(
+                    "Projection failure replay refused an existing scope actor because Agent Kind verification is unavailable. actorId={ActorId} expectedAgentKind={ExpectedAgentKind}",
+                    actorId,
+                    targetActorKind);
+                return false;
+            }
+
+            if (!await _agentKindVerifier
+                    .IsExpectedKindAsync(actorId, targetActorKind, ct)
+                    .ConfigureAwait(false))
+            {
+                _logger.LogError(
+                    "Projection failure replay refused an existing scope actor whose actor-owned Agent Kind did not match. actorId={ActorId} expectedAgentKind={ExpectedAgentKind}",
+                    actorId,
+                    targetActorKind);
+                return false;
+            }
+
+            return true;
+        }
+
+        if (recoveredFromDurableRelay)
+        {
+            // The durable relay is actor-owned activation evidence and carries the
+            // exact registered kind. Re-establishing by that typed fact repairs a
+            // state row that the runtime deliberately reports as uninitialized;
+            // the original stream delivery remains pending and is then redelivered.
+            _logger.LogWarning(
+                "Projection failure replay is re-establishing an uninitialized scope actor from durable relay evidence. actorId={ActorId} rootActorId={RootActorId} projectionKind={ProjectionKind} targetActorKind={TargetActorKind}",
+                actorId,
+                scopeKey.RootActorId,
+                scopeKey.ProjectionKind,
+                targetActorKind);
+        }
+
+        _ = await _runtime
+            .CreateByKindAsync(targetActorKind, actorId, ct)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    private bool RecordDispatchAdmission(
+        string recoverySource,
+        string actorId,
+        DispatchAdmission admission)
+    {
+        if (!admission.Accepted)
+        {
+            _logger.LogError(
+                "Projection failure replay was rejected at the actor admission boundary. actorId={ActorId} recoverySource={RecoverySource} commandId={CommandId} correlationId={CorrelationId}",
+                actorId,
+                recoverySource,
+                admission.CommandId,
+                admission.CorrelationId);
+            return false;
+        }
+
+        _logger.LogInformation(
+            "Projection failure replay entered the actor admission boundary. actorId={ActorId} recoverySource={RecoverySource} commandId={CommandId} correlationId={CorrelationId} ackedAt={AckedAt}",
+            actorId,
+            recoverySource,
+            admission.CommandId,
+            admission.CorrelationId,
+            admission.AckedAt);
         return true;
     }
 

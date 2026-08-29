@@ -638,6 +638,9 @@ public sealed class OrleansActorRuntimeForwardingTests
             return Task.CompletedTask;
         }
 
+        public Task AdmitEnvelopeAsync(byte[] envelopeBytes) =>
+            HandleEnvelopeAsync(envelopeBytes);
+
         public Task PublishToOwnStreamAsync(EventEnvelope envelope, CancellationToken ct) =>
             _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
 

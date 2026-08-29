@@ -84,7 +84,13 @@ public sealed class CqrsObservatoryApiEndpointsAuditTests
                 OldestUnresolvedFailureAt: DateTimeOffset.Parse("2026-07-30T07:55:00Z"),
                 FailureDiagnosticDroppedTotal: 0,
                 SourceVersions: [new ProjectionSourceVersionSnapshot("actor-alpha", 11, 10, 1)],
-                UpdatedAt: DateTimeOffset.Parse("2026-07-30T08:00:00Z")),
+                UpdatedAt: DateTimeOffset.Parse("2026-07-30T08:00:00Z"))
+            {
+                InFlightSource = new ProjectionInFlightSourceSnapshot(
+                    "actor-alpha",
+                    11,
+                    "event-in-flight"),
+            },
             Envelopes =
             [
                 new ProjectionObservedEnvelopeSnapshot(
@@ -124,6 +130,10 @@ public sealed class CqrsObservatoryApiEndpointsAuditTests
         detail.RootElement.GetProperty("retryExhaustedTotal").GetInt64().Should().Be(7);
         detail.RootElement.GetProperty("retryExhaustedFailureCount").GetInt32().Should().Be(0);
         detail.RootElement.GetProperty("unresolvedFailureCount").GetInt32().Should().Be(1);
+        var inFlightSource = detail.RootElement.GetProperty("inFlightSource");
+        inFlightSource.GetProperty("sourceActorId").GetString().Should().Be("actor-alpha");
+        inFlightSource.GetProperty("stateVersion").GetInt64().Should().Be(11);
+        inFlightSource.GetProperty("eventId").GetString().Should().Be("event-in-flight");
         var sourceVersion = detail.RootElement.GetProperty("sourceVersions")[0];
         sourceVersion.GetProperty("sourceActorId").GetString().Should().Be("actor-alpha");
         sourceVersion.GetProperty("versionGap").GetInt64().Should().Be(1);

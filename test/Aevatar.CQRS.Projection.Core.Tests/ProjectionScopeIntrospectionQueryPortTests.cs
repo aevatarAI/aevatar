@@ -44,6 +44,12 @@ public sealed class ProjectionScopeIntrospectionQueryPortTests
             FailedAttemptTotal = 3, RetryExhaustedTotal = 1, RetryExhaustedFailureCount = 1,
             UnresolvedFailureCount = 2,
             FailureDiagnosticDroppedTotal = 5, UpdatedAt = updatedAt,
+            InFlightSource = new ProjectionSourceCoordinate
+            {
+                ActorId = "actor-alpha",
+                StateVersion = 39,
+                EventId = "event-in-flight",
+            },
         };
         document.SourceVersions.Add(new ProjectionSourceVersionStatus
         {
@@ -65,7 +71,13 @@ public sealed class ProjectionScopeIntrospectionQueryPortTests
             OldestUnresolvedFailureAt: null,
             FailureDiagnosticDroppedTotal: 5,
             SourceVersions: [new ProjectionSourceVersionSnapshot("actor-alpha", 41, 40, 1)],
-            UpdatedAt: updatedAt));
+            UpdatedAt: updatedAt)
+        {
+            InFlightSource = new ProjectionInFlightSourceSnapshot(
+                "actor-alpha",
+                39,
+                "event-in-flight"),
+        });
     }
 
     [Theory]

@@ -222,9 +222,22 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
     public async Task HandleReplayAsync(ReplayProjectionFailuresCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        var commandId = ActiveInboundEnvelope?.Id ?? string.Empty;
+        var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? string.Empty;
 
         if (!State.Active || State.Released || State.Failures.Count == 0)
+        {
+            _logger.LogInformation(
+                "Projection failure replay was a no-op at the actor-owned manifest. actorId={ActorId} recoverySource={RecoverySource} commandId={CommandId} correlationId={CorrelationId} active={Active} released={Released} unresolvedFailureCount={UnresolvedFailureCount}",
+                Id,
+                command.AutomaticRecovery ? "automatic" : "manual",
+                commandId,
+                correlationId,
+                State.Active,
+                State.Released,
+                State.Failures.Count);
             return;
+        }
 
         // Durable observations are strictly serialized. Replaying a later failure while an
         // earlier source is still staged makes DispatchObservationAsync recover the staged
@@ -233,6 +246,16 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         // before admitting any backlog item.
         if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
         {
+            var source = State.InFlightObservation.Source;
+            _logger.LogInformation(
+                "Projection failure replay deferred behind the actor-owned in-flight source. actorId={ActorId} recoverySource={RecoverySource} commandId={CommandId} correlationId={CorrelationId} sourceActorId={SourceActorId} sourceStateVersion={SourceStateVersion} sourceEventId={SourceEventId}",
+                Id,
+                command.AutomaticRecovery ? "automatic" : "manual",
+                commandId,
+                correlationId,
+                source.ActorId,
+                source.StateVersion,
+                source.EventId);
             await ScheduleInFlightObservationRecoveryAsync(CancellationToken.None);
             return;
         }
@@ -243,10 +266,36 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
                 ? command.ObservedScopeStateVersion
                 : Math.Max(1, EventSourcing?.CurrentVersion ?? 0);
             if (observedScopeStateVersion <= State.LastAutomaticRecoveryObservedStateVersion)
+            {
+                _logger.LogInformation(
+                    "Projection automatic failure replay ignored an already consumed recovery fence. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} observedScopeStateVersion={ObservedScopeStateVersion} lastObservedScopeStateVersion={LastObservedScopeStateVersion}",
+                    Id,
+                    commandId,
+                    correlationId,
+                    observedScopeStateVersion,
+                    State.LastAutomaticRecoveryObservedStateVersion);
                 return;
+            }
 
             if (!State.Failures.Any(static failure => !failure.RetryExhausted))
+            {
+                _logger.LogInformation(
+                    "Projection automatic failure replay found no non-exhausted failures. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} unresolvedFailureCount={UnresolvedFailureCount} retryExhaustedFailureCount={RetryExhaustedFailureCount}",
+                    Id,
+                    commandId,
+                    correlationId,
+                    State.Failures.Count,
+                    State.Failures.Count(static failure => failure.RetryExhausted));
                 return;
+            }
+
+            _logger.LogInformation(
+                "Projection automatic failure replay was admitted by the actor-owned recovery fence. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} observedScopeStateVersion={ObservedScopeStateVersion} unresolvedFailureCount={UnresolvedFailureCount}",
+                Id,
+                commandId,
+                correlationId,
+                observedScopeStateVersion,
+                State.Failures.Count);
 
             await PersistDomainEventAsync(new ProjectionScopeAutomaticRecoveryRequestedEvent
             {
@@ -275,9 +324,22 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         ReplayRetryExhaustedProjectionFailuresCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        var commandId = ActiveInboundEnvelope?.Id ?? string.Empty;
+        var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? string.Empty;
 
         if (!State.Active || State.Released || State.Failures.Count == 0)
+        {
+            _logger.LogInformation(
+                "Projection retry-exhausted operator replay was a no-op at the actor-owned manifest. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} requestIdLength={RequestIdLength} active={Active} released={Released} unresolvedFailureCount={UnresolvedFailureCount}",
+                Id,
+                commandId,
+                correlationId,
+                command.RequestId?.Length ?? 0,
+                State.Active,
+                State.Released,
+                State.Failures.Count);
             return;
+        }
 
         var currentStateVersion = EventSourcing?.CurrentVersion ?? 0;
         var retryExhaustedFailureCount = State.Failures.Count(static failure => failure.RetryExhausted);
@@ -287,8 +349,10 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             command.ExpectedRetryExhaustedFailureCount != retryExhaustedFailureCount)
         {
             _logger.LogWarning(
-                "Projection retry-exhausted operator replay was rejected by its actor-owned manifest. actorId={ActorId} requestIdLength={RequestIdLength} expectedStateVersion={ExpectedStateVersion} currentStateVersion={CurrentStateVersion} expectedUnresolvedFailureCount={ExpectedUnresolvedFailureCount} currentUnresolvedFailureCount={CurrentUnresolvedFailureCount} expectedRetryExhaustedFailureCount={ExpectedRetryExhaustedFailureCount} currentRetryExhaustedFailureCount={CurrentRetryExhaustedFailureCount}",
+                "Projection retry-exhausted operator replay was rejected by its actor-owned manifest. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} requestIdLength={RequestIdLength} expectedStateVersion={ExpectedStateVersion} currentStateVersion={CurrentStateVersion} expectedUnresolvedFailureCount={ExpectedUnresolvedFailureCount} currentUnresolvedFailureCount={CurrentUnresolvedFailureCount} expectedRetryExhaustedFailureCount={ExpectedRetryExhaustedFailureCount} currentRetryExhaustedFailureCount={CurrentRetryExhaustedFailureCount}",
                 Id,
+                commandId,
+                correlationId,
                 command.RequestId?.Length ?? 0,
                 command.ExpectedScopeStateVersion,
                 currentStateVersion,
@@ -303,13 +367,25 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         // advanced manifest after that source settles; the stale request cannot spend budget.
         if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
         {
+            var source = State.InFlightObservation.Source;
+            _logger.LogInformation(
+                "Projection retry-exhausted operator replay deferred behind the actor-owned in-flight source. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} requestSha256={RequestSha256} sourceActorId={SourceActorId} sourceStateVersion={SourceStateVersion} sourceEventId={SourceEventId}",
+                Id,
+                commandId,
+                correlationId,
+                BuildOperatorRequestIdDigest(command.RequestId),
+                source.ActorId,
+                source.StateVersion,
+                source.EventId);
             await ScheduleInFlightObservationRecoveryAsync(CancellationToken.None);
             return;
         }
 
         _logger.LogWarning(
-            "Projection retry-exhausted operator replay was admitted. actorId={ActorId} requestSha256={RequestSha256} requestedBySubjectId={RequestedBySubjectId} maxItems={MaxItems} reasonLength={ReasonLength}",
+            "Projection retry-exhausted operator replay was admitted. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} requestSha256={RequestSha256} requestedBySubjectId={RequestedBySubjectId} maxItems={MaxItems} reasonLength={ReasonLength}",
             Id,
+            commandId,
+            correlationId,
             BuildOperatorRequestIdDigest(command.RequestId),
             command.RequestedBySubjectId,
             command.MaxItems,

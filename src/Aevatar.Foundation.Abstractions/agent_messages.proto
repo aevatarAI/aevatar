@@ -124,6 +124,10 @@ message EnvelopeCallbackContext {
 
 message EnvelopeDispatchControl {
   bool propagate_failure = 1;
+  // Requests a target-actor turn before the durable transport handoff is acknowledged.
+  // This is reserved for recovery/control commands that must prove the current actor
+  // activation and its inbox subscription; it does not mean the payload was handled.
+  bool require_target_actor_admission = 2;
 }
 
 message EnvelopeRuntime {

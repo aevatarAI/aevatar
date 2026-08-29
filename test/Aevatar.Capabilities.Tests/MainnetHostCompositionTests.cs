@@ -43,6 +43,7 @@ using Aevatar.Foundation.Projection.Runtime;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Modules;
@@ -433,6 +434,10 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionRetryExhaustedFailureRepairService>()
             .Should()
             .BeOfType<ProjectionRetryExhaustedFailureRepairService>();
+        app.Services.GetRequiredService<IProjectionFailureReplayService>()
+            .Should()
+            .BeOfType<ProjectionFailureReplayService>();
+        app.Services.GetRequiredService<IAgentKindVerifier>().Should().NotBeNull();
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExternalApprovalContinuationDocument, string>>()
             .Should()
             .NotBeNull();

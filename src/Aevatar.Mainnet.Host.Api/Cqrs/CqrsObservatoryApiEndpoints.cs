@@ -157,6 +157,7 @@ public static class CqrsObservatoryApiEndpoints
                 snapshot.UnresolvedFailureCount,
                 snapshot.OldestUnresolvedFailureAt,
                 snapshot.FailureDiagnosticDroppedTotal,
+                snapshot.InFlightSource,
                 snapshot.SourceVersions,
                 snapshot.UpdatedAt,
             });

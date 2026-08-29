@@ -445,6 +445,9 @@ flowchart LR
 - `failure_diagnostic_dropped_total`：64 条 payload-free diagnostic ring 被裁剪的累计数。
   第 65 条 failure 只裁剪 diagnostic 副本；durable repair record 不裁剪，并通过
   `IProjectionFailureAlertSink` 发出包含 dropped failure identity 的专项 signal。
+- `in_flight_source`：scope actor 当前已持久化、尚待完成的串行 observation 坐标，
+  由 `source_actor_id + state_version + event_id` 唯一标识。`null` 只表示当前没有 staged
+  durable source，不表示投影已追平；成功水位仍以 `source_versions` 为准。
 - `source_versions`：按 authoritative `source_actor_id` 分组的
   `highest_seen_version / last_successful_version / version_gap`。版本差只允许在同一个
   source actor 轴内计算。多 actor scope 不提供聚合 version subtraction。

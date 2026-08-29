@@ -596,6 +596,12 @@ public sealed class OrleansDistributedCoverageTests
 
         public Task<bool> IsInitializedAsync() => Task.FromResult(true);
 
+        public Task AdmitEnvelopeAsync(byte[] envelopeBytes)
+        {
+            _ = envelopeBytes;
+            return Task.CompletedTask;
+        }
+
         public Task HandleEnvelopeAsync(byte[] envelopeBytes)
         {
             _ = envelopeBytes;

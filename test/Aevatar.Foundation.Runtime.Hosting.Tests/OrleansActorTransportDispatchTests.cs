@@ -5,38 +5,110 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using NSubstitute;
+using Orleans;
+using Orleans.Runtime;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 public sealed class OrleansActorTransportDispatchTests
 {
     [Fact]
-    public void Constructor_WhenStreamProviderIsNull_ShouldThrowArgumentNullException()
+    public void Constructor_WhenDependencyIsNull_ShouldThrowArgumentNullException()
     {
-        var act = () => new OrleansActorDispatchPort(null!);
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var streams = new RecordingStreamProvider();
+        var grainContextAccessor = Substitute.For<IGrainContextAccessor>();
 
-        act.Should().Throw<ArgumentNullException>()
+        var missingGrainFactory = () => new OrleansActorDispatchPort(null!, streams, grainContextAccessor);
+        var missingStreams = () => new OrleansActorDispatchPort(grainFactory, null!, grainContextAccessor);
+        var missingGrainContextAccessor = () => new OrleansActorDispatchPort(grainFactory, streams, null!);
+
+        missingGrainFactory.Should().Throw<ArgumentNullException>()
+            .WithParameterName("grainFactory");
+        missingStreams.Should().Throw<ArgumentNullException>()
             .WithParameterName("streams");
+        missingGrainContextAccessor.Should().Throw<ArgumentNullException>()
+            .WithParameterName("grainContextAccessor");
     }
 
     [Fact]
-    public async Task DispatchPortAsync_ShouldHandoffViaStreamProviderWithoutResolvingTargetGrain()
+    public async Task DispatchPortAsync_WhenTargetAdmissionIsNotRequired_ShouldHandoffWithoutResolvingTargetGrain()
     {
+        var grainFactory = Substitute.For<IGrainFactory>();
         var streams = new RecordingStreamProvider();
-        var dispatchPort = new OrleansActorDispatchPort(streams);
+        var grainContextAccessor = Substitute.For<IGrainContextAccessor>();
+        var dispatchPort = new OrleansActorDispatchPort(grainFactory, streams, grainContextAccessor);
         var envelope = new EventEnvelope { Payload = Any.Pack(new StringValue { Value = "payload" }) };
+
+        await dispatchPort.DispatchAsync("actor-default", envelope, CancellationToken.None);
+
+        streams.GetProduced("actor-default").Should().ContainSingle();
+        streams.GetProduced("actor-default")[0].Payload!.Unpack<StringValue>().Value.Should().Be("payload");
+        grainFactory.DidNotReceiveWithAnyArgs().GetGrain<IRuntimeActorGrain>(default!);
+    }
+
+    [Fact]
+    public async Task DispatchPortAsync_WhenTargetAdmissionIsRequired_ShouldEnterTargetGrainAdmission()
+    {
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var streams = new RecordingStreamProvider();
+        var grainContextAccessor = Substitute.For<IGrainContextAccessor>();
+        grainContextAccessor.GrainContext.Returns((IGrainContext?)null);
+        var grain = new RecordingRuntimeActorGrain();
+        grainFactory.GetGrain<IRuntimeActorGrain>("actor-0").Returns(grain);
+        var dispatchPort = new OrleansActorDispatchPort(grainFactory, streams, grainContextAccessor);
+        var envelope = new EventEnvelope
+        {
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+            Runtime = new EnvelopeRuntime
+            {
+                Dispatch = new EnvelopeDispatchControl { RequireTargetActorAdmission = true },
+            },
+        };
 
         await dispatchPort.DispatchAsync("actor-0", envelope, CancellationToken.None);
 
-        streams.GetProduced("actor-0").Should().ContainSingle();
-        streams.GetProduced("actor-0")[0].Payload!.Unpack<StringValue>().Value.Should().Be("payload");
+        grain.AdmissionCount.Should().Be(1);
+        grain.LastAdmittedEnvelope!.Payload!.Unpack<StringValue>().Value.Should().Be("payload");
+        streams.GetProduced("actor-0").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchPortAsync_WhenTargetIsCurrentGrain_ShouldHandoffViaStreamForNextTurn()
+    {
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var streams = new RecordingStreamProvider();
+        var grainContextAccessor = Substitute.For<IGrainContextAccessor>();
+        var grainContext = Substitute.For<IGrainContext>();
+        grainContext.GrainId.Returns(GrainId.Create("runtime-actor", "actor-self"));
+        grainContextAccessor.GrainContext.Returns(grainContext);
+        var grain = new RecordingRuntimeActorGrain(grainContext);
+        grainFactory.GetGrain<IRuntimeActorGrain>("actor-self").Returns(grain);
+        var dispatchPort = new OrleansActorDispatchPort(grainFactory, streams, grainContextAccessor);
+        var envelope = new EventEnvelope
+        {
+            Payload = Any.Pack(new StringValue { Value = "next-turn" }),
+            Runtime = new EnvelopeRuntime
+            {
+                Dispatch = new EnvelopeDispatchControl { RequireTargetActorAdmission = true },
+            },
+        };
+
+        await dispatchPort.DispatchAsync("actor-self", envelope, CancellationToken.None);
+
+        grain.AdmissionCount.Should().Be(0);
+        streams.GetProduced("actor-self").Should().ContainSingle();
+        streams.GetProduced("actor-self")[0].Payload!.Unpack<StringValue>().Value.Should().Be("next-turn");
     }
 
     [Fact]
     public async Task DispatchPortAsync_ShouldValidateInputsBeforeHandoff()
     {
+        var grainFactory = Substitute.For<IGrainFactory>();
         var streams = new RecordingStreamProvider();
-        var dispatchPort = new OrleansActorDispatchPort(streams);
+        var grainContextAccessor = Substitute.For<IGrainContextAccessor>();
+        var dispatchPort = new OrleansActorDispatchPort(grainFactory, streams, grainContextAccessor);
         var envelope = new EventEnvelope();
 
         Func<Task> dispatchWithBlankActorId = async () =>
@@ -83,14 +155,30 @@ public sealed class OrleansActorTransportDispatchTests
         grain.DispatchCount.Should().Be(0);
     }
 
-    private sealed class RecordingRuntimeActorGrain : IRuntimeActorGrain
+    private sealed class RecordingRuntimeActorGrain : IRuntimeActorGrain, IGrainBase
     {
+        public RecordingRuntimeActorGrain(IGrainContext? grainContext = null)
+        {
+            GrainContext = grainContext ?? Substitute.For<IGrainContext>();
+        }
+
+        public IGrainContext GrainContext { get; }
+
         public int DispatchCount { get; private set; }
+        public int AdmissionCount { get; private set; }
+        public EventEnvelope? LastAdmittedEnvelope { get; private set; }
         public EventEnvelope? LastHandledEnvelope { get; private set; }
 
         public Task<bool> InitializeAgentByKindAsync(string kind) => Task.FromResult(true);
 
         public Task<bool> IsInitializedAsync() => Task.FromResult(true);
+
+        public Task AdmitEnvelopeAsync(byte[] envelopeBytes)
+        {
+            LastAdmittedEnvelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
+            AdmissionCount++;
+            return Task.CompletedTask;
+        }
 
         public Task HandleEnvelopeAsync(byte[] envelopeBytes)
         {
@@ -118,6 +206,10 @@ public sealed class OrleansActorTransportDispatchTests
         public Task DeactivateAsync() => Task.CompletedTask;
 
         public Task PurgeAsync() => Task.CompletedTask;
+
+        public Task OnActivateAsync(CancellationToken token) => Task.CompletedTask;
+
+        public Task OnDeactivateAsync(DeactivationReason reason, CancellationToken token) => Task.CompletedTask;
     }
 
     private sealed class RecordingStreamProvider : IStreamProvider

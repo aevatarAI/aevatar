@@ -237,6 +237,23 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     public Task HandleEnvelopeAsync(byte[] envelopeBytes) =>
         HandleEnvelopeAsyncCore(envelopeBytes, propagateFailure: false);
 
+    public async Task AdmitEnvelopeAsync(byte[] envelopeBytes)
+    {
+        ArgumentNullException.ThrowIfNull(envelopeBytes);
+
+        var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
+        if (!await EnsureAgentAvailableForEnvelopeAsync(envelope, propagateFailure: true))
+        {
+            throw new InvalidOperationException(
+                $"Runtime actor '{this.GetPrimaryKeyString()}' is unavailable for envelope admission.");
+        }
+
+        await SubscribeSelfStreamAsync();
+        await _streams
+            .GetStream(this.GetPrimaryKeyString())
+            .ProduceAsync(envelope.Clone(), CancellationToken.None);
+    }
+
     private async Task HandleEnvelopeAsyncCore(byte[] envelopeBytes, bool propagateFailure)
     {
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
