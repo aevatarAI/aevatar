@@ -1044,15 +1044,19 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         harness.Streams.Relays.Should().NotContainKey((SourceScopeActorId, previousWriterActorId));
     }
 
-    [Fact]
-    public async Task QuiescedBlockedRoute_RetryKeepsDrainFenceSoDelayedConfirmationCanActivate()
+    [Theory]
+    [InlineData(FrozenRouteKind.Terminal)]
+    [InlineData(FrozenRouteKind.Legacy)]
+    public async Task QuiescedBlockedRoute_RetryReusesDrainFenceWithoutRestoringPreviousWriter(
+        FrozenRouteKind routeKind)
     {
         var state = BuildActiveSourceState();
-        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
-            7,
-            ProjectionScopeStatusRoutePhase.Blocked);
+        state.StatusRoute = routeKind == FrozenRouteKind.Terminal
+            ? ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(7, ProjectionScopeStatusRoutePhase.Blocked)
+            : ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(7, ProjectionScopeStatusRoutePhase.Blocked);
         state.StatusRoute.BlockedVersion = 13;
         AddPhaseBSeals(state.StatusRoute);
+        var previousWriterActorId = routeKind == FrozenRouteKind.Terminal ? LegacyActorId : TerminalActorId;
         var harness = SourceScopeHarness.Build(
             quiescence: CreateQuiescenceEvidence(),
             initialState: state,
@@ -1061,13 +1065,21 @@ public sealed class ProjectionScopeStatusRouteActivationTests
 
         await harness.Agent.ActivateForTestAsync();
         var firstDrainFence = harness.Agent.State.StatusRoute!.DrainProbeVersion;
+        var initialEnsureDispatchCount = harness.DispatchPort.Dispatched.Count(item =>
+            item.actorId == previousWriterActorId &&
+            item.command.Payload?.Is(EnsureProjectionScopeCommand.Descriptor) == true);
 
         await harness.Agent.HandleRetryStatusRouteAdoptionAsync(
             new RetryProjectionScopeStatusRouteAdoptionCommand { Attempt = 1 });
 
         harness.EventSourcing.Committed
             .OfType<ProjectionScopeStatusRouteDrainProbedEvent>()
-            .Should().HaveCount(2).And.OnlyContain(evt => evt.RequiredObservedVersion == firstDrainFence);
+            .Should().ContainSingle().Which.RequiredObservedVersion.Should().Be(firstDrainFence);
+        harness.DispatchPort.Dispatched.Count(item =>
+                item.actorId == previousWriterActorId &&
+                item.command.Payload?.Is(EnsureProjectionScopeCommand.Descriptor) == true)
+            .Should().Be(initialEnsureDispatchCount,
+                "a retry can request confirmation from the durably released writer without restarting it");
         harness.Agent.State.StatusRoute.BlockedVersion.Should().Be(13);
         harness.Agent.State.StatusRoute.DrainProbeVersion.Should().Be(firstDrainFence);
         harness.Publisher.SentTo
@@ -1076,11 +1088,11 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             .Should().HaveCount(2).And.OnlyContain(command =>
                 command.RequiredObservedVersion == firstDrainFence);
 
-        await DispatchContinuationAsync(harness.Agent, LegacyActorId,
+        await DispatchContinuationAsync(harness.Agent, previousWriterActorId,
             new ProjectionScopeStatusWriterReleasedEvent
             {
                 SourceScopeActorId = SourceScopeActorId,
-                WriterActorId = LegacyActorId,
+                WriterActorId = previousWriterActorId,
                 RouteEpoch = 7,
                 LastObservedVersion = firstDrainFence,
                 ReleasedAtUtc = Timestamp.FromDateTimeOffset(Now),
