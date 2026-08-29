@@ -10,15 +10,18 @@ public sealed class ServiceInvocationResolutionService : IServiceInvocationResol
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
     private readonly IServiceInvocationCatalogQueryReader _invocationCatalogQueryReader;
     private readonly IServiceRevisionCatalogQueryReader _revisionCatalogQueryReader;
+    private readonly IServiceServingSetQueryReader _servingSetQueryReader;
 
     public ServiceInvocationResolutionService(
         IServiceCatalogQueryReader catalogQueryReader,
         IServiceInvocationCatalogQueryReader invocationCatalogQueryReader,
-        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader)
+        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader,
+        IServiceServingSetQueryReader servingSetQueryReader)
     {
         _catalogQueryReader = catalogQueryReader ?? throw new ArgumentNullException(nameof(catalogQueryReader));
         _invocationCatalogQueryReader = invocationCatalogQueryReader ?? throw new ArgumentNullException(nameof(invocationCatalogQueryReader));
         _revisionCatalogQueryReader = revisionCatalogQueryReader ?? throw new ArgumentNullException(nameof(revisionCatalogQueryReader));
+        _servingSetQueryReader = servingSetQueryReader ?? throw new ArgumentNullException(nameof(servingSetQueryReader));
     }
 
     public async Task<bool> HasServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
@@ -41,7 +44,7 @@ public sealed class ServiceInvocationResolutionService : IServiceInvocationResol
         var serviceKey = ServiceKeys.Build(request.Identity);
         var definition = await _catalogQueryReader.GetAsync(request.Identity, ct)
             ?? throw new InvalidOperationException($"Service '{serviceKey}' was not found.");
-        var readiness = await ResolveReadinessAsync(request, serviceKey, ct);
+        var readiness = await ResolveReadinessAsync(request, definition, serviceKey, ct);
         var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(request.Identity, ct);
         var artifact = ResolvePreparedArtifact(
             revisionCatalog,
@@ -84,6 +87,7 @@ public sealed class ServiceInvocationResolutionService : IServiceInvocationResol
 
     private async Task<ServiceInvokeReadinessSnapshot> ResolveReadinessAsync(
         ServiceInvocationRequest request,
+        ServiceCatalogSnapshot definition,
         string serviceKey,
         CancellationToken ct)
     {
@@ -92,18 +96,69 @@ public sealed class ServiceInvocationResolutionService : IServiceInvocationResol
             throw CreateUnavailable(CreateUnspecifiedSnapshot(serviceKey, request.EndpointId), $"Service '{serviceKey}' has no invocation catalog readmodel.");
 
         var requestedRevisionId = request.RevisionId?.Trim() ?? string.Empty;
-        var readiness = catalog.Entries.FirstOrDefault(x =>
-            string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal) &&
-            (string.IsNullOrWhiteSpace(requestedRevisionId) ||
-             string.Equals(x.SelectedRevisionId, requestedRevisionId, StringComparison.Ordinal)));
-        if (readiness == null)
+        var expectedRevisionId = string.IsNullOrWhiteSpace(requestedRevisionId)
+            ? definition.DefaultServingRevisionId.Trim()
+            : requestedRevisionId;
+        var endpointEntries = catalog.Entries
+            .Where(x => string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal))
+            .ToArray();
+        if (endpointEntries.Length == 0)
             throw CreateUnavailable(CreateUnspecifiedSnapshot(catalog, request.EndpointId), $"Endpoint '{request.EndpointId}' has no invocation readiness on service '{serviceKey}'.");
+
+        var revisionEntries = string.IsNullOrWhiteSpace(expectedRevisionId)
+            ? endpointEntries
+            : endpointEntries
+                .Where(x => string.Equals(x.SelectedRevisionId, expectedRevisionId, StringComparison.Ordinal))
+                .ToArray();
+        if (revisionEntries.Length == 0)
+        {
+            throw CreateServingTargetUnavailable(
+                endpointEntries[0],
+                serviceKey,
+                request.EndpointId);
+        }
+
+        var servingSet = await _servingSetQueryReader.GetAsync(request.Identity!, ct);
+        var readiness = revisionEntries.FirstOrDefault(entry =>
+            servingSet?.Targets.Any(target => IsEligibleServingTarget(target, entry, request.EndpointId)) == true);
+        if (readiness == null)
+        {
+            throw CreateServingTargetUnavailable(
+                revisionEntries[0],
+                serviceKey,
+                request.EndpointId);
+        }
 
         if (readiness.ReadinessStatus != ServiceInvokeReadinessStatus.Ready)
             throw CreateUnavailable(readiness, $"Service '{serviceKey}' endpoint '{request.EndpointId}' is not ready for invoke.");
 
         return readiness;
     }
+
+    private static bool IsEligibleServingTarget(
+        ServiceServingTargetSnapshot target,
+        ServiceInvokeReadinessSnapshot readiness,
+        string endpointId) =>
+        string.Equals(target.RevisionId, readiness.SelectedRevisionId, StringComparison.Ordinal) &&
+        string.Equals(target.DeploymentId, readiness.SelectedDeploymentId, StringComparison.Ordinal) &&
+        string.Equals(target.PrimaryActorId, readiness.SelectedActorId, StringComparison.Ordinal) &&
+        Enum.TryParse<ServiceServingState>(target.ServingState, ignoreCase: true, out var state) &&
+        state == ServiceServingState.Active &&
+        target.AllocationWeight > 0 &&
+        (target.EnabledEndpointIds.Count == 0 ||
+         target.EnabledEndpointIds.Any(x => string.Equals(x, endpointId, StringComparison.Ordinal)));
+
+    private static ServiceInvokeReadinessException CreateServingTargetUnavailable(
+        ServiceInvokeReadinessSnapshot readiness,
+        string serviceKey,
+        string endpointId) =>
+        CreateUnavailable(
+            readiness with
+            {
+                UnavailableReason = ServiceInvokeUnavailableReason.ServingTargetMissing,
+                ReadinessStatus = ServiceInvokeReadinessStatus.Unavailable,
+            },
+            $"Service '{serviceKey}' endpoint '{endpointId}' has no matching eligible serving target.");
 
     private static PreparedServiceRevisionArtifact ResolvePreparedArtifact(
         ServiceRevisionCatalogSnapshot? revisionCatalog,

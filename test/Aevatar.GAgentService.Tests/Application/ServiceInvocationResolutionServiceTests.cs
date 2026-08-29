@@ -83,7 +83,8 @@ public sealed class ServiceInvocationResolutionServiceTests
         var service = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader(),
             new RecordingInvocationCatalogQueryReader(),
-            new FakeServiceRevisionCatalogQueryReader());
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingServingSetQueryReader());
 
         var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
 
@@ -101,7 +102,8 @@ public sealed class ServiceInvocationResolutionServiceTests
                 GetResult = CreateCatalogSnapshot(identity),
             },
             new RecordingInvocationCatalogQueryReader(),
-            new FakeServiceRevisionCatalogQueryReader());
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingServingSetQueryReader());
 
         var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
 
@@ -189,6 +191,153 @@ public sealed class ServiceInvocationResolutionServiceTests
     }
 
     [Fact]
+    public async Task ResolveAsync_ShouldRejectReadyReadiness_WhenDefaultServingRevisionHasCutOver()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "r1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        var service = CreateService(
+            identity,
+            revisionCatalog,
+            readiness: Ready(identity, "chat", "r1", "dep-1", "actor-1"),
+            servingTargets: [ServingTarget("r2", "dep-2", "actor-2", "chat")],
+            defaultServingRevisionId: "r2");
+
+        var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
+
+        var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
+        ex.Which.Snapshot.ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        ex.Which.Snapshot.UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.ServingTargetMissing);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldRejectReadyReadiness_WhenServingSetIsMissing()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "r1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        var service = new ServiceInvocationResolutionService(
+            new RecordingCatalogQueryReader
+            {
+                GetResult = CreateCatalogSnapshot(identity),
+            },
+            new RecordingInvocationCatalogQueryReader
+            {
+                GetResult = new ServiceInvocationCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    [Ready(identity, "chat", "r1", "dep-1", "actor-1")],
+                    DateTimeOffset.Parse("2026-06-05T00:00:00+00:00"),
+                    7,
+                    $"{ServiceKeys.Build(identity)}:invocation-catalog:7",
+                    1,
+                    2,
+                    3),
+            },
+            revisionCatalog,
+            new RecordingServingSetQueryReader());
+
+        var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
+
+        var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
+        ex.Which.Snapshot.ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        ex.Which.Snapshot.UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.ServingTargetMissing);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldUseCurrentServingTarget_WhenStaleReadyEntryRemains()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        foreach (var revisionId in new[] { "r1", "r2" })
+        {
+            await revisionCatalog.UpsertRevisionAsync(
+                ServiceKeys.Build(identity),
+                revisionId,
+                GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                    identity,
+                    revisionId,
+                    GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        }
+
+        var service = CreateService(
+            identity,
+            revisionCatalog,
+            readinessEntries:
+            [
+                Ready(identity, "chat", "r1", "dep-1", "actor-1"),
+                Ready(identity, "chat", "r2", "dep-2", "actor-2"),
+            ],
+            servingTargets: [ServingTarget("r2", "dep-2", "actor-2", "chat")],
+            defaultServingRevisionId: "r2");
+
+        var resolved = await service.ResolveAsync(NewRequest(identity, "chat"));
+
+        resolved.Service.RevisionId.Should().Be("r2");
+        resolved.Service.DeploymentId.Should().Be("dep-2");
+        resolved.Service.PrimaryActorId.Should().Be("actor-2");
+        resolved.Artifact.RevisionId.Should().Be("r2");
+    }
+
+    [Theory]
+    [InlineData("r2", "dep-1", "actor-1", 100, "Active", "chat")]
+    [InlineData("r1", "dep-2", "actor-1", 100, "Active", "chat")]
+    [InlineData("r1", "dep-1", "actor-2", 100, "Active", "chat")]
+    [InlineData("r1", "dep-1", "actor-1", 0, "Active", "chat")]
+    [InlineData("r1", "dep-1", "actor-1", 100, "Draining", "chat")]
+    [InlineData("r1", "dep-1", "actor-1", 100, "invalid", "chat")]
+    [InlineData("r1", "dep-1", "actor-1", 100, "Active", "other")]
+    public async Task ResolveAsync_ShouldRejectReadyReadiness_WhenServingTargetIsNotEligible(
+        string revisionId,
+        string deploymentId,
+        string actorId,
+        int allocationWeight,
+        string servingState,
+        string endpointId)
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "r1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        var service = CreateService(
+            identity,
+            revisionCatalog,
+            readiness: Ready(identity, "chat", "r1", "dep-1", "actor-1"),
+            servingTargets:
+            [
+                new ServiceServingTargetSnapshot(
+                    deploymentId,
+                    revisionId,
+                    actorId,
+                    allocationWeight,
+                    servingState,
+                    [endpointId]),
+            ]);
+
+        var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
+
+        var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
+        ex.Which.Snapshot.ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        ex.Which.Snapshot.UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.ServingTargetMissing);
+    }
+
+    [Fact]
     public async Task ResolveAsync_ShouldMapReadyDriftMissingArtifact_ToPreparedArtifactMissing()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
@@ -259,12 +408,15 @@ public sealed class ServiceInvocationResolutionServiceTests
         ServiceInvokeReadinessSnapshot? readiness = null,
         ServiceInvocationCatalogSnapshot? readinessCatalog = default,
         IReadOnlyList<ServiceInvokeReadinessSnapshot>? readinessEntries = null,
-        IReadOnlyList<string>? policyIds = null)
+        IReadOnlyList<string>? policyIds = null,
+        IReadOnlyList<ServiceServingTargetSnapshot>? servingTargets = null,
+        string defaultServingRevisionId = "")
     {
         var serviceKey = ServiceKeys.Build(identity);
+        var entries = readinessEntries ?? (readiness == null ? [] : [readiness]);
         readinessCatalog ??= new ServiceInvocationCatalogSnapshot(
             serviceKey,
-            readinessEntries ?? (readiness == null ? [] : [readiness]),
+            entries,
             DateTimeOffset.Parse("2026-06-05T00:00:00+00:00"),
             7,
             $"{serviceKey}:invocation-catalog:7",
@@ -275,14 +427,40 @@ public sealed class ServiceInvocationResolutionServiceTests
         return new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader
             {
-                GetResult = CreateCatalogSnapshot(identity, policyIds),
+                GetResult = CreateCatalogSnapshot(identity, policyIds, defaultServingRevisionId),
             },
             new RecordingInvocationCatalogQueryReader
             {
                 GetResult = readinessCatalog,
             },
-            revisionCatalog);
+            revisionCatalog,
+            new RecordingServingSetQueryReader
+            {
+                GetResult = new ServiceServingSetSnapshot(
+                    serviceKey,
+                    1,
+                    "rollout-1",
+                    servingTargets ?? entries.Select(entry => ServingTarget(
+                        entry.SelectedRevisionId,
+                        entry.SelectedDeploymentId,
+                        entry.SelectedActorId,
+                        entry.EndpointId)).ToArray(),
+                    DateTimeOffset.Parse("2026-06-05T00:00:00+00:00")),
+            });
     }
+
+    private static ServiceServingTargetSnapshot ServingTarget(
+        string revisionId,
+        string deploymentId,
+        string actorId,
+        string endpointId) =>
+        new(
+            deploymentId,
+            revisionId,
+            actorId,
+            100,
+            ServiceServingState.Active.ToString(),
+            [endpointId]);
 
     private static ServiceInvokeReadinessSnapshot Ready(
         ServiceIdentity identity,
@@ -340,7 +518,8 @@ public sealed class ServiceInvocationResolutionServiceTests
 
     private static ServiceCatalogSnapshot CreateCatalogSnapshot(
         ServiceIdentity identity,
-        IReadOnlyList<string>? policyIds = null) =>
+        IReadOnlyList<string>? policyIds = null,
+        string defaultServingRevisionId = "") =>
         new(
             ServiceKeys.Build(identity),
             identity.TenantId,
@@ -348,7 +527,7 @@ public sealed class ServiceInvocationResolutionServiceTests
             identity.Namespace,
             identity.ServiceId,
             "Service",
-            string.Empty,
+            defaultServingRevisionId,
             string.Empty,
             string.Empty,
             string.Empty,
@@ -411,6 +590,14 @@ public sealed class ServiceInvocationResolutionServiceTests
         public ServiceInvocationCatalogSnapshot? GetResult { get; init; }
 
         public Task<ServiceInvocationCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(GetResult);
+    }
+
+    private sealed class RecordingServingSetQueryReader : IServiceServingSetQueryReader
+    {
+        public ServiceServingSetSnapshot? GetResult { get; init; }
+
+        public Task<ServiceServingSetSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(GetResult);
     }
 }

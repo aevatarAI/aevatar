@@ -46,7 +46,8 @@ public sealed class ServiceInvocationApplicationServiceTests
             {
                 GetResult = CreateInvocationCatalogSnapshot(identity, Ready(identity, "chat", "r1", "dep-1", "actor-1")),
             },
-            revisionCatalog);
+            revisionCatalog,
+            ServingSetReader(identity, "chat", "r1", "dep-1", "actor-1"));
         var authorizer = new RecordingAuthorizer();
         var dispatcher = new RecordingDispatcher();
         var service = new ServiceInvocationApplicationService(resolutionService, authorizer, dispatcher);
@@ -104,7 +105,8 @@ public sealed class ServiceInvocationApplicationServiceTests
             {
                 GetResult = CreateInvocationCatalogSnapshot(identity, Ready(identity, "chat", "r1", "dep-1", "actor-1")),
             },
-            revisionCatalog);
+            revisionCatalog,
+            ServingSetReader(identity, "chat", "r1", "dep-1", "actor-1"));
         var authorizer = new RecordingAuthorizer();
         var dispatcher = new RecordingDispatcher();
         var service = new ServiceInvocationApplicationService(resolutionService, authorizer, dispatcher);
@@ -134,7 +136,8 @@ public sealed class ServiceInvocationApplicationServiceTests
         var resolutionService = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader { GetResult = null },
             new RecordingInvocationCatalogQueryReader { GetResult = null },
-            revisionCatalog);
+            revisionCatalog,
+            new RecordingServingSetQueryReader());
         var service = new ServiceInvocationApplicationService(
             resolutionService, new RecordingAuthorizer(), new RecordingDispatcher());
 
@@ -174,7 +177,8 @@ public sealed class ServiceInvocationApplicationServiceTests
                     DateTimeOffset.UtcNow),
             },
             new RecordingInvocationCatalogQueryReader { GetResult = null },
-            revisionCatalog);
+            revisionCatalog,
+            new RecordingServingSetQueryReader());
         var service = new ServiceInvocationApplicationService(
             resolutionService, new RecordingAuthorizer(), new RecordingDispatcher());
 
@@ -217,7 +221,8 @@ public sealed class ServiceInvocationApplicationServiceTests
             {
                 GetResult = CreateInvocationCatalogSnapshot(identity, Ready(identity, "other-endpoint", "r1", "dep-1", "actor-1")),
             },
-            revisionCatalog);
+            revisionCatalog,
+            ServingSetReader(identity, "other-endpoint", "r1", "dep-1", "actor-1"));
         var service = new ServiceInvocationApplicationService(
             resolutionService, new RecordingAuthorizer(), new RecordingDispatcher());
 
@@ -265,7 +270,8 @@ public sealed class ServiceInvocationApplicationServiceTests
                         "chat",
                         ServiceInvokeUnavailableReason.ServingTargetMissing)),
             },
-            revisionCatalog);
+            revisionCatalog,
+            new RecordingServingSetQueryReader());
         var service = new ServiceInvocationApplicationService(
             resolutionService, new RecordingAuthorizer(), new RecordingDispatcher());
 
@@ -344,6 +350,30 @@ public sealed class ServiceInvocationApplicationServiceTests
             2,
             3);
 
+    private static RecordingServingSetQueryReader ServingSetReader(
+        ServiceIdentity identity,
+        string endpointId,
+        string revisionId,
+        string deploymentId,
+        string actorId) =>
+        new()
+        {
+            GetResult = new ServiceServingSetSnapshot(
+                ServiceKeys.Build(identity),
+                1,
+                "rollout-1",
+                [
+                    new ServiceServingTargetSnapshot(
+                        deploymentId,
+                        revisionId,
+                        actorId,
+                        100,
+                        ServiceServingState.Active.ToString(),
+                        [endpointId]),
+                ],
+                DateTimeOffset.Parse("2026-06-05T00:00:00+00:00")),
+        };
+
     private sealed class RecordingCatalogQueryReader : IServiceCatalogQueryReader
     {
         public ServiceCatalogSnapshot? GetResult { get; init; }
@@ -368,6 +398,14 @@ public sealed class ServiceInvocationApplicationServiceTests
         public ServiceInvocationCatalogSnapshot? GetResult { get; init; }
 
         public Task<ServiceInvocationCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(GetResult);
+    }
+
+    private sealed class RecordingServingSetQueryReader : IServiceServingSetQueryReader
+    {
+        public ServiceServingSetSnapshot? GetResult { get; init; }
+
+        public Task<ServiceServingSetSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(GetResult);
     }
 

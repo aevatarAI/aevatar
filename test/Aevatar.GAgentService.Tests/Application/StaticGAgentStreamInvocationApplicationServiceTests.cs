@@ -443,7 +443,8 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         var resolutionService = new ServiceInvocationResolutionService(
             new CatalogQueryReader(identity),
             new InvocationCatalogQueryReader(identity),
-            revisionCatalog);
+            revisionCatalog,
+            new ServingSetQueryReader(identity));
 
         return new StaticGAgentStreamInvocationApplicationService(
             resolutionService,
@@ -572,6 +573,25 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
                 1,
                 1,
                 1));
+    }
+
+    private sealed class ServingSetQueryReader(ServiceIdentity identity) : IServiceServingSetQueryReader
+    {
+        public Task<ServiceServingSetSnapshot?> GetAsync(ServiceIdentity requestedIdentity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceServingSetSnapshot?>(new ServiceServingSetSnapshot(
+                ServiceKeys.Build(identity),
+                1,
+                "rollout-1",
+                [
+                    new ServiceServingTargetSnapshot(
+                        "dep-1",
+                        "r1",
+                        "primary-actor-1",
+                        100,
+                        ServiceServingState.Active.ToString(),
+                        ["chat"]),
+                ],
+                DateTimeOffset.Parse("2026-06-05T00:00:00+00:00")));
     }
 
     private sealed class NoOpInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer

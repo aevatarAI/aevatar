@@ -41,20 +41,34 @@ public sealed class ApplicationServiceGuardTests
             new ServiceInvocationResolutionService(
                 new NoOpCatalogQueryReader(),
                 new NoOpInvocationCatalogQueryReader(),
-                new FakeServiceRevisionCatalogQueryReader()),
+                new FakeServiceRevisionCatalogQueryReader(),
+                new NoOpServingSetQueryReader()),
             null!,
             new NoOpInvocationDispatcher());
         Action nullDispatcher = () => new ServiceInvocationApplicationService(
             new ServiceInvocationResolutionService(
                 new NoOpCatalogQueryReader(),
                 new NoOpInvocationCatalogQueryReader(),
-                new FakeServiceRevisionCatalogQueryReader()),
+                new FakeServiceRevisionCatalogQueryReader(),
+                new NoOpServingSetQueryReader()),
             new NoOpInvokeAdmissionAuthorizer(),
             null!);
 
         nullResolution.Should().Throw<ArgumentNullException>();
         nullAuthorizer.Should().Throw<ArgumentNullException>();
         nullDispatcher.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void ServiceInvocationResolutionService_ShouldValidateServingSetReader()
+    {
+        Action nullServingSetReader = () => new ServiceInvocationResolutionService(
+            new NoOpCatalogQueryReader(),
+            new NoOpInvocationCatalogQueryReader(),
+            new FakeServiceRevisionCatalogQueryReader(),
+            null!);
+
+        nullServingSetReader.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
