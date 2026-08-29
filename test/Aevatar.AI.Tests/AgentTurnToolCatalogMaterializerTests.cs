@@ -650,6 +650,62 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         preparation.Diagnostics.Should().Contain(static diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.SelectedPolicyEmpty &&
             diagnostic.Detail == "intent-alpha");
+        preparation.Authority.DegradationReasons.Should().ContainSingle().Which.Should().Be(
+            AgentProfileTurnDegradationReason.SelectedPolicyEmpty);
+    }
+
+    [Fact]
+    public async Task MaterializeCommittedAsync_SelectedEmptyPolicyWithInvalidSkillBody_ShouldKeepOrdinaryBaseline()
+    {
+        var tools = NewTools("nyxid_services", "use_skill", "task", "extra");
+        var profile = BuildProfile();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add(["nyxid_services", "use_skill", "task"]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        var sealedProfile = SealProfile(profile);
+        var materializer = NewMaterializer(
+            RegistryWithRoute(tools),
+            new SequencedClassifier(
+                AgentProfileTurnClassificationResult.Matched(
+                    AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+                AgentProfileTurnClassificationResult.Matched("intent-alpha")),
+            new RecordingFetcher(SuccessfulFetch(new string('x', profile.MaxSelectedSkillBytes + 1))));
+
+        var preparation = await materializer.PrepareNyxIdChatAsync(
+            sealedProfile,
+            "session-selected-empty-invalid-body",
+            "read my NyxID services",
+            tools,
+            ToolContext(),
+            llmControl: null,
+            CancellationToken.None);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            sealedProfile,
+            preparation.Authority,
+            "token",
+            tools,
+            ToolContext(),
+            CancellationToken.None);
+
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "use_skill");
+        materialization.Catalog.ExactTools.Keys.Should().BeEquivalentTo(
+            "nyxid_services",
+            "use_skill");
+        materialization.Catalog.SelectedSkillPromptLayer.Should().BeNull();
+        materialization.Catalog.Diagnostics.Should().Contain(static diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.SelectedPolicyEmpty);
+        materialization.Catalog.Diagnostics.Should().Contain(static diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid &&
+            diagnostic.Detail == "body_out_of_bounds");
+        materialization.ReconcileProposal.AuthorityKind.Should().Be(
+            AgentProfileTurnAuthorityKind.Recovery);
+        materialization.ReconcileProposal.DegradationReasons.Should().Contain([
+            AgentProfileTurnDegradationReason.SelectedPolicyEmpty,
+            AgentProfileTurnDegradationReason.SelectedSkillBodyInvalid,
+        ]);
     }
 
     [Fact]

@@ -1,11 +1,13 @@
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Application.CodexExecution;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.AI.Core.Middleware;
@@ -353,6 +355,125 @@ public sealed class MainnetHostCompositionTests
             ],
             because: diagnosticsDetail);
         catalog.ExactTools.Should().HaveCount(10);
+    }
+
+    [Fact]
+    public async Task AddAevatarMainnetHost_ShouldKeepProfiledOrdinaryToolsWhenSelectedSkillBodyIsInvalid()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var secretStoreBackend = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__SecretStoreBackend", "InMemory");
+        var skillSha256 = ByteString.CopyFrom(
+            Enumerable.Range(0, 32).Select(static value => (byte)value).ToArray());
+        var exactFetcher = Substitute.For<IExactRemoteSkillFetcher>();
+        exactFetcher.FetchAsync(
+                Arg.Any<string>(),
+                Arg.Any<ExactRemoteSkillRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ExactRemoteSkillFetchResult.Success(
+                "11111111-1111-1111-1111-111111111111",
+                "1.0",
+                "aevatar-triage",
+                "publisher-alpha",
+                skillSha256,
+                new string('x', 65))));
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.Replace(ServiceDescriptor.Singleton(exactFetcher));
+
+        using var app = builder.Build();
+        var profile = new AgentProfileSnapshot
+        {
+            ProfileId = "aevatar-operator",
+            ProfileVersion = "profile-v1",
+            AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
+            MaximumToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_services", "use_skill" },
+            },
+            RecoveryToolPolicy = new AgentProfileToolPolicy(),
+            ClassifierTimeoutMs = 600,
+            ExactSkillFetchTimeoutMs = 1_500,
+            MaxSelectedSkillBytes = 64,
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        };
+        profile.Members.Add(new AgentProfileSkillMember
+        {
+            IntentId = "aevatar-triage",
+            RoutingDescription = "Route ordinary Aevatar operator questions.",
+            SkillRef = new ExactRemoteSkillRef
+            {
+                Guid = "11111111-1111-1111-1111-111111111111",
+                LiteralVersion = "1.0",
+            },
+            TaskToolPolicy = new AgentProfileToolPolicy(),
+            SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
+            ExpectedSkillName = "aevatar-triage",
+            ReviewedPublisherId = "publisher-alpha",
+            SealedSkillSha256 = skillSha256,
+        });
+        profile = AgentProfileSnapshotCodec.Seal(profile);
+        var authority = new AgentProfileTurnAuthorityState
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = "mainnet-profile-invalid-body",
+                Attempt = 1,
+            },
+            CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+            {
+                ProfileId = profile.ProfileId,
+                ProfileVersion = profile.ProfileVersion,
+                PolicyRevision = profile.PolicyRevision,
+                IntentId = "aevatar-triage",
+            },
+            SelectedExactSkillRef = profile.Members[0].SkillRef.Clone(),
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            AuthorityCeilingToolNames = { "nyxid_services", "use_skill" },
+            DegradationReasons = { AgentProfileTurnDegradationReason.SelectedPolicyEmpty },
+        };
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                null,
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+                SourceReadableNyxIdAccessToken: "source-readable-token"),
+        };
+
+        var materialization = await app.Services
+            .GetRequiredService<AgentTurnToolCatalogMaterializer>()
+            .MaterializeCommittedAsync(
+                profile,
+                authority,
+                "fetch-token",
+                registeredTools: [],
+                toolContext);
+
+        var diagnosticsDetail = string.Join(
+            ",",
+            materialization.Catalog.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Code}:{diagnostic.Detail}"));
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            ["nyxid_services", "use_skill"],
+            because: diagnosticsDetail);
+        materialization.Catalog.ExactTools.Keys.Should().BeEquivalentTo(
+            "nyxid_services",
+            "use_skill");
+        materialization.ReconcileProposal.AuthorityKind.Should().Be(
+            AgentProfileTurnAuthorityKind.Recovery);
+        materialization.ReconcileProposal.DegradationReasons.Should().Contain([
+            AgentProfileTurnDegradationReason.SelectedPolicyEmpty,
+            AgentProfileTurnDegradationReason.SelectedSkillBodyInvalid,
+        ]);
     }
 
     [Fact]

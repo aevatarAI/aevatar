@@ -15,6 +15,7 @@ public sealed class AgentTurnToolCatalogTests
         ((int)AgentProfileTurnDegradationReason.CatalogNeedsDisambiguation).Should().Be(16);
         ((int)AgentProfileTurnDegradationReason.CatalogOverBudget).Should().Be(17);
         ((int)AgentProfileTurnDegradationReason.SchemaInvalid).Should().Be(18);
+        ((int)AgentProfileTurnDegradationReason.SelectedPolicyEmpty).Should().Be(19);
     }
 
     [Fact]

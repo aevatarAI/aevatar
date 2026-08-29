@@ -530,15 +530,19 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         var fetched = await FetchSelectedSkillAsync(profile, candidate, accessToken, diagnostics, ct);
         if (fetched is null)
         {
+            var fallbackNames = committedAuthority.DegradationReasons.Contains(
+                AgentProfileTurnDegradationReason.SelectedPolicyEmpty)
+                ? OrdinaryDegradedNames(eligible, recoveryNames)
+                : recoveryNames;
             return BuildMaterialization(
                 profile,
                 committedAuthority,
                 NarrowAuthority(committedAuthority.AuthorityKind, AgentProfileTurnAuthorityKind.Recovery),
-                recoveryNames,
+                fallbackNames,
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
                 diagnostics,
-                SelectTools(routeTools.Tools, recoveryNames));
+                SelectTools(routeTools.Tools, fallbackNames));
         }
 
         var selectedLayer = new SelectedSkillPromptLayer(
@@ -2401,6 +2405,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             AgentProfileTurnDegradationReason.CatalogOverBudget,
         (AgentProfileTurnDiagnosticCode.SchemaInvalid, _) =>
             AgentProfileTurnDegradationReason.SchemaInvalid,
+        (AgentProfileTurnDiagnosticCode.SelectedPolicyEmpty, _) =>
+            AgentProfileTurnDegradationReason.SelectedPolicyEmpty,
         _ => AgentProfileTurnDegradationReason.Unspecified,
     };
 
@@ -2438,6 +2444,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.CatalogOverBudget, reason.ToString()),
         AgentProfileTurnDegradationReason.SchemaInvalid =>
             new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.SchemaInvalid, reason.ToString()),
+        AgentProfileTurnDegradationReason.SelectedPolicyEmpty =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.SelectedPolicyEmpty, reason.ToString()),
         AgentProfileTurnDegradationReason.Unspecified or
             AgentProfileTurnDegradationReason.LegacyAuthorityMissing or
             AgentProfileTurnDegradationReason.MaterializerUnavailable or
