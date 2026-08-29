@@ -36,6 +36,8 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Projection.Runtime;
 using Aevatar.Foundation.Abstractions;
@@ -428,6 +430,9 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>()
             .Should()
             .NotBeNull();
+        app.Services.GetRequiredService<IProjectionRetryExhaustedFailureRepairService>()
+            .Should()
+            .BeOfType<ProjectionRetryExhaustedFailureRepairService>();
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExternalApprovalContinuationDocument, string>>()
             .Should()
             .NotBeNull();

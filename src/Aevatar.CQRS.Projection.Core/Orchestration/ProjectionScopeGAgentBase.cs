@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.CQRS.Projection.Core.Observability;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -266,6 +268,90 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         // before another backlog item is attempted, preserving source ownership of retry counts.
         if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
             await ScheduleInFlightObservationRecoveryAsync(CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleRetryExhaustedReplayAsync(
+        ReplayRetryExhaustedProjectionFailuresCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!State.Active || State.Released || State.Failures.Count == 0)
+            return;
+
+        var currentStateVersion = EventSourcing?.CurrentVersion ?? 0;
+        var retryExhaustedFailureCount = State.Failures.Count(static failure => failure.RetryExhausted);
+        if (!IsValidRetryExhaustedReplayCommand(command) ||
+            command.ExpectedScopeStateVersion != currentStateVersion ||
+            command.ExpectedUnresolvedFailureCount != State.Failures.Count ||
+            command.ExpectedRetryExhaustedFailureCount != retryExhaustedFailureCount)
+        {
+            _logger.LogWarning(
+                "Projection retry-exhausted operator replay was rejected by its actor-owned manifest. actorId={ActorId} requestIdLength={RequestIdLength} expectedStateVersion={ExpectedStateVersion} currentStateVersion={CurrentStateVersion} expectedUnresolvedFailureCount={ExpectedUnresolvedFailureCount} currentUnresolvedFailureCount={CurrentUnresolvedFailureCount} expectedRetryExhaustedFailureCount={ExpectedRetryExhaustedFailureCount} currentRetryExhaustedFailureCount={CurrentRetryExhaustedFailureCount}",
+                Id,
+                command.RequestId?.Length ?? 0,
+                command.ExpectedScopeStateVersion,
+                currentStateVersion,
+                command.ExpectedUnresolvedFailureCount,
+                State.Failures.Count,
+                command.ExpectedRetryExhaustedFailureCount,
+                retryExhaustedFailureCount);
+            return;
+        }
+
+        // Finish the actor-owned staged source first. The operator can resubmit with the
+        // advanced manifest after that source settles; the stale request cannot spend budget.
+        if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
+        {
+            await ScheduleInFlightObservationRecoveryAsync(CancellationToken.None);
+            return;
+        }
+
+        _logger.LogWarning(
+            "Projection retry-exhausted operator replay was admitted. actorId={ActorId} requestSha256={RequestSha256} requestedBySubjectId={RequestedBySubjectId} maxItems={MaxItems} reasonLength={ReasonLength}",
+            Id,
+            BuildOperatorRequestIdDigest(command.RequestId),
+            command.RequestedBySubjectId,
+            command.MaxItems,
+            command.Reason.Length);
+
+        await _failureTracker!.ReplayAsync(
+            State,
+            command.MaxItems,
+            (envelope, ct) => DispatchObservationAsync(
+                envelope,
+                ct,
+                ProjectionObservationDispatchOrigin.FailureReplay),
+            includeRetryExhausted: true,
+            retryExhaustedOnly: true);
+
+        if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
+            await ScheduleInFlightObservationRecoveryAsync(CancellationToken.None);
+    }
+
+    private static bool IsValidRetryExhaustedReplayCommand(
+        ReplayRetryExhaustedProjectionFailuresCommand command) =>
+        command.MaxItems is > 0 and <= ProjectionFailureRecoveryReconciler.MaxReplayItemsPerScope &&
+        command.ExpectedScopeStateVersion > 0 &&
+        command.ExpectedUnresolvedFailureCount > 0 &&
+        command.ExpectedRetryExhaustedFailureCount > 0 &&
+        command.ExpectedRetryExhaustedFailureCount <= command.ExpectedUnresolvedFailureCount &&
+        command.MaxItems <= command.ExpectedRetryExhaustedFailureCount &&
+        IsBoundedOperatorText(command.RequestId, 128) &&
+        IsBoundedOperatorText(command.Reason, 256) &&
+        IsBoundedOperatorText(command.RequestedBySubjectId, 256);
+
+    private static bool IsBoundedOperatorText(string? value, int maxLength) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= maxLength &&
+        value.All(static character =>
+            !char.IsControl(character) &&
+            character is not '\r' and not '\n' and not '\u2028' and not '\u2029');
+
+    private static string BuildOperatorRequestIdDigest(string requestId)
+    {
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(requestId.Trim()));
+        return Convert.ToHexString(digest.AsSpan(0, 16)).ToLowerInvariant();
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]

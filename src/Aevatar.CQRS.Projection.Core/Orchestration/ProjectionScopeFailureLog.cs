@@ -38,10 +38,13 @@ internal static class ProjectionScopeFailureLog
     public static IReadOnlyList<ProjectionScopeFailure> GetPendingFailures(
         ProjectionScopeState state,
         int maxItems,
-        bool includeRetryExhausted = true)
+        bool includeRetryExhausted = true,
+        bool retryExhaustedOnly = false)
     {
         return state.Failures
-            .Where(failure => includeRetryExhausted || !failure.RetryExhausted)
+            .Where(failure => retryExhaustedOnly
+                ? failure.RetryExhausted
+                : includeRetryExhausted || !failure.RetryExhausted)
             .Take(Math.Max(1, maxItems))
             .ToList();
     }

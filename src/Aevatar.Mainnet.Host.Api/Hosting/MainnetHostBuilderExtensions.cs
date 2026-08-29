@@ -726,6 +726,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeliveryConsoleEndpoints();
         app.MapCqrsObservatoryPageEndpoints();
         app.MapCqrsObservatoryApiEndpoints();
+        app.MapCqrsProjectionFailureRepairAdminEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();

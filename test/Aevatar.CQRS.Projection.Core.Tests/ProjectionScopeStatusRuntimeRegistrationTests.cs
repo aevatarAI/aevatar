@@ -45,6 +45,9 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
             descriptor.ServiceType == typeof(IProjectionFailureReplayService) &&
             descriptor.ImplementationType == typeof(ProjectionFailureReplayService));
         services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionRetryExhaustedFailureRepairService) &&
+            descriptor.ImplementationType == typeof(ProjectionRetryExhaustedFailureRepairService));
+        services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(ProjectionFailureRecoveryReconciler) &&
             descriptor.ImplementationType == typeof(ProjectionFailureRecoveryReconciler));
         services.Should().Contain(descriptor =>

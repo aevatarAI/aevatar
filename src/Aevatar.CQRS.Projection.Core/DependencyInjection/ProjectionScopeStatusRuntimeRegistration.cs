@@ -46,6 +46,9 @@ public static class ProjectionScopeStatusRuntimeRegistration
         services.TryAddSingleton<IProjectionScopeStatusListQueryPort, ProjectionScopeStatusListQueryPort>();
         services.TryAddSingleton<IProjectionScopeIntrospectionQueryPort, ProjectionScopeIntrospectionQueryPort>();
         services.TryAddSingleton<IProjectionFailureReplayService, ProjectionFailureReplayService>();
+        services.TryAddSingleton<
+            IProjectionRetryExhaustedFailureRepairService,
+            ProjectionRetryExhaustedFailureRepairService>();
         services.TryAddSingleton<ProjectionFailureRecoveryReconciler>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ProjectionFailureRecoveryHostedService>());
         services.AddCurrentStateProjectionMaterializer<

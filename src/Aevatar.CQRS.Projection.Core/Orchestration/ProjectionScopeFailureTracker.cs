@@ -108,7 +108,8 @@ internal sealed class ProjectionScopeFailureTracker
         ProjectionScopeState state,
         int maxItems,
         Func<EventEnvelope, CancellationToken, Task<ProjectionScopeDispatchResult>> dispatchAsync,
-        bool includeRetryExhausted = true)
+        bool includeRetryExhausted = true,
+        bool retryExhaustedOnly = false)
     {
         if (state.Failures.Count == 0)
             return;
@@ -116,10 +117,16 @@ internal sealed class ProjectionScopeFailureTracker
         var failures = ProjectionScopeFailureLog.GetPendingFailures(
             state,
             maxItems,
-            includeRetryExhausted);
+            includeRetryExhausted,
+            retryExhaustedOnly);
+        var resolvedCoordinates = new HashSet<ProjectionFailureSourceCoordinate>();
         foreach (var failure in failures)
         {
             if (failure.Envelope == null)
+                continue;
+
+            var sourceCoordinate = TryBuildSourceCoordinate(failure);
+            if (sourceCoordinate != null && !resolvedCoordinates.Add(sourceCoordinate))
                 continue;
 
             try
@@ -127,12 +134,26 @@ internal sealed class ProjectionScopeFailureTracker
                 var result = await dispatchAsync(failure.Envelope, CancellationToken.None);
                 if (result.Handled)
                 {
-                    await _persistAsync(
-                        ProjectionScopeFailureLog.BuildReplayResultEvent(failure.FailureId, true));
-                    ProjectionProcessingMetrics.RecordResolved(
-                        _scopeKeyResolver().ProjectionKind,
-                        _failureCountAccessor(),
-                        _oldestFailureAtAccessor());
+                    if (sourceCoordinate != null)
+                    {
+                        await ResolveMatchingAsync(
+                            state,
+                            new ProjectionSourceCoordinate
+                            {
+                                ActorId = sourceCoordinate.SourceActorId,
+                                StateVersion = sourceCoordinate.SourceVersion,
+                                EventId = sourceCoordinate.EventId,
+                            });
+                    }
+                    else
+                    {
+                        await _persistAsync(
+                            ProjectionScopeFailureLog.BuildReplayResultEvent(failure.FailureId, true));
+                        ProjectionProcessingMetrics.RecordResolved(
+                            _scopeKeyResolver().ProjectionKind,
+                            _failureCountAccessor(),
+                            _oldestFailureAtAccessor());
+                    }
                 }
                 else
                 {
@@ -155,6 +176,22 @@ internal sealed class ProjectionScopeFailureTracker
                 break;
             }
         }
+    }
+
+    private static ProjectionFailureSourceCoordinate? TryBuildSourceCoordinate(
+        ProjectionScopeFailure failure)
+    {
+        if (string.IsNullOrWhiteSpace(failure.SourceActorId) ||
+            failure.SourceVersion <= 0 ||
+            string.IsNullOrWhiteSpace(failure.EventId))
+        {
+            return null;
+        }
+
+        return new ProjectionFailureSourceCoordinate(
+            failure.SourceActorId,
+            failure.SourceVersion,
+            failure.EventId);
     }
 
     public async Task ResolveMatchingAsync(
@@ -217,4 +254,9 @@ internal sealed class ProjectionScopeFailureTracker
                 alert.Kind);
         }
     }
+
+    private sealed record ProjectionFailureSourceCoordinate(
+        string SourceActorId,
+        long SourceVersion,
+        string EventId);
 }

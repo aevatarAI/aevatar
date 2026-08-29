@@ -268,6 +268,19 @@ message ReplayProjectionFailuresCommand {
   int64 observed_scope_state_version = 3;
 }
 
+// Explicit operator command for failures whose bounded automatic retry budget is exhausted.
+// A new message type keeps rolling-version receivers fail closed instead of interpreting this
+// as an unfenced legacy ReplayProjectionFailuresCommand.
+message ReplayRetryExhaustedProjectionFailuresCommand {
+  int32 max_items = 1;
+  int64 expected_scope_state_version = 2;
+  int32 expected_unresolved_failure_count = 3;
+  int32 expected_retry_exhausted_failure_count = 4;
+  string request_id = 5;
+  string reason = 6;
+  string requested_by_subject_id = 7;
+}
+
 message ResumeProjectionInFlightObservationCommand {
   ProjectionSourceCoordinate expected_source = 1;
 }

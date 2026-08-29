@@ -868,6 +868,182 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleReplayAsync_WhenExactCoordinateSucceeds_ShouldResolveAllDuplicateFailures()
+    {
+        const string sourceActorId = "publisher-actor";
+        const string eventId = "evt-shared-coordinate";
+        const long sourceVersion = 7;
+        var processedVersions = new List<long>();
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-exact-coordinate-replay",
+            onProcess: envelope =>
+            {
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                processedVersions.Add(version);
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: new TrackingEventSourcing());
+        agent.State.Active = false;
+        await agent.InitializeForTestAsync();
+        agent.State.Active = true;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-exhausted-duplicate",
+            SourceActorId = sourceActorId,
+            SourceVersion = sourceVersion,
+            EventId = eventId,
+            RetryExhausted = true,
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-exact-coordinate-replay",
+                version: sourceVersion,
+                eventId: eventId),
+        });
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-recoverable-duplicate",
+            SourceActorId = sourceActorId,
+            SourceVersion = sourceVersion,
+            EventId = eventId,
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-exact-coordinate-replay",
+                version: sourceVersion,
+                eventId: eventId),
+        });
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-other-coordinate",
+            SourceActorId = sourceActorId,
+            SourceVersion = sourceVersion + 1,
+            EventId = "evt-other-coordinate",
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-exact-coordinate-replay",
+                version: sourceVersion + 1,
+                eventId: "evt-other-coordinate"),
+        });
+
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 1,
+            AutomaticRecovery = true,
+        });
+
+        processedVersions.Should().Equal(sourceVersion);
+        agent.State.Failures.Should().ContainSingle()
+            .Which.FailureId.Should().Be("failure-other-coordinate");
+    }
+
+    [Fact]
+    public async Task HandleRetryExhaustedReplayAsync_ShouldReplayOnlyExhaustedFailuresBehindExactManifest()
+    {
+        var processedVersions = new List<long>();
+        var eventSourcing = new TrackingEventSourcing(initialVersion: 40);
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-operator-exhausted-replay",
+            onProcess: envelope =>
+            {
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                processedVersions.Add(version);
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: eventSourcing);
+        agent.State.Active = false;
+        await agent.InitializeForTestAsync();
+        agent.State.Active = true;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-recoverable",
+            SourceActorId = "publisher-actor",
+            SourceVersion = 1,
+            EventId = "evt-recoverable",
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-operator-exhausted-replay",
+                version: 1,
+                eventId: "evt-recoverable"),
+        });
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-exhausted",
+            SourceActorId = "publisher-actor",
+            SourceVersion = 2,
+            EventId = "evt-exhausted",
+            RetryExhausted = true,
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-operator-exhausted-replay",
+                version: 2,
+                eventId: "evt-exhausted"),
+        });
+
+        await agent.HandleRetryExhaustedReplayAsync(
+            new ReplayRetryExhaustedProjectionFailuresCommand
+            {
+                MaxItems = 1,
+                ExpectedScopeStateVersion = eventSourcing.CurrentVersion,
+                ExpectedUnresolvedFailureCount = 2,
+                ExpectedRetryExhaustedFailureCount = 1,
+                RequestId = "operator-replay-1",
+                Reason = "storage recovery completed",
+                RequestedBySubjectId = "operator-alpha",
+            });
+
+        processedVersions.Should().Equal(2);
+        agent.State.Failures.Should().ContainSingle()
+            .Which.FailureId.Should().Be("failure-recoverable");
+    }
+
+    [Fact]
+    public async Task HandleRetryExhaustedReplayAsync_WhenManifestIsStale_ShouldNotSpendRetryBudget()
+    {
+        var processCount = 0;
+        var eventSourcing = new TrackingEventSourcing(initialVersion: 40);
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-stale-operator-replay",
+            onProcess: _ =>
+            {
+                processCount++;
+                return ProjectionScopeDispatchResult.Success(1, "event-type");
+            },
+            eventSourcing: eventSourcing);
+        agent.State.Active = false;
+        await agent.InitializeForTestAsync();
+        agent.State.Active = true;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-exhausted",
+            SourceActorId = "publisher-actor",
+            SourceVersion = 1,
+            EventId = "evt-exhausted",
+            RetryExhausted = true,
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-stale-operator-replay",
+                version: 1,
+                eventId: "evt-exhausted"),
+        });
+
+        await agent.HandleRetryExhaustedReplayAsync(
+            new ReplayRetryExhaustedProjectionFailuresCommand
+            {
+                MaxItems = 1,
+                ExpectedScopeStateVersion = eventSourcing.CurrentVersion - 1,
+                ExpectedUnresolvedFailureCount = 1,
+                ExpectedRetryExhaustedFailureCount = 1,
+                RequestId = "operator-replay-stale",
+                Reason = "storage recovery completed",
+                RequestedBySubjectId = "operator-alpha",
+            });
+
+        processCount.Should().Be(0);
+        agent.State.Failures.Should().ContainSingle().Which.Attempts.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleReplayAsync_WhenAutomaticBacklogExceedsBatch_ShouldAdmitNextBatchAtAdvancedStateVersion()
     {
         var processedVersions = new List<long>();

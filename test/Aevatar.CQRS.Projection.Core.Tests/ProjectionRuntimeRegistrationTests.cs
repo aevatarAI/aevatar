@@ -530,7 +530,7 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
-    public async Task ProjectionFailureReplayService_ShouldOnlyDispatchForExistingScope()
+    public async Task ProjectionFailureReplayService_ShouldDispatchTypedRetryExhaustedOperatorCommand()
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new RecordingActorDispatchPort(runtime);
@@ -538,17 +538,42 @@ public sealed class ProjectionRuntimeRegistrationTests
         var scopeKey = new ProjectionRuntimeScopeKey("actor-3", "projection-c", ProjectionRuntimeMode.DurableMaterialization);
         runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(scopeKey));
 
-        var replayed = await service.ReplayAsync(scopeKey, 0);
-        var missing = await service.ReplayAsync(
-            new ProjectionRuntimeScopeKey("missing", "projection-d", ProjectionRuntimeMode.DurableMaterialization),
-            3);
+        var replayed = await service.ReplayRetryExhaustedAsync(
+            new ProjectionRetryExhaustedFailuresRequest(
+                scopeKey,
+                ExpectedScopeStateVersion: 11,
+                ExpectedUnresolvedFailureCount: 2,
+                ExpectedRetryExhaustedFailureCount: 1,
+                MaxItems: 1,
+                RequestId: "operator-replay-1",
+                Reason: "storage recovery completed",
+                RequestedBySubjectId: "operator-alpha"));
+        var missing = await service.ReplayRetryExhaustedAsync(
+            new ProjectionRetryExhaustedFailuresRequest(
+                new ProjectionRuntimeScopeKey(
+                    "missing",
+                    "projection-d",
+                    ProjectionRuntimeMode.DurableMaterialization),
+                ExpectedScopeStateVersion: 12,
+                ExpectedUnresolvedFailureCount: 3,
+                ExpectedRetryExhaustedFailureCount: 1,
+                MaxItems: 1,
+                RequestId: "operator-replay-2",
+                Reason: "storage recovery completed",
+                RequestedBySubjectId: "operator-alpha"));
 
         replayed.Should().BeTrue();
         missing.Should().BeFalse();
         dispatchPort.Dispatched.Should().ContainSingle();
-        var replay = dispatchPort.Dispatched[0].command.Payload!.Unpack<ReplayProjectionFailuresCommand>();
+        var replay = dispatchPort.Dispatched[0].command.Payload!
+            .Unpack<ReplayRetryExhaustedProjectionFailuresCommand>();
         replay.MaxItems.Should().Be(1);
-        replay.AutomaticRecovery.Should().BeFalse();
+        replay.ExpectedScopeStateVersion.Should().Be(11);
+        replay.ExpectedUnresolvedFailureCount.Should().Be(2);
+        replay.ExpectedRetryExhaustedFailureCount.Should().Be(1);
+        replay.RequestId.Should().Be("operator-replay-1");
+        replay.Reason.Should().Be("storage recovery completed");
+        replay.RequestedBySubjectId.Should().Be("operator-alpha");
     }
 
     [Fact]
@@ -621,6 +646,132 @@ public sealed class ProjectionRuntimeRegistrationTests
             "actor-without-recovery-evidence",
             "projection-without-recovery-evidence",
             ProjectionRuntimeMode.DurableMaterialization);
+
+        var replayed = await service.ReplayAutomaticallyAsync(
+            scopeKey,
+            observedScopeStateVersion: 1,
+            maxItems: 1);
+
+        replayed.Should().BeFalse();
+        runtime.CreatedByKind.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectionFailureReplayService_WhenRelayIsMissing_ShouldUseExactRegisteredRecoveryKind()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-registered-recovery",
+            "projection-registered-recovery",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var service = new ProjectionFailureReplayService(
+            runtime,
+            dispatchPort,
+            dispatchPort,
+            recoveryAgentKindResolvers: [new StaticRecoveryAgentKindResolver(
+                scopeKey.ProjectionKind,
+                scopeKey.Mode,
+                "projection.materialization-scope.registered-recovery")]);
+
+        var replayed = await service.ReplayAutomaticallyAsync(
+            scopeKey,
+            observedScopeStateVersion: 31,
+            maxItems: 7);
+
+        replayed.Should().BeTrue();
+        var actorId = ProjectionScopeActorId.Build(scopeKey);
+        runtime.CreatedByKind.Should().ContainSingle().Which.Should().Be(
+            ("projection.materialization-scope.registered-recovery", actorId));
+        dispatchPort.Dispatched.Should().ContainSingle();
+        dispatchPort.Dispatched[0].actorId.Should().Be(actorId);
+    }
+
+    [Fact]
+    public async Task ProjectionFailureReplayService_WhenRelayEvidenceIsInvalid_ShouldNotOverrideItWithRegisteredRecoveryKind()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-invalid-relay-recovery",
+            "projection-invalid-relay-recovery",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var actorId = ProjectionScopeActorId.Build(scopeKey);
+        await dispatchPort.UpsertAsync(new StreamForwardingBinding
+        {
+            SourceStreamId = scopeKey.RootActorId,
+            TargetStreamId = actorId,
+            ForwardingMode = StreamForwardingMode.TransitOnly,
+            TargetActorKind = "projection.scope.conflicting-relay",
+            ActivationGeneration = 4,
+        });
+        var service = new ProjectionFailureReplayService(
+            runtime,
+            dispatchPort,
+            dispatchPort,
+            recoveryAgentKindResolvers: [new StaticRecoveryAgentKindResolver(
+                scopeKey.ProjectionKind,
+                scopeKey.Mode,
+                "projection.scope.registered")]);
+
+        var replayed = await service.ReplayAutomaticallyAsync(
+            scopeKey,
+            observedScopeStateVersion: 1,
+            maxItems: 1);
+
+        replayed.Should().BeFalse();
+        runtime.CreatedByKind.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectionFailureReplayService_WhenRegisteredRecoveryKindsConflict_ShouldFailClosed()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-conflicting-recovery",
+            "projection-conflicting-recovery",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var service = new ProjectionFailureReplayService(
+            runtime,
+            dispatchPort,
+            dispatchPort,
+            recoveryAgentKindResolvers:
+            [
+                new StaticRecoveryAgentKindResolver(scopeKey.ProjectionKind, scopeKey.Mode, "projection.scope.first"),
+                new StaticRecoveryAgentKindResolver(scopeKey.ProjectionKind, scopeKey.Mode, "projection.scope.second"),
+            ]);
+
+        var replayed = await service.ReplayAutomaticallyAsync(
+            scopeKey,
+            observedScopeStateVersion: 1,
+            maxItems: 1);
+
+        replayed.Should().BeFalse();
+        runtime.CreatedByKind.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectionFailureReplayService_WhenMatchingRecoveryKindIsBlank_ShouldFailClosed()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-blank-recovery-kind",
+            "projection-blank-recovery-kind",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var service = new ProjectionFailureReplayService(
+            runtime,
+            dispatchPort,
+            dispatchPort,
+            recoveryAgentKindResolvers:
+            [
+                new StaticRecoveryAgentKindResolver(scopeKey.ProjectionKind, scopeKey.Mode, " "),
+                new StaticRecoveryAgentKindResolver(scopeKey.ProjectionKind, scopeKey.Mode, "projection.scope.valid"),
+            ]);
 
         var replayed = await service.ReplayAutomaticallyAsync(
             scopeKey,
@@ -820,6 +971,28 @@ public sealed class ProjectionRuntimeRegistrationTests
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class StaticRecoveryAgentKindResolver(
+        string projectionKind,
+        ProjectionRuntimeMode mode,
+        string agentKind)
+        : IProjectionScopeRecoveryAgentKindResolver
+    {
+        public bool TryResolve(
+            ProjectionRuntimeScopeKey scopeKey,
+            out string resolvedAgentKind)
+        {
+            if (scopeKey.Mode == mode &&
+                string.Equals(scopeKey.ProjectionKind, projectionKind, StringComparison.Ordinal))
+            {
+                resolvedAgentKind = agentKind;
+                return true;
+            }
+
+            resolvedAgentKind = string.Empty;
+            return false;
+        }
     }
 
     private sealed class RecordingActorDispatchPort

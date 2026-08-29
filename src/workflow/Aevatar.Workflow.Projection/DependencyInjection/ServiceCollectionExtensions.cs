@@ -43,6 +43,9 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
         services.AddAevatarAgentKindRegistry(builder =>
             builder.ScanAssemblies(typeof(WorkflowExecutionMaterializationScopeGAgent).Assembly));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionScopeRecoveryAgentKindResolver,
+            WorkflowExecutionProjectionScopeRecoveryAgentKindResolver>());
         services.AddRuntimeFleetCapabilityProjection();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IRuntimeFleetCapabilityAdvertisement,

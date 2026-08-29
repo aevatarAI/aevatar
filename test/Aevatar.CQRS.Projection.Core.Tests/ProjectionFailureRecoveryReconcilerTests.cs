@@ -317,9 +317,8 @@ public sealed class ProjectionFailureRecoveryReconcilerTests
 
         public string? ThrowOnRootActorId { get; init; }
 
-        public Task<bool> ReplayAsync(
-            ProjectionRuntimeScopeKey scopeKey,
-            int maxItems = 100,
+        public Task<bool> ReplayRetryExhaustedAsync(
+            ProjectionRetryExhaustedFailuresRequest request,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
