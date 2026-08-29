@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Core.Services;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Core;
@@ -118,6 +119,27 @@ public sealed class ServiceInvocationCatalogGAgentTests
 
         agent.State.SourceCatalogVersion.Should().Be(2);
         agent.State.ServiceEndpoints.Should().ContainSingle(x => x.EndpointId == "chat");
+    }
+
+    [Fact]
+    public async Task RevisionObservation_ShouldRetainOnlyBoundedReadinessState()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revision = PreparedRevision(identity, "r1", "chat");
+        revision.PreparedArtifact.ProtocolDescriptorSet = ByteString.CopyFrom(new byte[2_000_000]);
+        var agent = CreateAgent(identity);
+
+        await agent.HandleRevisionObservationAsync(new ObserveServiceInvocationRevisionsCommand
+        {
+            Identity = identity.Clone(),
+            Revisions = { ["r1"] = revision },
+            SourceRevisionVersion = 3,
+        });
+
+        agent.State.Revisions.Should().BeEmpty();
+        agent.State.RevisionReadiness.Should().ContainSingle();
+        agent.State.RevisionReadiness["r1"].PreparedEndpointIds.Should().Equal("chat");
+        agent.State.CalculateSize().Should().BeLessThan(4_096);
     }
 
     private static ServiceInvocationCatalogGAgent CreateAgent(ServiceIdentity identity) =>

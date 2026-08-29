@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.GAgentService.Core.Ports;
+using Aevatar.GAgentService.Core.Services;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -837,7 +838,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
                 new ObserveServiceInvocationRevisionsCommand
                 {
                     Identity = identity.Clone(),
-                    Revisions = { State.Revisions.ToDictionary(x => x.Key, x => x.Value.Clone(), StringComparer.Ordinal) },
+                    RevisionReadiness = { ServiceInvocationCatalogCompaction.ProjectRevisions(State.Revisions) },
                     SourceRevisionVersion = State.LastAppliedEventVersion,
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }),

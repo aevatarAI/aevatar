@@ -243,6 +243,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
+            ServiceInvocationCatalogCommittedStateCompactionHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
             CommittedStateProjectionActivationHook>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,

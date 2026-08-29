@@ -88,6 +88,25 @@ public sealed class ServiceInvokeReadinessEvaluatorTests
     }
 
     [Fact]
+    public void Evaluate_ShouldKeepArtifactEndpointMatchingExact()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revision = PreparedRevision(identity, "r1", " chat ");
+
+        var entries = _evaluator.Evaluate(
+            [GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")],
+            [Target("dep-1", "r1", "actor-1", "chat")],
+            new Dictionary<string, ServiceRevisionRecordState>(StringComparer.Ordinal)
+            {
+                ["r1"] = revision,
+            });
+
+        entries.Should().ContainSingle();
+        entries[0].ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        entries[0].UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.PreparedArtifactMissing);
+    }
+
+    [Fact]
     public void Evaluate_ShouldReturnPreparedArtifactIncompatible_WhenWorkflowExecutionModeIsMissing()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
@@ -153,6 +172,47 @@ public sealed class ServiceInvokeReadinessEvaluatorTests
         entries[0].UnavailableReason.Should()
             .Be(ServiceInvokeUnavailableReason.PreparedArtifactIncompatible);
         entries[0].SelectedRevisionId.Should().Be("r1");
+    }
+
+    [Fact]
+    public void Evaluate_ShouldPreserveStaticReadiness_WhenLegacyArtifactRevisionIdDiffers()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revision = PreparedRevision(identity, "r1", "chat");
+        revision.PreparedArtifact.RevisionId = "legacy-artifact";
+
+        var entries = _evaluator.Evaluate(
+            [GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")],
+            [Target("dep-1", "r1", "actor-1", "chat")],
+            new Dictionary<string, ServiceRevisionRecordState>(StringComparer.Ordinal)
+            {
+                ["r1"] = revision,
+            });
+
+        entries.Should().ContainSingle();
+        entries[0].ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready);
+        entries[0].UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.Unspecified);
+    }
+
+    [Fact]
+    public void Evaluate_ShouldRejectWorkflowArtifact_WhenRevisionBindingDiffers()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revision = PreparedWorkflowRevision(identity, "r1", "chat");
+        revision.PreparedArtifact.RevisionId = "legacy-artifact";
+
+        var entries = _evaluator.Evaluate(
+            [GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")],
+            [Target("dep-1", "r1", "actor-1", "chat")],
+            new Dictionary<string, ServiceRevisionRecordState>(StringComparer.Ordinal)
+            {
+                ["r1"] = revision,
+            });
+
+        entries.Should().ContainSingle();
+        entries[0].ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        entries[0].UnavailableReason.Should()
+            .Be(ServiceInvokeUnavailableReason.PreparedArtifactIncompatible);
     }
 
     [Fact]

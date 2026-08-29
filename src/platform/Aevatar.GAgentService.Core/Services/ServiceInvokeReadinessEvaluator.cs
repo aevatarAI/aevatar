@@ -8,7 +8,16 @@ public sealed class ServiceInvokeReadinessEvaluator
     public IReadOnlyList<ServiceInvocationCatalogEntryState> Evaluate(
         IReadOnlyList<ServiceEndpointDescriptor> endpoints,
         IReadOnlyList<ServiceServingTargetSpec> servingTargets,
-        IReadOnlyDictionary<string, ServiceRevisionRecordState> revisions)
+        IReadOnlyDictionary<string, ServiceRevisionRecordState> revisions) =>
+        Evaluate(
+            endpoints,
+            servingTargets,
+            ServiceInvocationCatalogCompaction.ProjectRevisions(revisions));
+
+    public IReadOnlyList<ServiceInvocationCatalogEntryState> Evaluate(
+        IReadOnlyList<ServiceEndpointDescriptor> endpoints,
+        IReadOnlyList<ServiceServingTargetSpec> servingTargets,
+        IReadOnlyDictionary<string, ServiceInvocationRevisionReadinessState> revisions)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(servingTargets);
@@ -23,7 +32,7 @@ public sealed class ServiceInvokeReadinessEvaluator
     private static ServiceInvocationCatalogEntryState EvaluateEndpoint(
         ServiceEndpointDescriptor endpoint,
         IReadOnlyList<ServiceServingTargetSpec> servingTargets,
-        IReadOnlyDictionary<string, ServiceRevisionRecordState> revisions)
+        IReadOnlyDictionary<string, ServiceInvocationRevisionReadinessState> revisions)
     {
         var endpointId = endpoint.EndpointId?.Trim() ?? string.Empty;
         var selectedTarget = SelectTarget(endpointId, servingTargets);
@@ -43,10 +52,8 @@ public sealed class ServiceInvokeReadinessEvaluator
                 selectedTarget);
         }
 
-        var artifact = revision.PreparedArtifact;
-        if (artifact == null ||
-            string.IsNullOrWhiteSpace(artifact.RevisionId) ||
-            artifact.Endpoints.All(x => !string.Equals(x.EndpointId, endpointId, StringComparison.Ordinal)))
+        if (string.IsNullOrWhiteSpace(revision.PreparedArtifactRevisionId) ||
+            revision.PreparedEndpointIds.All(x => !string.Equals(x, endpointId, StringComparison.Ordinal)))
         {
             return Unavailable(
                 endpointId,
@@ -54,11 +61,7 @@ public sealed class ServiceInvokeReadinessEvaluator
                 selectedTarget);
         }
 
-        if (revision.Spec?.ImplementationKind == ServiceImplementationKind.Workflow &&
-            (!WorkflowServiceDeploymentPlanIntegrity.IsCompatible(
-                 artifact,
-                 selectedTarget.RevisionId) ||
-             WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(artifact)))
+        if (!revision.PreparedArtifactCompatible)
         {
             return Unavailable(
                 endpointId,

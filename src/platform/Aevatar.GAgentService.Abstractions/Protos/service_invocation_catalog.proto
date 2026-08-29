@@ -32,6 +32,13 @@ message ServiceInvocationCatalogEntryState {
   string selected_actor_id = 6;
 }
 
+message ServiceInvocationRevisionReadinessState {
+  ServiceRevisionStatus status = 1;
+  string prepared_artifact_revision_id = 2;
+  repeated string prepared_endpoint_ids = 3;
+  bool prepared_artifact_compatible = 4;
+}
+
 message ServiceInvocationCatalogState {
   ServiceIdentity identity = 1;
   repeated ServiceEndpointDescriptor service_endpoints = 2;
@@ -44,6 +51,7 @@ message ServiceInvocationCatalogState {
   google.protobuf.Timestamp observed_at = 9;
   int64 last_applied_event_version = 10;
   string last_event_id = 11;
+  map<string, ServiceInvocationRevisionReadinessState> revision_readiness = 12;
 }
 
 message ObserveServiceInvocationCatalogCommand {
@@ -65,6 +73,7 @@ message ObserveServiceInvocationRevisionsCommand {
   map<string, ServiceRevisionRecordState> revisions = 2;
   int64 source_revision_version = 3;
   google.protobuf.Timestamp observed_at = 4;
+  map<string, ServiceInvocationRevisionReadinessState> revision_readiness = 5;
 }
 
 message RefreshServiceInvocationCatalogObservationCommand {
@@ -81,4 +90,5 @@ message ServiceInvocationCatalogObservedEvent {
   int64 source_serving_version = 7;
   int64 source_revision_version = 8;
   google.protobuf.Timestamp observed_at = 9;
+  map<string, ServiceInvocationRevisionReadinessState> revision_readiness = 10;
 }

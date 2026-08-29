@@ -67,8 +67,11 @@ public sealed class ServiceInvocationCatalogGAgent : GAgentBase<ServiceInvocatio
         var next = State.Clone();
         next.Identity = command.Identity.Clone();
         next.Revisions.Clear();
-        foreach (var (revisionId, revision) in command.Revisions)
-            next.Revisions[revisionId] = revision.Clone();
+        next.RevisionReadiness.Clear();
+        if (command.RevisionReadiness.Count > 0)
+            next.RevisionReadiness.Add(CloneRevisionReadiness(command.RevisionReadiness));
+        else
+            next.RevisionReadiness.Add(ServiceInvocationCatalogCompaction.ProjectRevisions(command.Revisions));
         next.SourceRevisionVersion = command.SourceRevisionVersion;
         next.ObservedAt = ResolveObservedAt(command.ObservedAt);
         return PersistObservationAsync(next);
@@ -85,14 +88,14 @@ public sealed class ServiceInvocationCatalogGAgent : GAgentBase<ServiceInvocatio
         var entries = _evaluator.Evaluate(
             next.ServiceEndpoints,
             next.ServingTargets,
-            next.Revisions);
+            next.RevisionReadiness);
 
         await PersistDomainEventAsync(new ServiceInvocationCatalogObservedEvent
         {
             Identity = next.Identity?.Clone(),
             ServiceEndpoints = { next.ServiceEndpoints.Select(CloneEndpoint) },
             ServingTargets = { next.ServingTargets.Select(CloneTarget) },
-            Revisions = { CloneRevisions(next.Revisions) },
+            RevisionReadiness = { CloneRevisionReadiness(next.RevisionReadiness) },
             Entries = { entries.Select(CloneEntry) },
             SourceCatalogVersion = next.SourceCatalogVersion,
             SourceServingVersion = next.SourceServingVersion,
@@ -112,8 +115,11 @@ public sealed class ServiceInvocationCatalogGAgent : GAgentBase<ServiceInvocatio
         next.ServingTargets.Clear();
         next.ServingTargets.Add(evt.ServingTargets.Select(CloneTarget));
         next.Revisions.Clear();
-        foreach (var (revisionId, revision) in evt.Revisions)
-            next.Revisions[revisionId] = revision.Clone();
+        next.RevisionReadiness.Clear();
+        if (evt.RevisionReadiness.Count > 0)
+            next.RevisionReadiness.Add(CloneRevisionReadiness(evt.RevisionReadiness));
+        else
+            next.RevisionReadiness.Add(ServiceInvocationCatalogCompaction.ProjectRevisions(evt.Revisions));
         next.Entries.Clear();
         next.Entries.Add(evt.Entries.Select(CloneEntry));
         next.SourceCatalogVersion = evt.SourceCatalogVersion;
@@ -152,8 +158,14 @@ public sealed class ServiceInvocationCatalogGAgent : GAgentBase<ServiceInvocatio
         return $"{serviceKey}:invocation-catalog:{version}";
     }
 
-    private static IDictionary<string, ServiceRevisionRecordState> CloneRevisions(
-        MapField<string, ServiceRevisionRecordState> revisions) =>
+    protected override Task OnStateChangedAsync(ServiceInvocationCatalogState state, CancellationToken ct)
+    {
+        ServiceInvocationCatalogCompaction.Compact(state);
+        return Task.CompletedTask;
+    }
+
+    private static IDictionary<string, ServiceInvocationRevisionReadinessState> CloneRevisionReadiness(
+        MapField<string, ServiceInvocationRevisionReadinessState> revisions) =>
         revisions.ToDictionary(x => x.Key, x => x.Value.Clone(), StringComparer.Ordinal);
 
     private static ServiceEndpointDescriptor CloneEndpoint(ServiceEndpointDescriptor source) =>

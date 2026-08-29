@@ -65,17 +65,17 @@ public sealed class ServiceRevisionCatalogGAgentTests
             x.ActorId == ServiceActorIds.InvocationCatalog(identity));
         var createObservation = dispatchPort.Calls[0].Envelope.Payload.Unpack<ObserveServiceInvocationRevisionsCommand>();
         createObservation.SourceRevisionVersion.Should().Be(1);
-        createObservation.Revisions.Should().ContainKey("r1")
+        createObservation.Revisions.Should().BeEmpty();
+        createObservation.RevisionReadiness.Should().ContainKey("r1")
             .WhoseValue.Status.Should().Be(ServiceRevisionStatus.Created);
         var prepareObservation = dispatchPort.Calls[1].Envelope.Payload.Unpack<ObserveServiceInvocationRevisionsCommand>();
         prepareObservation.SourceRevisionVersion.Should().Be(2);
-        prepareObservation.Revisions["r1"].Status.Should().Be(ServiceRevisionStatus.Prepared);
-        prepareObservation.Revisions["r1"].PreparedArtifact.Should().NotBeNull();
-        prepareObservation.Revisions["r1"].PreparedArtifact.Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        prepareObservation.RevisionReadiness["r1"].Status.Should().Be(ServiceRevisionStatus.Prepared);
+        prepareObservation.RevisionReadiness["r1"].PreparedEndpointIds.Should().Equal("run");
         var publishObservation = dispatchPort.Calls[2].Envelope.Payload.Unpack<ObserveServiceInvocationRevisionsCommand>();
         publishObservation.SourceRevisionVersion.Should().Be(3);
         publishObservation.Identity.Should().BeEquivalentTo(identity);
-        publishObservation.Revisions["r1"].Status.Should().Be(ServiceRevisionStatus.Published);
+        publishObservation.RevisionReadiness["r1"].Status.Should().Be(ServiceRevisionStatus.Published);
 
         await agent.DeactivateAsync();
 
@@ -127,7 +127,8 @@ public sealed class ServiceRevisionCatalogGAgentTests
             .Unpack<ObserveServiceInvocationRevisionsCommand>();
         observation.Identity.Should().BeEquivalentTo(identity);
         observation.SourceRevisionVersion.Should().Be(committedVersion);
-        observation.Revisions.Should().ContainKey(revisionId)
+        observation.Revisions.Should().BeEmpty();
+        observation.RevisionReadiness.Should().ContainKey(revisionId)
             .WhoseValue.Status.Should().Be(ServiceRevisionStatus.Published);
     }
 
@@ -187,7 +188,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
         dispatchPort.Calls.Should().HaveCount(5);
         var replayObservation = dispatchPort.Calls[^1].Envelope.Payload.Unpack<ObserveServiceInvocationRevisionsCommand>();
         replayObservation.SourceRevisionVersion.Should().Be(3);
-        replayObservation.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
+        replayObservation.RevisionReadiness[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
     }
 
     [Theory]
@@ -501,7 +502,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
         var observation = dispatchPort.Calls[0].Envelope.Payload
             .Unpack<ObserveServiceInvocationRevisionsCommand>();
         observation.SourceRevisionVersion.Should().Be(4);
-        observation.Revisions[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
+        observation.RevisionReadiness[revisionId].Status.Should().Be(ServiceRevisionStatus.Published);
 
         var committedEvents = await eventStore.GetEventsAsync(actorId);
         committedEvents.Should().HaveCount(4);
