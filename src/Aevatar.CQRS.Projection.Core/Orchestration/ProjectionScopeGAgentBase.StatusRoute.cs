@@ -753,10 +753,14 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             return;
         }
 
-        if (!await RestorePreviousWriterForDrainAsync(route, ct))
+        var hasDurableDrainProbe = route.DrainProbeVersion > 0;
+        if (!await RestorePreviousWriterForDrainAsync(
+                route,
+                restartLifecycle: !hasDurableDrainProbe,
+                ct))
         {
             _logger.LogInformation(
-                "Projection scope status route cannot restore its previous writer for a fresh drain probe. actorId={ActorId} routeEpoch={RouteEpoch} attempt={Attempt}",
+                "Projection scope status route cannot prepare its previous writer for drain confirmation. actorId={ActorId} routeEpoch={RouteEpoch} attempt={Attempt}",
                 Id,
                 route.RouteEpoch,
                 attempt);
@@ -764,15 +768,15 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             return;
         }
 
-        var requiredObservedVersion = route.DrainProbeVersion > 0
-            ? route.DrainProbeVersion
-            : CurrentScopeVersion + 1;
-        await PersistDomainEventAsync(new ProjectionScopeStatusRouteDrainProbedEvent
+        if (!hasDurableDrainProbe)
         {
-            RouteEpoch = route.RouteEpoch,
-            RequiredObservedVersion = requiredObservedVersion,
-            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
-        });
+            await PersistDomainEventAsync(new ProjectionScopeStatusRouteDrainProbedEvent
+            {
+                RouteEpoch = route.RouteEpoch,
+                RequiredObservedVersion = CurrentScopeVersion + 1,
+                OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
+            });
+        }
 
         route = State.StatusRoute!;
         _ = await RequestPreviousWriterReleaseAsync(route, ct);
@@ -788,6 +792,7 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
     private async Task<bool> RestorePreviousWriterForDrainAsync(
         ProjectionScopeStatusRoute route,
+        bool restartLifecycle,
         CancellationToken ct)
     {
         if (route.Phase != ProjectionScopeStatusRoutePhase.Blocked)
@@ -813,16 +818,19 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             if (!await runtime.ExistsAsync(previousWriterActorId))
                 _ = await runtime.CreateByKindAsync(legacyKind, previousWriterActorId, ct);
 
-            await DispatchEnsureLifecycleAsync(
-                dispatchPort,
-                previousWriterActorId,
-                new EnsureProjectionScopeCommand
-                {
-                    RootActorId = Id,
-                    ProjectionKind = ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
-                    Mode = ProjectionScopeMode.DurableMaterialization,
-                },
-                ct);
+            if (restartLifecycle)
+            {
+                await DispatchEnsureLifecycleAsync(
+                    dispatchPort,
+                    previousWriterActorId,
+                    new EnsureProjectionScopeCommand
+                    {
+                        RootActorId = Id,
+                        ProjectionKind = ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
+                        Mode = ProjectionScopeMode.DurableMaterialization,
+                    },
+                    ct);
+            }
             await UpsertPreviousWriterRelayAsync(previousWriterActorId, legacyKind, ct);
             return true;
         }
@@ -833,16 +841,19 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         if (!await runtime.ExistsAsync(previousWriterActorId))
             _ = await runtime.CreateByKindAsync(ProjectionScopeStatusGAgent.AgentKind, previousWriterActorId, ct);
 
-        await DispatchEnsureLifecycleAsync(
-            dispatchPort,
-            previousWriterActorId,
-            new EnsureProjectionScopeCommand
-            {
-                RootActorId = Id,
-                ProjectionKind = ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
-                Mode = ProjectionScopeMode.DurableMaterialization,
-            },
-            ct);
+        if (restartLifecycle)
+        {
+            await DispatchEnsureLifecycleAsync(
+                dispatchPort,
+                previousWriterActorId,
+                new EnsureProjectionScopeCommand
+                {
+                    RootActorId = Id,
+                    ProjectionKind = ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
+                    Mode = ProjectionScopeMode.DurableMaterialization,
+                },
+                ct);
+        }
         await UpsertPreviousWriterRelayAsync(
             previousWriterActorId,
             ProjectionScopeStatusGAgent.AgentKind,
