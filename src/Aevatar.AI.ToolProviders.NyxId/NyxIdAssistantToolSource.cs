@@ -18,6 +18,7 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
 {
     private readonly NyxIdToolOptions _options;
     private readonly NyxIdApiClient _client;
+    private readonly NyxIdDelegationTokenLease _delegationTokenLease;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
     private readonly ILogger _logger;
 
@@ -25,10 +26,12 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
         NyxIdToolOptions options,
         NyxIdApiClient client,
         INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
-        ILogger<NyxIdAssistantToolSource>? logger = null)
+        ILogger<NyxIdAssistantToolSource>? logger = null,
+        NyxIdDelegationTokenLease? delegationTokenLease = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _client = client ?? throw new ArgumentNullException(nameof(client));
+        _delegationTokenLease = delegationTokenLease ?? new NyxIdDelegationTokenLease(client);
         _fileArtifactIngress = fileArtifactIngress;
         _logger = logger ?? NullLogger<NyxIdAssistantToolSource>.Instance;
     }
@@ -53,7 +56,8 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
                 _logger,
                 _fileArtifactIngress,
                 _options.EffectiveProxyFileArtifactMaxBytes,
-                _options.ManagedWorkflowAdmissionMode),
+                _options.ManagedWorkflowAdmissionMode,
+                _delegationTokenLease),
             ReadOnly(new NyxIdProfileTool(_client), ["consents"], "consents"),
             ReadOnly(new NyxIdMfaTool(_client), ["status"], "status"),
             ReadOnly(new NyxIdServicesTool(_client), ["list", "show"], "list", "id"),

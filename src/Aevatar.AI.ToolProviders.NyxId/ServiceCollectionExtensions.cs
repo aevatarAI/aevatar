@@ -202,6 +202,7 @@ public static class ServiceCollectionExtensions
         }
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<NyxIdDelegationTokenLease>();
         services.TryAddSingleton<NyxIdMcpOperationCatalogReader>();
         services.TryAddSingleton<INyxIdActionEvidenceReadPort>(provider =>
             new NyxIdActionEvidenceReadPort(

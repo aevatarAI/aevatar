@@ -17,6 +17,7 @@ internal sealed class NyxIdAdmittedOperationToolFactory : INyxIdAdmittedOperatio
 {
     private readonly NyxIdApiClient _apiClient;
     private readonly NyxIdToolOptions _options;
+    private readonly NyxIdDelegationTokenLease _delegationTokenLease;
     private readonly ILogger<NyxIdAdmittedOperationToolFactory> _logger;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
 
@@ -24,10 +25,12 @@ internal sealed class NyxIdAdmittedOperationToolFactory : INyxIdAdmittedOperatio
         NyxIdApiClient apiClient,
         NyxIdToolOptions options,
         ILogger<NyxIdAdmittedOperationToolFactory> logger,
-        INyxIdProxyFileArtifactIngress? fileArtifactIngress = null)
+        INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
+        NyxIdDelegationTokenLease? delegationTokenLease = null)
     {
         _apiClient = apiClient;
         _options = options;
+        _delegationTokenLease = delegationTokenLease ?? new NyxIdDelegationTokenLease(apiClient);
         _logger = logger;
         _fileArtifactIngress = fileArtifactIngress;
     }
@@ -52,7 +55,8 @@ internal sealed class NyxIdAdmittedOperationToolFactory : INyxIdAdmittedOperatio
             _logger,
             _fileArtifactIngress,
             _options.EffectiveProxyFileArtifactMaxBytes,
-            _options.ManagedWorkflowAdmissionMode);
+            _options.ManagedWorkflowAdmissionMode,
+            _delegationTokenLease);
         return new NyxIdConnectedServiceOperationTool(
             proxy,
             mapped,

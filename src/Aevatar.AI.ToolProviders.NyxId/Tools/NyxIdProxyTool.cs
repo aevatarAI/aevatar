@@ -28,6 +28,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     private const string AccessTokenMissingErrorCode = "NYXID_ACCESS_TOKEN_MISSING";
     private const string AccessTokenMissingErrorMessage =
         "No NyxID access token available. User must be authenticated.";
+    private const string DelegationRefreshFailedErrorCode =
+        NyxIdDelegationTokenLease.RefreshFailedErrorCode;
+    private const string DelegationRefreshFailedErrorMessage =
+        NyxIdDelegationTokenLease.RefreshFailedErrorMessage;
     private const string ResponseTooLargeErrorCode = "NYXID_PROXY_RESPONSE_TOO_LARGE";
     private const string ResponseTooLargeErrorMessage =
         "The admitted proxy response exceeded the configured text response limit.";
@@ -39,6 +43,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     };
 
     private readonly NyxIdApiClient _client;
+    private readonly NyxIdDelegationTokenLease _delegationTokenLease;
     private readonly ILogger _logger;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
     private readonly long _fileArtifactMaxBytes;
@@ -50,9 +55,11 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
         long fileArtifactMaxBytes = NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes,
         NyxIdManagedWorkflowAdmissionMode managedWorkflowAdmissionMode =
-            NyxIdManagedWorkflowAdmissionMode.Shadow)
+            NyxIdManagedWorkflowAdmissionMode.Shadow,
+        NyxIdDelegationTokenLease? delegationTokenLease = null)
     {
         _client = client;
+        _delegationTokenLease = delegationTokenLease ?? new NyxIdDelegationTokenLease(client);
         _logger = logger ?? NullLogger.Instance;
         _fileArtifactIngress = fileArtifactIngress;
         _fileArtifactMaxBytes = NormalizeMaxBytes(fileArtifactMaxBytes);
@@ -100,6 +107,19 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 Status = AgentToolReceiptStatus.Error,
                 ErrorCode = OperationAdmissionRequiredErrorCode,
                 ErrorMessage = OperationAdmissionRequiredErrorMessage,
+                ResultJson = resultJson,
+            };
+        }
+
+        if (string.Equals(resultJson, DelegationRefreshFailureResult(), StringComparison.Ordinal))
+        {
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = DelegationRefreshFailedErrorCode,
+                ErrorMessage = DelegationRefreshFailedErrorMessage,
                 ResultJson = resultJson,
             };
         }
@@ -386,12 +406,14 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         }
 
         // Resolve which token owns the target service: user token first, fallback to org token
-        var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, serviceId, ct);
+        var resolvedToken = await ResolveTokenForServiceAsync(token, orgToken, serviceId, ct);
+        if (!resolvedToken.Lease.Succeeded)
+            return DelegationRefreshFailureResult();
 
         _logger.LogInformation("[nyxid_proxy] {Method} slug={Slug} tokenSource={Source}",
-            method, slug, effectiveToken == token ? "user" : "org");
+            method, slug, resolvedToken.UsesOrganizationToken ? "org" : "user");
         var result = await _client.ProxyRequestAsync(
-            effectiveToken,
+            resolvedToken.Lease.AccessToken!,
             slug,
             serviceId,
             path,
@@ -455,7 +477,21 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         // against that same view while retaining the delegation token for the exact proxy request.
         var authorityToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
                                  AgentToolRequestContext.Current?.Credentials) ?? token;
-        var revalidationFailure = await RevalidateAdmittedOperationAsync(admission, authorityToken, ct);
+        var authorityLease = await _delegationTokenLease.ResolveAsync(authorityToken, ct);
+        if (!authorityLease.Succeeded)
+        {
+            return CreateAdmittedFailureOutcome(
+                admission,
+                callId,
+                toolName,
+                DelegationRefreshFailedErrorCode,
+                DelegationRefreshFailedErrorMessage);
+        }
+
+        var revalidationFailure = await RevalidateAdmittedOperationAsync(
+            admission,
+            authorityLease.AccessToken!,
+            ct);
         if (revalidationFailure is not null)
         {
             return CreateAdmittedFailureOutcome(
@@ -472,10 +508,21 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             request.Slug,
             FormatAdmissionIdentity(admission.Identity));
 
+        var proxyLease = await _delegationTokenLease.ResolveAsync(token, ct);
+        if (!proxyLease.Succeeded)
+        {
+            return CreateAdmittedFailureOutcome(
+                admission,
+                callId,
+                toolName,
+                DelegationRefreshFailedErrorCode,
+                DelegationRefreshFailedErrorMessage);
+        }
+
         if (request.FileArtifact)
         {
             return await ExecuteAdmittedFileArtifactAsync(
-                token,
+                proxyLease.AccessToken!,
                 request,
                 callId,
                 toolName,
@@ -487,7 +534,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
         var response = maxTextResponseBytes.HasValue
             ? await _client.ProxyRequestBoundedAsync(
-                token,
+                proxyLease.AccessToken!,
                 request.Slug,
                 request.ServiceId,
                 request.Path,
@@ -497,7 +544,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 maxTextResponseBytes.Value,
                 ct)
             : await _client.ProxyRequestResponseAsync(
-                token,
+                proxyLease.AccessToken!,
                 request.Slug,
                 request.ServiceId,
                 request.Path,
@@ -552,7 +599,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         if (IsExactApprovalFailedReceipt(receipt))
         {
             receipt!.NyxIdApprovalTerminalOutcome = await ReadApprovalTerminalOutcomeAsync(
-                token,
+                proxyLease.AccessToken!,
                 receipt.ApprovalRequestId,
                 ct);
         }
@@ -867,6 +914,11 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     private static string AdmissionDriftError(string code, string message) =>
         JsonSerializer.Serialize(new { error = true, error_code = code, message });
 
+    private static string DelegationRefreshFailureResult() =>
+        AdmissionDriftError(
+            DelegationRefreshFailedErrorCode,
+            DelegationRefreshFailedErrorMessage);
+
     private static AgentToolTerminalOutcome CreateAdmittedFailureOutcome(
         AgentToolOperationAdmission admission,
         string callId,
@@ -981,15 +1033,22 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         if (!workflowRuntime.HasManagedParent || callerScopeId == null || ownerRunId == null)
             return FileArtifactError("managed_workflow_context_required", "response_mode=file_artifact requires a managed workflow runtime context and caller scope.");
 
-        var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, serviceId, ct);
+        var resolvedToken = await ResolveTokenForServiceAsync(token, orgToken, serviceId, ct);
+        if (!resolvedToken.Lease.Succeeded)
+        {
+            return FileArtifactError(
+                DelegationRefreshFailedErrorCode,
+                DelegationRefreshFailedErrorMessage);
+        }
+
         _logger.LogInformation(
             "[nyxid_proxy] GET file_artifact slug={Slug} maxBytes={MaxBytes} tokenSource={Source}",
             slug,
             _fileArtifactMaxBytes,
-            effectiveToken == token ? "user" : "org");
+            resolvedToken.UsesOrganizationToken ? "org" : "user");
 
         var response = await _client.ProxyGetBinaryResponseAsync(
-            effectiveToken,
+            resolvedToken.Lease.AccessToken!,
             slug,
             serviceId,
             path,
@@ -1078,24 +1137,32 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     /// Resolve which token to use for a given exact UserService id.
     /// Checks user token's service list first; falls back to org token.
     /// </summary>
-    private async Task<string> ResolveTokenForServiceAsync(
+    private async Task<ResolvedProxyToken> ResolveTokenForServiceAsync(
         string userToken, string? orgToken, string serviceId, CancellationToken ct)
     {
+        var userLease = await _delegationTokenLease.ResolveAsync(userToken, ct);
+        if (!userLease.Succeeded)
+            return new ResolvedProxyToken(userLease, false);
+
         if (string.IsNullOrWhiteSpace(orgToken) || TokensEqual(orgToken, userToken))
-            return userToken;
+            return new ResolvedProxyToken(userLease, false);
 
-        if (await ServiceExistsForTokenAsync(userToken, serviceId, ct))
-            return userToken;
+        if (await ServiceExistsForTokenAsync(userLease.AccessToken!, serviceId, ct))
+            return new ResolvedProxyToken(userLease, false);
 
-        if (await ServiceExistsForTokenAsync(orgToken, serviceId, ct))
+        var organizationLease = await _delegationTokenLease.ResolveAsync(orgToken, ct);
+        if (!organizationLease.Succeeded)
+            return new ResolvedProxyToken(organizationLease, true);
+
+        if (await ServiceExistsForTokenAsync(organizationLease.AccessToken!, serviceId, ct))
         {
             _logger.LogInformation(
                 "[nyxid_proxy] Service instance {ServiceId} not found for user token, using org token", serviceId);
-            return orgToken;
+            return new ResolvedProxyToken(organizationLease, true);
         }
 
         // Neither has it — use user token and let NyxID return the error
-        return userToken;
+        return new ResolvedProxyToken(userLease, false);
     }
 
     /// <summary>
@@ -1296,6 +1363,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         string Detail,
         int? HttpStatus,
         string? SourceContentType);
+
+    private sealed record ResolvedProxyToken(
+        NyxIdDelegationTokenLeaseResult Lease,
+        bool UsesOrganizationToken);
 
     private sealed record NyxIdProxyWorkflowFileRefProjection(
         string? FileId,

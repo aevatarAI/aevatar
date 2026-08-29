@@ -14,6 +14,7 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
     private readonly NyxIdToolOptions _options;
     private readonly NyxIdApiClient _apiClient;
     private readonly NyxIdServiceInstanceClient _client;
+    private readonly NyxIdDelegationTokenLease _delegationTokenLease;
     private readonly ILogger _logger;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
 
@@ -22,11 +23,13 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         NyxIdApiClient apiClient,
         NyxIdServiceInstanceClient client,
         ILogger<NyxIdConnectedServiceToolSource>? logger = null,
-        INyxIdProxyFileArtifactIngress? fileArtifactIngress = null)
+        INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
+        NyxIdDelegationTokenLease? delegationTokenLease = null)
     {
         _options = options;
         _apiClient = apiClient;
         _client = client;
+        _delegationTokenLease = delegationTokenLease ?? new NyxIdDelegationTokenLease(apiClient);
         _logger = logger ?? NullLogger<NyxIdConnectedServiceToolSource>.Instance;
         _fileArtifactIngress = fileArtifactIngress;
     }
@@ -67,7 +70,8 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                 _logger,
                 _fileArtifactIngress,
                 _options.EffectiveProxyFileArtifactMaxBytes,
-                _options.ManagedWorkflowAdmissionMode);
+                _options.ManagedWorkflowAdmissionMode,
+                _delegationTokenLease);
             var tools = catalog.Services
                 .Where(service => HasExactRouteBinding(service, bindingsById))
                 .SelectMany(service => service.Endpoints
