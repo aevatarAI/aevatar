@@ -74,6 +74,15 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         // the cold ensure path or the activation path.
         await AdvanceStatusRouteAsync(ct);
         await EnsureObservationRelayAsync(State.RootActorId, ct);
+        if (!string.IsNullOrWhiteSpace(State.RootActorId) && !State.ObservationAttached)
+        {
+            await PersistDomainEventAsync(new ProjectionObservationAttachmentUpdatedEvent
+            {
+                Attached = true,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+        }
+
         if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
             await ScheduleInFlightObservationRecoveryAsync(ct);
         else

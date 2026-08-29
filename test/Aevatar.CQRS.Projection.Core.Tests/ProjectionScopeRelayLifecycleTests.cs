@@ -143,6 +143,24 @@ public sealed class ProjectionScopeRelayLifecycleTests
         stream.UpsertedRelays.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ActiveScope_Activation_ShouldPersistObservationAttachmentAfterRelayIsRestored()
+    {
+        var (agent, stream) = CreateAgent(
+            "projection-scope-active-reactivation",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var eventSourcing = (LifecycleEventSourcing)agent.EventSourcing!;
+        agent.State.ObservationAttached = false;
+
+        await agent.ActivateForTestAsync();
+
+        stream.UpsertedRelays.Should().ContainSingle();
+        eventSourcing.PersistedEvents.OfType<ProjectionObservationAttachmentUpdatedEvent>()
+            .Should().ContainSingle()
+            .Which.Attached.Should().BeTrue();
+        agent.State.ObservationAttached.Should().BeTrue();
+    }
+
     private static (LifecycleScopeAgent Agent, RecordingStream Stream) CreateAgent(
         string scopeId,
         ProjectionRuntimeMode runtimeMode)

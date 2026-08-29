@@ -36,6 +36,7 @@ public class EventSourcingBehavior<TState> :
     private readonly string _agentId;
     private long _currentVersion;
     private long _lastSnapshotVersion;
+    private long _lastSnapshotAttemptVersion;
     private IReadOnlyList<CommittedStateEventPublished> _pendingCommittedStatePublications = [];
 
     public EventSourcingBehavior(
@@ -222,13 +223,18 @@ public class EventSourcingBehavior<TState> :
             }
         }
 
-        var eventsSinceLastSnapshot = _currentVersion - _lastSnapshotVersion;
-        if (!_snapshotStrategy.ShouldCreateSnapshot(eventsSinceLastSnapshot))
+        // A failed snapshot must not turn every subsequent event into another full-state
+        // snapshot attempt. Keep the successful snapshot watermark for replay/compaction,
+        // but pace attempts from the latest version at which the store was actually tried.
+        var snapshotAttemptWatermark = Math.Max(_lastSnapshotVersion, _lastSnapshotAttemptVersion);
+        var eventsSinceLastSnapshotAttempt = _currentVersion - snapshotAttemptWatermark;
+        if (!_snapshotStrategy.ShouldCreateSnapshot(eventsSinceLastSnapshotAttempt))
             return;
 
+        var snapshotVersion = _currentVersion;
+        _lastSnapshotAttemptVersion = snapshotVersion;
         try
         {
-            var snapshotVersion = _currentVersion;
             await _snapshotStore.SaveAsync(
                 _agentId,
                 new EventSourcingSnapshot<TState>(currentState.Clone(), snapshotVersion),
@@ -256,6 +262,7 @@ public class EventSourcingBehavior<TState> :
     {
         var snapshot = await TryLoadSnapshotAsync(agentId, ct);
         _lastSnapshotVersion = snapshot?.Version ?? 0;
+        _lastSnapshotAttemptVersion = _lastSnapshotVersion;
         long? fromVersion = snapshot?.Version;
         var events = await _eventStore.GetEventsAsync(agentId, fromVersion, ct);
         var publicationState = _publicationStateStore == null

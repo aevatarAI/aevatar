@@ -206,6 +206,37 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
+    public async Task PersistSnapshotAsync_WhenSnapshotSaveFails_ShouldWaitForNextIntervalBeforeRetrying()
+    {
+        var store = new InMemoryEventStore();
+        var snapshotStore = new ThrowingSnapshotStore<CounterState>();
+        var behavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-snapshot-fail-throttled",
+            snapshotStore: snapshotStore,
+            snapshotStrategy: new IntervalSnapshotStrategy(2));
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+        await behavior.ConfirmEventsAsync();
+        await behavior.PersistSnapshotAsync(new CounterState { Count = 2 });
+
+        snapshotStore.SaveAttempts.ShouldBe(1);
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+        await behavior.ConfirmEventsAsync();
+        await behavior.PersistSnapshotAsync(new CounterState { Count = 3 });
+
+        snapshotStore.SaveAttempts.ShouldBe(1);
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+        await behavior.ConfirmEventsAsync();
+        await behavior.PersistSnapshotAsync(new CounterState { Count = 4 });
+
+        snapshotStore.SaveAttempts.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task PersistSnapshotAsync_WhenCompactionEnabled_ShouldDeleteAfterSnapshotIsSaved()
     {
         var store = new InMemoryEventStore();
@@ -737,6 +768,8 @@ public class EventSourcingBehaviorTests
     private sealed class ThrowingSnapshotStore<TState> : IEventSourcingSnapshotStore<TState>
         where TState : class
     {
+        public int SaveAttempts { get; private set; }
+
         public Task<EventSourcingSnapshot<TState>?> LoadAsync(string agentId, CancellationToken ct = default)
         {
             _ = agentId;
@@ -749,6 +782,7 @@ public class EventSourcingBehaviorTests
             _ = agentId;
             _ = snapshot;
             _ = ct;
+            SaveAttempts++;
             throw new InvalidOperationException("snapshot-store-failure");
         }
     }
