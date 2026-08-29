@@ -225,6 +225,13 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         var commandId = ActiveInboundEnvelope?.Id ?? string.Empty;
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? string.Empty;
 
+        if (command.AutomaticRecovery)
+        {
+            await TryRestoreInactiveDurableRecoveryManifestAsync(
+                commandId,
+                correlationId);
+        }
+
         if (!State.Active || State.Released || State.Failures.Count == 0)
         {
             _logger.LogInformation(
@@ -317,6 +324,83 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         // before another backlog item is attempted, preserving source ownership of retry counts.
         if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
             await ScheduleInFlightObservationRecoveryAsync(CancellationToken.None);
+    }
+
+    private async Task TryRestoreInactiveDurableRecoveryManifestAsync(
+        string commandId,
+        string correlationId)
+    {
+        var pending = State.InFlightObservation;
+        if (State.Active ||
+            State.Released ||
+            RuntimeMode != ProjectionRuntimeMode.DurableMaterialization ||
+            State.Mode != ProjectionScopeMode.DurableMaterialization ||
+            !EnablesDurableObservationRecovery ||
+            State.Failures.Count == 0 ||
+            pending?.Source == null ||
+            pending.Envelope == null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(State.RootActorId) ||
+            string.IsNullOrWhiteSpace(State.ProjectionKind))
+        {
+            _logger.LogError(
+                "Projection automatic recovery refused an inactive unreleased manifest with incomplete actor-owned scope identity. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} rootActorIdPresent={RootActorIdPresent} projectionKindPresent={ProjectionKindPresent} unresolvedFailureCount={UnresolvedFailureCount}",
+                Id,
+                commandId,
+                correlationId,
+                !string.IsNullOrWhiteSpace(State.RootActorId),
+                !string.IsNullOrWhiteSpace(State.ProjectionKind),
+                State.Failures.Count);
+            return;
+        }
+
+        var rootActorId = State.RootActorId;
+        var projectionKind = State.ProjectionKind;
+        var sessionId = State.SessionId;
+        var previousActivationGeneration = State.ActivationGeneration;
+        var source = pending.Source.Clone();
+
+        // No domain transition deactivates a projection scope without also releasing it.
+        // A durable staged source plus a retained failure manifest therefore proves that this
+        // actor was initialized before its persisted active bit became inconsistent. Restore
+        // only from those actor-owned typed facts; never copy lifecycle state back from the
+        // eventually consistent status document which requested this replay.
+        await PersistDomainEventAsync(new ProjectionScopeStartedEvent
+        {
+            RootActorId = rootActorId,
+            ProjectionKind = projectionKind,
+            SessionId = sessionId,
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            ActivationGeneration = Math.Max(1, previousActivationGeneration + 1),
+        });
+
+        await AdvanceStatusRouteAsync(CancellationToken.None);
+        await EnsureObservationRelayAsync(rootActorId, CancellationToken.None);
+        if (!State.ObservationAttached)
+        {
+            await PersistDomainEventAsync(new ProjectionObservationAttachmentUpdatedEvent
+            {
+                Attached = true,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+        }
+
+        await OnScopeReadyAsync(CancellationToken.None);
+
+        _logger.LogWarning(
+            "Projection automatic recovery restored an inactive unreleased durable manifest from actor-owned recovery facts. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} activationGeneration={ActivationGeneration} unresolvedFailureCount={UnresolvedFailureCount} sourceActorId={SourceActorId} sourceStateVersion={SourceStateVersion} sourceEventId={SourceEventId}",
+            Id,
+            commandId,
+            correlationId,
+            State.ActivationGeneration,
+            State.Failures.Count,
+            source.ActorId,
+            source.StateVersion,
+            source.EventId);
     }
 
     [EventHandler(AllowSelfHandling = true)]

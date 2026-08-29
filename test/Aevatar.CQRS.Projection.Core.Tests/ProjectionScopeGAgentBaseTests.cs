@@ -6,8 +6,10 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -1146,6 +1148,136 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleReplayAsync_AutomaticRecovery_ShouldRestoreInactiveDurableInFlightManifest()
+    {
+        var eventSourcing = new TrackingEventSourcing(initialVersion: 41);
+        var publisher = new RecordingEventPublisher();
+        var processCount = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-inactive-durable-recovery",
+            onProcess: _ =>
+            {
+                processCount++;
+                return ProjectionScopeDispatchResult.Success(7, "event-type");
+            },
+            eventSourcing: eventSourcing,
+            enableDurableObservationRecovery: true);
+        agent.EventPublisher = publisher;
+        agent.State.Active = false;
+        agent.State.Released = false;
+        agent.State.ObservationAttached = false;
+        agent.State.ActivationGeneration = 2;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-inactive-durable-recovery",
+            EventType = "type.googleapis.com/aevatar.TestEvent",
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-inactive-durable-recovery",
+                version: 6),
+        });
+        agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = 7,
+                EventId = "source-event-7",
+            },
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-inactive-durable-recovery",
+                version: 7,
+                eventId: "source-event-7"),
+            EventKind = "event-type",
+            StagedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+        };
+
+        await agent.InitializeForTestAsync();
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 1,
+            AutomaticRecovery = true,
+            ObservedScopeStateVersion = 41,
+        });
+
+        agent.State.Active.Should().BeTrue();
+        agent.State.Released.Should().BeFalse();
+        agent.State.ObservationAttached.Should().BeTrue();
+        agent.State.ActivationGeneration.Should().Be(3);
+        agent.State.Failures.Should().ContainSingle();
+        agent.State.InFlightObservation.Should().NotBeNull();
+        processCount.Should().Be(0, "the staged source resumes on its own actor turn before backlog replay");
+        eventSourcing.CommittedEventTypes.Should().ContainInOrder(
+            typeof(ProjectionScopeStartedEvent),
+            typeof(ProjectionObservationAttachmentUpdatedEvent));
+        var published = publisher.Published.Should().ContainSingle().Which;
+        published.Audience.Should().Be(TopologyAudience.Self);
+        var resume = published.Message.Should().BeOfType<ResumeProjectionInFlightObservationCommand>().Which;
+        resume.ExpectedSource.ActorId.Should().Be("publisher-actor");
+        resume.ExpectedSource.StateVersion.Should().Be(7);
+        resume.ExpectedSource.EventId.Should().Be("source-event-7");
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task HandleReplayAsync_AutomaticRecovery_ShouldNotRestoreWithoutCompleteUnreleasedEvidence(
+        bool released,
+        bool omitInFlightEnvelope)
+    {
+        var eventSourcing = new TrackingEventSourcing(initialVersion: 41);
+        var publisher = new RecordingEventPublisher();
+        var processCount = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-incomplete-durable-recovery",
+            onProcess: _ =>
+            {
+                processCount++;
+                return ProjectionScopeDispatchResult.Success(7, "event-type");
+            },
+            eventSourcing: eventSourcing,
+            enableDurableObservationRecovery: true);
+        agent.EventPublisher = publisher;
+        agent.State.Active = false;
+        agent.State.Released = released;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-incomplete-durable-recovery",
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-incomplete-durable-recovery",
+                version: 6),
+        });
+        agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = 7,
+                EventId = "source-event-7",
+            },
+            Envelope = omitInFlightEnvelope
+                ? null
+                : BuildForwardedCommittedObservationEnvelope(
+                    "projection-scope-incomplete-durable-recovery",
+                    version: 7,
+                    eventId: "source-event-7"),
+        };
+
+        await agent.InitializeForTestAsync();
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 1,
+            AutomaticRecovery = true,
+            ObservedScopeStateVersion = 41,
+        });
+
+        agent.State.Active.Should().BeFalse();
+        agent.State.Released.Should().Be(released);
+        processCount.Should().Be(0);
+        eventSourcing.CommittedEventTypes.Should().BeEmpty();
+        publisher.Published.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldSwallow_DeterministicProjectionFailure()
     {
         var agent = BuildActivatedAgent(
@@ -1192,6 +1324,13 @@ public sealed class ProjectionScopeGAgentBaseTests
         services.AddSingleton<Func<ProjectionRuntimeScopeKey, TestContext>>(
             static _ => new TestContext("root-actor", "test-kind"));
         services.AddSingleton<IStreamProvider>(new NoOpStreamProvider());
+        services.AddSingleton<IAgentKindRegistry>(new AgentKindRegistry(
+        [
+            new AgentRegistration(
+                "projection.test-scope",
+                typeof(TestScopeAgent),
+                typeof(ProjectionScopeState)),
+        ]));
         agent.Services = services.BuildServiceProvider();
 
         return agent;
@@ -1454,6 +1593,10 @@ public sealed class ProjectionScopeGAgentBaseTests
                     ProjectionScopeStateApplier.ApplyDispatchFailed(current, failed),
                 ProjectionScopeFailureReplayedEvent replayed =>
                     ProjectionScopeStateApplier.ApplyFailureReplayed(current, replayed),
+                ProjectionScopeStartedEvent started =>
+                    ProjectionScopeStateApplier.ApplyStarted(current, started),
+                ProjectionObservationAttachmentUpdatedEvent attachmentUpdated =>
+                    ProjectionScopeStateApplier.ApplyAttachmentUpdated(current, attachmentUpdated),
                 ProjectionScopeAutomaticRecoveryRequestedEvent automaticRecovery =>
                     ProjectionScopeStateApplier.ApplyAutomaticRecoveryRequested(current, automaticRecovery),
                 _ => current,
