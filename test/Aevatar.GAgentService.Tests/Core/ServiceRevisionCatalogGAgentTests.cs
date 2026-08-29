@@ -85,6 +85,53 @@ public sealed class ServiceRevisionCatalogGAgentTests
     }
 
     [Fact]
+    public async Task RefreshInvocationCatalogObservation_ShouldRedispatchCommittedRevisionsWithoutMutatingState()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity("svc-refresh-revisions");
+        const string revisionId = "rev-refresh";
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new RecordingAdapter(_ => Task.FromResult(
+                GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, revisionId))),
+            ServiceActorIds.RevisionCatalog(identity),
+            dispatchPort);
+        await agent.ActivateAsync();
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, revisionId),
+        });
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+        await agent.HandlePublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+        });
+        var committedVersion = agent.State.LastAppliedEventVersion;
+        dispatchPort.Calls.Clear();
+
+        await agent.HandleRefreshInvocationCatalogObservationAsync(
+            new RefreshServiceInvocationCatalogObservationCommand
+            {
+                Identity = identity.Clone(),
+            });
+
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        dispatchPort.Calls.Should().ContainSingle();
+        dispatchPort.Calls[0].ActorId.Should().Be(ServiceActorIds.InvocationCatalog(identity));
+        var observation = dispatchPort.Calls[0].Envelope.Payload
+            .Unpack<ObserveServiceInvocationRevisionsCommand>();
+        observation.Identity.Should().BeEquivalentTo(identity);
+        observation.SourceRevisionVersion.Should().Be(committedVersion);
+        observation.Revisions.Should().ContainKey(revisionId)
+            .WhoseValue.Status.Should().Be(ServiceRevisionStatus.Published);
+    }
+
+    [Fact]
     public async Task PrepareAndPublish_ShouldReusePublishedRevision_AndRefreshInvocationObservation()
     {
         var identity = GAgentServiceTestKit.CreateIdentity("svc-published");

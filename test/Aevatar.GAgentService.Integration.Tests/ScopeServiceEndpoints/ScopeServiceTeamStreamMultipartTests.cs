@@ -28,7 +28,12 @@ public sealed class ScopeServiceTeamStreamMultipartTests : ScopeServiceEndpointT
             "team-a",
             "member-a",
             "member-a");
-        var service = BuildService("scope-a", "member-a", "definition-actor-member-a");
+        var service = BuildService(
+            "scope-a",
+            "member-a",
+            "definition-actor-member-a",
+            "rev-team-member-a-1",
+            "dep-team-member-a-1");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,
@@ -134,7 +139,12 @@ public sealed class ScopeServiceTeamStreamMultipartTests : ScopeServiceEndpointT
             "team-a",
             "member-a",
             "member-a");
-        var service = BuildService("scope-a", "member-a", "definition-actor-member-a");
+        var service = BuildService(
+            "scope-a",
+            "member-a",
+            "definition-actor-member-a",
+            "rev-team-member-a-1",
+            "dep-team-member-a-1");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,

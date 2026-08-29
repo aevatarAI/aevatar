@@ -613,6 +613,42 @@ public sealed class ServiceServingRolloutGAgentTests
     }
 
     [Fact]
+    public async Task ServiceServingSetManager_RefreshInvocationCatalogObservation_ShouldRedispatchCommittedTargetsWithoutMutatingState()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity("svc-refresh-serving");
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = CreateServingSetAgent(
+            new InMemoryEventStore(),
+            ServiceActorIds.ServingSet(identity),
+            dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        await agent.HandleReplaceResolvedAsync(new ReplaceResolvedServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Reason = "initial serving",
+            Targets = { CreateTarget("dep-refresh", "rev-refresh", "actor-refresh", 100, "chat") },
+        });
+        var committedVersion = agent.State.LastAppliedEventVersion;
+        dispatchPort.Calls.Clear();
+
+        await agent.HandleRefreshInvocationCatalogObservationAsync(
+            new RefreshServiceInvocationCatalogObservationCommand
+            {
+                Identity = identity.Clone(),
+            });
+
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        dispatchPort.Calls.Should().ContainSingle();
+        dispatchPort.Calls[0].ActorId.Should().Be(ServiceActorIds.InvocationCatalog(identity));
+        var observation = dispatchPort.Calls[0].Envelope.Payload
+            .Unpack<ObserveServiceInvocationServingCommand>();
+        observation.Identity.Should().BeEquivalentTo(identity);
+        observation.SourceServingVersion.Should().Be(committedVersion);
+        observation.ServingTargets.Should().ContainSingle();
+        observation.ServingTargets[0].RevisionId.Should().Be("rev-refresh");
+    }
+
+    [Fact]
     public async Task ServiceServingSetManager_ShouldRemoveDeploymentFromActorStateIdempotently()
     {
         var eventStore = new InMemoryEventStore();

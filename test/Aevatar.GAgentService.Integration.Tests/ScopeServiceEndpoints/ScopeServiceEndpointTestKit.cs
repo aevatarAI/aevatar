@@ -56,7 +56,12 @@ namespace Aevatar.GAgentService.Integration.Tests;
 
 public abstract class ScopeServiceEndpointTestKit
 {
-    protected static ServiceCatalogSnapshot BuildService(string scopeId, string serviceId, string primaryActorId) =>
+    protected static ServiceCatalogSnapshot BuildService(
+        string scopeId,
+        string serviceId,
+        string primaryActorId,
+        string revisionId = "rev-1",
+        string deploymentId = "dep-1") =>
         new(
             $"{scopeId}:default:default:{serviceId}",
             scopeId,
@@ -64,9 +69,9 @@ public abstract class ScopeServiceEndpointTestKit
             "default",
             serviceId,
             serviceId,
-            "rev-1",
-            "rev-1",
-            "dep-1",
+            revisionId,
+            revisionId,
+            deploymentId,
             primaryActorId,
             "Active",
             [],
@@ -254,6 +259,7 @@ public abstract class ScopeServiceEndpointTestKit
             RecordingServiceServingQueryPort servingQueryPort,
             FakeServiceCatalogQueryReader serviceCatalogReader,
             FakeServiceTrafficViewQueryReader trafficViewReader,
+            FakeServiceServingSetQueryReader servingSetReader,
             FakeServiceInvocationCatalogQueryReader invocationCatalogReader,
             FakeServiceRevisionCatalogQueryReader revisionCatalog,
             FakeMemberPublishedServiceResolver memberPublishedServiceResolver,
@@ -283,6 +289,7 @@ public abstract class ScopeServiceEndpointTestKit
             ServingQueryPort = servingQueryPort;
             ServiceCatalogReader = serviceCatalogReader;
             TrafficViewReader = trafficViewReader;
+            ServingSetReader = servingSetReader;
             InvocationCatalogReader = invocationCatalogReader;
             RevisionCatalog = revisionCatalog;
             MemberPublishedServiceResolver = memberPublishedServiceResolver;
@@ -329,6 +336,8 @@ public abstract class ScopeServiceEndpointTestKit
         public FakeServiceCatalogQueryReader ServiceCatalogReader { get; }
 
         public FakeServiceTrafficViewQueryReader TrafficViewReader { get; }
+
+        public FakeServiceServingSetQueryReader ServingSetReader { get; }
 
         public FakeServiceInvocationCatalogQueryReader InvocationCatalogReader { get; }
 
@@ -384,6 +393,7 @@ public abstract class ScopeServiceEndpointTestKit
             var servingQueryPort = new RecordingServiceServingQueryPort();
             var serviceCatalogReader = new FakeServiceCatalogQueryReader();
             var trafficViewReader = new FakeServiceTrafficViewQueryReader();
+            var servingSetReader = new FakeServiceServingSetQueryReader(trafficViewReader);
             var invocationCatalogReader = new FakeServiceInvocationCatalogQueryReader(serviceCatalogReader, trafficViewReader);
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
             var memberPublishedServiceResolver = new FakeMemberPublishedServiceResolver();
@@ -428,6 +438,7 @@ public abstract class ScopeServiceEndpointTestKit
             builder.Services.AddSingleton<IMemberPublishedServiceResolver>(memberPublishedServiceResolver);
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(serviceCatalogReader);
             builder.Services.AddSingleton<IServiceTrafficViewQueryReader>(trafficViewReader);
+            builder.Services.AddSingleton<IServiceServingSetQueryReader>(servingSetReader);
             builder.Services.AddSingleton<IServiceInvocationCatalogQueryReader>(invocationCatalogReader);
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
             builder.Services.AddSingleton<ITeamEntryMemberResolver>(teamEntryMemberResolver);
@@ -560,6 +571,7 @@ public abstract class ScopeServiceEndpointTestKit
                 servingQueryPort,
                 serviceCatalogReader,
                 trafficViewReader,
+                servingSetReader,
                 invocationCatalogReader,
                 revisionCatalog,
                 memberPublishedServiceResolver,
@@ -1168,6 +1180,49 @@ public abstract class ScopeServiceEndpointTestKit
 
         public Task<ServiceTrafficViewSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(View);
+    }
+
+    protected sealed class FakeServiceServingSetQueryReader(
+        FakeServiceTrafficViewQueryReader trafficViewReader) : IServiceServingSetQueryReader
+    {
+        public ServiceServingSetSnapshot? ServingSet { get; set; }
+
+        public Task<ServiceServingSetSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            if (ServingSet != null)
+                return Task.FromResult<ServiceServingSetSnapshot?>(ServingSet);
+
+            var view = trafficViewReader.View;
+            if (view == null)
+                return Task.FromResult<ServiceServingSetSnapshot?>(null);
+
+            var targets = view.Endpoints
+                .SelectMany(endpoint => endpoint.Targets.Select(target => (endpoint.EndpointId, Target: target)))
+                .GroupBy(
+                    entry => new
+                    {
+                        entry.Target.DeploymentId,
+                        entry.Target.RevisionId,
+                        entry.Target.PrimaryActorId,
+                        entry.Target.AllocationWeight,
+                        entry.Target.ServingState,
+                    })
+                .Select(group => new ServiceServingTargetSnapshot(
+                    group.Key.DeploymentId,
+                    group.Key.RevisionId,
+                    group.Key.PrimaryActorId,
+                    group.Key.AllocationWeight,
+                    group.Key.ServingState,
+                    group.Select(entry => entry.EndpointId).Distinct(StringComparer.Ordinal).ToList()))
+                .ToList();
+
+            return Task.FromResult<ServiceServingSetSnapshot?>(new ServiceServingSetSnapshot(
+                view.ServiceKey,
+                view.Generation,
+                view.ActiveRolloutId,
+                targets,
+                view.UpdatedAt));
+        }
     }
 
     protected sealed class FakeServiceInvocationCatalogQueryReader(

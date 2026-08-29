@@ -152,6 +152,15 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
         await DispatchAppliedAckAsync(State.ResolvedOperations[operationId], CancellationToken.None);
     }
 
+    [EventHandler]
+    public Task HandleRefreshInvocationCatalogObservationAsync(
+        RefreshServiceInvocationCatalogObservationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureIdentity(command.Identity, allowInitialize: false);
+        return DispatchInvocationServingObservationAsync(CancellationToken.None);
+    }
+
     private Task PersistResolvedTargetsAsync(
         ReplaceResolvedServiceServingTargetsCommand command,
         string operationId,

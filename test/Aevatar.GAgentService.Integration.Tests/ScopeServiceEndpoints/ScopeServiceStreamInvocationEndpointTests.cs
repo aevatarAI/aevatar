@@ -821,7 +821,12 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
     public async Task InvokeStreamEndpoint_ShouldResolveExplicitServiceAndDelegateToWorkflowPipeline()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        var service = BuildService("scope-a", "orders", "definition-actor-orders");
+        var service = BuildService(
+            "scope-a",
+            "orders",
+            "definition-actor-orders",
+            "rev-orders-1",
+            "dep-orders-1");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,
@@ -1060,7 +1065,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             "m-alpha",
             "svc-alpha",
             IsMemberAuthorityBacked: true);
-        var service = BuildService("scope-a", "svc-alpha", "wf-alpha");
+        var service = BuildService("scope-a", "svc-alpha", "wf-alpha", "rev-alpha-1", "dep-alpha-1");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,
@@ -1172,7 +1177,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             "m-alpha",
             "svc-alpha",
             IsMemberAuthorityBacked: true);
-        var service = BuildService("scope-a", "svc-alpha", "wf-alpha");
+        var service = BuildService("scope-a", "svc-alpha", "wf-alpha", "rev-alpha-1", "dep-alpha-1");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,
@@ -1271,7 +1276,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             "m-alpha",
             "svc-alpha",
             IsMemberAuthorityBacked: true);
-        var service = BuildService("scope-a", "svc-alpha", "wf-alpha");
+        var service = BuildService("scope-a", "svc-alpha", "wf-alpha", "rev-alpha-1", "dep-alpha-1");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,
@@ -1394,7 +1399,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             "scope-a",
             "m-alpha",
             "svc-alpha");
-        var service = BuildService("scope-a", "svc-alpha", "wf-alpha");
+        var service = BuildService("scope-a", "svc-alpha", "wf-alpha", "rev-alpha-1", "dep-alpha-1");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,
@@ -1477,7 +1482,12 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             "team-a",
             "member-a",
             "member-a");
-        var service = BuildService("scope-a", "member-a", "definition-actor-member-a");
+        var service = BuildService(
+            "scope-a",
+            "member-a",
+            "definition-actor-member-a",
+            "rev-team-member-a-1",
+            "dep-team-member-a-1");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,
@@ -1624,7 +1634,12 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
     public async Task InvokeStreamEndpoint_WhenAuthenticationIsDisabled_ShouldExecuteExplicitServiceFlowWithoutClaims()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync(authenticationEnabled: false);
-        var service = BuildService("scope-a", "orders", "definition-actor-orders");
+        var service = BuildService(
+            "scope-a",
+            "orders",
+            "definition-actor-orders",
+            "rev-orders-1",
+            "dep-orders-1");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,
@@ -1708,7 +1723,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
     {
         var revisionId = $"rev-{serviceId}-1";
         var deploymentId = $"dep-{serviceId}-1";
-        var service = BuildService("scope-a", serviceId, definitionActorId);
+        var service = BuildService("scope-a", serviceId, definitionActorId, revisionId, deploymentId);
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,
@@ -1796,7 +1811,12 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
 
     private static async Task ConfigureStaticStreamServiceAsync(ScopeServiceEndpointTestHost host)
     {
-        var service = BuildService("scope-a", "static-agent", "definition-actor-static");
+        var service = BuildService(
+            "scope-a",
+            "static-agent",
+            "definition-actor-static",
+            "rev-static-1",
+            "dep-static-1");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,

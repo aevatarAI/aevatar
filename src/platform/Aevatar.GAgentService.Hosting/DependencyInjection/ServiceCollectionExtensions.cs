@@ -168,6 +168,7 @@ public static class ServiceCollectionExtensions
             ServiceRevisionCatalogProjectionContext,
             ScopeWorkflowCatalogueRevisionSourceProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ScopeWorkflowCatalogueBackfillHostedService>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ServiceInvocationCatalogReconciliationHostedService>());
         services.TryAddSingleton<LlmRunExecutionScheduler>();
         services.TryAddSingleton<ILlmRunExecutionScheduler>(sp => sp.GetRequiredService<LlmRunExecutionScheduler>());
         services.AddHostedService<LlmRunExecutionWorker>();

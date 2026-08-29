@@ -67,6 +67,10 @@ message ObserveServiceInvocationRevisionsCommand {
   google.protobuf.Timestamp observed_at = 4;
 }
 
+message RefreshServiceInvocationCatalogObservationCommand {
+  ServiceIdentity identity = 1;
+}
+
 message ServiceInvocationCatalogObservedEvent {
   ServiceIdentity identity = 1;
   repeated ServiceEndpointDescriptor service_endpoints = 2;

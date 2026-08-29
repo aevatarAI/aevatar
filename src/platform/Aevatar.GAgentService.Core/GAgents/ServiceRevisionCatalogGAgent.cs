@@ -235,6 +235,15 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
     }
 
+    [EventHandler]
+    public Task HandleRefreshInvocationCatalogObservationAsync(
+        RefreshServiceInvocationCatalogObservationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureCatalogIdentity(command.Identity, allowInitialize: false);
+        return DispatchInvocationRevisionObservationAsync(CancellationToken.None);
+    }
+
     protected override ServiceRevisionCatalogState TransitionState(ServiceRevisionCatalogState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)

@@ -66,6 +66,15 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
     }
 
     [EventHandler]
+    public Task HandleRefreshInvocationCatalogObservationAsync(
+        RefreshServiceInvocationCatalogObservationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureExistingIdentity(command.Identity);
+        return DispatchInvocationCatalogObservationAsync(CancellationToken.None);
+    }
+
+    [EventHandler]
     public async Task HandleReconcileExternalExposureAsync(ReconcileExternalExposureCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);

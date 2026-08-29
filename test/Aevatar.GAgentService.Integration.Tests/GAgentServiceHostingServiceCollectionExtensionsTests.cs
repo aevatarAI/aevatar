@@ -16,6 +16,7 @@ using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.GAgentService.Hosting.Backfill;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
@@ -110,6 +111,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(LlmRunExecutionWorker));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType == typeof(ServiceInvocationCatalogReconciliationHostedService));
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<ILlmRunCore>().Should().BeOfType<MissingLlmProviderRunCore>();

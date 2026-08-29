@@ -1,11 +1,11 @@
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Core.Models;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Tests.TestSupport;
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Runtime.Persistence;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -180,6 +180,38 @@ public sealed class ServiceDefinitionGAgentTests
         updateObservation.ServiceEndpoints.Should().ContainSingle(x => x.EndpointId == "chat");
         updateObservation.ServiceEndpoints[0].Kind.Should().Be(ServiceEndpointKind.Chat);
         updateObservation.ServiceEndpoints[0].RequestTypeUrl.Should().Be("type.googleapis.com/test.chat");
+    }
+
+    [Fact]
+    public async Task RefreshInvocationCatalogObservation_ShouldRedispatchCommittedDefinitionWithoutMutatingState()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity("svc-refresh-definition");
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            new InMemoryEventStore(),
+            ServiceActorIds.Definition(identity),
+            () => new ServiceDefinitionGAgent(dispatchPort));
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        var committedVersion = agent.State.LastAppliedEventVersion;
+        dispatchPort.Calls.Clear();
+
+        await agent.HandleRefreshInvocationCatalogObservationAsync(
+            new RefreshServiceInvocationCatalogObservationCommand
+            {
+                Identity = identity.Clone(),
+            });
+
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        dispatchPort.Calls.Should().ContainSingle();
+        dispatchPort.Calls[0].ActorId.Should().Be(ServiceActorIds.InvocationCatalog(identity));
+        var observation = dispatchPort.Calls[0].Envelope.Payload
+            .Unpack<ObserveServiceInvocationCatalogCommand>();
+        observation.Identity.Should().BeEquivalentTo(identity);
+        observation.SourceCatalogVersion.Should().Be(committedVersion);
+        observation.ServiceEndpoints.Should().ContainSingle();
     }
 
     [Fact]
