@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
@@ -22,6 +23,8 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     where TReadModel : class, IProjectionReadModel<TReadModel>, new()
 {
     private const string ProviderName = "Elasticsearch";
+    private const int MaxDocumentIdBytes = 512;
+    private const string HashedDocumentIdPrefix = "sha256:";
 
     private readonly JsonFormatter _formatter;
     private readonly JsonParser _parser;
@@ -179,6 +182,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         ThrowIfDynamicReadModelWritesUnsupportedForDelete();
 
         var trimmedId = id.Trim();
+        var storageId = NormalizeStorageKey(trimmedId);
         // Refactor (iter89/cluster-089-projection-provider-elapsed-clock):
         // Old: elapsedMs used DateTimeOffset.UtcNow subtraction, so wall-clock changes could skew duration logs.
         // New: elapsedMs uses a monotonic Stopwatch timestamp; projection clocks remain for semantic timestamps only.
@@ -186,7 +190,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         try
         {
             using var response = await _httpClient.DeleteAsync(
-                $"{_indexName}/_doc/{Uri.EscapeDataString(trimmedId)}",
+                $"{_indexName}/_doc/{Uri.EscapeDataString(storageId)}",
                 ct);
             ProjectionWriteResult result;
             if (response.StatusCode == HttpStatusCode.NotFound)
@@ -237,12 +241,13 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         ThrowIfDynamicReadModelWritesUnsupportedForDelete();
 
         await _indexManager.EnsureIndexAsync(_indexName, _indexMetadata, ct);
+        var storageId = NormalizeStorageKey(marker.Id);
         var startedAtTimestamp = Stopwatch.GetTimestamp();
         try
         {
             for (var attempt = 1; attempt <= 3; attempt++)
             {
-                var existing = await TryGetExistingProjectionStateAsync(_indexName, marker.Id, ct);
+                var existing = await TryGetExistingProjectionStateAsync(_indexName, storageId, ct);
                 var result = EvaluateDeleteMarker(existing, marker);
                 if (!result.IsApplied)
                 {
@@ -250,8 +255,8 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
                     return result;
                 }
 
-                var payload = ElasticsearchProjectionDeleteMarkerPayload.Serialize(marker, marker.Id);
-                using var request = BuildConditionalTombstoneRequest(_indexName, marker.Id, payload, existing);
+                var payload = ElasticsearchProjectionDeleteMarkerPayload.Serialize(marker, storageId);
+                using var request = BuildConditionalTombstoneRequest(_indexName, storageId, payload, existing);
                 using var response = await _httpClient.SendAsync(request, ct);
                 if (response.IsSuccessStatusCode)
                 {
@@ -271,7 +276,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
                     3);
             }
 
-            var reconciled = await TryGetExistingProjectionStateAsync(_indexName, marker.Id, ct);
+            var reconciled = await TryGetExistingProjectionStateAsync(_indexName, storageId, ct);
             var reconciledResult = EvaluateDeleteMarker(reconciled, marker);
             if (!reconciledResult.IsApplied)
             {
@@ -648,7 +653,20 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         return keyValue;
     }
 
-    private string FormatKey(TKey key) => _keyFormatter(key)?.Trim() ?? "";
+    private string FormatKey(TKey key)
+    {
+        var logicalKey = _keyFormatter(key)?.Trim() ?? "";
+        return NormalizeStorageKey(logicalKey);
+    }
+
+    private static string NormalizeStorageKey(string logicalKey)
+    {
+        if (logicalKey.Length == 0 || Encoding.UTF8.GetByteCount(logicalKey) <= MaxDocumentIdBytes)
+            return logicalKey;
+
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(logicalKey));
+        return $"{HashedDocumentIdPrefix}{Convert.ToHexStringLower(digest)}";
+    }
 
     private static Func<string, string> BuildFieldPathResolver(MessageDescriptor descriptor)
     {

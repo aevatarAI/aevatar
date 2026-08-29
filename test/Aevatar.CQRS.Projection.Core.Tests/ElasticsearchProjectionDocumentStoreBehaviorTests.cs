@@ -14,6 +14,41 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 {
     [Fact]
+    public async Task UpsertAndGetAsync_WhenLogicalKeyExceedsElasticsearchLimit_ShouldUseStableHashedDocumentId()
+    {
+        var logicalKey = $"projection.durable.scope:{new string('x', 960)}";
+        var expectedStorageId = $"sha256:{Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(logicalKey)))}";
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            $"{{\"_source\":{{\"id\":\"{logicalKey}\",\"actor_id\":\"{logicalKey}\",\"state_version\":\"1\",\"last_event_id\":\"evt-1\",\"updated_at_utc_value\":\"2026-03-16T00:00:00Z\",\"value\":\"ready\"}}}}"));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+        var readModel = new TestStoreReadModel
+        {
+            Id = logicalKey,
+            ActorId = logicalKey,
+            StateVersion = 1,
+            LastEventId = "evt-1",
+            UpdatedAt = DateTimeOffset.Parse("2026-03-16T00:00:00Z"),
+            Value = "ready",
+        };
+
+        await store.UpsertAsync(readModel);
+        var loaded = await store.GetAsync(logicalKey);
+
+        Encoding.UTF8.GetByteCount(expectedStorageId).Should().BeLessThanOrEqualTo(512);
+        handler.CapturedRequests.Select(static request => Uri.UnescapeDataString(request.PathAndQuery))
+            .Should().OnlyContain(path => path.EndsWith($"/{expectedStorageId}", StringComparison.Ordinal));
+        handler.CapturedRequests[1].Body.Should().Contain($"\"id\":\"{logicalKey}\"");
+        loaded.Should().NotBeNull();
+        loaded!.Id.Should().Be(logicalKey);
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenMaintenanceRepublishMatchesExistingVersion_ShouldReplaceStaleDocument()
     {
         var handler = new ScriptedHttpMessageHandler();
@@ -1521,6 +1556,24 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         result.IsApplied.Should().BeTrue();
         handler.CapturedRequests.Should().ContainSingle(r =>
             r.Method == "DELETE" && r.PathAndQuery.EndsWith("/_doc/actor-1"));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_WhenLogicalKeyExceedsElasticsearchLimit_ShouldUseHashedDocumentId()
+    {
+        var logicalKey = new string('\u754c', 300);
+        var expectedStorageId = $"sha256:{Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(logicalKey)))}";
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"deleted"}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var result = await store.DeleteAsync(logicalKey);
+
+        result.IsApplied.Should().BeTrue();
+        var requestPath = Uri.UnescapeDataString(handler.CapturedRequests.Single().PathAndQuery);
+        requestPath.Should().EndWith($"/_doc/{expectedStorageId}");
     }
 
     [Fact]
