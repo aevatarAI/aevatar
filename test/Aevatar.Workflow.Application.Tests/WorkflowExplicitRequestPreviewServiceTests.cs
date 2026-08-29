@@ -91,9 +91,8 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
         item.BodyRequired.Should().BeTrue();
         item.ResponseMode.Should().Be(NyxIdRequestResponseMode.Text);
         item.EffectiveRisk.Should().Be(NyxIdOperationRisk.Write);
-        item.ApprovalRequired.Should().BeTrue();
-        item.ApprovalEnforcement.Should().Be(
-            WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmationAndRunTimeToolApproval);
+        item.ApprovalRequired.Should().BeFalse();
+        item.ApprovalEnforcement.Should().Be(WorkflowExplicitRequestApprovalEnforcement.None);
         item.AllowedExecutionModes.Should().Equal(ExternalCapabilityExecutionMode.Interactive);
 
         var serialized = JsonSerializer.Serialize(result);
@@ -394,9 +393,7 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
         var policy = new NyxIdOperationExecutionPolicy
         {
             Risk = risk,
-            Approval = risk == NyxIdOperationRisk.ReadOnly
-                ? NyxIdOperationApproval.None
-                : NyxIdOperationApproval.Required,
+            Approval = NyxIdOperationApproval.None,
             EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
         };
         policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);

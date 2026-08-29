@@ -355,6 +355,37 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeRouteToolChoiceHintAsync_ShouldSelectOnlyHintedTool()
+    {
+        var source = new StaticToolSource(
+        [
+            new TestTool("aevatar_start_workflow"),
+            new TestTool("ask_user"),
+        ]);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, source);
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeRouteToolChoiceHintAsync(
+            AgentProfilePolicies.NyxIdChatRouteToolSet,
+            "aevatar_start_workflow",
+            ToolContext(),
+            CancellationToken.None);
+
+        registry.ResolveCalls.Should().Equal(AgentProfilePolicies.NyxIdChatRouteToolSet);
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("aevatar_start_workflow");
+        catalog.ExactTools.Keys.Should().BeEquivalentTo("aevatar_start_workflow");
+        catalog.ExactTools.Keys.Should().NotContain("ask_user");
+        catalog.SelectedIntentId.Should().Be(
+            AgentTurnToolCatalogMaterializer.RouteToolChoiceHintIntentId);
+        catalog.CandidateIntentId.Should().Be(
+            AgentTurnToolCatalogMaterializer.RouteToolChoiceHintIntentId);
+    }
+
+    [Fact]
     public async Task MaterializeUnprofiledBaselineAsync_WithPartialComposition_ShouldDegradePerTool()
     {
         var source = new StaticToolSource(

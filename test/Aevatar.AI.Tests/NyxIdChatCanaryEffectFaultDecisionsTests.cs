@@ -240,8 +240,7 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
                 dispatch.Tool.MayChangeExternalState = false;
                 break;
             case "admission":
-                dispatch.Tool.OperationAdmission.ExecutionPolicy.Approval =
-                    AgentToolOperationApprovalPayload.None;
+                dispatch.Tool.OperationAdmission.ExecutionPolicy.AllowedExecutionModes.Clear();
                 break;
             case "read_back":
                 dispatch.Tool.OperationAdmission.ReadBack = null;
@@ -337,8 +336,7 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
                     "connected-service-beta";
                 break;
             case "admission":
-                dispatch.Tool.OperationAdmission.ExecutionPolicy.Approval =
-                    AgentToolOperationApprovalPayload.None;
+                dispatch.Tool.OperationAdmission.ExecutionPolicy.AllowedExecutionModes.Clear();
                 break;
             case "effect":
                 dispatch.Tool.MayChangeExternalState = false;

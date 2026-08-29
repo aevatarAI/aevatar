@@ -760,18 +760,15 @@ public static partial class NyxIdChatEndpoints
 
         var callerScope = OwnerScope.ForNyxIdNative(scopeId);
         var snapshot = await queryPort.LookupForCallerAsync(callerScope, ct);
-        return routeResolver
-            .Resolve(snapshot, new ChatRouteInput
-            {
-                SourceKind = ChatSourceKind.Direct,
-                CallerScope = callerScope.Clone(),
-                Channel = string.Empty,
-                CommandName = string.Empty,
-                ContentHint = BuildContentHint(prompt),
-                ToolMode = ToolMode.None,
-            })
-            .Action
-            .Clone();
+        return routeResolver.Resolve(snapshot, new ChatRouteInput
+        {
+            SourceKind = ChatSourceKind.Direct,
+            CallerScope = callerScope.Clone(),
+            Channel = string.Empty,
+            CommandName = string.Empty,
+            ContentHint = BuildContentHint(prompt),
+            ToolMode = ToolMode.None,
+        }).Action.Clone();
     }
 
     private static string BuildContentHint(string? prompt)

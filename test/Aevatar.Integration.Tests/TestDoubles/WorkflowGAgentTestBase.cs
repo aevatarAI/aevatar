@@ -350,18 +350,20 @@ public abstract class WorkflowGAgentTestBase
             var request = runPublisher.Sent.Select(x => x.evt).OfType<SubWorkflowDefinitionResolveRequestedEvent>().Last();
             await definitionAgent.HandleSubWorkflowDefinitionResolveRequested(request);
 
-            var reply = definitionPublisher.Sent.Select(x => x.evt).Last();
-            switch (reply)
+            var reply = definitionPublisher.Sent.Last();
+            await runAgent.HandleEventAsync(Envelope(
+                reply.evt,
+                definitionAgent.Id,
+                TopologyAudience.Children));
+
+            switch (reply.evt)
             {
-                case SubWorkflowDefinitionResolvedEvent resolved:
-                    await runAgent.HandleSubWorkflowDefinitionResolved(resolved);
-                    break;
-                case SubWorkflowDefinitionResolveFailedEvent failed:
-                    await runAgent.HandleSubWorkflowDefinitionResolveFailed(failed);
+                case SubWorkflowDefinitionResolvedEvent:
+                case SubWorkflowDefinitionResolveFailedEvent:
                     break;
                 default:
                     throw new InvalidOperationException(
-                        $"Unexpected workflow definition reply '{reply.Descriptor.FullName}'.");
+                        $"Unexpected workflow definition reply '{reply.evt.Descriptor.FullName}'.");
             }
         }
 

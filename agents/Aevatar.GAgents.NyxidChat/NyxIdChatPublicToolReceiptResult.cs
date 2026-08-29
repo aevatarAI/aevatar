@@ -122,15 +122,16 @@ internal static class NyxIdChatPublicToolReceiptResult
             ["status"] = status,
             ["mutation_stage"] = mutationStage,
         };
+        var completionRoot = ReadObject(root, "result") ?? root;
         if (IsTerminalWorkflowStartStatus(status))
         {
-            var completionRoot = ReadObject(root, "result") ?? root;
             var stateVersion = ReadPositiveInt64(completionRoot, "state_version");
             if (stateVersion.HasValue)
                 result["state_version"] = stateVersion.Value;
-            if (ReadOptionalBoundedString(completionRoot, "partial_output", MaxPartialOutputBytes) is { } partialOutput)
-                result["partial_output"] = partialOutput;
         }
+
+        if (ReadOptionalBoundedString(completionRoot, "partial_output", MaxPartialOutputBytes) is { } partialOutput)
+            result["partial_output"] = partialOutput;
 
         return result;
     }

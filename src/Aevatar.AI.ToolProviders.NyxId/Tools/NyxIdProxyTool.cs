@@ -227,14 +227,12 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         CancellationToken ct = default)
     {
         var admission = AgentToolRequestContext.Current?.OperationAdmission;
-        if (admission?.ExecutionPolicy is not
-            {
-                Risk: AgentToolOperationRisk.Write,
-                Approval: AgentToolOperationApproval.Required,
-            })
+        if (admission?.ExecutionPolicy.Risk != AgentToolOperationRisk.Write ||
+            admission.ExecutionPolicy.Approval is not
+                (AgentToolOperationApproval.None or AgentToolOperationApproval.Required))
         {
             throw new InvalidOperationException(
-                "Admitted effect execution requires an exact approval-gated write operation admission.");
+                "Admitted effect execution requires an exact admitted write operation admission.");
         }
 
         return await ExecuteWithOutcomeCoreAsync(
@@ -299,7 +297,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             AgentToolOperationRisk.ReadOnly =>
                 policy.Approval == AgentToolOperationApproval.None,
             AgentToolOperationRisk.Write or AgentToolOperationRisk.Destructive =>
-                policy.Approval == AgentToolOperationApproval.Required,
+                policy.Approval is AgentToolOperationApproval.None or AgentToolOperationApproval.Required,
             _ => false,
         };
     }

@@ -2290,6 +2290,71 @@ public sealed class AevatarInvocationToolSourceTests
             .Should().Be("call-workflow-wait-complete");
     }
 
+    [Fact]
+    public async Task StartWorkflow_WithWaitComplete_ShouldUseConfiguredCompletionObservationTimeout()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var context = PushContext(
+            callId: "call-workflow-wait-complete-unobserved",
+            channelPlatform: null,
+            channelRegistrationScopeId: null,
+            durableReplyCredentialRef: null);
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().Be("workflow-actor");
+        using var result = JsonDocument.Parse(output);
+        result.RootElement.GetProperty("status").GetString().Should().Be("streaming");
+        result.RootElement.TryGetProperty("result", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithWaitComplete_ShouldReturnObservedPartialOutputWhenRunIsStillActive()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        harness.WorkflowQuery.Snapshot = new WorkflowActorSnapshot
+        {
+            ScopeId = "scope-1",
+            ActorId = "workflow-actor",
+            LastCommandId = "call-workflow-wait-complete-partial",
+            CompletionStatus = WorkflowRunCompletionStatus.Running,
+            StateVersion = 7,
+            LastOutput = "{\"workflow_status\":\"needs_input\",\"message\":\"choose one\"}",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var context = PushContext(
+            callId: "call-workflow-wait-complete-partial",
+            channelPlatform: null,
+            channelRegistrationScopeId: null,
+            durableReplyCredentialRef: null);
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        using var result = JsonDocument.Parse(output);
+        result.RootElement.GetProperty("status").GetString().Should().Be("streaming");
+        result.RootElement.GetProperty("result").GetProperty("partial_output").GetString()
+            .Should().Be("{\"workflow_status\":\"needs_input\",\"message\":\"choose one\"}");
+    }
+
     [Theory]
     [InlineData("stream")]
     [InlineData("ack")]

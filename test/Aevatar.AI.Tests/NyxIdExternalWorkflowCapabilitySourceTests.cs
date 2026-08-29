@@ -209,9 +209,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
     [Theory]
     [InlineData("GET", NyxIdOperationRisk.ReadOnly, NyxIdOperationApproval.None, true, false)]
-    [InlineData("POST", NyxIdOperationRisk.Write, NyxIdOperationApproval.Required, false, false)]
-    [InlineData("DELETE", NyxIdOperationRisk.Destructive, NyxIdOperationApproval.Required, false, true)]
-    public async Task InspectAsync_ShouldDeriveConservativeExecutionPolicy(
+    [InlineData("POST", NyxIdOperationRisk.Write, NyxIdOperationApproval.None, false, false)]
+    [InlineData("DELETE", NyxIdOperationRisk.Destructive, NyxIdOperationApproval.None, false, true)]
+    public async Task InspectAsync_ShouldDeriveDefaultNoApprovalExecutionPolicy(
         string method,
         NyxIdOperationRisk risk,
         NyxIdOperationApproval approval,

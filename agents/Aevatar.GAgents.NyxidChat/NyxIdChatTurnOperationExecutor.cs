@@ -2472,6 +2472,11 @@ public sealed class NyxIdChatTurnOperationExecutor
         var toolContext = ResolveCatalogToolContext(request);
         try
         {
+            var routeToolChoiceHintCatalog = await MaterializeRouteToolChoiceHintCatalogAsync(request, toolContext, ct)
+                .ConfigureAwait(false);
+            if (routeToolChoiceHintCatalog is not null)
+                return routeToolChoiceHintCatalog;
+
             var catalog = await _turnCatalogMaterializer
                 .MaterializeUnprofiledBaselineAsync(toolContext, ct)
                 .ConfigureAwait(false);
@@ -2503,6 +2508,40 @@ public sealed class NyxIdChatTurnOperationExecutor
                 "Unprofiled NyxID chat baseline catalog materialization failed closed.");
             return RestrictedEmptyCatalog();
         }
+    }
+
+    private async Task<AgentTurnToolCatalog?> MaterializeRouteToolChoiceHintCatalogAsync(
+        NeedsLlmReplyEvent request,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        var forward = request.TargetRef?.ForwardToModel;
+        var toolSetName = forward?.ToolSetRef?.Name?.Trim();
+        var toolName = forward?.ToolChoiceHint?.ToolName?.Trim();
+        if (string.IsNullOrWhiteSpace(toolSetName) || string.IsNullOrWhiteSpace(toolName))
+            return null;
+
+        var catalog = await _turnCatalogMaterializer!
+            .MaterializeRouteToolChoiceHintAsync(toolSetName, toolName, toolContext, ct)
+            .ConfigureAwait(false);
+        if (catalog.ExactTools.Count == 0)
+        {
+            _logger.LogWarning(
+                "Route tool choice hint catalog materialized empty. toolSet={ToolSet} toolName={ToolName} diagnostics={Diagnostics}",
+                toolSetName,
+                toolName,
+                FormatDiagnostics(catalog.Diagnostics));
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Route tool choice hint catalog materialized. toolSet={ToolSet} toolName={ToolName} diagnostics={Diagnostics}",
+                toolSetName,
+                toolName,
+                FormatDiagnostics(catalog.Diagnostics));
+        }
+
+        return catalog;
     }
 
     private async Task<AgentTurnToolCatalog?> MaterializeTurnCatalogAsync(

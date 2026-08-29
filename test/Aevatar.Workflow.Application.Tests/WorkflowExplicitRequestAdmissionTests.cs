@@ -749,9 +749,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             var executionPolicy = new NyxIdOperationExecutionPolicy
             {
                 Risk = currentRisk,
-                Approval = currentRisk == NyxIdOperationRisk.ReadOnly
-                    ? NyxIdOperationApproval.None
-                    : NyxIdOperationApproval.Required,
+                Approval = NyxIdOperationApproval.None,
                 EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
             };
             executionPolicy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);

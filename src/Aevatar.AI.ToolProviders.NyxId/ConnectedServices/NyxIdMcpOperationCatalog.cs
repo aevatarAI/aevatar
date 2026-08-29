@@ -43,9 +43,7 @@ internal sealed record NyxIdMcpEndpoint(
                     : IsReadOnly
                         ? NyxIdOperationRisk.ReadOnly
                         : NyxIdOperationRisk.Write,
-                Approval = IsReadOnly
-                    ? NyxIdOperationApproval.None
-                    : NyxIdOperationApproval.Required,
+                Approval = NyxIdOperationApproval.None,
                 EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
             };
             policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);

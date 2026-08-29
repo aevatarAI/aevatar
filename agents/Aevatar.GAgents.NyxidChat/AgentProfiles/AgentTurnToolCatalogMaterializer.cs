@@ -32,6 +32,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             ProfileTaskRouteRoutingDescription,
             AgentProfileSideEffectClass.ExternalHandoff);
     internal const string UnprofiledBaselineIntentId = "nyxid_chat_unprofiled_baseline";
+    internal const string RouteToolChoiceHintIntentId = "nyxid_chat_route_tool_choice_hint";
 
     // The reviewed baseline surface for ordinary, unprofiled NyxID chat turns:
     // the Class-R management reads (#3298), the service readiness gate, typed
@@ -644,6 +645,43 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             diagnostics,
             selectedTools.Values,
             budget: AgentTurnToolCatalogBudget.Ordinary);
+    }
+
+    public async Task<AgentTurnToolCatalog> MaterializeRouteToolChoiceHintAsync(
+        string toolSetName,
+        string toolName,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(toolContext);
+        var normalizedToolSetName = toolSetName.Trim();
+        var normalizedToolName = toolName.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedToolSetName) || string.IsNullOrWhiteSpace(normalizedToolName))
+            return AgentTurnToolCatalogFactory.RestrictedEmpty();
+
+        var diagnostics = new List<AgentProfileTurnDiagnostic>();
+        var routeTools = await DiscoverToolSetAsync(
+            normalizedToolSetName,
+            toolContext,
+            AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
+            diagnostics,
+            ct);
+        if (routeTools.HadFailure ||
+            !toolContext.ToolVisibility.Allows(normalizedToolName) ||
+            !routeTools.Tools.TryGetValue(normalizedToolName, out var selectedTool))
+        {
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
+        }
+
+        return new AgentTurnToolCatalog(
+            [normalizedToolName],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            RouteToolChoiceHintIntentId,
+            RouteToolChoiceHintIntentId,
+            diagnostics,
+            [selectedTool],
+            budget: AgentTurnToolCatalogBudget.ConnectedOperations);
     }
 
     internal async Task<AgentTurnToolCatalog> MaterializeVerifiedAuthorizationContinuationAsync(

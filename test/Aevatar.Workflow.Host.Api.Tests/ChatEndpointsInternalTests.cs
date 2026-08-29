@@ -1166,6 +1166,35 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task WorkflowCallerCredentialExtractor_ShouldNotTreatIdentityAssertionSubjectAsNyxIdUser()
+    {
+        var bindingQueryPort = new RecordingBindingQueryPort("bnd-sender-alpha");
+        var tokenProvider = new RecordingCallerAccessTokenProvider("source-readable-alpha");
+        var http = CreateHttpContext();
+        http.RequestServices = CreateRequestServices(
+            bindingQueryPort: bindingQueryPort,
+            callerAccessTokenProvider: tokenProvider);
+        http.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-alpha";
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("scope_id", "scope-owner-alpha"),
+            new Claim("sub", "scope-owner-alpha"),
+        ], "NyxIdIdentityAssertion"));
+
+        var result = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Credential!.BearerToken.Should().Be("delegation-alpha");
+        result.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        result.Credential.NyxIdAuthority.Should().BeNull();
+        result.Credential.SourceReadableUserBearerToken.Should().BeNull();
+        bindingQueryPort.Subject.Should().BeNull();
+        tokenProvider.Authority.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleChatPost_ShouldAcceptWorkflowScopeClaimAsTrustedScope()
     {
         var capturedCommand = default(WorkflowChatRunRequest);
