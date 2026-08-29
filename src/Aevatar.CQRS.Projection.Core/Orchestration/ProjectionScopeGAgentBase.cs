@@ -331,29 +331,41 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         string correlationId)
     {
         var pending = State.InFlightObservation;
-        if (State.Active ||
-            State.Released ||
-            RuntimeMode != ProjectionRuntimeMode.DurableMaterialization ||
-            State.Mode != ProjectionScopeMode.DurableMaterialization ||
-            !EnablesDurableObservationRecovery ||
-            State.Failures.Count == 0 ||
-            pending?.Source == null ||
-            pending.Envelope == null)
+        if (State.Active || State.Released)
         {
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(State.RootActorId) ||
-            string.IsNullOrWhiteSpace(State.ProjectionKind))
+        var durableObservationRecoveryEnabled = EnablesDurableObservationRecovery;
+        var rootActorIdPresent = !string.IsNullOrWhiteSpace(State.RootActorId);
+        var projectionKindPresent = !string.IsNullOrWhiteSpace(State.ProjectionKind);
+        var inFlightSourcePresent = pending?.Source != null;
+        var inFlightEnvelopePresent = pending?.Envelope != null;
+        if (RuntimeMode != ProjectionRuntimeMode.DurableMaterialization ||
+            State.Mode != ProjectionScopeMode.DurableMaterialization ||
+            !durableObservationRecoveryEnabled ||
+            State.Failures.Count == 0 ||
+            !inFlightSourcePresent ||
+            !inFlightEnvelopePresent ||
+            !rootActorIdPresent ||
+            !projectionKindPresent)
         {
-            _logger.LogError(
-                "Projection automatic recovery refused an inactive unreleased manifest with incomplete actor-owned scope identity. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} rootActorIdPresent={RootActorIdPresent} projectionKindPresent={ProjectionKindPresent} unresolvedFailureCount={UnresolvedFailureCount}",
+            _logger.LogWarning(
+                "Projection automatic recovery refused an inactive unreleased manifest without complete actor-owned recovery evidence. actorId={ActorId} commandId={CommandId} correlationId={CorrelationId} runtimeMode={RuntimeMode} stateMode={StateMode} durableObservationRecoveryEnabled={DurableObservationRecoveryEnabled} unresolvedFailureCount={UnresolvedFailureCount} rootActorIdPresent={RootActorIdPresent} projectionKindPresent={ProjectionKindPresent} inFlightSourcePresent={InFlightSourcePresent} inFlightEnvelopePresent={InFlightEnvelopePresent} sourceActorIdPresent={SourceActorIdPresent} sourceStateVersion={SourceStateVersion} sourceEventIdPresent={SourceEventIdPresent}",
                 Id,
                 commandId,
                 correlationId,
-                !string.IsNullOrWhiteSpace(State.RootActorId),
-                !string.IsNullOrWhiteSpace(State.ProjectionKind),
-                State.Failures.Count);
+                RuntimeMode,
+                State.Mode,
+                durableObservationRecoveryEnabled,
+                State.Failures.Count,
+                rootActorIdPresent,
+                projectionKindPresent,
+                inFlightSourcePresent,
+                inFlightEnvelopePresent,
+                !string.IsNullOrWhiteSpace(pending?.Source?.ActorId),
+                pending?.Source?.StateVersion ?? 0,
+                !string.IsNullOrWhiteSpace(pending?.Source?.EventId));
             return;
         }
 
@@ -361,7 +373,7 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         var projectionKind = State.ProjectionKind;
         var sessionId = State.SessionId;
         var previousActivationGeneration = State.ActivationGeneration;
-        var source = pending.Source.Clone();
+        var source = pending!.Source!.Clone();
 
         // No domain transition deactivates a projection scope without also releasing it.
         // A durable staged source plus a retained failure manifest therefore proves that this
