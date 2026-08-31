@@ -63,9 +63,13 @@ public sealed class WorkflowProjectionFailurePublicationRecoveryTests
             StateRoot = Any.Pack(agent.State),
         };
         unredactedPendingPublication.CalculateSize().Should().BeGreaterThan(MaxPublicationBytes);
-        committedPublisher.Proxy.Accepted.Should().ContainSingle();
-        committedPublisher.Proxy.AttemptedSizes.Should().ContainSingle()
-            .Which.Should().BeLessThan(MaxPublicationBytes);
+        committedPublisher.Proxy.AttemptedSizes.Should().OnlyContain(
+            size => size > 0 && size < MaxPublicationBytes);
+        committedPublisher.Proxy.Accepted.Should().OnlyContain(
+            publication => publication.CalculateSize() < MaxPublicationBytes);
+        committedPublisher.Proxy.Accepted.Should().ContainSingle(
+            publication => publication.StateEvent.EventData.Is(
+                ProjectionScopeDispatchFailedEvent.Descriptor));
 
         var replayEnvelope = selfPublisher.Published.Should().ContainSingle().Subject;
         replayEnvelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
