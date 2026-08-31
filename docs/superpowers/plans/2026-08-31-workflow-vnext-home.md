@@ -75,6 +75,6 @@ Run changed test files explicitly, related tests for changed production files, a
 
 Search the changed navigation area for stale Teams-home assertions, confirm no `src/pages/teams/**` file changed, and inspect `git diff --check` plus the complete base diff.
 
-- [ ] **Step 4: Commit and deliver**
+- [x] **Step 4: Commit and deliver**
 
 Stage only this task's tracked files, commit with an imperative single-purpose message, push the branch, and create a PR targeting `feat/2026-08-04_workflow-activity-vnext`. Record exact focused commands and state that the full frontend suite/build is delegated to GitHub CI.
