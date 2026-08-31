@@ -34,6 +34,29 @@ public sealed class ServiceRunRegistrationAdapterTests
     }
 
     [Fact]
+    public async Task RegisterAsync_WhenRegistrationDispatchIsRejected_ShouldNotReturnSuccessfulResult()
+    {
+        var runtime = new RecordingRunRegistryRuntime();
+        var dispatchPort = new RecordingDispatchPort
+        {
+            Admission = new DispatchAdmission(
+                false,
+                "cmd-run-rejected",
+                DateTimeOffset.UtcNow,
+                ServiceRunIds.BuildActorId("tenant-1", "svc-1", "run-1"),
+                "corr-run-rejected"),
+        };
+        var adapter = new ServiceRunRegistrationAdapter(runtime, dispatchPort);
+        var record = BuildRecord(scopeId: "tenant-1", serviceId: "svc-1", runId: "run-1");
+
+        var act = () => adapter.RegisterAsync(record);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*ServiceRun registration dispatch was not accepted*service-run:tenant-1:svc-1:run-1*");
+        dispatchPort.Calls.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task RegisterAsync_ShouldNotCollide_OnSameRunIdAcrossScopes()
     {
         var runtime = new RecordingRunRegistryRuntime();
@@ -240,10 +263,12 @@ public sealed class ServiceRunRegistrationAdapterTests
     {
         public List<(string actorId, EventEnvelope envelope)> Calls { get; } = [];
 
+        public DispatchAdmission? Admission { get; init; }
+
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Calls.Add((actorId, envelope));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+            return Task.FromResult(Admission ?? DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
     private sealed class RecordingActor : IActor
