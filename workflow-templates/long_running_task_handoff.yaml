@@ -1,6 +1,6 @@
 name: long_running_task_handoff
 description: >-
-  Emit a durable work request, suspend until an external worker returns the task_completed signal, and review the callback payload before completing. Use this starter when work cannot finish inside one workflow turn and the external worker can preserve the run ID, signal name, and callback payload required to resume the waiting step. A worker or callback adapter must be connected separately.
+  Emit a durable work request, suspend until an external worker returns the task_completed signal, and review the callback payload before completing. Use this starter when work cannot finish inside one workflow turn and the external worker can preserve the run ID, submit signal_name=task_completed with step_id=wait_for_task_completion, and return the callback payload required to resume the waiting step. A worker or callback adapter must be connected separately.
 roles:
   - id: result_reviewer
     name: Result Reviewer
@@ -21,7 +21,10 @@ steps:
     type: emit
     parameters:
       event_type: starter.long_running_task.requested
-      payload: "${handoff_request}"
+      payload: >-
+        signal_name=task_completed
+        step_id=wait_for_task_completion
+        request=${handoff_request}
     next: initialize_callback_payload
 
   - id: initialize_callback_payload

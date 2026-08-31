@@ -47,7 +47,8 @@ public sealed class WorkflowStarterTemplateContractTests
         Directory.EnumerateFiles(directory, "*.yaml", SearchOption.TopDirectoryOnly)
             .Select(Path.GetFileNameWithoutExtension)
             .Should()
-            .Contain(ExpectedTemplateNames);
+            .BeEquivalentTo(ExpectedTemplateNames,
+                "the starter-template surface is a fixed ten-template manifest");
     }
 
     [Theory]
@@ -151,7 +152,8 @@ public sealed class WorkflowStarterTemplateContractTests
         var emitStep = allSteps.Should()
             .ContainSingle(static step => step.Type == "emit")
             .Which;
-        emitStep.Parameters.Should().Contain("payload", "${handoff_request}",
+        emitStep.Parameters.Should().ContainKey("payload");
+        emitStep.Parameters["payload"].Should().Contain("${handoff_request}",
             "emit does not implement AssignModule's $input pass-through convention");
         var waitStep = allSteps.Should()
             .ContainSingle(static step => step.Type == "wait_signal")
@@ -162,6 +164,10 @@ public sealed class WorkflowStarterTemplateContractTests
         missingCallbackStep.Parameters["value"].Should().Contain("NO CALLBACK PAYLOAD RECEIVED");
         missingCallbackStep.Next.Should().Be(waitStep.Id);
         waitStep.Parameters.Should().Contain("signal_name", "task_completed");
+        emitStep.Parameters["payload"].Should().Contain("signal_name=task_completed",
+            "the external worker must receive the callback signal locator");
+        emitStep.Parameters["payload"].Should().Contain($"step_id={waitStep.Id}",
+            "an early callback can only be buffered when it identifies the future wait step");
         var reviewStep = definition.GetStep("review_callback");
         reviewStep.Should().NotBeNull();
         reviewStep!.Parameters["prompt_prefix"].Should().Contain("${handoff_request}",

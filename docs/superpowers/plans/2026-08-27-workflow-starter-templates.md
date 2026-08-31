@@ -52,8 +52,8 @@
 ### Task 4: Browser Verification
 
 1. Reuse the existing authenticated browser and existing vNext frontend tab.
-2. Open `/scopes/:scopeId/workflow-activity-vnext/workflows/new`, import one YAML, and retain the isolated workflow draft it creates.
-3. In the resulting `/scopes/:scopeId/workflow-activity-vnext/workflows/:workflowId` editor, apply and save each YAML; require zero diagnostics, inspect the matching Canvas graph, then reload the same URL and require the same workflow name and graph before treating the draft as durably materialized.
+2. For each YAML, open `/scopes/:scopeId/workflow-activity-vnext/workflows/new`, submit one import, and require its own fresh workflow ID; never rotate multiple templates through one draft.
+3. In each resulting `/scopes/:scopeId/workflow-activity-vnext/workflows/:workflowId` editor, require zero diagnostics, inspect that YAML's matching Canvas graph, then reload the same URL and require the same workflow ID, name, and graph before treating that individual draft as durably materialized.
 4. Draft-run representative safe inputs. For human approval and wait-signal workflows, verify the expected suspension and resume/signal surface rather than claiming synchronous completion.
 5. Record remote environment or provider limitations without adding mocks or local backend services.
 

@@ -129,6 +129,93 @@ public sealed class WorkflowStarterTemplateExecutionTests
             completion.Output.Should().Contain(RejectionFeedback);
     }
 
+    [Fact]
+    public async Task LongRunningTaskHandoff_CallbackModuleContract_ShouldConsumeEarlyEmptySignalOnceWithSentinel()
+    {
+        var definition = ParseTemplate("long_running_task_handoff");
+        var emitStep = definition.Steps.Single(static step => step.Type == "emit");
+        var waitStep = definition.Steps.Single(static step => step.Type == "wait_signal");
+        var signalName = waitStep.Parameters["signal_name"];
+        var sentinelStep = definition.GetStep(emitStep.Next!);
+
+        emitStep.Parameters["payload"].Should().Contain($"signal_name={signalName}");
+        emitStep.Parameters["payload"].Should().Contain($"step_id={waitStep.Id}");
+        sentinelStep.Should().NotBeNull();
+        sentinelStep!.Next.Should().Be(waitStep.Id);
+
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var waitSignalModule = new WaitSignalModule();
+        var context = new TestEventHandlerContext(
+            services,
+            new TestAgent("starter-template-signal-agent", RunId),
+            NullLogger.Instance);
+
+        await waitSignalModule.HandleAsync(
+            Envelope(new SignalReceivedEvent
+            {
+                RunId = RunId,
+                StepId = waitStep.Id,
+                SignalName = signalName,
+                Payload = string.Empty,
+            }),
+            context,
+            CancellationToken.None);
+
+        var buffered = context.Published.Select(static item => item.evt)
+            .OfType<WorkflowSignalBufferedEvent>()
+            .Should()
+            .ContainSingle()
+            .Which;
+        buffered.StepId.Should().Be(waitStep.Id);
+        buffered.SignalName.Should().Be(signalName);
+        context.Published.Clear();
+
+        var sentinelRequest = new StepRequestEvent
+        {
+            RunId = RunId,
+            StepId = sentinelStep.Id,
+            StepType = sentinelStep.Type,
+        };
+        sentinelRequest.Parameters.Add(sentinelStep.Parameters);
+        await new AssignModule().HandleAsync(
+            Envelope(sentinelRequest),
+            context,
+            CancellationToken.None);
+        var sentinelCompletion = context.Published.Select(static item => item.evt)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Which;
+        sentinelCompletion.AssignedVariable.Should().Be("callback_payload");
+        sentinelCompletion.Output.Should().Contain("NO CALLBACK PAYLOAD RECEIVED");
+        context.Published.Clear();
+
+        await waitSignalModule.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                RunId = RunId,
+                StepId = waitStep.Id,
+                StepType = waitStep.Type,
+                Input = sentinelCompletion.Output,
+                Parameters = { ["signal_name"] = signalName },
+            }),
+            context,
+            CancellationToken.None);
+
+        var waitCompletion = context.Published.Select(static item => item.evt)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Which;
+        waitCompletion.StepId.Should().Be(waitStep.Id);
+        waitCompletion.Output.Should().Be(sentinelCompletion.Output);
+        context.Published.Select(static item => item.evt)
+            .Should()
+            .NotContain(static message => message is WaitingForSignalEvent);
+        context.LoadState<WaitSignalModuleState>("wait_signal").Buffered.Should().BeEmpty(
+            "a buffered callback must be consumed exactly once");
+    }
+
     private static WorkflowDefinition ParseTemplate(string templateName)
     {
         var path = Path.Combine(TemplateDirectory(), $"{templateName}.yaml");
