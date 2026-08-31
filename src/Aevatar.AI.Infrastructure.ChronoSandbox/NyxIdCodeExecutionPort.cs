@@ -256,7 +256,8 @@ internal sealed partial class NyxIdCodeExecutionPort(
     private static bool IsValidExecutionCredentialKind(
         CodeExecutionNyxIdCredentialKind? kind) =>
         kind is CodeExecutionNyxIdCredentialKind.Bearer or
-            CodeExecutionNyxIdCredentialKind.AgentKey;
+            CodeExecutionNyxIdCredentialKind.AgentKey or
+            CodeExecutionNyxIdCredentialKind.InteractiveAgentKey;
 
     private static string SerializeLanguage(CodeExecutionLanguage language) => language switch
     {

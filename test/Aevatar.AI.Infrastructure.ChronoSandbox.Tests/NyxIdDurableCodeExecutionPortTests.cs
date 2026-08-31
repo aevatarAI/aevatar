@@ -136,6 +136,40 @@ public sealed class NyxIdDurableCodeExecutionPortTests
         handler.Requests[0].Headers["X-NyxID-Operation-Id"].Should().Equal(IdempotencyKey);
     }
 
+    [Fact]
+    public async Task SubmitAsync_InteractiveAgentKeyUsesOrdinaryProxyAuthority()
+    {
+        var handler = new SequenceHandler(_ => Response(
+            HttpStatusCode.Accepted,
+            $$"""
+              {
+                "operation_id":"{{OperationId}}",
+                "status":"queued",
+                "created_at":"2026-08-14T10:00:00Z",
+                "expires_at":"2026-08-15T10:00:00Z"
+              }
+              """));
+        var port = CreatePort(handler);
+        var execution = ExecutionRequest() with
+        {
+            Caller = new CodeExecutionCallerContext(
+                "interactive-agent-key",
+                null,
+                CodeExecutionNyxIdCredentialKind.InteractiveAgentKey),
+        };
+
+        var outcome = await port.SubmitAsync(new DurableCodeExecutionSubmitRequest(
+            execution,
+            IdempotencyKey));
+
+        outcome.Failure.Should().BeNull();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Headers["Authorization"].Should().Equal("Bearer interactive-agent-key");
+        handler.Requests[0].Headers["Idempotency-Key"].Should().Equal(IdempotencyKey);
+        handler.Requests[0].Headers.Should().NotContainKey("X-NyxID-Durable-Grant-Id");
+        handler.Requests[0].Headers.Should().NotContainKey("X-NyxID-Operation-Id");
+    }
+
     [Theory]
     [InlineData("missing")]
     [InlineData("route-mismatch")]
@@ -292,6 +326,30 @@ public sealed class NyxIdDurableCodeExecutionPortTests
             Retryable = false,
         });
         handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetStatusAsync_InteractiveAgentKeyUsesOrdinaryProxyAuthority()
+    {
+        var handler = new SequenceHandler(_ => Response(
+            HttpStatusCode.NotModified,
+            string.Empty,
+            response => response.Headers.ETag = new EntityTagHeaderValue("\"v7\"")));
+        var port = CreatePort(handler);
+        var request = OperationRequest("\"v6\"") with
+        {
+            Caller = new CodeExecutionCallerContext(
+                "interactive-agent-key",
+                null,
+                CodeExecutionNyxIdCredentialKind.InteractiveAgentKey),
+        };
+
+        var outcome = await port.GetStatusAsync(request);
+
+        outcome.Failure.Should().BeNull();
+        outcome.NotModified.Should().BeTrue();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Headers["Authorization"].Should().Equal("Bearer interactive-agent-key");
     }
 
     [Fact]

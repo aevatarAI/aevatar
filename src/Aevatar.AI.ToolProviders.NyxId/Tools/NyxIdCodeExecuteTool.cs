@@ -871,7 +871,8 @@ public sealed class NyxIdCodeExecuteTool(
         }
 
         var credentials = AgentToolRequestContext.Current?.Credentials;
-        var executionCredential = ResolveExecutionCredential(credentials);
+        var durableCredential = AgentToolRequestContext.Current?.DurableNyxIdCredential;
+        var executionCredential = ResolveExecutionCredential(credentials, durableCredential);
         if (executionCredential.Token is null ||
             executionCredential.Kind == CodeExecutionNyxIdCredentialKind.Unspecified)
         {
@@ -892,7 +893,7 @@ public sealed class NyxIdCodeExecuteTool(
         var durableGrant = ResolveDurableOperationGrant(
             credentials,
             admittedUserServiceId,
-            AgentToolRequestContext.Current?.DurableNyxIdCredential,
+            durableCredential,
             _timeProvider.GetUtcNow());
         if (durableGrant.Failure is not null)
             return CodeExecutionPreparation.Failed(durableGrant.Failure);
@@ -929,7 +930,8 @@ public sealed class NyxIdCodeExecuteTool(
         DurableCallerCredentialRef? durableCredential,
         DateTimeOffset now)
     {
-        if (credentials?.NyxIdCredentialKind != AgentToolNyxIdCredentialKind.AgentKey)
+        if (credentials?.NyxIdCredentialKind != AgentToolNyxIdCredentialKind.AgentKey ||
+            durableCredential is null)
             return DurableGrantResolution.Succeeded(null);
 
         var providerCredentialId = NormalizeCredential(durableCredential?.ProviderCredentialId);
@@ -981,13 +983,17 @@ public sealed class NyxIdCodeExecuteTool(
         string.IsNullOrEmpty(value) || IsNormalized(value);
 
     private static (string? Token, CodeExecutionNyxIdCredentialKind Kind)
-        ResolveExecutionCredential(AgentToolCredentials? credentials)
+        ResolveExecutionCredential(
+            AgentToolCredentials? credentials,
+            DurableCallerCredentialRef? durableCredential)
     {
         var kind = credentials?.NyxIdCredentialKind switch
         {
             AgentToolNyxIdCredentialKind.SourceReadableUserBearer or
                 AgentToolNyxIdCredentialKind.ProxyDelegation =>
                 CodeExecutionNyxIdCredentialKind.Bearer,
+            AgentToolNyxIdCredentialKind.AgentKey when durableCredential is null =>
+                CodeExecutionNyxIdCredentialKind.InteractiveAgentKey,
             AgentToolNyxIdCredentialKind.AgentKey =>
                 CodeExecutionNyxIdCredentialKind.AgentKey,
             _ => CodeExecutionNyxIdCredentialKind.Unspecified,

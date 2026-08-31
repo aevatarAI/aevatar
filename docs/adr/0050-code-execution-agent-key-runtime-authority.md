@@ -28,6 +28,13 @@ preserve the strong typed kind `AgentKey` through workflow, tool execution, and
 code-execution ports. They never relabel that secret as `ProxyDelegation` or use a
 five-minute token as the sandbox program's NyxID credential.
 
+An authenticated interactive workflow may instead receive an exact Agent Key directly on the
+current request. Workflow execution preserves its upstream `AgentKey` identity, while the
+code-execution boundary projects it as `InteractiveAgentKey`. That typed class uses the ordinary
+key's exact service allowlist for the asynchronous execution lifecycle and never fabricates or
+sends scheduled durable-grant headers. A non-null durable caller reference always selects the
+Vault-backed `AgentKey` class and therefore cannot fall into this interactive path.
+
 Webhook binding management credentials are admission credentials only. Aevatar
 must never persist a forwarded management Agent Key as the webhook runtime
 credential. When unattended effects are enabled, Aevatar obtains a
