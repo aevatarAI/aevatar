@@ -171,6 +171,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
 
     public string Description =>
         "Start a mounted/imported Aevatar Scope Workflow by workflow_id with typed inputs. " +
+        "Before starting a workflow whose input contract needs stable user context, use only relevant read-only scoped connected-service tools already admitted for this turn and merge their results into inputs.prompt; leave missing fields explicit instead of guessing. " +
         "The returned run_id is the workflow run actor id; command_id is the start command/tool-call id. " +
         "Use inline workflow_yamls only as an explicit fallback when Scope Workflow mounting/import is unavailable; Ornn workflow YAMLs from use_skill are templates/import sources, not page-visible runnable workflow authority by themselves. " +
         "Use wait=stream only when the current surface can deliver or observe the workflow terminal result; channel bots without workflow result delivery should not start background-only runs.";

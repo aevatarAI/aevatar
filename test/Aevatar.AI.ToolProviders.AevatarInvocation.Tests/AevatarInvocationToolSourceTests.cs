@@ -98,6 +98,8 @@ public sealed class AevatarInvocationToolSourceTests
         tool.Description.Should().Contain("workflow_yamls");
         tool.Description.Should().Contain("explicit fallback");
         tool.Description.Should().Contain("templates/import sources");
+        tool.Description.Should().Contain("read-only scoped connected-service tools");
+        tool.Description.Should().Contain("inputs.prompt");
         tool.Description.Should().NotContain("pass that bundle in workflow_yamls");
     }
 
@@ -118,6 +120,8 @@ public sealed class AevatarInvocationToolSourceTests
             .GetProperty("prompt");
         var description = prompt.GetProperty("description").GetString();
         description.Should().Contain("serialized JSON");
+        description.Should().Contain("read-only scoped connected-service");
+        description.Should().Contain("leave unavailable fields explicit");
         description.Should().Contain("Never pass an empty string");
 
         var workflowId = doc.RootElement
