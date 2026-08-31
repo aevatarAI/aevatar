@@ -35,21 +35,21 @@ steps:
     type: assign
     parameters:
       target: simulated_user_choice
-      value: "${json(input.user_choice)}"
+      value: "$input"
     next: initialize_context
 
   - id: initialize_context
     type: assign
     parameters:
       target: dinner_date_context
-      value: '{"task_id":${json(input.task_id)},"raw_user_request":${json(input.raw_user_request)},"participant":${json(input.participant)},"window":${json(input.window)},"party_size":${json(input.party_size)},"day":${json(input.day)},"time":${json(input.time)},"location":${json(input.location)},"cuisines":${json(input.cuisines)},"restaurant_type":${json(input.restaurant_type)},"phone_number":${json(input.phone_number)},"budget_cap":${json(input.budget_cap)},"policy":${json(input.policy)},"mode":"mock","missing_fields":${json(input.missing_fields)}}'
+      value: '{"task_id":"${json(steps.capture_user_choice.json.task_id)}","raw_user_request":"${json(steps.capture_user_choice.json.raw_user_request)}","participant":"${json(steps.capture_user_choice.json.participant)}","window":"${json(steps.capture_user_choice.json.window)}","party_size":${if(isBlank(steps.capture_user_choice.json.party_size), "null", steps.capture_user_choice.json.party_size)},"day":"${json(steps.capture_user_choice.json.day)}","time":"${json(steps.capture_user_choice.json.time)}","location":"${json(steps.capture_user_choice.json.location)}","cuisines":${if(isBlank(steps.capture_user_choice.json.cuisines), "null", steps.capture_user_choice.json.cuisines)},"restaurant_type":"${json(steps.capture_user_choice.json.restaurant_type)}","phone_number":"${json(steps.capture_user_choice.json.phone_number)}","budget_cap":${if(isBlank(steps.capture_user_choice.json.budget_cap), "null", steps.capture_user_choice.json.budget_cap)},"policy":${if(isBlank(steps.capture_user_choice.json.policy), "null", steps.capture_user_choice.json.policy)},"mode":"mock","missing_fields":${if(isBlank(steps.capture_user_choice.json.missing_fields), "[]", steps.capture_user_choice.json.missing_fields)}}'
     next: discover_restaurant_candidates
 
   - id: discover_restaurant_candidates
     type: tool_call
     parameters:
       tool: web_search
-      arguments: '{"query":${json(input.search_query)},"max_results":8}'
+      arguments: '{"query":"${json(steps.capture_user_choice.json.search_query)}","max_results":8}'
     next: build_shortlist_from_candidates
 
   - id: build_shortlist_from_candidates
