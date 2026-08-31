@@ -19,6 +19,7 @@ public static class WorkflowCallerCredentialExtractor
     private const string JwtBearerAuthenticationScheme = "Bearer";
     private const string NyxIdIdentityAssertionAuthenticationScheme = "NyxIdIdentityAssertion";
     private const string NyxIdDelegationTokenHeader = "X-NyxID-Delegation-Token";
+    private const string NyxIdAgentKeyPrefix = "nyxid_ag_";
     private const string DefaultNyxIdCapabilityScope = "proxy";
 
     public static WorkflowCallerCredentialExtractionResult Extract(HttpContext? http)
@@ -77,7 +78,7 @@ public static class WorkflowCallerCredentialExtractor
 
     private static CallerCredentialTokensExtractionResult ExtractCredentialTokens(HttpContext? http)
     {
-        string? sourceReadableRawToken = null;
+        string? authorizationRawToken = null;
         if (http?.Request.Headers.TryGetValue("Authorization", out var authorizationValues) == true)
         {
             if (authorizationValues.Count != 1)
@@ -95,7 +96,7 @@ public static class WorkflowCallerCredentialExtractor
             if (authorization?.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase) != true)
                 return CallerCredentialTokensExtractionResult.Invalid;
 
-            sourceReadableRawToken = authorization[BearerPrefix.Length..];
+            authorizationRawToken = authorization[BearerPrefix.Length..];
         }
 
         string? delegationRawToken = null;
@@ -110,16 +111,25 @@ public static class WorkflowCallerCredentialExtractor
 
         if (delegationRawToken != null)
         {
+            if (IsNyxIdAgentKey(authorizationRawToken))
+            {
+                return CallerCredentialTokensExtractionResult.Success(
+                    authorizationRawToken!,
+                    WorkflowProtocol.NyxIdCallerCredentialKind.AgentKey,
+                    sourceReadableRawToken: null,
+                    admissionProxyDelegationRawToken: delegationRawToken);
+            }
+
             return CallerCredentialTokensExtractionResult.Success(
                 delegationRawToken,
                 WorkflowProtocol.NyxIdCallerCredentialKind.ProxyDelegation,
-                sourceReadableRawToken);
+                authorizationRawToken);
         }
 
-        return sourceReadableRawToken == null
+        return authorizationRawToken == null
             ? CallerCredentialTokensExtractionResult.Missing
             : CallerCredentialTokensExtractionResult.Success(
-                sourceReadableRawToken,
+                authorizationRawToken,
                 WorkflowProtocol.NyxIdCallerCredentialKind.SourceReadableUserBearer,
                 null);
     }
@@ -131,9 +141,20 @@ public static class WorkflowCallerCredentialExtractor
         var execution = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(tokens.ExecutionRawToken);
         var sourceReadable = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(
             tokens.SourceReadableRawToken);
-        if (execution.IsValid && !sourceReadable.IsInvalid)
+        var admissionProxyDelegation = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(
+            tokens.AdmissionProxyDelegationRawToken);
+        var admissionProxyDelegationIsValid = tokens.AdmissionProxyDelegationRawToken == null ||
+                                              admissionProxyDelegation.IsValid;
+        if (execution.IsValid &&
+            !sourceReadable.IsInvalid &&
+            admissionProxyDelegationIsValid)
         {
-            var selection = CreateAdmissionSelection(tokens, execution, sourceReadable, http);
+            var selection = CreateAdmissionSelection(
+                tokens,
+                execution,
+                sourceReadable,
+                admissionProxyDelegation,
+                http);
             return WorkflowCallerCredentialExtractionResult.Success(
                 new WorkflowCallerCredential(
                     execution.NormalizedBearerToken,
@@ -157,7 +178,13 @@ public static class WorkflowCallerCredentialExtractor
         var execution = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(tokens.ExecutionRawToken);
         var sourceReadable = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(
             tokens.SourceReadableRawToken);
-        if (execution.IsValid && !sourceReadable.IsInvalid)
+        var admissionProxyDelegation = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(
+            tokens.AdmissionProxyDelegationRawToken);
+        var admissionProxyDelegationIsValid = tokens.AdmissionProxyDelegationRawToken == null ||
+                                              admissionProxyDelegation.IsValid;
+        if (execution.IsValid &&
+            !sourceReadable.IsInvalid &&
+            admissionProxyDelegationIsValid)
         {
             var authority = await ResolveAuthenticatedNyxIdAuthorityAsync(
                 http,
@@ -177,7 +204,12 @@ public static class WorkflowCallerCredentialExtractor
                 sourceReadable = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(issuedToken);
             }
 
-            var selection = CreateAdmissionSelection(tokens, execution, sourceReadable, http);
+            var selection = CreateAdmissionSelection(
+                tokens,
+                execution,
+                sourceReadable,
+                admissionProxyDelegation,
+                http);
             return WorkflowCallerCredentialExtractionResult.Success(
                 new WorkflowCallerCredential(
                     execution.NormalizedBearerToken,
@@ -349,8 +381,15 @@ public static class WorkflowCallerCredentialExtractor
         CallerCredentialTokensExtractionResult tokens,
         WorkflowProtocol.WorkflowCallerCredentialTokenParseResult execution,
         WorkflowProtocol.WorkflowCallerCredentialTokenParseResult sourceReadable,
+        WorkflowProtocol.WorkflowCallerCredentialTokenParseResult admissionProxyDelegation,
         HttpContext? http)
     {
+        if (admissionProxyDelegation.IsValid)
+        {
+            return WorkflowProtocol.NyxIdCallerCredentialSelection.ProxyDelegation(
+                admissionProxyDelegation.NormalizedBearerToken!);
+        }
+
         if (sourceReadable.IsValid)
         {
             return !string.IsNullOrWhiteSpace(tokens.SourceReadableRawToken) &&
@@ -371,6 +410,15 @@ public static class WorkflowCallerCredentialExtractor
         }
 
         return CreateSelection(tokens.ExecutionKind, execution.NormalizedBearerToken!);
+    }
+
+    private static bool IsNyxIdAgentKey(string? rawToken)
+    {
+        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(rawToken);
+        return parsed.IsValid &&
+               parsed.NormalizedBearerToken?.StartsWith(
+                   NyxIdAgentKeyPrefix,
+                   StringComparison.Ordinal) == true;
     }
 
     private static bool IsAuthenticatedHumanAccessToken(HttpContext? http)
@@ -428,19 +476,26 @@ readonly record struct CallerCredentialTokensExtractionResult(
     string? ExecutionRawToken,
     WorkflowProtocol.NyxIdCallerCredentialKind ExecutionKind,
     string? SourceReadableRawToken,
+    string? AdmissionProxyDelegationRawToken,
     bool Succeeded)
 {
     public static CallerCredentialTokensExtractionResult Missing =>
-        new(null, WorkflowProtocol.NyxIdCallerCredentialKind.Unspecified, null, true);
+        new(null, WorkflowProtocol.NyxIdCallerCredentialKind.Unspecified, null, null, true);
 
     public static CallerCredentialTokensExtractionResult Invalid =>
-        new(null, WorkflowProtocol.NyxIdCallerCredentialKind.Unspecified, null, false);
+        new(null, WorkflowProtocol.NyxIdCallerCredentialKind.Unspecified, null, null, false);
 
     public static CallerCredentialTokensExtractionResult Success(
         string executionRawToken,
         WorkflowProtocol.NyxIdCallerCredentialKind executionKind,
-        string? sourceReadableRawToken) =>
-        new(executionRawToken, executionKind, sourceReadableRawToken, true);
+        string? sourceReadableRawToken,
+        string? admissionProxyDelegationRawToken = null) =>
+        new(
+            executionRawToken,
+            executionKind,
+            sourceReadableRawToken,
+            admissionProxyDelegationRawToken,
+            true);
 }
 
 public readonly record struct WorkflowCallerCredentialExtractionResult(
