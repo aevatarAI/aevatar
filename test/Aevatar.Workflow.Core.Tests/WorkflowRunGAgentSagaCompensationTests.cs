@@ -1242,6 +1242,59 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     [Fact]
+    public async Task ManagedWorkflowCallChild_WhenNormalizedCompletionHasNoInvocationId_ShouldNotSendChildCompletionToParent()
+    {
+        const string parentActorId = "parent-run-actor";
+        const string parentRunId = "parent-run";
+        const string parentStepId = "call_child";
+        var childRunId = "child-run-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(
+            childRunId,
+            NormalizedSagaWorkflowYaml(),
+            normalizedAdmission: true);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(parentActorId, new StartWorkflowEvent
+        {
+            WorkflowName = "wf_2097",
+            RunId = childRunId,
+            Input = "hello",
+            WorkflowRuntime = new WorkflowToolRuntimeContextPayload
+            {
+                ParentActorId = parentActorId,
+                ParentRunId = parentRunId,
+                ParentStepId = parentStepId,
+                RootRunId = parentRunId,
+                Depth = 1,
+            },
+            ValueRepresentation = WorkflowExecutionValueRepresentation.Normalized,
+        }));
+
+        await CompleteStepAsync(
+            harness,
+            "create_order",
+            "order-output",
+            producedOutput: true);
+        await CompleteStepAsync(
+            harness,
+            "charge_payment",
+            "charge-output",
+            producedOutput: true);
+        await FailStepAsync(
+            harness,
+            "ship_order",
+            "ship failed",
+            producedOutput: true);
+        var firstRequest = CompensationRequests(harness.Publisher).Single();
+        await CompleteCompensationAsync(harness, firstRequest, producedOutput: true);
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+        await CompleteCompensationAsync(harness, secondRequest, producedOutput: true);
+
+        harness.Publisher.Sent.Should().NotContain(x =>
+            x.TargetActorId == parentActorId &&
+            x.Event is SubWorkflowInvocationCompletedEvent);
+    }
+
+    [Fact]
     public async Task RetryCompensation_FromMatchingDeadLetter_ShouldPersistRetryAndRepublishCurrentCompensation()
     {
         var harness = await CreateStartedRunAsync(SagaWorkflowYaml());

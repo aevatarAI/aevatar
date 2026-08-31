@@ -6309,9 +6309,10 @@ public sealed partial class WorkflowRunGAgent
 
             var kernelState = packedState.Unpack<WorkflowExecutionKernelState>();
             var variableView = WorkflowExecutionValueStore.CreateVariableView(kernelState);
-            return variableView.TryGetValue("workflow_call.invocation_id", out var invocationId)
-                ? invocationId?.Trim() ?? string.Empty
-                : string.Empty;
+            if (!variableView.TryGetValue("workflow_call.invocation_id", out var invocationId))
+                return string.Empty;
+
+            return invocationId.Trim();
         }
 
         return string.Empty;
