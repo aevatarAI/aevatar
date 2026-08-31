@@ -9,6 +9,7 @@ public sealed class WorkflowDraftRunCapabilityAdmissionService(
     IWorkflowDraftRunCapabilityAdmissionService
 {
     private const string SourceKind = "workflow_draft_run";
+    private const string NyxIdAgentKeyPrefix = "nyxid_ag_";
 
     public async Task<WorkflowDraftRunCapabilityAdmissionResult> PrepareAsync(
         WorkflowDraftRunCapabilityAdmissionRequest request,
@@ -97,11 +98,8 @@ public sealed class WorkflowDraftRunCapabilityAdmissionService(
 
         var selectedProxyToken = selection.ProxyDelegationToken;
         if (!string.IsNullOrWhiteSpace(selectedProxyToken) &&
-            callerCredential?.Kind == NyxIdCallerCredentialKind.ProxyDelegation &&
-            string.Equals(
-                selectedProxyToken,
-                callerCredential.BearerToken?.Trim(),
-                StringComparison.Ordinal))
+            (IsMatchingProxyExecutionCredential(callerCredential, selectedProxyToken) ||
+             IsAgentKeyExecutionCredential(callerCredential)))
         {
             return selection;
         }
@@ -131,6 +129,34 @@ public sealed class WorkflowDraftRunCapabilityAdmissionService(
                 NyxIdCallerCredentialSelection.ProxyDelegation(bearerToken),
             _ => null,
         };
+    }
+
+    private static bool IsMatchingProxyExecutionCredential(
+        Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? callerCredential,
+        string selectedProxyToken) =>
+        callerCredential?.Kind == NyxIdCallerCredentialKind.ProxyDelegation &&
+        string.Equals(
+            selectedProxyToken,
+            callerCredential.BearerToken?.Trim(),
+            StringComparison.Ordinal);
+
+    private static bool IsAgentKeyExecutionCredential(
+        Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? callerCredential)
+    {
+        if (callerCredential?.Kind != NyxIdCallerCredentialKind.AgentKey ||
+            WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                callerCredential.BearerToken,
+                callerCredential.Kind,
+                callerCredential.SourceReadableUserBearerToken))
+        {
+            return false;
+        }
+
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(callerCredential.BearerToken);
+        return parsed.IsValid &&
+               parsed.NormalizedBearerToken?.StartsWith(
+                   NyxIdAgentKeyPrefix,
+                   StringComparison.Ordinal) == true;
     }
 
     private static IReadOnlyList<NyxIdExplicitRequestConfirmation> BuildConfirmations(

@@ -1153,6 +1153,36 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task WorkflowCallerCredentialExtractor_AgentKeyAndDelegation_ShouldSeparateTheirPurposes()
+    {
+        var http = CreateHttpContext("Bearer nyxid_ag_interactive_runtime");
+        http.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-alpha";
+
+        var result = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Credential.Should().NotBeNull();
+        result.Credential!.BearerToken.Should().Be("nyxid_ag_interactive_runtime");
+        result.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
+        result.Credential.SourceReadableUserBearerToken.Should().BeNull();
+        result.NyxIdCredentialSelection.Should().NotBeNull();
+        result.NyxIdCredentialSelection!.Kind.Should().Be(
+            NyxIdCallerCredentialKind.ProxyDelegation);
+        result.NyxIdCredentialSelection.ProxyDelegationToken.Should().Be("delegation-alpha");
+        result.NyxIdCredentialSelection.CanManageUserServices.Should().BeFalse();
+
+        http.Request.Headers["X-NyxID-Delegation-Token"] = string.Empty;
+        var emptyDelegation = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            CancellationToken.None);
+
+        emptyDelegation.Succeeded.Should().BeFalse();
+        emptyDelegation.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+    }
+
+    [Fact]
     public void WorkflowCallerCredentialExtractor_ShouldNotTreatScopeAsNyxIdUser()
     {
         var http = CreateHttpContext("Bearer trusted-token");
@@ -1749,6 +1779,11 @@ public sealed class ChatEndpointsInternalTests
         var bothValidHttp = CreateHttpContext();
         ApplyValidatedAccessTokenAuthentication(bothValidHttp, humanAccessToken, humanSubject);
         bothValidHttp.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        var agentKeyWithDelegationHttp = CreateHttpContext();
+        agentKeyWithDelegationHttp.Request.Headers.Authorization =
+            "Bearer nyxid_ag_interactive_runtime";
+        agentKeyWithDelegationHttp.Request.Headers["X-NyxID-Delegation-Token"] =
+            "agent-key-delegation-token";
         var apiKeyHttp = CreateHttpContext();
         apiKeyHttp.Request.Headers.Authorization = "Bearer nyxid_sk_example";
         apiKeyHttp.User = AuthenticatedSubjectPrincipal(humanSubject);
@@ -1776,6 +1811,11 @@ public sealed class ChatEndpointsInternalTests
         var malformedDelegationOnlyHttp = CreateHttpContext();
         malformedDelegationOnlyHttp.Request.Headers["X-NyxID-Delegation-Token"] =
             "token with spaces";
+        var agentKeyWithMalformedDelegationHttp = CreateHttpContext();
+        agentKeyWithMalformedDelegationHttp.Request.Headers.Authorization =
+            "Bearer nyxid_ag_interactive_runtime";
+        agentKeyWithMalformedDelegationHttp.Request.Headers["X-NyxID-Delegation-Token"] =
+            "token with spaces";
 
         var missing = WorkflowCallerCredentialExtractor.Extract(missingHttp);
         var unsupportedScheme = WorkflowCallerCredentialExtractor.Extract(unsupportedSchemeHttp);
@@ -1783,6 +1823,8 @@ public sealed class ChatEndpointsInternalTests
         var bareBearer = WorkflowCallerCredentialExtractor.Extract(bareBearerHttp);
         var invalid = WorkflowCallerCredentialExtractor.Extract(invalidHttp);
         var bothValid = WorkflowCallerCredentialExtractor.Extract(bothValidHttp);
+        var agentKeyWithDelegation = WorkflowCallerCredentialExtractor.Extract(
+            agentKeyWithDelegationHttp);
         var apiKey = WorkflowCallerCredentialExtractor.Extract(apiKeyHttp);
         var serviceAccount = WorkflowCallerCredentialExtractor.Extract(serviceAccountHttp);
         var unauthenticatedHumanToken = WorkflowCallerCredentialExtractor.Extract(
@@ -1795,6 +1837,8 @@ public sealed class ChatEndpointsInternalTests
             WorkflowCallerCredentialExtractor.Extract(validAuthorizationWithMalformedDelegationHttp);
         var malformedDelegationOnly =
             WorkflowCallerCredentialExtractor.Extract(malformedDelegationOnlyHttp);
+        var agentKeyWithMalformedDelegation = WorkflowCallerCredentialExtractor.Extract(
+            agentKeyWithMalformedDelegationHttp);
 
         missingHttpContext.Succeeded.Should().BeTrue();
         missingHttpContext.Credential.Should().BeNull();
@@ -1820,6 +1864,16 @@ public sealed class ChatEndpointsInternalTests
             NyxIdCallerCredentialKind.SourceReadableUserBearer);
         bothValid.NyxIdCredentialSelection.SourceReadableUserBearerToken.Should().Be(humanAccessToken);
         bothValid.NyxIdCredentialSelection.CanManageUserServices.Should().BeTrue();
+        agentKeyWithDelegation.Succeeded.Should().BeTrue();
+        agentKeyWithDelegation.Credential!.BearerToken.Should().Be(
+            "nyxid_ag_interactive_runtime");
+        agentKeyWithDelegation.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
+        agentKeyWithDelegation.Credential.SourceReadableUserBearerToken.Should().BeNull();
+        agentKeyWithDelegation.NyxIdCredentialSelection!.Kind.Should().Be(
+            NyxIdCallerCredentialKind.ProxyDelegation);
+        agentKeyWithDelegation.NyxIdCredentialSelection.ProxyDelegationToken.Should().Be(
+            "agent-key-delegation-token");
+        agentKeyWithDelegation.NyxIdCredentialSelection.CanManageUserServices.Should().BeFalse();
         apiKey.Succeeded.Should().BeTrue();
         apiKey.NyxIdCredentialSelection!.CanManageUserServices.Should().BeFalse();
         serviceAccount.Succeeded.Should().BeTrue();
@@ -1845,6 +1899,9 @@ public sealed class ChatEndpointsInternalTests
         identityOnly.Credential.Should().BeNull();
         malformedDelegationOnly.Succeeded.Should().BeFalse();
         malformedDelegationOnly.Error.Should().Be(
+            WorkflowChatRunStartError.InvalidCallerCredential);
+        agentKeyWithMalformedDelegation.Succeeded.Should().BeFalse();
+        agentKeyWithMalformedDelegation.Error.Should().Be(
             WorkflowChatRunStartError.InvalidCallerCredential);
     }
 
