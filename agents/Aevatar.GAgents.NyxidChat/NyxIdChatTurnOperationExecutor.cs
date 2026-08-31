@@ -2478,7 +2478,11 @@ public sealed class NyxIdChatTurnOperationExecutor
                 return routeToolChoiceHintCatalog;
 
             var catalog = await _turnCatalogMaterializer
-                .MaterializeUnprofiledBaselineAsync(toolContext, ct)
+                .MaterializeUnprofiledBaselineAsync(
+                    toolContext,
+                    request.Activity?.Content?.Text,
+                    LLMControlContextMapper.FromPayload(request.LlmControl),
+                    ct)
                 .ConfigureAwait(false);
             if (catalog.ExactTools.Count == 0)
             {

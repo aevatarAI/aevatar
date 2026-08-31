@@ -355,6 +355,69 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeUnprofiledBaselineAsync_ShouldSelectRelevantReadOnlyConnectedOperation()
+    {
+        var baselineSource = new StaticToolSource(
+        [
+            new TestTool("nyxid_services"),
+            new TestTool("use_skill"),
+        ]);
+        var routeSource = new StaticToolSource(
+        [
+            new TestTool("nyxid_services"),
+            new TestTool("use_skill"),
+            new AdmittedTestTool(
+                "nyxop_user_context_read",
+                CreateReadAdmission(
+                    "us-context-alpha",
+                    "user-context-alpha",
+                    "readDiningProfileContext",
+                    "user-context")),
+            new AdmittedTestTool(
+                "nyxop_user_context_write",
+                CreateWriteAdmission(
+                    "us-context-alpha",
+                    "user-context-alpha",
+                    "updateDiningProfileContext",
+                    "user-context")),
+        ]);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(ToolSetNames.NyxIdChatBaseline, baselineSource);
+        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, routeSource);
+        var connectedSelector = new RecordingConnectedOperationSelector(request =>
+            AgentProfileConnectedOperationSelectionResult.Selected(
+            [request.Candidates.Single(candidate =>
+                candidate.DisplayName == "nyxop_user_context_read").CandidateId]));
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null,
+            connectedOperationSelector: connectedSelector);
+
+        var catalog = await materializer.MaterializeUnprofiledBaselineAsync(
+            ToolContext(),
+            "Use my connected dining profile context for dinner booking.",
+            llmControl: null,
+            CancellationToken.None);
+
+        registry.ResolveCalls.Should().Equal(
+            ToolSetNames.NyxIdChatBaseline,
+            AgentProfilePolicies.NyxIdChatRouteToolSet);
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "use_skill",
+            "nyxop_user_context_read");
+        catalog.FinalAllowedToolNames.Should().NotContain("nyxop_user_context_write");
+        catalog.ExactTools.Keys.Should().Contain("nyxop_user_context_read");
+        connectedSelector.CallCount.Should().Be(1);
+        connectedSelector.LastRequest!.MaximumReadSelections.Should().Be(3);
+        connectedSelector.LastRequest.MaximumWriteSelections.Should().Be(0);
+        connectedSelector.LastRequest.Candidates.Should().ContainSingle(candidate =>
+            candidate.DisplayName == "nyxop_user_context_read" &&
+            candidate.Risk == AgentToolOperationRisk.ReadOnly);
+    }
+
+    [Fact]
     public async Task MaterializeRouteToolChoiceHintAsync_ShouldSelectOnlyHintedTool()
     {
         var source = new StaticToolSource(
@@ -576,6 +639,87 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         preparation.Authority.CandidateRoute.Should().BeNull();
         preparation.Diagnostics.Should().Contain(static diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierNoMatch);
+    }
+
+    [Fact]
+    public async Task PrepareNyxIdChatAsync_ProfileMemberNoMatch_ShouldSelectRelevantReadOnlyConnectedOperation()
+    {
+        IAgentTool[] tools =
+        [
+            new TestTool("nyxid_services"),
+            new TestTool("use_skill"),
+            new AdmittedTestTool(
+                "nyxop_user_context_read",
+                CreateReadAdmission(
+                    "us-context-alpha",
+                    "user-context-alpha",
+                    "readDiningProfileContext",
+                    "user-context")),
+            new AdmittedTestTool(
+                "nyxop_user_context_write",
+                CreateWriteAdmission(
+                    "us-context-alpha",
+                    "user-context-alpha",
+                    "updateDiningProfileContext",
+                    "user-context")),
+        ];
+        var profile = BuildProfile();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add([
+            "nyxid_services",
+            "use_skill",
+            "nyxop_user_context_read",
+            "nyxop_user_context_write",
+        ]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        var classifier = new SequencedClassifier(
+            AgentProfileTurnClassificationResult.Matched(
+                AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+            AgentProfileTurnClassificationResult.NoMatch());
+        var connectedSelector = new RecordingConnectedOperationSelector(request =>
+            AgentProfileConnectedOperationSelectionResult.Selected(
+            [request.Candidates.Single(candidate =>
+                candidate.DisplayName == "nyxop_user_context_read").CandidateId]));
+        var sealedProfile = SealProfile(profile);
+        var materializer = NewMaterializer(
+            RegistryWithRoute(tools),
+            classifier,
+            fetcher: null,
+            connectedOperationSelector: connectedSelector);
+
+        var preparation = await materializer.PrepareNyxIdChatAsync(
+            sealedProfile,
+            "session-member-no-match-connected-read",
+            "I want to book dinner on Tuesday; use my connected profile context if relevant.",
+            tools,
+            ToolContext(),
+            llmControl: null,
+            CancellationToken.None);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            sealedProfile,
+            preparation.Authority,
+            accessToken: null,
+            tools,
+            ToolContext(),
+            CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Recovery);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "use_skill",
+            "nyxop_user_context_read");
+        preparation.Authority.AuthorityCeilingToolNames.Should().NotContain("nyxop_user_context_write");
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "use_skill",
+            "nyxop_user_context_read");
+        materialization.Catalog.ExactTools.Keys.Should().Contain("nyxop_user_context_read");
+        connectedSelector.CallCount.Should().Be(1);
+        connectedSelector.LastRequest!.MaximumReadSelections.Should().Be(3);
+        connectedSelector.LastRequest.MaximumWriteSelections.Should().Be(0);
+        connectedSelector.LastRequest.Candidates.Should().ContainSingle(candidate =>
+            candidate.DisplayName == "nyxop_user_context_read" &&
+            candidate.Risk == AgentToolOperationRisk.ReadOnly);
     }
 
     [Fact]

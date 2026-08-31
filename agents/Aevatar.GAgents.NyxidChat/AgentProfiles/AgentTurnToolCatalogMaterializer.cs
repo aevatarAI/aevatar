@@ -36,9 +36,9 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
     // The reviewed baseline surface for ordinary, unprofiled NyxID chat turns:
     // the Class-R management reads (#3298), the service readiness gate, typed
-    // user input, and explicit skill discovery/loading. Request-local
-    // connected operations stay behind the readiness gate's verified
-    // authorization continuation and never enter the unprofiled baseline.
+    // user input, and explicit skill discovery/loading. Request-local connected
+    // operations are not part of the baseline names; ordinary chat may add only
+    // selector-chosen read-only operations from the already-eligible route set.
     private static readonly IReadOnlySet<string> UnprofiledBaselineToolNames =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -251,7 +251,17 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                 // closed to zero tools. Non-chat surfaces keep the strict empty
                 // no-match contract.
                 var noMatchNames = includeBuiltInNyxIdIntents
-                    ? OrdinaryDegradedNames(available, recoveryNames)
+                    ? await OrdinaryDegradedNamesAsync(
+                        available,
+                        recoveryNames,
+                        availableTools,
+                        new ConnectedOperationSelectionContext(
+                            userMessage ?? string.Empty,
+                            profile.ClassifierTimeoutMs,
+                            llmControl,
+                            $"{sessionId}:ordinary-connected-operation-selector"),
+                        diagnostics,
+                        ct)
                     : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 return CreatePreparation(
                     sessionId,
@@ -287,7 +297,17 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                 selectedExactSkillRef: null,
                 AgentProfileTurnAuthorityKind.Recovery,
                 includeBuiltInNyxIdIntents
-                    ? OrdinaryDegradedNames(available, recoveryNames)
+                    ? await OrdinaryDegradedNamesAsync(
+                        available,
+                        recoveryNames,
+                        availableTools,
+                        new ConnectedOperationSelectionContext(
+                            userMessage ?? string.Empty,
+                            profile.ClassifierTimeoutMs,
+                            llmControl,
+                            $"{sessionId}:ordinary-connected-operation-selector"),
+                        diagnostics,
+                        ct)
                     : recoveryNames,
                 diagnostics);
         }
@@ -355,7 +375,17 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.SelectedPolicyEmpty,
                 candidate.IntentId));
-            ceiling.UnionWith(OrdinaryDegradedNames(available, recoveryNames));
+            ceiling.UnionWith(await OrdinaryDegradedNamesAsync(
+                available,
+                recoveryNames,
+                availableTools,
+                new ConnectedOperationSelectionContext(
+                    userMessage ?? string.Empty,
+                    profile.ClassifierTimeoutMs,
+                    llmControl,
+                    $"{sessionId}:ordinary-connected-operation-selector"),
+                diagnostics,
+                ct));
         }
 
         if (profile.ActivationMode != AgentProfileActivationMode.Enforced)
@@ -616,13 +646,24 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
     /// visibility; tools that are absent, ineligible, or collided degrade
     /// individually instead of failing the whole surface closed.
     /// </summary>
+    public Task<AgentTurnToolCatalog> MaterializeUnprofiledBaselineAsync(
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct = default) =>
+        MaterializeUnprofiledBaselineAsync(
+            toolContext,
+            userMessage: null,
+            llmControl: null,
+            ct);
+
     public async Task<AgentTurnToolCatalog> MaterializeUnprofiledBaselineAsync(
         AgentToolExecutionContext toolContext,
+        string? userMessage,
+        LLMControlContext? llmControl,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(toolContext);
         var diagnostics = new List<AgentProfileTurnDiagnostic>();
-        var routeTools = await DiscoverToolSetAsync(
+        var baselineTools = await DiscoverToolSetAsync(
             ToolSetNames.NyxIdChatBaseline,
             toolContext,
             AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
@@ -633,12 +674,21 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         // collided, or unavailable degrades on its own (with a diagnostic) and
         // the remaining reviewed tools still ship. Only an empty intersection
         // fails closed.
-        var selectedTools = routeTools.Tools
+        var selectedTools = baselineTools.Tools
             .Where(pair => UnprofiledBaselineToolNames.Contains(pair.Key) &&
                            toolContext.ToolVisibility.Allows(pair.Key))
             .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.OrdinalIgnoreCase);
         if (selectedTools.Count == 0)
             return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
+
+        var connectedTools = await SelectUnprofiledConnectedReadToolsAsync(
+            toolContext,
+            userMessage,
+            llmControl,
+            diagnostics,
+            ct);
+        foreach (var pair in connectedTools)
+            selectedTools[pair.Key] = pair.Value;
 
         return new AgentTurnToolCatalog(
             selectedTools.Keys,
@@ -649,6 +699,181 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             diagnostics,
             selectedTools.Values,
             budget: AgentTurnToolCatalogBudget.Ordinary);
+    }
+
+    private async Task<IReadOnlyDictionary<string, IAgentTool>> SelectUnprofiledConnectedReadToolsAsync(
+        AgentToolExecutionContext toolContext,
+        string? userMessage,
+        LLMControlContext? llmControl,
+        List<AgentProfileTurnDiagnostic> diagnostics,
+        CancellationToken ct)
+    {
+        if (_connectedOperationSelector is null)
+            return new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+
+        var routeTools = await DiscoverToolSetAsync(
+            AgentProfilePolicies.NyxIdChatRouteToolSet,
+            toolContext,
+            AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
+            diagnostics,
+            ct);
+        if (routeTools.HadFailure)
+            return new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+
+        var connectedReadNames = routeTools.Tools
+            .Where(pair => toolContext.ToolVisibility.Allows(pair.Key) &&
+                           IsEligibleConnectedRead(pair.Value))
+            .Select(static pair => pair.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var selected = await SelectConnectedReadOperationsInBatchesAsync(
+            connectedReadNames,
+            routeTools.Tools,
+            new ConnectedOperationSelectionContext(
+                userMessage ?? string.Empty,
+                DefaultConnectedOperationSelectorTimeoutMs,
+                llmControl,
+                "unprofiled:ordinary-connected-operation-selector"),
+            diagnostics,
+            ct);
+        if (selected is null || selected.Count == 0)
+            return new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+
+        return selected
+            .Where(routeTools.Tools.ContainsKey)
+            .ToDictionary(name => name, name => routeTools.Tools[name], StringComparer.OrdinalIgnoreCase);
+
+        static bool IsEligibleConnectedRead(IAgentTool tool) =>
+            tool is IAgentToolOperationAdmissionOwner owner &&
+            owner.OperationAdmission.Identity is AgentToolOperationIdentity.PublishedEndpoint &&
+            owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly;
+    }
+
+    private async Task<IReadOnlySet<string>?> SelectConnectedReadOperationsInBatchesAsync(
+        IReadOnlySet<string> names,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        ConnectedOperationSelectionContext selectionContext,
+        List<AgentProfileTurnDiagnostic> diagnostics,
+        CancellationToken ct)
+    {
+        var maximumReadSelections = AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount;
+        var rankedNames = RankConnectedOperationNamesByUserMessage(
+            names,
+            availableTools,
+            selectionContext.UserMessage);
+        if (rankedNames.Count <= StreamingAgentProfileConnectedOperationSelector.MaximumCandidates)
+        {
+            return await SelectConnectedOperationsAsync(
+                rankedNames.ToHashSet(StringComparer.OrdinalIgnoreCase),
+                availableTools,
+                maximumReadSelections,
+                maximumWriteSelections: 0,
+                selectionContext,
+                diagnostics,
+                ct,
+                noMatchIsDiagnostic: false);
+        }
+
+        var selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var chunk in rankedNames
+                     .Chunk(StreamingAgentProfileConnectedOperationSelector.MaximumCandidates))
+        {
+            var chunkSelected = await SelectConnectedOperationsAsync(
+                chunk.ToHashSet(StringComparer.OrdinalIgnoreCase),
+                availableTools,
+                maximumReadSelections,
+                maximumWriteSelections: 0,
+                selectionContext,
+                diagnostics,
+                ct,
+                noMatchIsDiagnostic: false);
+            if (chunkSelected is null)
+                return null;
+
+            selected.UnionWith(chunkSelected);
+        }
+
+        if (selected.Count == 0 || selected.Count <= maximumReadSelections)
+            return selected;
+
+        return await SelectConnectedOperationsAsync(
+            selected,
+            availableTools,
+            maximumReadSelections,
+            maximumWriteSelections: 0,
+            selectionContext,
+            diagnostics,
+            ct,
+            noMatchIsDiagnostic: false);
+    }
+
+    private static IReadOnlyList<string> RankConnectedOperationNamesByUserMessage(
+        IReadOnlySet<string> names,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        string userMessage)
+    {
+        var messageTokens = TokenizeSelectionText(userMessage);
+        if (messageTokens.Count == 0)
+            return names.OrderBy(static name => name, StringComparer.Ordinal).ToArray();
+
+        var ranked = names
+            .Select(name => new
+            {
+                Name = name,
+                Score = TryCreateConnectedOperationSelectionEntry(name, availableTools[name], out var entry)
+                    ? ScoreConnectedOperation(messageTokens, entry.Candidate)
+                    : 0,
+            })
+            .OrderByDescending(static item => item.Score)
+            .ThenBy(static item => item.Name, StringComparer.Ordinal)
+            .ToArray();
+        return ranked.Any(static item => item.Score > 0)
+            ? ranked.Where(static item => item.Score > 0)
+                .Select(static item => item.Name)
+                .ToArray()
+            : ranked.Select(static item => item.Name).ToArray();
+    }
+
+    private static int ScoreConnectedOperation(
+        IReadOnlySet<string> messageTokens,
+        AgentProfileConnectedOperationSelectionCandidate candidate)
+    {
+        var textTokens = TokenizeSelectionText(string.Join(' ',
+            candidate.CatalogServiceSlug,
+            candidate.ConnectorDisplayName,
+            candidate.ConnectionLabel,
+            candidate.DisplayName,
+            candidate.Description,
+            candidate.PathTemplate));
+        return messageTokens.Sum(token => textTokens.Contains(token) ? 1 : 0);
+    }
+
+    private static IReadOnlySet<string> TokenizeSelectionText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var builder = new StringBuilder();
+        foreach (var ch in value)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                builder.Append(char.ToLowerInvariant(ch));
+                continue;
+            }
+
+            AddToken(builder, tokens);
+        }
+
+        AddToken(builder, tokens);
+        return tokens;
+
+        static void AddToken(StringBuilder builder, HashSet<string> tokens)
+        {
+            if (builder.Length > 1)
+                tokens.Add(builder.ToString());
+            builder.Clear();
+        }
     }
 
     public async Task<AgentTurnToolCatalog> MaterializeRouteToolChoiceHintAsync(
@@ -1662,7 +1887,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         int maximumWriteSelections,
         ConnectedOperationSelectionContext selectionContext,
         List<AgentProfileTurnDiagnostic> diagnostics,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool noMatchIsDiagnostic = true)
     {
         if (names.Count == 0 ||
             maximumReadSelections == 0 && maximumWriteSelections == 0 ||
@@ -1751,10 +1977,15 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
         if (result.Status == AgentProfileConnectedOperationSelectionStatus.NoMatch)
         {
-            diagnostics.Add(new AgentProfileTurnDiagnostic(
-                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
-                "connected_operation_selector_no_match"));
-            return null;
+            if (noMatchIsDiagnostic)
+            {
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                    "connected_operation_selector_no_match"));
+                return null;
+            }
+
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
         if (result.Status != AgentProfileConnectedOperationSelectionStatus.Selected ||
             result.CandidateIds.Count == 0 ||
@@ -1985,6 +2216,43 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
     /// ceiling is never widened; the baseline only survives where the profile
     /// admits it.
     /// </summary>
+    private async Task<HashSet<string>> OrdinaryDegradedNamesAsync(
+        IReadOnlySet<string> eligibleToolNames,
+        IReadOnlySet<string> recoveryToolNames,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        ConnectedOperationSelectionContext selectionContext,
+        List<AgentProfileTurnDiagnostic> diagnostics,
+        CancellationToken ct)
+    {
+        var names = OrdinaryDegradedNames(eligibleToolNames, recoveryToolNames);
+
+        var connectedReadNames = eligibleToolNames
+            .Where(name => availableTools.TryGetValue(name, out var tool) &&
+                           IsEligibleConnectedRead(tool))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (connectedReadNames.Count == 0 || _connectedOperationSelector is null)
+            return names;
+
+        var selected = await SelectConnectedOperationsAsync(
+            connectedReadNames,
+            availableTools,
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount,
+            maximumWriteSelections: 0,
+            selectionContext,
+            diagnostics,
+            ct,
+            noMatchIsDiagnostic: false);
+        if (selected is not null)
+            names.UnionWith(selected);
+
+        return names;
+
+        static bool IsEligibleConnectedRead(IAgentTool tool) =>
+            tool is IAgentToolOperationAdmissionOwner owner &&
+            owner.OperationAdmission.Identity is AgentToolOperationIdentity.PublishedEndpoint &&
+            owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly;
+    }
+
     private static HashSet<string> OrdinaryDegradedNames(
         IReadOnlySet<string> eligibleToolNames,
         IReadOnlySet<string> recoveryToolNames)
