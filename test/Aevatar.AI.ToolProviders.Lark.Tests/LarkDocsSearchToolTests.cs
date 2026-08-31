@@ -78,6 +78,127 @@ public sealed class LarkDocsSearchToolTests
         handler.LastBody.Should().BeNull();
     }
 
+    [Fact]
+    public void ParseSearch_ShouldNormalizeDocxAndWikiCandidates()
+    {
+        const string payload = """
+            {
+              "code": 0,
+              "data": {
+                "has_more": true,
+                "page_token": "next-page",
+                "res_units": [
+                  {
+                    "entity_type": "DOCX",
+                    "title": "Expense policy",
+                    "result_meta": {
+                      "token": "doccn_1",
+                      "url": "https://example.larksuite.com/docx/doccn_1"
+                    }
+                  },
+                  {
+                    "entity_type": "WIKI",
+                    "title_highlighted": "<h>Run</h>book &amp; FAQ",
+                    "result_meta": {
+                      "token": "wikcn_1",
+                      "obj_token": "doccn_2",
+                      "url": "https://example.larksuite.com/wiki/wikcn_1"
+                    }
+                  }
+                ]
+              }
+            }
+            """;
+
+        var result = LarkKnowledgeResponseParser.ParseSearch(payload);
+
+        result.HasMore.Should().BeTrue();
+        result.PageToken.Should().Be("next-page");
+        result.Candidates.Should().Equal(
+            new LarkKnowledgeCandidate(
+                "docx",
+                "Expense policy",
+                "https://example.larksuite.com/docx/doccn_1",
+                "doccn_1",
+                "doccn_1"),
+            new LarkKnowledgeCandidate(
+                "wiki",
+                "Runbook & FAQ",
+                "https://example.larksuite.com/wiki/wikcn_1",
+                "wikcn_1",
+                "doccn_2"));
+    }
+
+    [Fact]
+    public void ParseSearch_ShouldIgnoreUnsupportedOrUnaddressableResults()
+    {
+        const string payload = """
+            {
+              "code": 0,
+              "data": {
+                "res_units": [
+                  {"entity_type":"SHEET","title":"Numbers","result_meta":{"token":"shtcn_1"}},
+                  {"entity_type":"DOCX","title":"Missing token","result_meta":{}},
+                  {"entity_type":"WIKI","title":"Runbook","result_meta":{"token":"wikcn_1"}}
+                ]
+              }
+            }
+            """;
+
+        var result = LarkKnowledgeResponseParser.ParseSearch(payload);
+
+        result.Candidates.Should().ContainSingle()
+            .Which.Should().Be(new LarkKnowledgeCandidate("wiki", "Runbook", "", "wikcn_1", null));
+        result.HasMore.Should().BeFalse();
+        result.PageToken.Should().BeNull();
+    }
+
+    [Fact]
+    public void ParseWikiNode_ShouldReturnUnderlyingDocxIdentity()
+    {
+        var result = LarkKnowledgeResponseParser.ParseWikiNode(
+            """{"code":0,"data":{"node":{"obj_type":"docx","obj_token":"doccn_1"}}}""");
+
+        result.Should().Be(new LarkWikiNodeResult("docx", "doccn_1"));
+    }
+
+    [Fact]
+    public void ParseDocxRawContent_ShouldReturnContent()
+    {
+        LarkKnowledgeResponseParser.ParseDocxRawContent(
+                """{"code":0,"data":{"content":"Expense limit is 100."}}""")
+            .Should()
+            .Be("Expense limit is 100.");
+    }
+
+    [Theory]
+    [InlineData("", "empty_lark_response")]
+    [InlineData("not-json", "invalid_lark_response_json")]
+    [InlineData("{\"code\":9301,\"data\":{\"msg\":\"blocked\"}}", "lark_code=9301 msg=blocked")]
+    [InlineData(
+        "{\"error\":true,\"status\":502,\"message\":\"gateway\",\"body\":\"secret provider body\"}",
+        "nyx_proxy_error status=502")]
+    public void ParseSearch_WithProviderFailure_ShouldThrowSafeError(string payload, string expectedError)
+    {
+        var act = () => LarkKnowledgeResponseParser.ParseSearch(payload);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage(expectedError);
+    }
+
+    [Theory]
+    [InlineData("{\"code\":0,\"data\":{\"node\":{\"obj_type\":\"docx\"}}}", "missing_wiki_object_token")]
+    [InlineData("{\"code\":0,\"data\":{}}", "missing_docx_content")]
+    public void ParseRequiredContent_WhenFieldIsMissing_ShouldThrowStableError(
+        string payload,
+        string expectedError)
+    {
+        Action act = expectedError == "missing_wiki_object_token"
+            ? () => { _ = LarkKnowledgeResponseParser.ParseWikiNode(payload); }
+            : () => { _ = LarkKnowledgeResponseParser.ParseDocxRawContent(payload); };
+
+        act.Should().Throw<InvalidOperationException>().WithMessage(expectedError);
+    }
+
     private static (LarkKnowledgeNyxClient Client, RecordingHandler Handler) CreateClient(string response)
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
