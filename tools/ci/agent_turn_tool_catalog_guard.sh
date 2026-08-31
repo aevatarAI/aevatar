@@ -196,10 +196,10 @@ require_pattern \
 
 require_pattern 'AddAevatarMainnetHost_ShouldRegisterDefaultToolSets' "${composition_tests}" \
   "the Mainnet route topology snapshot test is missing."
-require_pattern 'total:13:11524' "${composition_tests}" \
+require_pattern 'total:13:11659' "${composition_tests}" \
   "the reviewed workspace.default count/schema snapshot changed without an explicit migration."
 require_pattern \
-  'sha256:46788e82f006792a4c606a8784c036a465bd53bba143439bf7eb7e625d3a9932' \
+  'sha256:f375070841c2461e768b97b300d617df51cf40e6d93308ecc1e146ed9f6de9d2' \
   "${composition_tests}" \
   "the reviewed workspace.default catalog digest changed without an explicit migration."
 require_pattern '"unique_tool_count": 68' "${baseline_manifest}" \
@@ -217,7 +217,7 @@ jq -e '
   || fail "the baseline manifest tool names/schema bytes do not match its measured totals."
 require_pattern '"unique_tool_percent": 80.9' "${baseline_manifest}" \
   "the baseline manifest must prove the reviewed tool-count reduction."
-require_pattern '"canonical_schema_bytes_percent": 76.2' "${baseline_manifest}" \
+require_pattern '"canonical_schema_bytes_percent": 75.9' "${baseline_manifest}" \
   "the baseline manifest must prove at least a 60% schema-byte reduction."
 for forbidden_type in \
   NyxIdAgentToolSource \
