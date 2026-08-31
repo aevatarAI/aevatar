@@ -1347,7 +1347,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     }
 
     [Fact]
-    public async Task BlockedRoute_ObservationFailureIsRetryableAndLeavesNoDurableTrace()
+    public async Task BlockedRoute_ObservationFailureRetriesUntilCutoverAndLeavesNoDurableTrace()
     {
         var state = BuildActiveSourceState();
         state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
@@ -1359,7 +1359,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         var failure = (await harness.Agent.Invoking(agent => agent.HandleObservedEnvelopeAsync(envelope))
             .Should().ThrowExactlyAsync<ProjectionScopeStatusRouteBlockedException>()).Which;
 
-        failure.Should().BeAssignableTo<Aevatar.Foundation.Abstractions.IRuntimeEnvelopeRetryableException>();
+        failure.Should().BeAssignableTo<IRuntimeEnvelopeRetryUntilResolvedException>();
         failure.RouteEpoch.Should().Be(3);
         harness.Journal.Should().BeEmpty();
         harness.Agent.State.ReceivedEnvelopeTotal.Should().Be(0);

@@ -1339,12 +1339,14 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
 /// <summary>
 /// The source scope's status route is BLOCKED (cutover in flight): the observation is refused
-/// so the source publishes nothing until the route is flipped; the envelope is redelivered.
+/// so the source publishes nothing until the route is flipped. Keep the exact envelope in an
+/// actor-owned durable retry until the cutover continuation completes; falling back to transport
+/// redelivery sheds the activation which owns that continuation and can pin the stream cache.
 /// </summary>
 public sealed class ProjectionScopeStatusRouteBlockedException(string scopeActorId, long routeEpoch)
     : InvalidOperationException(
         $"Projection scope '{scopeActorId}' status route epoch {routeEpoch} is blocked for cutover; the observation is retried after the flip."),
-        IRuntimeEnvelopeRetryableException
+        IRuntimeEnvelopeRetryUntilResolvedException
 {
     public string ScopeActorId { get; } = scopeActorId;
 

@@ -26,7 +26,7 @@ public sealed class ProjectionObservationFailurePolicyTests
         exception.RetryCoalescingCursor.Should().Be(
             new RuntimeEnvelopeRetryCoalescingCursor("source", 23, "evt-23"));
         new ProjectionScopeStatusRouteBlockedException("source", 7)
-            .Should().NotBeAssignableTo<IRuntimeEnvelopeRetryUntilResolvedException>();
+            .Should().BeAssignableTo<IRuntimeEnvelopeRetryUntilResolvedException>();
         new ProjectionScopeStatusWriteRejectedException(
                 "projection-status-terminal:source",
                 new ProjectionSourceCoordinate
