@@ -335,6 +335,75 @@ public sealed class NormalizedNestedModuleDataflowTests
     }
 
     [Fact]
+    public async Task While_WithWorkflowCallChild_ShouldAdvanceSecondTransientIteration()
+    {
+        const string runId = "run-while-workflow-call";
+        const string parentStepId = "wait_for_terminal";
+        var workflow = new WorkflowDefinition
+        {
+            Name = "normalized-while-workflow-call",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = parentStepId,
+                    Type = "while",
+                    Next = "done",
+                    Parameters =
+                    {
+                        ["max_iterations"] = "3",
+                        ["step"] = "workflow_call",
+                        ["condition"] = "${eq(output, 'running')}",
+                        ["sub_param_workflow"] = "poll_call_status",
+                        ["sub_param_lifecycle"] = "transient",
+                    },
+                },
+                CreateProbeStep("done", parentStepId),
+            ],
+        };
+        var harness = NormalizedHarness.Create(workflow, runId, new WhileModule());
+
+        var parentRequest = await harness.StartAsync("conversation-id");
+        var firstIteration = (await harness.DispatchThroughBridgeAsync(parentRequest))
+            .Should().ContainSingle().Subject;
+        firstIteration.StepId.Should().Be("wait_for_terminal_iter_0");
+        firstIteration.StepType.Should().Be("workflow_call");
+        firstIteration.Parameters["workflow"].Should().Be("poll_call_status");
+        firstIteration.Parameters["lifecycle"].Should().Be("transient");
+        await harness.AdmitInternalRequestAsync(firstIteration);
+
+        var secondIteration = (await harness.CompleteInternalStepAsync(
+                ProducedCompletion(runId, firstIteration, "running")))
+            .Should().ContainSingle().Subject;
+        secondIteration.StepId.Should().Be("wait_for_terminal_iter_1");
+        secondIteration.StepType.Should().Be("workflow_call");
+        secondIteration.Input.Should().Be("running");
+        secondIteration.InputValueId.Should().Be(
+            harness.LoadKernelState().NormalizedValues!.CompletedSteps[firstIteration.StepId].OutputValueId);
+        await harness.AdmitInternalRequestAsync(secondIteration);
+
+        var publishedAfterSecond = await harness.CompleteInternalStepAsync(
+            ProducedCompletion(runId, secondIteration, "completed"));
+        publishedAfterSecond.Should().BeEmpty();
+
+        var parentCompletion = harness.SinglePublishedCompletion(parentStepId);
+        parentCompletion.Success.Should().BeTrue();
+        parentCompletion.Output.Should().Be("completed");
+        parentCompletion.ExecutionId.Should().Be(parentRequest.ExecutionId);
+        parentCompletion.Annotations["while.iterations"].Should().Be("2");
+
+        var doneRequest = await harness.CompleteTopLevelStepAsync(parentCompletion, "done");
+        AssertProbeParameters(doneRequest, parentStepId, "completed");
+
+        var state = harness.LoadKernelState();
+        WorkflowExecutionValueStore.ResolveCompletedStepOutput(state, parentStepId).Should().Be("completed");
+        state.NormalizedValues!.PendingInternalDispatches.Should().BeEmpty();
+        harness.Host.States.Should().NotContainKey("while",
+            "the second transient workflow_call completion must settle the parent loop");
+    }
+
+    [Fact]
     public async Task MapReduce_ShouldReferenceMapOutputsOnceAndProduceReduceOutputOnce()
     {
         const string runId = "run-map-reduce";
