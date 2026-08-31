@@ -12,15 +12,15 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Input, Modal, Segmented, Space } from 'antd';
 import React from 'react';
-import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import WorkflowStudioEditorSurface from '@/pages/team-member-workflow-studio/components/WorkflowStudioEditorSurface';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { formatUtcDateTime } from '@/shared/datetime/dateTime';
 import { t } from '@/shared/i18n/messages';
 import { getLocationSnapshot, history } from '@/shared/navigation/history';
-import { studioApi } from '@/shared/studio/api';
+import { isStudioApiErrorCode, studioApi } from '@/shared/studio/api';
 import { buildWorkflowExecutionNodeSnapshots } from '@/shared/studio/execution';
 import { createWorkflowRevisionIdentityCandidate } from '@/shared/studio/explicitRequestConfirmation';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import {
   adaptActivityRunToExecutionLogs,
@@ -187,6 +187,14 @@ const WorkflowEditorPage: React.FC<{
   const publicationPhase = publicationReceipt
     ? publication.phase
     : publicationStage;
+  const publicationValidationRejected =
+    publicationReceipt === null &&
+    publicationStage === 'failed' &&
+    isStudioApiErrorCode(
+      publicationError,
+      400,
+      'INVALID_USER_WORKFLOW_REQUEST',
+    );
   React.useEffect(() => {
     const pendingFocus = pendingRunConsoleFocusRef.current;
     if (!pendingFocus) return;
@@ -246,10 +254,15 @@ const WorkflowEditorPage: React.FC<{
       ].join(':');
     } else if (publicationStage === 'failed') {
       toastIntent = 'error';
-      toastMessage = t(
-        'workflowActivityVNext.publish.failed',
-        "Publication couldn't be confirmed",
-      );
+      toastMessage = publicationValidationRejected
+        ? t(
+            'workflowActivityVNext.publish.validationRejected',
+            "Workflow isn't ready to publish",
+          )
+        : t(
+            'workflowActivityVNext.publish.submissionFailed',
+            "Workflow couldn't be submitted",
+          );
       toastKey = [
         'workflow-publication',
         publicationGenerationRef.current,
@@ -265,7 +278,13 @@ const WorkflowEditorPage: React.FC<{
     if (toastIntent === 'success')
       toast.success(toastMessage, { key: toastKey });
     else toast.error(toastMessage, { key: toastKey });
-  }, [publication.phase, publicationReceipt, publicationStage, toast]);
+  }, [
+    publication.phase,
+    publicationReceipt,
+    publicationStage,
+    publicationValidationRejected,
+    toast,
+  ]);
   const publicationObserved = publication.phase === 'observed';
   const restoredPublishedInvocationTarget = restorePublishedInvocationTarget(
     activeScopeId,
@@ -1169,27 +1188,44 @@ const WorkflowEditorPage: React.FC<{
             ) : undefined
           }
           description={
-            <>
-              {publicationPhase === 'unauthorized'
-                ? t(
-                    'workflowActivityVNext.publish.unauthorizedDescription',
-                    'Sign in again to check this publication.',
-                  )
-                : publicationPhase === 'forbidden'
-                  ? t(
-                      'workflowActivityVNext.publish.forbiddenDescription',
-                      "You don't have access to check this publication.",
-                    )
-                  : t(
-                      'workflowActivityVNext.publish.failedDescription',
-                      'Resolve the error or try publishing again.',
-                    )}
-              {publicationError || publication.error ? (
+            publicationValidationRejected && publicationError ? (
+              <>
+                {t(
+                  'workflowActivityVNext.publish.validationRejectedDescription',
+                  'Fix the workflow configuration below, then publish again.',
+                )}
                 <TechnicalDetails>
-                  {errorMessage(publicationError ?? publication.error)}
+                  {errorMessage(publicationError)}
                 </TechnicalDetails>
-              ) : null}
-            </>
+              </>
+            ) : (
+              <>
+                {publicationPhase === 'unauthorized'
+                  ? t(
+                      'workflowActivityVNext.publish.unauthorizedDescription',
+                      'Sign in again to check this publication.',
+                    )
+                  : publicationPhase === 'forbidden'
+                    ? t(
+                        'workflowActivityVNext.publish.forbiddenDescription',
+                        "You don't have access to check this publication.",
+                      )
+                    : publicationReceipt
+                      ? t(
+                          'workflowActivityVNext.publish.failedDescription',
+                          'Resolve the error or try publishing again.',
+                        )
+                      : t(
+                          'workflowActivityVNext.publish.submissionFailedDescription',
+                          'Review the error and try publishing again.',
+                        )}
+                {publicationError || publication.error ? (
+                  <TechnicalDetails>
+                    {errorMessage(publicationError ?? publication.error)}
+                  </TechnicalDetails>
+                ) : null}
+              </>
+            )
           }
           title={
             publicationPhase === 'unauthorized'
@@ -1202,10 +1238,20 @@ const WorkflowEditorPage: React.FC<{
                     'workflowActivityVNext.state.forbidden',
                     "You don't have access to this workspace",
                   )
-                : t(
-                    'workflowActivityVNext.publish.failed',
-                    "Publication couldn't be confirmed",
-                  )
+                : publicationValidationRejected
+                  ? t(
+                      'workflowActivityVNext.publish.validationRejected',
+                      "Workflow isn't ready to publish",
+                    )
+                  : publicationReceipt
+                    ? t(
+                        'workflowActivityVNext.publish.failed',
+                        "Publication couldn't be confirmed",
+                      )
+                    : t(
+                        'workflowActivityVNext.publish.submissionFailed',
+                        "Workflow couldn't be submitted",
+                      )
           }
           id="workflow-publication-status"
           showIcon

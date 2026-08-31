@@ -268,7 +268,15 @@ jest.mock('@umijs/max', () => ({
 }));
 
 jest.mock('@/shared/studio/api', () => ({
-  isStudioApiErrorCode: () => false,
+  isStudioApiErrorCode: (error: unknown, status: number, code: string) =>
+    Boolean(
+      error &&
+        typeof error === 'object' &&
+        'status' in error &&
+        error.status === status &&
+        'code' in error &&
+        error.code === code,
+    ),
   isStudioApiStatus: (error: unknown, status: number) =>
     Boolean(
       error &&
@@ -2720,7 +2728,7 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
 
     expect(
-      await screen.findByText("Publication couldn't be confirmed"),
+      await screen.findByText("Workflow couldn't be submitted"),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
     expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
@@ -3001,6 +3009,48 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockConsoleToast.error).toHaveBeenCalledTimes(1);
   });
 
+  it('presents a publication validation rejection as workflow configuration to fix', async () => {
+    arrangeSavedDraftPublication();
+    const validationMessage =
+      "Step 'draft_weekly_report' can invoke llm_call and must declare an explicit allowed_tools scope on the step or its target role.";
+    mockStudioApi.previewExplicitRequests.mockRejectedValue(
+      Object.assign(new Error(validationMessage), {
+        code: 'INVALID_USER_WORKFLOW_REQUEST',
+        status: 400,
+      }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+
+    expect(
+      await screen.findByText("Workflow isn't ready to publish"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Fix the workflow configuration below, then publish again.',
+      ),
+    ).toBeInTheDocument();
+    const technicalDetails = screen.getByText('Technical details');
+    expect(screen.getByText(validationMessage)).not.toBeVisible();
+    fireEvent.click(technicalDetails);
+    expect(screen.getByText(validationMessage)).toBeVisible();
+    expect(
+      screen.queryByText("Publication couldn't be confirmed"),
+    ).not.toBeInTheDocument();
+    expect(mockStudioApi.publishWorkflow).not.toHaveBeenCalled();
+    expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Workflow isn't ready to publish",
+        expect.objectContaining({
+          key: expect.stringContaining('workflow-publication:'),
+        }),
+      ),
+    );
+  });
+
   it('creates a fresh revision before retrying a publication that was not accepted', async () => {
     arrangeSavedDraftPublication();
     const receiptRevisionId = 'rev-receipt-alpha';
@@ -3057,11 +3107,11 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
 
     expect(
-      await screen.findByText("Publication couldn't be confirmed"),
+      await screen.findByText("Workflow couldn't be submitted"),
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(mockConsoleToast.error).toHaveBeenCalledWith(
-        "Publication couldn't be confirmed",
+        "Workflow couldn't be submitted",
         expect.objectContaining({
           key: expect.stringContaining('workflow-publication:'),
         }),

@@ -144,6 +144,13 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.publish.revisionId': '版本 ID',
     'workflowActivityVNext.publish.readinessIssues': '发布就绪问题',
     'workflowActivityVNext.publish.success': '工作流已发布',
+    'workflowActivityVNext.publish.submissionFailed': '无法提交工作流发布',
+    'workflowActivityVNext.publish.submissionFailedDescription':
+      '请查看错误后重试发布。',
+    'workflowActivityVNext.publish.validationRejected':
+      '工作流尚未满足发布条件',
+    'workflowActivityVNext.publish.validationRejectedDescription':
+      '请修正下方工作流配置，然后重新发布。',
     'workflowActivityVNext.publish.resolvePublication':
       '再次发布前请先处理当前发布状态。',
     'workflowActivityVNext.publish.saveBeforePublishing':
