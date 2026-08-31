@@ -8,7 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Aevatar.GAgents.NyxidChat" />
-    <InternalsVisibleTo Include="Aevatar.AI.ToolProviders.Lark.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />

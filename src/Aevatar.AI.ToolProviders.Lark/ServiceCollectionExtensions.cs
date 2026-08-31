@@ -19,12 +19,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdToolOptions>();
         services.TryAddSingleton<NyxIdApiClient>();
         services.TryAddSingleton<ILarkNyxClient, LarkNyxClient>();
-        services.TryAddSingleton<ILarkKnowledgeClient, LarkKnowledgeNyxClient>();
         services.TryAddSingleton<ILarkCardKitClient, LarkCardKitClient>();
         services.TryAddSingleton<ILarkOutboundClientFactory, LarkOutboundClientFactory>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, LarkAgentToolSource>());
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IAgentToolSource, LarkKnowledgeAgentToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IWorkflowConnectedServiceResourceFetchAdapter,
             LarkMessageResourceFetchAdapter>());
