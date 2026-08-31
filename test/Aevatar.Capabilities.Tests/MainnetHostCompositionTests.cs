@@ -1081,14 +1081,14 @@ public sealed class MainnetHostCompositionTests
             "aevatar_list_workflow_templates:62," +
             "aevatar_observe_run:646," +
             "aevatar_read_workflow_run_artifact:999," +
-            "aevatar_start_workflow:1949," +
+            "aevatar_start_workflow:2084," +
             "ask_user:1345," +
             "ornn_search_skills:148," +
             "use_skill:1473," +
             "web_fetch:274," +
             "web_search:231" +
-            "|total:13:11524" +
-            "|digest:sha256:46788e82f006792a4c606a8784c036a465bd53bba143439bf7eb7e625d3a9932");
+            "|total:13:11659" +
+            "|digest:sha256:f375070841c2461e768b97b300d617df51cf40e6d93308ecc1e146ed9f6de9d2");
         app.Services.GetServices<IAgentToolSource>()
             .Select(static source => source.GetType())
             .Should()
