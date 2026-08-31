@@ -76,6 +76,34 @@ public sealed class WorkflowCallerCredentialToolContextTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenCallerCredentialIsAgentKey_ShouldPreserveCredentialKind()
+    {
+        var tool = new RecordingAgentTool();
+        var source = new SingleToolSource(tool);
+        var adapter = new AgentWorkflowToolSourceAdapter([source], new PassThroughExecutionPort());
+        var workflowTool = (await adapter.GetToolsAsync()).Should().ContainSingle().Subject;
+
+        await workflowTool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            "{}",
+            "run-alpha",
+            "step-alpha",
+            "execution-alpha",
+            "call-alpha",
+            "scope-alpha",
+            new WorkflowCallerCredential
+            {
+                BearerToken = "nyxid_ag_interactive_runtime",
+                Kind = NyxIdCallerCredentialKind.AgentKey,
+            }));
+
+        tool.NyxIdAccessToken.Should().Be("nyxid_ag_interactive_runtime");
+        tool.NyxIdOrgToken.Should().BeNull();
+        tool.SenderNyxIdAccessToken.Should().BeNull();
+        tool.SourceReadableNyxIdAccessToken.Should().BeNull();
+        tool.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenCallerHasDelegationAndSourceBearer_ShouldMapEachCredentialByPurpose()
     {
         var tool = new RecordingAgentTool();

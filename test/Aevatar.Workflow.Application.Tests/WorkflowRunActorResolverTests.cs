@@ -234,12 +234,14 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Theory]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    [InlineData(true, false)]
-    public async Task ResolveOrCreateAsync_ShouldUseSupplementalSourceCredentialForDraftAdmission(
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, true)]
+    public async Task ResolveOrCreateAsync_ShouldBindTrustedCredentialForDraftAdmission(
         bool canManageNyxIdUserServices,
-        bool selectionMatchesCredential)
+        bool selectionMatchesCredential,
+        bool useAgentKeyRuntimeCredential)
     {
         var workflowYaml =
             """
@@ -299,30 +301,51 @@ public sealed class WorkflowRunActorResolverTests
                 ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-alpha",
                 CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(
-                    "proxy-delegation-alpha",
+                    useAgentKeyRuntimeCredential
+                        ? "nyxid_ag_interactive_runtime"
+                        : "proxy-delegation-alpha",
                     new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
                         "nyxid",
                         string.Empty,
                         "owner-alpha",
                         "proxy"),
-                    NyxIdCallerCredentialKind.ProxyDelegation,
-                    SourceReadableUserBearerToken: "source-readable-alpha"),
+                    useAgentKeyRuntimeCredential
+                        ? NyxIdCallerCredentialKind.AgentKey
+                        : NyxIdCallerCredentialKind.ProxyDelegation,
+                    SourceReadableUserBearerToken: useAgentKeyRuntimeCredential
+                        ? null
+                        : "source-readable-alpha"),
                 CommandIdSeed: "command-alpha",
-                CallerNyxIdCredentialSelection: canManageNyxIdUserServices
-                    ? NyxIdCallerCredentialSelection.DirectUserBearer(
-                        selectionMatchesCredential
-                            ? "source-readable-alpha"
-                            : "different-source-token")
-                    : NyxIdCallerCredentialSelection.SourceReadableUserBearer(
-                        "source-readable-alpha")),
+                CallerNyxIdCredentialSelection: useAgentKeyRuntimeCredential
+                    ? NyxIdCallerCredentialSelection.ProxyDelegation("agent-key-delegation-alpha")
+                    : canManageNyxIdUserServices
+                        ? NyxIdCallerCredentialSelection.DirectUserBearer(
+                            selectionMatchesCredential
+                                ? "source-readable-alpha"
+                                : "different-source-token")
+                        : NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                            "source-readable-alpha")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
-        readinessPort.LastAccess!.NyxIdCallerCredential!.SourceReadableUserBearerToken.Should()
-            .Be("source-readable-alpha");
-        readinessPort.LastAccess.NyxIdCallerCredential.CanManageUserServices.Should()
-            .Be(canManageNyxIdUserServices && selectionMatchesCredential);
-        readinessPort.LastAccess.NyxIdCallerCredential.ProxyDelegationToken.Should().BeNull();
+        if (useAgentKeyRuntimeCredential)
+        {
+            readinessPort.LastAccess!.NyxIdCallerCredential!.Kind.Should().Be(
+                NyxIdCallerCredentialKind.ProxyDelegation);
+            readinessPort.LastAccess.NyxIdCallerCredential.ProxyDelegationToken.Should().Be(
+                "agent-key-delegation-alpha");
+            readinessPort.LastAccess.NyxIdCallerCredential.SourceReadableUserBearerToken.Should()
+                .BeNull();
+            readinessPort.LastAccess.NyxIdCallerCredential.CanManageUserServices.Should().BeFalse();
+        }
+        else
+        {
+            readinessPort.LastAccess!.NyxIdCallerCredential!.SourceReadableUserBearerToken.Should()
+                .Be("source-readable-alpha");
+            readinessPort.LastAccess.NyxIdCallerCredential.CanManageUserServices.Should()
+                .Be(canManageNyxIdUserServices && selectionMatchesCredential);
+            readinessPort.LastAccess.NyxIdCallerCredential.ProxyDelegationToken.Should().BeNull();
+        }
         actorPort.CreateRunBindings.Should().ContainSingle();
         var binding = actorPort.CreateRunBindings[0];
         binding.SourceKind.Should().Be("workflow_draft_run");
