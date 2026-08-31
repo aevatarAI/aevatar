@@ -1177,6 +1177,71 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     [Fact]
+    public async Task ManagedWorkflowCallChild_WhenNormalizedCompensationCompletes_ShouldSendChildCompletionToParent()
+    {
+        const string parentActorId = "parent-run-actor";
+        const string parentRunId = "parent-run";
+        const string parentStepId = "call_child";
+        const string invocationId = "invoke-child-normalized-1";
+        var childRunId = "child-run-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(
+            childRunId,
+            NormalizedSagaWorkflowYaml(),
+            normalizedAdmission: true);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(parentActorId, new StartWorkflowEvent
+        {
+            WorkflowName = "wf_2097",
+            RunId = childRunId,
+            Input = "hello",
+            WorkflowRuntime = new WorkflowToolRuntimeContextPayload
+            {
+                ParentActorId = parentActorId,
+                ParentRunId = parentRunId,
+                ParentStepId = parentStepId,
+                RootRunId = parentRunId,
+                Depth = 1,
+            },
+            ValueRepresentation = WorkflowExecutionValueRepresentation.Normalized,
+            Parameters =
+            {
+                ["workflow_call.invocation_id"] = invocationId,
+            },
+        }));
+
+        await CompleteStepAsync(
+            harness,
+            "create_order",
+            "order-output",
+            producedOutput: true);
+        await CompleteStepAsync(
+            harness,
+            "charge_payment",
+            "charge-output",
+            producedOutput: true);
+        await FailStepAsync(
+            harness,
+            "ship_order",
+            "ship failed",
+            producedOutput: true);
+        var firstRequest = CompensationRequests(harness.Publisher).Single();
+        await CompleteCompensationAsync(harness, firstRequest, producedOutput: true);
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+        await CompleteCompensationAsync(harness, secondRequest, producedOutput: true);
+
+        PublishedEvents<WorkflowCompletedEvent>(harness.Publisher)
+            .Where(x => x.Audience == TopologyAudience.Parent)
+            .Should()
+            .BeEmpty();
+        var sent = harness.Publisher.Sent.Should().ContainSingle(x => x.TargetActorId == parentActorId).Subject;
+        var completed = sent.Event.Should().BeOfType<SubWorkflowInvocationCompletedEvent>().Subject;
+        completed.InvocationId.Should().Be(invocationId);
+        completed.ChildRunId.Should().Be(childRunId);
+        completed.Success.Should().BeFalse();
+        completed.Compensated.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task RetryCompensation_FromMatchingDeadLetter_ShouldPersistRetryAndRepublishCurrentCompensation()
     {
         var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
@@ -1328,7 +1393,10 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         }));
     }
 
-    private static async Task CompleteCompensationAsync(RunHarness harness, CompensationRequestEvent request)
+    private static async Task CompleteCompensationAsync(
+        RunHarness harness,
+        CompensationRequestEvent request,
+        bool producedOutput = false)
     {
         var stepRequest = harness.Publisher.Published
             .Where(x => x.Event is StepRequestEvent stepRequestEvent && stepRequestEvent.StepId == request.CompensationStepId)
@@ -1343,6 +1411,9 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             Success = true,
             Output = $"done:{request.CompensationStepId}",
             ExecutionId = stepRequest.ExecutionId,
+            OutputProvenance = producedOutput
+                ? WorkflowStepOutputProvenance.Produced
+                : WorkflowStepOutputProvenance.Unspecified,
         }));
     }
 
