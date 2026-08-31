@@ -61,7 +61,13 @@ public sealed class ServiceRunRegistrationAdapter :
             Record = prepared,
         }), prepared.CommandId, prepared.CorrelationId);
 
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        var admission = await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        if (!admission.Accepted)
+        {
+            throw new InvalidOperationException(
+                $"ServiceRun registration dispatch was not accepted for actor '{actor.Id}'.");
+        }
+
         return new ServiceRunRegistrationResult(actor.Id, prepared.RunId);
     }
 
