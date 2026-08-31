@@ -1,3 +1,5 @@
+import { CONSOLE_HOME_ROUTE } from './shared/navigation/consoleHome';
+
 describe('console routes', () => {
   function loadRoutes(): typeof import('../config/routes').default {
     let loadedRoutes!: typeof import('../config/routes').default;
@@ -43,20 +45,23 @@ describe('console routes', () => {
     jest.resetModules();
   });
 
-  it('keeps scoped Team navigation as the default resource route model', () => {
+  it('routes console home to Workflow Activity while preserving scoped Teams', () => {
     const routes = loadRoutes();
 
     expect(findRoute(routes, '/chat').hideInMenu).toBe(false);
     expect(findRoute(routes, '/chat').name).toBe('Chat');
     expect(findRoute(routes, '/chat').menuGroupKey).toBe('chat');
     expect(findRoute(routes, '/chat').icon).toBeUndefined();
-    expect(findRoute(routes, '/scopes').hideInMenu).toBe(false);
+    expect(findRoute(routes, '/scopes').hideInMenu).toBe(true);
     expect(findRoute(routes, '/studio').hideInMenu).toBe(true);
     expect(findRoute(routes, '/runtime/runs').hideInMenu).toBeUndefined();
     expect(findRoute(routes, '/runtime/runs').menuGroupKey).toBe('platform');
     expect(findRoute(routes, '/scopes/overview').hideInMenu).toBe(true);
-    expect(findRoute(routes, '/scopes').name).toBe('My Teams');
-    expect(findRoute(routes, '/scopes').component).toBe('./teams');
+    expect(findRoute(routes, '/scopes').name).toBeUndefined();
+    expect(findRoute(routes, '/scopes').component).toBeUndefined();
+    for (const path of ['/', '/overview', '/scopes']) {
+      expect(findRoute(routes, path).redirect).toBe(CONSOLE_HOME_ROUTE);
+    }
     expect(findRouteIndex(routes, '/chat')).toBeLessThan(
       findRouteIndex(routes, '/scopes'),
     );
@@ -236,6 +241,6 @@ describe('console routes', () => {
 
     expect(findRoute(routes, '/workflows').redirect).toBe('/runtime/workflows');
     expect(findRoute(routes, '/runs').redirect).toBe('/runtime/runs');
-    expect(findRoute(routes, '/').redirect).toBe('/scopes');
+    expect(findRoute(routes, '/').redirect).toBe(CONSOLE_HOME_ROUTE);
   });
 });

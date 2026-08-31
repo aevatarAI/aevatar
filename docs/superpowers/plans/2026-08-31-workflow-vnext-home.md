@@ -16,15 +16,15 @@
 - Modify: `apps/aevatar-console-web/src/shared/navigation/consoleHome.test.ts`
 - Modify: `apps/aevatar-console-web/src/routesConfig.test.ts`
 
-- [ ] **Step 1: Update the shared home test**
+- [x] **Step 1: Update the shared home test**
 
 Assert that `WORKFLOW_ACTIVITY_VNEXT_HOME_ROUTE`, `getConsoleHomeRoute()`, and `CONSOLE_HOME_ROUTE` all equal the fixed workflow catalogue path.
 
-- [ ] **Step 2: Update the route contract test**
+- [x] **Step 2: Update the route contract test**
 
 Import `CONSOLE_HOME_ROUTE` and assert that `/`, `/overview`, and `/scopes` redirect to it, `/scopes` is hidden and does not mount `./teams`, and `/scopes/:scopeId/teams` still mounts `./teams`.
 
-- [ ] **Step 3: Run the changed tests and verify RED**
+- [x] **Step 3: Run the changed tests and verify RED**
 
 Run:
 
@@ -40,15 +40,15 @@ Expected: FAIL because the shared home still equals `/scopes` and `/scopes` stil
 - Modify: `apps/aevatar-console-web/src/shared/navigation/consoleHome.ts`
 - Modify: `apps/aevatar-console-web/config/routes.ts`
 
-- [ ] **Step 1: Define the fixed Workflow Activity home**
+- [x] **Step 1: Define the fixed Workflow Activity home**
 
 Replace the Teams home constant with a named Workflow Activity vNext home constant and retain `CONSOLE_HOME_ROUTE` as its public default-navigation alias.
 
-- [ ] **Step 2: Redirect unscoped home aliases**
+- [x] **Step 2: Redirect unscoped home aliases**
 
 Import `CONSOLE_HOME_ROUTE` into `config/routes.ts`. Redirect `/`, `/overview`, and `/scopes` to it; make `/scopes` hidden and remove its Teams name/component fields.
 
-- [ ] **Step 3: Run the changed tests and verify GREEN**
+- [x] **Step 3: Run the changed tests and verify GREEN**
 
 Run:
 
@@ -63,15 +63,15 @@ Expected: PASS with both changed test suites green.
 **Files:**
 - Review all files changed from `feat/2026-08-04_workflow-activity-vnext`
 
-- [ ] **Step 1: Analyze affected frontend scope**
+- [x] **Step 1: Analyze affected frontend scope**
 
 Run the `frontend-incremental-pr` analyzer with base `feat/2026-08-04_workflow-activity-vnext` and use its output to select exact tests and changed-file static checks.
 
-- [ ] **Step 2: Run focused tests and static checks**
+- [x] **Step 2: Run focused tests and static checks**
 
 Run changed test files explicitly, related tests for changed production files, and Biome only for analyzer-reported static-check files. Do not run a full frontend test, typecheck, or build.
 
-- [ ] **Step 3: Review semantic drift and the full diff**
+- [x] **Step 3: Review semantic drift and the full diff**
 
 Search the changed navigation area for stale Teams-home assertions, confirm no `src/pages/teams/**` file changed, and inspect `git diff --check` plus the complete base diff.
 
