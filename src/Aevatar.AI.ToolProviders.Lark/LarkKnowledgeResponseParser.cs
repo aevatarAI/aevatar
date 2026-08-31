@@ -63,14 +63,16 @@ internal static class LarkKnowledgeResponseParser
 
     private static LarkKnowledgeCandidate? TryParseCandidate(JsonElement item)
     {
-        var entityType = TryReadString(item, "entity_type")?.ToUpperInvariant();
-        if (entityType is not ("DOCX" or "WIKI"))
-            return null;
-
         var resultData = item.TryGetProperty("result_meta", out var resultMeta) &&
                          resultMeta.ValueKind == JsonValueKind.Object
             ? resultMeta
             : item;
+        var entityType = TryReadString(item, "entity_type")?.ToUpperInvariant();
+        if (entityType is not ("DOCX" or "WIKI"))
+            entityType = TryReadString(resultData, "doc_types")?.ToUpperInvariant();
+        if (entityType is not ("DOCX" or "WIKI"))
+            return null;
+
         var resourceToken = TryReadString(resultData, "token") ??
                             TryReadString(item, "token");
         if (string.IsNullOrWhiteSpace(resourceToken))

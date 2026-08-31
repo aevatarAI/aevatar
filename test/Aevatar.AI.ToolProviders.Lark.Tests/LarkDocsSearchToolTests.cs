@@ -134,6 +134,39 @@ public sealed class LarkDocsSearchToolTests
     }
 
     [Fact]
+    public void ParseSearch_ShouldUseResultMetaDocTypeForGenericDocumentEntity()
+    {
+        const string payload = """
+            {
+              "code": 0,
+              "data": {
+                "res_units": [
+                  {
+                    "entity_type": "DOC",
+                    "title_highlighted": "Expense <h>policy</h>",
+                    "result_meta": {
+                      "token": "doccn_1",
+                      "doc_types": "DOCX",
+                      "url": "https://example.larksuite.com/docx/doccn_1"
+                    }
+                  }
+                ]
+              }
+            }
+            """;
+
+        var result = LarkKnowledgeResponseParser.ParseSearch(payload);
+
+        result.Candidates.Should().ContainSingle().Which.Should().Be(
+            new LarkKnowledgeCandidate(
+                "docx",
+                "Expense policy",
+                "https://example.larksuite.com/docx/doccn_1",
+                "doccn_1",
+                "doccn_1"));
+    }
+
+    [Fact]
     public void ParseSearch_ShouldIgnoreUnsupportedOrUnaddressableResults()
     {
         const string payload = """
