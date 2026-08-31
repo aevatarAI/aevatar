@@ -143,6 +143,14 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.publish.revisionId': 'Revision ID',
   'workflowActivityVNext.publish.readinessIssues': 'Publish readiness issues',
   'workflowActivityVNext.publish.success': 'Workflow published',
+  'workflowActivityVNext.publish.submissionFailed':
+    "Workflow couldn't be submitted",
+  'workflowActivityVNext.publish.submissionFailedDescription':
+    'Review the error and try publishing again.',
+  'workflowActivityVNext.publish.validationRejected':
+    "Workflow isn't ready to publish",
+  'workflowActivityVNext.publish.validationRejectedDescription':
+    'Fix the workflow configuration below, then publish again.',
   'workflowActivityVNext.publish.resolvePublication':
     'Resolve the current publication status before publishing again.',
   'workflowActivityVNext.publish.saveBeforePublishing':
