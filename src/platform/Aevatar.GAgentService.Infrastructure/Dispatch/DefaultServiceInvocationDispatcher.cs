@@ -184,15 +184,24 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 
         var run = await _workflowRunProvisioningPort.CreateRunAsync(definition, ct);
         var serviceRunId = run.ActorId;
-        var serviceRunRegistration = await RegisterRunAsync(
-            target,
-            request,
-            serviceRunId,
-            commandId,
-            correlationId,
-            run.ActorId,
-            ServiceImplementationKind.Workflow,
-            ct);
+        ServiceRunRegistrationResult serviceRunRegistration;
+        try
+        {
+            serviceRunRegistration = await RegisterRunAsync(
+                target,
+                request,
+                serviceRunId,
+                commandId,
+                correlationId,
+                run.ActorId,
+                ServiceImplementationKind.Workflow,
+                ct);
+        }
+        catch
+        {
+            await DestroyRejectedWorkflowRunAsync(run.ActorId).ConfigureAwait(false);
+            throw;
+        }
         var workflowChatRequest = ToWorkflowChatRequest(chatRequest, request, target, run.ActorId, callerCredential);
         var envelope = CreateEnvelope(run.ActorId, Any.Pack(workflowChatRequest), commandId, correlationId);
         var admission = await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);

@@ -146,6 +146,43 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
     }
 
     [Fact]
+    public async Task StartOperationAsync_InteractiveAgentKeyUsesOrdinaryLifecycleAuthority()
+    {
+        var legacy = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
+            new CodeExecutionResult("legacy", string.Empty, 0),
+            ResolvedRoute));
+        var durable = new StubDurableCodeExecutionPort();
+        durable.SubmitOutcomes.Enqueue(new DurableCodeExecutionSubmitOutcome(
+            DurableReceipt("provider-interactive-agent-key"),
+            null));
+        var tool = new NyxIdCodeExecuteTool(legacy, durable);
+        SetAgentKey("interactive-agent-key");
+        var context = AgentToolRequestContext.Current! with
+        {
+            InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+            OperationAdmission = CodeExecutionAdmission("us-code-admitted"),
+        };
+        AgentToolRequestContext.Current = context;
+
+        var result = await tool.StartOperationAsync(new AgentToolOperationStartRequest(
+            OpaqueOperationId('e'),
+            "call-interactive-agent-key",
+            tool.Name,
+            """{"language":"python","code":"print(42)"}""",
+            context));
+
+        result.Disposition.Should().Be(AgentToolOperationStartDisposition.Pending);
+        durable.SubmitRequests.Should().ContainSingle();
+        var submitRequest = durable.SubmitRequests.Single();
+        submitRequest.Execution.Caller.ExecutionCredentialKind.Should()
+            .Be(CodeExecutionNyxIdCredentialKind.InteractiveAgentKey);
+        submitRequest.Execution.Caller.ExecutionNyxIdCredential.Should()
+            .Be("interactive-agent-key");
+        submitRequest.Execution.Caller.DurableOperationGrant.Should().BeNull();
+        legacy.Request.Should().BeNull();
+    }
+
+    [Fact]
     public async Task StartOperationAsync_AgentKeyWithExactGrantFailsBeforeUnreconcilableSubmit()
     {
         var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
@@ -1383,28 +1420,28 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
     }
 
     [Fact]
-    public async Task ExecuteWithOutcomeAsync_AgentKeyWithoutDurableGrantFailsBeforeLegacyDispatch()
+    public async Task ExecuteWithOutcomeAsync_InteractiveAgentKeyUsesLegacyDispatch()
     {
         var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
             new CodeExecutionResult("ok", string.Empty, 0),
             ResolvedRoute));
         var tool = new NyxIdCodeExecuteTool(port);
-        SetAgentKey("scheduled-agent-key");
+        SetAgentKey("interactive-agent-key");
         AgentToolRequestContext.Current = AgentToolRequestContext.Current! with
         {
             OperationAdmission = CodeExecutionAdmission("us-code-admitted"),
         };
 
-        var outcome = await tool.ExecuteWithOutcomeAsync(
-            "call-scheduled-admitted",
+        await tool.ExecuteWithOutcomeAsync(
+            "call-interactive-agent-key-admitted",
             tool.Name,
             """{"language":"javascript","code":"console.log('ok')"}""");
 
-        port.Request.Should().BeNull();
-        AssertFailure(
-            outcome,
-            "code_execution_durable_grant_rebind_required",
-            "The scheduled NyxID credential is missing one exact active code execution grant and must be rebound.");
+        port.Request.Should().NotBeNull();
+        port.Request!.Caller.ExecutionCredentialKind.Should()
+            .Be(CodeExecutionNyxIdCredentialKind.InteractiveAgentKey);
+        port.Request.Caller.ExecutionNyxIdCredential.Should().Be("interactive-agent-key");
+        port.Request.Caller.DurableOperationGrant.Should().BeNull();
     }
 
     [Fact]
@@ -1927,26 +1964,26 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
         string grantId = "grant-executions",
         DateTimeOffset? validFrom = null,
         DateTimeOffset? expiresAt = null) => new()
-    {
-        GrantId = grantId,
-        ApiKeyId = "key-schedule",
-        UserServiceId = "us-code-admitted",
-        EndpointId = "endpoint-executions",
-        HttpMethod = NyxIdDurableOperationHttpMethod.Post,
-        NormalizedPathTemplate = "/executions",
-        ContractDigest =
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ValidFromUnixMs = (validFrom ?? now.AddMinutes(-1)).ToUnixTimeMilliseconds(),
-        ExpiresAtUnixMs = (expiresAt ?? now.AddDays(1)).ToUnixTimeMilliseconds(),
-        ReplayPolicy = NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey,
-        ClientAuditBinding = new NyxIdDurableOperationClientAuditBinding
         {
-            Platform = "lark",
-            ScheduleId = "schedule-alpha",
-            WorkflowRevision = "revision-7",
-            CallSite = "code_execute",
-        },
-    };
+            GrantId = grantId,
+            ApiKeyId = "key-schedule",
+            UserServiceId = "us-code-admitted",
+            EndpointId = "endpoint-executions",
+            HttpMethod = NyxIdDurableOperationHttpMethod.Post,
+            NormalizedPathTemplate = "/executions",
+            ContractDigest =
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ValidFromUnixMs = (validFrom ?? now.AddMinutes(-1)).ToUnixTimeMilliseconds(),
+            ExpiresAtUnixMs = (expiresAt ?? now.AddDays(1)).ToUnixTimeMilliseconds(),
+            ReplayPolicy = NyxIdDurableOperationReplayPolicy.DownstreamIdempotencyKey,
+            ClientAuditBinding = new NyxIdDurableOperationClientAuditBinding
+            {
+                Platform = "lark",
+                ScheduleId = "schedule-alpha",
+                WorkflowRevision = "revision-7",
+                CallSite = "code_execute",
+            },
+        };
 
     private static AgentToolExecutionContext SetLegacyWorkflowExecutionContext()
     {

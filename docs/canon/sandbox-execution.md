@@ -60,7 +60,10 @@ The shared `chrono-sandbox` route must deliver two credentials with different ty
 - `forward_access_token=true` forwards the caller credential as `Authorization`. Channel,
   webhook, and scheduled workflow paths must resolve their Vault-backed NyxID Agent Key at the
   outbound call and keep its credential kind as `AgentKey`; they must not relabel it as
-  `ProxyDelegation`. A direct human invocation may still use a source-readable bearer.
+  `ProxyDelegation`. A direct human invocation may still use a source-readable bearer. An
+  interactive workflow invoked with an exact forwarded Agent Key keeps that request credential
+  distinct as `InteractiveAgentKey` at the code-execution boundary; it is not a producer-issued
+  unattended credential and does not inherit scheduled-grant requirements.
 - `inject_delegation_token=true` and a whitespace-separated `delegation_token_scope` containing
   both `proxy:*` and `sandbox:execute` makes NyxID add the short-lived
   `X-NyxID-Delegation-Token`. The `sandbox:execute` grant authenticates Chrono's exact execution
@@ -145,6 +148,13 @@ method, normalized path, contract digest, replay policy, and validity window, th
 `X-NyxID-Operation-Id`. Missing, legacy, ambiguous, expired, or mismatched grants require rebind,
 and an Agent Key may not use the synchronous `/execute` path.
 
+An interactive request-forwarded Agent Key is a separate authority class. It uses the ordinary
+Agent Key's exact NyxID service allowlist for `/executions` submit, status, result, and cancel and
+does not send durable-grant headers. This exception is request-scoped: the credential must arrive
+as the authenticated workflow invocation credential with no durable caller reference. Any
+Vault-backed scheduled, webhook, or channel reference remains `AgentKey`, never falls into this
+interactive class, and retains the fail-closed durable-grant and lifecycle rules above.
+
 Current scheduled authorization plans contain service/node grants but no producer-attested exact
 endpoint and request constraints. The issuer therefore fails before key creation with
 `scheduled_durable_operation_authority_unavailable`; it must not fabricate
@@ -205,8 +215,9 @@ The workflow lifecycle is actor-owned:
    exact route identity, ETag, expiry, retry time, callback identity, and a verified protected-material
    reference plus digest. Source, idempotency key, file references, and external invocation details
    stay in the runtime secret store rather than actor state. Raw credentials never enter actor state,
-   events, projections, logs, or API responses; Agent Keys remain Vault-backed and are resolved again
-   at outbound execution.
+   events, projections, logs, or API responses. Vault-backed unattended Agent Keys are resolved again
+   at outbound execution; a request-forwarded interactive Agent Key remains protected runtime material
+   for that invocation and is never promoted into a durable caller reference.
 3. A typed durable self-callback performs one bounded status request. It sends `If-None-Match` when
    an ETag is known, saves the next callback identity before scheduling it, and never polls with
    `Task.Delay` inside an actor turn.

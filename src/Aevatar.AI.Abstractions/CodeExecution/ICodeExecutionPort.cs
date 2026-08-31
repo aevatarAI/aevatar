@@ -82,7 +82,10 @@ public enum CodeExecutionNyxIdCredentialKind
 {
     Unspecified = 0,
     Bearer = 1,
+    // Vault-backed unattended Agent Key with producer-issued durable authority.
     AgentKey = 2,
+    // Agent Key forwarded by the current authenticated interactive request.
+    InteractiveAgentKey = 3,
 }
 
 public enum CodeExecutionRouteIdentitySource

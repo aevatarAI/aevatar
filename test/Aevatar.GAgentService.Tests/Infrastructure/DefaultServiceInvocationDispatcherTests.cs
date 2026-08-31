@@ -493,6 +493,55 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_WhenWorkflowRegistrationIsRejected_ShouldDestroyRunAndNotDispatchWorkflow()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var registry = new RecordingServiceRunRegistrationPort
+        {
+            RegistrationException = new InvalidOperationException("registration rejected"),
+        };
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry,
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
+        };
+        var request = new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-registration-rejected",
+            CorrelationId = "corr-registration-rejected",
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+        };
+
+        var act = () => dispatcher.DispatchAsync(target, request);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("registration rejected");
+        workflowPort.CreateRunCalls.Should().ContainSingle();
+        workflowPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("workflow-run");
+        registry.Calls.Should().ContainSingle();
+        dispatchPort.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task DispatchAsync_WhenWorkflowAdmissionIsRejected_ShouldDestroyRunAndNotReturnReceipt()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
@@ -2059,10 +2108,14 @@ public sealed class DefaultServiceInvocationDispatcherTests
         public List<ServiceRunRecord> Calls { get; } = [];
         public List<(string RunActorId, string RunId, ServiceRunStatus Status)> StatusUpdates { get; } = [];
         public ServiceRunRegistrationResult? RegistrationResult { get; init; }
+        public Exception? RegistrationException { get; init; }
 
         public Task<ServiceRunRegistrationResult> RegisterAsync(ServiceRunRecord record, CancellationToken ct = default)
         {
             Calls.Add(record.Clone());
+            if (RegistrationException != null)
+                throw RegistrationException;
+
             return Task.FromResult(
                 RegistrationResult ?? new ServiceRunRegistrationResult($"service-run:{record.RunId}", record.RunId));
         }
