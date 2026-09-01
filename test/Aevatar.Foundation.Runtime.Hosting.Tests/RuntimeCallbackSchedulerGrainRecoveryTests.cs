@@ -681,6 +681,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         state.ReminderCallbacks.Should().ContainKey(callbackId);
         state.ReminderCallbacks[callbackId].Generation.Should().Be(8);
         state.CallbackGenerations[callbackId].Should().Be(8);
+        await grain.PurgeAsync();
     }
 
     [Fact]
