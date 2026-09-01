@@ -27,7 +27,10 @@ public sealed class DinnerDateMockWorkflowFixtureTests
             .And.Contain("steps.capture_user_choice.json.budget_cap")
             .And.Contain("missing_fields");
         var discovery = workflow.Steps.Should().Contain(step => step.Id == "discover_restaurant_candidates").Subject;
-        discovery.Parameters["arguments"].Should().Contain("\"${json(steps.capture_user_choice.json.search_query)}\"");
+        discovery.Type.Should().Be("assign");
+        discovery.Parameters["value"].Should().Contain("mock_catalog")
+            .And.Contain("${json(steps.capture_user_choice.json.search_query)}");
+        yaml.Should().NotContain("tool: web_search");
         yaml.Should().NotContain("Keong Saik Duxton Singapore")
             .And.NotContain("\"participant\":\"Priya\"")
             .And.NotContain("\"day\":\"Friday\"");
@@ -42,6 +45,10 @@ public sealed class DinnerDateMockWorkflowFixtureTests
             "dinner_date_mock.yaml"));
 
         var workflow = new WorkflowParser().Parse(yaml);
+
+        var timeoutWait = workflow.Steps.Should().Contain(step => step.Id == "wait_for_user_choice_timeout").Subject;
+        timeoutWait.Type.Should().Be("delay");
+        timeoutWait.Parameters["duration_ms"].Should().Be("10000");
 
         var timeoutMarker = workflow.Steps.Should().Contain(step => step.Id == "mark_silence_timeout").Subject;
         timeoutMarker.Next.Should().Be("hold_candidate_option_1");
@@ -109,15 +116,17 @@ public sealed class DinnerDateMockWorkflowFixtureTests
         var initialize = workflow.Steps.Single(step => step.Id == "initialize_context");
         var contextJson = evaluator.Evaluate(initialize.Parameters["value"], variables);
         var discovery = workflow.Steps.Single(step => step.Id == "discover_restaurant_candidates");
-        var argumentsJson = evaluator.Evaluate(discovery.Parameters["arguments"], variables);
+        var candidatesJson = evaluator.Evaluate(discovery.Parameters["value"], variables);
 
         using var contextDocument = JsonDocument.Parse(contextJson);
         contextDocument.RootElement.GetProperty("location").GetString().Should().Be("Keong Saik Duxton Singapore");
         contextDocument.RootElement.GetProperty("cuisines").EnumerateArray().Should().HaveCount(2);
         contextDocument.RootElement.GetProperty("policy").GetProperty("show_options_before_calls").GetBoolean().Should().BeTrue();
-        using var argumentsDocument = JsonDocument.Parse(argumentsJson);
-        argumentsDocument.RootElement.GetProperty("query").GetString().Should()
+        using var candidatesDocument = JsonDocument.Parse(candidatesJson);
+        candidatesDocument.RootElement.GetProperty("source").GetString().Should().Be("mock_catalog");
+        candidatesDocument.RootElement.GetProperty("query").GetString().Should()
             .Be("Keong Saik Duxton Singapore romantic dinner Tuesday 7:30pm");
+        candidatesDocument.RootElement.GetProperty("results").EnumerateArray().Should().HaveCount(3);
     }
 
     [Fact]

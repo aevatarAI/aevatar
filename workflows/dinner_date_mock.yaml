@@ -1,5 +1,5 @@
 name: dinner_date_mock
-description: Executable workflow for the UC5 dinner-date restaurant discovery and phone reservation flow. Chat must provide structured input assembled from the user's request and relevant scoped context services; restaurant discovery uses web_search; phone outcomes are deterministic mock assign nodes.
+description: Executable workflow for the UC5 dinner-date restaurant discovery and phone reservation flow. Chat must provide structured input assembled from the user's request and relevant scoped context services; restaurant discovery and phone outcomes are deterministic mock assign nodes.
 when_to_use: Use when chat has assembled dinner_date structured input, including search_query and any available profile context such as location, cuisines, restaurant type, phone number, budget cap, party size, day, and time.
 configuration:
   closed_world_mode: true
@@ -7,9 +7,9 @@ roles:
   - id: shortlist_builder
     name: Dinner Shortlist Builder
     system_prompt: >-
-      You extract three dinner-date candidates strictly from web_search results.
+      You extract three dinner-date candidates strictly from deterministic mock candidate input.
       Output STRICT JSON only, no markdown fences. The JSON shape is exactly
-      {"source":"web_search","search_step_success":true,"failure_reason":"","option_1_name":"string","option_1_url":"string","option_1_note":"string","option_2_name":"string","option_2_url":"string","option_2_note":"string","option_3_name":"string","option_3_url":"string","option_3_note":"string"}.
+      {"source":"mock_catalog","search_step_success":true,"failure_reason":"","option_1_name":"string","option_1_url":"string","option_1_note":"string","option_2_name":"string","option_2_url":"string","option_2_note":"string","option_3_name":"string","option_3_url":"string","option_3_note":"string"}.
       If the raw search output has fewer than three suitable restaurant or reservation results, output the same JSON shape with search_step_success false, a non-empty failure_reason, and empty option fields.
       Each option URL must come from one of the provided search result items.
       Each option name must be either a search result title or a restaurant name explicitly present in that result title or snippet.
@@ -46,10 +46,10 @@ steps:
     next: discover_restaurant_candidates
 
   - id: discover_restaurant_candidates
-    type: tool_call
+    type: assign
     parameters:
-      tool: web_search
-      arguments: '{"query":"${json(steps.capture_user_choice.json.search_query)}","max_results":8}'
+      target: mock_restaurant_candidates
+      value: '{"source":"mock_catalog","query":"${json(steps.capture_user_choice.json.search_query)}","results":[{"name":"Pasta Bar","url":"https://example.local/restaurants/pasta-bar","note":"Intimate Italian counter dining near Keong Saik; suitable for a romantic dinner under the requested budget if ordering selectively."},{"name":"Tipo Pasta Bar","url":"https://example.local/restaurants/tipo-pasta-bar","note":"Budget-safer Italian option near the requested area with casual date-night fit."},{"name":"Kamoshita","url":"https://example.local/restaurants/kamoshita","note":"Cozy Japanese dinner option near Duxton and Tanjong Pagar with moderate ordering."}]}'
     next: build_shortlist_from_candidates
 
   - id: build_shortlist_from_candidates
@@ -57,7 +57,7 @@ steps:
     target_role: shortlist_builder
     parameters:
       prompt_prefix: >-
-        Build three selectable dinner-date options using only items present in these web_search results. Do not infer or add restaurants outside the raw search output. Raw search output:
+        Build three selectable dinner-date options using only items present in these deterministic mock candidates. Do not infer or add restaurants outside the raw candidate input. Raw candidate input:
     next: route_shortlist_status
 
   - id: route_shortlist_status
@@ -83,7 +83,7 @@ steps:
     type: assign
     parameters:
       target: options_gate
-      value: '{"options_shown":true,"restaurant_calls_started":false,"money_spent":false,"silence_timeout_ms":2000,"production_timeout":"10m"}'
+      value: '{"options_shown":true,"restaurant_calls_started":false,"money_spent":false,"silence_timeout_ms":10000,"production_timeout":"10s"}'
     next: emit_options_shown
 
   - id: emit_options_shown
@@ -215,7 +215,7 @@ steps:
   - id: wait_for_user_choice_timeout
     type: delay
     parameters:
-      duration_ms: "2000"
+      duration_ms: "10000"
     next: mark_silence_timeout
 
   - id: mark_silence_timeout
