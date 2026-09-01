@@ -66,6 +66,7 @@ message NyxIdServiceInstance {
   bool credential_allowed = 13;
   optional string catalog_service_slug = 14;
   NyxIdServiceCallerExecutionReadiness caller_execution_readiness = 15;
+  optional string openapi_spec_url = 16;
 }
 
 message NyxIdServiceUpdateRequest {

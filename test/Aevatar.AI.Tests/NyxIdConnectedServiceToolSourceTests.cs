@@ -103,6 +103,61 @@ public class NyxIdConnectedServiceToolSourceTests
         }
         """;
 
+    private const string CustomOpenApi = """
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "User Context Mock", "version": "1.0.0" },
+          "paths": {
+            "/profile/dining": {
+              "get": {
+                "operationId": "readDiningProfileContext",
+                "summary": "Read dining preference context",
+                "responses": {
+                  "200": {
+                    "description": "Dining context",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "home_location": { "type": "string" },
+                            "preferred_cuisines": {
+                              "type": "array",
+                              "items": { "type": "string" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "post": {
+                "operationId": "updateDiningProfileContext",
+                "summary": "Update dining preference context",
+                "requestBody": {
+                  "required": true,
+                  "content": {
+                    "application/json": {
+                      "schema": {
+                        "type": "object",
+                        "properties": { "budget_cap": { "type": "number" } }
+                      }
+                    }
+                  }
+                },
+                "responses": {
+                  "200": {
+                    "description": "Updated dining context",
+                    "content": { "application/json": { "schema": { "type": "object" } } }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """;
+
     [Fact]
     public async Task DiscoverToolsAsync_NoBaseUrl_ReturnsEmptyWithoutReadingKeys()
     {
@@ -400,6 +455,61 @@ public class NyxIdConnectedServiceToolSourceTests
         tools.Should().BeEmpty();
         handler.McpConfigRequests.Should().Be(1);
         handler.RawOpenApiRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_CustomOpenApiServiceMissingFromMcp_ExposesReadOnlyOperation()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            CustomInstanceWithOpenApiUrl(
+                "custom-service-alpha",
+                "user-context-mock",
+                "http://127.0.0.1:5119/openapi.json"));
+        handler.OpenApiResponsesByPath["/api/v1/proxy/s/user-context-mock/openapi.json"] = CustomOpenApi;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        var tool = tools.Should().ContainSingle().Subject;
+        tool.Name.Should().MatchRegex("^nyxop_[0-9a-f]{48}$");
+        tool.IsReadOnly.Should().BeTrue();
+        var owner = tool.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
+        owner.OperationAdmission.ServiceInstanceId.Should().Be("custom-service-alpha");
+        owner.OperationAdmission.ServiceSlug.Should().Be("user-context-mock");
+        owner.OperationAdmission.Identity.Should().Be(
+            new AgentToolOperationIdentity.PublishedEndpoint("readDiningProfileContext"));
+        owner.OperationAdmission.HttpMethod.Should().Be("GET");
+        owner.OperationAdmission.PathTemplate.Should().Be("/profile/dining");
+        owner.OperationAdmission.CatalogDigest.Should().MatchRegex("^sha256:[0-9a-f]{64}$");
+        handler.McpConfigRequests.Should().Be(1);
+        handler.RawOpenApiRequests.Should().Equal("/api/v1/proxy/s/user-context-mock/openapi.json");
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_CustomOpenApiEffects_DisabledByDefault()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            CustomInstanceWithOpenApiUrl(
+                "custom-service-alpha",
+                "user-context-mock",
+                "http://127.0.0.1:5119/openapi.json"));
+        handler.OpenApiResponsesByPath["/api/v1/proxy/s/user-context-mock/openapi.json"] = CustomOpenApi;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle();
+        tools.Cast<IAgentToolOperationAdmissionOwner>()
+            .Should().ContainSingle(owner =>
+                owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly);
+        tools.Cast<IAgentToolOperationAdmissionOwner>()
+            .Should().NotContain(owner =>
+                owner.OperationAdmission.Identity ==
+                new AgentToolOperationIdentity.PublishedEndpoint("updateDiningProfileContext"));
     }
 
     [Fact]
@@ -1619,6 +1729,24 @@ public class NyxIdConnectedServiceToolSourceTests
         }
         """;
 
+    private static string CustomInstanceWithOpenApiUrl(
+        string id,
+        string slug,
+        string openApiUrl) => $$"""
+        {
+          "id": "{{id}}",
+          "slug": "{{slug}}",
+          "label": "User Context Mock",
+          "endpoint_id": "instance-endpoint-alpha",
+          "endpoint_url": "http://127.0.0.1:5119",
+          "openapi_spec_url": "{{openApiUrl}}",
+          "is_active": true,
+          "status": "active",
+          "connected": true,
+          "credential_source": {{PersonalCredentialSource}}
+        }
+        """;
+
     private static string InstanceWithCatalogSlug(
         string id,
         string slug,
@@ -2133,6 +2261,7 @@ public class NyxIdConnectedServiceToolSourceTests
 
         public Dictionary<string, string> KeysByToken { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> McpConfigByToken { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, string> OpenApiResponsesByPath { get; } = new(StringComparer.Ordinal);
         public List<string> DiscoveryTokens { get; } = [];
         public List<string> McpConfigTokens { get; } = [];
         public List<string> RawOpenApiRequests { get; } = [];
@@ -2187,6 +2316,16 @@ public class NyxIdConnectedServiceToolSourceTests
                 path.EndsWith("/openapi.json", StringComparison.Ordinal))
             {
                 RawOpenApiRequests.Add(path);
+                throw new InvalidOperationException("raw_openapi_must_not_be_requested");
+            }
+
+            if (request.Method == HttpMethod.Get &&
+                path.StartsWith("/api/v1/proxy/s/", StringComparison.Ordinal) &&
+                path.EndsWith("/openapi.json", StringComparison.Ordinal))
+            {
+                RawOpenApiRequests.Add(path);
+                if (OpenApiResponsesByPath.TryGetValue(path, out var openApiResponse))
+                    return Task.FromResult(Json(openApiResponse));
                 throw new InvalidOperationException("raw_openapi_must_not_be_requested");
             }
 

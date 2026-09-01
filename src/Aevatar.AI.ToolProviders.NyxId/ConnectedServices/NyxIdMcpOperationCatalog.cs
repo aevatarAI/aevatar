@@ -550,6 +550,351 @@ internal static class NyxIdMcpOperationCatalog
         return (false, [], null);
     }
 
+    public static NyxIdMcpCatalogRead ParseCustomOpenApi(
+        string response,
+        NyxIdServiceInstance serviceInstance,
+        string sourceSuffix,
+        DateTimeOffset observedAt,
+        TimeSpan freshnessWindow)
+    {
+        ArgumentNullException.ThrowIfNull(serviceInstance);
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(response);
+        }
+        catch (JsonException)
+        {
+            return SourceFailure(
+                BuildSource(
+                    sourceSuffix,
+                    serviceInstance.UserServiceId,
+                    observedAt,
+                    freshnessWindow,
+                    ExternalWorkflowCapabilityContractDigest.Compute("invalid-openapi", response),
+                    ExternalCapabilitySourceKind.NyxIdOpenApi),
+                accessDenied: false);
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            var digest = ExternalWorkflowCapabilityContractDigest.Compute(Canonicalize(root));
+            var source = BuildSource(
+                sourceSuffix,
+                serviceInstance.UserServiceId,
+                observedAt,
+                freshnessWindow,
+                $"sha256:{digest}",
+                ExternalCapabilitySourceKind.NyxIdOpenApi);
+            if (root.ValueKind != JsonValueKind.Object ||
+                ExactString(root, "openapi") is null ||
+                !root.TryGetProperty("paths", out var paths) ||
+                paths.ValueKind != JsonValueKind.Object ||
+                string.IsNullOrWhiteSpace(serviceInstance.UserServiceId) ||
+                string.IsNullOrWhiteSpace(serviceInstance.DisplaySlug))
+            {
+                return SourceFailure(source, accessDenied: false);
+            }
+
+            return ParseCustomOpenApiPaths(serviceInstance, paths, source);
+        }
+    }
+
+    private static NyxIdMcpCatalogRead ParseCustomOpenApiPaths(
+        NyxIdServiceInstance serviceInstance,
+        JsonElement paths,
+        ExternalCapabilitySourceStamp source)
+    {
+        var issues = new List<NyxIdMcpCatalogIssue>();
+        var endpoints = new List<NyxIdMcpEndpoint>();
+        var candidateCount = 0;
+        var seenEndpointIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var pathProperty in paths.EnumerateObject())
+        {
+            if (pathProperty.Value.ValueKind != JsonValueKind.Object)
+                continue;
+            var pathParameters = ReadOpenApiParameterArray(pathProperty.Value, "parameters");
+            foreach (var operationProperty in pathProperty.Value.EnumerateObject())
+            {
+                var method = operationProperty.Name.ToUpperInvariant();
+                if (!HttpMethods.Contains(method))
+                    continue;
+                candidateCount++;
+                if (operationProperty.Value.ValueKind != JsonValueKind.Object)
+                {
+                    issues.Add(new NyxIdMcpCatalogIssue(
+                        ExternalCapabilityDiscoveryDiagnosticCode.InvalidEndpointIdentity,
+                        "The OpenAPI operation is not an object.",
+                        serviceInstance.UserServiceId));
+                    continue;
+                }
+
+                var endpoint = ParseCustomOpenApiOperation(
+                    serviceInstance.UserServiceId,
+                    serviceInstance.DisplaySlug,
+                    pathProperty.Name,
+                    method,
+                    pathParameters,
+                    operationProperty.Value,
+                    seenEndpointIds,
+                    issues);
+                if (endpoint is not null)
+                    endpoints.Add(endpoint);
+            }
+        }
+
+        var services = endpoints.Count == 0
+            ? []
+            : new[]
+            {
+                new NyxIdMcpService(
+                    serviceInstance.UserServiceId,
+                    string.IsNullOrWhiteSpace(serviceInstance.Label)
+                        ? serviceInstance.DisplaySlug
+                        : serviceInstance.Label,
+                    serviceInstance.DisplaySlug,
+                    endpoints,
+                    source.Clone()),
+            };
+        var capabilities = services.SelectMany(service =>
+            service.Endpoints.Select(endpoint => BuildDescriptor(service, endpoint)));
+        return new NyxIdMcpCatalogRead(
+            services,
+            BuildDiscovery(
+                capabilities,
+                candidateCount,
+                Math.Max(0, candidateCount - endpoints.Count),
+                issues,
+                source),
+            issues,
+            source,
+            false,
+            false);
+    }
+
+    private static NyxIdMcpEndpoint? ParseCustomOpenApiOperation(
+        string serviceId,
+        string serviceSlug,
+        string path,
+        string method,
+        IReadOnlyList<JsonElement> pathParameters,
+        JsonElement operation,
+        ISet<string> seenEndpointIds,
+        ICollection<NyxIdMcpCatalogIssue> issues)
+    {
+        if (!TryReadPathPlaceholders(path, out var pathPlaceholders))
+        {
+            issues.Add(new NyxIdMcpCatalogIssue(
+                ExternalCapabilityDiscoveryDiagnosticCode.InvalidEndpointIdentity,
+                "The OpenAPI operation path is not a safe path template.",
+                serviceId));
+            return null;
+        }
+
+        var endpointId = ExactString(operation, "operationId") ??
+                         "custom_" + ExternalWorkflowCapabilityContractDigest.Compute(method, path)[..32];
+        if (!seenEndpointIds.Add(endpointId))
+        {
+            issues.Add(new NyxIdMcpCatalogIssue(
+                ExternalCapabilityDiscoveryDiagnosticCode.AmbiguousEndpointIdentity,
+                "The OpenAPI document published duplicate operation ids for one service.",
+                serviceId,
+                endpointId));
+            return null;
+        }
+
+        var parameters = ParseCustomOpenApiParameters(
+            serviceId,
+            endpointId,
+            pathPlaceholders,
+            pathParameters.Concat(ReadOpenApiParameterArray(operation, "parameters")),
+            issues);
+        if (parameters is null)
+            return null;
+        var body = ParseCustomOpenApiRequestBody(operation, serviceId, endpointId, method, issues);
+        if (!body.Supported)
+            return null;
+        var response = ParseCustomOpenApiResponse(operation, serviceId, endpointId, method, issues);
+        if (!response.Supported)
+            return null;
+
+        var endpoint = new NyxIdMcpEndpoint(
+            endpointId,
+            OptionalString(operation, "summary") ?? ExactString(operation, "operationId") ?? endpointId,
+            method,
+            path,
+            parameters,
+            body.Schema,
+            body.Required,
+            body.MediaType,
+            response.MediaTypes,
+            response.BinaryArtifact);
+        try
+        {
+            _ = NyxIdOperationAdmissionProofBuilder.Build(
+                serviceId,
+                serviceSlug,
+                endpoint,
+                endpoint.ContractDigest);
+            if (endpoint.Parameters.Any(static parameter => !IsScalarParameterSchema(parameter.Schema)))
+            {
+                UnsupportedParameters(issues, serviceId, endpointId);
+                return null;
+            }
+            return endpoint;
+        }
+        catch (NyxIdOperationSchemaUnsupportedException)
+        {
+            issues.Add(new NyxIdMcpCatalogIssue(
+                ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema,
+                "The OpenAPI operation schema is outside the supported workflow contract subset.",
+                serviceId,
+                endpointId));
+            return null;
+        }
+    }
+
+    private static IReadOnlyList<JsonElement> ReadOpenApiParameterArray(JsonElement owner, string name) =>
+        owner.ValueKind == JsonValueKind.Object &&
+        owner.TryGetProperty(name, out var parameters) &&
+        parameters.ValueKind == JsonValueKind.Array
+            ? parameters.EnumerateArray().ToArray()
+            : [];
+
+    private static IReadOnlyList<ConnectedServiceToolParameter>? ParseCustomOpenApiParameters(
+        string serviceId,
+        string endpointId,
+        IReadOnlySet<string> pathPlaceholders,
+        IEnumerable<JsonElement> parameterElements,
+        ICollection<NyxIdMcpCatalogIssue> issues)
+    {
+        var parameters = new List<ConnectedServiceToolParameter>();
+        var identities = new HashSet<(string Name, ParameterLocation Location)>();
+        foreach (var item in parameterElements)
+        {
+            if (item.ValueKind != JsonValueKind.Object || item.TryGetProperty("$ref", out _))
+                return UnsupportedParameters(issues, serviceId, endpointId);
+            var name = ExactString(item, "name");
+            var locationText = ExactString(item, "in")?.ToLowerInvariant();
+            if (name is null || locationText == "cookie" || !TryMapLocation(locationText, out var location))
+                return UnsupportedParameters(issues, serviceId, endpointId);
+            if (!IsSupportedParameterName(name, location))
+                return UnsupportedParameters(issues, serviceId, endpointId);
+            if (!TryReadOptionalBool(item, "required", out var required))
+                return UnsupportedParameters(issues, serviceId, endpointId);
+            if (location == ParameterLocation.Header &&
+                (!AllowedHeaders.Contains(name) || NyxIdProxyHeaderPolicy.IsSensitive(name)))
+            {
+                return UnsupportedParameters(issues, serviceId, endpointId);
+            }
+            var identityName = location == ParameterLocation.Header ? name.ToUpperInvariant() : name;
+            if (!identities.Add((identityName, location)))
+                return UnsupportedParameters(issues, serviceId, endpointId);
+
+            JsonNode? schema = null;
+            if (item.TryGetProperty("schema", out var schemaElement) &&
+                schemaElement.ValueKind != JsonValueKind.Null)
+            {
+                if (schemaElement.ValueKind != JsonValueKind.Object)
+                    return UnsupportedSchema(issues, serviceId, endpointId);
+                schema = JsonNode.Parse(Canonicalize(schemaElement));
+            }
+            parameters.Add(new ConnectedServiceToolParameter(
+                name,
+                location,
+                required || location == ParameterLocation.Path,
+                schema,
+                OptionalString(item, "description")));
+        }
+
+        if (!pathPlaceholders.SetEquals(parameters
+                .Where(static parameter => parameter.In == ParameterLocation.Path)
+                .Select(static parameter => parameter.Name)))
+        {
+            issues.Add(new NyxIdMcpCatalogIssue(
+                ExternalCapabilityDiscoveryDiagnosticCode.InvalidEndpointIdentity,
+                "The OpenAPI path template placeholders do not match its path parameters.",
+                serviceId,
+                endpointId));
+            return null;
+        }
+
+        return parameters;
+    }
+
+    private static (bool Supported, JsonNode? Schema, bool Required, string? MediaType)
+        ParseCustomOpenApiRequestBody(
+            JsonElement operation,
+            string serviceId,
+            string endpointId,
+            string method,
+            ICollection<NyxIdMcpCatalogIssue> issues)
+    {
+        if (!operation.TryGetProperty("requestBody", out var requestBody) ||
+            requestBody.ValueKind == JsonValueKind.Null)
+        {
+            return (true, null, false, null);
+        }
+        if (method is "GET" or "HEAD" ||
+            requestBody.ValueKind != JsonValueKind.Object ||
+            requestBody.TryGetProperty("$ref", out _) ||
+            !requestBody.TryGetProperty("content", out var content) ||
+            content.ValueKind != JsonValueKind.Object ||
+            !content.TryGetProperty("application/json", out var jsonContent) ||
+            jsonContent.ValueKind != JsonValueKind.Object ||
+            !jsonContent.TryGetProperty("schema", out var schema) ||
+            schema.ValueKind != JsonValueKind.Object ||
+            !TryReadOptionalBool(requestBody, "required", out var required))
+        {
+            return UnsupportedRequestBody(issues, serviceId, endpointId);
+        }
+
+        return (true, JsonNode.Parse(Canonicalize(schema)), required, "application/json");
+    }
+
+    private static (bool Supported, IReadOnlyList<string> MediaTypes, bool? BinaryArtifact)
+        ParseCustomOpenApiResponse(
+            JsonElement operation,
+            string serviceId,
+            string endpointId,
+            string method,
+            ICollection<NyxIdMcpCatalogIssue> issues)
+    {
+        if (!operation.TryGetProperty("responses", out var responses) ||
+            responses.ValueKind != JsonValueKind.Object)
+        {
+            return UnsupportedResponse(issues, serviceId, endpointId);
+        }
+
+        var mediaTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var response in responses.EnumerateObject()
+                     .Where(static property => property.Value.ValueKind == JsonValueKind.Object))
+        {
+            if (!response.Value.TryGetProperty("content", out var content) ||
+                content.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+            foreach (var mediaType in content.EnumerateObject().Select(static property => property.Name))
+            {
+                if (string.IsNullOrWhiteSpace(mediaType) ||
+                    !string.Equals(mediaType, mediaType.Trim(), StringComparison.Ordinal) ||
+                    !MediaTypeHeaderValue.TryParse(mediaType, out _))
+                {
+                    return UnsupportedResponse(issues, serviceId, endpointId);
+                }
+                mediaTypes.Add(mediaType);
+            }
+            if (mediaTypes.Count > 0)
+                break;
+        }
+
+        return mediaTypes.Count == 0
+            ? UnsupportedResponse(issues, serviceId, endpointId)
+            : (true, mediaTypes.Order(StringComparer.Ordinal).ToArray(), false);
+    }
+
     private static ExternalWorkflowCapabilityDescriptor BuildDescriptor(
         NyxIdMcpService service,
         NyxIdMcpEndpoint endpoint) => new()
@@ -626,9 +971,10 @@ internal static class NyxIdMcpOperationCatalog
         string? userId,
         DateTimeOffset observedAt,
         TimeSpan freshnessWindow,
-        string digest) => new()
+        string digest,
+        ExternalCapabilitySourceKind sourceKind = ExternalCapabilitySourceKind.NyxIdMcpConfig) => new()
     {
-        SourceKind = ExternalCapabilitySourceKind.NyxIdMcpConfig,
+        SourceKind = sourceKind,
         SourceId = string.IsNullOrWhiteSpace(userId)
             ? $"nyxid-mcp-config:{sourceSuffix}"
             : $"nyxid-mcp-config:{sourceSuffix}:{userId}",

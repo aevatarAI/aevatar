@@ -61,8 +61,9 @@ internal static class AevatarInvocationToolSchemas
             ["inputs.prompt"] =
                 "The workflow's run input. Typed workflows require a NON-EMPTY serialized JSON string " +
                 "matching the workflow's input contract, for example {\"period_label\":\"2026年8月\",\"submit\":false}. " +
-                "Build the JSON yourself from the user's request. Never pass an empty string, an unserialized " +
-                "object, or the user's natural-language sentence.",
+                "Build the JSON from the user's request and any relevant read-only scoped connected-service " +
+                "results already exposed in this turn; leave unavailable fields explicit instead of guessing. " +
+                "Never pass an empty string, an unserialized object, or the user's natural-language sentence.",
         });
 
     public static readonly string ObserveRun = ProtoToolSchema.Build(

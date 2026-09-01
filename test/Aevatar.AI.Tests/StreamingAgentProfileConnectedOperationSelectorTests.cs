@@ -57,6 +57,7 @@ public sealed class StreamingAgentProfileConnectedOperationSelectorTests
             .And.NotContain("access_token");
         request.Messages.Single(message => message.Role == "system").Content.Should()
             .Contain("untrusted data")
+            .And.Contain("workflow input preparation")
             .And.Contain("never mix read and write");
     }
 

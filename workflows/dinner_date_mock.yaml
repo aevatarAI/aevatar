@@ -1,6 +1,6 @@
 name: dinner_date_mock
-description: Executable workflow for the UC5 dinner-date restaurant discovery and phone reservation flow. Restaurant discovery uses web_search; phone outcomes are deterministic mock assign nodes.
-when_to_use: Use to validate NyxID-backed web_search discovery, shortlist, option gate, selected hold, timeout hold-all/release, deposit-blocked, ambiguous-outcome, and proof artifact flow before replacing phone connector boundary nodes.
+description: Executable workflow for the UC5 dinner-date restaurant discovery and phone reservation flow. Chat must provide structured input assembled from the user's request and relevant scoped context services; restaurant discovery uses web_search; phone outcomes are deterministic mock assign nodes.
+when_to_use: Use when chat has assembled dinner_date structured input, including search_query and any available profile context such as location, cuisines, restaurant type, phone number, budget cap, party size, day, and time.
 configuration:
   closed_world_mode: true
 roles:
@@ -42,14 +42,14 @@ steps:
     type: assign
     parameters:
       target: dinner_date_context
-      value: '{"task_id":"task-uc5","participant":"Priya","window":"this week","party_size":2,"day":"Friday","time":"19:30","policy":{"show_options_before_calls":true,"money_spend_allowed":false,"reservation_calls_auto_allowed":true},"mode":"mock"}'
+      value: '{"task_id":"${json(steps.capture_user_choice.json.task_id)}","raw_user_request":"${json(steps.capture_user_choice.json.raw_user_request)}","participant":"${json(steps.capture_user_choice.json.participant)}","window":"${json(steps.capture_user_choice.json.window)}","party_size":${if(isBlank(steps.capture_user_choice.json.party_size), "null", steps.capture_user_choice.json.party_size)},"day":"${json(steps.capture_user_choice.json.day)}","time":"${json(steps.capture_user_choice.json.time)}","location":"${json(steps.capture_user_choice.json.location)}","cuisines":${if(isBlank(steps.capture_user_choice.json.cuisines), "null", steps.capture_user_choice.json.cuisines)},"restaurant_type":"${json(steps.capture_user_choice.json.restaurant_type)}","phone_number":"${json(steps.capture_user_choice.json.phone_number)}","budget_cap":${if(isBlank(steps.capture_user_choice.json.budget_cap), "null", steps.capture_user_choice.json.budget_cap)},"policy":${if(isBlank(steps.capture_user_choice.json.policy), "null", steps.capture_user_choice.json.policy)},"mode":"mock","missing_fields":${if(isBlank(steps.capture_user_choice.json.missing_fields), "[]", steps.capture_user_choice.json.missing_fields)}}'
     next: discover_restaurant_candidates
 
   - id: discover_restaurant_candidates
     type: tool_call
     parameters:
       tool: web_search
-      arguments: '{"query":"Keong Saik Duxton Singapore romantic dinner restaurant reservation book table Friday 7:30pm","max_results":8}'
+      arguments: '{"query":"${json(steps.capture_user_choice.json.search_query)}","max_results":8}'
     next: build_shortlist_from_candidates
 
   - id: build_shortlist_from_candidates

@@ -292,6 +292,9 @@ public sealed class NyxIdServiceInstanceClient
             instance.CatalogServiceId = catalogId;
         if (!string.IsNullOrWhiteSpace(catalogSlug))
             instance.CatalogServiceSlug = catalogSlug;
+        var openApiSpecUrl = ReadString(item, "openapi_spec_url") ?? ReadString(item, "openapi_url");
+        if (!string.IsNullOrWhiteSpace(openApiSpecUrl))
+            instance.OpenapiSpecUrl = openApiSpecUrl;
         if (nodeId is not null)
             instance.NodeId = nodeId;
         return new NyxIdServiceInstanceBinding(instance, token);
@@ -430,6 +433,7 @@ public sealed class NyxIdServiceInstanceClient
         string.Equals(left.DisplaySlug, right.DisplaySlug, StringComparison.Ordinal) &&
         string.Equals(left.EndpointId, right.EndpointId, StringComparison.Ordinal) &&
         string.Equals(left.EndpointUrl, right.EndpointUrl, StringComparison.Ordinal) &&
+        string.Equals(left.OpenapiSpecUrl, right.OpenapiSpecUrl, StringComparison.Ordinal) &&
         string.Equals(left.NodeId, right.NodeId, StringComparison.Ordinal) &&
         Equals(left.CallerExecutionReadiness, right.CallerExecutionReadiness) &&
         Equals(left.RouteConstraint, right.RouteConstraint);

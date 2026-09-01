@@ -108,8 +108,8 @@
       "aevatar.observe"
     ],
     "unique_tool_count": 13,
-    "canonical_schema_bytes": 11524,
-    "catalog_digest": "sha256:46788e82f006792a4c606a8784c036a465bd53bba143439bf7eb7e625d3a9932",
+    "canonical_schema_bytes": 11659,
+    "catalog_digest": "sha256:f375070841c2461e768b97b300d617df51cf40e6d93308ecc1e146ed9f6de9d2",
     "tools": [
       { "name": "aevatar_get_workflow_template", "schema_bytes": 170 },
       { "name": "aevatar_invoke_gagent", "schema_bytes": 1400 },
@@ -118,7 +118,7 @@
       { "name": "aevatar_list_workflow_templates", "schema_bytes": 62 },
       { "name": "aevatar_observe_run", "schema_bytes": 646 },
       { "name": "aevatar_read_workflow_run_artifact", "schema_bytes": 999 },
-      { "name": "aevatar_start_workflow", "schema_bytes": 1949 },
+      { "name": "aevatar_start_workflow", "schema_bytes": 2084 },
       { "name": "ask_user", "schema_bytes": 1345 },
       { "name": "ornn_search_skills", "schema_bytes": 148 },
       { "name": "use_skill", "schema_bytes": 1473 },
@@ -128,6 +128,6 @@
   },
   "reduction": {
     "unique_tool_percent": 80.9,
-    "canonical_schema_bytes_percent": 76.2
+    "canonical_schema_bytes_percent": 75.9
   }
 }
