@@ -61,11 +61,13 @@ public sealed record ScopeWorkflowTemplateEnsureResult(
         string scopeId,
         string workflowId,
         string revisionId,
-        string reason) =>
+        string reason,
+        ScopeWorkflowSaveAndBindResult? saveAndBind = null) =>
         new(
             ScopeWorkflowTemplateEnsureStatus.Failed,
             scopeId,
             workflowId,
             revisionId,
-            reason);
+            reason,
+            saveAndBind);
 }

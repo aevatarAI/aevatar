@@ -25,13 +25,11 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
     [Fact]
     public async Task EnsureAsync_WhenWorkflowRevisionIsCurrent_ShouldNotSaveAndBind()
     {
-        var queryPort = new RecordingScopeWorkflowQueryPort
-        {
-            LookupResult = new ScopeWorkflowLookupResult(
+        var queryPort = new RecordingScopeWorkflowQueryPort(
+            new ScopeWorkflowLookupResult(
                 ScopeWorkflowLookupStatus.Runnable,
                 BuildWorkflow("scope-1", "wf-default", "rev-expected"),
-                "runnable"),
-        };
+                "runnable"));
         var saveAndBindPort = new RecordingScopeWorkflowSaveAndBindPort();
         var service = CreateService(queryPort, saveAndBindPort, BuildTemplate());
 
@@ -46,13 +44,15 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
     [Fact]
     public async Task EnsureAsync_WhenWorkflowIsMissing_ShouldSaveAndBindConfiguredTemplate()
     {
-        var queryPort = new RecordingScopeWorkflowQueryPort
-        {
-            LookupResult = new ScopeWorkflowLookupResult(
+        var queryPort = new RecordingScopeWorkflowQueryPort(
+            new ScopeWorkflowLookupResult(
                 ScopeWorkflowLookupStatus.NotFound,
                 null,
                 "service_catalog_missing"),
-        };
+            new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.Runnable,
+                BuildWorkflow("scope-1", "wf-default", "rev-expected"),
+                "runnable"));
         var saveAndBindPort = new RecordingScopeWorkflowSaveAndBindPort();
         var service = CreateService(queryPort, saveAndBindPort, BuildTemplate());
 
@@ -73,19 +73,44 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
     }
 
     [Fact]
+    public async Task EnsureAsync_WhenSaveAndBindReadModelIsNotObserved_ShouldFail()
+    {
+        var queryPort = new RecordingScopeWorkflowQueryPort(
+            new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.NotFound,
+                null,
+                "service_catalog_missing"));
+        var saveAndBindPort = new RecordingScopeWorkflowSaveAndBindPort();
+        var service = CreateService(
+            queryPort,
+            saveAndBindPort,
+            options => options.TemplateEnsureProjectionWaitTimeout = TimeSpan.Zero,
+            BuildTemplate());
+
+        var result = await service.EnsureAsync(new ScopeWorkflowTemplateEnsureRequest("scope-1", "wf-default"));
+
+        result.Status.Should().Be(ScopeWorkflowTemplateEnsureStatus.Failed);
+        result.Reason.Should().Be("workflow_template_readmodel_not_observed");
+        result.SaveAndBind.Should().NotBeNull();
+        queryPort.Lookups.Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task EnsureAsync_WhenTemplateUsesYamlPath_ShouldSaveAndBindFileContent()
     {
         var workflowYamlPath = Path.Combine(Path.GetTempPath(), $"scope-workflow-template-{Guid.NewGuid():N}.yaml");
         await File.WriteAllTextAsync(workflowYamlPath, "name: wf_default_from_path\nsteps: []");
         try
         {
-            var queryPort = new RecordingScopeWorkflowQueryPort
-            {
-                LookupResult = new ScopeWorkflowLookupResult(
+            var queryPort = new RecordingScopeWorkflowQueryPort(
+                new ScopeWorkflowLookupResult(
                     ScopeWorkflowLookupStatus.NotFound,
                     null,
                     "service_catalog_missing"),
-            };
+                new ScopeWorkflowLookupResult(
+                    ScopeWorkflowLookupStatus.Runnable,
+                    BuildWorkflow("scope-1", "wf-default", "rev-expected"),
+                    "runnable"));
             var saveAndBindPort = new RecordingScopeWorkflowSaveAndBindPort();
             var service = CreateService(queryPort, saveAndBindPort, BuildTemplateFromPath(workflowYamlPath));
 
@@ -104,13 +129,15 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
     [Fact]
     public async Task EnsureAsync_WhenWorkflowRevisionDiffers_ShouldSaveAndBindConfiguredTemplate()
     {
-        var queryPort = new RecordingScopeWorkflowQueryPort
-        {
-            LookupResult = new ScopeWorkflowLookupResult(
+        var queryPort = new RecordingScopeWorkflowQueryPort(
+            new ScopeWorkflowLookupResult(
                 ScopeWorkflowLookupStatus.Runnable,
                 BuildWorkflow("scope-1", "wf-default", "rev-old"),
                 "runnable"),
-        };
+            new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.Runnable,
+                BuildWorkflow("scope-1", "wf-default", "rev-expected"),
+                "runnable"));
         var saveAndBindPort = new RecordingScopeWorkflowSaveAndBindPort();
         var service = CreateService(queryPort, saveAndBindPort, BuildTemplate());
 
@@ -125,13 +152,24 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
         RecordingScopeWorkflowQueryPort queryPort,
         RecordingScopeWorkflowSaveAndBindPort saveAndBindPort,
         params ScopeWorkflowConfiguredTemplateOptions[] templates) =>
-        new(
+        CreateService(queryPort, saveAndBindPort, null, templates);
+
+    private static ScopeWorkflowTemplateEnsureService CreateService(
+        RecordingScopeWorkflowQueryPort queryPort,
+        RecordingScopeWorkflowSaveAndBindPort saveAndBindPort,
+        Action<ScopeWorkflowCapabilityOptions>? configure,
+        params ScopeWorkflowConfiguredTemplateOptions[] templates)
+    {
+        var options = new ScopeWorkflowCapabilityOptions
+        {
+            ConfiguredTemplates = templates.ToList(),
+        };
+        configure?.Invoke(options);
+        return new ScopeWorkflowTemplateEnsureService(
             queryPort,
             saveAndBindPort,
-            Options.Create(new ScopeWorkflowCapabilityOptions
-            {
-                ConfiguredTemplates = templates.ToList(),
-            }));
+            Options.Create(options));
+    }
 
     private static ScopeWorkflowConfiguredTemplateOptions BuildTemplate() =>
         new()
@@ -174,12 +212,19 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
 
     private sealed class RecordingScopeWorkflowQueryPort : IScopeWorkflowQueryPort
     {
-        public List<(string ScopeId, string WorkflowId)> Lookups { get; } = [];
+        private readonly Queue<ScopeWorkflowLookupResult> _lookupResults;
+        private ScopeWorkflowLookupResult _lastLookupResult;
 
-        public ScopeWorkflowLookupResult LookupResult { get; set; } = new(
-            ScopeWorkflowLookupStatus.NotFound,
-            null,
-            "service_catalog_missing");
+        public RecordingScopeWorkflowQueryPort(params ScopeWorkflowLookupResult[] lookupResults)
+        {
+            _lookupResults = new Queue<ScopeWorkflowLookupResult>(lookupResults);
+            _lastLookupResult = lookupResults.LastOrDefault() ?? new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.NotFound,
+                null,
+                "service_catalog_missing");
+        }
+
+        public List<(string ScopeId, string WorkflowId)> Lookups { get; } = [];
 
         public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(
             string scopeId,
@@ -192,7 +237,10 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
             CancellationToken ct = default)
         {
             Lookups.Add((scopeId, workflowId));
-            return Task.FromResult(LookupResult);
+            if (_lookupResults.Count > 0)
+                _lastLookupResult = _lookupResults.Dequeue();
+
+            return Task.FromResult(_lastLookupResult);
         }
 
         public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(

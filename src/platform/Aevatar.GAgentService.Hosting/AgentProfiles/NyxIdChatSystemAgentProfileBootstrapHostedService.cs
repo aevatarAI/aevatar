@@ -121,6 +121,7 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
             }
         }
 
+        var draftChanged = false;
         if (!detail.Snapshot.DraftSha256.Equals(desiredDraftSha256))
         {
             await _profileService.UpdateDraftAsync(
@@ -146,11 +147,11 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
                     profileSlug);
                 return null;
             }
+
+            draftChanged = true;
         }
 
-        if (detail.Snapshot.PublishedRevision <= 0 ||
-            detail.Snapshot.PublishedSnapshotSha256.Length != 32 ||
-            !detail.ExecutionAvailable)
+        if (draftChanged || !PublishedExists(detail.Snapshot) || !detail.ExecutionAvailable)
         {
             await _profileService.PublishAsync(
                 new AgentProfilePublishRequest(
@@ -233,6 +234,10 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
             await Task.Delay(interval, _timeProvider, ct).ConfigureAwait(false);
         }
     }
+
+    private static bool PublishedExists(AgentProfileManagementSnapshot snapshot) =>
+        snapshot.PublishedRevision > 0 &&
+        snapshot.PublishedSnapshotSha256.Length == 32;
 
     private static bool BindingTargetsPublishedSnapshot(
         AgentProfileDefaultBinding? binding,

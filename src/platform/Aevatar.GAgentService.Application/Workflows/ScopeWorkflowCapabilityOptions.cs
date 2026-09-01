@@ -36,6 +36,10 @@ public sealed class ScopeWorkflowCapabilityOptions
 
     public List<ScopeWorkflowConfiguredTemplateOptions> ConfiguredTemplates { get; set; } = [];
 
+    public TimeSpan TemplateEnsureProjectionWaitTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    public TimeSpan TemplateEnsureProjectionPollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
+
     public string BuildDefinitionActorIdPrefix(string scopeId, string workflowId) =>
         $"{DefinitionActorIdPrefix}:{BuildOpaqueToken(scopeId)}:{BuildOpaqueToken(workflowId)}";
 

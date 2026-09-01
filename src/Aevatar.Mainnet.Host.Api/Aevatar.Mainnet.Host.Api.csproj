@@ -75,5 +75,6 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\..\workflow-templates\**\*.yaml" Link="workflow-templates\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\workflows\**\*.yaml" Link="workflows\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -54,11 +54,47 @@ public sealed class ScopeWorkflowTemplateEnsureService : IScopeWorkflowTemplateE
                 RevisionId: revisionId),
             ct).ConfigureAwait(false);
 
-        return ScopeWorkflowTemplateEnsureResult.SaveAndBindAccepted(
-            result,
-            lookup.Status == ScopeWorkflowLookupStatus.NotFound
-                ? "workflow_template_missing"
-                : "workflow_template_stale");
+        var observed = await WaitForRunnableRevisionAsync(scopeId, workflowId, revisionId, ct).ConfigureAwait(false);
+        return observed is null
+            ? ScopeWorkflowTemplateEnsureResult.Failed(
+                scopeId,
+                workflowId,
+                revisionId,
+                "workflow_template_readmodel_not_observed",
+                result)
+            : ScopeWorkflowTemplateEnsureResult.SaveAndBindAccepted(
+                result,
+                lookup.Status == ScopeWorkflowLookupStatus.NotFound
+                    ? "workflow_template_missing"
+                    : "workflow_template_stale");
+    }
+
+    private async Task<ScopeWorkflowSummary?> WaitForRunnableRevisionAsync(
+        string scopeId,
+        string workflowId,
+        string revisionId,
+        CancellationToken ct)
+    {
+        var timeout = _options.TemplateEnsureProjectionWaitTimeout;
+        var interval = _options.TemplateEnsureProjectionPollInterval <= TimeSpan.Zero
+            ? TimeSpan.FromMilliseconds(250)
+            : _options.TemplateEnsureProjectionPollInterval;
+        var deadline = TimeProvider.System.GetUtcNow() + timeout;
+
+        while (true)
+        {
+            var lookup = await _workflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct).ConfigureAwait(false);
+            if (lookup.IsRunnable &&
+                string.Equals(lookup.Workflow!.ActiveRevisionId, revisionId, StringComparison.Ordinal))
+            {
+                return lookup.Workflow;
+            }
+
+            if (timeout <= TimeSpan.Zero || TimeProvider.System.GetUtcNow() >= deadline)
+                return null;
+
+            await Task.Delay(interval, ct).ConfigureAwait(false);
+        }
     }
 
     private ScopeWorkflowConfiguredTemplateOptions? ResolveTemplate(string workflowId)
