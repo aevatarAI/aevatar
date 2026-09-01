@@ -37,6 +37,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgentService.Hosting.AgentProfiles;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgents.Channel.Identity;
@@ -672,9 +673,13 @@ public static class MainnetHostBuilderExtensions
 
     private static void AddNyxIdChatAgentProfile(WebApplicationBuilder builder)
     {
+        builder.Services.AddOptions<NyxIdChatSystemAgentProfileBootstrapOptions>()
+            .Bind(builder.Configuration.GetSection(NyxIdChatSystemAgentProfileBootstrapOptions.SectionName));
         builder.Services.Replace(
             ServiceDescriptor.Singleton<INyxIdChatAgentProfileResolver,
                 MainnetNyxIdChatAgentProfileResolver>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, NyxIdChatSystemAgentProfileBootstrapHostedService>());
     }
 
     private static void ReplaceMainnetWorkflowAgentToolSourceAdapter(IServiceCollection services)
