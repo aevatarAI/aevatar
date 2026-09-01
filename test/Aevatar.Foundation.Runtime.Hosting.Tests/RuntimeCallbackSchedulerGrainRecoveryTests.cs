@@ -603,7 +603,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         const string callbackId = "scheduled-dispatch-next-fire";
         var streamProvider = new RecordingStreamProvider();
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
-        using var host = await StartSiloHostAsync(streamProvider, storage);
+        await using var host = await StartSiloHostAsync(streamProvider, storage);
 
         var grain = host.Services
             .GetRequiredService<IGrainFactory>()
@@ -651,7 +651,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         const string callbackId = "scheduled-dispatch-next-fire";
         var streamProvider = new RecordingStreamProvider();
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
-        using var host = await StartSiloHostAsync(streamProvider, storage);
+        await using var host = await StartSiloHostAsync(streamProvider, storage);
 
         var grain = host.Services
             .GetRequiredService<IGrainFactory>()
@@ -692,7 +692,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         var streamProvider = new RecordingStreamProvider();
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
         var reminderTable = new RecordingReminderTable();
-        using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
+        await using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
         var grain = host.Services
             .GetRequiredService<IGrainFactory>()
             .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
@@ -760,7 +760,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         var streamProvider = new RecordingStreamProvider();
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
         var reminderTable = new RecordingReminderTable();
-        using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
+        await using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
         var grain = host.Services
             .GetRequiredService<IGrainFactory>()
             .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
@@ -817,7 +817,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         var streamProvider = new RecordingStreamProvider();
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
         var reminderTable = new RecordingReminderTable();
-        using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
+        await using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
         var grain = host.Services
             .GetRequiredService<IGrainFactory>()
             .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
@@ -871,7 +871,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         const string callbackId = "scheduled-dispatch-next-fire";
         var streamProvider = new RecordingStreamProvider();
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
-        using var host = await StartSiloHostAsync(streamProvider, storage);
+        await using var host = await StartSiloHostAsync(streamProvider, storage);
 
         var grain = host.Services
             .GetRequiredService<IGrainFactory>()
@@ -899,7 +899,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
         var reminderTable = new RecordingReminderTable();
         var failureLoggerProvider = new GrainContextFailureLoggerProvider();
-        using var host = await StartSiloHostAsync(
+        await using var host = await StartSiloHostAsync(
             streamProvider,
             storage,
             reminderTable,
@@ -943,7 +943,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         var streamProvider = new RecordingStreamProvider();
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
         var reminderTable = new RecordingReminderTable();
-        using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
+        await using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
 
         var grain = host.Services
             .GetRequiredService<IGrainFactory>()
@@ -1002,7 +1002,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         var streamProvider = new RecordingStreamProvider();
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
         var reminderTable = new RecordingReminderTable();
-        using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
+        await using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
 
         var grain = host.Services
             .GetRequiredService<IGrainFactory>()
@@ -1050,7 +1050,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         var streamProvider = new RecordingStreamProvider();
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
         var reminderTable = new RecordingReminderTable();
-        using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
+        await using var host = await StartSiloHostAsync(streamProvider, storage, reminderTable);
 
         var grain = host.Services
             .GetRequiredService<IGrainFactory>()
@@ -1074,7 +1074,7 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         var streamProvider = new RecordingStreamProvider();
         var storage = new TestRuntimeCallbackSchedulerStateStorage();
         var reminderTable = new RecordingReminderTable();
-        using var host = await StartSiloHostAsync(
+        await using var host = await StartSiloHostAsync(
             streamProvider,
             storage,
             reminderTable,
@@ -1115,13 +1115,14 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
             .Be(generation);
     }
 
-    private static async Task<IHost> StartSiloHostAsync(
+    private static async Task<SiloHostLease> StartSiloHostAsync(
         RecordingStreamProvider streamProvider,
         TestRuntimeCallbackSchedulerStateStorage storage,
         RecordingReminderTable? reminderTable = null,
         GrainContextFailureLoggerProvider? failureLoggerProvider = null,
-        bool disableFleetAuthorityBootstrap = false) =>
-        await SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
+        bool disableFleetAuthorityBootstrap = false)
+    {
+        var host = await SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .ConfigureLogging(logging =>
             {
                 if (failureLoggerProvider != null)
@@ -1170,6 +1171,20 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                 });
             })
             .Build());
+
+        return new SiloHostLease(host);
+    }
+
+    private sealed class SiloHostLease(IHost host) : IAsyncDisposable
+    {
+        public IServiceProvider Services => host.Services;
+
+        public async ValueTask DisposeAsync()
+        {
+            await host.StopAsync().ConfigureAwait(false);
+            host.Dispose();
+        }
+    }
 
     private static RuntimeScheduledCallback CreateScheduledCallback(string callbackId, long generation) => new()
     {
