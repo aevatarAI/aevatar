@@ -418,6 +418,62 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeUnprofiledBaselineAsync_ShouldTrimConnectedReadCandidatesBeforeSelector()
+    {
+        var baselineSource = new StaticToolSource(
+        [
+            new TestTool("nyxid_services"),
+            new TestTool("use_skill"),
+        ]);
+        var broadContextReads = Enumerable.Range(0, 40)
+            .Select(index => (IAgentTool)new AdmittedTestTool(
+                $"nyxop_profile_context_{index:D2}",
+                CreateReadAdmission(
+                    $"us-context-{index:D2}",
+                    $"api-context-{index:D2}",
+                    $"readProfileContext{index:D2}",
+                    "context-service")));
+        var relevantRead = new AdmittedTestTool(
+            "nyxop_dining_profile_context_read",
+            CreateReadAdmission(
+                "us-dining-alpha",
+                "user-context-alpha",
+                "readDiningProfileContext",
+                "user-context"));
+        var routeSource = new StaticToolSource(
+        [
+            new TestTool("nyxid_services"),
+            new TestTool("use_skill"),
+            .. broadContextReads,
+            relevantRead,
+        ]);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(ToolSetNames.NyxIdChatBaseline, baselineSource);
+        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, routeSource);
+        var connectedSelector = new RecordingConnectedOperationSelector(request =>
+            AgentProfileConnectedOperationSelectionResult.Selected(
+            [request.Candidates.Single(candidate =>
+                candidate.DisplayName == "nyxop_dining_profile_context_read").CandidateId]));
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null,
+            connectedOperationSelector: connectedSelector);
+
+        var catalog = await materializer.MaterializeUnprofiledBaselineAsync(
+            ToolContext(),
+            "Use my dining profile context for dinner booking.",
+            llmControl: null,
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().Contain("nyxop_dining_profile_context_read");
+        connectedSelector.CallCount.Should().Be(1);
+        connectedSelector.LastRequest!.Candidates.Should().HaveCount(32);
+        connectedSelector.LastRequest.Candidates.Should().Contain(candidate =>
+            candidate.DisplayName == "nyxop_dining_profile_context_read");
+    }
+
+    [Fact]
     public async Task MaterializeRouteToolChoiceHintAsync_ShouldSelectOnlyHintedTool()
     {
         var source = new StaticToolSource(

@@ -21,6 +21,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 {
     private const string NyxIdRequireServiceToolName = "nyxid_require_service";
     private const int DefaultConnectedOperationSelectorTimeoutMs = 15_000;
+    private const int MaximumRankedConnectedReadCandidates = 32;
     internal const string ProfileTaskRouteIntentId = "nyxid_profile_task_route";
     internal const string ProfileTaskRouteRoutingDescription =
         "Perform an ordinary NyxID Assistant task, including invoking, reading from, or " +
@@ -760,6 +761,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             names,
             availableTools,
             selectionContext.UserMessage);
+        if (rankedNames.Count > MaximumRankedConnectedReadCandidates)
+            rankedNames = rankedNames.Take(MaximumRankedConnectedReadCandidates).ToArray();
         if (rankedNames.Count <= StreamingAgentProfileConnectedOperationSelector.MaximumCandidates)
         {
             return await SelectConnectedOperationsAsync(
@@ -837,14 +840,29 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         IReadOnlySet<string> messageTokens,
         AgentProfileConnectedOperationSelectionCandidate candidate)
     {
-        var textTokens = TokenizeSelectionText(string.Join(' ',
+        var serviceTokens = TokenizeSelectionText(string.Join(' ',
             candidate.CatalogServiceSlug,
             candidate.ConnectorDisplayName,
-            candidate.ConnectionLabel,
+            candidate.ConnectionLabel));
+        var operationTokens = TokenizeSelectionText(string.Join(' ',
             candidate.DisplayName,
             candidate.Description,
             candidate.PathTemplate));
-        return messageTokens.Sum(token => textTokens.Contains(token) ? 1 : 0);
+        var serviceScore = messageTokens.Sum(token => serviceTokens.Contains(token) ? 4 : 0);
+        var operationScore = messageTokens.Sum(token => operationTokens.Contains(token) ? 3 : 0);
+        var contextScore = operationTokens.Any(static token =>
+            string.Equals(token, "profile", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(token, "context", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(token, "preference", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(token, "preferences", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(token, "settings", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(token, "config", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(token, "account", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(token, "user", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(token, "me", StringComparison.OrdinalIgnoreCase))
+            ? 1
+            : 0;
+        return serviceScore + operationScore + contextScore;
     }
 
     private static IReadOnlySet<string> TokenizeSelectionText(string? value)
