@@ -34,7 +34,7 @@ public sealed class DinnerDateMockWorkflowFixtureTests
     }
 
     [Fact]
-    public void Parse_ShouldNotHoldAllVenuesAfterUserChoiceTimeout()
+    public void Parse_ShouldAutoHoldAllVenuesAfterUserChoiceTimeoutAndReleaseUnselectedAfterChoice()
     {
         var yaml = File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
@@ -44,22 +44,39 @@ public sealed class DinnerDateMockWorkflowFixtureTests
         var workflow = new WorkflowParser().Parse(yaml);
 
         var timeoutMarker = workflow.Steps.Should().Contain(step => step.Id == "mark_silence_timeout").Subject;
-        timeoutMarker.Next.Should().Be("final_artifact_timeout_waiting_for_choice");
-        timeoutMarker.Parameters["value"].Should().Contain("wait_for_choice")
-            .And.Contain("No venue was held")
-            .And.NotContain("hold_all");
+        timeoutMarker.Next.Should().Be("hold_candidate_option_1");
+        timeoutMarker.Parameters["value"].Should().Contain("hold_all")
+            .And.Contain("automatically holding all shown venues");
 
-        workflow.Steps.Should().NotContain(step => step.Id.StartsWith("hold_candidate_option_", StringComparison.Ordinal));
-        workflow.Steps.Should().NotContain(step => step.Id == "publish_holds_wait_state");
-        workflow.Steps.Should().NotContain(step => step.Id == "final_artifact_waiting_after_holds");
+        workflow.Steps.Should().Contain(step => step.Id == "hold_candidate_option_1").Subject
+            .Next.Should().Be("hold_candidate_option_2");
+        workflow.Steps.Should().Contain(step => step.Id == "hold_candidate_option_2").Subject
+            .Next.Should().Be("hold_candidate_option_3");
+        workflow.Steps.Should().Contain(step => step.Id == "hold_candidate_option_3").Subject
+            .Next.Should().Be("publish_holds_wait_state");
 
-        var timeoutArtifact = workflow.Steps.Should()
-            .Contain(step => step.Id == "final_artifact_timeout_waiting_for_choice")
+        var waitForPostTimeoutChoice = workflow.Steps.Should()
+            .Contain(step => step.Id == "wait_for_post_timeout_choice")
             .Subject;
-        timeoutArtifact.Parameters["value"].Should().Contain("no_restaurant_calls_after_timeout")
-            .And.Contain("no_venues_held_after_timeout")
-            .And.Contain("requires_user_choice_before_hold")
-            .And.NotContain("all_three_venues_held_after_timeout");
+        waitForPostTimeoutChoice.Type.Should().Be("wait_signal");
+        waitForPostTimeoutChoice.Parameters["signal_name"].Should().Be("dinner_date_user_choice_after_timeout");
+
+        var route = workflow.Steps.Should().Contain(step => step.Id == "route_post_timeout_choice").Subject;
+        route.Branches.Should().ContainKey("option_1").WhoseValue.Should().Be("release_unselected_after_confirm_option_1");
+        route.Branches.Should().ContainKey("option_2").WhoseValue.Should().Be("release_unselected_after_confirm_option_2");
+        route.Branches.Should().ContainKey("option_3").WhoseValue.Should().Be("release_unselected_after_confirm_option_3");
+
+        workflow.Steps.Should().Contain(step => step.Id == "release_unselected_after_confirm_option_1").Subject
+            .Parameters["value"].Should().Contain("\"released_options\":[\"option_2\",\"option_3\"]");
+        workflow.Steps.Should().Contain(step => step.Id == "final_artifact_post_timeout_confirmed_option_1").Subject
+            .Parameters["value"].Should().Contain("post_timeout_choice_releases_unselected_venues");
+
+        var waitingArtifact = workflow.Steps.Should()
+            .Contain(step => step.Id == "final_artifact_waiting_after_holds")
+            .Subject;
+        waitingArtifact.Parameters["value"].Should().Contain("timeout_auto_hold_all_waiting_for_user_choice")
+            .And.Contain("all_three_venues_held_after_timeout")
+            .And.Contain("post_timeout_user_choice");
     }
 
     [Fact]
@@ -101,6 +118,38 @@ public sealed class DinnerDateMockWorkflowFixtureTests
         using var argumentsDocument = JsonDocument.Parse(argumentsJson);
         argumentsDocument.RootElement.GetProperty("query").GetString().Should()
             .Be("Keong Saik Duxton Singapore romantic dinner Tuesday 7:30pm");
+    }
+
+    [Fact]
+    public void RenderedTimeoutReleaseArtifact_ShouldRemainValidJson()
+    {
+        var workflow = new WorkflowParser().Parse(File.ReadAllText(Path.Combine(
+            GetRepositoryRoot(),
+            "workflows",
+            "dinner_date_mock.yaml")));
+        var variables = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["steps.hold_candidate_option_1.json.venue"] = "Option One",
+            ["steps.hold_candidate_option_2.json.venue"] = "Option Two",
+            ["steps.hold_candidate_option_3.json.venue"] = "Option Three",
+            ["steps.release_unselected_after_confirm_option_1.json.released"] = "[\"Option Two\",\"Option Three\"]",
+            ["steps.release_unselected_after_confirm_option_1.json.released_options"] = "[\"option_2\",\"option_3\"]",
+        };
+        var evaluator = new WorkflowExpressionEvaluator();
+
+        var finalArtifact = workflow.Steps.Single(step => step.Id == "final_artifact_post_timeout_confirmed_option_1");
+        var renderedJson = evaluator.Evaluate(finalArtifact.Parameters["value"], variables);
+
+        using var document = JsonDocument.Parse(renderedJson);
+        document.RootElement.GetProperty("path").GetString().Should().Be("timeout_auto_hold_then_user_selected");
+        document.RootElement.GetProperty("kept").GetString().Should().Be("Option One");
+        document.RootElement.GetProperty("released_options").EnumerateArray()
+            .Select(element => element.GetString())
+            .Should().Equal("option_2", "option_3");
+        document.RootElement.GetProperty("success_contract")
+            .GetProperty("post_timeout_choice_releases_unselected_venues")
+            .GetBoolean()
+            .Should().BeTrue();
     }
 
     private static string GetRepositoryRoot()
