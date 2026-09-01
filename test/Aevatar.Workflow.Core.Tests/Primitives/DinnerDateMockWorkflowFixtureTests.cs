@@ -34,6 +34,35 @@ public sealed class DinnerDateMockWorkflowFixtureTests
     }
 
     [Fact]
+    public void Parse_ShouldNotHoldAllVenuesAfterUserChoiceTimeout()
+    {
+        var yaml = File.ReadAllText(Path.Combine(
+            GetRepositoryRoot(),
+            "workflows",
+            "dinner_date_mock.yaml"));
+
+        var workflow = new WorkflowParser().Parse(yaml);
+
+        var timeoutMarker = workflow.Steps.Should().Contain(step => step.Id == "mark_silence_timeout").Subject;
+        timeoutMarker.Next.Should().Be("final_artifact_timeout_waiting_for_choice");
+        timeoutMarker.Parameters["value"].Should().Contain("wait_for_choice")
+            .And.Contain("No venue was held")
+            .And.NotContain("hold_all");
+
+        workflow.Steps.Should().NotContain(step => step.Id.StartsWith("hold_candidate_option_", StringComparison.Ordinal));
+        workflow.Steps.Should().NotContain(step => step.Id == "publish_holds_wait_state");
+        workflow.Steps.Should().NotContain(step => step.Id == "final_artifact_waiting_after_holds");
+
+        var timeoutArtifact = workflow.Steps.Should()
+            .Contain(step => step.Id == "final_artifact_timeout_waiting_for_choice")
+            .Subject;
+        timeoutArtifact.Parameters["value"].Should().Contain("no_restaurant_calls_after_timeout")
+            .And.Contain("no_venues_held_after_timeout")
+            .And.Contain("requires_user_choice_before_hold")
+            .And.NotContain("all_three_venues_held_after_timeout");
+    }
+
+    [Fact]
     public void RenderedParameters_ShouldRemainValidJsonForStructuredInput()
     {
         var workflow = new WorkflowParser().Parse(File.ReadAllText(Path.Combine(
