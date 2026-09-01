@@ -2169,6 +2169,89 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflow_WhenConfiguredScopeWorkflowTemplateIsMissing_ShouldEnsureBeforeLookup()
+    {
+        var harness = new Harness();
+        harness.ScopeWorkflowQuery.Workflows["wf-configured"] = new ScopeWorkflowSummary(
+            "scope-1",
+            "wf-configured",
+            "Configured Workflow",
+            "scope-1:aevatar:workflows:wf-configured",
+            "configured_workflow",
+            "workflow-definition-actor-configured",
+            "rev-configured",
+            "deployment-configured",
+            "Active",
+            DateTimeOffset.UtcNow);
+        harness.ScopeWorkflowTemplateEnsure.Result = ScopeWorkflowTemplateEnsureResult.SaveAndBindAccepted(
+            new ScopeWorkflowSaveAndBindResult(
+                "scope-1",
+                "wf-configured",
+                "rev-configured",
+                new ScopeWorkflowUpsertResult(
+                    "scope-1",
+                    "wf-configured",
+                    "scope-1:aevatar:workflows:wf-configured",
+                    "rev-configured",
+                    "scope-workflow",
+                    "workflow-definition-actor-configured",
+                    "deployment-configured",
+                    DateTimeOffset.UtcNow,
+                    [],
+                    "/api/scopes/scope-1/workflows/wf-configured"),
+                new ScopeBindingUpsertResult(
+                    "scope-1",
+                    "default",
+                    "Configured Workflow",
+                    "rev-configured",
+                    ScopeBindingImplementationKind.Workflow,
+                    "binding-actor")),
+            "workflow_template_missing");
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-configured-scope-workflow");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-configured",
+              "inputs": { "prompt": "process pdf" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.ScopeWorkflowTemplateEnsure.Requests.Should().ContainSingle()
+            .Which.Should().Be(new ScopeWorkflowTemplateEnsureRequest("scope-1", "wf-configured"));
+        harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
+            .Which.Should().Be(("scope-1", "wf-configured"));
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
+        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor-configured");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithInlineYamlBundle_ShouldNotEnsureScopeTemplate()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-inline-workflow");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-inline",
+              "workflow_yamls": ["name: wf_inline\nsteps: []"],
+              "inputs": { "prompt": "process pdf" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.ScopeWorkflowTemplateEnsure.Requests.Should().BeEmpty();
+        harness.ScopeWorkflowQuery.Lookups.Should().BeEmpty();
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.InlineYamlBundle);
+    }
+
+    [Fact]
     public async Task StartWorkflow_WhenScopeWorkflowIsMissing_ShouldNotFallbackToCatalog()
     {
         var harness = new Harness();
@@ -5410,6 +5493,7 @@ public sealed class AevatarInvocationToolSourceTests
         public RecordingTerminalQueryPort TerminalQuery { get; } = new();
         public StubWorkflowExecutionQueryService WorkflowQuery { get; } = new();
         public RecordingScopeWorkflowQueryPort ScopeWorkflowQuery { get; } = new();
+        public RecordingScopeWorkflowTemplateEnsurePort ScopeWorkflowTemplateEnsure { get; } = new();
         public RecordingWorkflowRunBindingReader RunBindingReader { get; } = new();
 
         public Harness()
@@ -5449,7 +5533,8 @@ public sealed class AevatarInvocationToolSourceTests
                 withWorkflowRunDeliveryRegistrationPort ? WorkflowRunDelivery : null,
                 scopeWorkflowQueryPort: ScopeWorkflowQuery,
                 workflowStartObservationTimeout: TimeSpan.Zero,
-                channelAgentKeyReadinessPort: ChannelAgentKeyReadiness);
+                channelAgentKeyReadinessPort: ChannelAgentKeyReadiness,
+                scopeWorkflowTemplateEnsurePort: ScopeWorkflowTemplateEnsure);
 
         public void ConfigureServiceTarget(
             ServiceImplementationKind implementationKind,
@@ -5538,6 +5623,7 @@ public sealed class AevatarInvocationToolSourceTests
             services.AddSingleton<IGAgentRunTerminalQueryPort>(TerminalQuery);
             services.AddSingleton<IWorkflowExecutionQueryApplicationService>(WorkflowQuery);
             services.AddSingleton<IScopeWorkflowQueryPort>(ScopeWorkflowQuery);
+            services.AddSingleton<IScopeWorkflowTemplateEnsurePort>(ScopeWorkflowTemplateEnsure);
             services.AddSingleton<IWorkflowRunBindingReader>(RunBindingReader);
             services.AddSingleton<IWorkflowRunBackgroundDeliveryRegistrationPort>(WorkflowRunDelivery);
         }
@@ -5779,6 +5865,27 @@ public sealed class AevatarInvocationToolSourceTests
                 $"deployment-{workflowId}",
                 "Active",
                 DateTimeOffset.UtcNow);
+    }
+
+    private sealed class RecordingScopeWorkflowTemplateEnsurePort : IScopeWorkflowTemplateEnsurePort
+    {
+        public List<ScopeWorkflowTemplateEnsureRequest> Requests { get; } = [];
+
+        public ScopeWorkflowTemplateEnsureResult Result { get; set; } =
+            ScopeWorkflowTemplateEnsureResult.NotConfigured("scope-1", "wf-main");
+
+        public Exception? Failure { get; set; }
+
+        public Task<ScopeWorkflowTemplateEnsureResult> EnsureAsync(
+            ScopeWorkflowTemplateEnsureRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            if (Failure is not null)
+                throw Failure;
+
+            return Task.FromResult(Result);
+        }
     }
 
     private sealed class RecordingWorkflowDispatchService
