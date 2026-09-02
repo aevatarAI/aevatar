@@ -6,6 +6,10 @@ import {
   type XYPosition,
 } from '@xyflow/react';
 import { t } from '@/shared/i18n/messages';
+import {
+  normalizeStudioWorkflowCapability,
+  type StudioWorkflowCapability,
+} from './models';
 
 export type StudioGraphRole = {
   readonly id: string;
@@ -20,6 +24,7 @@ export type StudioGraphStep = {
   readonly id: string;
   readonly type: string;
   readonly targetRole: string;
+  readonly capability: StudioWorkflowCapability | null;
   readonly parameters: Record<string, unknown>;
   readonly next: string | null;
   readonly branches: Record<string, string>;
@@ -285,6 +290,9 @@ function normalizeSteps(document: WorkflowDocumentLike): StudioGraphStep[] {
         id,
         type,
         targetRole,
+        capability: normalizeStudioWorkflowCapability(
+          (payload as { capability?: unknown }).capability,
+        ),
         parameters: normalizeParameters(
           (payload as { parameters?: unknown }).parameters,
         ),

@@ -19,6 +19,7 @@ export type StudioWorkflowStepDocument = Record<string, unknown> & {
   id?: string;
   type?: string;
   originalType?: string;
+  capability?: StudioWorkflowCapability | null;
   targetRole?: string | null;
   target_role?: string | null;
   toolSets?: string[] | null;
@@ -26,6 +27,43 @@ export type StudioWorkflowStepDocument = Record<string, unknown> & {
   next?: string | null;
   branches?: Record<string, string> | null;
 };
+
+export type StudioWorkflowCapability = {
+  readonly nyxid_operation: {
+    readonly user_service_id: string;
+    readonly endpoint_id: string;
+  };
+};
+
+export function normalizeStudioWorkflowCapability(
+  value: unknown,
+): StudioWorkflowCapability | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const operation = (value as Record<string, unknown>).nyxid_operation;
+  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
+    return null;
+  }
+
+  const userServiceId = String(
+    (operation as Record<string, unknown>).user_service_id ?? '',
+  ).trim();
+  const endpointId = String(
+    (operation as Record<string, unknown>).endpoint_id ?? '',
+  ).trim();
+  if (!userServiceId || !endpointId) {
+    return null;
+  }
+
+  return {
+    nyxid_operation: {
+      user_service_id: userServiceId,
+      endpoint_id: endpointId,
+    },
+  };
+}
 
 export type StudioWorkflowDocument = Record<string, unknown> & {
   name?: string;

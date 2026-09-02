@@ -2,6 +2,7 @@ import {
   applyRoleInspectorDraft,
   applyStepInspectorDraft,
   connectStepToTarget,
+  createStepInspectorDraft,
   insertStepAfter,
   insertStepByType,
   materializeImplicitSequentialTransitions,
@@ -15,6 +16,110 @@ import {
 import type { StudioWorkflowDocument } from './models';
 
 describe('studio document helpers', () => {
+  it('round-trips an exact external operation capability independently from parameters', () => {
+    const draft = createStepInspectorDraft({
+      id: 'posthog_step',
+      type: 'tool_call',
+      targetRole: '',
+      capability: {
+        nyxid_operation: {
+          user_service_id: 'us-posthog-alpha',
+          endpoint_id: 'list-dashboards',
+        },
+      },
+      parameters: {
+        tool: 'nyxid_proxy',
+        arguments: '{"query":{"limit":10}}',
+      },
+      next: null,
+      branches: {},
+    });
+
+    expect(draft.capability).toEqual({
+      nyxid_operation: {
+        user_service_id: 'us-posthog-alpha',
+        endpoint_id: 'list-dashboards',
+      },
+    });
+
+    const result = applyStepInspectorDraft(
+      {
+        steps: [
+          {
+            id: 'posthog_step',
+            type: 'tool_call',
+            capability: draft.capability,
+            parameters: {
+              tool: 'nyxid_proxy',
+              arguments: '{"query":{"limit":10}}',
+            },
+          },
+        ],
+      },
+      'posthog_step',
+      {
+        ...draft,
+        capability: {
+          nyxid_operation: {
+            user_service_id: 'us-posthog-beta',
+            endpoint_id: 'update-dashboard',
+          },
+        },
+      },
+    );
+
+    expect(result.document.steps?.[0]).toEqual(
+      expect.objectContaining({
+        capability: {
+          nyxid_operation: {
+            user_service_id: 'us-posthog-beta',
+            endpoint_id: 'update-dashboard',
+          },
+        },
+        parameters: {
+          tool: 'nyxid_proxy',
+          arguments: '{"query":{"limit":10}}',
+        },
+      }),
+    );
+  });
+
+  it('removes an external capability without deleting runtime parameters', () => {
+    const result = applyStepInspectorDraft(
+      {
+        steps: [
+          {
+            id: 'posthog_step',
+            type: 'tool_call',
+            capability: {
+              nyxid_operation: {
+                user_service_id: 'us-posthog-alpha',
+                endpoint_id: 'list-dashboards',
+              },
+            },
+            parameters: { tool: 'nyxid_proxy' },
+          },
+        ],
+      },
+      'posthog_step',
+      {
+        kind: 'step',
+        id: 'posthog_step',
+        type: 'tool_call',
+        targetRole: '',
+        next: '',
+        branchesText: '{}',
+        parametersText: '{"tool":"nyxid_proxy"}',
+        capability: null,
+      },
+    );
+
+    expect(result.document.steps?.[0]).not.toHaveProperty('capability');
+    expect(result.document.steps?.[0]?.parameters).toEqual({
+      tool: 'nyxid_proxy',
+    });
+  });
+
   it('materializes only eligible implicit sequential transitions without mutating the document', () => {
     const document: StudioWorkflowDocument = {
       name: 'workspace-demo',
@@ -222,6 +327,7 @@ describe('studio document helpers', () => {
       next: 'approve_step',
       branchesText: '{"approved":"approve_step"}',
       parametersText: '{"connector":"web-search","limit":3}',
+      capability: null,
     });
 
     expect(result.nodeId).toBe('step:review_step');
@@ -276,6 +382,7 @@ describe('studio document helpers', () => {
       parametersText: JSON.stringify({
         prompt: 'Translate the input to Japanese.',
       }),
+      capability: null,
     });
 
     expect(result.document.steps?.[0]?.parameters).toEqual({
@@ -311,6 +418,7 @@ describe('studio document helpers', () => {
       parametersText: JSON.stringify({
         prompt: 'Approve the generated response?',
       }),
+      capability: null,
     });
 
     expect(result.document.steps?.[0]?.parameters).toEqual({

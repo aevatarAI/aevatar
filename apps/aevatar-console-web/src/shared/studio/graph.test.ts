@@ -1,6 +1,32 @@
 import { buildStudioGraphElements, formatStudioStepTypeLabel } from './graph';
 
 describe('studio graph helpers', () => {
+  it('preserves an exact external operation capability for inspector selection', () => {
+    const graph = buildStudioGraphElements({
+      name: 'workflow-demo',
+      steps: [
+        {
+          id: 'posthog_step',
+          type: 'tool_call',
+          capability: {
+            nyxid_operation: {
+              user_service_id: 'us-posthog-alpha',
+              endpoint_id: 'list-dashboards',
+            },
+          },
+          parameters: { tool: 'nyxid_proxy' },
+        },
+      ],
+    });
+
+    expect(graph.steps[0]?.capability).toEqual({
+      nyxid_operation: {
+        user_service_id: 'us-posthog-alpha',
+        endpoint_id: 'list-dashboards',
+      },
+    });
+  });
+
   it('formats step type labels without leaking backend identifiers', () => {
     expect(formatStudioStepTypeLabel('llm_call')).toBe('LLM call');
     expect(formatStudioStepTypeLabel('workflow_yaml_validate')).toBe(

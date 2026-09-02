@@ -1,9 +1,11 @@
 import type {
   StudioConnectorDefinition,
+  StudioWorkflowCapability,
   StudioWorkflowDocument,
   StudioWorkflowRoleDocument,
   StudioWorkflowStepDocument,
 } from './models';
+import { normalizeStudioWorkflowCapability } from './models';
 
 export type StudioStepInspectorDraft = {
   readonly kind: 'step';
@@ -13,6 +15,7 @@ export type StudioStepInspectorDraft = {
   readonly next: string;
   readonly branchesText: string;
   readonly parametersText: string;
+  readonly capability: StudioWorkflowCapability | null;
 };
 
 export type StudioRoleInspectorDraft = {
@@ -317,6 +320,7 @@ export function createStepInspectorDraft(step: {
   id: string;
   type: string;
   targetRole: string;
+  capability?: StudioWorkflowCapability | null;
   parameters: Record<string, unknown>;
   next: string | null;
   branches?: Record<string, string>;
@@ -329,6 +333,7 @@ export function createStepInspectorDraft(step: {
     next: step.next ?? '',
     branchesText: formatInspectorBranches(step.branches),
     parametersText: formatInspectorParameters(step.parameters),
+    capability: normalizeStudioWorkflowCapability(step.capability),
   };
 }
 
@@ -372,7 +377,7 @@ export function applyStepInspectorDraft(
     const stepId = normalizeString(step.id);
     if (stepId === currentStepId) {
       delete step.target_role;
-      return {
+      const updatedStep = {
         ...step,
         id: nextId,
         type: nextType,
@@ -382,6 +387,13 @@ export function applyStepInspectorDraft(
         next: nextStepId || null,
         branches: nextBranches,
       } satisfies StudioWorkflowStepDocument;
+      const nextCapability = normalizeStudioWorkflowCapability(draft.capability);
+      if (nextCapability) {
+        updatedStep.capability = nextCapability;
+      } else {
+        delete updatedStep.capability;
+      }
+      return updatedStep;
     }
 
     const updatedBranches = Object.fromEntries(
