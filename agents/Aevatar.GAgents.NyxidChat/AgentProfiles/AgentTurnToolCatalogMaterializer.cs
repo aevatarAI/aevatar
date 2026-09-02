@@ -1702,6 +1702,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         var selectorKeys = new HashSet<string>(StringComparer.Ordinal);
         var exactConnectedMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var broadConnectedMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var dynamicReadMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var connectionAmbiguous = false;
         foreach (var selector in policy.ConnectedServiceSelectors)
         {
@@ -1720,22 +1721,13 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
             if (IsDynamicReadConnectedServiceSelector(selector))
             {
-                if (selectionContext is not null)
+                if (enforceConnectedOperationLimits)
                 {
-                    var dynamicReadNames = availableTools
+                    dynamicReadMatches.UnionWith(availableTools
                         .Where(pair => toolContext.ToolVisibility.Allows(pair.Key) &&
                                        (eligibleToolNames is null || eligibleToolNames.Contains(pair.Key)) &&
                                        IsEligibleConnectedRead(pair.Value))
-                        .Select(static pair => pair.Key)
-                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    var selectedDynamicReadNames = await SelectConnectedReadOperationsInBatchesAsync(
-                        dynamicReadNames,
-                        availableTools,
-                        selectionContext,
-                        [],
-                        ct).ConfigureAwait(false);
-                    if (selectedDynamicReadNames is not null)
-                        names.UnionWith(selectedDynamicReadNames);
+                        .Select(static pair => pair.Key));
                 }
 
                 continue;
@@ -1782,6 +1774,9 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         }
 
         broadConnectedMatches.ExceptWith(exactConnectedMatches);
+        dynamicReadMatches.ExceptWith(exactConnectedMatches);
+        dynamicReadMatches.ExceptWith(broadConnectedMatches);
+        var requiresSelection = dynamicReadMatches.Count > 0;
         var connectedMatches = new HashSet<string>(exactConnectedMatches, StringComparer.OrdinalIgnoreCase);
         connectedMatches.UnionWith(broadConnectedMatches);
         if (!enforceConnectedOperationLimits)
@@ -1798,7 +1793,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             return new ToolPolicyResolution(names, hadFailure);
         }
 
-        if (!ConnectedOperationLimitExceeded(connectedMatches, availableTools))
+        if (!requiresSelection && !ConnectedOperationLimitExceeded(connectedMatches, availableTools))
         {
             names.UnionWith(connectedMatches);
             return new ToolPolicyResolution(names, hadFailure);
@@ -1816,8 +1811,10 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             return new ToolPolicyResolution(names, hadFailure);
         }
 
+        var selectableMatches = new HashSet<string>(broadConnectedMatches, StringComparer.OrdinalIgnoreCase);
+        selectableMatches.UnionWith(dynamicReadMatches);
         if (ConnectedOperationLimitExceeded(exactConnectedMatches, availableTools) ||
-            broadConnectedMatches.Count == 0 ||
+            selectableMatches.Count == 0 ||
             selectionContext is null ||
             _connectedOperationSelector is null)
         {
@@ -1835,18 +1832,19 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             0,
             AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedWriteToolCount -
             exactCounts.WriteCount);
-        var selectionNames = broadConnectedMatches
+        var selectionNames = selectableMatches
             .Where(name => availableTools[name] is IAgentToolOperationAdmissionOwner owner &&
                            (owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly &&
                             maximumReadSelections > 0 ||
                             owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.Write &&
                             maximumWriteSelections > 0))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var selectionCounts = CountConnectedOperations(selectionNames, availableTools);
         var selectedConnectedNames = await SelectConnectedOperationsAsync(
             selectionNames,
             availableTools,
-            maximumReadSelections,
-            maximumWriteSelections,
+            selectionCounts.ReadCount > 0 ? maximumReadSelections : 0,
+            selectionCounts.WriteCount > 0 ? maximumWriteSelections : 0,
             selectionContext,
             diagnostics,
             ct);
@@ -1854,7 +1852,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             return new ToolPolicyResolution(names, hadFailure);
 
         var revalidatedSelectedNames = selectedConnectedNames
-            .Where(name => broadConnectedMatches.Contains(name) &&
+            .Where(name => selectableMatches.Contains(name) &&
                            availableTools.ContainsKey(name) &&
                            toolContext.ToolVisibility.Allows(name) &&
                            (eligibleToolNames is null || eligibleToolNames.Contains(name)))
