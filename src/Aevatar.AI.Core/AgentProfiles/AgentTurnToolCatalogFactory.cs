@@ -28,6 +28,8 @@ public static class AgentTurnToolCatalogFactory
             profileText.Append("\nCandidate intent: ").Append(candidateIntentId);
         if (!string.IsNullOrWhiteSpace(selectedIntentId))
             profileText.Append("\nSelected intent: ").Append(selectedIntentId);
+        if (!string.IsNullOrWhiteSpace(profile.Instructions))
+            profileText.Append("\nInstructions:\n").Append(profile.Instructions.Trim());
 
         var profileLayer = new ProfileRoutingPromptLayer(
             profileText.ToString(),
