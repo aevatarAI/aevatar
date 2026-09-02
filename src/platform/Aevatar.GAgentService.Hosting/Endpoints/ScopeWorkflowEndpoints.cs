@@ -40,6 +40,12 @@ public static class ScopeWorkflowEndpoints
         group.MapPost("/{scopeId}/workflows:explicit-request-preview", HandleExplicitRequestPreviewAsync)
             .Produces<ExplicitRequestPreviewHttpResult>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
+        group.MapGet("/{scopeId}/workflow-capabilities", HandleListWorkflowCapabilitiesAsync)
+            .Produces<WorkflowCapabilityListHttpResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest);
+        group.MapPost("/{scopeId}/workflow-capabilities:readiness", HandleWorkflowCapabilityReadinessAsync)
+            .Produces<WorkflowCapabilityReadinessHttpResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
@@ -74,6 +80,65 @@ public static class ScopeWorkflowEndpoints
         [FromServices] IWorkflowExplicitRequestPreviewService previewService,
         CancellationToken ct)
         => await HandleExplicitRequestPreviewAsyncCore(http, scopeId, request, previewService, ct);
+
+    internal static async Task<IResult> HandleListWorkflowCapabilitiesAsync(
+        HttpContext http,
+        string scopeId,
+        [FromServices] IExternalWorkflowCapabilityListPort capabilityListPort,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            var result = await capabilityListPort.ListAsync(
+                new ListExternalWorkflowCapabilitiesRequest(
+                    CreateExternalCapabilityAccessContext(http, scopeId)),
+                ct);
+            return Results.Ok(WorkflowCapabilityHttpContracts.ToHttpResponse(result));
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return CallerCredentialBadRequest();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return InvalidUserWorkflowRequest(ex);
+        }
+    }
+
+    internal static async Task<IResult> HandleWorkflowCapabilityReadinessAsync(
+        HttpContext http,
+        string scopeId,
+        WorkflowCapabilityReadinessHttpRequest request,
+        [FromServices] IExternalWorkflowCapabilityReadinessPort capabilityReadinessPort,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            ArgumentNullException.ThrowIfNull(request);
+            var executionMode = ParseExplicitRequestPreviewExecutionMode(request.ExecutionMode);
+            var readiness = await capabilityReadinessPort.InspectAsync(
+                new InspectExternalWorkflowCapabilityReadinessRequest(
+                    CreateExternalCapabilityAccessContext(http, scopeId, executionMode),
+                    WorkflowCapabilityHttpContracts.ToSelector(request.Selector),
+                    executionMode),
+                ct);
+            return Results.Ok(WorkflowCapabilityHttpContracts.ToHttpResponse(readiness));
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return CallerCredentialBadRequest();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentNullException)
+        {
+            return InvalidUserWorkflowRequest(ex);
+        }
+    }
 
     internal static async Task<IResult> HandleListWorkflowsAsync(
         HttpContext http,
@@ -226,6 +291,26 @@ public static class ScopeWorkflowEndpoints
             code = WorkflowCallerCredentialSelectionException.ErrorCode,
             message = WorkflowCallerCredentialSelectionException.SafeMessage,
         });
+
+    private static IResult InvalidUserWorkflowRequest(Exception exception) =>
+        Results.BadRequest(new
+        {
+            code = "INVALID_USER_WORKFLOW_REQUEST",
+            message = exception.Message,
+        });
+
+    private static ExternalWorkflowCapabilityAccessContext CreateExternalCapabilityAccessContext(
+        HttpContext http,
+        string scopeId,
+        ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive)
+    {
+        var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(http, executionMode);
+        return new ExternalWorkflowCapabilityAccessContext(
+            scopeId,
+            admissionContext.CallerId,
+            admissionContext.NyxIdCallerCredential,
+            admissionContext.NyxIdOrganizationBearerToken);
+    }
 
     private static async Task<IResult> HandleExplicitRequestPreviewAsyncCore(
         HttpContext http,
