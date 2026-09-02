@@ -90,13 +90,15 @@ public sealed class MainnetBootScriptTests
         var configuration = BuildMainnetConfiguration();
         var instructions = configuration["AgentProfiles:SystemDefaultNyxIdChat:Instructions"];
 
-        instructions.Should().Contain("current user message overrides");
-        instructions.Should().Contain("home_location or dining area as location");
-        instructions.Should().Contain("preferred_cuisines as cuisines");
-        instructions.Should().Contain("contact_phone_number as phone_number");
-        instructions.Should().Contain("budget_cap as budget_cap");
+        instructions.Should().Contain("current user message always overrides recovered defaults");
+        instructions.Should().Contain("Interpret recovered context semantically against the target workflow's expected input");
+        instructions.Should().Contain("recovered context fills only missing task inputs");
+        instructions.Should().Contain("asks the user only for inputs still missing");
+        instructions.Should().Contain("any available current-user read-only profile, preference, or context tool that is relevant");
         instructions.Should().Contain("one companion and no party size");
-        instructions.Should().Contain("missing from both the current user message and recovered dining context");
+        instructions.Should().NotContain("home_location");
+        instructions.Should().NotContain("preferred_cuisines");
+        instructions.Should().NotContain("contact_phone_number");
     }
 
     [Fact]
