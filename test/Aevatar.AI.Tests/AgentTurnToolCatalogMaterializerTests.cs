@@ -2157,7 +2157,8 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             "Start the dinner date workflow after preparing input from relevant user context.";
         profile.Members[0].TaskToolPolicy.ToolNames.Clear();
         profile.Members[0].TaskToolPolicy.ToolNames.Add("aevatar_start_workflow");
-        profile.Members[0].TaskToolPolicy.SelectReadOnlyConnectedOperations = true;
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(
+            ConnectedServiceSelector(string.Empty, AgentToolOperationRiskPayload.ReadOnly));
         var sealedProfile = SealProfile(profile);
         var classifier = new SequencedClassifier(
             AgentProfileTurnClassificationResult.Matched(

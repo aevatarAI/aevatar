@@ -76,7 +76,6 @@ public static class NyxIdChatSystemAgentProfileDraftFactory
         policy.ToolNames.AddRange(options.ToolNames.Select(Normalize).Where(static x => x.Length > 0));
         policy.ToolSetRefs.AddRange(options.ToolSetRefs.Select(Normalize).Where(static x => x.Length > 0));
         policy.ConnectedServiceSelectors.Add(options.ConnectedServiceSelectors.Select(CreateSelector));
-        policy.SelectReadOnlyConnectedOperations = options.SelectReadOnlyConnectedOperations;
         return policy;
     }
 
@@ -84,7 +83,7 @@ public static class NyxIdChatSystemAgentProfileDraftFactory
     {
         var selector = new AgentProfileConnectedServiceSelector
         {
-            CatalogServiceSlug = Required(options.CatalogServiceSlug, nameof(options.CatalogServiceSlug)),
+            CatalogServiceSlug = Normalize(options.CatalogServiceSlug),
             EndpointId = Normalize(options.EndpointId),
         };
         selector.AllowedRisks.AddRange(options.AllowedRisks.Select(AgentProfileRiskOptions.Parse));

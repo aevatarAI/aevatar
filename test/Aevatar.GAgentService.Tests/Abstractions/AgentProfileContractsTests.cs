@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using FluentAssertions;
@@ -90,6 +91,31 @@ public sealed class AgentProfileContractsTests
             .Should().ContainSingle(diagnostic =>
                 diagnostic.Code == "PROFILE_INTENT_ID_DUPLICATE" &&
                 diagnostic.Field == "runtimeProfile.members[1].intentId");
+    }
+
+    [Fact]
+    public void ValidateDraft_ShouldAcceptDynamicReadOnlyConnectedServiceSelector()
+    {
+        var draft = new AgentProfileDraft
+        {
+            DisplayName = "Research assistant",
+            Instructions = "Use verified sources.",
+            RuntimeProfile = new AgentProfileSnapshot
+            {
+                AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
+                RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
+                MaximumToolPolicy = new AgentProfileToolPolicy(),
+                RecoveryToolPolicy = new AgentProfileToolPolicy(),
+                Members = { ValidMember("research", "2d05bf2e-88ee-4f76-9998-728ba2f9db10") },
+            },
+        };
+        draft.RuntimeProfile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(
+            new AgentProfileConnectedServiceSelector
+            {
+                AllowedRisks = { AgentToolOperationRiskPayload.ReadOnly },
+            });
+
+        AgentProfilePolicies.ValidateDraft(draft).Should().BeEmpty();
     }
 
     [Fact]

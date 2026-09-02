@@ -1699,24 +1699,6 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             hadFailure |= resolution.HadFailure;
         }
 
-        if (policy.SelectReadOnlyConnectedOperations && selectionContext is not null)
-        {
-            var dynamicReadNames = availableTools
-                .Where(pair => toolContext.ToolVisibility.Allows(pair.Key) &&
-                               (eligibleToolNames is null || eligibleToolNames.Contains(pair.Key)) &&
-                               IsEligibleConnectedRead(pair.Value))
-                .Select(static pair => pair.Key)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var selectedDynamicReadNames = await SelectConnectedReadOperationsInBatchesAsync(
-                dynamicReadNames,
-                availableTools,
-                selectionContext,
-                [],
-                ct).ConfigureAwait(false);
-            if (selectedDynamicReadNames is not null)
-                names.UnionWith(selectedDynamicReadNames);
-        }
-
         var selectorKeys = new HashSet<string>(StringComparer.Ordinal);
         var exactConnectedMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var broadConnectedMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1733,6 +1715,29 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                     AgentProfileTurnDiagnosticCode.ProfileInvalid,
                     "connected_service_selector_invalid"));
                 hadFailure = true;
+                continue;
+            }
+
+            if (IsDynamicReadConnectedServiceSelector(selector))
+            {
+                if (selectionContext is not null)
+                {
+                    var dynamicReadNames = availableTools
+                        .Where(pair => toolContext.ToolVisibility.Allows(pair.Key) &&
+                                       (eligibleToolNames is null || eligibleToolNames.Contains(pair.Key)) &&
+                                       IsEligibleConnectedRead(pair.Value))
+                        .Select(static pair => pair.Key)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var selectedDynamicReadNames = await SelectConnectedReadOperationsInBatchesAsync(
+                        dynamicReadNames,
+                        availableTools,
+                        selectionContext,
+                        [],
+                        ct).ConfigureAwait(false);
+                    if (selectedDynamicReadNames is not null)
+                        names.UnionWith(selectedDynamicReadNames);
+                }
+
                 continue;
             }
 
@@ -2155,7 +2160,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
     private static bool IsValidConnectedServiceSelector(
         AgentProfileConnectedServiceSelector selector) =>
-        NyxIdServiceSlugPolicy.IsCanonical(selector.CatalogServiceSlug) &&
+        (NyxIdServiceSlugPolicy.IsCanonical(selector.CatalogServiceSlug) ||
+         IsDynamicReadConnectedServiceSelector(selector)) &&
         (string.IsNullOrEmpty(selector.EndpointId) ||
          selector.EndpointId.Length <= 256 &&
          string.Equals(selector.EndpointId, selector.EndpointId.Trim(), StringComparison.Ordinal) &&
@@ -2164,6 +2170,14 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         selector.AllowedRisks.All(static risk =>
             risk is AgentToolOperationRiskPayload.ReadOnly or AgentToolOperationRiskPayload.Write) &&
         IsValidReadiness(selector.Readiness);
+
+    private static bool IsDynamicReadConnectedServiceSelector(
+        AgentProfileConnectedServiceSelector selector) =>
+        string.IsNullOrEmpty(selector.CatalogServiceSlug) &&
+        string.IsNullOrEmpty(selector.EndpointId) &&
+        selector.Readiness is null &&
+        selector.AllowedRisks.Count == 1 &&
+        selector.AllowedRisks[0] == AgentToolOperationRiskPayload.ReadOnly;
 
     private static bool IsValidReadiness(AgentProfileConnectedServiceReadiness? readiness)
     {
@@ -2189,11 +2203,17 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         if (policy is null || policy.ConnectedServiceSelectors.Count == 0)
             return ConnectedServiceReadinessResolution.None;
 
-        var unmatched = policy.ConnectedServiceSelectors
+        var concreteSelectors = policy.ConnectedServiceSelectors
+            .Where(static selector => !IsDynamicReadConnectedServiceSelector(selector))
+            .ToArray();
+        if (concreteSelectors.Length == 0)
+            return ConnectedServiceReadinessResolution.None;
+
+        var unmatched = concreteSelectors
             .Where(selector => !availableTools.Any(pair =>
                 MatchesConnectedServiceSelector(pair.Value, selector)))
             .ToArray();
-        if (unmatched.Length != policy.ConnectedServiceSelectors.Count)
+        if (unmatched.Length != concreteSelectors.Length)
             return ConnectedServiceReadinessResolution.None;
 
         if (unmatched.Length != 1 ||
