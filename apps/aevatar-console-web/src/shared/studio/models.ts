@@ -201,6 +201,200 @@ export type StudioExplicitRequestRisk = 'read_only' | 'write' | 'destructive';
 
 export type StudioExplicitRequestExecutionMode = 'interactive' | 'durable';
 
+export type StudioWorkflowCapabilitySelector =
+  | {
+      readonly kind: 'nyxid_operation';
+      readonly userServiceId: string;
+      readonly endpointId: string;
+    }
+  | {
+      readonly kind: 'host_connector';
+      readonly connectorCapabilityRef: string;
+      readonly operationId: string;
+      readonly contractDigest: string;
+    }
+  | {
+      readonly kind: 'nyxid_request';
+      readonly userServiceId: string;
+      readonly method: StudioExplicitRequestMethod;
+      readonly pathTemplate: string;
+      readonly queryParameters: readonly string[];
+      readonly headerParameters: readonly string[];
+      readonly bodyMode: StudioExplicitRequestBodyMode;
+      readonly responseMode: StudioExplicitRequestResponseMode;
+      readonly bodyRequired: boolean;
+    };
+
+export type StudioWorkflowCapabilitySourceKind =
+  | 'connector_catalog'
+  | 'nyxid_user_services'
+  | 'nyxid_open_api'
+  | 'durable_authorization_catalog'
+  | 'nyxid_mcp_config';
+
+export interface StudioWorkflowCapabilitySource {
+  readonly kind: StudioWorkflowCapabilitySourceKind;
+  readonly sourceId: string;
+  readonly sourceVersion: number;
+  readonly observedAt: string | null;
+  readonly freshUntil: string | null;
+}
+
+export interface StudioWorkflowCapabilityDescriptor {
+  readonly displayName: string;
+  readonly readOnly: boolean;
+  readonly destructive: boolean;
+  readonly selector: StudioWorkflowCapabilitySelector;
+  readonly source: StudioWorkflowCapabilitySource | null;
+}
+
+export type StudioWorkflowCapabilityDiagnosticCode =
+  | 'source_unavailable'
+  | 'no_exact_user_service'
+  | 'generic_proxy_rejected'
+  | 'invalid_service_identity'
+  | 'ambiguous_service_identity'
+  | 'invalid_endpoint_identity'
+  | 'ambiguous_endpoint_identity'
+  | 'unsupported_parameter'
+  | 'unsupported_request_body'
+  | 'unsupported_schema'
+  | 'unsupported_response';
+
+export interface StudioWorkflowCapabilityDiagnostic {
+  readonly code: StudioWorkflowCapabilityDiagnosticCode;
+  readonly safeMessage: string;
+  readonly count: number;
+  readonly source: StudioWorkflowCapabilitySource | null;
+}
+
+export interface StudioWorkflowCapabilityList {
+  readonly capabilities: readonly StudioWorkflowCapabilityDescriptor[];
+  readonly candidateCount: number;
+  readonly rejectedCount: number;
+  readonly diagnostics: readonly StudioWorkflowCapabilityDiagnostic[];
+}
+
+export type StudioWorkflowCapabilityReadinessStatus =
+  | 'selection_required'
+  | 'connector_not_found'
+  | 'service_registration_required'
+  | 'credential_connection_required'
+  | 'service_access_denied'
+  | 'node_binding_required'
+  | 'node_unavailable'
+  | 'endpoint_contract_required'
+  | 'operation_selection_required'
+  | 'source_stale'
+  | 'durable_authorization_unavailable'
+  | 'contract_drift'
+  | 'ready'
+  | 'admission_rebind_required';
+
+export type StudioWorkflowCapabilityRemediationAction =
+  | 'select_capability'
+  | 'configure_connector'
+  | 'register_service'
+  | 'connect_credential'
+  | 'request_access'
+  | 'bind_node'
+  | 'restore_node'
+  | 'publish_endpoint_contract'
+  | 'select_operation'
+  | 'refresh_source'
+  | 'use_interactive_execution'
+  | 'rebind_workflow';
+
+export type StudioWorkflowCapabilityParameterLocation =
+  | 'path'
+  | 'query'
+  | 'header';
+
+export type StudioWorkflowCapabilityValueKind =
+  | 'string'
+  | 'integer'
+  | 'number'
+  | 'boolean'
+  | 'object'
+  | 'array';
+
+export interface StudioWorkflowCapabilitySchema {
+  readonly valueKind: StudioWorkflowCapabilityValueKind;
+  readonly properties: readonly StudioWorkflowCapabilitySchemaProperty[];
+  readonly requiredProperties: readonly string[];
+  readonly items: StudioWorkflowCapabilitySchema | null;
+  readonly allowedValues: readonly string[];
+  readonly additionalPropertiesAllowed: boolean;
+}
+
+export interface StudioWorkflowCapabilitySchemaProperty {
+  readonly name: string;
+  readonly schema: StudioWorkflowCapabilitySchema;
+}
+
+export interface StudioWorkflowCapabilityParameter {
+  readonly name: string;
+  readonly location: StudioWorkflowCapabilityParameterLocation;
+  readonly required: boolean;
+  readonly schema: StudioWorkflowCapabilitySchema;
+}
+
+export interface StudioWorkflowCapabilityOperation {
+  readonly userServiceId: string;
+  readonly endpointId: string;
+  readonly serviceSlug: string;
+  readonly httpMethod: string;
+  readonly pathTemplate: string;
+  readonly parameters: readonly StudioWorkflowCapabilityParameter[];
+  readonly requestBody: {
+    readonly required: boolean;
+    readonly mediaType: string;
+    readonly schema: StudioWorkflowCapabilitySchema;
+  } | null;
+  readonly responsePolicy: {
+    readonly textAllowed: boolean;
+    readonly fileArtifactAllowed: boolean;
+    readonly mediaTypes: readonly string[];
+  } | null;
+  readonly executionPolicy: {
+    readonly risk: StudioExplicitRequestRisk;
+    readonly approval: 'none' | 'required';
+    readonly enforcementOwner: 'aevatar' | 'nyxid';
+    readonly allowedExecutionModes: readonly StudioExplicitRequestExecutionMode[];
+  } | null;
+}
+
+export interface StudioWorkflowCapabilityBlocker {
+  readonly status: StudioWorkflowCapabilityReadinessStatus;
+  readonly code: string;
+  readonly safeMessage: string;
+}
+
+export interface StudioWorkflowCapabilityRemediation {
+  readonly actionKind: StudioWorkflowCapabilityRemediationAction;
+  readonly label: string;
+  readonly trustedLocator: string;
+}
+
+export interface StudioWorkflowCapabilityReadiness {
+  readonly executionMode: StudioExplicitRequestExecutionMode;
+  readonly status: StudioWorkflowCapabilityReadinessStatus;
+  readonly selectedSelector: StudioWorkflowCapabilitySelector | null;
+  readonly selectedOperation: StudioWorkflowCapabilityOperation | null;
+  readonly blockers: readonly StudioWorkflowCapabilityBlocker[];
+  readonly remediations: readonly StudioWorkflowCapabilityRemediation[];
+  readonly sources: readonly StudioWorkflowCapabilitySource[];
+}
+
+export interface StudioWorkflowCapabilityReadinessInput {
+  readonly scopeId: string;
+  readonly selector: Extract<
+    StudioWorkflowCapabilitySelector,
+    { readonly kind: 'nyxid_operation' }
+  >;
+  readonly executionMode: 'interactive';
+}
+
 export interface StudioExplicitRequestPreviewInput {
   readonly scopeId: string;
   readonly workflowId: string;

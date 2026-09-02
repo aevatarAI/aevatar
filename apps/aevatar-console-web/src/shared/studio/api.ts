@@ -98,6 +98,22 @@ import type {
   StudioUserLlmSettings,
   StudioWorkflowBoardSnapshot,
   StudioWorkflowBoardSnapshotRequest,
+  StudioWorkflowCapabilityDescriptor,
+  StudioWorkflowCapabilityDiagnostic,
+  StudioWorkflowCapabilityDiagnosticCode,
+  StudioWorkflowCapabilityList,
+  StudioWorkflowCapabilityOperation,
+  StudioWorkflowCapabilityParameter,
+  StudioWorkflowCapabilityParameterLocation,
+  StudioWorkflowCapabilityReadiness,
+  StudioWorkflowCapabilityReadinessInput,
+  StudioWorkflowCapabilityReadinessStatus,
+  StudioWorkflowCapabilityRemediationAction,
+  StudioWorkflowCapabilitySchema,
+  StudioWorkflowCapabilitySelector,
+  StudioWorkflowCapabilitySource,
+  StudioWorkflowCapabilitySourceKind,
+  StudioWorkflowCapabilityValueKind,
   StudioWorkflowDocument,
   StudioWorkflowDraft,
   StudioWorkflowDraftCreateAcceptedReceipt,
@@ -335,6 +351,596 @@ function decodeStudioExplicitRequestPreview(
       'StudioExplicitRequestPreview.revisionId',
     ),
     items,
+  };
+}
+
+function decodeStudioWorkflowCapabilitySelector(
+  value: unknown,
+  label = 'StudioWorkflowCapabilityDescriptor.selector',
+): StudioWorkflowCapabilitySelector {
+  const record = expectRecord(value, label);
+  const kind = readString(record, 'kind', label + '.kind');
+  if (kind === 'nyxid_operation') {
+    return {
+      kind,
+      userServiceId: readNonBlankExplicitRequestString(
+        record,
+        'userServiceId',
+        label + '.userServiceId',
+      ),
+      endpointId: readNonBlankExplicitRequestString(
+        record,
+        'endpointId',
+        label + '.endpointId',
+      ),
+    };
+  }
+  if (kind === 'host_connector') {
+    return {
+      kind,
+      connectorCapabilityRef: readNonBlankExplicitRequestString(
+        record,
+        'connectorCapabilityRef',
+        label + '.connectorCapabilityRef',
+      ),
+      operationId: readNonBlankExplicitRequestString(
+        record,
+        'operationId',
+        label + '.operationId',
+      ),
+      contractDigest: readNonBlankExplicitRequestString(
+        record,
+        'contractDigest',
+        label + '.contractDigest',
+      ),
+    };
+  }
+  if (kind === 'nyxid_request') {
+    return {
+      kind,
+      userServiceId: readNonBlankExplicitRequestString(
+        record,
+        'userServiceId',
+        label + '.userServiceId',
+      ),
+      method: readExplicitRequestEnum(
+        record,
+        'method',
+        label + '.method',
+        ['get', 'head', 'options', 'post', 'put', 'patch', 'delete'],
+      ),
+      pathTemplate: readNonBlankExplicitRequestString(
+        record,
+        'pathTemplate',
+        label + '.pathTemplate',
+      ),
+      queryParameters: expectArray(
+        record.queryParameters,
+        label + '.queryParameters',
+        expectString,
+      ),
+      headerParameters: expectArray(
+        record.headerParameters,
+        label + '.headerParameters',
+        expectString,
+      ),
+      bodyMode: readExplicitRequestEnum(
+        record,
+        'bodyMode',
+        label + '.bodyMode',
+        ['none', 'json'],
+      ),
+      responseMode: readExplicitRequestEnum(
+        record,
+        'responseMode',
+        label + '.responseMode',
+        ['text', 'file_artifact'],
+      ),
+      bodyRequired: readBoolean(
+        record,
+        'bodyRequired',
+        label + '.bodyRequired',
+      ),
+    };
+  }
+
+  throw new Error(label + '.kind is not supported.');
+}
+
+function workflowCapabilitySelectorKey(
+  selector: StudioWorkflowCapabilitySelector,
+): string {
+  if (selector.kind === 'nyxid_operation') {
+    return [
+      selector.kind,
+      selector.userServiceId,
+      selector.endpointId,
+    ].join('\u0000');
+  }
+  if (selector.kind === 'host_connector') {
+    return [
+      selector.kind,
+      selector.connectorCapabilityRef,
+      selector.operationId,
+      selector.contractDigest,
+    ].join('\u0000');
+  }
+  return [
+    selector.kind,
+    selector.userServiceId,
+    selector.method,
+    selector.pathTemplate,
+  ].join('\u0000');
+}
+
+function decodeStudioWorkflowCapabilitySource(
+  value: unknown,
+  label: string,
+): StudioWorkflowCapabilitySource {
+  const record = expectRecord(value, label);
+  return {
+    kind: readExplicitRequestEnum<StudioWorkflowCapabilitySourceKind>(
+      record,
+      'kind',
+      label + '.kind',
+      [
+        'connector_catalog',
+        'nyxid_user_services',
+        'nyxid_open_api',
+        'durable_authorization_catalog',
+        'nyxid_mcp_config',
+      ],
+    ),
+    sourceId: readNonBlankExplicitRequestString(
+      record,
+      'sourceId',
+      label + '.sourceId',
+    ),
+    sourceVersion: readNumber(
+      record,
+      'sourceVersion',
+      label + '.sourceVersion',
+    ),
+    observedAt: readNullableString(record, 'observedAt', label + '.observedAt'),
+    freshUntil: readNullableString(
+      record,
+      'freshUntil',
+      label + '.freshUntil',
+    ),
+  };
+}
+
+function decodeNullableWorkflowCapabilitySource(
+  value: unknown,
+  label: string,
+): StudioWorkflowCapabilitySource | null {
+  return value == null
+    ? null
+    : decodeStudioWorkflowCapabilitySource(value, label);
+}
+
+function decodeStudioWorkflowCapabilityDescriptor(
+  value: unknown,
+  label = 'StudioWorkflowCapabilityDescriptor',
+): StudioWorkflowCapabilityDescriptor {
+  const record = expectRecord(value, label);
+  return {
+    displayName: readNonBlankExplicitRequestString(
+      record,
+      'displayName',
+      label + '.displayName',
+    ),
+    readOnly: readBoolean(record, 'readOnly', label + '.readOnly'),
+    destructive: readBoolean(
+      record,
+      'destructive',
+      label + '.destructive',
+    ),
+    selector: decodeStudioWorkflowCapabilitySelector(
+      record.selector,
+      label + '.selector',
+    ),
+    source: decodeNullableWorkflowCapabilitySource(
+      record.source,
+      label + '.source',
+    ),
+  };
+}
+
+function decodeStudioWorkflowCapabilityDiagnostic(
+  value: unknown,
+  label = 'StudioWorkflowCapabilityDiagnostic',
+): StudioWorkflowCapabilityDiagnostic {
+  const record = expectRecord(value, label);
+  return {
+    code: readExplicitRequestEnum<StudioWorkflowCapabilityDiagnosticCode>(
+      record,
+      'code',
+      label + '.code',
+      [
+        'source_unavailable',
+        'no_exact_user_service',
+        'generic_proxy_rejected',
+        'invalid_service_identity',
+        'ambiguous_service_identity',
+        'invalid_endpoint_identity',
+        'ambiguous_endpoint_identity',
+        'unsupported_parameter',
+        'unsupported_request_body',
+        'unsupported_schema',
+        'unsupported_response',
+      ],
+    ),
+    safeMessage: readString(record, 'safeMessage', label + '.safeMessage'),
+    count: readNumber(record, 'count', label + '.count'),
+    source: decodeNullableWorkflowCapabilitySource(
+      record.source,
+      label + '.source',
+    ),
+  };
+}
+
+function decodeStudioWorkflowCapabilityList(
+  value: unknown,
+): StudioWorkflowCapabilityList {
+  const record = expectRecord(value, 'StudioWorkflowCapabilityList');
+  const capabilities = expectArray(
+    record.capabilities,
+    'StudioWorkflowCapabilityList.capabilities',
+    decodeStudioWorkflowCapabilityDescriptor,
+  );
+  const selectorKeys = new Set<string>();
+  for (const descriptor of capabilities) {
+    const selectorKey = workflowCapabilitySelectorKey(descriptor.selector);
+    if (selectorKeys.has(selectorKey)) {
+      throw new Error(
+        'StudioWorkflowCapabilityList.capabilities contains a duplicate selector.',
+      );
+    }
+    selectorKeys.add(selectorKey);
+  }
+
+  return {
+    capabilities,
+    candidateCount: readNumber(
+      record,
+      'candidateCount',
+      'StudioWorkflowCapabilityList.candidateCount',
+    ),
+    rejectedCount: readNumber(
+      record,
+      'rejectedCount',
+      'StudioWorkflowCapabilityList.rejectedCount',
+    ),
+    diagnostics: expectArray(
+      record.diagnostics,
+      'StudioWorkflowCapabilityList.diagnostics',
+      decodeStudioWorkflowCapabilityDiagnostic,
+    ),
+  };
+}
+
+function decodeStudioWorkflowCapabilitySchema(
+  value: unknown,
+  label: string,
+): StudioWorkflowCapabilitySchema {
+  const record = expectRecord(value, label);
+  return {
+    valueKind: readExplicitRequestEnum<StudioWorkflowCapabilityValueKind>(
+      record,
+      'valueKind',
+      label + '.valueKind',
+      ['string', 'integer', 'number', 'boolean', 'object', 'array'],
+    ),
+    properties: expectArray(
+      record.properties,
+      label + '.properties',
+      (entry, entryLabel = label + '.properties[]') => {
+        const property = expectRecord(entry, entryLabel);
+        return {
+          name: readNonBlankExplicitRequestString(
+            property,
+            'name',
+            entryLabel + '.name',
+          ),
+          schema: decodeStudioWorkflowCapabilitySchema(
+            property.schema,
+            entryLabel + '.schema',
+          ),
+        };
+      },
+    ),
+    requiredProperties: expectArray(
+      record.requiredProperties,
+      label + '.requiredProperties',
+      expectString,
+    ),
+    items:
+      record.items == null
+        ? null
+        : decodeStudioWorkflowCapabilitySchema(
+            record.items,
+            label + '.items',
+          ),
+    allowedValues: expectArray(
+      record.allowedValues,
+      label + '.allowedValues',
+      expectString,
+    ),
+    additionalPropertiesAllowed: readBoolean(
+      record,
+      'additionalPropertiesAllowed',
+      label + '.additionalPropertiesAllowed',
+    ),
+  };
+}
+
+function decodeStudioWorkflowCapabilityParameter(
+  value: unknown,
+  label = 'StudioWorkflowCapabilityParameter',
+): StudioWorkflowCapabilityParameter {
+  const record = expectRecord(value, label);
+  return {
+    name: readNonBlankExplicitRequestString(
+      record,
+      'name',
+      label + '.name',
+    ),
+    location:
+      readExplicitRequestEnum<StudioWorkflowCapabilityParameterLocation>(
+        record,
+        'location',
+        label + '.location',
+        ['path', 'query', 'header'],
+      ),
+    required: readBoolean(record, 'required', label + '.required'),
+    schema: decodeStudioWorkflowCapabilitySchema(
+      record.schema,
+      label + '.schema',
+    ),
+  };
+}
+
+function decodeStudioWorkflowCapabilityOperation(
+  value: unknown,
+  label = 'StudioWorkflowCapabilityOperation',
+): StudioWorkflowCapabilityOperation {
+  const record = expectRecord(value, label);
+  const requestBody =
+    record.requestBody == null
+      ? null
+      : expectRecord(record.requestBody, label + '.requestBody');
+  const responsePolicy =
+    record.responsePolicy == null
+      ? null
+      : expectRecord(record.responsePolicy, label + '.responsePolicy');
+  const executionPolicy =
+    record.executionPolicy == null
+      ? null
+      : expectRecord(record.executionPolicy, label + '.executionPolicy');
+
+  return {
+    userServiceId: readNonBlankExplicitRequestString(
+      record,
+      'userServiceId',
+      label + '.userServiceId',
+    ),
+    endpointId: readNonBlankExplicitRequestString(
+      record,
+      'endpointId',
+      label + '.endpointId',
+    ),
+    serviceSlug: readString(record, 'serviceSlug', label + '.serviceSlug'),
+    httpMethod: readNonBlankExplicitRequestString(
+      record,
+      'httpMethod',
+      label + '.httpMethod',
+    ),
+    pathTemplate: readNonBlankExplicitRequestString(
+      record,
+      'pathTemplate',
+      label + '.pathTemplate',
+    ),
+    parameters: expectArray(
+      record.parameters,
+      label + '.parameters',
+      decodeStudioWorkflowCapabilityParameter,
+    ),
+    requestBody: requestBody
+      ? {
+          required: readBoolean(
+            requestBody,
+            'required',
+            label + '.requestBody.required',
+          ),
+          mediaType: readString(
+            requestBody,
+            'mediaType',
+            label + '.requestBody.mediaType',
+          ),
+          schema: decodeStudioWorkflowCapabilitySchema(
+            requestBody.schema,
+            label + '.requestBody.schema',
+          ),
+        }
+      : null,
+    responsePolicy: responsePolicy
+      ? {
+          textAllowed: readBoolean(
+            responsePolicy,
+            'textAllowed',
+            label + '.responsePolicy.textAllowed',
+          ),
+          fileArtifactAllowed: readBoolean(
+            responsePolicy,
+            'fileArtifactAllowed',
+            label + '.responsePolicy.fileArtifactAllowed',
+          ),
+          mediaTypes: expectArray(
+            responsePolicy.mediaTypes,
+            label + '.responsePolicy.mediaTypes',
+            expectString,
+          ),
+        }
+      : null,
+    executionPolicy: executionPolicy
+      ? {
+          risk: readExplicitRequestEnum(
+            executionPolicy,
+            'risk',
+            label + '.executionPolicy.risk',
+            ['read_only', 'write', 'destructive'],
+          ),
+          approval: readExplicitRequestEnum(
+            executionPolicy,
+            'approval',
+            label + '.executionPolicy.approval',
+            ['none', 'required'],
+          ),
+          enforcementOwner: readExplicitRequestEnum(
+            executionPolicy,
+            'enforcementOwner',
+            label + '.executionPolicy.enforcementOwner',
+            ['aevatar', 'nyxid'],
+          ),
+          allowedExecutionModes: expectArray(
+            executionPolicy.allowedExecutionModes,
+            label + '.executionPolicy.allowedExecutionModes',
+            (entry, entryLabel = label + '.executionPolicy.allowedExecutionModes[]') => {
+              if (entry !== 'interactive' && entry !== 'durable') {
+                throw new Error(entryLabel + ' is not supported.');
+              }
+              return entry;
+            },
+          ),
+        }
+      : null,
+  };
+}
+
+const workflowCapabilityReadinessStatuses = [
+  'selection_required',
+  'connector_not_found',
+  'service_registration_required',
+  'credential_connection_required',
+  'service_access_denied',
+  'node_binding_required',
+  'node_unavailable',
+  'endpoint_contract_required',
+  'operation_selection_required',
+  'source_stale',
+  'durable_authorization_unavailable',
+  'contract_drift',
+  'ready',
+  'admission_rebind_required',
+] as const satisfies readonly StudioWorkflowCapabilityReadinessStatus[];
+
+function decodeStudioWorkflowCapabilityReadiness(
+  value: unknown,
+  expectedSelector: StudioWorkflowCapabilityReadinessInput['selector'],
+): StudioWorkflowCapabilityReadiness {
+  const label = 'StudioWorkflowCapabilityReadiness';
+  const record = expectRecord(value, label);
+  const selectedSelector =
+    record.selectedSelector == null
+      ? null
+      : decodeStudioWorkflowCapabilitySelector(
+          record.selectedSelector,
+          label + '.selectedSelector',
+        );
+  if (
+    selectedSelector &&
+    workflowCapabilitySelectorKey(selectedSelector) !==
+      workflowCapabilitySelectorKey(expectedSelector)
+  ) {
+    throw new Error(
+      'StudioWorkflowCapabilityReadiness returned a different selectedSelector.',
+    );
+  }
+
+  return {
+    executionMode: readExplicitRequestEnum(
+      record,
+      'executionMode',
+      label + '.executionMode',
+      ['interactive', 'durable'],
+    ),
+    status: readExplicitRequestEnum<StudioWorkflowCapabilityReadinessStatus>(
+      record,
+      'status',
+      label + '.status',
+      workflowCapabilityReadinessStatuses,
+    ),
+    selectedSelector,
+    selectedOperation:
+      record.selectedOperation == null
+        ? null
+        : decodeStudioWorkflowCapabilityOperation(
+            record.selectedOperation,
+            label + '.selectedOperation',
+          ),
+    blockers: expectArray(
+      record.blockers,
+      label + '.blockers',
+      (entry, entryLabel = label + '.blockers[]') => {
+        const blocker = expectRecord(entry, entryLabel);
+        return {
+          status:
+            readExplicitRequestEnum<StudioWorkflowCapabilityReadinessStatus>(
+              blocker,
+              'status',
+              entryLabel + '.status',
+              workflowCapabilityReadinessStatuses,
+            ),
+          code: readString(blocker, 'code', entryLabel + '.code'),
+          safeMessage: readString(
+            blocker,
+            'safeMessage',
+            entryLabel + '.safeMessage',
+          ),
+        };
+      },
+    ),
+    remediations: expectArray(
+      record.remediations,
+      label + '.remediations',
+      (entry, entryLabel = label + '.remediations[]') => {
+        const remediation = expectRecord(entry, entryLabel);
+        return {
+          actionKind:
+            readExplicitRequestEnum<StudioWorkflowCapabilityRemediationAction>(
+              remediation,
+              'actionKind',
+              entryLabel + '.actionKind',
+              [
+                'select_capability',
+                'configure_connector',
+                'register_service',
+                'connect_credential',
+                'request_access',
+                'bind_node',
+                'restore_node',
+                'publish_endpoint_contract',
+                'select_operation',
+                'refresh_source',
+                'use_interactive_execution',
+                'rebind_workflow',
+              ],
+            ),
+          label: readString(remediation, 'label', entryLabel + '.label'),
+          trustedLocator: readString(
+            remediation,
+            'trustedLocator',
+            entryLabel + '.trustedLocator',
+          ),
+        };
+      },
+    ),
+    sources: expectArray(
+      record.sources,
+      label + '.sources',
+      decodeStudioWorkflowCapabilitySource,
+    ),
   };
 }
 
@@ -3274,6 +3880,37 @@ export const studioApi = {
     return toCommittedWorkflowFile(
       scopeId.trim(),
       await scopesApi.getWorkflowDetail(scopeId.trim(), workflowId),
+    );
+  },
+
+  listWorkflowCapabilities(
+    scopeId: string,
+  ): Promise<StudioWorkflowCapabilityList> {
+    return requestDecodedJson(
+      '/api/scopes/' +
+        encodeURIComponent(scopeId.trim()) +
+        '/workflow-capabilities',
+      decodeStudioWorkflowCapabilityList,
+    );
+  },
+
+  inspectWorkflowCapabilityReadiness(
+    input: StudioWorkflowCapabilityReadinessInput,
+  ): Promise<StudioWorkflowCapabilityReadiness> {
+    return requestDecodedJson(
+      '/api/scopes/' +
+        encodeURIComponent(input.scopeId.trim()) +
+        '/workflow-capabilities:readiness',
+      (value) =>
+        decodeStudioWorkflowCapabilityReadiness(value, input.selector),
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          selector: input.selector,
+          executionMode: input.executionMode,
+        }),
+      },
     );
   },
 
