@@ -76,6 +76,7 @@ public static class NyxIdChatSystemAgentProfileDraftFactory
         policy.ToolNames.AddRange(options.ToolNames.Select(Normalize).Where(static x => x.Length > 0));
         policy.ToolSetRefs.AddRange(options.ToolSetRefs.Select(Normalize).Where(static x => x.Length > 0));
         policy.ConnectedServiceSelectors.Add(options.ConnectedServiceSelectors.Select(CreateSelector));
+        policy.SelectReadOnlyConnectedOperations = options.SelectReadOnlyConnectedOperations;
         return policy;
     }
 

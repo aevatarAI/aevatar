@@ -74,6 +74,8 @@ public sealed class AgentProfileToolPolicyOptions
     public List<string> ToolSetRefs { get; set; } = [];
 
     public List<AgentProfileConnectedServiceSelectorOptions> ConnectedServiceSelectors { get; set; } = [];
+
+    public bool SelectReadOnlyConnectedOperations { get; set; }
 }
 
 public sealed class AgentProfileConnectedServiceSelectorOptions

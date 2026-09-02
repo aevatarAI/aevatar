@@ -428,6 +428,7 @@ internal static class AgentProfileEndpoints
     {
         toolNames = value is null ? Array.Empty<string>() : value.ToolNames.ToArray(),
         toolSetRefs = value is null ? Array.Empty<string>() : value.ToolSetRefs.ToArray(),
+        selectReadOnlyConnectedOperations = value?.SelectReadOnlyConnectedOperations ?? false,
         connectedServiceSelectors = value is null
             ? Array.Empty<object>()
             : value.ConnectedServiceSelectors.Select(static selector => new
@@ -480,6 +481,7 @@ internal static class AgentProfileEndpoints
     {
         ToolNames = { input?.ToolNames ?? [] },
         ToolSetRefs = { input?.ToolSetRefs ?? [] },
+        SelectReadOnlyConnectedOperations = input?.SelectReadOnlyConnectedOperations ?? false,
         ConnectedServiceSelectors =
         {
             input?.ConnectedServiceSelectors?.Select(static selector => new AgentProfileConnectedServiceSelector
@@ -745,7 +747,8 @@ internal static class AgentProfileEndpoints
     internal sealed record AgentProfileToolPolicyInput(
         IReadOnlyList<string>? ToolNames,
         IReadOnlyList<string>? ToolSetRefs,
-        IReadOnlyList<AgentProfileConnectedServiceSelectorInput>? ConnectedServiceSelectors);
+        IReadOnlyList<AgentProfileConnectedServiceSelectorInput>? ConnectedServiceSelectors,
+        bool SelectReadOnlyConnectedOperations = false);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     internal sealed record AgentProfileConnectedServiceSelectorInput(
         string? CatalogServiceSlug,

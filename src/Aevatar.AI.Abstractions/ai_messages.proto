@@ -1020,6 +1020,7 @@ message AgentProfileToolPolicy {
   repeated string tool_names = 1;
   repeated string tool_set_refs = 2;
   repeated AgentProfileConnectedServiceSelector connected_service_selectors = 3;
+  bool select_read_only_connected_operations = 4;
 }
 
 enum AgentProfileSideEffectClass {

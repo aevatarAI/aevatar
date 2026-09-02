@@ -43,6 +43,7 @@ public sealed class NyxIdChatSystemAgentProfileDraftFactoryTests
                     TaskToolPolicy = new AgentProfileToolPolicyOptions
                     {
                         ToolNames = { "ask_user", "aevatar_start_workflow" },
+                        SelectReadOnlyConnectedOperations = true,
                     },
                 },
             },
@@ -63,6 +64,7 @@ public sealed class NyxIdChatSystemAgentProfileDraftFactoryTests
         draft.RuntimeProfile.Members.Should().ContainSingle();
         draft.RuntimeProfile.Members[0].SkillRef.Guid.Should().Be("11111111-1111-1111-1111-111111111111");
         draft.RuntimeProfile.Members[0].ExplicitTriggerAliases.Should().ContainSingle().Which.Should().Be("dinner");
+        draft.RuntimeProfile.Members[0].TaskToolPolicy.SelectReadOnlyConnectedOperations.Should().BeTrue();
         AgentProfilePolicies.ValidateDraft(draft).Should().BeEmpty();
     }
 }

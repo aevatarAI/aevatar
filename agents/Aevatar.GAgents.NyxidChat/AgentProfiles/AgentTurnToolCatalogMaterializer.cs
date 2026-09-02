@@ -742,12 +742,12 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         return selected
             .Where(routeTools.Tools.ContainsKey)
             .ToDictionary(name => name, name => routeTools.Tools[name], StringComparer.OrdinalIgnoreCase);
-
-        static bool IsEligibleConnectedRead(IAgentTool tool) =>
-            tool is IAgentToolOperationAdmissionOwner owner &&
-            owner.OperationAdmission.Identity is AgentToolOperationIdentity.PublishedEndpoint &&
-            owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly;
     }
+
+    private static bool IsEligibleConnectedRead(IAgentTool tool) =>
+        tool is IAgentToolOperationAdmissionOwner owner &&
+        owner.OperationAdmission.Identity is AgentToolOperationIdentity.PublishedEndpoint &&
+        owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly;
 
     private async Task<IReadOnlySet<string>?> SelectConnectedReadOperationsInBatchesAsync(
         IReadOnlySet<string> names,
@@ -1699,6 +1699,24 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             hadFailure |= resolution.HadFailure;
         }
 
+        if (policy.SelectReadOnlyConnectedOperations && selectionContext is not null)
+        {
+            var dynamicReadNames = availableTools
+                .Where(pair => toolContext.ToolVisibility.Allows(pair.Key) &&
+                               (eligibleToolNames is null || eligibleToolNames.Contains(pair.Key)) &&
+                               IsEligibleConnectedRead(pair.Value))
+                .Select(static pair => pair.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var selectedDynamicReadNames = await SelectConnectedReadOperationsInBatchesAsync(
+                dynamicReadNames,
+                availableTools,
+                selectionContext,
+                [],
+                ct).ConfigureAwait(false);
+            if (selectedDynamicReadNames is not null)
+                names.UnionWith(selectedDynamicReadNames);
+        }
+
         var selectorKeys = new HashSet<string>(StringComparer.Ordinal);
         var exactConnectedMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var broadConnectedMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2264,11 +2282,6 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             names.UnionWith(selected);
 
         return names;
-
-        static bool IsEligibleConnectedRead(IAgentTool tool) =>
-            tool is IAgentToolOperationAdmissionOwner owner &&
-            owner.OperationAdmission.Identity is AgentToolOperationIdentity.PublishedEndpoint &&
-            owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly;
     }
 
     private static HashSet<string> OrdinaryDegradedNames(
