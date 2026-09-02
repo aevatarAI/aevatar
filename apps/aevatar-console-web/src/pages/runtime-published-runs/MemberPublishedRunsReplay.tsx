@@ -1093,9 +1093,13 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
     retry: false,
   });
 
+  const selectedAuditSummary =
+    auditQuery.data?.summary?.runId === selectedRunId
+      ? auditQuery.data.summary
+      : null;
   const selectedRun =
+    selectedAuditSummary ??
     selectedCatalogRun ??
-    auditQuery.data?.summary ??
     (normalizedInitialRunId
       ? createFallbackRunSummary({
           actorId: selectedRunActorId,
@@ -1105,8 +1109,19 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
         })
       : null);
   const audit = auditQuery.data?.audit ?? null;
-  const displayRuns =
-    runs.length || !selectedRun ? runs : [selectedRun];
+  const displayRuns = React.useMemo(() => {
+    if (!runs.length) {
+      return selectedRun ? [selectedRun] : runs;
+    }
+
+    if (!selectedAuditSummary) {
+      return runs;
+    }
+
+    return runs.map((run) =>
+      run.runId === selectedAuditSummary.runId ? selectedAuditSummary : run,
+    );
+  }, [runs, selectedAuditSummary, selectedRun]);
   const showReplaySkeleton = Boolean(
     runsQuery.isLoading || (selectedRun && auditQuery.isLoading),
   );

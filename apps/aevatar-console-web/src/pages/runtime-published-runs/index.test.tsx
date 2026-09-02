@@ -350,6 +350,52 @@ describe("TeamMemberPublishedRunsPage", () => {
     );
   });
 
+  it("uses the completed audit status when the run catalog is still running", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/team-1/members/m-alpha/runs?runId=run-1",
+    );
+    mockedScopeRuntimeApi.listMemberRuns.mockResolvedValueOnce({
+      displayName: "Alpha Workflow",
+      memberId: "m-alpha",
+      publishedServiceId: "svc-alpha",
+      publishedServiceKey: "scope-1:default:default:svc-alpha",
+      runs: [
+        {
+          actorId: "actor://scope-1/run-1",
+          bindingUpdatedAt: "2026-06-22T01:00:00Z",
+          boundAt: "2026-06-22T01:00:00Z",
+          completedSteps: 0,
+          completionStatus: "running",
+          definitionActorId: "definition://alpha",
+          deploymentId: "dep-alpha",
+          lastError: "",
+          lastEventId: "evt-1",
+          lastOutput: "",
+          lastSuccess: null,
+          lastUpdatedAt: "2026-06-22T01:00:00Z",
+          memberId: "m-alpha",
+          publishedServiceId: "svc-alpha",
+          revisionId: "rev-alpha",
+          roleReplyCount: 0,
+          runId: "run-1",
+          scopeId: "scope-1",
+          stateVersion: 1,
+          totalSteps: 2,
+          workflowName: "Alpha Workflow",
+        },
+      ],
+      scopeId: "scope-1",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberPublishedRunsPage));
+
+    expect(await screen.findByText("node:config")).toBeTruthy();
+    expect(screen.queryByText("Running")).toBeNull();
+    expect(screen.getAllByText("Completed").length).toBeGreaterThanOrEqual(2);
+  });
+
   it("returns from published runs to the Team members tab", async () => {
     renderWithQueryClient(React.createElement(TeamMemberPublishedRunsPage));
 
