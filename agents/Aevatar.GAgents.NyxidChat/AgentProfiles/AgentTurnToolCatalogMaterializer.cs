@@ -544,15 +544,18 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
         if (committedAuthority.SelectedExactSkillRef is null)
         {
+            var committedNames = committedAuthority.AuthorityCeilingToolNames
+                .Where(eligible.Contains)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             return BuildMaterialization(
                 profile,
                 committedAuthority,
-                committedAuthority.AuthorityKind,
-                eligible,
+                ResolveAuthorityKindForCeiling(committedAuthority.AuthorityKind, committedNames),
+                committedNames,
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
                 diagnostics,
-                SelectTools(routeTools.Tools, eligible));
+                SelectTools(routeTools.Tools, committedNames));
         }
 
         var candidate = ResolveCommittedCandidate(profile, committedAuthority, diagnostics);
@@ -876,8 +879,15 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             string.Equals(token, "me", StringComparison.OrdinalIgnoreCase))
             ? 1
             : 0;
-        return serviceScore + operationScore + contextScore;
+        var diningScore = HasAnyToken(messageTokens, "dinner", "dining", "restaurant", "reservation", "booking", "cuisine") &&
+                          HasAnyToken(operationTokens, "dining", "restaurant", "restaurants", "meal", "cuisine", "cuisines")
+            ? 8
+            : 0;
+        return serviceScore + operationScore + contextScore + diningScore;
     }
+
+    private static bool HasAnyToken(IReadOnlySet<string> tokens, params string[] expected) =>
+        expected.Any(tokens.Contains);
 
     private static IReadOnlySet<string> TokenizeSelectionText(string? value)
     {
@@ -1390,24 +1400,40 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                 profile.ClassifierTimeoutMs,
                 llmControl,
                 ct);
-            var builtInMember = builtInMembers.SingleOrDefault(member => string.Equals(
-                member.IntentId,
-                builtInResult.IntentId,
-                StringComparison.Ordinal));
             if (builtInResult.Status == AgentProfileTurnClassificationStatus.Matched &&
-                builtInMember is not null)
+                string.Equals(
+                    builtInResult.IntentId,
+                    ProfileTaskRouteIntentId,
+                    StringComparison.Ordinal))
             {
-                diagnostics.Add(new AgentProfileTurnDiagnostic(
-                    AgentProfileTurnDiagnosticCode.ClassifierMatched,
-                    builtInMember.IntentId));
-                return builtInMember;
+                if (profile.Members.Count == 0)
+                {
+                    diagnostics.Add(new AgentProfileTurnDiagnostic(
+                        AgentProfileTurnDiagnosticCode.ClassifierMatched,
+                        ProfileTaskRouteIntentId));
+                    return CreateProfileTaskRouteMember(profile);
+                }
+            }
+            else
+            {
+                var builtInMember = builtInMembers.SingleOrDefault(member => string.Equals(
+                    member.IntentId,
+                    builtInResult.IntentId,
+                    StringComparison.Ordinal));
+                if (builtInResult.Status == AgentProfileTurnClassificationStatus.Matched &&
+                    builtInMember is not null)
+                {
+                    diagnostics.Add(new AgentProfileTurnDiagnostic(
+                        AgentProfileTurnDiagnosticCode.ClassifierMatched,
+                        builtInMember.IntentId));
+                    return builtInMember;
+                }
             }
             if (builtInResult.Status != AgentProfileTurnClassificationStatus.NoMatch &&
-                !(builtInResult.Status == AgentProfileTurnClassificationStatus.Matched &&
-                  string.Equals(
-                      builtInResult.IntentId,
-                      ProfileTaskRouteIntentId,
-                      StringComparison.Ordinal)))
+                !string.Equals(
+                    builtInResult.IntentId,
+                    ProfileTaskRouteIntentId,
+                    StringComparison.Ordinal))
             {
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
                     IsDisambiguationFailure(builtInResult.FailureCode)
@@ -1551,6 +1577,15 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                 ToolSetRefs = { ToolSetNames.WorkflowExternalCapabilityAuthoring },
             },
             SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
+        };
+
+    private static AgentProfileSkillMember CreateProfileTaskRouteMember(AgentProfileSnapshot profile) =>
+        new()
+        {
+            IntentId = ProfileTaskRouteIntentId,
+            RoutingDescription = ProfileTaskRouteRoutingDescription,
+            TaskToolPolicy = profile.MaximumToolPolicy?.Clone() ?? new AgentProfileToolPolicy(),
+            SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
         };
 
     private static BuiltInIntent? ResolveBuiltInIntent(NyxIdChatTurnIntent intent) => intent switch
@@ -1855,9 +1890,22 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                             owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.Write &&
                             maximumWriteSelections > 0))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var selectionCounts = CountConnectedOperations(selectionNames, availableTools);
+        var boundedSelectionNames = selectionNames;
+        var selectionCounts = CountConnectedOperations(boundedSelectionNames, availableTools);
+        if (selectionCounts.WriteCount == 0 &&
+            boundedSelectionNames.Count > MaximumRankedConnectedReadCandidates)
+        {
+            boundedSelectionNames = RankConnectedOperationNamesByUserMessage(
+                    boundedSelectionNames,
+                    availableTools,
+                    selectionContext.UserMessage)
+                .Take(MaximumRankedConnectedReadCandidates)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            selectionCounts = CountConnectedOperations(boundedSelectionNames, availableTools);
+        }
+
         var selectedConnectedNames = await SelectConnectedOperationsAsync(
-            selectionNames,
+            boundedSelectionNames,
             availableTools,
             selectionCounts.ReadCount > 0 ? maximumReadSelections : 0,
             selectionCounts.WriteCount > 0 ? maximumWriteSelections : 0,

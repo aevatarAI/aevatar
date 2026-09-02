@@ -418,7 +418,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
-    public async Task MaterializeUnprofiledBaselineAsync_ShouldTrimConnectedReadCandidatesBeforeSelector()
+    public async Task MaterializeUnprofiledBaselineAsync_ShouldKeepDiningReadCandidateForDinnerRequest()
     {
         var baselineSource = new StaticToolSource(
         [
@@ -462,7 +462,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
 
         var catalog = await materializer.MaterializeUnprofiledBaselineAsync(
             ToolContext(),
-            "Use my dining profile context for dinner booking.",
+            "Plan a dinner date this week.",
             llmControl: null,
             CancellationToken.None);
 
@@ -779,7 +779,9 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             ToolContext(),
             CancellationToken.None);
 
-        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Recovery);
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Selected);
+        preparation.Authority.CandidateRoute!.IntentId.Should()
+            .Be(AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
             "ask_user",
             "aevatar_start_workflow",
