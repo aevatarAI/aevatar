@@ -3083,11 +3083,13 @@ public sealed class NyxIdChatConversationGAgent
                     llmControl,
                     CancellationToken.None);
             Logger.LogInformation(
-                "Agent profile turn authority prepared. turn={TurnId} activation={ActivationMode} kind={AuthorityKind} ceilingCount={CeilingCount} diagnostics={Diagnostics}",
+                "Agent profile turn authority prepared. turn={TurnId} activation={ActivationMode} kind={AuthorityKind} ceilingCount={CeilingCount} maximumSelectorCount={MaximumSelectorCount} dynamicReadSelectorCount={DynamicReadSelectorCount} diagnostics={Diagnostics}",
                 command.TurnId,
                 profile.ActivationMode,
                 preparation.Authority.AuthorityKind,
                 preparation.Authority.AuthorityCeilingToolNames.Count,
+                profile.MaximumToolPolicy?.ConnectedServiceSelectors.Count ?? 0,
+                CountDynamicReadConnectedServiceSelectors(profile.MaximumToolPolicy),
                 string.Join(
                     ",",
                     preparation.Diagnostics.Select(static diagnostic =>
@@ -3109,6 +3111,14 @@ public sealed class NyxIdChatConversationGAgent
                     AgentProfileTurnDegradationReason.MaterializationFailed);
         }
     }
+
+    private static int CountDynamicReadConnectedServiceSelectors(AgentProfileToolPolicy? policy) =>
+        policy?.ConnectedServiceSelectors.Count(static selector =>
+            string.IsNullOrEmpty(selector.CatalogServiceSlug) &&
+            string.IsNullOrEmpty(selector.EndpointId) &&
+            selector.Readiness is null &&
+            selector.AllowedRisks.Count == 1 &&
+            selector.AllowedRisks[0] == AgentToolOperationRiskPayload.ReadOnly) ?? 0;
 
     private async Task<NyxIdChatTurnIntent> ClassifyTurnIntentAsync(
         NyxIdChatStartTurnCommand command,

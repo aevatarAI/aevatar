@@ -216,6 +216,12 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             toolContext,
             diagnostics,
             ct);
+        LogMaximumPolicyResolution(
+            sessionId,
+            profile,
+            available,
+            maximum.Names,
+            availableTools);
         ApplyMaximumPolicy(available, maximum.Names, availableTools, diagnostics);
         var recovery = await ResolvePolicyAsync(
             profile.RecoveryToolPolicy,
@@ -1889,6 +1895,35 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         names.UnionWith(connectedMatches);
         return new ToolPolicyResolution(names, hadFailure);
     }
+
+    private void LogMaximumPolicyResolution(
+        string sessionId,
+        AgentProfileSnapshot profile,
+        IReadOnlySet<string> availableToolNames,
+        IReadOnlySet<string> maximumToolNames,
+        IReadOnlyDictionary<string, IAgentTool> availableTools)
+    {
+        if (!_logger.IsEnabled(LogLevel.Information))
+            return;
+
+        _logger.LogInformation(
+            "Agent profile maximum tool policy resolved. session={SessionId} maximumToolNameCount={MaximumToolNameCount} maximumSelectorCount={MaximumSelectorCount} dynamicReadSelectorCount={DynamicReadSelectorCount} availableToolCount={AvailableToolCount} availableConnectedReadCount={AvailableConnectedReadCount} admittedMaximumConnectedReadCount={AdmittedMaximumConnectedReadCount}",
+            sessionId,
+            maximumToolNames.Count,
+            profile.MaximumToolPolicy?.ConnectedServiceSelectors.Count ?? 0,
+            CountDynamicReadConnectedServiceSelectors(profile.MaximumToolPolicy),
+            availableToolNames.Count,
+            CountEligibleConnectedReads(availableToolNames, availableTools),
+            CountEligibleConnectedReads(maximumToolNames, availableTools));
+    }
+
+    private static int CountDynamicReadConnectedServiceSelectors(AgentProfileToolPolicy? policy) =>
+        policy?.ConnectedServiceSelectors.Count(IsDynamicReadConnectedServiceSelector) ?? 0;
+
+    private static int CountEligibleConnectedReads(
+        IReadOnlySet<string> names,
+        IReadOnlyDictionary<string, IAgentTool> availableTools) =>
+        names.Count(name => availableTools.TryGetValue(name, out var tool) && IsEligibleConnectedRead(tool));
 
     private static bool ConnectedOperationLimitExceeded(
         IReadOnlySet<string> names,
