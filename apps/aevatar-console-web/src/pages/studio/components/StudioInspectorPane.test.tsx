@@ -23,6 +23,7 @@ const workflowRole = {
 };
 
 const workflowStep = {
+  capability: null,
   id: 'review_step',
   type: 'connector_call' as const,
   targetRole: 'assistant',

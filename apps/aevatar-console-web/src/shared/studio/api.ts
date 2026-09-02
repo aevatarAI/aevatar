@@ -420,12 +420,14 @@ function decodeStudioWorkflowCapabilitySelector(
       queryParameters: expectArray(
         record.queryParameters,
         `${label}.queryParameters`,
-        expectString,
+        (entry, entryLabel = `${label}.queryParameters[]`) =>
+          expectString(entry, entryLabel),
       ),
       headerParameters: expectArray(
         record.headerParameters,
         `${label}.headerParameters`,
-        expectString,
+        (entry, entryLabel = `${label}.headerParameters[]`) =>
+          expectString(entry, entryLabel),
       ),
       bodyMode: readExplicitRequestEnum(
         record,
@@ -476,7 +478,7 @@ function workflowCapabilitySelectorKey(
 
 function decodeStudioWorkflowCapabilitySource(
   value: unknown,
-  label: string,
+  label = 'StudioWorkflowCapabilitySource',
 ): StudioWorkflowCapabilitySource {
   const record = expectRecord(value, label);
   return {
@@ -646,7 +648,8 @@ function decodeStudioWorkflowCapabilitySchema(
     requiredProperties: expectArray(
       record.requiredProperties,
       `${label}.requiredProperties`,
-      expectString,
+      (entry, entryLabel = `${label}.requiredProperties[]`) =>
+        expectString(entry, entryLabel),
     ),
     items:
       record.items == null
@@ -655,7 +658,8 @@ function decodeStudioWorkflowCapabilitySchema(
     allowedValues: expectArray(
       record.allowedValues,
       `${label}.allowedValues`,
-      expectString,
+      (entry, entryLabel = `${label}.allowedValues[]`) =>
+        expectString(entry, entryLabel),
     ),
     additionalPropertiesAllowed: readBoolean(
       record,
@@ -765,7 +769,8 @@ function decodeStudioWorkflowCapabilityOperation(
           mediaTypes: expectArray(
             responsePolicy.mediaTypes,
             `${label}.responsePolicy.mediaTypes`,
-            expectString,
+            (entry, entryLabel = `${label}.responsePolicy.mediaTypes[]`) =>
+              expectString(entry, entryLabel),
           ),
         }
       : null,
