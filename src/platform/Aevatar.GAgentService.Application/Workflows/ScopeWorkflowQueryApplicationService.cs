@@ -301,8 +301,7 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
 
         var bindingWorkflowId = binding.WorkflowId?.Trim() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(bindingWorkflowId) &&
-            !string.Equals(bindingWorkflowId, normalizedWorkflowId, StringComparison.Ordinal) &&
-            !(hasExplicitDescriptor && string.Equals(bindingWorkflowId, identity.ServiceId, StringComparison.Ordinal)))
+            !string.Equals(bindingWorkflowId, normalizedWorkflowId, StringComparison.Ordinal))
         {
             return new ScopeWorkflowLookupResult(
                 ScopeWorkflowLookupStatus.Stale,

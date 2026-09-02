@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GAgentService.Abstractions;
 
@@ -76,4 +77,52 @@ public sealed record ScopeWorkflowTemplateEnsureResult(
             revisionId,
             reason,
             saveAndBind);
+}
+
+public sealed record ScopeWorkflowDefinitionBindingResolveRequest(
+    string ScopeId,
+    string WorkflowId);
+
+public enum ScopeWorkflowDefinitionBindingResolveStatus
+{
+    NotRunnable = 0,
+    Resolved = 1,
+}
+
+public sealed record ScopeWorkflowDefinitionBindingResolveResult(
+    ScopeWorkflowDefinitionBindingResolveStatus Status,
+    string ScopeId,
+    string WorkflowId,
+    string Reason,
+    WorkflowDefinitionBinding? DefinitionBinding = null)
+{
+    public bool Succeeded => Status == ScopeWorkflowDefinitionBindingResolveStatus.Resolved && DefinitionBinding is not null;
+
+    public static ScopeWorkflowDefinitionBindingResolveResult NotRunnable(
+        string scopeId,
+        string workflowId,
+        string reason) =>
+        new(
+            ScopeWorkflowDefinitionBindingResolveStatus.NotRunnable,
+            scopeId,
+            workflowId,
+            string.IsNullOrWhiteSpace(reason) ? "workflow_not_runnable" : reason);
+
+    public static ScopeWorkflowDefinitionBindingResolveResult Resolved(
+        string scopeId,
+        string workflowId,
+        WorkflowDefinitionBinding definitionBinding) =>
+        new(
+            ScopeWorkflowDefinitionBindingResolveStatus.Resolved,
+            scopeId,
+            workflowId,
+            "resolved",
+            definitionBinding);
+}
+
+public interface IScopeWorkflowDefinitionBindingResolvePort
+{
+    Task<ScopeWorkflowDefinitionBindingResolveResult> ResolveAsync(
+        ScopeWorkflowDefinitionBindingResolveRequest request,
+        CancellationToken ct = default);
 }

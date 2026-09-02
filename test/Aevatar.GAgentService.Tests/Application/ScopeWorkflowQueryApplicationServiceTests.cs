@@ -339,7 +339,7 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
     }
 
     [Fact]
-    public async Task LookupByWorkflowIdAsync_ShouldResolveDescriptor_WhenBindingUsesPublishedServiceId()
+    public async Task LookupByWorkflowIdAsync_ShouldRejectDescriptor_WhenBindingUsesPublishedServiceIdAsWorkflowId()
     {
         const string workflowId = "dinner_date";
         const string publishedServiceId = "default";
@@ -367,11 +367,9 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
 
         var result = await service.LookupByWorkflowIdAsync(ScopeId, workflowId);
 
-        result.Status.Should().Be(ScopeWorkflowLookupStatus.Runnable);
-        result.Workflow.Should().NotBeNull();
-        result.Workflow!.WorkflowId.Should().Be(workflowId);
-        result.Workflow.PublishedServiceId.Should().Be(publishedServiceId);
-        result.Workflow.WorkflowName.Should().Be("dinner_date_mock");
+        result.Status.Should().Be(ScopeWorkflowLookupStatus.Stale);
+        result.Workflow.Should().BeNull();
+        result.Reason.Should().Be("workflow_actor_binding_workflow_mismatched");
         lifecyclePort.LastGetRequest.Should().NotBeNull();
         lifecyclePort.LastGetRequest!.ServiceId.Should().Be(publishedServiceId);
     }

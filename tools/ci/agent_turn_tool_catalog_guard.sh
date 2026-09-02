@@ -196,10 +196,10 @@ require_pattern \
 
 require_pattern 'AddAevatarMainnetHost_ShouldRegisterDefaultToolSets' "${composition_tests}" \
   "the Mainnet route topology snapshot test is missing."
-require_pattern 'total:13:11659' "${composition_tests}" \
+require_pattern 'total:13:11744' "${composition_tests}" \
   "the reviewed workspace.default count/schema snapshot changed without an explicit migration."
 require_pattern \
-  'sha256:f375070841c2461e768b97b300d617df51cf40e6d93308ecc1e146ed9f6de9d2' \
+  'sha256:9109bc325b6c4eea8693c8a0f6bf023ec74a7bdef4e0c521fb2a930797b71fd7' \
   "${composition_tests}" \
   "the reviewed workspace.default catalog digest changed without an explicit migration."
 require_pattern '"unique_tool_count": 68' "${baseline_manifest}" \

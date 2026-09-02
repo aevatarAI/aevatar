@@ -170,29 +170,29 @@ public sealed class MainnetChatEndpointsTests
         var workflow = CreateDinnerWorkflowSummary();
         var ensurePort = new RecordingScopeWorkflowTemplateEnsurePort(
             ScopeWorkflowTemplateEnsureResult.AlreadyCurrent(workflow, workflow.ActiveRevisionId));
-        var queryPort = new FixedScopeWorkflowQueryPort(
-            new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Runnable, workflow, "workflow_runnable"));
-        var bindingReader = new FixedWorkflowActorBindingReader(new WorkflowActorBinding(
-            WorkflowActorKind.Definition,
-            "actor-dinner",
-            "actor-dinner",
-            string.Empty,
-            "dinner_date_mock",
-            "name: dinner_date_mock\nsteps: []",
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-            ExternalCapabilityExecutionMode.Interactive,
-            ScopeId: "scope-1",
-            SourceKind: "service_revision",
-            WorkflowId: "default",
-            RevisionId: "dinner-date-mock-v2"));
+        var resolvePort = new RecordingScopeWorkflowDefinitionBindingResolvePort(
+            ScopeWorkflowDefinitionBindingResolveResult.Resolved(
+                "scope-1",
+                "dinner_date",
+                new WorkflowDefinitionBinding(
+                    "actor-dinner",
+                    "dinner_date_mock",
+                    "name: dinner_date_mock\nsteps: []",
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    ExternalCapabilityExecutionMode.Interactive,
+                    "scope-1",
+                    WorkflowRunOrigins.AdHocChat,
+                    SourceKind: "service_revision",
+                    WorkflowId: "dinner_date",
+                    RevisionId: "dinner-date-mock-v2",
+                    DefinitionVersion: 7)));
         var chatRunService = new RecordingWorkflowChatRunInteractionPort();
         var http = CreateAuthenticatedJsonContext(
             json,
             services =>
             {
                 services.AddSingleton<IScopeWorkflowTemplateEnsurePort>(ensurePort);
-                services.AddSingleton<IScopeWorkflowQueryPort>(queryPort);
-                services.AddSingleton<IWorkflowActorBindingReader>(bindingReader);
+                services.AddSingleton<IScopeWorkflowDefinitionBindingResolvePort>(resolvePort);
                 services.AddSingleton<IWorkflowChatRunInteractionPort>(chatRunService);
             });
         var classification = await MainnetChatEndpoints.ClassifyRequestAsync(http.Request);
@@ -200,13 +200,14 @@ public sealed class MainnetChatEndpointsTests
         await ExternalWorkflowChatCompatibilityAdapter.HandleAsync(http, classification.Body, CancellationToken.None);
 
         ensurePort.Requests.Should().ContainSingle().Which.WorkflowId.Should().Be("dinner_date");
-        queryPort.Requests.Should().ContainSingle().Which.Should().Be(("scope-1", "dinner_date"));
+        resolvePort.Requests.Should().ContainSingle().Which.Should().Be(("scope-1", "dinner_date"));
         chatRunService.LastRequest.Should().NotBeNull();
         chatRunService.LastRequest!.Source.CatalogName!.WorkflowName.Should().Be("dinner_date_mock");
         chatRunService.LastRequest.ResolvedDefinitionBinding.Should().NotBeNull();
         chatRunService.LastRequest.ResolvedDefinitionBinding!.DefinitionActorId.Should().Be("actor-dinner");
         chatRunService.LastRequest.ResolvedDefinitionBinding.WorkflowId.Should().Be("dinner_date");
         chatRunService.LastRequest.ResolvedDefinitionBinding.WorkflowName.Should().Be("dinner_date_mock");
+        chatRunService.LastRequest.ResolvedDefinitionBinding.DefinitionVersion.Should().Be(7);
     }
 
     [Fact]
@@ -394,43 +395,18 @@ public sealed class MainnetChatEndpointsTests
         }
     }
 
-    private sealed class FixedScopeWorkflowQueryPort(
-        ScopeWorkflowLookupResult result) : IScopeWorkflowQueryPort
+    private sealed class RecordingScopeWorkflowDefinitionBindingResolvePort(
+        ScopeWorkflowDefinitionBindingResolveResult result) : IScopeWorkflowDefinitionBindingResolvePort
     {
         public List<(string ScopeId, string WorkflowId)> Requests { get; } = [];
 
-        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(
-            string scopeId,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>([]);
-
-        public Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
-            string scopeId,
-            string workflowId,
+        public Task<ScopeWorkflowDefinitionBindingResolveResult> ResolveAsync(
+            ScopeWorkflowDefinitionBindingResolveRequest request,
             CancellationToken ct = default)
         {
-            Requests.Add((scopeId, workflowId));
+            Requests.Add((request.ScopeId, request.WorkflowId));
             return Task.FromResult(result);
         }
-
-        public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
-            string scopeId,
-            string workflowId,
-            CancellationToken ct = default) =>
-            Task.FromResult(result.Workflow);
-
-        public Task<ScopeWorkflowSummary?> GetByActorIdAsync(
-            string scopeId,
-            string actorId,
-            CancellationToken ct = default) =>
-            Task.FromResult(result.Workflow);
-    }
-
-    private sealed class FixedWorkflowActorBindingReader(
-        WorkflowActorBinding? binding) : IWorkflowActorBindingReader
-    {
-        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult(binding);
     }
 
     private sealed class RecordingScopeWorkflowTemplateEnsurePort(

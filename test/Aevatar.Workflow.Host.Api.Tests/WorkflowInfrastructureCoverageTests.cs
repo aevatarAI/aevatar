@@ -7,7 +7,6 @@ using Aevatar.Configuration;
 using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -1032,7 +1031,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void AddWorkflowCapabilityServices_ShouldLoadRepositoryWorkflowsFromWorkflowSource()
+    public void AddWorkflowCapabilityServices_ShouldNotRegisterStartupRepositoryWorkflowSource()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -1042,18 +1041,11 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
-        var loader = provider.GetRequiredService<WorkflowDefinitionFileLoader>();
         var options = provider.GetRequiredService<IOptions<WorkflowDefinitionFileSourceOptions>>().Value;
 
-        loader.LoadInto(
-            registry,
-            options.WorkflowDirectories,
-            NullLogger.Instance,
-            options.DuplicatePolicy);
-
-        registry.GetYaml("mission_wall_15_node_probe").Should().NotBeNull();
-        registry.GetYaml("simple_qa").Should().NotBeNull();
-        registry.GetYaml("codex_execute").Should().NotBeNull();
+        provider.GetService<WorkflowDefinitionFileLoader>().Should().BeNull();
+        options.WorkflowDirectories.Should().BeEmpty();
+        registry.GetYaml("mission_wall_15_node_probe").Should().BeNull();
         registry.GetYaml("demo_template").Should().BeNull();
     }
 

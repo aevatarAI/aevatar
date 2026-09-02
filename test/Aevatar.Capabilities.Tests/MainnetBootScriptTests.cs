@@ -85,6 +85,21 @@ public sealed class MainnetBootScriptTests
     }
 
     [Fact]
+    public void AppSettings_DefaultNyxIdChatProfile_ShouldSealDiningPreferenceMergePrecedence()
+    {
+        var configuration = BuildMainnetConfiguration();
+        var instructions = configuration["AgentProfiles:SystemDefaultNyxIdChat:Instructions"];
+
+        instructions.Should().Contain("current user message overrides");
+        instructions.Should().Contain("home_location or dining area as location");
+        instructions.Should().Contain("preferred_cuisines as cuisines");
+        instructions.Should().Contain("contact_phone_number as phone_number");
+        instructions.Should().Contain("budget_cap as budget_cap");
+        instructions.Should().Contain("one companion and no party size");
+        instructions.Should().Contain("missing from both the current user message and recovered dining context");
+    }
+
+    [Fact]
     public async Task BootScript_LocalMode_ShouldPassCompleteDevelopmentStartupBoundary()
     {
         var repoRoot = FindRepoRoot();
