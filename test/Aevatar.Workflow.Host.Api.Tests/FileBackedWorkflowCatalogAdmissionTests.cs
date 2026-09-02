@@ -72,6 +72,50 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_WhenStartupSkipIsEnabled_ShouldSkipNyxIdSourceCredentialRequiredDefinitions()
+    {
+        var runtime = new RecordingActorRuntime();
+        var observations = new RecordingWorkflowDefinitionBindObservationRuntime();
+        var dispatch = new RecordingActorDispatchPort(observations);
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ServiceAccessDenied,
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.ServiceAccessDenied,
+            Code = "NYXID_ADMISSION_SOURCE_CREDENTIAL_REQUIRED",
+            SafeMessage = "A source-readable caller NyxID credential is required.",
+        });
+        var admission = new RecordingWorkflowCapabilityAdmissionService(
+            new WorkflowExternalCapabilityAdmissionException(readiness));
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatch);
+        services.AddSingleton<IWorkflowDefinitionBindObservationScopeLeasePreparationPort>(observations);
+        services.AddSingleton<IWorkflowDefinitionBindObservationProjectionPort>(observations);
+        services.AddSingleton<IWorkflowExternalCapabilityAdmissionService>(admission);
+        services.AddWorkflowDefinitionFileSource(options =>
+            options.SkipSourceCredentialRequiredDefinitionsOnStartup = true);
+        using var provider = services.BuildServiceProvider();
+
+        await provider.GetRequiredService<FileBackedWorkflowCatalogPort>().MaterializeAsync(
+        [
+            new WorkflowDefinitionRegistration(
+                "nyxid_install",
+                "name: nyxid_install",
+                "workflow-definition:nyxid_install",
+                ExternalCapabilityExecutionMode.Interactive,
+                "repo"),
+        ]);
+
+        admission.Request.Should().NotBeNull();
+        runtime.Created.Should().BeEmpty();
+        dispatch.Envelopes.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task MaterializeAsync_ShouldReuseExactCommittedDefinitionBinding()
     {
         const string actorId = "workflow-definition:committed-alpha";

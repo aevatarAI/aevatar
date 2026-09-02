@@ -97,6 +97,7 @@ public sealed class AevatarInvocationDispatcher
     private readonly IWorkflowRunBackgroundDeliveryRegistrationPort? _workflowRunDeliveryRegistrationPort;
     private readonly IChannelNyxIdAgentKeyReadinessPort? _channelAgentKeyReadinessPort;
     private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
+    private readonly IScopeWorkflowTemplateEnsurePort? _scopeWorkflowTemplateEnsurePort;
     private readonly ILogger<AevatarInvocationDispatcher> _logger;
 
     public AevatarInvocationDispatcher(
@@ -116,7 +117,8 @@ public sealed class AevatarInvocationDispatcher
         ILogger<AevatarInvocationDispatcher>? logger = null,
         IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
         TimeSpan? workflowStartObservationTimeout = null,
-        IChannelNyxIdAgentKeyReadinessPort? channelAgentKeyReadinessPort = null)
+        IChannelNyxIdAgentKeyReadinessPort? channelAgentKeyReadinessPort = null,
+        IScopeWorkflowTemplateEnsurePort? scopeWorkflowTemplateEnsurePort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _actorRegistryQueryPort = actorRegistryQueryPort ?? throw new ArgumentNullException(nameof(actorRegistryQueryPort));
@@ -137,6 +139,7 @@ public sealed class AevatarInvocationDispatcher
         _workflowRunDeliveryRegistrationPort = workflowRunDeliveryRegistrationPort;
         _channelAgentKeyReadinessPort = channelAgentKeyReadinessPort;
         _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
+        _scopeWorkflowTemplateEnsurePort = scopeWorkflowTemplateEnsurePort;
         _logger = logger ?? NullLogger<AevatarInvocationDispatcher>.Instance;
     }
 
@@ -576,6 +579,10 @@ public sealed class AevatarInvocationDispatcher
             return WorkflowStartSourceResolution.Success(
                 WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName));
 
+        var templateEnsure = await TryEnsureScopeWorkflowTemplateAsync(scopeId, workflowName, ct).ConfigureAwait(false);
+        if (templateEnsure.Error != null)
+            return templateEnsure;
+
         var scopeWorkflow = await TryResolveScopeWorkflowAsync(scopeId, workflowName, ct).ConfigureAwait(false);
         if (scopeWorkflow.Error != null)
             return scopeWorkflow;
@@ -590,6 +597,35 @@ public sealed class AevatarInvocationDispatcher
         }
 
         return WorkflowStartSourceResolution.Success(WorkflowChatSource.CatalogWorkflow(workflowName));
+    }
+
+    private async ValueTask<WorkflowStartSourceResolution> TryEnsureScopeWorkflowTemplateAsync(
+        string scopeId,
+        string workflowId,
+        CancellationToken ct)
+    {
+        if (_scopeWorkflowTemplateEnsurePort is null)
+            return WorkflowStartSourceResolution.NotResolved();
+
+        try
+        {
+            var result = await _scopeWorkflowTemplateEnsurePort.EnsureAsync(
+                    new ScopeWorkflowTemplateEnsureRequest(scopeId, workflowId),
+                    ct)
+                .ConfigureAwait(false);
+            return result.Succeeded
+                ? WorkflowStartSourceResolution.NotResolved()
+                : WorkflowStartSourceResolution.Failed(ScopeWorkflowTemplateEnsureFailedError(result));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Scope workflow template ensure failed before workflow start: scopeId={ScopeId} workflowId={WorkflowId}",
+                scopeId,
+                workflowId);
+            return WorkflowStartSourceResolution.Failed(ScopeWorkflowTemplateEnsureFailedError(scopeId, workflowId));
+        }
     }
 
     private async ValueTask<WorkflowStartSourceResolution> TryResolveScopeWorkflowAsync(
@@ -1619,6 +1655,19 @@ public sealed class AevatarInvocationDispatcher
         Error(
             "scope_workflow_lookup_failed",
             $"Current-scope workflow '{workflowId}' in scope '{scopeId}' could not be verified. List current scope workflows and retry when the descriptor is available.",
+            "workflow_id");
+
+    private static InvocationToolError ScopeWorkflowTemplateEnsureFailedError(
+        ScopeWorkflowTemplateEnsureResult result) =>
+        Error(
+            "scope_workflow_template_ensure_failed",
+            $"Configured current-scope workflow '{result.WorkflowId}' in scope '{result.ScopeId}' could not be reconciled to revision '{result.RevisionId}': {result.Reason}.",
+            "workflow_id");
+
+    private static InvocationToolError ScopeWorkflowTemplateEnsureFailedError(string scopeId, string workflowId) =>
+        Error(
+            "scope_workflow_template_ensure_failed",
+            $"Configured current-scope workflow '{workflowId}' in scope '{scopeId}' could not be reconciled before start.",
             "workflow_id");
 
     private static InvocationToolError ChannelWorkflowDeliveryUnavailableError() =>

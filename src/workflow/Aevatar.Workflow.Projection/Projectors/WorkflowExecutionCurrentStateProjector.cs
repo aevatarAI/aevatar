@@ -357,11 +357,13 @@ public sealed class WorkflowExecutionCurrentStateProjector
 
         foreach (var executionState in state.ExecutionStates.Values)
         {
-            if (!executionState.Is(ToolCallModuleState.Descriptor))
-                continue;
-
-            if (executionState.Unpack<ToolCallModuleState>().PendingApprovals.Count > 0)
+            if (executionState.Is(ToolCallModuleState.Descriptor) &&
+                executionState.Unpack<ToolCallModuleState>().PendingApprovals.Count > 0)
                 return "awaiting_tool_approval";
+
+            if (executionState.Is(WaitSignalModuleState.Descriptor) &&
+                executionState.Unpack<WaitSignalModuleState>().Pending.Count > 0)
+                return "waiting_for_signal";
         }
 
         return status;

@@ -34,6 +34,12 @@ public sealed class ScopeWorkflowCapabilityOptions
 
     public int ListTake { get; set; } = 200;
 
+    public List<ScopeWorkflowConfiguredTemplateOptions> ConfiguredTemplates { get; set; } = [];
+
+    public TimeSpan TemplateEnsureProjectionWaitTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    public TimeSpan TemplateEnsureProjectionPollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
+
     public string BuildDefinitionActorIdPrefix(string scopeId, string workflowId) =>
         $"{DefinitionActorIdPrefix}:{BuildOpaqueToken(scopeId)}:{BuildOpaqueToken(workflowId)}";
 
@@ -71,4 +77,27 @@ public sealed class ScopeWorkflowCapabilityOptions
         var hashSuffix = Convert.ToHexString(hash).ToLowerInvariant()[..10];
         return slug.Length == 0 ? hashSuffix : $"{slug}-{hashSuffix}";
     }
+}
+
+public sealed class ScopeWorkflowConfiguredTemplateOptions
+{
+    public bool Enabled { get; set; } = true;
+
+    public string WorkflowId { get; set; } = string.Empty;
+
+    public string RevisionId { get; set; } = string.Empty;
+
+    public string WorkflowYaml { get; set; } = string.Empty;
+
+    public string WorkflowYamlPath { get; set; } = string.Empty;
+
+    public string WorkflowName { get; set; } = string.Empty;
+
+    public string DisplayName { get; set; } = string.Empty;
+
+    public string AppId { get; set; } = string.Empty;
+
+    public string ServiceId { get; set; } = string.Empty;
+
+    public bool? ExposureDesired { get; set; }
 }

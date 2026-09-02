@@ -206,6 +206,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
             {
                 options.WorkflowDirectories.Clear();
                 options.WorkflowDirectories.Add(Path.Combine(repoRoot, "workflows"));
+                options.SkipSourceCredentialRequiredDefinitionsOnStartup = true;
             });
             builder.Services.AddSingleton<IAuditTrailAppender, AppendedAuditTrail>();
             builder.Services.AddSingleton<IAuditActorIdentityHasher, StableAuditActorIdentityHasher>();

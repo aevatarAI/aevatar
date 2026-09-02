@@ -83,10 +83,7 @@ internal sealed class FileBackedWorkflowCatalogPort
             }
             catch (WorkflowExternalCapabilityAdmissionException ex) when (
                 _options.SkipSourceCredentialRequiredDefinitionsOnStartup &&
-                string.Equals(
-                    ex.SafeBlockerCode,
-                    "CODE_EXECUTION_SOURCE_CREDENTIAL_REQUIRED",
-                    StringComparison.Ordinal))
+                IsSourceCredentialRequiredBlocker(ex.SafeBlockerCode))
             {
                 _logger.LogWarning(
                     ex,
@@ -95,6 +92,16 @@ internal sealed class FileBackedWorkflowCatalogPort
             }
         }
     }
+
+    private static bool IsSourceCredentialRequiredBlocker(string blockerCode) =>
+        string.Equals(
+            blockerCode,
+            "CODE_EXECUTION_SOURCE_CREDENTIAL_REQUIRED",
+            StringComparison.Ordinal) ||
+        string.Equals(
+            blockerCode,
+            "NYXID_ADMISSION_SOURCE_CREDENTIAL_REQUIRED",
+            StringComparison.Ordinal);
 
     private async Task MaterializeDefinitionAsync(
         WorkflowDefinitionRegistration definition,

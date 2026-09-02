@@ -1784,6 +1784,54 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldExposeWaitingSignalStatus()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-09-02T09:00:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-signal",
+            ScopeId = "scope-signal",
+            Status = "running",
+        };
+        state.ExecutionStates["wait_signal"] = Any.Pack(new WaitSignalModuleState
+        {
+            Pending =
+            {
+                ["signal-key"] = new PendingSignalState
+                {
+                    RunId = "run-signal",
+                    StepId = "wait_for_post_timeout_choice",
+                    SignalName = "dinner_date_user_choice_after_timeout",
+                },
+            },
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WaitingForSignalEvent
+                {
+                    RunId = "run-signal",
+                    StepId = "wait_for_post_timeout_choice",
+                    SignalName = "dinner_date_user_choice_after_timeout",
+                },
+                state));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Status.Should().Be("waiting_for_signal");
+        document.ActivityWaiting.Availability.Should().Be("available");
+        document.ActivityWaiting.WaitingKind.Should().Be("signal");
+        document.ActivityWaiting.StepId.Should().Be("wait_for_post_timeout_choice");
+        document.ActivityWaiting.Prompt.Should().Be("dinner_date_user_choice_after_timeout");
+        new WorkflowExecutionReadModelMapper()
+            .ToActorSnapshot(document)
+            .CompletionStatus.Should().Be(WorkflowRunCompletionStatus.WaitingForSignal);
+    }
+
+    [Fact]
     public async Task WorkflowExecutionCurrentStateProjector_ShouldExposeActivityFailureAndDelayStepIds()
     {
         var opaqueCredential = new string('E', 48);

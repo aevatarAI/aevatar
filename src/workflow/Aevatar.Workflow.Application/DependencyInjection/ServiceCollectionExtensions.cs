@@ -168,7 +168,10 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<WorkflowDirectFallbackPolicy>(),
                 sp.GetService<IWorkflowChatHistoryTerminalDeliveryPort>(),
                 sp.GetService<IWorkflowChatHistoryCreateRecoveryReadPort>(),
-                sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
+                sp.GetRequiredService<WorkflowRunBehaviorOptions>(),
+                sp.GetService<IWorkflowExecutionCurrentStateQueryPort>(),
+                sp.GetService<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(),
+                sp.GetService<ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>>()));
         services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();
         // Refactor (iter18/cluster-005):
         //   Old pattern: accepted-only dispatch used a detached live-sink monitor service

@@ -1,5 +1,8 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
@@ -14,6 +17,9 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     private readonly WorkflowDirectFallbackPolicy _fallbackPolicy;
     private readonly IWorkflowChatHistoryTerminalDeliveryPort? _chatHistoryTerminalDeliveryPort;
     private readonly IWorkflowChatHistoryCreateRecoveryReadPort? _chatHistoryCreateRecoveryReadPort;
+    private readonly IWorkflowExecutionCurrentStateQueryPort? _currentStateQueryPort;
+    private readonly ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? _signalDispatchService;
+    private readonly ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>? _finalizeEmitter;
     private readonly WorkflowRunBehaviorOptions _behaviorOptions;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
 
@@ -26,6 +32,9 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         IWorkflowChatHistoryTerminalDeliveryPort? chatHistoryTerminalDeliveryPort = null,
         IWorkflowChatHistoryCreateRecoveryReadPort? chatHistoryCreateRecoveryReadPort = null,
         WorkflowRunBehaviorOptions? behaviorOptions = null,
+        IWorkflowExecutionCurrentStateQueryPort? currentStateQueryPort = null,
+        ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? signalDispatchService = null,
+        ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>? finalizeEmitter = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
         _actorResolver = actorResolver ?? throw new ArgumentNullException(nameof(actorResolver));
@@ -35,6 +44,9 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         _fallbackPolicy = fallbackPolicy ?? throw new ArgumentNullException(nameof(fallbackPolicy));
         _chatHistoryTerminalDeliveryPort = chatHistoryTerminalDeliveryPort;
         _chatHistoryCreateRecoveryReadPort = chatHistoryCreateRecoveryReadPort;
+        _currentStateQueryPort = currentStateQueryPort;
+        _signalDispatchService = signalDispatchService;
+        _finalizeEmitter = finalizeEmitter;
         _behaviorOptions = behaviorOptions ?? new WorkflowRunBehaviorOptions();
         _delayAsync = delayAsync ?? ((delay, token) => Task.Delay(delay, token));
     }
@@ -72,6 +84,14 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         var recoveredCreate = await TryRecoverCreateAsync(currentRequest, ct).ConfigureAwait(false);
         if (recoveredCreate != null)
             return recoveredCreate;
+
+        var signaledContinuation = await TrySignalWaitingConversationAsync(
+            currentRequest,
+            emitAsync,
+            onAcceptedAsync,
+            ct).ConfigureAwait(false);
+        if (signaledContinuation != null)
+            return signaledContinuation;
 
         while (true)
         {
@@ -438,6 +458,194 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
                 WorkflowProjectionCompletionStatus.Completed,
                 false));
+    }
+
+    private async Task<WorkflowChatRunInteractionResult?> TrySignalWaitingConversationAsync(
+        WorkflowChatRunRequest request,
+        Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
+        Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+        CancellationToken ct)
+    {
+        if (_chatHistoryCreateRecoveryReadPort is null ||
+            _currentStateQueryPort is null ||
+            _signalDispatchService is null ||
+            _finalizeEmitter is null ||
+            request.ChatConversation?.Intent != WorkflowChatConversationIntentKind.Continue ||
+            string.IsNullOrWhiteSpace(request.ScopeId) ||
+            string.IsNullOrWhiteSpace(request.ChatConversation.ConversationId) ||
+            string.IsNullOrWhiteSpace(request.Prompt))
+        {
+            return null;
+        }
+
+        if (!_projectionPort.ProjectionEnabled)
+            return WorkflowChatRunInteractionResult.Failure(
+                WorkflowChatRunStartError.ProjectionDisabled,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.ProjectionDisabled));
+
+        var normalizedScopeId = request.ScopeId.Trim();
+        var conversationId = request.ChatConversation.ConversationId.Trim();
+        var recovery = await _chatHistoryCreateRecoveryReadPort
+            .GetByConversationAsync(normalizedScopeId, conversationId, ct)
+            .ConfigureAwait(false);
+        if (recovery == null || string.IsNullOrWhiteSpace(recovery.WorkflowActorId))
+            return null;
+
+        var actorId = recovery.WorkflowActorId.Trim();
+        var snapshot = await _currentStateQueryPort
+            .GetWorkflowActorCurrentStateAsync(actorId, ct)
+            .ConfigureAwait(false);
+        if (!IsWaitingForSignal(snapshot, normalizedScopeId, out var runId, out var stepId, out var signalName))
+            return null;
+
+        var commandId = string.IsNullOrWhiteSpace(request.CommandIdSeed)
+            ? CreateInteractionId()
+            : request.CommandIdSeed.Trim();
+        var observationSessionId = string.IsNullOrWhiteSpace(recovery.WorkflowCommandId)
+            ? commandId
+            : recovery.WorkflowCommandId.Trim();
+        var signalCommand = new WorkflowSignalCommand(
+            actorId,
+            runId,
+            signalName,
+            commandId,
+            request.Prompt.Trim(),
+            stepId,
+            request.CorrelationIdSeed);
+        var signalSink = new EventChannel<WorkflowRunEventEnvelope>();
+        var attachment = await _projectionPort
+            .AttachExistingActorProjectionAsync(actorId, observationSessionId, signalSink, ct)
+            .ConfigureAwait(false);
+        if (attachment == null)
+        {
+            await signalSink.DisposeAsync().ConfigureAwait(false);
+            return WorkflowChatRunInteractionResult.Failure(
+                WorkflowChatRunStartError.ProjectionUnavailable,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.ProjectionUnavailable));
+        }
+
+        try
+        {
+            var dispatch = await _signalDispatchService.DispatchAsync(signalCommand, ct).ConfigureAwait(false);
+            if (!dispatch.Succeeded || dispatch.Receipt == null)
+            {
+                return WorkflowChatRunInteractionResult.Failure(
+                    WorkflowChatRunStartError.ChatHistoryReservationUnavailable,
+                    WorkflowChatRunStartFailureDetail.Create(
+                        WorkflowChatRunStartError.ChatHistoryReservationUnavailable,
+                        "Pending workflow signal could not be accepted."));
+            }
+
+            var acceptedReceipt = new WorkflowChatRunAcceptedReceipt(
+                actorId,
+                snapshot!.WorkflowName,
+                dispatch.Receipt.CommandId,
+                dispatch.Receipt.CorrelationId);
+            var receipt = new WorkflowChatInteractionAcceptedReceipt(
+                acceptedReceipt,
+                new WorkflowChatContext(
+                    normalizedScopeId,
+                    conversationId,
+                    request.CurrentTurnId ?? string.Empty,
+                    snapshot.StateVersion));
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct).ConfigureAwait(false);
+
+            var finalizeResult = await PumpSignaledContinuationAsync(
+                signalSink,
+                acceptedReceipt,
+                emitAsync,
+                ct).ConfigureAwait(false);
+            return WorkflowChatRunInteractionResult.Success(receipt, finalizeResult);
+        }
+        finally
+        {
+            await _projectionPort.DetachReleaseAndDisposeAsync(
+                    attachment.ProjectionLease,
+                    attachment.LiveSinkLease,
+                    signalSink,
+                    ct: CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private async Task<CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>> PumpSignaledContinuationAsync(
+        IEventSink<WorkflowRunEventEnvelope> signalSink,
+        WorkflowChatRunAcceptedReceipt receipt,
+        Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
+        CancellationToken ct)
+    {
+        var completed = false;
+        var completion = WorkflowProjectionCompletionStatus.Unknown;
+        await foreach (var evt in signalSink.ReadAllAsync(ct).ConfigureAwait(false))
+        {
+            await emitAsync(evt, ct).ConfigureAwait(false);
+            if (!TryResolveCompletion(evt, out var resolvedCompletion))
+                continue;
+
+            completed = true;
+            completion = resolvedCompletion;
+            break;
+        }
+
+        await _finalizeEmitter!.EmitAsync(receipt, completion, completed, emitAsync, ct).ConfigureAwait(false);
+        return new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(completion, completed);
+    }
+
+    private static bool TryResolveCompletion(
+        WorkflowRunEventEnvelope evt,
+        out WorkflowProjectionCompletionStatus completion)
+    {
+        completion = WorkflowProjectionCompletionStatus.Unknown;
+        if (evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunFinished)
+        {
+            completion = WorkflowProjectionCompletionStatus.Completed;
+            return true;
+        }
+
+        if (evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError)
+        {
+            completion = WorkflowProjectionCompletionStatus.Failed;
+            return true;
+        }
+
+        if (evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunStopped)
+        {
+            completion = WorkflowProjectionCompletionStatus.Stopped;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsWaitingForSignal(
+        WorkflowActorSnapshot? snapshot,
+        string scopeId,
+        out string runId,
+        out string stepId,
+        out string signalName)
+    {
+        runId = string.Empty;
+        stepId = string.Empty;
+        signalName = string.Empty;
+        if (snapshot == null ||
+            snapshot.CompletionStatus != WorkflowRunCompletionStatus.WaitingForSignal ||
+            !string.Equals(snapshot.ScopeId?.Trim(), scopeId, StringComparison.Ordinal) ||
+            snapshot.ActivityWaiting == null ||
+            !string.Equals(snapshot.ActivityWaiting.Availability, "available", StringComparison.Ordinal) ||
+            !string.Equals(snapshot.ActivityWaiting.WaitingKind, "signal", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        runId = string.IsNullOrWhiteSpace(snapshot.RunId)
+            ? snapshot.ActorId
+            : snapshot.RunId.Trim();
+        stepId = snapshot.ActivityWaiting.StepId?.Trim() ?? string.Empty;
+        signalName = snapshot.ActivityWaiting.Prompt?.Trim() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(runId) &&
+               !string.IsNullOrWhiteSpace(stepId) &&
+               !string.IsNullOrWhiteSpace(signalName);
     }
 
     private static WorkflowChatConversationIntent? NormalizeConversationIntent(WorkflowChatRunRequest request)

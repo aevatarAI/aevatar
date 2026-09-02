@@ -12,6 +12,7 @@ using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -73,6 +74,10 @@ public sealed class MainnetHealthEndpointsTests
         builder.Services.AddSingleton<IAuditTrailQueryPort, ReadyAuditTrailQueryPort>();
         builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.PostConfigure<WorkflowDefinitionFileSourceOptions>(options =>
+        {
+            options.SkipSourceCredentialRequiredDefinitionsOnStartup = true;
+        });
         builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddSingleton(Substitute.For<IScheduledAgentCredentialLifecycle>());
         builder.Services.AddScheduledAgents(builder.Configuration);
