@@ -483,6 +483,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             FormatToolNames(validTools.Select(static tool => tool.Name)),
             inputFileRefs.Count,
             toolContext.InputFileRefs.Count);
+        LogConnectedReadToolEvidence(surface, validTools);
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -2365,6 +2366,47 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         tool is IAgentToolCapabilityDescriptor descriptor &&
         descriptor.Capabilities.Any(declared =>
             string.Equals(declared, capability, StringComparison.OrdinalIgnoreCase));
+
+    private void LogConnectedReadToolEvidence(
+        string surface,
+        IReadOnlyList<IAgentTool> tools)
+    {
+        var connectedReads = tools
+            .Where(static tool =>
+                tool is IAgentToolOperationAdmissionOwner owner &&
+                owner.OperationAdmission.Identity is AgentToolOperationIdentity.PublishedEndpoint &&
+                owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly)
+            .Select(tool =>
+            {
+                var owner = (IAgentToolOperationAdmissionOwner)tool;
+                return new
+                {
+                    Tool = tool,
+                    Admission = owner.OperationAdmission,
+                    Endpoint = (AgentToolOperationIdentity.PublishedEndpoint)owner.OperationAdmission.Identity,
+                };
+            })
+            .OrderBy(static item => item.Tool.Name, StringComparer.Ordinal)
+            .ToArray();
+        if (connectedReads.Length == 0)
+            return;
+
+        foreach (var item in connectedReads)
+        {
+            _logger.LogInformation(
+                "Selected read-only connected operation admitted for LLM turn: surface={Surface} tool={ToolName} catalogServiceSlug={CatalogServiceSlug} serviceSlug={ServiceSlug} serviceInstanceId={ServiceInstanceId} endpointId={EndpointId} method={HttpMethod} pathTemplate={PathTemplate} displayName={DisplayName} description={Description}",
+                surface,
+                item.Tool.Name,
+                item.Admission.CatalogServiceSlug,
+                item.Admission.ServiceSlug,
+                item.Admission.ServiceInstanceId,
+                item.Endpoint.EndpointId,
+                item.Admission.HttpMethod,
+                item.Admission.PathTemplate,
+                item.Tool.Presentation.DisplayName,
+                item.Tool.Presentation.Description);
+        }
+    }
 
     private static string FormatToolNames(IEnumerable<string?> toolNames)
     {

@@ -1729,14 +1729,16 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
             if (IsDynamicReadConnectedServiceSelector(selector))
             {
+                var dynamicMatches = availableTools
+                    .Where(pair => toolContext.ToolVisibility.Allows(pair.Key) &&
+                                   (eligibleToolNames is null || eligibleToolNames.Contains(pair.Key)) &&
+                                   IsEligibleConnectedRead(pair.Value))
+                    .Select(static pair => pair.Key)
+                    .ToArray();
                 if (enforceConnectedOperationLimits)
-                {
-                    dynamicReadMatches.UnionWith(availableTools
-                        .Where(pair => toolContext.ToolVisibility.Allows(pair.Key) &&
-                                       (eligibleToolNames is null || eligibleToolNames.Contains(pair.Key)) &&
-                                       IsEligibleConnectedRead(pair.Value))
-                        .Select(static pair => pair.Key));
-                }
+                    dynamicReadMatches.UnionWith(dynamicMatches);
+                else
+                    names.UnionWith(dynamicMatches);
 
                 continue;
             }
@@ -2045,7 +2047,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                     "multiple_write_candidates",
                     StringComparison.Ordinal)
                     ? "connected_service_write_ambiguous"
-                    : "connected_operation_selector_failed"));
+                    : $"connected_operation_selector_failed:{result.FailureCode ?? "unknown"}"));
             return null;
         }
 
@@ -2295,15 +2297,12 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         if (connectedReadNames.Count == 0 || _connectedOperationSelector is null)
             return names;
 
-        var selected = await SelectConnectedOperationsAsync(
+        var selected = await SelectConnectedReadOperationsInBatchesAsync(
             connectedReadNames,
             availableTools,
-            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount,
-            maximumWriteSelections: 0,
             selectionContext,
             diagnostics,
-            ct,
-            noMatchIsDiagnostic: false);
+            ct);
         if (selected is not null)
             names.UnionWith(selected);
 

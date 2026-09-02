@@ -1888,6 +1888,44 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflow_FromNyxIdAssistant_ShouldBindRecoveryToCurrentConversation()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-chat-recovery",
+            chatContext: new AgentChatInvocationContext(
+                AgentChatInvocationSurface.NyxIdAssistant,
+                "nyxid-chat-conversation-1",
+                "turn-1",
+                "task-1",
+                null,
+                null));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowChatHistoryDelivery.Reservations.Should().ContainSingle();
+        var reservation = harness.WorkflowChatHistoryDelivery.Reservations.Single();
+        reservation.ScopeId.Should().Be("scope-1");
+        reservation.Conversation.Intent.Should().Be(WorkflowChatConversationIntentKind.Create);
+        reservation.Conversation.ConversationId.Should().Be("nyxid-chat-conversation-1");
+        reservation.WorkflowActorId.Should().Be("workflow-actor");
+        reservation.WorkflowCommandId.Should().Be("call-workflow-chat-recovery");
+        reservation.RequestFingerprint.Should().NotBeNullOrWhiteSpace();
+        harness.WorkflowChatHistoryDelivery.Bindings.Should().ContainSingle();
+        harness.WorkflowChatHistoryDelivery.Bindings.Single().Receipt.ActorId.Should().Be("workflow-actor");
+    }
+
+    [Fact]
     public async Task StartWorkflow_CreateResultReceipt_WithAcceptedStreamAck_ShouldReturnVerifiedReceipt()
     {
         var harness = new Harness();
@@ -5494,6 +5532,7 @@ public sealed class AevatarInvocationToolSourceTests
         public RecordingWorkflowDispatchService WorkflowDispatch { get; } = new();
         public RecordingServiceInvocationDispatcher ServiceInvocationDispatcher { get; } = new();
         public RecordingWorkflowRunBackgroundDeliveryRegistrationPort WorkflowRunDelivery { get; } = new();
+        public RecordingWorkflowChatHistoryTerminalDeliveryPort WorkflowChatHistoryDelivery { get; } = new();
         public RecordingChannelAgentKeyReadinessPort ChannelAgentKeyReadiness { get; } = new();
         public RecordingServiceInvocationResolutionPort ServiceInvocationResolution { get; } = new();
         public RecordingInvokeAdmissionAuthorizer AdmissionAuthorizer { get; } = new();
@@ -5543,7 +5582,8 @@ public sealed class AevatarInvocationToolSourceTests
                 scopeWorkflowQueryPort: ScopeWorkflowQuery,
                 workflowStartObservationTimeout: TimeSpan.Zero,
                 channelAgentKeyReadinessPort: ChannelAgentKeyReadiness,
-                scopeWorkflowTemplateEnsurePort: ScopeWorkflowTemplateEnsure);
+                scopeWorkflowTemplateEnsurePort: ScopeWorkflowTemplateEnsure,
+                workflowChatHistoryTerminalDeliveryPort: WorkflowChatHistoryDelivery);
 
         public void ConfigureServiceTarget(
             ServiceImplementationKind implementationKind,
@@ -5982,6 +6022,49 @@ public sealed class AevatarInvocationToolSourceTests
                 target.Service,
                 target.Artifact.Clone(),
                 target.Endpoint.Clone());
+    }
+
+    private sealed class RecordingWorkflowChatHistoryTerminalDeliveryPort : IWorkflowChatHistoryTerminalDeliveryPort
+    {
+        public List<WorkflowChatHistoryTerminalDeliveryReservationRequest> Reservations { get; } = [];
+        public List<(WorkflowChatHistoryTerminalDeliveryReservation Reservation, WorkflowChatRunAcceptedReceipt Receipt)> Bindings { get; } = [];
+        public List<(WorkflowChatHistoryTerminalDeliveryReservation Reservation, string Reason)> Abandons { get; } = [];
+
+        public Task<WorkflowChatHistoryTerminalDeliveryReservationResult> ReserveAsync(
+            WorkflowChatHistoryTerminalDeliveryReservationRequest request,
+            CancellationToken ct = default)
+        {
+            Reservations.Add(request);
+            var reservation = new WorkflowChatHistoryTerminalDeliveryReservation(
+                "chat-history-delivery-actor",
+                request.DeliveryId,
+                request.WorkflowActorId,
+                request.WorkflowCommandId);
+            var chatContext = new WorkflowChatContext(
+                request.ScopeId,
+                request.Conversation.ConversationId ?? "generated-conversation",
+                "generated-turn",
+                1);
+            return Task.FromResult(WorkflowChatHistoryTerminalDeliveryReservationResult.Success(reservation, chatContext));
+        }
+
+        public Task BindAcceptedAsync(
+            WorkflowChatHistoryTerminalDeliveryReservation reservation,
+            WorkflowChatRunAcceptedReceipt receipt,
+            CancellationToken ct = default)
+        {
+            Bindings.Add((reservation, receipt));
+            return Task.CompletedTask;
+        }
+
+        public Task AbandonAsync(
+            WorkflowChatHistoryTerminalDeliveryReservation reservation,
+            string reason,
+            CancellationToken ct = default)
+        {
+            Abandons.Add((reservation, reason));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingWorkflowRunBackgroundDeliveryRegistrationPort

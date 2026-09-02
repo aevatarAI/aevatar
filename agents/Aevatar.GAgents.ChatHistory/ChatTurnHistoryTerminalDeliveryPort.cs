@@ -114,7 +114,10 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
         return conversation.Intent switch
         {
             WorkflowChatConversationIntentKind.Create =>
-                ConversationIdentityResolution.Create(ChatHistoryActorIds.CreateConversationId(scopeId, workflowCommandId)),
+                ConversationIdentityResolution.Create(
+                    string.IsNullOrWhiteSpace(conversation.ConversationId)
+                        ? ChatHistoryActorIds.CreateConversationId(scopeId, workflowCommandId)
+                        : conversation.ConversationId.Trim()),
             WorkflowChatConversationIntentKind.Continue => await ResolveExistingConversationAsync(
                     scopeId,
                     conversation.ConversationId,

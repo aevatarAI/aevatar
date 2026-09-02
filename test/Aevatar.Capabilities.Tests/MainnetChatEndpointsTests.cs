@@ -1,9 +1,12 @@
 using System.Security.Claims;
 using System.Text;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Mainnet.Host.Api.Chat;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -95,6 +98,69 @@ public sealed class MainnetChatEndpointsTests
         var result = await MainnetChatEndpoints.ClassifyRequestAsync(http.Request);
 
         result.Kind.Should().Be(MainnetChatRequestKind.Unsupported);
+    }
+
+    [Fact]
+    public async Task AssistantText_ShouldRouteWaitingWorkflowConversationToSignalBeforeNyxIdChat()
+    {
+        const string json = "{\"type\":\"text\",\"conversationId\":\"nyxid-chat-1\",\"clientRequestId\":\"client-1\",\"prompt\":\"Let's pick the first restaurant, Pasta Bar.\"}";
+        var recoveryPort = new RecordingChatHistoryCreateRecoveryReadPort
+        {
+            Recovery = new WorkflowChatHistoryCreateRecovery(
+                WorkflowChatHistoryCreateRecoveryStatus.Bound,
+                "scope-1",
+                "create-command",
+                "nyxid-chat-1",
+                "turn-1",
+                "workflow-actor-1",
+                "create-command",
+                "create-correlation",
+                "fingerprint",
+                7,
+                DateTimeOffset.UtcNow),
+        };
+        var currentStateQueryPort = new FixedWorkflowExecutionCurrentStateQueryPort(new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor-1",
+            ScopeId = "scope-1",
+            RunId = "run-1",
+            CompletionStatus = WorkflowRunCompletionStatus.WaitingForSignal,
+            ActivityWaiting = new WorkflowRunActivityWaitingSnapshot
+            {
+                Availability = "available",
+                WaitingKind = "signal",
+                StepId = "wait_for_post_timeout_choice",
+                Prompt = "dinner_date_user_choice_after_timeout",
+            },
+        });
+        var signalDispatchService = new RecordingWorkflowSignalDispatchService();
+        var http = CreateAuthenticatedJsonContext(
+            json,
+            services =>
+            {
+                services.AddSingleton<IWorkflowChatHistoryCreateRecoveryReadPort>(recoveryPort);
+                services.AddSingleton<IWorkflowExecutionCurrentStateQueryPort>(currentStateQueryPort);
+                services.AddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(signalDispatchService);
+            });
+        var classification = await MainnetChatEndpoints.ClassifyRequestAsync(http.Request);
+
+        var handled = await MainnetChatEndpoints.TryHandleWorkflowSignalContinuationAsync(
+            http,
+            classification.Body!.Value,
+            CancellationToken.None);
+
+        handled.Should().BeTrue();
+        recoveryPort.ConversationRequests.Should().ContainSingle().Which.Should().Be(("scope-1", "nyxid-chat-1"));
+        currentStateQueryPort.ActorIds.Should().ContainSingle().Which.Should().Be("workflow-actor-1");
+        var command = signalDispatchService.Commands.Should().ContainSingle().Subject;
+        command.ActorId.Should().Be("workflow-actor-1");
+        command.RunId.Should().Be("run-1");
+        command.SignalName.Should().Be("dinner_date_user_choice_after_timeout");
+        command.StepId.Should().Be("wait_for_post_timeout_choice");
+        command.CommandId.Should().Be("client-1");
+        command.Payload.Should().Be("Let's pick the first restaurant, Pasta Bar.");
+        command.CorrelationId.Should().Be("client-1");
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
     }
 
     [Fact]
@@ -234,6 +300,83 @@ public sealed class MainnetChatEndpointsTests
             ServiceNamespace = "default",
             PublishedServiceId = "default",
         };
+
+    private sealed class RecordingChatHistoryCreateRecoveryReadPort : IWorkflowChatHistoryCreateRecoveryReadPort
+    {
+        public WorkflowChatHistoryCreateRecovery? Recovery { get; init; }
+
+        public List<(string ScopeId, string CommandId)> Requests { get; } = [];
+
+        public List<(string ScopeId, string ConversationId)> ConversationRequests { get; } = [];
+
+        public Task<WorkflowChatHistoryCreateRecovery?> GetAsync(
+            string scopeId,
+            string commandId,
+            CancellationToken ct = default)
+        {
+            Requests.Add((scopeId, commandId));
+            return Task.FromResult(Recovery);
+        }
+
+        public Task<WorkflowChatHistoryCreateRecovery?> GetByConversationAsync(
+            string scopeId,
+            string conversationId,
+            CancellationToken ct = default)
+        {
+            ConversationRequests.Add((scopeId, conversationId));
+            return Task.FromResult(Recovery);
+        }
+    }
+
+    private sealed class FixedWorkflowExecutionCurrentStateQueryPort(
+        WorkflowActorSnapshot? snapshot) : IWorkflowExecutionCurrentStateQueryPort
+    {
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
+
+        public List<string> ActorIds { get; } = [];
+
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ActorIds.Add(actorId);
+            return Task.FromResult(snapshot);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(
+            string actorId,
+            CancellationToken ct = default) =>
+            Task.FromResult<WorkflowActorProjectionState?>(null);
+    }
+
+    private sealed class RecordingWorkflowSignalDispatchService
+        : ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+    {
+        public List<WorkflowSignalCommand> Commands { get; } = [];
+
+        public Task<CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>> DispatchAsync(
+            WorkflowSignalCommand command,
+            CancellationToken ct = default)
+        {
+            Commands.Add(command);
+            return Task.FromResult(CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+                .Success(new WorkflowRunControlAcceptedReceipt(
+                    command.ActorId,
+                    command.RunId,
+                    command.CommandId ?? "accepted-command",
+                    command.CorrelationId ?? command.CommandId ?? "accepted-correlation")));
+        }
+    }
 
     private sealed class RecordingWorkflowChatRunInteractionPort : IWorkflowChatRunInteractionPort
     {
