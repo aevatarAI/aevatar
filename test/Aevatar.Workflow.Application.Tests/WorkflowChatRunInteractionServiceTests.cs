@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
@@ -665,6 +666,114 @@ public sealed class WorkflowChatRunInteractionServiceTests
             deliveryPort.ConversationContext with { CurrentTurnId = "generated-turn" });
         dispatched.CurrentTurnId.Should().Be("generated-turn");
         dispatched.CompletionNotificationTarget.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRouteContinuationPromptToPendingWorkflowSignal_AndEmitResultFrames()
+    {
+        var actorResolver = new RecordingActorResolver();
+        var projectionPort = new RecordingProjectionPort();
+        var recoveryPort = new RecordingChatHistoryCreateRecoveryReadPort
+        {
+            Recovery = new WorkflowChatHistoryCreateRecovery(
+                WorkflowChatHistoryCreateRecoveryStatus.Reserved,
+                "scope-a",
+                "create-cmd",
+                "conversation-existing",
+                "turn-original",
+                "workflow-actor-1",
+                "create-cmd",
+                "corr-original",
+                "fingerprint",
+                12,
+                DateTimeOffset.UtcNow),
+        };
+        var currentStateQueryPort = new RecordingCurrentStateQueryPort();
+        currentStateQueryPort.Snapshots.Enqueue(new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor-1",
+            WorkflowName = "dinner_date_mock",
+            ScopeId = "scope-a",
+            RunId = "run-1",
+            StateVersion = 12,
+            CompletionStatus = WorkflowRunCompletionStatus.WaitingForSignal,
+            ActivityWaiting = new WorkflowRunActivityWaitingSnapshot
+            {
+                StepId = "wait_for_post_timeout_choice",
+                WaitingKind = "signal",
+                Prompt = "dinner_date_user_choice_after_timeout",
+                Availability = "available",
+            },
+        });
+        currentStateQueryPort.Snapshots.Enqueue(new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor-1",
+            WorkflowName = "dinner_date_mock",
+            ScopeId = "scope-a",
+            RunId = "run-1",
+            StateVersion = 13,
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+        });
+        var signalDispatchService = new RecordingSignalDispatchService(projectionPort);
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            projectionPort,
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryCreateRecoveryReadPort: recoveryPort,
+            currentStateQueryPort: currentStateQueryPort,
+            signalDispatchService: signalDispatchService,
+            finalizeEmitter: new WorkflowRunFinalizeEmitter(currentStateQueryPort));
+        var emitted = new List<WorkflowRunEventEnvelope>();
+        WorkflowChatInteractionAcceptedReceipt? acceptedReceipt = null;
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "option_1",
+                WorkflowChatSource.CatalogWorkflow("dinner_date_mock"),
+                ExternalCapabilityExecutionMode.Interactive,
+                CommandIdSeed: "signal-cmd",
+                CorrelationIdSeed: "signal-corr",
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Continue(
+                    "conversation-existing",
+                    minimumStateVersion: 12)),
+            (evt, _) =>
+            {
+                emitted.Add(evt);
+                return ValueTask.CompletedTask;
+            },
+            (receipt, _) =>
+            {
+                acceptedReceipt = receipt;
+                return ValueTask.CompletedTask;
+            });
+
+        result.Succeeded.Should().BeTrue();
+        result.Completed.Should().BeTrue();
+        result.Completion.Should().Be(WorkflowProjectionCompletionStatus.Completed);
+        actorResolver.Requests.Should().BeEmpty();
+        inner.Requests.Should().BeEmpty();
+        recoveryPort.ConversationRequests.Should().Equal(("scope-a", "conversation-existing"));
+        projectionPort.AttachExistingCalls.Should().Equal(("workflow-actor-1", "create-cmd"));
+        signalDispatchService.Commands.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new WorkflowSignalCommand(
+                "workflow-actor-1",
+                "run-1",
+                "dinner_date_user_choice_after_timeout",
+                "signal-cmd",
+                "option_1",
+                "wait_for_post_timeout_choice",
+                "signal-corr"));
+        emitted.Select(x => x.EventCase).Should().Equal(
+            WorkflowRunEventEnvelope.EventOneofCase.RunFinished,
+            WorkflowRunEventEnvelope.EventOneofCase.StateSnapshot);
+        acceptedReceipt.Should().NotBeNull();
+        acceptedReceipt!.ChatContext.Should().BeEquivalentTo(
+            new WorkflowChatContext("scope-a", "conversation-existing", result.Receipt!.ChatContext!.TurnId, 12));
+        projectionPort.DetachCalls.Should().ContainSingle();
+        projectionPort.ReleaseCalls.Should().ContainSingle().Which.ActorId.Should().Be("workflow-actor-1");
     }
 
     [Fact]
@@ -1351,6 +1460,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
         IWorkflowChatHistoryTerminalDeliveryPort? chatHistoryTerminalDeliveryPort = null,
         IWorkflowChatHistoryCreateRecoveryReadPort? chatHistoryCreateRecoveryReadPort = null,
         WorkflowRunBehaviorOptions? behaviorOptions = null,
+        IWorkflowExecutionCurrentStateQueryPort? currentStateQueryPort = null,
+        ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? signalDispatchService = null,
+        ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>? finalizeEmitter = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null) =>
         new(
             actorResolver,
@@ -1361,6 +1473,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
             chatHistoryTerminalDeliveryPort,
             chatHistoryCreateRecoveryReadPort,
             behaviorOptions,
+            currentStateQueryPort,
+            signalDispatchService,
+            finalizeEmitter,
             delayAsync);
 
     private static WorkflowRunBehaviorOptions FastReservationObservationOptions() =>
@@ -1431,6 +1546,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         public bool AttachExistingReturnsNull { get; init; }
         public Exception? AttachExistingException { get; init; }
         public List<(string RootActorId, string CommandId)> AttachExistingCalls { get; } = [];
+        public List<IEventSink<WorkflowRunEventEnvelope>> AttachedSinks { get; } = [];
         public List<IAsyncDisposable?> DetachCalls { get; } = [];
         public List<IWorkflowExecutionProjectionLease> ReleaseCalls { get; } = [];
 
@@ -1446,9 +1562,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
             Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
         {
-            _ = sink;
             ct.ThrowIfCancellationRequested();
             AttachExistingCalls.Add((rootActorId, commandId));
+            AttachedSinks.Add(sink);
             if (AttachExistingException != null)
                 throw AttachExistingException;
 
@@ -1690,6 +1806,65 @@ public sealed class WorkflowChatRunInteractionServiceTests
                     ? Recovery
                     : ConversationRecoveries.Dequeue());
         }
+    }
+
+    private sealed class RecordingSignalDispatchService(RecordingProjectionPort projectionPort)
+        : ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+    {
+        public List<WorkflowSignalCommand> Commands { get; } = [];
+
+        public async Task<CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>> DispatchAsync(
+            WorkflowSignalCommand command,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Commands.Add(command);
+            await projectionPort.AttachedSinks[^1].PushAsync(
+                new WorkflowRunEventEnvelope
+                {
+                    RunFinished = new WorkflowRunFinishedEventPayload
+                    {
+                        ThreadId = command.ActorId,
+                    },
+                },
+                ct);
+            return CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt(
+                    command.ActorId,
+                    command.RunId,
+                    command.CommandId ?? "signal-cmd",
+                    command.CorrelationId ?? command.CommandId ?? "signal-corr"));
+        }
+    }
+
+    private sealed class RecordingCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
+    {
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
+        public Queue<WorkflowActorSnapshot?> Snapshots { get; } = new();
+
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(Snapshots.Count == 0 ? null : Snapshots.Dequeue());
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(
+            string actorId,
+            CancellationToken ct = default) =>
+            Task.FromResult<WorkflowActorProjectionState?>(null);
     }
 
     private sealed class NoopCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
