@@ -761,7 +761,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             preparation.Authority.AuthorityCeilingToolNames);
         materialization.Catalog.ProfilePromptLayer.Should().NotBeNull();
         materialization.Catalog.ProfilePromptLayer!.Content.Should()
-            .Contain("Profile instructions:")
+            .Contain("Instructions:")
             .And.Contain("For dinner reservation requests, start workflow_id dinner_date.");
     }
 
@@ -2188,6 +2188,205 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         connectedSelector.LastRequest.Candidates.Should().OnlyContain(candidate =>
             candidate.CatalogServiceSlug == "api-profile" &&
             candidate.Risk == AgentToolOperationRisk.ReadOnly);
+    }
+
+    [Fact]
+    public async Task PrepareNyxIdChatAsync_WorkflowMemberWithDynamicContextReads_ShouldNotRequireCatalogSlug()
+    {
+        IAgentTool[] contextTools =
+        [
+            new AdmittedTestTool(
+                "nyxop_current_user_dining_context_read",
+                CreateReadAdmission(
+                    "us-context-current",
+                    "current-user-context",
+                    "readDiningProfileContext")),
+            new AdmittedTestTool(
+                "nyxop_other_user_dining_context_read",
+                CreateReadAdmission(
+                    "us-context-other",
+                    "other-user-context",
+                    "readDiningProfileContext")),
+            new AdmittedTestTool(
+                "nyxop_current_user_dining_context_write",
+                CreateWriteAdmission(
+                    "us-context-current",
+                    "current-user-context",
+                    "updateDiningProfileContext",
+                    "user-context")),
+        ];
+        IAgentTool[] tools = [new TestTool("aevatar_start_workflow"), .. contextTools];
+        var profile = BuildProfile();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("aevatar_start_workflow");
+        profile.MaximumToolPolicy.ToolSetRefs.Add("profile.route");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].RoutingDescription =
+            "Start the dinner date workflow after preparing input from relevant user context.";
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Add("aevatar_start_workflow");
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(
+            ConnectedServiceSelector(string.Empty, AgentToolOperationRiskPayload.ReadOnly));
+        var sealedProfile = SealProfile(profile);
+        var classifier = new SequencedClassifier(
+            AgentProfileTurnClassificationResult.Matched(
+                AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+            AgentProfileTurnClassificationResult.Matched("intent-alpha"));
+        var connectedSelector = new RecordingConnectedOperationSelector(request =>
+            AgentProfileConnectedOperationSelectionResult.Selected(
+            [request.Candidates.Single(candidate =>
+                candidate.DisplayName == "nyxop_current_user_dining_context_read").CandidateId]));
+        var materializer = NewMaterializer(
+            RegistryWithRoute(tools),
+            classifier,
+            new RecordingFetcher(SuccessfulFetch()),
+            connectedOperationSelector: connectedSelector);
+
+        var preparation = await materializer.PrepareNyxIdChatAsync(
+            sealedProfile,
+            "session-dinner-dynamic-context-workflow",
+            "Use my saved dining profile and book dinner tonight at 7pm for 2 people.",
+            tools,
+            ToolContext(),
+            llmControl: null,
+            CancellationToken.None);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            sealedProfile,
+            preparation.Authority,
+            "token",
+            tools,
+            ToolContext(),
+            CancellationToken.None);
+
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "aevatar_start_workflow",
+            "nyxop_current_user_dining_context_read");
+        materialization.Catalog.FinalAllowedToolNames.Should().NotContain([
+            "nyxop_other_user_dining_context_read",
+            "nyxop_current_user_dining_context_write",
+        ]);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
+            "aevatar_start_workflow",
+            "nyxop_current_user_dining_context_read");
+        connectedSelector.CallCount.Should().Be(1);
+        connectedSelector.LastRequest!.MaximumReadSelections.Should().Be(3);
+        connectedSelector.LastRequest.MaximumWriteSelections.Should().Be(0);
+        connectedSelector.LastRequest.Candidates.Should().HaveCount(2);
+        connectedSelector.LastRequest.Candidates.Should().OnlyContain(candidate =>
+            candidate.Risk == AgentToolOperationRisk.ReadOnly);
+        connectedSelector.LastRequest.Candidates.Should().Contain(candidate =>
+            candidate.CatalogServiceSlug.Length == 0 &&
+            candidate.DisplayName == "nyxop_current_user_dining_context_read");
+    }
+
+    [Fact]
+    public async Task PrepareNyxIdChatAsync_DynamicContextReadSelectorFailure_ShouldRestrictEmpty()
+    {
+        IAgentTool[] tools =
+        [
+            new TestTool("aevatar_start_workflow"),
+            new AdmittedTestTool(
+                "nyxop_current_user_dining_context_read",
+                CreateReadAdmission(
+                    "us-context-current",
+                    "current-user-context",
+                    "readDiningProfileContext")),
+        ];
+        var profile = BuildProfile();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("aevatar_start_workflow");
+        profile.MaximumToolPolicy.ToolSetRefs.Add("profile.route");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Add("aevatar_start_workflow");
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(
+            ConnectedServiceSelector(string.Empty, AgentToolOperationRiskPayload.ReadOnly));
+        var connectedSelector = new RecordingConnectedOperationSelector(
+            AgentProfileConnectedOperationSelectionResult.Failed("selector_timeout"));
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new SequencedClassifier(
+                    AgentProfileTurnClassificationResult.Matched(
+                        AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+                    AgentProfileTurnClassificationResult.Matched("intent-alpha")),
+                new RecordingFetcher(SuccessfulFetch()),
+                connectedOperationSelector: connectedSelector)
+            .PrepareNyxIdChatAsync(
+                SealProfile(profile),
+                "session-dinner-dynamic-context-failure",
+                "Use my saved dining profile and book dinner tonight at 7pm for 2 people.",
+                tools,
+                ToolContext(),
+                llmControl: null,
+                CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.RestrictedEmpty);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEmpty();
+        preparation.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation);
+    }
+
+    [Fact]
+    public async Task PrepareNyxIdChatAsync_DynamicAndConcreteContextReads_ShouldShareReadBudget()
+    {
+        var concreteReads = Enumerable.Range(1, 3)
+            .Select(index => (IAgentTool)new AdmittedTestTool(
+                $"nyxop_api_profile_read_{index}",
+                CreateReadAdmission(
+                    "us-profile-current",
+                    "current-user-profile",
+                    $"readProfile{index}",
+                    "api-profile")))
+            .ToArray();
+        var dynamicReads = Enumerable.Range(1, 3)
+            .Select(index => (IAgentTool)new AdmittedTestTool(
+                $"nyxop_current_user_dining_context_read_{index}",
+                CreateReadAdmission(
+                    "us-context-current",
+                    "current-user-context",
+                    $"readDiningProfileContext{index}")))
+            .ToArray();
+        IAgentTool[] tools = [new TestTool("aevatar_start_workflow"), .. concreteReads, .. dynamicReads];
+        var profile = BuildProfile();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("aevatar_start_workflow");
+        profile.MaximumToolPolicy.ToolSetRefs.Add("profile.route");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Add("aevatar_start_workflow");
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-profile",
+            AgentToolOperationRiskPayload.ReadOnly));
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(
+            ConnectedServiceSelector(string.Empty, AgentToolOperationRiskPayload.ReadOnly));
+        var connectedSelector = new RecordingConnectedOperationSelector(request =>
+            AgentProfileConnectedOperationSelectionResult.Selected(
+                request.Candidates.Take(request.MaximumReadSelections)
+                    .Select(static candidate => candidate.CandidateId)
+                    .ToArray()));
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new SequencedClassifier(
+                    AgentProfileTurnClassificationResult.Matched(
+                        AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+                    AgentProfileTurnClassificationResult.Matched("intent-alpha")),
+                new RecordingFetcher(SuccessfulFetch()),
+                connectedOperationSelector: connectedSelector)
+            .PrepareNyxIdChatAsync(
+                SealProfile(profile),
+                "session-dinner-dynamic-context-budget",
+                "Use my saved dining profile and book dinner tonight at 7pm for 2 people.",
+                tools,
+                ToolContext(),
+                llmControl: null,
+                CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Selected);
+        CountReadTools(preparation.Authority.AuthorityCeilingToolNames, tools).Should().Be(
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount);
+        connectedSelector.CallCount.Should().Be(1);
+        connectedSelector.LastRequest!.MaximumReadSelections.Should().Be(
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount);
     }
 
     [Fact]
@@ -3886,6 +4085,16 @@ public sealed class AgentTurnToolCatalogMaterializerTests
 
     private static IReadOnlyList<IAgentTool> NewTools(params string[] names) =>
         names.Select(static name => (IAgentTool)new TestTool(name)).ToArray();
+
+    private static int CountReadTools(
+        IEnumerable<string> names,
+        IReadOnlyList<IAgentTool> tools)
+    {
+        var byName = tools.ToDictionary(static tool => tool.Name, StringComparer.OrdinalIgnoreCase);
+        return names.Count(name => byName.TryGetValue(name, out var tool) &&
+                                   tool is IAgentToolOperationAdmissionOwner owner &&
+                                   owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly);
+    }
 
     private static RecordingToolSetRegistry RegistryWithRoute(IReadOnlyList<IAgentTool> tools)
     {

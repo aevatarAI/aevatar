@@ -83,7 +83,7 @@ public static class NyxIdChatSystemAgentProfileDraftFactory
     {
         var selector = new AgentProfileConnectedServiceSelector
         {
-            CatalogServiceSlug = Required(options.CatalogServiceSlug, nameof(options.CatalogServiceSlug)),
+            CatalogServiceSlug = Normalize(options.CatalogServiceSlug),
             EndpointId = Normalize(options.EndpointId),
         };
         selector.AllowedRisks.AddRange(options.AllowedRisks.Select(AgentProfileRiskOptions.Parse));

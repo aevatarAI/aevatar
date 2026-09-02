@@ -1,5 +1,7 @@
 using System.Text;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Prompting;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Prompting;
 using FluentAssertions;
 
@@ -49,6 +51,31 @@ public sealed class SystemPromptLayerComposerTests
         result.ConversationProvenance!.SummarySource.Should().Be("summary-source");
         result.Kernel.ActualUtf8Bytes.Should().Be(Encoding.UTF8.GetByteCount("kernel"));
         result.Kernel.EstimatedTokens.Should().Be(2);
+    }
+
+    [Fact]
+    public void CreateForProfile_IncludesProfileInstructionsInPromptLayer()
+    {
+        var profile = new AgentProfileSnapshot
+        {
+            ProfileId = "nyxid-chat-default",
+            ProfileVersion = "v1",
+            PolicyRevision = "dinner-date-mock-v2",
+            Instructions = "For dinner booking requests, read the user's dining profile before starting the workflow.",
+        };
+
+        var catalog = AgentTurnToolCatalogFactory.CreateForProfile(
+            profile,
+            finalNames: [],
+            selectedIntentId: null,
+            candidateIntentId: "dinner_booking",
+            selectedSkillPromptLayer: null,
+            diagnostics: null,
+            exactTools: []);
+
+        catalog.ProfilePromptLayer.Should().NotBeNull();
+        catalog.ProfilePromptLayer!.Content.Should().Contain("Instructions:");
+        catalog.ProfilePromptLayer.Content.Should().Contain(profile.Instructions);
     }
 
     [Fact]
