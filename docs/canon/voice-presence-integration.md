@@ -89,14 +89,14 @@ touch the audio socket.
 | **Audio + control** | edge ⇄ aevatar ⇄ OpenAI | binary PCM16 (audio) + JSON `VoiceControlFrame` (control) over `/ws/voice`; relay WS to OpenAI | Hot path. Raw PCM never enters the actor inbox / `EventEnvelope` / projection / committed store (ADR-013 media red line). |
 | **Credential** | aevatar → NyxID → OpenAI | HTTPS mint; `/ws/voice` admission carries a short-TTL opaque `credential_ref` in typed `VoiceToolExecutionContext` and binds the raw caller bearer only when the live transport lease attaches | Connect-time/provider/tool use only. Actor state carries the ref and non-secret caller/channel fields; catalog, invoker, and provider reconnect resolve through `ICredentialProvider` at the co-located transport boundary. Raw bearers do not cross lease/proto/actor/readmodel boundaries. |
 | **Edge tools** | actor → NyxID proxy → node WS → edge HTTP → LAN | NyxID connected-service `x-aevatar-tool` operations | The LAN tool bridge. Edge publishes `/edge-tools/openapi.json`; only `EDGE_TOOLS_ALLOWLIST` operations are exposed (ADR-0031 short-term bridge). |
-| **Device events** | edge → aevatar `/api/device-events/{regId}` | HMAC-SHA256 signed callback body | Off-socket household-event ingress. The endpoint admits only fresh signed body timestamps and maps a stable delivery id into the envelope dedupe operation; the actor owns fencing / turn creation. |
+| **Device events** | edge → aevatar `/api/device-events/{regId}` | HMAC-SHA256 signed callback body | Off-socket household-event ingress. The endpoint admits only fresh signed body timestamps and maps a stable delivery id into the envelope delivery operation identity; the actor owns fencing / turn creation. |
 
 Device-event replay protection is enforced before dispatch. The endpoint trusts
 only the timestamp carried in the HMAC-covered callback body, with a default
 10-second freshness window aligned to voice event staleness. `X-NyxID-Timestamp`
 is diagnostic only and cannot refresh a captured body. The delivery id is
 `content.text.event_id` when present, otherwise a home-alert `correlation_key`;
-it becomes `Runtime.Deduplication.OperationId =
+it becomes `Runtime.DeliveryIdentity.OperationId =
 device-event:{registrationId}:{deliveryId}`. If no active voice session exists,
 the event is still drop-and-log at the voice boundary; this integration does not
 add a durable spool.
@@ -107,9 +107,12 @@ Authoritative schema: `src/Aevatar.Foundation.VoicePresence.Abstractions/Protos/
 The edge consumes a JSON projection of it (camelCase), hand-parsed by
 `voice-presence` `Aevatar/AevatarRealtimeFrameParser.cs`.
 
-- **Endpoint** — `GET /ws/voice` (policy-resolved). Auth:
-  `Authorization: Bearer <NyxID JWT>` or `?access_token=`. Query:
-  `codec=pcm16`, `mode`, `voice_module_name`. Mainnet does not expose an
+- **Endpoint** — `GET /ws/voice` (policy-resolved). Browser clients offer
+  `aevatar-voice-v1` and `aevatar-bearer.<NyxID JWT>` through
+  `Sec-WebSocket-Protocol`; the host must select only `aevatar-voice-v1` in the
+  upgrade response and must never echo the bearer entry. Non-browser clients
+  may use `Authorization: Bearer <NyxID JWT>`; `?access_token=` is legacy only.
+  Query: `codec=pcm16`, `mode`, `voice_module_name`. Mainnet does not expose an
   actor-id path; explicit voice attachment is represented only by typed
   `ForwardToModel.tool_choice_hint.voice_attach_target`.
 - **Audio** — WebSocket **binary** frames carry raw PCM16 (24 kHz) both
@@ -122,7 +125,11 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   - down (aevatar → client): `sessionAccepted`, `realtimeFrame`
   - `sessionAccepted` advertises the typed wire contract version (`1.0`) and
     the input image policy (`maxBytes: 512000`, allowed media types
-    `image/jpeg`, `image/png`) owned by aevatar.
+    `image/jpeg`, `image/png`) owned by aevatar. It also carries
+    `attachOutcome`: `NEW_SESSION` for a fresh lease and `RESTARTED` when
+    aevatar intentionally evicted a previous lease before accepting the new
+    transport. Clients must not infer reset semantics from a changed
+    `sessionId`; `sessionId` remains identity.
   - `realtimeFrame` is itself a `VoiceRealtimeFrame` oneof: `responseStarted`/
     `Done`/`Cancelled`, `speechStarted`/`Stopped`, `functionCall`,
     `transcriptDelta`/`Completed`, `error`, `disconnected`, `sessionClosed`.
@@ -155,6 +162,14 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   results, and event injection are delivered only through the live media relay
   bound at attach time. A missing media port or relay for that lease is a
   delivery/topology gap, not permission to open a replacement provider socket.
+- **Attach lifecycle** — both the Foundation endpoint and the Mainnet
+  policy-aware endpoint use the same stateless Foundation WebSocket attach
+  executor. It sends the typed `sessionAccepted` ACK, subscribes realtime
+  control frames, attaches the volatile media relay with a bounded timeout, and
+  releases/detaches with a bounded close-wait. A pre-upgrade
+  `TransportAlreadyAttached` result returns `409` with `Retry-After: 1`;
+  post-upgrade media, credential, conflict, or timeout failures close the socket
+  with a policy-violation reason.
 - **Credential ref lifetime** — `/ws/voice` admission mints at most one
   `voice-tool:` ref for an attach attempt and hands a non-protobuf transport
   binding to the host attach path. The raw caller bearer becomes resolvable
@@ -187,6 +202,18 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   timeout as edge playout confirmation.
 
 ## Connect + turn sequence
+
+The browser `/voice` surface keeps its provider grant separate from the shared
+console login. Before route provisioning or microphone access, it obtains a
+feature token whose RFC 8707 resources are the union of the baseline Aevatar
+resource and
+`<same-NyxID-resource-base>/api/v1/proxy/s/<configured-realtime-service-slug>`.
+The browser derives that URI from the injected Aevatar resource, so it preserves
+the resource server's canonical API base independently of the OIDC authority. The
+authorization-code exchange repeats that exact resource set, and refresh uses
+the resources stored with the feature token. The shared baseline token is not
+overwritten. Owning the NyxID service and authorizing a particular access token
+to proxy it are separate facts.
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -247,7 +274,7 @@ sequenceDiagram
 | Media relay | `VoiceVolatileMediaStreamPort` (volatile, per-lease) | `VoiceSession` + WebRTC/WHIP transcode |
 | Brain state | `VoicePresenceModule` on a `RoleGAgent` actor | — (no `session.update`) |
 | Provider | `OpenAIRealtimeProvider` (direct WS) / MiniCPM | — |
-| Credentials | `VoiceToolExecutionContext` + `ICredentialProvider` use-boundary resolution; `NyxIdRealtimeProviderCredentialResolver` mints provider ephemeral | NyxID bearer only |
+| Credentials | `/voice` feature-scoped OAuth token + `VoiceToolExecutionContext` / `ICredentialProvider` use-boundary resolution; `NyxIdRealtimeProviderCredentialResolver` mints provider ephemeral | NyxID bearer authorized for both Aevatar and the configured realtime service |
 | Tools | `IVoiceToolInvoker` / `IAgentToolSource` (+ NyxID connected-service) | `/edge-tools` HTTP surface (LAN execution) |
 | Device events | `/api/device-events` HMAC ingress → actor | `AevatarDeviceEventClient` (HMAC sign) |
 

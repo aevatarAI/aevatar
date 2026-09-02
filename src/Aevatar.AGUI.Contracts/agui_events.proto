@@ -6,9 +6,11 @@ option csharp_namespace = "Aevatar.AGUI.Contracts";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/wrappers.proto";
+import "Tools/tool_presentation.proto";
 
 message AGUIEvent {
   google.protobuf.Int64Value timestamp = 1;
+  int64 sequence = 17;
 
   oneof event {
     RunStartedEvent run_started = 2;
@@ -34,10 +36,18 @@ message RunStartedEvent {
   string run_id = 2;
 }
 
+enum RunCompletionStatus {
+  RUN_COMPLETION_STATUS_UNSPECIFIED = 0;
+  RUN_COMPLETION_STATUS_COMPLETED = 1;
+  RUN_COMPLETION_STATUS_FAILED = 2;
+  RUN_COMPLETION_STATUS_BLOCKED = 3;
+}
+
 message RunFinishedEvent {
   string thread_id = 1;
   string run_id = 2;
   google.protobuf.Any result = 3;
+  RunCompletionStatus status = 4;
 }
 
 message GAgentDraftRunResultPayload {
@@ -79,6 +89,7 @@ message StateSnapshotEvent {
 message ToolCallStartEvent {
   string tool_call_id = 1;
   string tool_name = 2;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
 }
 
 message ToolCallEndEvent {

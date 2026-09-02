@@ -34,4 +34,11 @@ public sealed class RuntimeActorGrainState
     /// </summary>
     [Id(7)]
     public RuntimeActorIdentity? Identity { get; set; }
+
+    /// <summary>
+    /// Protobuf-encoded runtime delivery checkpoint for committed-state observation.
+    /// It is deliberately separate from the actor's business state snapshot.
+    /// </summary>
+    [Id(8)]
+    public byte[]? CommittedStatePublicationState { get; set; }
 }

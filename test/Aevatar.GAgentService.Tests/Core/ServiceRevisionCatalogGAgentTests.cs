@@ -214,6 +214,89 @@ public sealed class ServiceRevisionCatalogGAgentTests
     }
 
     [Fact]
+    public async Task HandlePublishRevisionAsync_ShouldRevalidatePreparedArtifactBeforeCommit()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var prepareCalls = 0;
+        var adapter = new RecordingAdapter(_ =>
+        {
+            prepareCalls++;
+            if (prepareCalls == 1)
+            {
+                return Task.FromResult(
+                    GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+            }
+
+            throw new InvalidOperationException("publish admission failed");
+        });
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            adapter,
+            ServiceActorIds.RevisionCatalog(identity));
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+        });
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        var act = () => agent.HandlePublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("publish admission failed");
+        prepareCalls.Should().Be(2);
+        agent.State.Revisions["r1"].Status.Should().Be(ServiceRevisionStatus.Prepared);
+    }
+
+    [Fact]
+    public async Task HandlePublishRevisionAsync_ShouldRejectRevalidatedArtifactHashDrift()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var prepareCalls = 0;
+        var adapter = new RecordingAdapter(_ =>
+        {
+            prepareCalls++;
+            var endpoint = GAgentServiceTestKit.CreateEndpointDescriptor(
+                endpointId: prepareCalls == 1 ? "run" : "changed");
+            return Task.FromResult(
+                GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1", endpoint));
+        });
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            adapter,
+            ServiceActorIds.RevisionCatalog(identity));
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+        });
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        var act = () => agent.HandlePublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*different prepared artifact*");
+        prepareCalls.Should().Be(2);
+        agent.State.Revisions["r1"].Status.Should().Be(ServiceRevisionStatus.Prepared);
+    }
+
+    [Fact]
     public async Task HandleCreateRevisionAsync_ShouldRejectDuplicateRevision()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();

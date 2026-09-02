@@ -20,8 +20,11 @@
 
     <ItemGroup>
         <Protobuf Include="agent_messages.proto" GrpcServices="None" />
+        <Protobuf Include="Credentials/credential_secret_references.proto" GrpcServices="None" />
         <Protobuf Include="ExternalLinks/external_link_messages.proto" GrpcServices="None" />
+        <Protobuf Include="EventSourcing/committed_state_publication_state.proto" GrpcServices="None" />
         <Protobuf Include="Interactions/interaction_spec.proto" GrpcServices="None" />
+        <Protobuf Include="Tools/tool_presentation.proto" GrpcServices="None" />
         <Protobuf Include="runtime_actor_identity.proto" GrpcServices="None" />
     </ItemGroup>
 

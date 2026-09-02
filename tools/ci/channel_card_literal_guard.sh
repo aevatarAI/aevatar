@@ -10,17 +10,17 @@ cd "${REPO_ROOT}"
 #
 # Outbound rich interactions must flow through a composer + dispatcher; raw Lark 2.0 card
 # JSON literals (msg_type=interactive / schema=2.0 / tag=button / tag=form / tag=input)
-# inside agents/Aevatar.GAgents.Authoring.Lark or agents/Aevatar.GAgents.NyxidChat are a
+# inside the Lark authoring adapter or agents/Aevatar.GAgents.NyxidChat are a
 # regression signal that someone sidestepped the composer.
 #
 # Scan:
-#   - agents/Aevatar.GAgents.Authoring.Lark/**/*.cs
+#   - agents/platforms/Aevatar.GAgents.Platform.Lark/Authoring/**/*.cs
 #   - agents/Aevatar.GAgents.NyxidChat/**/*.cs
 # Exclude:
 #   - */bin/*, */obj/*
 #
-# Lark composer ownership boundary lives under agents/channels/Aevatar.GAgents.Channel.Lark
-# and is intentionally not scanned here.
+# The general Lark platform composer is intentionally not scanned here; this guard covers
+# authoring adapter code and NyxidChat call sites.
 
 forbidden_patterns=(
   '"msg_type"[[:space:]]*:[[:space:]]*"interactive"'
@@ -41,7 +41,7 @@ violations=""
 # the guard grandfathers them so new code cannot add further offenders while this list shrinks.
 # TODO(#350-followup): migrate AgentBuilderCardFlow onto IChannelMessageComposerRegistry then drop the allowlist entry.
 allowlist=(
-  "agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderCardFlow.cs"
+  "agents/platforms/Aevatar.GAgents.Platform.Lark/Authoring/AgentBuilderCardFlow.cs"
 )
 
 is_allowlisted() {
@@ -86,7 +86,7 @@ ${hits}"
   done < <(rg --files "${project_root}" -g '*.cs' || true)
 }
 
-scan_project "agents/Aevatar.GAgents.Authoring.Lark"
+scan_project "agents/platforms/Aevatar.GAgents.Platform.Lark/Authoring"
 scan_project "agents/Aevatar.GAgents.NyxidChat"
 
 if [ -n "${violations}" ]; then

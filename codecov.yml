@@ -1,6 +1,11 @@
 ignore:
   - "tools/**"
   - "agents/**"
+  # Host/composition layer: inline-HTML console pages render UI strings and wire
+  # endpoints (CLAUDE.md: API 仅做宿主与组合). They carry no business logic and
+  # must not gate patch coverage.
+  - "**/*Page.cs"
+  - "src/Aevatar.Mainnet.Host.Api/BackendConsole/**"
 
 coverage:
   status:

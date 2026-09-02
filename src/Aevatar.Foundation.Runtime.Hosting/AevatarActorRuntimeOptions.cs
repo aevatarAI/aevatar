@@ -1,3 +1,5 @@
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
+
 namespace Aevatar.Foundation.Runtime.Hosting;
 
 public sealed class AevatarActorRuntimeOptions
@@ -25,6 +27,18 @@ public sealed class AevatarActorRuntimeOptions
 
     public string OrleansGarnetConnectionString { get; set; } = DefaultOrleansGarnetConnectionString;
 
+    public string SecretStoreBackend { get; set; } = string.Empty;
+
+    public string SecretStoreConnectionString { get; set; } = string.Empty;
+
+    public int SecretStoreDatabase { get; set; } = -1;
+
+    public string SecretStoreKeyringPath { get; set; } = string.Empty;
+
+    public string SecretStoreVaultPrefix { get; set; } = "aevatar:secret-vault";
+
+    public string SecretStoreRuntimePrefix { get; set; } = "aevatar:runtime-secrets";
+
     public int OrleansQueueCount { get; set; } = 8;
 
     public int OrleansQueueCacheSize { get; set; } = 4096;
@@ -34,6 +48,15 @@ public sealed class AevatarActorRuntimeOptions
     public string KafkaTopicName { get; set; } = "aevatar-foundation-agent-events";
 
     public string KafkaConsumerGroup { get; set; } = "aevatar-foundation-kafka-streaming";
+
+    public int KafkaReceiverBufferCapacity { get; set; } =
+        KafkaProviderTransportOptions.DefaultReceiverBufferCapacity;
+
+    public int KafkaReceiverBufferHighWatermark { get; set; } =
+        KafkaProviderTransportOptions.DefaultReceiverBufferHighWatermark;
+
+    public int KafkaReceiverBufferLowWatermark { get; set; } =
+        KafkaProviderTransportOptions.DefaultReceiverBufferLowWatermark;
 
     public bool EventSourcingEnableSnapshots { get; set; } = true;
 

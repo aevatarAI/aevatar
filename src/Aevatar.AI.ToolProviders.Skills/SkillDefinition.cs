@@ -59,7 +59,7 @@ public sealed class SkillDefinition
     /// <summary>关联文件内容（远程技能可能附带多个文件）。</summary>
     public IReadOnlyDictionary<string, string>? AssociatedFiles { get; init; }
 
-    /// <summary>技能附带的可运行 workflow YAML 描述。</summary>
+    /// <summary>技能附带的 workflow 模板 YAML 描述；需先导入/挂载到 scope workflow 才可运行。</summary>
     public IReadOnlyList<SkillWorkflowDescriptor> Workflows { get; init; } = [];
 
     /// <summary>技能附带的可编译 C# script 描述。</summary>
@@ -67,14 +67,14 @@ public sealed class SkillDefinition
 }
 
 /// <summary>
-/// Skill package workflow YAML handoff descriptor.
+/// Skill package workflow template YAML handoff descriptor.
 /// </summary>
 public sealed class SkillWorkflowDescriptor
 {
-    /// <summary>Workflow identifier passed to aevatar_start_workflow.workflow_id.</summary>
+    /// <summary>Workflow template identifier used when mounting/importing into a scope workflow.</summary>
     public required string WorkflowId { get; init; }
 
-    /// <summary>Workflow YAML bundle passed to aevatar_start_workflow.workflow_yamls in stable path order.</summary>
+    /// <summary>Workflow YAML template bundle in stable path order.</summary>
     public required IReadOnlyList<string> WorkflowYamls { get; init; }
 }
 

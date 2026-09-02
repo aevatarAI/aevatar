@@ -12,7 +12,6 @@ import {
   Segmented,
   Space,
   Tag,
-  Tooltip,
   Typography,
   theme,
 } from 'antd';
@@ -24,6 +23,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { history } from '@/shared/navigation/history';
 import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
 import { buildTeamDetailHref } from '@/shared/navigation/teamRoutes';
@@ -299,8 +299,7 @@ function MissionHeaderBar({
           ) : null}
         </Space>
         <Typography.Text style={{ color: token.colorTextTertiary }}>
-          {snapshot.summary.workflowName} {t("pages.missioncontrol.index.scope.2", "· Scope")}{snapshot.summary.scopeId} {t("pages.missioncontrol.index.run.2", "· Run")}{' '}
-          {snapshot.summary.runId}
+          {snapshot.summary.workflowName}
         </Typography.Text>
         {connectionMessage ? (
           <Typography.Text style={{ color: token.colorTextTertiary }}>
@@ -616,7 +615,6 @@ function MissionStage({
                   </Typography.Text>
                   <Space wrap size={[8, 8]}>
                     {event.stepId ? <Tag>{event.stepId}</Tag> : null}
-                    {event.actorId ? <Tag color="cyan">{event.actorId}</Tag> : null}
                     <Tag color={resolveHandoffTagColor(event.handoff.severity)}>
                       {formatHandoffSeverityLabel(event.handoff.severity)}
                     </Tag>
@@ -737,20 +735,20 @@ function MissionDock({
         }}
       >
         <Space wrap size={[8, 8]}>
-          <Tooltip title={t("pages.missioncontrol.index.key.events.2", "Key events")}>
+          <AevatarTooltip title={t("pages.missioncontrol.index.key.events.2", "Key events")}>
             <Button
               icon={<ClockCircleOutlined />}
               onClick={() => onTabChange('timeline')}
               type={activeTab === 'timeline' ? 'primary' : 'default'}
             />
-          </Tooltip>
-          <Tooltip title={t("pages.missioncontrol.index.raw.logs.2", "Raw logs")}>
+          </AevatarTooltip>
+          <AevatarTooltip title={t("pages.missioncontrol.index.raw.logs.2", "Raw logs")}>
             <Button
               icon={<BorderBottomOutlined />}
               onClick={() => onTabChange('logs')}
               type={activeTab === 'logs' ? 'primary' : 'default'}
             />
-          </Tooltip>
+          </AevatarTooltip>
           <Typography.Text style={{ color: token.colorTextHeading }}>
             {t("pages.missioncontrol.index.event.dock.2", "Event Dock")}</Typography.Text>
         </Space>

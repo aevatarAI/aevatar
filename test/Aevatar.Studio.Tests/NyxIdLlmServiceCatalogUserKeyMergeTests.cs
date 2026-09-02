@@ -1,3 +1,6 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
@@ -11,13 +14,256 @@ namespace Aevatar.Studio.Tests;
 /// </summary>
 public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
 {
+    [Fact]
+    public void ParseServicesResult_WithEmptyModels_ShouldReturnNotVerifiable()
+    {
+        var result = NyxIdLlmServiceCatalogParser.ParseServicesResult(
+            """{"services":[{"user_service_id":"diag-alpha","service_slug":"chrono","route_value":"/api/v1/llm/gateway/v1","status":"ready","source":"gateway_provider","allowed":true,"models":[]}]}""");
+
+        result.Services.Single().ModelCatalog.Certainty
+            .Should().Be(LLMModelCatalogCertainty.NotVerifiable);
+        result.Services.Single().ModelCatalog.DiagnosticKind
+            .Should().Be(LLMModelCatalogDiagnosticKind.NotPublished);
+    }
+
+    [Theory]
+    [InlineData("gpt-*", LLMModelCatalogDiagnosticKind.PatternOnly)]
+    [InlineData(" gpt-5.5", LLMModelCatalogDiagnosticKind.ResponseInvalid)]
+    [InlineData("gpt-5.5\u0001", LLMModelCatalogDiagnosticKind.ResponseInvalid)]
+    public void ParseServicesResult_WithInvalidModel_ShouldReturnTypedDiagnostic(
+        string model,
+        LLMModelCatalogDiagnosticKind expected)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            services = new[]
+            {
+                new
+                {
+                    user_service_id = "diag-alpha",
+                    service_slug = "gateway",
+                    route_value = UserConfigLlmRouteDefaults.Gateway,
+                    status = "ready",
+                    source = "gateway_provider",
+                    allowed = true,
+                    models = new[] { model },
+                },
+            },
+        });
+
+        var catalog = NyxIdLlmServiceCatalogParser.ParseServicesResult(json)
+            .Services.Single().ModelCatalog;
+
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.NotVerifiable);
+        catalog.DiagnosticKind.Should().Be(expected);
+        catalog.ModelIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ParseServicesResult_WithTooManyModels_ShouldReturnResponseTooLarge()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            services = new[]
+            {
+                new
+                {
+                    user_service_id = "diag-alpha",
+                    service_slug = "gateway",
+                    route_value = UserConfigLlmRouteDefaults.Gateway,
+                    status = "ready",
+                    source = "gateway_provider",
+                    allowed = true,
+                    models = Enumerable.Range(0, LLMSelectionPolicy.MaxModelsPerCatalog + 1)
+                        .Select(index => $"model-{index:D4}").ToArray(),
+                },
+            },
+        });
+
+        var catalog = NyxIdLlmServiceCatalogParser.ParseServicesResult(json)
+            .Services.Single().ModelCatalog;
+
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.NotVerifiable);
+        catalog.DiagnosticKind.Should().Be(LLMModelCatalogDiagnosticKind.ResponseTooLarge);
+    }
+
+    [Fact]
+    public void ParseServicesResult_ShouldUseOrdinalModelIdentityAndRejectDefaultOutsideList()
+    {
+        var exact = NyxIdLlmServiceCatalogParser.ParseServicesResult("""
+            {"services":[{"user_service_id":"diag-alpha","service_slug":"gateway","route_value":"/api/v1/llm/gateway/v1","status":"ready","source":"gateway_provider","allowed":true,"default_model":"model-a","models":["model-a","MODEL-A"]}]}
+            """).Services.Single().ModelCatalog;
+        var invalidDefault = NyxIdLlmServiceCatalogParser.ParseServicesResult("""
+            {"services":[{"user_service_id":"diag-alpha","service_slug":"gateway","route_value":"/api/v1/llm/gateway/v1","status":"ready","source":"gateway_provider","allowed":true,"default_model":"missing","models":["model-a"]}]}
+            """).Services.Single().ModelCatalog;
+
+        exact.ModelIds.Should().Equal("MODEL-A", "model-a");
+        invalidDefault.Certainty.Should().Be(LLMModelCatalogCertainty.NotVerifiable);
+        invalidDefault.DiagnosticKind.Should().Be(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+    }
+
+    [Theory]
+    [InlineData("ready", false, LLMModelCatalogDiagnosticKind.AccessDenied)]
+    [InlineData("not_connected", true, LLMModelCatalogDiagnosticKind.RouteNotReady)]
+    public void ParseServicesResult_WithUnavailableRoute_ShouldReturnUnavailable(
+        string status,
+        bool allowed,
+        LLMModelCatalogDiagnosticKind expected)
+    {
+        var json = $$"""
+            {"services":[{"user_service_id":"diag-alpha","service_slug":"gateway","route_value":"/api/v1/llm/gateway/v1","status":"{{status}}","source":"gateway_provider","allowed":{{allowed.ToString().ToLowerInvariant()}},"models":["model-a"]}]}
+            """;
+
+        var catalog = NyxIdLlmServiceCatalogParser.ParseServicesResult(json)
+            .Services.Single().ModelCatalog;
+
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.Unavailable);
+        catalog.DiagnosticKind.Should().Be(expected);
+        catalog.ModelIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ComposeUserServiceInventory_ShouldRetainGatewayAndExactInventoryIdentity()
+    {
+        var diagnostics = new NyxIdLlmServicesResult(
+            [
+                new NyxIdLlmService(
+                    null,
+                    "gateway",
+                    "Gateway",
+                    UserConfigLlmRouteDefaults.Gateway,
+                    new LLMModelCatalog
+                    {
+                        Certainty = LLMModelCatalogCertainty.Enumerated,
+                        DefaultModelId = "gateway-model",
+                        ModelIds = { "gateway-model" },
+                    },
+                    UserLlmRouteStatus.Ready,
+                    NyxIdLlmProviderSource.GatewayProvider,
+                    true,
+                    null),
+                Diagnostic("diag-alpha", "shared"),
+            ],
+            null);
+
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(
+            diagnostics,
+            new NyxIdUserServices([Inventory("us-alpha", "shared")]));
+
+        result.Services.Should().ContainSingle(service =>
+            service.Source == NyxIdLlmProviderSource.GatewayProvider &&
+            service.ModelCatalog.Certainty == LLMModelCatalogCertainty.Enumerated);
+        result.Services.Should().ContainSingle(service =>
+            service.Identity != null &&
+            service.Identity.NyxIdUserServiceId == "us-alpha" &&
+            service.ModelCatalog.ModelIds.Contains("gpt-5.5"));
+    }
+
+    [Fact]
+    public void ComposeUserServiceInventory_WithoutGatewayDiagnostic_ShouldNotSynthesizeGateway()
+    {
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(
+            new NyxIdLlmServicesResult([Diagnostic("diag-alpha", "shared")], null),
+            new NyxIdUserServices([Inventory("us-alpha", "shared")]));
+
+        result.Services.Should().NotContain(service =>
+            service.Source == NyxIdLlmProviderSource.GatewayProvider);
+    }
+
+    [Fact]
+    public void ParseProvisionedService_ShouldKeepResponseIdDiagnosticOnly()
+    {
+        var service = NyxIdLlmServiceCatalogParser.ParseProvisionedService("""
+            {
+              "service": {
+                "user_service_id": "us-provisioned",
+                "service_slug": "chrono-llm",
+                "display_name": "Chrono LLM",
+                "route_value": "/api/v1/proxy/s/chrono-llm",
+                "status": "ready",
+                "source": "user_service",
+                "allowed": true
+              }
+            }
+            """);
+
+        service.CatalogEntryId.Should().Be("us-provisioned");
+        service.Identity.Should().BeNull();
+    }
+
+    [Fact]
+    public void ComposeInventory_ShouldMintOnlyInventoryIdsAndPreserveDuplicateSlugs()
+    {
+        var diagnostics = new NyxIdLlmServicesResult(
+            [Diagnostic("key-alpha", "chrono-llm-public")],
+            null);
+        var inventory = new NyxIdUserServices(
+        [
+            Inventory("us-alpha", "chrono-llm-public"),
+            Inventory("us-beta", "chrono-llm-public"),
+        ]);
+
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(diagnostics, inventory);
+
+        result.Services.Should().HaveCount(2);
+        result.Services.Select(service => service.Identity!.NyxIdUserServiceId)
+            .Should()
+            .Equal("us-alpha", "us-beta");
+        result.Services.Should().OnlyContain(service =>
+            service.Identity!.Authority == UserLlmIdentityAuthority.NyxIdUserServicesInventory);
+        result.Services.Should().NotContain(service =>
+            service.Identity!.NyxIdUserServiceId == "key-alpha");
+    }
+
+    [Fact]
+    public void ComposeInventory_ShouldIncludeOnlyActiveAuthorizedCredentialSources()
+    {
+        var inventory = new NyxIdUserServices(
+        [
+            Inventory("us-personal", "personal-llm"),
+            Inventory("us-inactive", "inactive-llm", isActive: false),
+            Inventory("us-org-allowed", "org-allowed-llm", organizationAllowed: true),
+            Inventory("us-org-denied", "org-denied-llm", organizationAllowed: false),
+        ]);
+
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(
+            new NyxIdLlmServicesResult([], null),
+            inventory);
+
+        result.Services.Select(service => service.Identity!.NyxIdUserServiceId)
+            .Should()
+            .Equal("us-org-allowed", "us-personal");
+    }
+
+    [Fact]
+    public void ToOption_ShouldCopyOnlyExplicitInventoryIdentity()
+    {
+        var identity = new UserLlmServiceIdentity(
+            UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+            "us-alpha");
+        var proven = Diagnostic("legacy-diagnostic-id", "chrono-llm") with
+        {
+            Identity = identity,
+        };
+        var unproven = Diagnostic("source-derived-id", "other-llm") with
+        {
+            Source = NyxIdLlmProviderSource.UserService,
+        };
+
+        NyxIdLlmServiceMapping.ToOption(proven).Identity.Should().Be(identity);
+        NyxIdLlmServiceMapping.ToOption(unproven).Identity.Should().BeNull();
+    }
+
     private static NyxIdLlmService NotConnectedProxyService(string slug = "chrono-llm") => new(
-        UserServiceId: "svc-catalog-id",
+        CatalogEntryId: "svc-catalog-id",
         ServiceSlug: slug,
         DisplayName: "Chrono LLM",
         RouteValue: $"/api/v1/proxy/s/{slug}",
-        DefaultModel: null,
-        Models: [],
+        ModelCatalog: new LLMModelCatalog
+        {
+            Certainty = LLMModelCatalogCertainty.Unavailable,
+            DiagnosticKind = LLMModelCatalogDiagnosticKind.RouteNotReady,
+        },
         Status: "not_connected",
         Source: NyxIdLlmProviderSource.ProxyService,
         Allowed: false,
@@ -25,6 +271,45 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
 
     private static NyxIdLlmServicesResult ResultWith(params NyxIdLlmService[] services) =>
         new(services, null);
+
+    private static NyxIdLlmService Diagnostic(string diagnosticId, string slug) => new(
+        CatalogEntryId: diagnosticId,
+        ServiceSlug: slug,
+        DisplayName: "Chrono LLM",
+        RouteValue: $"/api/v1/proxy/s/{slug}",
+        ModelCatalog: new LLMModelCatalog
+        {
+            Certainty = LLMModelCatalogCertainty.Enumerated,
+            DefaultModelId = "gpt-5.5",
+            ModelIds = { "gpt-5.5" },
+        },
+        Status: UserLlmRouteStatus.Ready,
+        Source: NyxIdLlmProviderSource.ProxyService,
+        Allowed: true,
+        Description: null)
+    {
+        Identity = null,
+    };
+
+    private static NyxIdUserService Inventory(
+        string id,
+        string slug,
+        bool isActive = true,
+        bool? organizationAllowed = null) => new(
+        Id: id,
+        Slug: slug,
+        Label: $"Inventory {id}",
+        CatalogServiceName: "Chrono LLM",
+        IsActive: isActive,
+        CredentialSource: organizationAllowed is { } allowed
+            ? new NyxIdUserServiceCredentialSource(
+                NyxIdUserServiceCredentialSourceKind.Organization,
+                OrganizationId: "org-1",
+                OrganizationName: "Org",
+                OrganizationRole: NyxIdOrganizationRole.Member,
+                Allowed: allowed)
+            : new NyxIdUserServiceCredentialSource(
+                NyxIdUserServiceCredentialSourceKind.Personal));
 
     [Fact]
     public void ActiveKeyReplacesNotConnectedProxyEntryAsSelectable()
@@ -52,7 +337,7 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
         var service = merged.Services.Should().ContainSingle().Subject;
         service.Allowed.Should().BeTrue();
         service.Status.Should().Be("ready");
-        service.UserServiceId.Should().Be("key-1");
+        service.CatalogEntryId.Should().Be("key-1");
         service.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
         service.Source.Should().Be(NyxIdLlmProviderSource.UserService);
     }
@@ -83,7 +368,7 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
         var service = merged.Services.Should().ContainSingle().Subject;
         service.ServiceSlug.Should().Be("chrono-llm");
         service.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
-        service.UserServiceId.Should().Be("key-1");
+        service.CatalogEntryId.Should().Be("key-1");
     }
 
     [Fact]
@@ -164,7 +449,7 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
 
         var service = merged.Services.Should().ContainSingle().Subject;
         service.Source.Should().Be(NyxIdLlmProviderSource.UserService);
-        service.UserServiceId.Should().Be("key-1");
+        service.CatalogEntryId.Should().Be("key-1");
     }
 
     [Fact]

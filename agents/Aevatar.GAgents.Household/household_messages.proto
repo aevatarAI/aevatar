@@ -45,6 +45,22 @@ message SafetyState {
   int64 minute_window_start_ts = 3;
 }
 
+enum HouseholdReasoningOutcome {
+  HOUSEHOLD_REASONING_OUTCOME_UNSPECIFIED = 0;
+  HOUSEHOLD_REASONING_OUTCOME_COMPLETED = 1;
+  HOUSEHOLD_REASONING_OUTCOME_FAILED = 2;
+}
+
+message HouseholdReasoningTerminalState {
+  string trigger = 1;
+  HouseholdReasoningOutcome outcome = 2;
+  string decision = 3;
+  string reasoning = 4;
+  string failure_code = 5;
+  string safe_message = 6;
+  int64 timestamp = 7;
+}
+
 // ─── Actor State ───
 
 message HouseholdEntityState {
@@ -64,6 +80,7 @@ message HouseholdEntityState {
   optional int32 max_tokens = 14;
   optional int32 max_tool_rounds = 15;
   optional int32 max_history_messages = 16;
+  HouseholdReasoningTerminalState last_reasoning_terminal = 17;
 }
 
 // ─── Domain Events ───
@@ -106,6 +123,10 @@ message ReasoningCompletedEvent {
   string decision = 1;       // "NO_ACTION" or action description
   string reasoning = 2;      // full LLM reasoning output
   int64 timestamp = 3;
+  HouseholdReasoningOutcome outcome = 4;
+  string failure_code = 5;
+  string safe_message = 6;
+  string trigger = 7;
 }
 
 // Physical action executed via NyxID proxy

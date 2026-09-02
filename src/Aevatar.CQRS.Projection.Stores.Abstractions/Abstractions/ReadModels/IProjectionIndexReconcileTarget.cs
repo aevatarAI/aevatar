@@ -14,8 +14,9 @@ public interface IProjectionIndexReconcileTarget
 
     /// <summary>
     /// Reconcile the backing physical index for this store's alias, healing schema drift by
-    /// copying data forward and atomically repointing the alias. A no-op when auto-create is
-    /// disabled or the store uses dynamic per-document indexing.
+    /// copying data forward and atomically repointing the alias. Provider read-model targets may
+    /// opt out when request-path auto-create is disabled; explicitly governed artifact targets
+    /// may still provision at startup under their own lifecycle policy.
     /// </summary>
     Task ReconcileIndexAsync(CancellationToken ct = default);
 }

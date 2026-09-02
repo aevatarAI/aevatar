@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Runtime.Hosting;
+using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Microsoft.Extensions.Configuration;
@@ -29,6 +30,7 @@ public static class MainnetDistributedHostBuilderExtensions
         builder.Configuration.AddEnvironmentVariables();
 
         var runtimeOptions = ResolveRuntimeOptions(builder.Configuration);
+        builder.Services.AddAevatarRuntimeSecretStores(runtimeOptions);
         if (!string.Equals(runtimeOptions.Provider, AevatarActorRuntimeOptions.ProviderOrleans, StringComparison.OrdinalIgnoreCase))
             return builder;
 
@@ -59,6 +61,9 @@ public static class MainnetDistributedHostBuilderExtensions
                         options.TopicName = runtimeOptions.KafkaTopicName;
                         options.ConsumerGroup = runtimeOptions.KafkaConsumerGroup;
                         options.TopicPartitionCount = hostOptions.QueueCount;
+                        options.ReceiverBufferCapacity = runtimeOptions.KafkaReceiverBufferCapacity;
+                        options.ReceiverBufferHighWatermark = runtimeOptions.KafkaReceiverBufferHighWatermark;
+                        options.ReceiverBufferLowWatermark = runtimeOptions.KafkaReceiverBufferLowWatermark;
                     });
                 });
             }
@@ -178,6 +183,26 @@ public static class MainnetDistributedHostBuilderExtensions
         var configuredGarnetConnectionString = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"];
         if (!string.IsNullOrWhiteSpace(configuredGarnetConnectionString))
             options.OrleansGarnetConnectionString = configuredGarnetConnectionString;
+        var configuredSecretStoreBackend = configuration[$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreBackend"];
+        if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderInMemory, StringComparison.OrdinalIgnoreCase))
+            options.SecretStoreBackend = AevatarActorRuntimeOptions.ProviderInMemory;
+        else if (!string.IsNullOrWhiteSpace(configuredSecretStoreBackend))
+            options.SecretStoreBackend = configuredSecretStoreBackend;
+        var configuredSecretStoreConnectionString = configuration[$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreConnectionString"];
+        if (!string.IsNullOrWhiteSpace(configuredSecretStoreConnectionString))
+            options.SecretStoreConnectionString = configuredSecretStoreConnectionString;
+        var configuredSecretStoreDatabase = configuration[$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreDatabase"];
+        if (int.TryParse(configuredSecretStoreDatabase, out var secretStoreDatabase))
+            options.SecretStoreDatabase = secretStoreDatabase;
+        var configuredSecretStoreKeyringPath = configuration[$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreKeyringPath"];
+        if (!string.IsNullOrWhiteSpace(configuredSecretStoreKeyringPath))
+            options.SecretStoreKeyringPath = configuredSecretStoreKeyringPath;
+        var configuredSecretStoreVaultPrefix = configuration[$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreVaultPrefix"];
+        if (!string.IsNullOrWhiteSpace(configuredSecretStoreVaultPrefix))
+            options.SecretStoreVaultPrefix = configuredSecretStoreVaultPrefix;
+        var configuredSecretStoreRuntimePrefix = configuration[$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreRuntimePrefix"];
+        if (!string.IsNullOrWhiteSpace(configuredSecretStoreRuntimePrefix))
+            options.SecretStoreRuntimePrefix = configuredSecretStoreRuntimePrefix;
         var configuredKafkaBootstrapServers = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"];
         if (!string.IsNullOrWhiteSpace(configuredKafkaBootstrapServers))
             options.KafkaBootstrapServers = configuredKafkaBootstrapServers;
@@ -187,8 +212,52 @@ public static class MainnetDistributedHostBuilderExtensions
         var configuredKafkaConsumerGroup = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"];
         if (!string.IsNullOrWhiteSpace(configuredKafkaConsumerGroup))
             options.KafkaConsumerGroup = configuredKafkaConsumerGroup;
+        options.KafkaReceiverBufferCapacity = ResolveIntSetting(
+            configuration,
+            nameof(AevatarActorRuntimeOptions.KafkaReceiverBufferCapacity),
+            options.KafkaReceiverBufferCapacity);
+        options.KafkaReceiverBufferHighWatermark = ResolveIntSetting(
+            configuration,
+            nameof(AevatarActorRuntimeOptions.KafkaReceiverBufferHighWatermark),
+            options.KafkaReceiverBufferHighWatermark);
+        options.KafkaReceiverBufferLowWatermark = ResolveIntSetting(
+            configuration,
+            nameof(AevatarActorRuntimeOptions.KafkaReceiverBufferLowWatermark),
+            options.KafkaReceiverBufferLowWatermark);
+
+        if (string.IsNullOrWhiteSpace(options.SecretStoreBackend))
+        {
+            options.SecretStoreBackend = string.Equals(
+                options.Provider,
+                AevatarActorRuntimeOptions.ProviderInMemory,
+                StringComparison.OrdinalIgnoreCase)
+                ? AevatarActorRuntimeOptions.ProviderInMemory
+                : options.OrleansPersistenceBackend;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.SecretStoreConnectionString) &&
+            string.Equals(options.SecretStoreBackend, AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet, StringComparison.OrdinalIgnoreCase))
+        {
+            options.SecretStoreConnectionString = options.OrleansGarnetConnectionString;
+        }
 
         return options;
+    }
+
+    private static int ResolveIntSetting(
+        IConfiguration configuration,
+        string settingName,
+        int defaultValue)
+    {
+        var configuredValue = configuration[$"{AevatarActorRuntimeOptions.SectionName}:{settingName}"];
+        if (string.IsNullOrWhiteSpace(configuredValue))
+            return defaultValue;
+
+        if (int.TryParse(configuredValue, out var value))
+            return value;
+
+        throw new FormatException(
+            $"Invalid ActorRuntime:{settingName} value '{configuredValue}'.");
     }
 
     private static OrleansHostOptions ResolveOrleansHostOptions(IConfiguration configuration)

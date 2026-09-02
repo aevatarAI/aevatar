@@ -309,7 +309,7 @@ public sealed class WaitSignalModuleTests
                     SignalName = "approval-terminal",
                     TimeoutMs = 5000,
                 },
-                scheduled),
+                scheduled.Lease),
             context,
             CancellationToken.None);
 
@@ -344,6 +344,72 @@ public sealed class WaitSignalModuleTests
             .Should()
             .BeTrue();
         committedFact.Should().BeOfType<WorkflowExternalApprovalContinuationClearedEvent>();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenTimeoutIsTwentyFourHours_ShouldScheduleDurableCallback()
+    {
+        var module = new WaitSignalModule();
+        var context = new RecordingEventHandlerContext(
+            new EmptyServiceProvider(),
+            new StubAgent("workflow-24h"),
+            NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-24h",
+                StepType = "wait_signal",
+                RunId = "run-24h",
+                Parameters =
+                {
+                    ["signal_name"] = "callback",
+                    ["timeout_ms"] = "86400000",
+                },
+            }),
+            context,
+            CancellationToken.None);
+
+        var scheduled = context.Scheduled.Should().ContainSingle().Subject;
+        var timeout = scheduled.Event.Should().BeOfType<WaitSignalTimeoutFiredEvent>().Subject;
+        timeout.TimeoutMs.Should().Be(86_400_000);
+        context.Published.Select(item => item.Event)
+            .OfType<WaitingForSignalEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject
+            .TimeoutMs.Should().Be(86_400_000);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenTimeoutExceedsTwentyFourHours_ShouldClampDurableCallback()
+    {
+        var module = new WaitSignalModule();
+        var context = new RecordingEventHandlerContext(
+            new EmptyServiceProvider(),
+            new StubAgent("workflow-clamp"),
+            NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-clamp",
+                StepType = "wait_signal",
+                RunId = "run-clamp",
+                Parameters =
+                {
+                    ["signal_name"] = "callback",
+                    ["timeout_ms"] = "172800000",
+                },
+            }),
+            context,
+            CancellationToken.None);
+
+        var timeout = context.Scheduled.Should().ContainSingle().Subject.Event
+            .Should()
+            .BeOfType<WaitSignalTimeoutFiredEvent>()
+            .Subject;
+        timeout.TimeoutMs.Should().Be(86_400_000);
     }
 
     [Fact]
@@ -438,7 +504,7 @@ public sealed class WaitSignalModuleTests
         }
 
         public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
-        public List<RuntimeCallbackLease> Scheduled { get; } = [];
+        public List<ScheduledCallbackRecord> Scheduled { get; } = [];
         public EventEnvelope InboundEnvelope { get; }
         public string AgentId => Agent.Id;
         public IAgent Agent { get; }
@@ -518,11 +584,10 @@ public sealed class WaitSignalModuleTests
             CancellationToken ct = default)
         {
             _ = dueTime;
-            _ = evt;
             _ = options;
             _ = ct;
             var lease = new RuntimeCallbackLease(AgentId, callbackId, Scheduled.Count + 1, RuntimeCallbackBackend.InMemory);
-            Scheduled.Add(lease);
+            Scheduled.Add(new ScheduledCallbackRecord(lease, dueTime, evt));
             return Task.FromResult(lease);
         }
 
@@ -544,4 +609,6 @@ public sealed class WaitSignalModuleTests
     {
         public object? GetService(System.Type serviceType) => null;
     }
+
+    private sealed record ScheduledCallbackRecord(RuntimeCallbackLease Lease, TimeSpan DueTime, IMessage Event);
 }

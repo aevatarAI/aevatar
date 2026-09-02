@@ -84,9 +84,9 @@ public sealed class BindingBindTool : IAgentTool
             if (args.ParseError != null)
                 return JsonDefaults.Error(args.ParseError);
 
-            var scopeId = AgentToolRequestContext.ScopeId;
+            var scopeId = ToolOwnerScopeResolver.Resolve();
             if (string.IsNullOrWhiteSpace(scopeId))
-                return JsonDefaults.Error("scope_id not available in request context");
+                return JsonDefaults.Error(ToolOwnerScopeResolver.MissingMessage);
 
             var kindStr = args.Str("kind");
             if (string.IsNullOrWhiteSpace(kindStr))
@@ -102,7 +102,9 @@ public sealed class BindingBindTool : IAgentTool
             switch (kindStr.ToLowerInvariant())
             {
                 case "workflow":
-                    var wfReq = await BuildWorkflowRequestAsync(scopeId, serviceId, args, ct);
+                    if (!ExternalWorkflowCapabilityToolSupport.TryResolveAccess(out var access, out var accessError))
+                        return JsonDefaults.Error(accessError ?? "verified caller context is required");
+                    var wfReq = await BuildWorkflowRequestAsync(scopeId, serviceId, args, access!, ct);
                     if (wfReq == null)
                         return JsonDefaults.Error("'workflow_name' or 'workflow_yamls' is required for 'workflow' kind");
                     request = wfReq;
@@ -147,7 +149,11 @@ public sealed class BindingBindTool : IAgentTool
     }
 
     private async Task<ScopeBindingUpsertRequest?> BuildWorkflowRequestAsync(
-        string scopeId, string? serviceId, ToolArgs args, CancellationToken ct)
+        string scopeId,
+        string? serviceId,
+        ToolArgs args,
+        Aevatar.Workflow.Application.Abstractions.ExternalCapabilities.ExternalWorkflowCapabilityAccessContext access,
+        CancellationToken ct)
     {
         // Option 1: inline YAML
         var yamls = args.StrArray("workflow_yamls");
@@ -178,7 +184,13 @@ public sealed class BindingBindTool : IAgentTool
             ImplementationKind: ScopeBindingImplementationKind.Workflow,
             Workflow: new ScopeBindingWorkflowSpec(yamls),
             DisplayName: args.Str("display_name") ?? workflowName,
-            ServiceId: serviceId);
+            ServiceId: serviceId)
+        {
+            CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                access.CallerId,
+                access.NyxIdCallerCredential,
+                access.NyxIdOrganizationBearerToken),
+        };
     }
 
     private static ScopeBindingUpsertRequest? BuildScriptingRequest(

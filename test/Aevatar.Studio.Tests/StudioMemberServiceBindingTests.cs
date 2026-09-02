@@ -5,6 +5,8 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 
 namespace Aevatar.Studio.Tests;
@@ -21,6 +23,177 @@ public sealed class StudioMemberServiceBindingTests
     private const string ScopeId = "scope-1";
     private const string MemberId = "m-bind-test";
     private const string PublishedServiceId = "member-m-bind-test";
+
+    [Fact]
+    public async Task BindAsync_Workflow_WithMatchingExplicitConfirmation_ShouldPersistOnlyAdmissionGrant()
+    {
+        var commandPort = new RecordingCommandPort();
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var service = NewService(
+            commandPort,
+            new ThrowingBindQueryPort(),
+            capabilityAdmissionService: admission);
+
+        await service.BindAsync(
+            "scope-studio-alpha",
+            "m-alpha",
+            new UpdateStudioMemberBindingRequest(
+                RevisionId: "rev-alpha",
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "wf-alpha",
+                    [StudioExplicitRequestAdmissionTestKit.WorkflowYaml]))
+            {
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                        "wf-alpha",
+                        "rev-alpha")]),
+            });
+
+        var admissionRequest = admission.Requests.Should().ContainSingle().Which;
+        admissionRequest.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.CallerBearer);
+        admissionRequest.Access.NyxIdOrganizationBearerToken.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
+        admissionRequest.ExplicitRequestConfirmations.Should().ContainSingle();
+        var started = commandPort.StartedRuns.Should().ContainSingle().Which;
+        started.ScopeId.Should().Be("scope-studio-alpha");
+        started.MemberId.Should().Be("m-alpha");
+        started.Binding.RevisionId.Should().Be("rev-alpha");
+        started.Binding.Workflow!.WorkflowId.Should().Be("wf-alpha");
+        started.Binding.CapabilityAdmission.Should().BeNull();
+        started.Binding.Workflow.CapabilityAdmissionPlan!.InvocationAdmissions
+            .Should().ContainSingle().Which.NyxIdExplicitRequestGrant.GrantorOwnerSubject.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.CallerId);
+        started.Binding.Workflow.CapabilityAdmissionPlan.ToString().Should()
+            .NotContain(StudioExplicitRequestAdmissionTestKit.CallerBearer);
+        started.Binding.Workflow.CapabilityAdmissionPlan.ToString().Should()
+            .NotContain(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
+    }
+
+    [Fact]
+    public async Task BindAsync_Workflow_ForNewRevision_ShouldReadmitCurrentAuthenticatedRequest()
+    {
+        var commandPort = new RecordingCommandPort();
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var service = NewService(
+            commandPort,
+            new ThrowingBindQueryPort(),
+            capabilityAdmissionService: admission);
+
+        foreach (var revisionId in new[] { "rev-alpha", "rev-beta" })
+        {
+            await service.BindAsync(
+                "scope-studio-alpha",
+                "m-alpha",
+                new UpdateStudioMemberBindingRequest(
+                    RevisionId: revisionId,
+                    Workflow: new StudioMemberWorkflowBindingSpec(
+                        "wf-alpha",
+                        [StudioExplicitRequestAdmissionTestKit.WorkflowYaml]))
+                {
+                    CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                        [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                            "wf-alpha",
+                            revisionId)]),
+                });
+        }
+
+        admission.Requests.Should().HaveCount(2);
+        admission.PersistedRequests.Should().BeEmpty();
+        admission.Requests.Should().OnlyContain(request =>
+            request.Access.CallerId == StudioExplicitRequestAdmissionTestKit.CallerId &&
+            request.ExecutionMode == ExternalCapabilityExecutionMode.Interactive &&
+            request.WorkflowYamls != null &&
+            request.WorkflowYamls.SequenceEqual(new[] { StudioExplicitRequestAdmissionTestKit.WorkflowYaml }));
+        commandPort.StartedRuns.Select(static run => run.Binding.RevisionId)
+            .Should().Equal("rev-alpha", "rev-beta");
+        commandPort.StartedRuns.Should().OnlyContain(run =>
+            run.Binding.Workflow!.CapabilityAdmissionPlan!.InvocationAdmissions
+                .Single().NyxIdExplicitRequestGrant.GrantorOwnerSubject ==
+            StudioExplicitRequestAdmissionTestKit.CallerId);
+    }
+
+    [Theory]
+    [InlineData("missing", "NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED")]
+    [InlineData("unknown", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH")]
+    [InlineData("duplicate", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH")]
+    [InlineData("stale_digest", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_DIGEST_MISMATCH")]
+    [InlineData("stale_risk", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH")]
+    public async Task BindAsync_Workflow_WithInvalidExplicitConfirmation_ShouldDispatchNoCommand(
+        string scenario,
+        string expectedCode)
+    {
+        var commandPort = new RecordingCommandPort();
+        var service = NewService(
+            commandPort,
+            new ThrowingBindQueryPort(),
+            capabilityAdmissionService: StudioExplicitRequestAdmissionTestKit.CreateAdmissionService());
+
+        var action = () => service.BindAsync(
+            "scope-studio-alpha",
+            "m-alpha",
+            new UpdateStudioMemberBindingRequest(
+                RevisionId: "rev-alpha",
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "wf-alpha",
+                    [StudioExplicitRequestAdmissionTestKit.WorkflowYaml]))
+            {
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    StudioExplicitRequestAdmissionTestKit.Confirmations(
+                        scenario,
+                        "wf-alpha",
+                        "rev-alpha")),
+            });
+
+        var exception = await action.Should()
+            .ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Blockers.Should().ContainSingle()
+            .Which.Code.Should().Be(expectedCode);
+        commandPort.StartedRuns.Should().BeEmpty();
+        commandPort.OperationsInOrder.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BindAsync_Workflow_WithExistingPlan_ShouldOnlyRevalidateWithoutFreshConfirmation()
+    {
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var plan = await admission.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-studio-alpha",
+                StudioExplicitRequestAdmissionTestKit.CallerId,
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    StudioExplicitRequestAdmissionTestKit.CallerBearer),
+                StudioExplicitRequestAdmissionTestKit.OrganizationBearer),
+            StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
+            new Dictionary<string, string>(),
+            "test_prepare_plan",
+            ExternalCapabilityExecutionMode.Interactive,
+            [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation("wf-alpha", "rev-alpha")],
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha"));
+        admission.Requests.Clear();
+        var commandPort = new RecordingCommandPort();
+        var service = NewService(
+            commandPort,
+            new ThrowingBindQueryPort(),
+            capabilityAdmissionService: admission);
+
+        await service.BindAsync(
+            "scope-studio-alpha",
+            "m-alpha",
+            new UpdateStudioMemberBindingRequest(
+                RevisionId: "rev-alpha",
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "wf-alpha",
+                    [StudioExplicitRequestAdmissionTestKit.WorkflowYaml]))
+            {
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(existingPlan: plan),
+            });
+
+        admission.Requests.Should().BeEmpty();
+        admission.PersistedRequests.Should().ContainSingle();
+        commandPort.StartedRuns.Should().ContainSingle();
+    }
 
     [Fact]
     public async Task BindAsync_Workflow_ShouldDispatchBindingRunWithoutReadingMember()
@@ -53,6 +226,45 @@ public sealed class StudioMemberServiceBindingTests
         started.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
         started.Binding.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
         started.Binding.Workflow!.WorkflowYamls.Should().ContainSingle();
+        started.Binding.Workflow.CapabilityAdmissionPlan.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task BindAsync_Workflow_WhenCapabilityAdmissionFails_ShouldNotDispatchBindingRun()
+    {
+        var commandPort = new RecordingCommandPort();
+        var admission = new StudioWorkflowCapabilityAdmissionTestService(
+            new InvalidOperationException("external capability is not ready"));
+        var service = NewService(
+            commandPort,
+            new ThrowingBindQueryPort(),
+            capabilityAdmissionService: admission);
+
+        var act = () => service.BindAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberBindingRequest(
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "workflow-stable-id",
+                    ["name: root-workflow\nsteps: []\n"]))
+            {
+                CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                    "caller-alpha",
+                    NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                        "runtime-caller-credential")),
+            },
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("external capability is not ready");
+        var request = admission.Requests.Should().ContainSingle().Which;
+        request.WorkflowYamls.Should().Equal("name: root-workflow\nsteps: []\n");
+        request.Access.ScopeId.Should().Be(ScopeId);
+        request.Access.CallerId.Should().Be("caller-alpha");
+        request.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("runtime-caller-credential");
+        request.SourceKind.Should().Be("studio_member_binding_run");
+        commandPort.StartedRuns.Should().BeEmpty();
     }
 
     [Fact]
@@ -291,7 +503,8 @@ public sealed class StudioMemberServiceBindingTests
     private static StudioMemberService NewService(
         IStudioMemberCommandPort memberCommandPort,
         IStudioMemberQueryPort memberQueryPort,
-        IStudioMemberBindingRunQueryPort? bindingRunQueryPort = null) =>
+        IStudioMemberBindingRunQueryPort? bindingRunQueryPort = null,
+        IWorkflowExternalCapabilityAdmissionService? capabilityAdmissionService = null) =>
         new(
             memberCommandPort,
             memberQueryPort,
@@ -299,7 +512,8 @@ public sealed class StudioMemberServiceBindingTests
             new InertTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ReadyScopeBindingReadinessQueryPort(),
-            new ThrowingServiceCommandPort());
+            new ThrowingServiceCommandPort(),
+            capabilityAdmissionService ?? new StudioWorkflowCapabilityAdmissionTestService());
 
     private sealed class InertTeamQueryPort : IStudioTeamQueryPort
     {
@@ -422,6 +636,16 @@ public sealed class StudioMemberServiceBindingTests
             return Task.CompletedTask;
         }
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default)
+        {
+            OperationsInOrder.Add("RecordPublishedBinding");
+            return Task.CompletedTask;
+        }
+
         public Task RenameAsync(
             string scopeId,
             string memberId,
@@ -446,6 +670,15 @@ public sealed class StudioMemberServiceBindingTests
             CancellationToken ct = default)
         {
             OperationsInOrder.Add("PatchTeamAssignment");
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default)
+        {
+            OperationsInOrder.Add("Delete");
             return Task.CompletedTask;
         }
     }

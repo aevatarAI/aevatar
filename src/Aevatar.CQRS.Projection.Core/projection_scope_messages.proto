@@ -19,10 +19,29 @@ message ProjectionScopeState {
   bool active = 5;
   bool observation_attached = 6;
   bool released = 7;
-  int64 last_observed_version = 8;
+  int64 highest_seen_version = 8;
   int64 last_successful_version = 9;
+  // Durable operator repair backlog. These records are never retention-trimmed.
   repeated ProjectionScopeFailure failures = 10;
   google.protobuf.Timestamp updated_at_utc = 11;
+  map<string, int64> last_successful_versions_by_actor = 12;
+  repeated ProjectionObservedEnvelopeMetadata recent_observed_envelopes = 13;
+  int64 received_envelope_total = 14;
+  int64 attempted_envelope_total = 15;
+  int64 successful_materialization_total = 16;
+  int64 failed_attempt_total = 17;
+  int64 retry_exhausted_total = 18;
+  map<string, int64> highest_seen_versions_by_actor = 19;
+  // Bounded, payload-free diagnostics. Trimming this ring never removes repair facts.
+  repeated ProjectionFailureDiagnostic retained_failure_diagnostics = 20;
+  int64 failure_diagnostic_dropped_total = 21;
+}
+
+message ProjectionObservedEnvelopeMetadata {
+  string event_id = 1;
+  string type_url = 2;
+  int64 state_version = 3;
+  google.protobuf.Timestamp timestamp_utc = 4;
 }
 
 message ProjectionScopeFailure {
@@ -35,6 +54,18 @@ message ProjectionScopeFailure {
   aevatar.EventEnvelope envelope = 7;
   int32 attempts = 8;
   google.protobuf.Timestamp occurred_at_utc = 9;
+  bool retry_exhausted = 10;
+  string source_actor_id = 11;
+}
+
+message ProjectionFailureDiagnostic {
+  string failure_id = 1;
+  string stage = 2;
+  string event_id = 3;
+  string event_type = 4;
+  int64 source_version = 5;
+  google.protobuf.Timestamp occurred_at_utc = 6;
+  string source_actor_id = 7;
 }
 
 message EnsureProjectionScopeCommand {
@@ -72,10 +103,25 @@ message ProjectionScopeReleasedEvent {
   google.protobuf.Timestamp occurred_at_utc = 1;
 }
 
+message ProjectionScopeEnvelopeReceivedEvent {
+  google.protobuf.Timestamp occurred_at_utc = 1;
+  string event_kind = 2;
+}
+
+message ProjectionScopeEnvelopeAttemptedEvent {
+  int64 highest_seen_version = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+  string source_actor_id = 3;
+  ProjectionObservedEnvelopeMetadata observed_envelope = 4;
+  string event_kind = 5;
+}
+
 message ProjectionScopeWatermarkAdvancedEvent {
-  int64 last_observed_version = 1;
+  reserved 1;
   int64 last_successful_version = 2;
   google.protobuf.Timestamp occurred_at_utc = 3;
+  string source_actor_id = 4;
+  ProjectionObservedEnvelopeMetadata observed_envelope = 5;
 }
 
 message ProjectionScopeDispatchFailedEvent {
@@ -87,6 +133,7 @@ message ProjectionScopeDispatchFailedEvent {
   string reason = 6;
   aevatar.EventEnvelope envelope = 7;
   google.protobuf.Timestamp occurred_at_utc = 8;
+  string source_actor_id = 9;
 }
 
 message ProjectionScopeFailureReplayedEvent {

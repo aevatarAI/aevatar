@@ -8,6 +8,9 @@ import "chat_activity.proto";
 import "conversation_events.proto";
 import "delivery_ledger.proto";
 import "ai_messages.proto";
+import "workflow_execution_messages.proto";
+import "nyxid_chat_task.proto";
+import "agent_profiles.proto";
 
 enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
@@ -97,6 +100,14 @@ enum AgentRunLarkCardDeliveryPhase {
   AGENT_RUN_LARK_CARD_DELIVERY_PHASE_CREATION_FAILED = 7;
 }
 
+enum AgentRunLarkCardTextFallbackPhase {
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_UNSPECIFIED = 0;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_IDLE = 1;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_STATUS_FORWARDED = 2;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_FINAL_FORWARDED = 3;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_FAILED = 4;
+}
+
 message AgentRunLarkCardDeliveryState {
   AgentRunLarkCardDeliveryPhase phase = 1;
   string card_id = 2;
@@ -113,6 +124,7 @@ message AgentRunLarkCardDeliveryState {
   string pending_finalize_text = 13;
   string pending_finalize_command_id = 14;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry pending_appended_history = 15;
+  AgentRunLarkCardTextFallbackPhase text_fallback_phase = 16;
 }
 
 message AgentRunLarkCardDeliveryChangedEvent {
@@ -135,6 +147,7 @@ message AgentRunLarkCardDeliveryChangedEvent {
   optional string finalize_text = 17;
   optional string finalize_command_id = 18;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 19;
+  optional AgentRunLarkCardTextFallbackPhase text_fallback_phase = 20;
 }
 
 message AgentRunLarkCardDeliveryCompletion {
@@ -213,12 +226,18 @@ message AgentRunReplyStepState {
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 22;
   aevatar.ai.LLMControlContextPayload owner_fallback_llm_control = 23;
   aevatar.ai.AgentToolExecutionContextPayload owner_fallback_tool_context = 24;
+  // One-shot empty-reply recovery marker. Gates re-recovery (recover at most once) WITHOUT the
+  // tool-stripping / server-default-routing semantics of final_no_tools_step: the recovery retry
+  // keeps tools + the user's routing + channel-context and only trims history to the recent floor.
+  bool empty_reply_retry = 25;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
 // facts with its current AgentRunReplyStepState before persisting the next
 // waterline.
 message AgentRunLlmStepResult {
+  reserved 9;
+  reserved "tool_step_result";
   string accumulated_text = 1;
   string content = 2;
   string reasoning_content = 3;
@@ -229,16 +248,16 @@ message AgentRunLlmStepResult {
   bool has_streamed_text_content = 8;
 }
 
-// Typed tool IO facts returned by the executor. The run actor owns round
-// advancement and message/state persistence.
+// Typed tool IO facts returned after the run actor has reconciled and persisted
+// the preceding LLM facts. The run actor owns round advancement and
+// message/state persistence.
 message AgentRunToolStepResult {
   repeated AgentRunChatMessage result_messages = 1;
   bool advance_round = 2;
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 3;
-  // Interactive reply intent captured while the tool step executed (for example
-  // reply_with_interaction). Tools run during the tool step, not the LLM step,
-  // so the executor surfaces the captured intent here for the run actor to
-  // merge into AgentRunReplyStepState.outbound_intent.
+  // Interactive reply intent captured while an authorized tool executed (for
+  // example reply_with_interaction). The executor surfaces the captured intent
+  // here for the run actor to merge into AgentRunReplyStepState.outbound_intent.
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 4;
 }
 
@@ -449,6 +468,9 @@ enum ChannelWorkflowDraftRunStatus {
   CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_STARTED = 1;
   CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_REPLY_HANDED_OFF = 2;
   CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_FAILED = 3;
+  // An immutable terminal reply has been committed, but actor-inbox admission
+  // and the corresponding final state event have not both completed yet.
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_TERMINAL_PRODUCED = 4;
 }
 
 message ChannelWorkflowDraftRunGAgentState {
@@ -461,6 +483,10 @@ message ChannelWorkflowDraftRunGAgentState {
   string error_code = 7;
   string error_summary = 8;
   string accumulated_text = 9;
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent recovery_request = 10;
+  int64 recovery_deadline_unix_ms = 11;
+  aevatar.gagents.channel.runtime.LlmReplyReadyEvent produced_terminal_reply = 12;
+  string terminal_operation_id = 13;
 }
 
 message ChannelWorkflowDraftRunStartRequested {
@@ -473,6 +499,35 @@ message ChannelWorkflowDraftRunStartedEvent {
   string correlation_id = 2;
   string target_actor_id = 3;
   int64 started_at_unix_ms = 4;
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent recovery_request = 5;
+  int64 recovery_deadline_unix_ms = 6;
+}
+
+// Durable self-timeout payload. The actor rehydrates the recovery request from
+// committed state so callback storage never contains runtime credentials.
+message ChannelWorkflowDraftRunRecoveryTimeoutElapsed {
+  string run_id = 1;
+  string correlation_id = 2;
+  int64 recovery_deadline_unix_ms = 3;
+}
+
+// Durable outbox fact. This is committed before actor-inbox admission is
+// attempted, so activation and retries only replay this immutable payload.
+message ChannelWorkflowDraftRunTerminalProducedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  aevatar.gagents.channel.runtime.LlmReplyReadyEvent terminal_reply = 4;
+  string operation_id = 5;
+  int64 produced_at_unix_ms = 6;
+}
+
+// Signal-only durable callback. The terminal payload is rehydrated from actor
+// state so callback storage contains no reply body or credential material.
+message ChannelWorkflowDraftRunTerminalHandoffRetryElapsed {
+  string run_id = 1;
+  string correlation_id = 2;
+  string operation_id = 3;
 }
 
 message ChannelWorkflowDraftRunFrame {
@@ -545,11 +600,13 @@ enum WorkflowRunDeliveryStatus {
   WORKFLOW_RUN_DELIVERY_STATUS_STARTED = 1;
   WORKFLOW_RUN_DELIVERY_STATUS_DELIVERED = 2;
   WORKFLOW_RUN_DELIVERY_STATUS_FAILED = 3;
+  WORKFLOW_RUN_DELIVERY_STATUS_RESERVED = 4;
+  WORKFLOW_RUN_DELIVERY_STATUS_ABANDONED = 5;
 }
 
 message WorkflowRunDeliveryGAgentState {
-  reserved 10;
-  reserved "bot_agent_key_id";
+  reserved 10, 21, 25;
+  reserved "bot_agent_key_id", "terminal_status", "durable_reply_credential_ref";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -569,57 +626,111 @@ message WorkflowRunDeliveryGAgentState {
   string delivered_platform_message_id = 18;
   string error_code = 19;
   string error_summary = 20;
-  string terminal_status = 21;
   string terminal_text = 22;
   string terminal_error_code = 23;
   int64 terminal_observed_at_unix_ms = 24;
-  string durable_reply_credential_ref = 25;
+  aevatar.ai.ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 26;
+  // Stable channel bot registration identity used for the terminal reply
+  // ConversationReference; identity is deliberately separate from the
+  // delivery credential handle above.
+  string bot_registration_id = 27;
+  string expected_workflow_command_id = 28;
+  int64 reservation_expires_at_unix_ms = 29;
+  aevatar.workflow.WorkflowRunTerminalNotification pending_terminal_notification = 30;
+  string pending_terminal_publisher_actor_id = 31;
+  int64 pending_terminal_buffered_at_unix_ms = 32;
+  aevatar.workflow.WorkflowRunTerminalStatus terminal_outcome = 33;
+}
+
+message WorkflowRunDeliveryReserveRequested {
+  string delivery_id = 1;
+  string expected_workflow_command_id = 2;
+  string channel_platform = 3;
+  string reply_message_id = 4;
+  string platform_message_id = 5;
+  string registration_scope_id = 6;
+  aevatar.ai.ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 7;
+  string bot_registration_id = 8;
+  int64 expires_at_unix_ms = 9;
+}
+
+message WorkflowRunDeliveryReservedEvent {
+  string delivery_id = 1;
+  string expected_workflow_command_id = 2;
+  string channel_platform = 3;
+  string reply_message_id = 4;
+  string platform_message_id = 5;
+  string registration_scope_id = 6;
+  aevatar.ai.ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 7;
+  string bot_registration_id = 8;
+  int64 expires_at_unix_ms = 9;
+  int64 reserved_at_unix_ms = 10;
 }
 
 message WorkflowRunDeliveryStartRequested {
-  reserved 10;
-  reserved "bot_agent_key_id";
+  reserved 7, 8, 9, 10, 11, 12, 13, 14;
+  reserved "channel_platform", "reply_message_id", "platform_message_id", "bot_agent_key_id",
+    "registration_scope_id", "durable_reply_credential_ref", "workflow_result_delivery_credential",
+    "bot_registration_id";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
   string workflow_command_id = 4;
   string workflow_correlation_id = 5;
   string stream_topic = 6;
-  string channel_platform = 7;
-  string reply_message_id = 8;
-  string platform_message_id = 9;
-  string registration_scope_id = 11;
-  string durable_reply_credential_ref = 12;
 }
 
 message WorkflowRunDeliveryStartedEvent {
-  reserved 10;
-  reserved "bot_agent_key_id";
+  reserved 7, 8, 9, 10, 11, 13, 14, 15;
+  reserved "channel_platform", "reply_message_id", "platform_message_id", "bot_agent_key_id",
+    "registration_scope_id", "durable_reply_credential_ref", "workflow_result_delivery_credential",
+    "bot_registration_id";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
   string workflow_command_id = 4;
   string workflow_correlation_id = 5;
   string stream_topic = 6;
-  string channel_platform = 7;
-  string reply_message_id = 8;
-  string platform_message_id = 9;
-  string registration_scope_id = 11;
   int64 started_at_unix_ms = 12;
-  string durable_reply_credential_ref = 13;
 }
 
-message WorkflowRunDeliveryTerminalFrameObserved {
+message WorkflowRunDeliveryTerminalNotificationBufferedEvent {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
-  string status = 4;
-  string text = 5;
-  string error_code = 6;
-  int64 observed_at_unix_ms = 7;
+  string workflow_command_id = 2;
+  string publisher_actor_id = 3;
+  aevatar.workflow.WorkflowRunTerminalNotification notification = 4;
+  int64 buffered_at_unix_ms = 5;
+}
+
+message WorkflowRunDeliveryTerminalNotificationDiscardedEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string reason = 3;
+  int64 discarded_at_unix_ms = 4;
+}
+
+message WorkflowRunDeliveryAbandonRequested {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string reason = 3;
+}
+
+message WorkflowRunDeliveryAbandonedEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string reason = 3;
+  int64 abandoned_at_unix_ms = 4;
+}
+
+message WorkflowRunDeliveryReservationExpiryReached {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  int64 expires_at_unix_ms = 3;
 }
 
 message WorkflowRunDeliverySucceededEvent {
+  reserved 8;
+  reserved "terminal_status";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_command_id = 3;
@@ -627,13 +738,15 @@ message WorkflowRunDeliverySucceededEvent {
   string platform_message_id = 5;
   int32 attempt = 6;
   int64 delivered_at_unix_ms = 7;
-  string terminal_status = 8;
   string terminal_text = 9;
   string terminal_error_code = 10;
   int64 terminal_observed_at_unix_ms = 11;
+  aevatar.workflow.WorkflowRunTerminalStatus terminal_outcome = 12;
 }
 
 message WorkflowRunDeliveryFailedEvent {
+  reserved 8;
+  reserved "terminal_status";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_command_id = 3;
@@ -641,10 +754,10 @@ message WorkflowRunDeliveryFailedEvent {
   string error_summary = 5;
   int32 attempt = 6;
   int64 failed_at_unix_ms = 7;
-  string terminal_status = 8;
   string terminal_text = 9;
   string terminal_error_code = 10;
   int64 terminal_observed_at_unix_ms = 11;
+  aevatar.workflow.WorkflowRunTerminalStatus terminal_outcome = 12;
 }
 
 message NyxIdChatConversationCreationCompensationRequested {
@@ -663,6 +776,10 @@ message NyxIdChatConversationDeletionCompensationRequested {
 message NyxIdChatConversationCreateCommand {
   string scope_id = 1;
   bool created_locally = 2;
+  aevatar.ai.AgentProfileSnapshot agent_profile = 3;
+  NyxIdChatStartTurnCommand first_turn = 4;
+  string requested_actor_id = 5;
+  aevatar.gagentservice.AgentProfileReference agent_profile_reference = 6;
 }
 
 message NyxIdChatConversationDeleteCommand {
@@ -692,6 +809,7 @@ message NyxIdChatConversationCreationStartedEvent {
   bool created_locally = 3;
   string command_id = 4;
   string correlation_id = 5;
+  string owner_subject = 6;
 }
 
 message NyxIdChatConversationRegistrationAcceptedEvent {
@@ -699,6 +817,7 @@ message NyxIdChatConversationRegistrationAcceptedEvent {
   string actor_id = 2;
   string command_id = 3;
   string correlation_id = 4;
+  NyxIdChatConversationGAgentState state = 5;
 }
 
 message NyxIdChatConversationRegistrationUnavailableEvent {

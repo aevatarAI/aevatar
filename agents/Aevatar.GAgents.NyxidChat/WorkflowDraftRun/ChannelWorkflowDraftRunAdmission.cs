@@ -59,13 +59,15 @@ public sealed class ChannelWorkflowDraftRunAdmission
         if (_workflowQueryPort is null)
             return ChannelWorkflowDraftRunAdmissionResult.Rejected("Workflow 查询服务暂不可用,请稍后重试。");
 
-        var workflow = await _workflowQueryPort.GetByWorkflowIdAsync(scopeId, intent.WorkflowId, ct)
+        var lookup = await _workflowQueryPort.LookupByWorkflowIdAsync(scopeId, intent.WorkflowId, ct)
             .ConfigureAwait(false);
-        if (workflow is null)
+        if (lookup.Status == ScopeWorkflowLookupStatus.NotFound)
             return ChannelWorkflowDraftRunAdmissionResult.Rejected($"未找到 workflow `{intent.WorkflowId}`。");
 
-        if (string.IsNullOrWhiteSpace(workflow.ActorId))
-            return ChannelWorkflowDraftRunAdmissionResult.Rejected($"Workflow `{intent.WorkflowId}` 暂未绑定可运行的 actor。");
+        if (!lookup.IsRunnable)
+            return ChannelWorkflowDraftRunAdmissionResult.Rejected($"Workflow `{intent.WorkflowId}` 暂未绑定可运行的 actor,请稍后重试。");
+
+        var workflow = lookup.Workflow!;
 
         var request = new NeedsWorkflowDraftRunEvent
         {

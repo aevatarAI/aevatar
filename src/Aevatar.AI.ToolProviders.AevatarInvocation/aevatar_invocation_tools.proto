@@ -19,6 +19,7 @@ enum InvocationContentPartKind {
   INVOCATION_CONTENT_PART_KIND_IMAGE = 2;
   INVOCATION_CONTENT_PART_KIND_AUDIO = 3;
   INVOCATION_CONTENT_PART_KIND_VIDEO = 4;
+  INVOCATION_CONTENT_PART_KIND_FILE = 5;
 }
 
 message InvocationContentPart {
@@ -28,6 +29,7 @@ message InvocationContentPart {
   string media_type = 4;
   string uri = 5;
   string name = 6;
+  aevatar.ai.ChatFileRef file_ref = 7;
 }
 
 message InvocationPayload {
@@ -48,6 +50,13 @@ message InvokeGAgentToolRequest {
 
 message InvokeTeamToolRequest {
   string team_id = 1;
+  string endpoint_id = 2;
+  InvocationPayload payload = 3;
+  InvocationWaitMode wait = 4;
+}
+
+message InvokeMemberToolRequest {
+  string member_id = 1;
   string endpoint_id = 2;
   InvocationPayload payload = 3;
   InvocationWaitMode wait = 4;

@@ -11,10 +11,10 @@ using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSo
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
 public sealed class WorkflowSpreadsheetExtractToolSource(
-    IWorkflowFileArtifactReadPort fileArtifacts,
+    IFileArtifactReadPort fileArtifacts,
     IOptions<WorkflowSpreadsheetExtractOptions> options) : IWorkflowToolSource
 {
-    private readonly IWorkflowFileArtifactReadPort _fileArtifacts =
+    private readonly IFileArtifactReadPort _fileArtifacts =
         fileArtifacts ?? throw new ArgumentNullException(nameof(fileArtifacts));
     private readonly IOptions<WorkflowSpreadsheetExtractOptions> _options =
         options ?? throw new ArgumentNullException(nameof(options));
@@ -25,7 +25,7 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
         ]);
 
     private sealed class SpreadsheetExtractTool(
-        IWorkflowFileArtifactReadPort fileArtifacts,
+        IFileArtifactReadPort fileArtifacts,
         IOptions<WorkflowSpreadsheetExtractOptions> options) : IWorkflowTool
     {
         private const string XlsxMediaType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -37,7 +37,7 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         };
 
-        private readonly IWorkflowFileArtifactReadPort _fileArtifacts = fileArtifacts;
+        private readonly IFileArtifactReadPort _fileArtifacts = fileArtifacts;
         private readonly IOptions<WorkflowSpreadsheetExtractOptions> _options = options;
 
         public string Name => "spreadsheet_extract";
@@ -149,9 +149,9 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
 
         private static bool TryResolveExplicitFileRef(
             JsonElement root,
-            out WorkflowFileRef fileRef)
+            out FileArtifactRef fileRef)
         {
-            fileRef = new WorkflowFileRef();
+            fileRef = new FileArtifactRef();
             if (!TryGetProperty(root, "fileRef", "file_ref", out var fileRefElement))
                 return false;
             if (fileRefElement.ValueKind != JsonValueKind.Object)
@@ -161,7 +161,7 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
             return true;
         }
 
-        private static WorkflowFileRef ResolveSingleInputFileRef(
+        private static FileArtifactRef ResolveSingleInputFileRef(
             IReadOnlyList<ProtoWorkflowFileRef> inputFileRefs)
         {
             if (inputFileRefs.Count == 1)
@@ -172,20 +172,20 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
                 : "spreadsheet_extract received multiple input file refs; provide fileRef explicitly.");
         }
 
-        private static WorkflowFileRef ToApplicationFileRef(ProtoWorkflowFileRef source) =>
+        private static FileArtifactRef ToApplicationFileRef(ProtoWorkflowFileRef source) =>
             new()
             {
                 FileId = Normalize(source.FileId),
                 ArtifactId = Normalize(source.ArtifactId),
                 SourceKind = source.SourceKind switch
                 {
-                    ProtoWorkflowFileSourceKind.ChatInput => WorkflowFileSourceKind.ChatInput,
-                    ProtoWorkflowFileSourceKind.FormUpload => WorkflowFileSourceKind.FormUpload,
+                    ProtoWorkflowFileSourceKind.ChatInput => FileArtifactSourceKind.ChatInput,
+                    ProtoWorkflowFileSourceKind.FormUpload => FileArtifactSourceKind.FormUpload,
                     ProtoWorkflowFileSourceKind.ConnectedServiceResource =>
-                        WorkflowFileSourceKind.ConnectedServiceResource,
-                    ProtoWorkflowFileSourceKind.ExternalResource => WorkflowFileSourceKind.ExternalResource,
-                    ProtoWorkflowFileSourceKind.Generated => WorkflowFileSourceKind.Generated,
-                    _ => WorkflowFileSourceKind.Unspecified,
+                        FileArtifactSourceKind.ConnectedServiceResource,
+                    ProtoWorkflowFileSourceKind.ExternalResource => FileArtifactSourceKind.ExternalResource,
+                    ProtoWorkflowFileSourceKind.Generated => FileArtifactSourceKind.Generated,
+                    _ => FileArtifactSourceKind.Unspecified,
                 },
                 SourceMessageId = Normalize(source.SourceMessageId),
                 SourceResourceKey = Normalize(source.SourceResourceKey),
@@ -199,13 +199,13 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
                 OwnerScopeId = Normalize(source.OwnerScopeId),
             };
 
-        private static WorkflowFileRef ParseFileRef(JsonElement fileRefElement)
+        private static FileArtifactRef ParseFileRef(JsonElement fileRefElement)
         {
-            var sourceKind = WorkflowFileSourceKind.Unspecified;
+            var sourceKind = FileArtifactSourceKind.Unspecified;
             if (TryGetProperty(fileRefElement, "sourceKind", "source_kind", out var sourceKindElement))
                 sourceKind = ParseSourceKind(sourceKindElement);
 
-            return new WorkflowFileRef
+            return new FileArtifactRef
             {
                 FileId = GetString(fileRefElement, "fileId", "file_id"),
                 ArtifactId = GetString(fileRefElement, "artifactId", "artifact_id"),
@@ -221,24 +221,24 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
             };
         }
 
-        private static WorkflowFileSourceKind ParseSourceKind(JsonElement element)
+        private static FileArtifactSourceKind ParseSourceKind(JsonElement element)
         {
             if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var numeric))
-                return Enum.IsDefined(typeof(WorkflowFileSourceKind), numeric)
-                    ? (WorkflowFileSourceKind)numeric
-                    : WorkflowFileSourceKind.Unspecified;
+                return Enum.IsDefined(typeof(FileArtifactSourceKind), numeric)
+                    ? (FileArtifactSourceKind)numeric
+                    : FileArtifactSourceKind.Unspecified;
 
             if (element.ValueKind != JsonValueKind.String)
-                return WorkflowFileSourceKind.Unspecified;
+                return FileArtifactSourceKind.Unspecified;
 
             return NormalizeKey(element.GetString()) switch
             {
-                "chatinput" => WorkflowFileSourceKind.ChatInput,
-                "formupload" => WorkflowFileSourceKind.FormUpload,
-                "connectedserviceresource" => WorkflowFileSourceKind.ConnectedServiceResource,
-                "externalresource" => WorkflowFileSourceKind.ExternalResource,
-                "generated" => WorkflowFileSourceKind.Generated,
-                _ => WorkflowFileSourceKind.Unspecified,
+                "chatinput" => FileArtifactSourceKind.ChatInput,
+                "formupload" => FileArtifactSourceKind.FormUpload,
+                "connectedserviceresource" => FileArtifactSourceKind.ConnectedServiceResource,
+                "externalresource" => FileArtifactSourceKind.ExternalResource,
+                "generated" => FileArtifactSourceKind.Generated,
+                _ => FileArtifactSourceKind.Unspecified,
             };
         }
 
@@ -348,7 +348,7 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
                 string.Equals(Path.GetExtension(normalized), ".xlsx", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static WorkflowSpreadsheetExtractFileRef ToResultFileRef(WorkflowFileRef descriptor) =>
+        private static WorkflowSpreadsheetExtractFileRef ToResultFileRef(FileArtifactRef descriptor) =>
             new(
                 descriptor.FileId,
                 descriptor.ArtifactId,
@@ -364,10 +364,13 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
                 descriptor.OwnerRunId,
                 descriptor.OwnerScopeId);
 
-        private static WorkflowToolExecutionResult Error(string error, string detail) =>
-            WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
+        private static WorkflowToolExecutionResult Error(string error, string detail)
+        {
+            var resultJson = JsonSerializer.Serialize(
                 new SpreadsheetExtractError(error, detail),
-                JsonOptions));
+                JsonOptions);
+            return WorkflowToolExecutionResult.Failed(resultJson, error, detail);
+        }
 
         private static string ToErrorName(SpreadsheetPreviewErrorCode errorCode) =>
             errorCode switch
@@ -397,7 +400,7 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
 
     private sealed class SpreadsheetTooLargeException(string message) : Exception(message);
 
-    private sealed record SpreadsheetExtractArguments(WorkflowFileRef FileRef);
+    private sealed record SpreadsheetExtractArguments(FileArtifactRef FileRef);
 
     private sealed record SpreadsheetExtractResult(
         string Kind,

@@ -12,6 +12,7 @@
     <ProjectReference Include="..\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Providers.Elasticsearch\Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
     <ProjectReference Include="..\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
@@ -25,6 +26,8 @@
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Scripting.Projection\Aevatar.Scripting.Projection.csproj" />
     <ProjectReference Include="..\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
+    <ProjectReference Include="..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

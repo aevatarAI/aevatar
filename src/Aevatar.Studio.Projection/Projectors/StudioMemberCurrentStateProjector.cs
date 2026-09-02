@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Projection.Mapping;
@@ -51,6 +52,19 @@ public sealed class StudioMemberCurrentStateProjector
         }
 
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
+
+        if (state.Deleted)
+        {
+            await _writeDispatcher.DeleteAsync(
+                new ProjectionDocumentDeleteMarker(
+                    context.RootActorId,
+                    context.RootActorId,
+                    stateEvent.Version,
+                    stateEvent.EventId ?? string.Empty,
+                    updatedAt),
+                ct);
+            return;
+        }
 
         var document = new StudioMemberCurrentStateDocument
         {
@@ -120,6 +134,7 @@ public sealed class StudioMemberCurrentStateProjector
         document.LastBoundRevisionId = lastBinding.RevisionId ?? string.Empty;
         document.LastBoundImplementationKind = MemberImplementationKindMapper.ToWireName(
             lastBinding.ImplementationKind);
+        document.LastBoundExpectedActorId = lastBinding.ExpectedActorId ?? string.Empty;
         if (lastBinding.BoundAtUtc != null)
             document.LastBoundAt = lastBinding.BoundAtUtc;
     }

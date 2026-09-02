@@ -8,7 +8,7 @@ public sealed class WebRtcVoiceTransportOptions
     public const int DefaultPcmSampleRateHz = 24000;
     public const int DefaultFrameDurationMs = 20;
     public const int DefaultPendingSendFrameCapacity = 64;
-    public const string DefaultControlDataChannelLabel = "voice-control";
+    public const string DefaultControlDataChannelLabel = "vp-control";
 
     public int PcmSampleRateHz { get; init; } = DefaultPcmSampleRateHz;
 

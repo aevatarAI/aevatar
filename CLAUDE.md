@@ -19,7 +19,7 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - 删除优先：空转发、重复抽象、无业务价值代码直接删除，不保留兼容空壳。
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
 - 外部仓库无改动权：本仓库需求禁止依赖 NyxID / chrono-storage / chrono-ornn 等外部仓库新增或修改；现有 surface 不足时，在本仓库内绕开或不做。只有发现外部仓库行为违反其已发布契约时，才可提 issue。
-- 不得对特定 skill / 命令 / 模板名硬编码：skill 接口本身就是泛化协议；生产代码、prompt、路由表、类型名和字段名不得感知具体 skill 名（如 `/daily`、`chrono-ai-daily` 等）。需要个性化行为时，通过 skill metadata / 通用 discovery 接口表达，不允许在分支判断、路由表、类型名里出现具体 skill 名；例外：测试代码可在 testfile 内引用具体 skill 名作 fixture。
+- 不得在运行时代码、prompt、类型名、字段名或 compiled branch 中硬编码具体 skill / command / template 名称；只有经过服务端 validate/publish sealing 流程核验、由 AgentProfileGAgent 持有的 committed published state，才可列举 opaque intent 标识、不可变 Ornn `{guid, literal_version}` 引用、显式 trigger alias 以及单义 `tool_names` / `tool_set_refs`。经授权 owner 通过受控 draft -> validate -> publish 流程提交 Profile 内容属于发布流程输入，不属于 runtime/client override；请求与 ChatRequestEvent 不得逐消息携带或切换 profile/tool policy，客户端不得覆盖 server-sealed snapshot；运行时 router 与 classifier template 只能解释 typed profile contract，不得按具体 skill 名写分支。普通 on-demand discovery 继续走通用 search / `use_skill` 协议；测试 fixture 可引用具体名称。
 
 ## 架构哲学
 - 单一主干，插件扩展：只保留一条权威业务主链路；新能力以插件/模块挂载，禁止平行"第二系统"。
@@ -145,7 +145,7 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - CI full-scan 禁止 `GetAwaiter().GetResult()`、`TypeUrl.Contains(...)` 字符串路由、投影端口 `actorId` 反查上下文。
 - 新增非抽象 `Reducer` 类必须有测试引用；事件类型到 reducer 路由必须使用精确键路由。
 - 守卫：提交前按变更范围运行对应 `tools/ci/*_guard*.sh`；架构相关默认跑 `bash tools/ci/architecture_guards.sh`，测试相关默认跑 `bash tools/ci/test_stability_guards.sh`。
-- 涉及 query/read、projection lifecycle、state version、workflow binding、CLI playground 静态资源时，运行对应专项 guard。
+- 涉及 query/read、projection lifecycle、state version、workflow binding、backend console 静态资产时，运行对应专项 guard。
 - 若新增或修改测试，提交前必须运行 `bash tools/ci/test_stability_guards.sh`。
 - Git：分支命名 `<type>/YYYY-MM-DD_<purpose>`；提交信息用祈使句并聚焦单一目的；PR 写明问题与方案、影响路径、验证命令与结果。
 - 分支 `type` 仅限 `feat/fix/refactor/docs/test/chore`；日期固定 `YYYY-MM-DD`；purpose 只用小写字母、数字、连字符。

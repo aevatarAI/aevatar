@@ -3,6 +3,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection.Observability;
 using Aevatar.Workflow.Projection.ReadModels;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
@@ -42,7 +43,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
         // Refactor (iter97/cluster-591): Old/New
         //   Old: every current-state projector hand-rolled committed-state unpack, timestamp resolution, and upsert.
         //   New: core mapped helper owns that projection shell; this projector keeps only WorkflowRunState -> read model mapping.
-        return new WorkflowExecutionCurrentStateDocument
+        var document = new WorkflowExecutionCurrentStateDocument
         {
             Id = context.RootActorId,
             RootActorId = context.RootActorId,
@@ -52,6 +53,9 @@ public sealed class WorkflowExecutionCurrentStateProjector
             WorkflowName = state.WorkflowName ?? string.Empty,
             Status = state.Status ?? string.Empty,
             ScopeId = state.ScopeId ?? string.Empty,
+            RunOrigin = state.RunOrigin ?? string.Empty,
+            ScheduleId = state.ScheduleId ?? string.Empty,
+            ExpectedExecutionMode = state.ExpectedExecutionMode,
             Compiled = state.Compiled,
             CompilationError = state.CompilationError ?? string.Empty,
             Input = state.Input ?? string.Empty,
@@ -82,7 +86,36 @@ public sealed class WorkflowExecutionCurrentStateProjector
                 x => MapStepIdempotency(x.Value),
                 StringComparer.Ordinal),
             InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
+            ConnectorApprovals = MapConnectorApprovals(state),
         };
+        if (state.CapabilityAdmissionPlan is not null)
+            document.CapabilityAdmissionPlan = state.CapabilityAdmissionPlan.Clone();
+
+        // O2 (06-19-workflow-run-observatory): started_at is derived from the committed WorkflowRunState's
+        // own start fact (StartedAtUtc), so the projector stays a pure committed-state -> readmodel mapper
+        // (no prior-readmodel read). Absent for pre-existing runs -> run list falls back to updated_at.
+        if (state.StartedAtUtc != null)
+            document.StartedAtUtcValue = state.StartedAtUtc;
+
+        return document;
+    }
+
+    private static IList<WorkflowExternalActionApprovalSnapshot> MapConnectorApprovals(WorkflowRunState state)
+    {
+        foreach (var executionState in state.ExecutionStates.Values)
+        {
+            if (!executionState.Is(ConnectorCallModuleState.Descriptor))
+                continue;
+
+            var connectorState = executionState.Unpack<ConnectorCallModuleState>();
+            return connectorState.ApprovalsByActionId.Values
+                .Where(static coordination => coordination.Snapshot?.Plan != null)
+                .OrderBy(static coordination => coordination.Snapshot.Plan.ActionId, StringComparer.Ordinal)
+                .Select(static coordination => coordination.Snapshot.Clone())
+                .ToList();
+        }
+
+        return [];
     }
 
     private static WorkflowStepIdempotencyReadModel MapStepIdempotency(

@@ -4,7 +4,7 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 
 public interface INyxIdProxyFileArtifactIngress
 {
-    ValueTask<WorkflowFileIngressResult> IngestAsync(
-        WorkflowFileIngressRequest request,
+    ValueTask<FileArtifactIngressResult> IngestAsync(
+        FileArtifactIngressRequest request,
         CancellationToken cancellationToken = default);
 }

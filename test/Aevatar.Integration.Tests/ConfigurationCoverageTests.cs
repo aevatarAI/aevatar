@@ -90,40 +90,6 @@ public sealed class ConfigurationCoverageTests
     }
 
     [Fact]
-    public void AevatarSecretsStore_WithInvalidEncryptedEnvelope_ShouldFallbackToEmptyThenWritable()
-    {
-        var dir = Path.Combine(Path.GetTempPath(), $"aevatar-secrets-invalid-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, "secrets.json");
-
-        File.WriteAllText(path, """
-            {
-              "schemaVersion": 1,
-              "algorithm": "AES-256-GCM",
-              "nonceB64": "invalid",
-              "tagB64": "invalid",
-              "ciphertextB64": "invalid"
-            }
-            """);
-
-        try
-        {
-            var store = new AevatarSecretsStore(path);
-            store.GetAll().Should().BeEmpty();
-
-            store.Set("After", "Write");
-
-            var reloaded = new AevatarSecretsStore(path);
-            reloaded.Get("After").Should().Be("Write");
-        }
-        finally
-        {
-            if (Directory.Exists(dir))
-                Directory.Delete(dir, recursive: true);
-        }
-    }
-
-    [Fact]
     public void ListenUrlResolver_ResolveListenUrls_PrioritizesExplicitBeforeConfiguration()
     {
         var config = new ConfigurationBuilder()

@@ -7,6 +7,8 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowRunReportExportWriterTests
 {
+    private const string AuditSentinel = "audit-secret-sentinel";
+
     [Fact]
     public void BuildDefaultPaths_ShouldCreateDirectory_AndUseWorkflowExecutionPrefix()
     {
@@ -94,6 +96,48 @@ public class WorkflowRunReportExportWriterTests
             TryDeleteDirectory(outputDir);
         }
     }
+
+    [Fact]
+    public async Task WriteAsync_ShouldSanitizePayloadDerivedFields_InJsonAndHtmlFiles()
+    {
+        var report = BuildReport(
+            finalError: $"Bearer {AuditSentinel}",
+            withTopology: true,
+            withRoleReplies: true);
+        report.Input = $$"""{"prompt":"go","token":"{{AuditSentinel}}"}""";
+        report.FinalOutput = $$"""{"answer":"done","api_key":"{{AuditSentinel}}"}""";
+        report.Steps[0].RequestParameters["authorization"] = $"Bearer {AuditSentinel}";
+        report.Steps[0].CompletionAnnotations["access_token"] = AuditSentinel;
+        report.Steps[0].AssignedVariable = "password";
+        report.Steps[0].AssignedValue = AuditSentinel;
+        report.RoleReplies[0].Content = $"reply Bearer {AuditSentinel}";
+        report.Timeline[0].Message = $"signature=sha256={new string('a', 16)}{AuditSentinel}";
+        report.Timeline[0].Data["result_json"] = $$"""{"secret":"{{AuditSentinel}}"}""";
+
+        var outputDir = Path.Combine(Path.GetTempPath(), "aevatar-report-" + Guid.NewGuid().ToString("N"));
+        var jsonPath = Path.Combine(outputDir, "report.json");
+        var htmlPath = Path.Combine(outputDir, "report.html");
+
+        try
+        {
+            await WorkflowRunReportExportWriter.WriteAsync(report, jsonPath, htmlPath);
+
+            var json = await File.ReadAllTextAsync(jsonPath);
+            var html = await File.ReadAllTextAsync(htmlPath);
+            json.Should().NotContain(AuditSentinel);
+            html.Should().NotContain(AuditSentinel);
+
+            using var doc = JsonDocument.Parse(json);
+            doc.RootElement.GetProperty("input").GetString().Should().Contain("[redacted]");
+            doc.RootElement.GetProperty("roleReplies")[0].GetProperty("contentLength").GetInt32()
+                .Should().Be(doc.RootElement.GetProperty("roleReplies")[0].GetProperty("content").GetString()!.Length);
+        }
+        finally
+        {
+            TryDeleteDirectory(outputDir);
+        }
+    }
+
 
     private static WorkflowRunReport BuildReport(
         string finalError,

@@ -64,19 +64,22 @@ public sealed class LlmSessionRunObservationService(
                 if (!TryGetObservedPayload(envelope, out var payload))
                     continue;
 
+                if (payload.Is(LlmRunStartedEvent.Descriptor))
+                {
+                    continue;
+                }
+
                 if (payload.Is(LlmStreamChunkObserved.Descriptor))
                 {
                     var delta = accumulator.ObserveChunk(payload.Unpack<LlmStreamChunkObserved>());
-                    if (onDelta != null)
+                    if (delta != null && onDelta != null)
                         await onDelta(delta, ct).ConfigureAwait(false);
                     continue;
                 }
 
                 if (payload.Is(LlmToolCallObserved.Descriptor))
                 {
-                    var delta = accumulator.ObserveToolCall(payload.Unpack<LlmToolCallObserved>());
-                    if (delta != null && onDelta != null)
-                        await onDelta(delta, ct).ConfigureAwait(false);
+                    accumulator.ObserveToolCall(payload.Unpack<LlmToolCallObserved>());
                     continue;
                 }
 

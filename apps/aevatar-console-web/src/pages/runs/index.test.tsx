@@ -1,18 +1,19 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { Grid } from "antd";
-import React from "react";
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { Grid } from 'antd';
+import React from 'react';
+import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { runtimeActorsApi } from '@/shared/api/runtimeActorsApi';
+import { runtimeCatalogApi } from '@/shared/api/runtimeCatalogApi';
+import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import {
   loadDraftRunPayload,
   saveDraftRunPayload,
   saveEndpointInvocationDraftPayload,
   saveObservedRunSessionPayload,
-} from "@/shared/runs/draftRunSession";
-import { saveRecentRun } from "@/shared/runs/recentRuns";
-import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
-import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
-import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
-import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
-import RunsPage from "./index";
+} from '@/shared/runs/draftRunSession';
+import { saveRecentRun } from '@/shared/runs/recentRuns';
+import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
+import RunsPage from './index';
 
 const mockDispatch = jest.fn();
 const mockReset = jest.fn();
@@ -33,21 +34,29 @@ type MockRunSession = {
 
 const mockSession: MockRunSession = {
   context: undefined,
-  status: "idle",
+  status: 'idle',
   messages: [],
   events: [],
   activeSteps: new Set<string>(),
   pendingHumanInput: undefined,
-  runId: "",
+  runId: '',
   error: undefined,
 };
 
-jest.mock("@aevatar-react-sdk/agui", () => ({
+jest.mock('@aevatar-react-sdk/agui', () => ({
   connectChatWebSocket: jest.fn(),
+  parseCustomEvent: (event: {
+    data?: unknown;
+    name?: string;
+    value?: unknown;
+  }) => ({
+    data: event.data ?? event.value,
+    name: event.name,
+  }),
   parseSSEStream: jest.fn(() => (async function* () {})()),
-  useHumanInteraction: jest.fn(() => ({
-    resume: jest.fn(),
-    signal: jest.fn(),
+  useHumanInteraction: jest.fn((handlers: any) => ({
+    resume: handlers.resume,
+    signal: handlers.signal,
     resuming: false,
     signaling: false,
   })),
@@ -58,37 +67,37 @@ jest.mock("@aevatar-react-sdk/agui", () => ({
   })),
 }));
 
-jest.mock("@aevatar-react-sdk/types", () => ({
+jest.mock('@aevatar-react-sdk/types', () => ({
   AGUIEventType: {
-    CUSTOM: "CUSTOM",
-    RUN_FINISHED: "RUN_FINISHED",
-    RUN_STARTED: "RUN_STARTED",
-    RUN_ERROR: "RUN_ERROR",
+    CUSTOM: 'CUSTOM',
+    RUN_FINISHED: 'RUN_FINISHED',
+    RUN_STARTED: 'RUN_STARTED',
+    RUN_ERROR: 'RUN_ERROR',
   },
   CustomEventName: {
-    RunContext: "aevatar.run.context",
-    WaitingSignal: "WaitingSignal",
-    StepRequest: "StepRequest",
+    RunContext: 'aevatar.run.context',
+    WaitingSignal: 'WaitingSignal',
+    StepRequest: 'StepRequest',
   },
 }));
 
-jest.mock("@/shared/api/runtimeCatalogApi", () => ({
+jest.mock('@/shared/api/runtimeCatalogApi', () => ({
   runtimeCatalogApi: {
     listWorkflowCatalog: jest.fn(async () => []),
   },
 }));
 
-jest.mock("@/shared/agui/sseFrameNormalizer", () => ({
+jest.mock('@/shared/agui/sseFrameNormalizer', () => ({
   parseBackendSSEStream: jest.fn(() => (async function* () {})()),
 }));
 
-jest.mock("@/shared/api/runtimeActorsApi", () => ({
+jest.mock('@/shared/api/runtimeActorsApi', () => ({
   runtimeActorsApi: {
     getActorSnapshot: jest.fn(),
   },
 }));
 
-jest.mock("@/shared/api/runtimeRunsApi", () => ({
+jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
     invokeEndpoint: jest.fn(),
     streamChat: jest.fn(),
@@ -99,100 +108,103 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
   },
 }));
 
-jest.mock("./components/RunsLaunchRail", () => {
-  const React = require("react");
+jest.mock('./components/RunsLaunchRail', () => {
+  const React = require('react');
 
   type MockRunFormValues = {
     actorId?: string;
     endpointId?: string;
-    endpointKind?: "chat" | "command";
+    endpointKind?: 'chat' | 'command';
     payloadBase64?: string;
     payloadTypeUrl?: string;
     prompt: string;
     routeName?: string;
     scopeId?: string;
     serviceOverrideId?: string;
-    transport: "sse" | "ws";
+    transport: 'sse' | 'ws';
   };
 
   const normalizeValues = (
-    value: Record<string, unknown> = {}
+    value: Record<string, unknown> = {},
   ): MockRunFormValues => ({
-    actorId:
-      typeof value.actorId === "string" ? value.actorId : undefined,
+    actorId: typeof value.actorId === 'string' ? value.actorId : undefined,
     endpointId:
-      typeof value.endpointId === "string" ? value.endpointId : "chat",
-    endpointKind:
-      value.endpointKind === "command" ? "command" : "chat",
+      typeof value.endpointId === 'string' ? value.endpointId : 'chat',
+    endpointKind: value.endpointKind === 'command' ? 'command' : 'chat',
     payloadBase64:
-      typeof value.payloadBase64 === "string" ? value.payloadBase64 : undefined,
+      typeof value.payloadBase64 === 'string' ? value.payloadBase64 : undefined,
     payloadTypeUrl:
-      typeof value.payloadTypeUrl === "string" ? value.payloadTypeUrl : undefined,
-    prompt: typeof value.prompt === "string" ? value.prompt : "",
+      typeof value.payloadTypeUrl === 'string'
+        ? value.payloadTypeUrl
+        : undefined,
+    prompt: typeof value.prompt === 'string' ? value.prompt : '',
     routeName:
-      typeof value.routeName === "string" ? value.routeName : undefined,
-    scopeId: typeof value.scopeId === "string" ? value.scopeId : undefined,
+      typeof value.routeName === 'string' ? value.routeName : undefined,
+    scopeId: typeof value.scopeId === 'string' ? value.scopeId : undefined,
     serviceOverrideId:
-      typeof value.serviceOverrideId === "string"
+      typeof value.serviceOverrideId === 'string'
         ? value.serviceOverrideId
         : undefined,
-    transport: value.transport === "ws" ? "ws" : "sse",
+    transport: value.transport === 'ws' ? 'ws' : 'sse',
   });
 
   const normalizePatch = (
-    value: Record<string, unknown> = {}
+    value: Record<string, unknown> = {},
   ): Partial<MockRunFormValues> => ({
-    ...(Object.hasOwn(value, "actorId")
+    ...(Object.hasOwn(value, 'actorId')
       ? { actorId: normalizeValues({ actorId: value.actorId }).actorId }
       : {}),
-    ...(Object.hasOwn(value, "endpointId")
-      ? { endpointId: normalizeValues({ endpointId: value.endpointId }).endpointId }
+    ...(Object.hasOwn(value, 'endpointId')
+      ? {
+          endpointId: normalizeValues({ endpointId: value.endpointId })
+            .endpointId,
+        }
       : {}),
-    ...(Object.hasOwn(value, "endpointKind")
+    ...(Object.hasOwn(value, 'endpointKind')
       ? {
           endpointKind: normalizeValues({
             endpointKind: value.endpointKind,
           }).endpointKind,
         }
       : {}),
-    ...(Object.hasOwn(value, "payloadBase64")
+    ...(Object.hasOwn(value, 'payloadBase64')
       ? {
           payloadBase64: normalizeValues({
             payloadBase64: value.payloadBase64,
           }).payloadBase64,
         }
       : {}),
-    ...(Object.hasOwn(value, "payloadTypeUrl")
+    ...(Object.hasOwn(value, 'payloadTypeUrl')
       ? {
           payloadTypeUrl: normalizeValues({
             payloadTypeUrl: value.payloadTypeUrl,
           }).payloadTypeUrl,
         }
       : {}),
-    ...(Object.hasOwn(value, "prompt")
+    ...(Object.hasOwn(value, 'prompt')
       ? { prompt: normalizeValues({ prompt: value.prompt }).prompt }
       : {}),
-    ...(Object.hasOwn(value, "routeName")
+    ...(Object.hasOwn(value, 'routeName')
       ? { routeName: normalizeValues({ routeName: value.routeName }).routeName }
       : {}),
-    ...(Object.hasOwn(value, "scopeId")
+    ...(Object.hasOwn(value, 'scopeId')
       ? { scopeId: normalizeValues({ scopeId: value.scopeId }).scopeId }
       : {}),
-    ...(Object.hasOwn(value, "serviceOverrideId")
+    ...(Object.hasOwn(value, 'serviceOverrideId')
       ? {
           serviceOverrideId: normalizeValues({
             serviceOverrideId: value.serviceOverrideId,
           }).serviceOverrideId,
         }
       : {}),
-    ...(Object.hasOwn(value, "transport")
+    ...(Object.hasOwn(value, 'transport')
       ? { transport: normalizeValues({ transport: value.transport }).transport }
       : {}),
   });
 
   const RunsLaunchRail = (props: any) => {
     const [values, setValues] = React.useState(() =>
-      normalizeValues(props.initialFormValues)
+      normalizeValues(props.initialFormValues),
     );
 
     React.useEffect(() => {
@@ -208,7 +220,8 @@ jest.mock("./components/RunsLaunchRail", () => {
       }
 
       props.composerFormRef.current = {
-        getFieldValue: (name: string) => (values as Record<string, unknown>)[name],
+        getFieldValue: (name: string) =>
+          (values as Record<string, unknown>)[name],
         getFieldsValue: () => values,
         resetFields: () => setValues(normalizeValues(props.initialFormValues)),
         setFieldValue: (name: string, value: unknown) =>
@@ -228,45 +241,35 @@ jest.mock("./components/RunsLaunchRail", () => {
       return () => {
         props.composerFormRef.current = undefined;
       };
-    }, [props.composerFormRef, props.initialFormValues, props.onSubmitRun, values]);
+    }, [
+      props.composerFormRef,
+      props.initialFormValues,
+      props.onSubmitRun,
+      values,
+    ]);
 
     return React.createElement(
-      "section",
+      'section',
       null,
       React.createElement(
-        "div",
+        'div',
         null,
-        props.variant === "chat" ? "Run context" : "Run setup"
+        props.variant === 'chat' ? 'Run context' : 'Run setup',
       ),
-      props.runReadiness
-        ? React.createElement(
-            "div",
-            {
-              "data-testid": "mock-run-readiness",
-            },
-            [
-              props.runReadiness.ready ? "Ready to send" : "Send readiness",
-              props.runReadiness.blockingReason ?? "",
-              ...props.runReadiness.items.map(
-                (item: any) => `${item.label}: ${item.value}`
-              ),
-            ].join(" | ")
-          )
-        : null,
       props.showPromptField !== false
-        ? React.createElement("textarea", {
-            "aria-label": "Prompt",
+        ? React.createElement('textarea', {
+            'aria-label': 'Prompt',
             onChange: (event: any) =>
               setValues((current: Record<string, unknown>) => ({
                 ...current,
                 prompt: event.target.value,
               })),
-            placeholder: "Describe the task to run.",
+            placeholder: 'Describe the task to run.',
             value: values.prompt,
           })
         : null,
-      React.createElement("input", {
-        "aria-label": "Workspace ID",
+      React.createElement('input', {
+        'aria-label': 'Workspace ID',
         onChange: (event: any) => {
           props.onScopeIdChange?.(event.target.value);
           setValues((current: Record<string, unknown>) => ({
@@ -274,29 +277,29 @@ jest.mock("./components/RunsLaunchRail", () => {
             scopeId: event.target.value,
           }));
         },
-        value: values.scopeId ?? "",
+        value: values.scopeId ?? '',
       }),
       props.showSubmitActions !== false
         ? React.createElement(
-            "button",
+            'button',
             {
               onClick: () => props.onSubmitRun(values),
-              type: "button",
+              type: 'button',
             },
-            "Start run"
+            'Start run',
           )
         : null,
       props.recentRunRows.map((row: any) =>
         React.createElement(
-          "button",
+          'button',
           {
             key: row.key,
             onClick: () => row.onRestore?.(),
-            type: "button",
+            type: 'button',
           },
-          "Restore"
-        )
-      )
+          'Restore',
+        ),
+      ),
     );
   };
 
@@ -306,7 +309,7 @@ jest.mock("./components/RunsLaunchRail", () => {
   };
 });
 
-describe("RunsPage", () => {
+describe('RunsPage', () => {
   const mockedRuntimeCatalogApi = runtimeCatalogApi as unknown as {
     listWorkflowCatalog: jest.Mock;
   };
@@ -318,113 +321,117 @@ describe("RunsPage", () => {
     signal: jest.Mock;
     stop: jest.Mock;
   };
+  const mockedRuntimeActorsApi = runtimeActorsApi as unknown as {
+    getActorSnapshot: jest.Mock;
+  };
   const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
     jest.restoreAllMocks();
-    window.history.replaceState({}, "", "/runtime/runs");
+    window.history.replaceState({}, '', '/runtime/runs');
     window.sessionStorage.clear();
     window.localStorage.clear();
     jest.clearAllMocks();
     mockDispatch.mockReset();
     mockReset.mockReset();
     mockSession.context = undefined;
-    mockSession.status = "idle";
+    mockSession.status = 'idle';
     mockSession.messages = [];
     mockSession.events = [];
     mockSession.activeSteps = new Set<string>();
     mockSession.pendingHumanInput = undefined;
-    mockSession.runId = "";
+    mockSession.runId = '';
     mockSession.error = undefined;
     mockedRuntimeRunsApi.invokeEndpoint.mockResolvedValue({
-      requestId: "cmd-1",
-      targetActorId: "actor-1",
-      endpointId: "aevatar.tools.cli.hosting.AppScriptCommand",
+      requestId: 'cmd-1',
+      targetActorId: 'actor-1',
+      endpointId: 'aevatar.tools.cli.hosting.AppScriptCommand',
     });
     mockedRuntimeRunsApi.streamChat.mockResolvedValue({
       ok: true,
       body: {},
     });
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({});
+    mockedRuntimeActorsApi.getActorSnapshot.mockResolvedValue({
+      actorId: 'actor-1',
+      workflowName: 'Test workflow',
+      lastCommandId: 'cmd-1',
+      completionStatusValue: 0,
+      stateVersion: 1,
+      lastEventId: 'event-1',
+      lastUpdatedAt: '2026-06-30T00:00:00Z',
+      lastSuccess: true,
+      lastOutput: '',
+      lastError: '',
+      totalSteps: 0,
+      requestedSteps: 0,
+      completedSteps: 0,
+      roleReplyCount: 0,
+      currentStateJson: '{}',
+      timelineCount: 0,
+      parentActorId: null,
+      childActorIds: [],
+      latestEvents: [],
+    });
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([]);
-    mockedParseBackendSSEStream.mockImplementation(
-      () => (async function* () {})()
+    mockedParseBackendSSEStream.mockImplementation(() =>
+      (async function* () {})(),
     );
   });
 
-  it("renders the run console header and setup-first state before any run starts", async () => {
+  it('renders the run console header and setup-first state before any run starts', async () => {
+    const consoleError = jest.spyOn(console, 'error');
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(container.textContent).toContain("Run Console");
-    expect(
-      screen.getByRole("button", { name: "Open runtime console guide" })
+    expect(container.textContent).toContain('Run Console');
+    expect(consoleError).not.toHaveBeenCalledWith(
+      expect.stringContaining('`NaN` is an invalid value for the `height`'),
     );
+    expect(screen.getByRole('button', { name: 'Open runtime console guide' }));
     expect(
-      screen.getByRole("button", { name: "Workflow catalog" })
+      screen.getByRole('button', { name: 'Workflow catalog' }),
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Back to advanced team editing" })
+      screen.queryByRole('button', { name: 'Back to advanced team editing' }),
+    ).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Actor explorer' })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Mission Control' }),
     ).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Actor explorer" })
+      screen.queryByRole('button', { name: 'Open observability hub' }),
     ).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Mission Control" })
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Open observability hub" })
-    ).toBeNull();
-    expect(
-      screen.getByPlaceholderText("Describe the task to run.")
+      screen.getByPlaceholderText('Describe the task to run.'),
     ).toBeTruthy();
-    expect(container.textContent).toContain("Run context");
-    expect(container.textContent).toContain("Conversation");
-    expect(container.textContent).toContain("Workspace: required");
-    expect(container.textContent).toContain("Route: direct");
-    expect(container.textContent).toContain("Endpoint: chat");
+    expect(container.textContent).toContain('Run context');
+    expect(container.textContent).toContain('Conversation');
+    expect(container.textContent).toContain('Workspace: required');
+    expect(container.textContent).toContain('Route: direct');
+    expect(container.textContent).toContain('Endpoint: chat');
     expect(container.textContent).toContain(
-      "Workspace is required before the prompt can be sent."
+      'Workspace is required before the prompt can be sent.',
     );
-    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
-      "Send readiness"
-    );
-    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
-      "Workspace: Required"
-    );
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
   });
 
-  it("enables the conversation composer only after a workspace is set", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/runtime/runs?prompt=Run%20it"
-    );
+  it('enables the conversation composer only after a workspace is set', async () => {
+    window.history.replaceState({}, '', '/runtime/runs?prompt=Run%20it');
 
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("Run it");
-    expect(container.textContent).toContain("Workspace: required");
-    const sendButton = screen.getByRole("button", { name: "Send" });
+    await screen.findByDisplayValue('Run it');
+    expect(container.textContent).toContain('Workspace: required');
+    const sendButton = screen.getByRole('button', { name: 'Send' });
     expect(sendButton).toBeDisabled();
-    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
-      "Send readiness"
-    );
-
-    fireEvent.change(screen.getByLabelText("Workspace ID"), {
-      target: { value: "scope-1" },
+    fireEvent.change(screen.getByLabelText('Workspace ID'), {
+      target: { value: 'scope-1' },
     });
 
-    expect(container.textContent).toContain("Workspace: scope-1");
+    expect(container.textContent).toContain('Workspace: scope-1');
     expect(container.textContent).not.toContain(
-      "Workspace is required before the prompt can be sent."
-    );
-    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
-      "Ready to send"
-    );
-    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
-      "Workspace: scope-1"
+      'Workspace is required before the prompt can be sent.',
     );
     expect(sendButton).toBeEnabled();
 
@@ -432,20 +439,20 @@ describe("RunsPage", () => {
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
-        "scope-1",
+        'scope-1',
         expect.objectContaining({
-          prompt: "Run it",
+          prompt: 'Run it',
         }),
         expect.any(AbortSignal),
         {
-          serviceId: "direct",
-        }
+          serviceId: 'direct',
+        },
       );
     });
   });
 
-  it("stacks the chat setup and conversation panes on compact screens", async () => {
-    jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
+  it('stacks the chat setup and conversation panes on compact screens', async () => {
+    jest.spyOn(Grid, 'useBreakpoint').mockReturnValue({
       xs: true,
       sm: true,
       md: false,
@@ -456,240 +463,429 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(await screen.findByTestId("runs-chat-layout")).toHaveStyle({
-      gridTemplateColumns: "minmax(0, 1fr)",
-      overflowY: "auto",
+    expect(await screen.findByTestId('runs-chat-layout')).toHaveStyle({
+      gridTemplateColumns: 'minmax(0, 1fr)',
+      overflowY: 'auto',
     });
-    expect(screen.getByPlaceholderText("Describe the task to run.")).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText('Describe the task to run.'),
+    ).toBeTruthy();
   });
 
-  it("navigates back to the team advanced tab from the runs console", async () => {
+  it('navigates back to the team advanced tab from the runs console', async () => {
+    window.history.replaceState({}, '', '/runtime/runs?scopeId=scope-1');
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Back to advanced team editing',
+      }),
+    );
+
+    expect(window.location.pathname).toBe('/scopes/scope-1/teams');
+    expect(window.location.search).toBe('');
+  });
+
+  it('returns to the originating studio route when a return target is provided', async () => {
     window.history.replaceState(
       {},
-      "",
-      "/runtime/runs?scopeId=scope-1"
+      '',
+      '/runtime/runs?scopeId=scope-1&returnTo=%2Fstudio%3FscopeId%3Dscope-1%26tab%3Dstudio%26template%3Dhello-chat',
     );
 
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Back to advanced team editing" })
+      await screen.findByRole('button', { name: 'Back to Studio' }),
     );
 
-    expect(window.location.pathname).toBe("/scopes/scope-1/teams");
-    expect(window.location.search).toBe("");
+    expect(window.location.pathname).toBe('/studio');
+    expect(new URLSearchParams(window.location.search).get('scopeId')).toBe(
+      'scope-1',
+    );
+    expect(new URLSearchParams(window.location.search).get('tab')).toBe(
+      'studio',
+    );
+    expect(new URLSearchParams(window.location.search).get('template')).toBe(
+      'hello-chat',
+    );
   });
 
-  it("returns to the originating studio route when a return target is provided", async () => {
+  it('returns to the originating workflow inspector when a workflow handoff provides return context', async () => {
     window.history.replaceState(
       {},
-      "",
-      "/runtime/runs?scopeId=scope-1&returnTo=%2Fstudio%3FscopeId%3Dscope-1%26tab%3Dstudio%26template%3Dhello-chat"
+      '',
+      '/runtime/runs?route=demo_flow&returnTo=%2Fruntime%2Fworkflows%3Fworkflow%3Ddemo_flow',
     );
 
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Back to Studio" })
+      await screen.findByRole('button', { name: 'Back to Workflow Library' }),
     );
 
-    expect(window.location.pathname).toBe("/studio");
-    expect(new URLSearchParams(window.location.search).get("scopeId")).toBe(
-      "scope-1"
-    );
-    expect(new URLSearchParams(window.location.search).get("tab")).toBe(
-      "studio"
-    );
-    expect(new URLSearchParams(window.location.search).get("template")).toBe(
-      "hello-chat"
+    expect(window.location.pathname).toBe('/runtime/workflows');
+    expect(new URLSearchParams(window.location.search).get('workflow')).toBe(
+      'demo_flow',
     );
   });
 
-  it("returns to the originating workflow inspector when a workflow handoff provides return context", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/runtime/runs?route=demo_flow&returnTo=%2Fruntime%2Fworkflows%3Fworkflow%3Ddemo_flow"
-    );
-
-    renderWithQueryClient(React.createElement(RunsPage));
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Back to Workflow Library" })
-    );
-
-    expect(window.location.pathname).toBe("/runtime/workflows");
-    expect(new URLSearchParams(window.location.search).get("workflow")).toBe(
-      "demo_flow"
-    );
-  });
-
-  it("keeps the trace workspace viewport stretchable once a run is active", async () => {
-    mockSession.status = "running";
-    mockSession.runId = "run-1";
+  it('keeps the trace workspace viewport stretchable once a run is active', async () => {
+    mockSession.status = 'running';
+    mockSession.runId = 'run-1';
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
-    const tabs = container.querySelectorAll(".ant-tabs");
+    const tabs = container.querySelectorAll('.ant-tabs');
     expect(tabs[0]).toHaveStyle({
-      flex: "1",
-      minHeight: "0",
+      flex: '1',
+      minHeight: '0',
     });
 
-    const contentHolder = tabs[0]?.querySelector(".ant-tabs-content-holder");
+    const contentHolder = tabs[0]?.querySelector('.ant-tabs-content-holder');
     expect(contentHolder).not.toBeNull();
     expect(contentHolder).toHaveStyle({
-      flex: "1",
-      minHeight: "0",
-      overflow: "hidden",
+      flex: '1',
+      minHeight: '0',
+      overflow: 'hidden',
     });
   });
 
-  it("shows the trace workbench and primary run actions after the run starts", async () => {
+  it('shows the trace workbench and primary run actions after the run starts', async () => {
     window.history.replaceState(
       {},
-      "",
-      "/runtime/runs?scopeId=scope-1&prompt=Watch%20this%20run",
+      '',
+      '/runtime/runs?scopeId=scope-1&prompt=Watch%20this%20run',
     );
-    mockSession.status = "running";
-    mockSession.runId = "run-1";
+    mockSession.status = 'running';
+    mockSession.runId = 'run-1';
     mockSession.context = {
-      actorId: "actor-1",
-      commandId: "cmd-1",
-      workflowName: "direct",
+      actorId: 'actor-1',
+      commandId: 'cmd-1',
+      workflowName: 'direct',
     };
 
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(container.textContent).toContain("Conversation");
-    expect(screen.queryByRole("button", { name: "Run setup" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Conversation" })).toBeTruthy();
+    expect(container.textContent).toContain('Conversation');
+    expect(screen.queryByRole('button', { name: 'Run setup' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Conversation' })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Mission Control" }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mission Control' }));
 
-    expect(window.location.pathname).toBe("/runtime/mission-control");
+    expect(window.location.pathname).toBe('/runtime/mission-control');
     const params = new URLSearchParams(window.location.search);
-    expect(params.get("actorId")).toBe("actor-1");
-    expect(params.get("autoStream")).toBe("true");
-    expect(params.get("prompt")).toBe("Watch this run");
-    expect(params.get("runId")).toBe("run-1");
-    expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get('actorId')).toBe('actor-1');
+    expect(params.get('autoStream')).toBe('true');
+    expect(params.get('prompt')).toBe('Watch this run');
+    expect(params.get('runId')).toBe('run-1');
+    expect(params.get('scopeId')).toBe('scope-1');
   });
 
-  it("surfaces pending human interaction inline in the main workspace", async () => {
-    mockSession.status = "running";
-    mockSession.runId = "run-1";
+  it('surfaces pending human interaction inline in the main workspace', async () => {
+    mockSession.status = 'running';
+    mockSession.runId = 'run-1';
     mockSession.pendingHumanInput = {
-      prompt: "Approve the release summary.",
-      runId: "run-1",
-      stepId: "review-step",
-      suspensionType: "human_approval",
+      prompt: 'Approve the release summary.',
+      runId: 'run-1',
+      stepId: 'review-step',
+      suspensionType: 'human_approval',
       timeoutSeconds: 600,
     } as any;
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(screen.getAllByText("Action required").length).toBeGreaterThan(0);
-    expect(screen.getByText("Review and continue the run")).toBeInTheDocument();
+    expect(screen.getAllByText('Action required').length).toBeGreaterThan(0);
+    expect(screen.getByText('Review and continue the run')).toBeInTheDocument();
     expect(
-      screen.getByRole("switch", { name: "Approved" })
+      screen.getByRole('switch', { name: 'Approved' }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("textbox", { name: "Operator response" })
+      screen.getByRole('textbox', { name: 'Operator response' }),
     ).toBeInTheDocument();
   });
 
-  it("uses the generic invoke path for prepared service invocation drafts", async () => {
+  it('keeps an accepted resume informational while the run still needs action', async () => {
+    window.history.replaceState({}, '', '/runtime/runs?scopeId=scope-1');
+    mockSession.status = 'running';
+    mockSession.runId = 'run-1';
+    mockSession.context = {
+      actorId: 'actor-1',
+      commandId: 'cmd-1',
+      workflowName: 'direct',
+    };
+    mockSession.pendingHumanInput = {
+      prompt: 'Approve the release summary.',
+      runId: 'run-1',
+      stepId: 'review-step',
+      suspensionType: 'human_approval',
+      timeoutSeconds: 600,
+    } as any;
+    mockedRuntimeRunsApi.resume.mockResolvedValue({
+      accepted: true,
+      actorId: 'actor-1',
+      runId: 'run-1',
+      stepId: 'review-step',
+    });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Approve and continue' }),
+    );
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.resume).toHaveBeenCalledWith(
+        'scope-1',
+        expect.objectContaining({
+          actorId: 'actor-1',
+          approved: true,
+          commandId: 'cmd-1',
+          runId: 'run-1',
+          stepId: 'review-step',
+        }),
+        { serviceId: undefined },
+      );
+    });
+    expect(
+      await screen.findByText(
+        'Resume request accepted. Waiting for the run to continue.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('Action required').length).toBeGreaterThan(0);
+  });
+
+  it('keeps an accepted signal informational while the run still needs action', async () => {
+    window.history.replaceState({}, '', '/runtime/runs?scopeId=scope-1');
+    mockSession.status = 'running';
+    mockSession.runId = 'run-1';
+    mockSession.context = {
+      actorId: 'actor-1',
+      commandId: 'cmd-1',
+      workflowName: 'direct',
+    };
+    mockSession.events = [
+      {
+        type: 'CUSTOM',
+        name: 'WaitingSignal',
+        value: {
+          prompt: 'Send the release signal.',
+          runId: 'run-1',
+          signalName: 'release_approved',
+          stepId: 'release-step',
+        },
+      },
+    ];
+    mockedRuntimeRunsApi.signal.mockResolvedValue({
+      accepted: true,
+      actorId: 'actor-1',
+      runId: 'run-1',
+      signalName: 'release_approved',
+      stepId: 'release-step',
+    });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Send signal' }));
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.signal).toHaveBeenCalledWith(
+        'scope-1',
+        expect.objectContaining({
+          actorId: 'actor-1',
+          commandId: 'cmd-1',
+          runId: 'run-1',
+          signalName: 'release_approved',
+          stepId: 'release-step',
+        }),
+        { serviceId: undefined },
+      );
+    });
+    expect(
+      await screen.findByText(
+        'Signal accepted. Waiting for the run to continue.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('Action required').length).toBeGreaterThan(0);
+  });
+
+  it('keeps a rejected resume retryable instead of claiming acceptance', async () => {
+    window.history.replaceState({}, '', '/runtime/runs?scopeId=scope-1');
+    mockSession.status = 'running';
+    mockSession.runId = 'run-1';
+    mockSession.context = {
+      actorId: 'actor-1',
+      commandId: 'cmd-1',
+      workflowName: 'direct',
+    };
+    mockSession.pendingHumanInput = {
+      prompt: 'Approve the release summary.',
+      runId: 'run-1',
+      stepId: 'review-step',
+      suspensionType: 'human_approval',
+      timeoutSeconds: 600,
+    } as any;
+    mockedRuntimeRunsApi.resume.mockResolvedValue({
+      accepted: false,
+      actorId: 'actor-1',
+      runId: 'run-1',
+      stepId: 'review-step',
+    });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Approve and continue' }),
+    );
+
+    expect(
+      await screen.findByText(
+        'The resume request was not accepted. Try again.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'Resume request accepted. Waiting for the run to continue.',
+      ),
+    ).toBeNull();
+    expect(screen.getAllByText('Action required').length).toBeGreaterThan(0);
+  });
+
+  it('keeps a rejected signal retryable instead of claiming acceptance', async () => {
+    window.history.replaceState({}, '', '/runtime/runs?scopeId=scope-1');
+    mockSession.status = 'running';
+    mockSession.runId = 'run-1';
+    mockSession.context = {
+      actorId: 'actor-1',
+      commandId: 'cmd-1',
+      workflowName: 'direct',
+    };
+    mockSession.events = [
+      {
+        type: 'CUSTOM',
+        name: 'WaitingSignal',
+        value: {
+          prompt: 'Send the release signal.',
+          runId: 'run-1',
+          signalName: 'release_approved',
+          stepId: 'release-step',
+        },
+      },
+    ];
+    mockedRuntimeRunsApi.signal.mockResolvedValue({
+      accepted: false,
+      actorId: 'actor-1',
+      runId: 'run-1',
+      signalName: 'release_approved',
+      stepId: 'release-step',
+    });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Send signal' }));
+
+    expect(
+      await screen.findByText('The signal was not accepted. Try again.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Signal accepted. Waiting for the run to continue.'),
+    ).toBeNull();
+    expect(screen.getAllByText('Action required').length).toBeGreaterThan(0);
+  });
+
+  it('uses the generic invoke path for prepared service invocation drafts', async () => {
     const draftKey = saveEndpointInvocationDraftPayload({
-      endpointId: "aevatar.tools.cli.hosting.AppScriptCommand",
-      prompt: "script payload",
-      payloadTypeUrl: "type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand",
-      payloadBase64: "CgBSCnNjcmlwdCBwYXlsb2Fk",
+      endpointId: 'aevatar.tools.cli.hosting.AppScriptCommand',
+      prompt: 'script payload',
+      payloadTypeUrl:
+        'type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand',
+      payloadBase64: 'CgBSCnNjcmlwdCBwYXlsb2Fk',
     });
     window.history.replaceState(
       {},
-      "",
-      `/runtime/runs?scopeId=scope-1&endpointId=aevatar.tools.cli.hosting.AppScriptCommand&draftKey=${draftKey}`
+      '',
+      `/runtime/runs?scopeId=scope-1&endpointId=aevatar.tools.cli.hosting.AppScriptCommand&draftKey=${draftKey}`,
     );
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("script payload");
-    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    await screen.findByDisplayValue('script payload');
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
-        "scope-1",
+        'scope-1',
         expect.objectContaining({
-          endpointId: "aevatar.tools.cli.hosting.AppScriptCommand",
-          prompt: "script payload",
+          endpointId: 'aevatar.tools.cli.hosting.AppScriptCommand',
+          prompt: 'script payload',
           payloadTypeUrl:
-            "type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand",
-          payloadBase64: "CgBSCnNjcmlwdCBwYXlsb2Fk",
+            'type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand',
+          payloadBase64: 'CgBSCnNjcmlwdCBwYXlsb2Fk',
         }),
         {
           serviceId: undefined,
-        }
+        },
       );
     });
     expect(mockedRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
     expect(mockedRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
     expect(mockDispatch).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "RUN_STARTED",
-        runId: "cmd-1",
-      })
+        type: 'RUN_STARTED',
+        runId: 'cmd-1',
+      }),
     );
     expect(mockDispatch).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "RUN_FINISHED",
-      })
+        type: 'RUN_FINISHED',
+      }),
     );
   });
 
-  it("auto-starts workflow draft runs handed off from Studio", async () => {
+  it('auto-starts workflow draft runs handed off from Studio', async () => {
     const draftKey = saveDraftRunPayload({
-      workflowName: "workspace-demo",
-      workflowYamls: ["name: workspace-demo\nsteps:\n  - id: review_step\n"],
+      workflowName: 'workspace-demo',
+      workflowYamls: ['name: workspace-demo\nsteps:\n  - id: review_step\n'],
     });
     window.history.replaceState(
       {},
-      "",
-      `/runtime/runs?scopeId=scope-1&route=workspace-demo&prompt=Run%20the%20draft&draftKey=${draftKey}`
+      '',
+      `/runtime/runs?scopeId=scope-1&route=workspace-demo&prompt=Run%20the%20draft&draftKey=${draftKey}`,
     );
 
     renderWithQueryClient(React.createElement(RunsPage));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
-        "scope-1",
+        'scope-1',
         expect.objectContaining({
-          prompt: "Run the draft",
-          workflowYamls: [
-            expect.stringContaining("name: workspace-demo"),
-          ],
+          prompt: 'Run the draft',
+          workflowYamls: [expect.stringContaining('name: workspace-demo')],
         }),
-        expect.any(AbortSignal)
+        expect.any(AbortSignal),
       );
     });
-    expect(screen.getAllByText("Conversation").length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Conversation').length).toBeGreaterThan(0);
 
-    expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
+    expect(
+      new URLSearchParams(window.location.search).get('draftKey'),
+    ).toBeNull();
     expect(loadDraftRunPayload(draftKey)).toBeNull();
   });
 
-  it("retries chat runs against the scope default binding when a stale service id is missing", async () => {
+  it('retries chat runs against the scope default binding when a stale service id is missing', async () => {
     window.history.replaceState(
       {},
-      "",
-      "/runtime/runs?scopeId=scope-1&route=hello-chat&serviceOverrideId=scope-1:default:default:hello-chat&prompt=%E4%BD%A0%E5%A5%BD%EF%BC%8C%E8%AF%B7%E5%81%9A%E4%B8%AA%E8%87%AA%E6%88%91%E4%BB%8B%E7%BB%8D"
+      '',
+      '/runtime/runs?scopeId=scope-1&route=hello-chat&serviceOverrideId=scope-1:default:default:hello-chat&prompt=%E4%BD%A0%E5%A5%BD%EF%BC%8C%E8%AF%B7%E5%81%9A%E4%B8%AA%E8%87%AA%E6%88%91%E4%BB%8B%E7%BB%8D',
     );
 
     mockedRuntimeRunsApi.streamChat
       .mockRejectedValueOnce(
         new Error(
-          "Service 'scope-1:default:default:hello-chat' was not found."
-        )
+          "Service 'scope-1:default:default:hello-chat' was not found.",
+        ),
       )
       .mockResolvedValueOnce({
         ok: true,
@@ -698,8 +894,8 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("scope-1");
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByDisplayValue('scope-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
@@ -707,34 +903,34 @@ describe("RunsPage", () => {
 
     expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
       1,
-      "scope-1",
+      'scope-1',
       expect.objectContaining({
-        prompt: "你好，请做个自我介绍",
+        prompt: '你好，请做个自我介绍',
       }),
       expect.any(AbortSignal),
       {
-        serviceId: "scope-1:default:default:hello-chat",
-      }
+        serviceId: 'scope-1:default:default:hello-chat',
+      },
     );
 
     expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
       2,
-      "scope-1",
+      'scope-1',
       expect.objectContaining({
-        prompt: "你好，请做个自我介绍",
+        prompt: '你好，请做个自我介绍',
       }),
       expect.any(AbortSignal),
       {
         serviceId: undefined,
-      }
+      },
     );
   });
 
-  it("retries streamed chat runs against the scope default binding when the stream reports a missing service", async () => {
+  it('retries streamed chat runs against the scope default binding when the stream reports a missing service', async () => {
     window.history.replaceState(
       {},
-      "",
-      "/runtime/runs?scopeId=scope-1&route=hello-chat&serviceOverrideId=scope-1:default:default:hello-chat&prompt=%E4%BD%A0%E5%A5%BD%EF%BC%8C%E8%AF%B7%E5%81%9A%E4%B8%AA%E8%87%AA%E6%88%91%E4%BB%8B%E7%BB%8D"
+      '',
+      '/runtime/runs?scopeId=scope-1&route=hello-chat&serviceOverrideId=scope-1:default:default:hello-chat&prompt=%E4%BD%A0%E5%A5%BD%EF%BC%8C%E8%AF%B7%E5%81%9A%E4%B8%AA%E8%87%AA%E6%88%91%E4%BB%8B%E7%BB%8D',
     );
 
     mockedRuntimeRunsApi.streamChat
@@ -747,21 +943,21 @@ describe("RunsPage", () => {
         body: {},
       });
     mockedParseBackendSSEStream
-      .mockImplementationOnce(
-        () =>
-          (async function* () {
-            yield {
-              type: "RUN_ERROR",
-              message: "Service 'scope-1:default:default:hello-chat' was not found.",
-            };
-          })()
+      .mockImplementationOnce(() =>
+        (async function* () {
+          yield {
+            type: 'RUN_ERROR',
+            message:
+              "Service 'scope-1:default:default:hello-chat' was not found.",
+          };
+        })(),
       )
       .mockImplementationOnce(() => (async function* () {})());
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("scope-1");
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByDisplayValue('scope-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
@@ -769,52 +965,52 @@ describe("RunsPage", () => {
 
     expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
       1,
-      "scope-1",
+      'scope-1',
       expect.objectContaining({
-        prompt: "你好，请做个自我介绍",
+        prompt: '你好，请做个自我介绍',
       }),
       expect.any(AbortSignal),
       {
-        serviceId: "scope-1:default:default:hello-chat",
-      }
+        serviceId: 'scope-1:default:default:hello-chat',
+      },
     );
 
     expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
       2,
-      "scope-1",
+      'scope-1',
       expect.objectContaining({
-        prompt: "你好，请做个自我介绍",
+        prompt: '你好，请做个自我介绍',
       }),
       expect.any(AbortSignal),
       {
         serviceId: undefined,
-      }
+      },
     );
   });
 
-  it("hydrates observed run sessions without starting a new invoke", async () => {
+  it('hydrates observed run sessions without starting a new invoke', async () => {
     const draftKey = saveObservedRunSessionPayload({
-      scopeId: "scope-1",
-      serviceOverrideId: "svc-1",
-      endpointId: "chat",
-      prompt: "hello observed run",
-      actorId: "actor-1",
-      commandId: "cmd-1",
-      runId: "run-1",
+      scopeId: 'scope-1',
+      serviceOverrideId: 'svc-1',
+      endpointId: 'chat',
+      prompt: 'hello observed run',
+      actorId: 'actor-1',
+      commandId: 'cmd-1',
+      runId: 'run-1',
       events: [
         {
-          type: "RUN_STARTED",
-          runId: "run-1",
-          threadId: "thread-1",
+          type: 'RUN_STARTED',
+          runId: 'run-1',
+          threadId: 'thread-1',
           timestamp: Date.now(),
         } as any,
         {
-          type: "CUSTOM",
-          name: "aevatar.run.context",
+          type: 'CUSTOM',
+          name: 'aevatar.run.context',
           value: {
-            actorId: "actor-1",
-            commandId: "cmd-1",
-            workflowName: "chat",
+            actorId: 'actor-1',
+            commandId: 'cmd-1',
+            workflowName: 'chat',
           },
           timestamp: Date.now(),
         } as any,
@@ -822,8 +1018,8 @@ describe("RunsPage", () => {
     });
     window.history.replaceState(
       {},
-      "",
-      `/runtime/runs?scopeId=scope-1&endpointId=chat&draftKey=${draftKey}`
+      '',
+      `/runtime/runs?scopeId=scope-1&endpointId=chat&draftKey=${draftKey}`,
     );
 
     renderWithQueryClient(React.createElement(RunsPage));
@@ -832,54 +1028,56 @@ describe("RunsPage", () => {
       expect(mockReset).toHaveBeenCalled();
       expect(mockDispatch).toHaveBeenCalledTimes(2);
     });
-    expect(screen.getAllByText("Conversation").length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Conversation').length).toBeGreaterThan(0);
 
     expect(mockDispatch).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        type: "RUN_STARTED",
-        runId: "run-1",
-      })
+        type: 'RUN_STARTED',
+        runId: 'run-1',
+      }),
     );
     expect(mockDispatch).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        type: "CUSTOM",
-        name: "aevatar.run.context",
-      })
+        type: 'CUSTOM',
+        name: 'aevatar.run.context',
+      }),
     );
     expect(mockedRuntimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
     expect(mockedRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
     expect(mockedRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
-    expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
+    expect(
+      new URLSearchParams(window.location.search).get('draftKey'),
+    ).toBeNull();
     expect(loadDraftRunPayload(draftKey)).toBeNull();
   });
 
-  it("replays observed logs when restoring a recent run", async () => {
+  it('replays observed logs when restoring a recent run', async () => {
     saveRecentRun({
-      id: "cmd-recent",
-      scopeId: "scope-1",
-      routeName: "direct",
-      endpointId: "chat",
-      prompt: "recent replay",
-      actorId: "actor-1",
-      commandId: "cmd-1",
-      runId: "run-1",
-      status: "finished",
+      id: 'cmd-recent',
+      scopeId: 'scope-1',
+      routeName: 'direct',
+      endpointId: 'chat',
+      prompt: 'recent replay',
+      actorId: 'actor-1',
+      commandId: 'cmd-1',
+      runId: 'run-1',
+      status: 'finished',
       observedEvents: [
         {
-          type: "RUN_STARTED",
-          runId: "run-1",
-          threadId: "thread-1",
+          type: 'RUN_STARTED',
+          runId: 'run-1',
+          threadId: 'thread-1',
           timestamp: Date.now(),
         } as any,
         {
-          type: "CUSTOM",
-          name: "aevatar.run.context",
+          type: 'CUSTOM',
+          name: 'aevatar.run.context',
           value: {
-            actorId: "actor-1",
-            commandId: "cmd-1",
-            workflowName: "direct",
+            actorId: 'actor-1',
+            commandId: 'cmd-1',
+            workflowName: 'direct',
           },
           timestamp: Date.now(),
         } as any,
@@ -891,7 +1089,7 @@ describe("RunsPage", () => {
     mockDispatch.mockClear();
     mockReset.mockClear();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Restore" })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Restore' })[0]);
 
     await waitFor(() => {
       expect(mockReset).toHaveBeenCalled();
@@ -901,33 +1099,33 @@ describe("RunsPage", () => {
     expect(mockDispatch).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        type: "RUN_STARTED",
-        runId: "run-1",
-      })
+        type: 'RUN_STARTED',
+        runId: 'run-1',
+      }),
     );
     expect(mockDispatch).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        type: "CUSTOM",
-        name: "aevatar.run.context",
-      })
+        type: 'CUSTOM',
+        name: 'aevatar.run.context',
+      }),
     );
     expect(mockedRuntimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
     expect(mockedRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
     expect(mockedRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
   });
 
-  it("routes chat runs through the selected workflow service when endpoint kind is chat", async () => {
+  it('routes chat runs through the selected workflow service when endpoint kind is chat', async () => {
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([
       {
-        name: "direct",
-        description: "Direct chat workflow",
-        category: "core",
-        group: "default",
-        groupLabel: "Default",
+        name: 'direct',
+        description: 'Direct chat workflow',
+        category: 'core',
+        group: 'default',
+        groupLabel: 'Default',
         sortOrder: 0,
-        source: "built-in",
-        sourceLabel: "Built-in",
+        source: 'built-in',
+        sourceLabel: 'Built-in',
         showInLibrary: true,
         isPrimitiveExample: false,
         requiresLlmProvider: true,
@@ -937,25 +1135,25 @@ describe("RunsPage", () => {
 
     window.history.replaceState(
       {},
-      "",
-      "/runtime/runs?scopeId=scope-1&route=direct&endpointId=support-chat&endpointKind=chat&prompt=Run%20it"
+      '',
+      '/runtime/runs?scopeId=scope-1&route=direct&endpointId=support-chat&endpointKind=chat&prompt=Run%20it',
     );
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("Run it");
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByDisplayValue('Run it');
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
-        "scope-1",
+        'scope-1',
         expect.objectContaining({
-          prompt: "Run it",
+          prompt: 'Run it',
         }),
         expect.any(AbortSignal),
         {
-          serviceId: "direct",
-        }
+          serviceId: 'direct',
+        },
       );
     });
     expect(mockedRuntimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();

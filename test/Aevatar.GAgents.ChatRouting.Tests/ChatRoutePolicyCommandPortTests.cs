@@ -43,7 +43,7 @@ public sealed class ChatRoutePolicyCommandPortTests
         envelope.Route.PublisherActorId.Should().Be("chat-route-policy-admin");
         envelope.Route.Direct.TargetActorId.Should().Be("chat-route-policy:scope-1");
         envelope.Propagation.CorrelationId.Should().Be(envelope.Id);
-        envelope.Runtime.Deduplication.OperationId.Should().Be(envelope.Id);
+        envelope.Runtime.DeliveryIdentity.OperationId.Should().Be(envelope.Id);
         receipt.Should().Be(new ChatRoutePolicyCommandAcceptedReceipt(
             "chat-route-policy:scope-1",
             envelope.Id,

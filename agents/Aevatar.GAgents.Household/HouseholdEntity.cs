@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -23,15 +24,23 @@ namespace Aevatar.GAgents.Household;
 [GAgent("household.entity")]
 public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 {
+    private const string LlmTimeoutFailureCode = "LLM_TIMEOUT";
+    private readonly TimeProvider _timeProvider;
+    private readonly int _maxTurnDeadlineMs;
+
     public HouseholdEntity(
+        IAgentToolExecutionPort toolExecutionPort,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        RoleChatExecutionOptions? chatExecutionOptions = null,
+        TimeProvider? timeProvider = null)
+        : base(toolExecutionPort, llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources)
     {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _maxTurnDeadlineMs = (chatExecutionOptions ?? new RoleChatExecutionOptions()).MaxTurnDeadlineMs;
     }
 
     // ─── Activation ───
@@ -77,7 +86,9 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 
     // ─── Dynamic system prompt (inject environment, actions, memories) ───
 
-    protected override string DecorateSystemPrompt(string basePrompt)
+    protected override string DecorateSystemPrompt(
+        string basePrompt,
+        AgentProfileTurnCatalog? turnCatalog)
     {
         var sb = new StringBuilder(basePrompt);
 
@@ -266,6 +277,11 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
         Logger.LogInformation("[Household] Reasoning triggered: {Trigger}", trigger);
 
         var prompt = $"[Trigger: {trigger}]\nBased on the current environment and your memories, decide whether to act.";
+        using var timeoutCts = new CancellationTokenSource(
+            TimeSpan.FromMilliseconds(_maxTurnDeadlineMs),
+            _timeProvider);
+        var streamCt = timeoutCts.Token;
+        ReasoningCompletedEvent? successfulCompletion = null;
 
         try
         {
@@ -273,31 +289,77 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
             //   Old pattern: household reasoning used the non-streaming chat shortcut as the main chain.
             //   New principle: household reasoning consumes the streaming chain and commits only its final text.
             var responseBuilder = new StringBuilder();
-            await foreach (var chunk in ChatStreamAsync(prompt, requestId: null, metadata))
+            await foreach (var chunk in ChatStreamAsync(
+                               prompt,
+                               requestId: null,
+                               turnCatalog: null,
+                               metadata: metadata,
+                               ct: streamCt))
             {
+                streamCt.ThrowIfCancellationRequested();
+
                 if (!string.IsNullOrEmpty(chunk.DeltaContent))
                     responseBuilder.Append(chunk.DeltaContent);
             }
 
+            streamCt.ThrowIfCancellationRequested();
             var response = responseBuilder.ToString();
 
             var isNoAction = response.Contains("NO_ACTION", StringComparison.OrdinalIgnoreCase);
 
-            await PersistDomainEventAsync(new ReasoningCompletedEvent
+            streamCt.ThrowIfCancellationRequested();
+            successfulCompletion = new ReasoningCompletedEvent
             {
+                Trigger = trigger,
                 Decision = isNoAction ? "NO_ACTION" : "ACTION",
                 Reasoning = response,
-                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            });
+                Timestamp = _timeProvider.GetUtcNow().ToUnixTimeSeconds(),
+                Outcome = HouseholdReasoningOutcome.Completed,
+            };
+            await PersistDomainEventAsync(successfulCompletion, streamCt);
 
             Logger.LogInformation(
                 "[Household] Reasoning complete: decision={Decision}",
                 isNoAction ? "NO_ACTION" : "ACTION");
         }
+        catch (Exception ex) when (
+            timeoutCts.IsCancellationRequested &&
+            !HasCommittedReasoningCompletion(successfulCompletion))
+        {
+            const string safeMessage = "The household reasoning turn exceeded its deadline. Please try again.";
+            await PersistDomainEventAsync(new ReasoningCompletedEvent
+            {
+                Trigger = trigger,
+                Timestamp = _timeProvider.GetUtcNow().ToUnixTimeSeconds(),
+                Outcome = HouseholdReasoningOutcome.Failed,
+                FailureCode = LlmTimeoutFailureCode,
+                SafeMessage = safeMessage,
+            });
+            Logger.LogWarning(
+                ex,
+                "[Household] Reasoning timed out after {TimeoutMs}ms. trigger={Trigger}",
+                _maxTurnDeadlineMs,
+                trigger);
+        }
+        catch (CommittedStatePublicationException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             Logger.LogError(ex, "[Household] Reasoning failed. trigger={Trigger}", trigger);
         }
+    }
+
+    private bool HasCommittedReasoningCompletion(ReasoningCompletedEvent? completion)
+    {
+        var terminal = State.LastReasoningTerminal;
+        return completion is not null &&
+               terminal?.Outcome == HouseholdReasoningOutcome.Completed &&
+               terminal.Trigger == completion.Trigger &&
+               terminal.Timestamp == completion.Timestamp &&
+               terminal.Decision == completion.Decision &&
+               terminal.Reasoning == completion.Reasoning;
     }
 
     // ─── Trigger condition checks ───
@@ -427,8 +489,21 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
         HouseholdEntityState current, ReasoningCompletedEvent evt)
     {
         var next = current.Clone();
-        next.LastReasoningTs = evt.Timestamp;
-        next.ReasoningCountToday++;
+        if (evt.Outcome is HouseholdReasoningOutcome.Unspecified or HouseholdReasoningOutcome.Completed)
+        {
+            next.LastReasoningTs = evt.Timestamp;
+            next.ReasoningCountToday++;
+        }
+        next.LastReasoningTerminal = new HouseholdReasoningTerminalState
+        {
+            Trigger = evt.Trigger,
+            Outcome = evt.Outcome,
+            Decision = evt.Decision,
+            Reasoning = evt.Reasoning,
+            FailureCode = evt.FailureCode,
+            SafeMessage = evt.SafeMessage,
+            Timestamp = evt.Timestamp,
+        };
         return next;
     }
 

@@ -4,6 +4,8 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Internal;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf.Reflection;
 using Microsoft.Extensions.Options;
 
@@ -16,18 +18,21 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
     private readonly IServiceGovernanceCommandPort _serviceGovernanceCommandPort;
     private readonly IServiceGovernanceQueryPort _serviceGovernanceQueryPort;
     private readonly ScopeWorkflowCapabilityOptions _options;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
 
     public ScopeWorkflowCommandApplicationService(
         IServiceCommandPort serviceCommandPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IServiceGovernanceCommandPort serviceGovernanceCommandPort,
         IServiceGovernanceQueryPort serviceGovernanceQueryPort,
-        IOptions<ScopeWorkflowCapabilityOptions> options)
+        IOptions<ScopeWorkflowCapabilityOptions> options,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService)
     {
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
         _serviceGovernanceCommandPort = serviceGovernanceCommandPort ?? throw new ArgumentNullException(nameof(serviceGovernanceCommandPort));
         _serviceGovernanceQueryPort = serviceGovernanceQueryPort ?? throw new ArgumentNullException(nameof(serviceGovernanceQueryPort));
+        _capabilityAdmissionService = capabilityAdmissionService ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("User workflow capability options are required.");
     }
@@ -40,7 +45,38 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
 
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.ScopeId, nameof(request.ScopeId));
         var normalizedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(request.WorkflowId);
+        var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var workflowYaml = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
+        var inlineWorkflowYamls = ScopeWorkflowCapabilityConventions.NormalizeInlineWorkflowYamls(request.InlineWorkflowYamls);
+        var admissionContext = request.CapabilityAdmission;
+        var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
+        var explicitRequestConfirmations = admissionContext?.ExplicitRequestConfirmations;
+        var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
+            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    existingPlan,
+                    workflowYaml,
+                    inlineWorkflowYamls,
+                    "scope_workflow_upsert",
+                    executionMode,
+                    normalizedWorkflowId,
+                    revisionId),
+                ct)
+            : await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
+                new ExternalWorkflowCapabilityAccessContext(
+                    normalizedScopeId,
+                    admissionContext?.CallerId ?? string.Empty,
+                    admissionContext?.NyxIdCallerCredential,
+                    admissionContext?.NyxIdOrganizationBearerToken),
+                workflowYaml,
+                inlineWorkflowYamls,
+                "scope_workflow_upsert",
+                executionMode,
+                explicitRequestConfirmations,
+                normalizedWorkflowId,
+                revisionId),
+                ct);
         var identity = ScopeWorkflowCapabilityConventions.BuildIdentity(_options, normalizedScopeId, normalizedWorkflowId);
         var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(
             _options,
@@ -90,7 +126,6 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
             _serviceGovernanceQueryPort,
             ct);
 
-        var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var revisionSpec = new ServiceRevisionSpec
         {
             Identity = identity.Clone(),
@@ -98,12 +133,15 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
             ImplementationKind = ServiceImplementationKind.Workflow,
             WorkflowSpec = new WorkflowServiceRevisionSpec
             {
+                WorkflowId = normalizedWorkflowId,
                 WorkflowName = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.WorkflowName),
                 WorkflowYaml = workflowYaml,
                 DefinitionActorId = definitionActorIdPrefix,
+                CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                ExpectedExecutionMode = executionMode,
             },
         };
-        ScopeWorkflowCapabilityConventions.AddInlineWorkflowYamls(revisionSpec.WorkflowSpec.InlineWorkflowYamls, request.InlineWorkflowYamls);
+        ScopeWorkflowCapabilityConventions.AddInlineWorkflowYamls(revisionSpec.WorkflowSpec.InlineWorkflowYamls, inlineWorkflowYamls);
 
         commandHandles.Add(ScopeWorkflowCommandAcceptedHandle.FromReceipt(
             "create_revision",

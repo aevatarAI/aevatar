@@ -1,5 +1,7 @@
-import { Tag, Tooltip, Typography } from "antd";
+import { Tag, Typography } from "antd";
 import React from "react";
+import AevatarTooltip from './AevatarTooltip';
+import { isMachineIdentifierValue } from "./userFacingIdentifiers";
 
 export const aevatarMonoFontFamily = '"IBM Plex Mono", "SF Mono", monospace';
 
@@ -23,6 +25,7 @@ type AevatarCompactTextProps = {
   color?: string;
   copyable?: boolean;
   head?: number;
+  hideMachineIdentifier?: boolean;
   maxChars?: number;
   maxWidth?: React.CSSProperties["maxWidth"];
   mode?: "middle" | "tail";
@@ -38,6 +41,7 @@ export const AevatarCompactText: React.FC<AevatarCompactTextProps> = ({
   color,
   copyable = false,
   head = 4,
+  hideMachineIdentifier,
   maxChars = 18,
   maxWidth = "100%",
   mode = "middle",
@@ -48,6 +52,11 @@ export const AevatarCompactText: React.FC<AevatarCompactTextProps> = ({
   tail = 4,
   value,
 }) => {
+  const shouldHideMachineIdentifier = hideMachineIdentifier ?? monospace;
+  if (shouldHideMachineIdentifier && isMachineIdentifierValue(value)) {
+    return null;
+  }
+
   const displayValue =
     mode === "middle" ? truncateMiddle(value, head, tail) : truncateTail(value, maxChars);
   const content = (
@@ -71,12 +80,13 @@ export const AevatarCompactText: React.FC<AevatarCompactTextProps> = ({
     </Typography.Text>
   );
 
-  return displayValue !== value ? <Tooltip title={value}>{content}</Tooltip> : content;
+  return displayValue !== value ? <AevatarTooltip title={value}>{content}</AevatarTooltip> : content;
 };
 
 type AevatarCompactTagProps = {
   color?: string;
   head?: number;
+  hideMachineIdentifier?: boolean;
   maxChars?: number;
   maxWidth?: React.CSSProperties["maxWidth"];
   mode?: "middle" | "tail";
@@ -89,6 +99,7 @@ type AevatarCompactTagProps = {
 export const AevatarCompactTag: React.FC<AevatarCompactTagProps> = ({
   color,
   head = 4,
+  hideMachineIdentifier,
   maxChars = 18,
   maxWidth = 128,
   mode = "middle",
@@ -97,6 +108,11 @@ export const AevatarCompactTag: React.FC<AevatarCompactTagProps> = ({
   tail = 4,
   value,
 }) => {
+  const shouldHideMachineIdentifier = hideMachineIdentifier ?? monospace;
+  if (shouldHideMachineIdentifier && isMachineIdentifierValue(value)) {
+    return null;
+  }
+
   const displayValue =
     mode === "middle" ? truncateMiddle(value, head, tail) : truncateTail(value, maxChars);
   const tag = (
@@ -116,5 +132,5 @@ export const AevatarCompactTag: React.FC<AevatarCompactTagProps> = ({
     </Tag>
   );
 
-  return displayValue !== value ? <Tooltip title={value}>{tag}</Tooltip> : tag;
+  return displayValue !== value ? <AevatarTooltip title={value}>{tag}</AevatarTooltip> : tag;
 };

@@ -5,17 +5,10 @@ namespace Aevatar.Authentication.Providers.NyxId;
 
 /// <summary>
 /// Maps NyxID token claims to Aevatar standard claims.
-/// Waterfall: scope_id → uid → sub → NameIdentifier → any *_id claim.
+/// Waterfall: scope_id → uid → sub → NameIdentifier.
 /// </summary>
 public sealed class NyxIdClaimsTransformer : IAevatarClaimsTransformer
 {
-    private static readonly HashSet<string> IgnoredGenericIdClaimTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "client_id",
-        "session_id",
-        "sid",
-    };
-
     private static readonly string[] ScopeClaimCandidates =
     [
         AevatarStandardClaimTypes.ScopeId,
@@ -33,7 +26,9 @@ public sealed class NyxIdClaimsTransformer : IAevatarClaimsTransformer
         if (identity.FindFirst(AevatarStandardClaimTypes.ScopeId) != null)
             yield break;
 
-        // Try known claim types in priority order
+        // Scope may only come from an explicit, known claim type. A token that carries
+        // scope only in some arbitrary *_id claim intentionally maps to no scope_id (and is
+        // therefore denied) rather than silently binding to an unvetted claim value.
         foreach (var claimType in ScopeClaimCandidates)
         {
             var claimValue = identity.FindFirst(claimType)?.Value?.Trim();
@@ -43,14 +38,5 @@ public sealed class NyxIdClaimsTransformer : IAevatarClaimsTransformer
             yield return new Claim(AevatarStandardClaimTypes.ScopeId, claimValue);
             yield break;
         }
-
-        // Fallback: any *_id claim not in the ignore list
-        var genericIdClaim = identity.Claims.FirstOrDefault(claim =>
-            claim.Type.EndsWith("_id", StringComparison.OrdinalIgnoreCase) &&
-            !IgnoredGenericIdClaimTypes.Contains(claim.Type) &&
-            !string.IsNullOrWhiteSpace(claim.Value));
-
-        if (genericIdClaim != null)
-            yield return new Claim(AevatarStandardClaimTypes.ScopeId, genericIdClaim.Value.Trim());
     }
 }

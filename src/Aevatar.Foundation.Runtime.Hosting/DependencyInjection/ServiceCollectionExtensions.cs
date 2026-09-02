@@ -1,7 +1,10 @@
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
+using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.DependencyInjection;
 using System.Collections.Generic;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -67,7 +70,59 @@ public static class ServiceCollectionExtensions
             value => options.EventSourcingRetainedEventsAfterSnapshot = value,
             "retained events after snapshot");
 
+        if (string.IsNullOrWhiteSpace(options.SecretStoreBackend))
+        {
+            options.SecretStoreBackend = string.Equals(
+                options.Provider,
+                AevatarActorRuntimeOptions.ProviderInMemory,
+                StringComparison.OrdinalIgnoreCase)
+                ? AevatarActorRuntimeOptions.ProviderInMemory
+                : options.OrleansPersistenceBackend;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.SecretStoreConnectionString) &&
+            string.Equals(options.SecretStoreBackend, AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet, StringComparison.OrdinalIgnoreCase))
+        {
+            options.SecretStoreConnectionString = options.OrleansGarnetConnectionString;
+        }
+
         return options;
+    }
+
+    public static IServiceCollection AddAevatarRuntimeSecretStores(
+        this IServiceCollection services,
+        AevatarActorRuntimeOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.Equals(options.SecretStoreBackend, AevatarActorRuntimeOptions.ProviderInMemory, StringComparison.OrdinalIgnoreCase))
+        {
+            services.TryAddSingleton<ISecretVault, InMemorySecretVault>();
+            services.TryAddSingleton<IRuntimeSecretStore, InMemoryRuntimeSecretStore>();
+            return services;
+        }
+
+        if (string.Equals(options.SecretStoreBackend, AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet, StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(options.SecretStoreKeyringPath))
+                throw new InvalidOperationException("Garnet secret store keyring path is required. Configure ActorRuntime:SecretStoreKeyringPath.");
+
+            services.AddGarnetSecretStores(secretOptions =>
+            {
+                secretOptions.ConnectionString = string.IsNullOrWhiteSpace(options.SecretStoreConnectionString)
+                    ? options.OrleansGarnetConnectionString
+                    : options.SecretStoreConnectionString;
+                secretOptions.Database = options.SecretStoreDatabase;
+                secretOptions.KeyringPath = options.SecretStoreKeyringPath;
+                secretOptions.SecretVaultPrefix = options.SecretStoreVaultPrefix;
+                secretOptions.RuntimeSecretPrefix = options.SecretStoreRuntimePrefix;
+            });
+            return services;
+        }
+
+        throw new InvalidOperationException(
+            $"Unsupported ActorRuntime secret store backend '{options.SecretStoreBackend}'.");
     }
 
     private static bool ReadBool(
@@ -107,6 +162,7 @@ public static class ServiceCollectionExtensions
     private static IServiceCollection AddInMemoryRuntime(IServiceCollection services, AevatarActorRuntimeOptions options)
     {
         AddAevatarRuntimeWithEventSourcingOptions(services, options);
+        services.AddAevatarRuntimeSecretStores(options);
         return services;
     }
 
@@ -123,6 +179,7 @@ public static class ServiceCollectionExtensions
             orleansOptions.QueueCount = options.OrleansQueueCount;
             orleansOptions.QueueCacheSize = options.OrleansQueueCacheSize;
         });
+        services.AddAevatarRuntimeSecretStores(options);
 
         if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
             return services;
@@ -135,6 +192,9 @@ public static class ServiceCollectionExtensions
                 transportOptions.TopicName = options.KafkaTopicName;
                 transportOptions.ConsumerGroup = options.KafkaConsumerGroup;
                 transportOptions.TopicPartitionCount = options.OrleansQueueCount;
+                transportOptions.ReceiverBufferCapacity = options.KafkaReceiverBufferCapacity;
+                transportOptions.ReceiverBufferHighWatermark = options.KafkaReceiverBufferHighWatermark;
+                transportOptions.ReceiverBufferLowWatermark = options.KafkaReceiverBufferLowWatermark;
             });
             return services;
         }

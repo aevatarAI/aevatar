@@ -212,6 +212,17 @@ public class CiTestAuthorityContractTests
         Assert.Contains("Runtime callback scheduler grain must use isolated RuntimeCallbackSchedulerStorageName", result.Output);
     }
 
+    [Fact]
+    public void MainFlowRuntimeSmoke_ShouldUseInMemorySecretStore()
+    {
+        var scriptPath = Path.Combine(TemporaryCiRepo.FindRepositoryRoot(), "tools", "ci", "main_flow_runtime_smoke.sh");
+        var script = File.ReadAllText(scriptPath);
+
+        Assert.Contains("AEVATAR_ActorRuntime__Provider=Orleans", script, StringComparison.Ordinal);
+        Assert.Contains("AEVATAR_ActorRuntime__OrleansPersistenceBackend=InMemory", script, StringComparison.Ordinal);
+        Assert.Contains("AEVATAR_ActorRuntime__SecretStoreBackend=InMemory", script, StringComparison.Ordinal);
+    }
+
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     private sealed class TemporaryCiRepo : IDisposable
@@ -333,7 +344,7 @@ public class CiTestAuthorityContractTests
             }
         }
 
-        private static string FindRepositoryRoot()
+        public static string FindRepositoryRoot()
         {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
             while (directory is not null)

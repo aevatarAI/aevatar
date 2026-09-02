@@ -9,6 +9,7 @@
     <RootNamespace>Aevatar.Workflow.Core.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Core\Aevatar.GAgentService.Core.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Integration.AI\Aevatar.Workflow.Integration.AI.csproj" />
@@ -20,6 +21,7 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />

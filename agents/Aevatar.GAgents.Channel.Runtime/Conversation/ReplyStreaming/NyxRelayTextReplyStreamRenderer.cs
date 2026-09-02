@@ -67,6 +67,7 @@ internal sealed class NyxRelayTextReplyStreamRenderer(
             var result = await runner.RunStreamChunkAsync(
                     chunk,
                     NormalizeOptional(step.CurrentPlatformMessageId),
+                    step.Operation,
                     runtimeContext,
                     ct)
                 .ConfigureAwait(false);

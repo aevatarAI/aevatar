@@ -2,7 +2,11 @@ syntax = "proto3";
 package aevatar.ai;
 option csharp_namespace = "Aevatar.AI.Abstractions";
 
+import "Credentials/credential_secret_references.proto";
 import "Protos/voice_presence.proto";
+import "ToolProviders/agent_tool_admission.proto";
+import "Tools/tool_presentation.proto";
+import "google/protobuf/timestamp.proto";
 
 enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_UNSPECIFIED = 0;
@@ -12,6 +16,15 @@ enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_VIDEO = 4;
 }
 
+enum ChatFileSourceKind {
+  CHAT_FILE_SOURCE_KIND_UNSPECIFIED = 0;
+  CHAT_FILE_SOURCE_KIND_CHAT_INPUT = 1;
+  CHAT_FILE_SOURCE_KIND_FORM_UPLOAD = 2;
+  CHAT_FILE_SOURCE_KIND_CONNECTED_SERVICE_RESOURCE = 3;
+  CHAT_FILE_SOURCE_KIND_EXTERNAL_RESOURCE = 4;
+  CHAT_FILE_SOURCE_KIND_GENERATED = 5;
+}
+
 message ChatContentPart {
   ChatContentPartKind kind = 1;
   string text = 2;
@@ -19,6 +32,23 @@ message ChatContentPart {
   string media_type = 4;
   string uri = 5;
   string name = 6;
+  ChatFileRef file_ref = 7;
+}
+
+message ChatFileRef {
+  string file_id = 1;
+  string artifact_id = 2;
+  ChatFileSourceKind source_kind = 3;
+  string source_message_id = 4;
+  string source_resource_key = 5;
+  string file_name = 6;
+  string media_type = 7;
+  int64 size_bytes = 8;
+  string sha256 = 9;
+  int64 created_at_unix_ms = 10;
+  int64 expires_at_unix_ms = 11;
+  string owner_run_id = 12;
+  string owner_scope_id = 13;
 }
 
 message ChatRequestEvent  {
@@ -37,8 +67,35 @@ message ChatRequestEvent  {
   LLMControlContextPayload llm_control = 10;
   // Refactor (iter169/cluster-issue1551): Old pattern: connector HTTP authorization used Metadata["connector.http.authorization"] as an authority carrier. New principle: connector authorization is a typed command payload field owned by workflow execution.
   string connector_http_authorization = 11;
+  aevatar.credentials.DurableCallerCredentialRef caller_durable_credential = 12;
+  RoleChatRunContext run_context = 13;
+  // Identity of this dispatch attempt. It is distinct from session_id, which
+  // remains the idempotent turn identity and may already name a final session.
+  string command_attempt_id = 14;
+  WorkflowLlmToolApprovalContinuation workflow_llm_tool_approval_continuation = 15;
+  AgentToolNyxIdCredentialKindPayload caller_nyx_id_credential_kind = 16;
+  string caller_source_readable_nyx_id_bearer_token = 17;
+  WorkflowLlmCompletionDeliveryContext workflow_llm_completion_delivery_context = 18;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
+
+// Live terminal observation used when an idempotent caller retries a session
+// whose committed outcome cannot be represented as a successful text end.
+message RoleChatSessionErrorEvent {
+  string session_id = 1;
+  RoleChatSessionOutcome outcome = 2;
+  string reason = 3;
+  string message = 4;
+}
+
+message RoleChatRunContext {
+  string run_id = 1;
+  string command_id = 2;
+  string correlation_id = 3;
+  string completion_notification_actor_id = 4;
+  string completion_notification_delivery_id = 5;
+  int64 completion_notification_expires_at_unix_ms = 6;
+}
 
 message LLMControlContextPayload {
   string nyx_id_access_token = 1;
@@ -101,6 +158,45 @@ message AgentToolExecutionContextPayload {
   AgentSkillRecoveryContextPayload skill_recovery = 9;
   AgentWorkflowRuntimeContextPayload workflow_runtime = 10;
   AgentToolVisibilityScopePayload tool_visibility = 11;
+  AgentToolCredentialSourcePayload credential_source = 12;
+  AgentToolScheduleContextPayload schedule = 13;
+  AgentToolNyxIdAuthorityContextPayload nyx_id_authority = 14;
+  AgentToolInvocationSurfacePayload invocation_surface = 15;
+  repeated ChatFileRef input_file_refs = 16;
+  AgentChatInvocationContextPayload chat = 17;
+  aevatar.ai.tool_providers.AgentToolExecutionOwner execution_owner = 18;
+}
+
+enum AgentChatInvocationSurfacePayload {
+  AGENT_CHAT_INVOCATION_SURFACE_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_CHAT_INVOCATION_SURFACE_PAYLOAD_NYXID_ASSISTANT = 1;
+  AGENT_CHAT_INVOCATION_SURFACE_PAYLOAD_WORKFLOW_CHAT = 2;
+}
+
+message AgentChatInvocationContextPayload {
+  AgentChatInvocationSurfacePayload surface = 1;
+  string conversation_id = 2;
+  string turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string action_request_id = 6;
+}
+
+enum AgentToolInvocationSurfacePayload {
+  AGENT_TOOL_INVOCATION_SURFACE_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_INVOCATION_SURFACE_PAYLOAD_HUMAN_SESSION = 1;
+  AGENT_TOOL_INVOCATION_SURFACE_PAYLOAD_WORKFLOW_TOOL_CALL = 2;
+  AGENT_TOOL_INVOCATION_SURFACE_PAYLOAD_WORKFLOW_LLM_TOOL_LOOP = 3;
+}
+
+enum AgentToolCredentialSourcePayload {
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_NYXID_ASSERTION = 1;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_BEARER_TOKEN = 2;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_CHANNEL_REGISTRATION = 3;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_SCHEDULED_RUN = 4;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_SYSTEM = 5;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_SERVICE_ACCOUNT = 6;
 }
 
 message AgentSkillRecoveryContextPayload {
@@ -122,32 +218,134 @@ message AgentToolRequestIdentityPayload {
   string request_id = 1;
   string call_id = 2;
   string idempotency_key = 3;
+  int64 issued_at_unix_ms = 4;
+  string operation_id = 5;
+}
+
+// Recovery-safe subset of tool execution context. Credential material and
+// open external bags are deliberately absent; recovery resolves authority
+// again from durable, server-sealed references owned by the actor command.
+message AgentToolRecoveryContextPayload {
+  AgentToolRequestIdentityPayload request = 1;
+  AgentToolCallerContextPayload caller = 2;
+  AgentToolChannelContextPayload channel = 3;
+  AgentToolSenderBindingContextPayload sender_binding = 4;
+  LLMRequestRoutingContextPayload routing = 5;
+  AgentSkillRecoveryCheckpointPayload skill_recovery = 6;
+  AgentWorkflowRuntimeContextPayload workflow_runtime = 7;
+  AgentToolVisibilityScopePayload tool_visibility = 8;
+  AgentToolCredentialSourcePayload credential_source = 9;
+  AgentToolScheduleContextPayload schedule = 10;
+  AgentToolNyxIdAuthorityContextPayload nyx_id_authority = 11;
+  AgentToolInvocationSurfacePayload invocation_surface = 12;
+  repeated ChatFileRef input_file_refs = 13;
+  AgentChatInvocationContextPayload chat = 14;
+  aevatar.ai.tool_providers.AgentToolExecutionOwner execution_owner = 15;
+  AgentToolNyxIdCredentialKindPayload nyx_id_credential_kind = 16;
+  bool requires_nyx_id_access_token = 17;
+  bool requires_nyx_id_org_token = 18;
+  bool requires_sender_nyx_id_access_token = 19;
+  bool requires_source_readable_nyx_id_access_token = 20;
+}
+
+message AgentSkillRecoveryCheckpointPayload {
+  bool require_initial_ornn_search = 1;
+  bool require_ornn_search_on_blocker = 2;
+  string command_name = 3;
+  string primary_skill_name = 4;
+  int32 max_ornn_search_attempts = 5;
+  bool discovery_requested = 6;
+}
+
+enum AgentToolNyxIdCredentialKindPayload {
+  AGENT_TOOL_NYX_ID_CREDENTIAL_KIND_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_NYX_ID_CREDENTIAL_KIND_PAYLOAD_SOURCE_READABLE_USER_BEARER = 1;
+  AGENT_TOOL_NYX_ID_CREDENTIAL_KIND_PAYLOAD_PROXY_DELEGATION = 2;
 }
 
 message AgentToolCredentialsPayload {
   string nyx_id_access_token = 1;
   string nyx_id_org_token = 2;
   string sender_nyx_id_access_token = 3;
+  AgentToolNyxIdCredentialKindPayload nyx_id_credential_kind = 4;
+  string source_readable_nyx_id_access_token = 5;
 }
 
 message AgentToolCallerContextPayload {
   string scope_id = 1;
   string owner_subject = 2;
   string response_id = 3;
+  string owner_scope_id = 4;
+}
+
+message AgentToolNyxIdAuthorityContextPayload {
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
+  string scope = 4;
+}
+
+message WorkflowLlmToolApprovalContinuation {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  repeated string tool_set_refs = 4;
+  repeated string allowed_tool_names = 5;
+  bool restrict_tool_sets = 6;
+  bool restrict_allowed_tool_names = 7;
+  string model = 8;
+  optional int32 max_tool_rounds = 9;
+  string user_memory_prompt = 10;
+  string route_preference = 11;
+  int32 timeout_ms = 12;
+  // The role-chat session whose committed ContinuationPrepared checkpoint
+  // directly owns this continuation target. This is not the workflow session id.
+  string direct_parent_role_chat_session_id = 13;
+}
+
+message WorkflowLlmCompletionDeliveryContext {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
 }
 
 message AgentToolChannelContextPayload {
+  reserved 7;
+  reserved "durable_reply_credential_ref";
   string platform = 1;
   string sender_id = 2;
   string registration_scope_id = 3;
   string message_id = 4;
   string platform_message_id = 5;
   string delivery_target_id = 6;
-  string durable_reply_credential_ref = 7;
+  ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 8;
+  string bot_registration_id = 9;
+  repeated AgentToolChannelIdentityHintPayload identity_hints = 10;
+}
+
+message AgentToolChannelIdentityHintPayload {
+  string subject = 1;
+  string kind = 2;
+  string value = 3;
+}
+
+// Typed handle for a channel bot's workflow terminal-result delivery credential.
+// Carries the vault SecretReference plus the NyxID agent api-key id it authorizes
+// (the vault subject); never the secret material itself.
+message ChannelWorkflowResultDeliveryCredential {
+  aevatar.credentials.SecretReference secret_reference = 1;
+  string subject_id = 2;
 }
 
 message AgentToolSenderBindingContextPayload {
   string binding_id = 1;
+  string nyx_user_id = 2;
+  // External-subject tenant for the bound sender (e.g. Lark open_tenant_id).
+  // Identity fact (not a credential), so it survives the transient-credential
+  // strip and crosses the deferred-run boundary. Lets the deferred reply run
+  // rebuild the exact ExternalSubjectRef and re-mint a sender token by
+  // binding id without re-deriving tenant from registration scope.
+  string sender_tenant = 3;
 }
 
 message LLMRequestRoutingContextPayload {
@@ -169,13 +367,22 @@ message AgentWorkflowRuntimeContextPayload {
   int32 depth = 5;
 }
 
+message AgentToolScheduleContextPayload {
+  string schedule_id = 1;
+}
+
 message TextMessageStartEvent   { string session_id = 1; string agent_id = 2; }
 message TextMessageContentEvent { string delta = 1; string session_id = 2; }
 message TextMessageReasoningEvent { string delta = 1; string session_id = 2; }
 message MediaContentEvent { string session_id = 1; string agent_id = 2; ChatContentPart part = 3; }
 message TextMessageEndEvent     { string content = 1; string session_id = 2; }
 
-message ToolCallEvent   { string tool_name = 1; string arguments_json = 2; string call_id = 3; }
+message ToolCallEvent {
+  string tool_name = 1;
+  string arguments_json = 2;
+  string call_id = 3;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 4;
+}
 
 enum AgentToolReceiptStatus {
   AGENT_TOOL_RECEIPT_STATUS_UNSPECIFIED = 0;
@@ -183,6 +390,7 @@ enum AgentToolReceiptStatus {
   AGENT_TOOL_RECEIPT_STATUS_APPROVAL_REQUIRED = 2;
   AGENT_TOOL_RECEIPT_STATUS_DENIED = 3;
   AGENT_TOOL_RECEIPT_STATUS_ERROR = 4;
+  AGENT_TOOL_RECEIPT_STATUS_AUTHORIZATION_REQUIRED = 5;
 }
 
 enum AgentToolReceiptApprovalMode {
@@ -190,6 +398,15 @@ enum AgentToolReceiptApprovalMode {
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_NEVER_REQUIRE = 1;
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_ALWAYS_REQUIRE = 2;
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_AUTO = 3;
+}
+
+message NyxIdAuthorizationRequiredEvent {
+  string service_slug = 1;
+  optional string service_label = 2;
+  optional string resource_uri = 3;
+  string reason_code = 4;
+  string safe_message = 5;
+  optional string user_service_id = 6;
 }
 
 message AgentToolReceipt {
@@ -209,6 +426,7 @@ message AgentToolReceipt {
   string result_json = 14;
   ManagedWorkflowHandoffReceipt managed_workflow_handoff = 15;
   WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 16;
+  NyxIdAuthorizationRequiredEvent authorization_required = 17;
 }
 
 message ManagedWorkflowHandoffReceipt {
@@ -221,8 +439,8 @@ message ManagedWorkflowHandoffReceipt {
 }
 
 message WorkflowRunBackgroundDeliveryReceipt {
-  reserved 10;
-  reserved "bot_agent_key_id";
+  reserved 10, 12;
+  reserved "bot_agent_key_id", "durable_reply_credential_ref";
   string delivery_actor_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -233,7 +451,6 @@ message WorkflowRunBackgroundDeliveryReceipt {
   string reply_message_id = 8;
   string platform_message_id = 9;
   string registration_scope_id = 11;
-  string durable_reply_credential_ref = 12;
 }
 
 message ToolResultEvent {
@@ -253,11 +470,134 @@ message ChatTokenUsageEvent {
   TokenUsagePayload usage = 2;
   string model = 3;
 }
+
+enum RoleChatRecoveryCheckpointStage {
+  ROLE_CHAT_RECOVERY_CHECKPOINT_STAGE_UNSPECIFIED = 0;
+  ROLE_CHAT_RECOVERY_CHECKPOINT_STAGE_MODEL_READY = 1;
+  ROLE_CHAT_RECOVERY_CHECKPOINT_STAGE_TOOL_BATCH_PREPARED = 2;
+  ROLE_CHAT_RECOVERY_CHECKPOINT_STAGE_WAITING_APPROVAL = 3;
+  ROLE_CHAT_RECOVERY_CHECKPOINT_STAGE_CONTINUATION_PREPARED = 4;
+}
+
+message RoleChatToolIntentState {
+  string operation_id = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+  string arguments_sha256 = 4;
+  aevatar.ai.tool_providers.AgentToolReplayPolicy replay_policy = 5;
+  AgentToolRecoveryContextPayload recovery_context = 6;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 7;
+  aevatar.credentials.SecretReference arguments_reference = 8;
+  int32 round = 9;
+}
+
+message RoleChatToolCompletionState {
+  string operation_id = 1;
+  string result_sha256 = 2;
+  google.protobuf.Timestamp completed_at = 3;
+  aevatar.credentials.SecretReference result_reference = 4;
+  bool success = 5;
+  string safe_error_code = 6;
+}
+
+// Typed vault payload written before the actor commits the corresponding
+// completion. Its deterministic reference is a first-result authority after
+// a crash between the external effect and checkpoint persistence.
+message RoleChatToolStoredResultPayload {
+  string result_json = 1;
+  bool success = 2;
+  string safe_error_code = 3;
+  AgentToolReceipt receipt = 4;
+}
+
+message RoleChatRecoveryCheckpoint {
+  int64 generation = 1;
+  RoleChatRecoveryCheckpointStage stage = 2;
+  int32 round = 3;
+  repeated RoleChatToolIntentState tool_intents = 4;
+  repeated RoleChatToolCompletionState tool_completions = 5;
+  string pending_operation_id = 6;
+  AgentToolRecoveryContextPayload recovery_context = 7;
+  aevatar.credentials.DurableCallerCredentialRef caller_durable_credential = 8;
+  WorkflowLlmToolApprovalContinuation workflow_llm_approval_continuation = 9;
+  LLMControlContextPayload llm_control = 10;
+  string continuation_session_id = 11;
+  bool requires_runtime_credential = 12;
+  int64 payload_expires_at_unix_ms = 13;
+  WorkflowLlmCompletionDeliveryContext workflow_llm_completion_delivery_context = 14;
+  // Durable parent relation of the current role-chat session. Outgoing nested
+  // continuations may replace workflow_llm_approval_continuation, so this fact
+  // is stored independently and remains stable for the session lifetime.
+  string direct_parent_role_chat_session_id = 15;
+}
+
+message RoleChatRecoveryCheckpointUpdatedEvent {
+  string session_id = 1;
+  RoleChatRecoveryCheckpoint checkpoint = 2;
+  int64 expected_generation = 3;
+}
+
+// Actor-internal continuation. The receiving turn fences stale delivery with
+// checkpoint generation and reads recovery facts only from actor state.
+message RoleChatRecoveryContinuationRequested {
+  string session_id = 1;
+  int64 expected_checkpoint_generation = 2;
+  string operation_id = 3;
+}
+
 message RoleChatSessionStartedEvent {
   string session_id = 1;
   string prompt = 2;
   repeated ChatContentPart input_parts = 3;
+  RoleChatRunContext run_context = 4;
+  string scope_id = 5;
+  RoleChatRecoveryCheckpoint recovery_checkpoint = 6;
 }
+
+// Legacy committed wire contract retained for rolling upgrades and queued
+// events. New producers publish RoleChatCommandAttemptRejectedEvent.
+enum RoleChatSessionConflictReason {
+  ROLE_CHAT_SESSION_CONFLICT_REASON_UNSPECIFIED = 0;
+  ROLE_CHAT_SESSION_CONFLICT_REASON_PROMPT_MISMATCH = 1;
+  ROLE_CHAT_SESSION_CONFLICT_REASON_INPUT_PARTS_MISMATCH = 2;
+}
+
+message RoleChatSessionConflictEvent {
+  string session_id = 1;
+  RoleChatSessionConflictReason reason = 2;
+  string safe_message = 3;
+}
+
+enum RoleChatCommandAttemptRejectionReason {
+  ROLE_CHAT_COMMAND_ATTEMPT_REJECTION_REASON_UNSPECIFIED = 0;
+  ROLE_CHAT_COMMAND_ATTEMPT_REJECTION_REASON_PROMPT_MISMATCH = 1;
+  ROLE_CHAT_COMMAND_ATTEMPT_REJECTION_REASON_INPUT_PARTS_MISMATCH = 2;
+  ROLE_CHAT_COMMAND_ATTEMPT_REJECTION_REASON_CAPACITY_EXHAUSTED = 3;
+}
+
+message RoleChatCommandAttemptRejectedEvent {
+  string requested_session_id = 1;
+  RoleChatCommandAttemptRejectionReason reason = 2;
+  string safe_message = 3;
+  string command_attempt_id = 4;
+}
+
+enum RoleChatSessionOutcome {
+  ROLE_CHAT_SESSION_OUTCOME_UNSPECIFIED = 0;
+  ROLE_CHAT_SESSION_OUTCOME_COMPLETED = 1;
+  ROLE_CHAT_SESSION_OUTCOME_FAILED = 2;
+  ROLE_CHAT_SESSION_OUTCOME_BLOCKED = 3;
+  ROLE_CHAT_SESSION_OUTCOME_OUTCOME_UNCERTAIN = 4;
+}
+
+// Actor-internal activation continuation. This signal is never a committed
+// domain fact; the matching actor turn rechecks the durable session state
+// before committing one terminal RoleChatSessionCompletedEvent.
+message RoleChatIncompleteSessionFinalizationRequested {
+  string session_id = 1;
+  int64 expected_last_progress_sequence = 2;
+}
+
 message RoleChatSessionCompletedEvent {
   string session_id = 1;
   string content = 2;
@@ -270,6 +610,168 @@ message RoleChatSessionCompletedEvent {
   TokenUsagePayload usage = 9;
   string model = 10;
   repeated AgentToolReceipt tool_receipts = 11;
+  RoleChatSessionOutcome outcome = 12;
+  string failure_code = 13;
+  string safe_message = 14;
+  NyxIdAuthorizationRequiredEvent authorization_required = 15;
+  google.protobuf.Timestamp terminal_time = 16;
+  RoleChatRunContext run_context = 17;
+  string actor_id = 18;
+  repeated ToolResultEvent tool_results = 19;
+  // Terminal presentation facts committed and published atomically with the
+  // final session authority. Projectors expand only this typed tail on live
+  // completion; snapshot synthesis remains explicit replay-only behavior.
+  repeated RoleChatSessionProgressedEvent terminal_progress = 20;
+  WorkflowLlmCompletionDeliveryContext workflow_llm_completion_delivery_context = 30;
+}
+
+message RoleChatTextStartedProgress {
+  string agent_id = 1;
+}
+
+message RoleChatTextDeltaProgress {
+  string delta = 1;
+}
+
+message RoleChatReasoningDeltaProgress {
+  string delta = 1;
+}
+
+message RoleChatMediaProgress {
+  string agent_id = 1;
+  ChatContentPart part = 2;
+}
+
+message RoleChatToolStartedProgress {
+  string call_id = 1;
+  string tool_name = 2;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
+  string operation_id = 4;
+}
+
+message RoleChatToolCompletedProgress {
+  ToolResultEvent result = 1;
+  string tool_name = 2;
+  string operation_id = 3;
+}
+
+message RoleChatUsageProgress {
+  TokenUsagePayload usage = 1;
+  string model = 2;
+}
+
+message RoleChatTextEndedProgress {
+  string message_id = 1;
+}
+
+message RoleChatAuthorizationRequiredProgress {
+  NyxIdAuthorizationRequiredEvent authorization_required = 1;
+}
+
+message RoleChatToolApprovalRequiredProgress {
+  PendingToolApprovalState pending = 1;
+}
+
+message RoleChatTerminalProgress {
+  RoleChatSessionOutcome outcome = 1;
+  string failure_code = 2;
+  string safe_message = 3;
+  string final_content = 4;
+}
+
+message RoleChatReplayProgress {
+  RoleChatSessionCompletedEvent snapshot = 1;
+}
+
+message RoleChatSessionProgressedEvent {
+  string session_id = 1;
+  int64 sequence = 2;
+
+  oneof payload {
+    RoleChatTextStartedProgress text_started = 10;
+    RoleChatTextDeltaProgress text_delta = 11;
+    RoleChatReasoningDeltaProgress reasoning_delta = 12;
+    RoleChatMediaProgress media = 13;
+    RoleChatToolStartedProgress tool_started = 14;
+    RoleChatToolCompletedProgress tool_completed = 15;
+    RoleChatUsageProgress usage = 16;
+    RoleChatTextEndedProgress text_ended = 17;
+    RoleChatAuthorizationRequiredProgress authorization_required = 18;
+    RoleChatTerminalProgress terminal = 19;
+    RoleChatReplayProgress replay = 20;
+    RoleChatToolApprovalRequiredProgress tool_approval_required = 21;
+  }
+}
+
+enum RoleChatCompletionNotificationDeliveryStatus {
+  ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_UNSPECIFIED = 0;
+  ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_PREPARED = 1;
+  ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_RETRY_SCHEDULED = 2;
+  ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_DISPATCHED = 3;
+  ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_EXPIRED = 4;
+}
+
+enum RoleChatHistoryDeliveryStatus {
+  ROLE_CHAT_HISTORY_DELIVERY_STATUS_UNSPECIFIED = 0;
+  ROLE_CHAT_HISTORY_DELIVERY_STATUS_PREPARED = 1;
+  ROLE_CHAT_HISTORY_DELIVERY_STATUS_DISPATCHED = 2;
+}
+
+message RoleChatCompletionNotificationRetryScheduledEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  string callback_id = 4;
+  google.protobuf.Timestamp retry_at = 5;
+}
+
+message RoleChatCompletionNotificationRetryFiredEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+}
+
+message RoleChatCompletionNotificationDispatchedEvent {
+  string session_id = 1;
+  RoleChatRunContext run_context = 2;
+  int64 dispatched_at_unix_time_ms = 3;
+  string delivery_id = 4;
+  int32 attempt = 5;
+}
+
+message RoleChatCompletionNotificationExpiredEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  int64 expired_at_unix_time_ms = 4;
+}
+
+enum WorkflowLlmCompletionDeliveryStatus {
+  WORKFLOW_LLM_COMPLETION_DELIVERY_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_LLM_COMPLETION_DELIVERY_STATUS_PREPARED = 1;
+  WORKFLOW_LLM_COMPLETION_DELIVERY_STATUS_RETRY_SCHEDULED = 2;
+  WORKFLOW_LLM_COMPLETION_DELIVERY_STATUS_DISPATCHED = 3;
+}
+
+message WorkflowLlmCompletionDeliveryRetryScheduledEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  string callback_id = 4;
+  google.protobuf.Timestamp retry_at = 5;
+}
+
+message WorkflowLlmCompletionDeliveryRetryFiredEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+}
+
+message WorkflowLlmCompletionDeliveryDispatchedEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  int64 dispatched_at_unix_time_ms = 4;
 }
 
 message InitializeRoleAgentEvent {
@@ -325,6 +827,151 @@ message AIAgentConfigOverrides {
   reserved "stream_buffer_capacity";
 }
 
+message SystemSkillOverlay {
+  string overlay_markdown = 1;
+  string source_watermark = 2;
+  int64 materialized_at = 3;
+}
+
+message ExactRemoteSkillRef {
+  string guid = 1;
+  string literal_version = 2;
+}
+
+message ExactRemoteSkillsetRef {
+  string guid = 1;
+  string literal_version = 2;
+}
+
+message AgentProfileToolPolicy {
+  repeated string tool_names = 1;
+  repeated string tool_set_refs = 2;
+}
+
+enum AgentProfileSideEffectClass {
+  AGENT_PROFILE_SIDE_EFFECT_CLASS_UNSPECIFIED = 0;
+  AGENT_PROFILE_SIDE_EFFECT_CLASS_READ_ONLY = 1;
+  AGENT_PROFILE_SIDE_EFFECT_CLASS_EXTERNAL_HANDOFF = 2;
+  AGENT_PROFILE_SIDE_EFFECT_CLASS_SERVICE_CALL = 3;
+  AGENT_PROFILE_SIDE_EFFECT_CLASS_MAINTENANCE = 4;
+}
+
+enum AgentProfileActivationMode {
+  AGENT_PROFILE_ACTIVATION_MODE_UNSPECIFIED = 0;
+  AGENT_PROFILE_ACTIVATION_MODE_SHADOW = 1;
+  AGENT_PROFILE_ACTIVATION_MODE_ENFORCED = 2;
+}
+
+message AgentProfileSkillMember {
+  string intent_id = 1;
+  string routing_description = 2;
+  ExactRemoteSkillRef skill_ref = 3;
+  repeated string explicit_trigger_aliases = 4;
+  AgentProfileToolPolicy task_tool_policy = 5;
+  AgentProfileSideEffectClass side_effect_class = 6;
+  string expected_skill_name = 7;
+  string reviewed_publisher_id = 8;
+  bytes sealed_skill_sha256 = 9;
+}
+
+message AgentProfileSnapshot {
+  string profile_id = 1;
+  string profile_version = 2;
+  string agent_kind = 3;
+  string policy_revision = 4;
+  bytes deterministic_policy_sha256 = 5;
+  ExactRemoteSkillsetRef skillset_provenance = 6;
+  string route_tool_set_ref = 7;
+  AgentProfileToolPolicy maximum_tool_policy = 8;
+  AgentProfileToolPolicy recovery_tool_policy = 9;
+  repeated AgentProfileSkillMember members = 10;
+  int32 max_plan_steps = 11;
+  int32 handoff_ttl_seconds = 12;
+  int32 classifier_timeout_ms = 13;
+  int32 exact_skill_fetch_timeout_ms = 14;
+  int32 max_selected_skill_bytes = 15;
+  AgentProfileActivationMode activation_mode = 16;
+  string instructions = 17;
+  int64 published_revision = 18;
+  reserved 19;
+  reserved "published_snapshot_sha256";
+}
+
+message AgentProfileBoundEvent {
+  AgentProfileSnapshot profile = 1;
+}
+
+enum AgentProfileTurnAuthorityKind {
+  AGENT_PROFILE_TURN_AUTHORITY_KIND_UNSPECIFIED = 0;
+  AGENT_PROFILE_TURN_AUTHORITY_KIND_RESTRICTED_EMPTY = 1;
+  AGENT_PROFILE_TURN_AUTHORITY_KIND_RECOVERY = 2;
+  AGENT_PROFILE_TURN_AUTHORITY_KIND_SELECTED = 3;
+}
+
+enum AgentProfileTurnAuthorityCommitKind {
+  AGENT_PROFILE_TURN_AUTHORITY_COMMIT_KIND_UNSPECIFIED = 0;
+  AGENT_PROFILE_TURN_AUTHORITY_COMMIT_KIND_INITIAL = 1;
+  AGENT_PROFILE_TURN_AUTHORITY_COMMIT_KIND_RETRY_STARTED = 2;
+  AGENT_PROFILE_TURN_AUTHORITY_COMMIT_KIND_RECONCILE = 3;
+}
+
+enum AgentProfileTurnDegradationReason {
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_UNSPECIFIED = 0;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_PROFILE_INVALID = 1;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_ROUTE_TOOL_SET_UNAVAILABLE = 2;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_SET_UNAVAILABLE = 3;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_DISCOVERY_FAILED = 4;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_NAME_COLLISION = 5;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_CAPABILITY_REJECTED = 6;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_NO_MATCH = 7;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_FAILED = 8;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_SHADOW_MODE = 9;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_EXACT_SKILL_FETCH_FAILED = 10;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_EXACT_SKILL_IDENTITY_MISMATCH = 11;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_SELECTED_SKILL_BODY_INVALID = 12;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_LEGACY_AUTHORITY_MISSING = 13;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZER_UNAVAILABLE = 14;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZATION_FAILED = 15;
+}
+
+message AgentProfileTurnReconciliationKey {
+  string session_id = 1;
+  int32 attempt = 2;
+}
+
+message AgentProfileTurnCandidateRouteIdentity {
+  string profile_id = 1;
+  string profile_version = 2;
+  string policy_revision = 3;
+  string intent_id = 4;
+}
+
+message AgentProfileTurnAuthorityState {
+  AgentProfileTurnReconciliationKey reconciliation_key = 1;
+  AgentProfileTurnCandidateRouteIdentity candidate_route = 2;
+  ExactRemoteSkillRef selected_exact_skill_ref = 3;
+  AgentProfileTurnAuthorityKind authority_kind = 4;
+  repeated AgentProfileTurnDegradationReason degradation_reasons = 5;
+  repeated string authority_ceiling_tool_names = 6;
+}
+
+message AgentProfileTurnAuthorityCommittedEvent {
+  AgentProfileTurnAuthorityCommitKind commit_kind = 1;
+  AgentProfileTurnAuthorityState authority = 2;
+}
+
+// Retired (issue #2498): no longer emitted — the overlay is sourced by the host-level provider, not
+// materialized per-actor. Kept defined so historical journals / queued durable timeouts still
+// deserialize and replay through their no-op handlers. Remove in a later release once no grain journal
+// or pending timeout references them.
+message SystemSkillOverlayMaterializedEvent {
+  SystemSkillOverlay overlay = 1;
+}
+
+message SystemSkillOverlayRefreshFiredEvent {
+  int32 attempt = 1;
+}
+
 // Agent → 前端：请求工具执行审批
 message ToolApprovalRequestEvent {
   string request_id = 1;
@@ -340,12 +987,16 @@ message ToolApprovalRequestEvent {
 // 前端 → Agent：审批决策
 message ToolApprovalDecisionEvent {
   string request_id = 1;
-  string session_id = 2;
+  reserved 2;
+  reserved "session_id";
   bool approved = 3;
   string reason = 4;
+  string continuation_turn_id = 5;
 }
 
 message RoleChatSessionState {
+  reserved 19;
+  reserved "completion_notification_dispatched";
   string prompt = 1;
   bool completed = 2;
   string final_content = 3;
@@ -358,6 +1009,31 @@ message RoleChatSessionState {
   TokenUsagePayload usage = 10;
   string model = 11;
   repeated AgentToolReceipt tool_receipts = 12;
+  RoleChatSessionOutcome outcome = 13;
+  NyxIdAuthorizationRequiredEvent authorization_required = 14;
+  string failure_code = 15;
+  string safe_message = 16;
+  google.protobuf.Timestamp terminal_time = 17;
+  RoleChatRunContext run_context = 18;
+  int64 last_progress_sequence = 20;
+  repeated ToolResultEvent tool_results = 21;
+  RoleChatCompletionNotificationDeliveryStatus completion_notification_delivery_status = 22;
+  int32 completion_notification_attempt = 23;
+  string completion_notification_retry_callback_id = 24;
+  google.protobuf.Timestamp completion_notification_retry_at = 25;
+  string scope_id = 26;
+  RoleChatHistoryDeliveryStatus history_delivery_status = 27;
+  int32 history_delivery_attempt = 28;
+  string history_delivery_id = 29;
+  WorkflowLlmCompletionDeliveryContext workflow_llm_completion_delivery_context = 30;
+  WorkflowLlmCompletionDeliveryStatus workflow_llm_completion_delivery_status = 31;
+  int32 workflow_llm_completion_delivery_attempt = 32;
+  string workflow_llm_completion_delivery_retry_callback_id = 33;
+  google.protobuf.Timestamp workflow_llm_completion_delivery_retry_at = 34;
+  RoleChatRecoveryCheckpoint recovery_checkpoint = 35;
+  // Stable direct parent relation retained after terminal completion clears the
+  // execution checkpoint, so completion can wake exactly one parent turn.
+  string direct_parent_role_chat_session_id = 36;
 }
 
 message RoleGAgentState {
@@ -371,6 +1047,12 @@ message RoleGAgentState {
   string role_id = 8;
   map<string, aevatar.voice.VoicePresenceRuntimeState> voice_presence = 9;
   map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 10;
+  // Retired (issue #2498): the system skill overlay is now sourced by the host-level provider, not
+  // materialized into actor state. Reserved so the tag is never reused and old snapshots parse cleanly.
+  reserved 11;
+  reserved "system_skill_overlay";
+  AgentProfileSnapshot agent_profile = 12;
+  AgentProfileTurnAuthorityState agent_profile_turn_authority = 13;
 }
 
 // ─── Multi-turn tool approval continuation ───
@@ -396,6 +1078,9 @@ message PendingToolApprovalState {
   reserved "remote_status_check_callback_id";
   int32 remote_status_check_attempt = 12;
   int64 remote_approval_expires_at_unix_ms = 13;
+  string scope_id = 15;
+  WorkflowLlmToolApprovalContinuation workflow_llm_continuation = 16;
+  string operation_id = 17;
 }
 
 // Domain event: approval pending persisted.

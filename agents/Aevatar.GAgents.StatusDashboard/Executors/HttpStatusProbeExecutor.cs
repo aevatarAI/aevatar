@@ -92,6 +92,11 @@ public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
         {
             throw;
         }
+        catch (ProbeCredentialUnavailableException ex)
+        {
+            // Required credential is not configured/available — report unknown, never a false down.
+            return Unknown("credential_unavailable", ex.Message);
+        }
         catch (Exception ex)
         {
             return Failure("oauth_token_failed", ex.Message);
@@ -108,6 +113,13 @@ public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
             if (string.IsNullOrWhiteSpace(headerValue)) continue;
             if (!request.Headers.TryAddWithoutValidation(headerName, headerValue))
                 request.Content?.Headers.TryAddWithoutValidation(headerName, headerValue);
+        }
+
+        // Attach the resolved dynamic authorization when the descriptor did not carry an explicit
+        // Header.Authorization for it to replace — e.g. static_bearer / scope_service_token targets.
+        if (!string.IsNullOrWhiteSpace(dynamicAuthorization) && !request.Headers.Contains("Authorization"))
+        {
+            request.Headers.TryAddWithoutValidation("Authorization", dynamicAuthorization);
         }
 
         var body = ReadParam(descriptor, "Body");
@@ -263,6 +275,14 @@ public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
             return value ?? string.Empty;
         });
     }
+
+    private HealthProbeOutcome Unknown(string detail, string error) => new()
+    {
+        Status = HealthOutcomeStatus.Unknown,
+        Detail = detail,
+        ErrorMessage = error,
+        ObservedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+    };
 
     private HealthProbeOutcome Failure(string detail, string error) => new()
     {

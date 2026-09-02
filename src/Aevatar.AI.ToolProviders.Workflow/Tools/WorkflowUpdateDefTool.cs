@@ -50,7 +50,7 @@ public sealed class WorkflowUpdateDefTool : IAgentTool
 
     public bool IsReadOnly => false;
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+    public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.UpdateExistingResource;
 
     private static readonly JsonSerializerOptions s_json = new()
     {

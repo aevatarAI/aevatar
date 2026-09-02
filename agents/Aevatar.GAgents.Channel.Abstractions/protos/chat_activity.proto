@@ -392,6 +392,23 @@ message TransportExtras {
   // The Lark operator `union_id` (`on_*`) for card action callbacks. Kept separate from the
   // sender union id so prompts can distinguish card operator facts from ordinary message senders.
   string nyx_lark_operator_union_id = 13;
+  // The NyxID outbound proxy slug of the inbound channel-bot that received this turn (resolved
+  // from the matched channel-bot registration by `nyx_agent_api_key_id`). This is the per-bot
+  // routing target (e.g. `api-lark-bot-4`), distinct from the generic process-wide default. The
+  // outbound CardKit/im reply MUST proxy through this slug so a reply to one bot is delivered by
+  // that bot's own NyxID app and not a sibling bot under the same account. A typed field (not a
+  // metadata bag) because it controls outbound routing and is resolved once at the runner boundary
+  // alongside `nyx_registration_scope_id`. Empty for non-relay traffic or when the registration
+  // did not record a slug, in which case downstream falls back to the configured default.
+  string nyx_provider_slug = 14;
+  // Provider-interpreted primary outbound address for this ingress turn.
+  string delivery_address_id = 15;
+  // Provider-interpreted type for `delivery_address_id`.
+  string delivery_address_type = 16;
+  // Optional provider-interpreted fallback outbound address for this ingress turn.
+  string delivery_fallback_address_id = 17;
+  // Provider-interpreted type for `delivery_fallback_address_id`.
+  string delivery_fallback_address_type = 18;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

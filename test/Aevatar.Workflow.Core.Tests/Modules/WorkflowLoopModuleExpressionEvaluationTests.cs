@@ -174,6 +174,74 @@ public class WorkflowLoopModuleExpressionEvaluationTests
     }
 
     [Fact]
+    public async Task DispatchStep_ShouldEvaluateTypedConnectorApprovalBeforeDispatch()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "connector",
+                    Type = "connector_call",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["connector"] = "service_proxy",
+                        ["operation"] = "create_resource",
+                    },
+                    ConnectorApprovalOptions = new ConnectorApprovalOptionsDefinition
+                    {
+                        ServiceRef = "${concat('service-', input)}",
+                        NodeId = "${concat('node-', input)}",
+                        HttpVerb = "post",
+                        Resource = "${concat('/resources/', input)}",
+                        PermissionScope = "resources.write",
+                        ExpirationSeconds = 300,
+                        StatusCheckIntervalSeconds = 3,
+                        Destructive = true,
+                        TeamId = "team-alpha",
+                        MemberId = "member-alpha",
+                        WorkflowId = "workflow-alpha",
+                        PublishedServiceId = "published-service-alpha",
+                        PolicyReason = "external-write",
+                    },
+                },
+            ],
+        };
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "run-connector-approval",
+            Input = "alpha",
+        }), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters.Should().Contain("connector", "service_proxy");
+        request.Parameters.Should().Contain("operation", "create_resource");
+        var approval = request.StepParameters.ConnectorApproval;
+        approval.Policy.Should().Be(WorkflowExternalActionApprovalPolicy.Required);
+        approval.ServiceRef.Should().Be("service-alpha");
+        approval.NodeId.Should().Be("node-alpha");
+        approval.HttpVerb.Should().Be("post");
+        approval.Resource.Should().Be("/resources/alpha");
+        approval.PermissionScope.Should().Be("resources.write");
+        approval.ExpirationSeconds.Should().Be(300);
+        approval.StatusCheckIntervalSeconds.Should().Be(3);
+        approval.Destructive.Should().BeTrue();
+        approval.TeamId.Should().Be("team-alpha");
+        approval.MemberId.Should().Be("member-alpha");
+        approval.WorkflowId.Should().Be("workflow-alpha");
+        approval.PublishedServiceId.Should().Be("published-service-alpha");
+        approval.PolicyReason.Should().Be("external-write");
+    }
+
+    [Fact]
     public async Task DispatchStep_WhenLlmCallOmitsRole_ShouldAssignImplicitAssistantTarget()
     {
         var workflow = new WorkflowDefinition

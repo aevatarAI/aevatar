@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
@@ -17,12 +19,11 @@ public sealed class NyxIdResponsesModelsAggregatorTests
         // catalog-backed IResponsesRouteResolver, no source-dependent branching.
         var body = """{"data":[{"id":"claude-opus-4-7"},{"id":"claude-sonnet-4-6"}]}""";
         var anthropicGateway = new NyxIdLlmService(
-            UserServiceId: "anthropic",
+            CatalogEntryId: "anthropic",
             ServiceSlug: "anthropic",
             DisplayName: "Anthropic",
             RouteValue: "/api/v1/llm/anthropic/v1",
-            DefaultModel: null,
-            Models: [],
+            ModelCatalog: EmptyCatalog(),
             Status: "ready",
             Source: NyxIdLlmProviderSource.GatewayProvider,
             Allowed: true,
@@ -43,12 +44,11 @@ public sealed class NyxIdResponsesModelsAggregatorTests
     {
         var body = """{"data":[{"id":"gpt-4o"},{"id":"qwen-3"}]}""";
         var chronoLlm = new NyxIdLlmService(
-            UserServiceId: "chrono-llm-id",
+            CatalogEntryId: "chrono-llm-id",
             ServiceSlug: "chrono-llm",
             DisplayName: "Chrono LLM",
             RouteValue: "/api/v1/proxy/s/chrono-llm",
-            DefaultModel: null,
-            Models: [],
+            ModelCatalog: EmptyCatalog(),
             Status: "ready",
             Source: NyxIdLlmProviderSource.ProxyService,
             Allowed: true,
@@ -189,16 +189,21 @@ public sealed class NyxIdResponsesModelsAggregatorTests
 
     private static NyxIdLlmService MakeService(string slug, string routeValue, string source) =>
         new(
-            UserServiceId: slug,
+            CatalogEntryId: slug,
             ServiceSlug: slug,
             DisplayName: slug,
             RouteValue: routeValue,
-            DefaultModel: null,
-            Models: [],
+            ModelCatalog: EmptyCatalog(),
             Status: "ready",
             Source: source,
             Allowed: true,
             Description: null);
+
+    private static LLMModelCatalog EmptyCatalog() =>
+        LLMSelectionPolicy.NormalizeCatalog(
+            [],
+            null,
+            LLMModelCatalogDiagnosticKind.NotPublished);
 
 
     [Theory]

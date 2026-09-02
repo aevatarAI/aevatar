@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 
 namespace Aevatar.AI.Abstractions.LLMProviders;
 
@@ -58,6 +59,30 @@ public sealed class LLMStreamChunk
 
     /// <summary>Typed authority receipt produced by a completed receipt-worthy tool call.</summary>
     public AgentToolReceipt? ToolReceipt { get; init; }
+
+    /// <summary>Runtime lifecycle carrier yielded before the tool is allowed to start.</summary>
+    public ToolCallStartedChunk? ToolCallStarted { get; init; }
+
+    /// <summary>Runtime lifecycle carrier yielded for every completed tool, including ordinary success.</summary>
+    public ToolCallCompletedChunk? ToolCallCompleted { get; init; }
+}
+
+public sealed class ToolCallStartedChunk
+{
+    public required ToolCall ToolCall { get; init; }
+    public required ToolPresentationDescriptor Presentation { get; init; }
+    public string OperationId { get; init; } = string.Empty;
+}
+
+public sealed class ToolCallCompletedChunk
+{
+    public required string CallId { get; init; }
+    public required string ToolName { get; init; }
+    public required string ResultJson { get; init; }
+    public bool Success { get; init; }
+    public string Error { get; init; } = string.Empty;
+    public AgentToolReceipt? Receipt { get; init; }
+    public string OperationId { get; init; } = string.Empty;
 }
 
 /// <summary>Token 用量统计。</summary>

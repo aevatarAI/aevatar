@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package aevatar.ai.tool_providers.nyxid.connected_services;
+
+option csharp_namespace = "Aevatar.AI.ToolProviders.NyxId.ConnectedServices";
+
+enum NyxIdServiceCredentialSource {
+  NYX_ID_SERVICE_CREDENTIAL_SOURCE_UNSPECIFIED = 0;
+  NYX_ID_SERVICE_CREDENTIAL_SOURCE_PERSONAL = 1;
+  NYX_ID_SERVICE_CREDENTIAL_SOURCE_ORGANIZATION = 2;
+}
+
+enum NyxIdServiceAccessTokenSource {
+  NYX_ID_SERVICE_ACCESS_TOKEN_SOURCE_UNSPECIFIED = 0;
+  NYX_ID_SERVICE_ACCESS_TOKEN_SOURCE_USER = 1;
+  NYX_ID_SERVICE_ACCESS_TOKEN_SOURCE_ORGANIZATION = 2;
+}
+
+message NyxIdProxyRouteConstraint {
+  oneof route {
+    string catalog_service_id = 1;
+    string service_slug = 2;
+  }
+}
+
+message NyxIdServiceInstance {
+  string user_service_id = 1;
+  string display_slug = 2;
+  string label = 3;
+  string endpoint_url = 4;
+  string endpoint_id = 5;
+  bool is_active = 6;
+  optional string catalog_service_id = 7;
+  optional string node_id = 8;
+  NyxIdServiceCredentialSource credential_source = 9;
+  NyxIdServiceAccessTokenSource access_token_source = 10;
+  reserved 11;
+  reserved "proxy_spec_service_id";
+  NyxIdProxyRouteConstraint route_constraint = 12;
+  bool credential_allowed = 13;
+}
+
+message NyxIdServiceUpdateRequest {
+  string user_service_id = 1;
+  optional string label = 2;
+  optional string endpoint_url = 3;
+  optional bool is_active = 4;
+  optional string openapi_spec_url = 5;
+}
+
+message NyxIdServiceRouteRequest {
+  string user_service_id = 1;
+  oneof route {
+    bool direct = 2;
+    string node_id = 3;
+  }
+}
+
+message NyxIdServiceInventoryResult {
+  repeated NyxIdServiceInstance instances = 1;
+}
+
+message NyxIdServiceMutationResult {
+  string user_service_id = 1;
+  bool accepted = 2;
+  reserved 3;
+  reserved "instance";
+  string response_json = 4;
+}
+
+message NyxIdServiceDeleteResult {
+  string user_service_id = 1;
+  bool deleted = 2;
+  string response_json = 3;
+}

@@ -5,6 +5,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgents.StatusDashboard.Tests;
 
@@ -15,7 +16,7 @@ public sealed class HealthProbeStartupServiceTests
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new RecordingActorDispatchPort();
-        var service = CreateService(runtime, dispatchPort);
+        using var service = CreateService(runtime, dispatchPort);
 
         await service.StartAsync(CancellationToken.None);
 
@@ -29,11 +30,33 @@ public sealed class HealthProbeStartupServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_ShouldRedispatchProbeConfigurationAfterOneMinute()
+    {
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-07-31T08:00:00Z"));
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        using var service = CreateService(runtime, dispatchPort, timeProvider: timeProvider);
+
+        await service.StartAsync(CancellationToken.None);
+        dispatchPort.Dispatches.Should().ContainSingle();
+
+        timeProvider.Advance(TimeSpan.FromMinutes(1));
+        await dispatchPort.SecondDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        dispatchPort.Dispatches.Should().HaveCount(2);
+        dispatchPort.Dispatches.Should().OnlyContain(dispatch =>
+            dispatch.Envelope.Payload.Is(HealthProbeConfigureCommand.Descriptor));
+        await service.StopAsync(CancellationToken.None);
+        timeProvider.Advance(TimeSpan.FromMinutes(1));
+        dispatchPort.Dispatches.Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task StartAsync_ShouldReturnWhenManifestIsEmpty()
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new RecordingActorDispatchPort();
-        var service = CreateService(
+        using var service = CreateService(
             runtime,
             dispatchPort,
             new StatusDashboardOptions { UseBuiltInTargets = false });
@@ -51,7 +74,7 @@ public sealed class HealthProbeStartupServiceTests
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new RecordingActorDispatchPort();
-        var service = CreateService(
+        using var service = CreateService(
             runtime,
             dispatchPort,
             registry: new HealthProbeExecutorRegistry([]));
@@ -71,7 +94,7 @@ public sealed class HealthProbeStartupServiceTests
         var runtime = new RecordingActorRuntime();
         runtime.SeedActor(retiredActorId);
         var dispatchPort = new RecordingActorDispatchPort();
-        var service = CreateService(
+        using var service = CreateService(
             runtime,
             dispatchPort,
             new StatusDashboardOptions { UseBuiltInTargets = false });
@@ -91,7 +114,7 @@ public sealed class HealthProbeStartupServiceTests
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new ThrowingActorDispatchPort(new InvalidOperationException("dispatch failed"));
-        var service = CreateService(runtime, dispatchPort);
+        using var service = CreateService(runtime, dispatchPort);
 
         await service.StartAsync(CancellationToken.None);
 
@@ -107,7 +130,7 @@ public sealed class HealthProbeStartupServiceTests
         await cancellation.CancelAsync();
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new ThrowingActorDispatchPort(new OperationCanceledException(cancellation.Token));
-        var service = CreateService(runtime, dispatchPort);
+        using var service = CreateService(runtime, dispatchPort);
 
         await service.StartAsync(cancellation.Token);
 
@@ -150,13 +173,15 @@ public sealed class HealthProbeStartupServiceTests
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
         StatusDashboardOptions? options = null,
-        IHealthProbeExecutorRegistry? registry = null) =>
+        IHealthProbeExecutorRegistry? registry = null,
+        TimeProvider? timeProvider = null) =>
         new(
             Options.Create(options ?? BuildOptions()),
             runtime,
             dispatchPort,
             registry ?? new HealthProbeExecutorRegistry([new TestHealthProbeExecutor()]),
-            NullLogger<HealthProbeStartupService>.Instance);
+            NullLogger<HealthProbeStartupService>.Instance,
+            timeProvider: timeProvider);
 
     private static StatusDashboardOptions BuildOptions() =>
         new()
@@ -249,10 +274,14 @@ public sealed class HealthProbeStartupServiceTests
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+        public TaskCompletionSource SecondDispatch { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add((actorId, envelope.Clone()));
+            if (Dispatches.Count == 2)
+                SecondDispatch.TrySetResult();
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }

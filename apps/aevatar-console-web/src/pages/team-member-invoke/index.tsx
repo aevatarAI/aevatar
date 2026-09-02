@@ -24,6 +24,7 @@ import {
   normalizeStudioMemberLifecycleStage,
   type StudioMemberBindingContract,
 } from "@/shared/studio/models";
+import { resolveStudioMemberDraftWorkflowId } from "@/shared/studio/memberWorkflowIdentity";
 import {
   AevatarInspectorEmpty,
   type AevatarBreadcrumbItem,
@@ -103,12 +104,6 @@ const TeamMemberInvokePage: React.FC = () => {
     tab: "members",
     teamId: route.teamId,
   });
-  const workflowStudioHref = buildTeamMemberWorkflowStudioHref({
-    memberId: route.memberId,
-    mode: "edit-member",
-    scopeId: route.scopeId,
-    teamId: route.teamId,
-  });
   const publishedRunsHref = buildTeamMemberPublishedRunsHref({
     memberId: route.memberId || undefined,
     scopeId: route.scopeId,
@@ -156,6 +151,16 @@ const TeamMemberInvokePage: React.FC = () => {
   ];
 
   const memberSummary = memberQuery.data?.summary ?? null;
+  const memberDraftWorkflowId = resolveStudioMemberDraftWorkflowId(
+    memberQuery.data,
+  );
+  const workflowStudioHref = buildTeamMemberWorkflowStudioHref({
+    memberId: route.memberId,
+    mode: "edit-member",
+    scopeId: route.scopeId,
+    teamId: route.teamId,
+    workflowId: memberDraftWorkflowId || undefined,
+  });
   const memberKind = normalizeStudioMemberBindingImplementationKind(
     memberSummary?.implementationKind,
   );

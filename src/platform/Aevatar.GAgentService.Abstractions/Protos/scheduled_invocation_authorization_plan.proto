@@ -1,0 +1,158 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.schedules.authorization;
+option csharp_namespace = "Aevatar.GAgentService.Abstractions.Schedules.Authorization";
+
+import "google/protobuf/timestamp.proto";
+import "llm_selection.proto";
+import "scheduled_invocation_authorization_evidence.proto";
+
+enum NyxIdCredentialScope {
+  NYX_ID_CREDENTIAL_SCOPE_UNSPECIFIED = 0;
+  NYX_ID_CREDENTIAL_SCOPE_READ = 1;
+  NYX_ID_CREDENTIAL_SCOPE_PROXY = 2;
+}
+
+enum ScheduledInvocationDisclosure {
+  SCHEDULED_INVOCATION_DISCLOSURE_UNSPECIFIED = 0;
+  SCHEDULED_INVOCATION_DISCLOSURE_DEDICATED_CREDENTIAL = 1;
+  SCHEDULED_INVOCATION_DISCLOSURE_AEVATAR_SECRET_CUSTODY = 2;
+  SCHEDULED_INVOCATION_DISCLOSURE_BROWSER_NEVER_RECEIVES_SECRET = 3;
+  SCHEDULED_INVOCATION_DISCLOSURE_DELETE_REVOKES_CREDENTIAL = 4;
+  SCHEDULED_INVOCATION_DISCLOSURE_PAUSE_RESUME_PRESERVES_CREDENTIAL = 5;
+  SCHEDULED_INVOCATION_DISCLOSURE_NODE_IDS_ARE_PERMISSION_SET = 6;
+}
+
+enum AuthorizationSourceKind {
+  AUTHORIZATION_SOURCE_KIND_UNSPECIFIED = 0;
+  AUTHORIZATION_SOURCE_KIND_INVOCATION_INTENT = 1;
+  AUTHORIZATION_SOURCE_KIND_STUDIO_MEMBER = 2;
+  AUTHORIZATION_SOURCE_KIND_WORKFLOW_REVISION = 3;
+  AUTHORIZATION_SOURCE_KIND_CONNECTOR_CATALOG = 4;
+  AUTHORIZATION_SOURCE_KIND_OWNER_LLM_ROUTE = 5;
+  AUTHORIZATION_SOURCE_KIND_SCHEDULED_AGENT_REGISTRATION = 6;
+  AUTHORIZATION_SOURCE_KIND_DELIVERY_TARGET_REGISTRATION = 7;
+  reserved 8;
+}
+
+enum ScheduledInvocationAuthorizationFailureCode {
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_UNSPECIFIED = 0;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_TARGET_INVALID = 1;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_INVALID = 2;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_SNAPSHOT_NOT_FOUND = 3;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_SNAPSHOT_STALE = 4;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_MISMATCH = 5;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_SERVICE_NOT_FOUND = 6;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_SERVICE_AMBIGUOUS = 7;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_SERVICE_ACCESS_DENIED = 8;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_NODE_GRANT_MISSING = 9;
+  reserved 10;
+  reserved "SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_NODE_ROLE_INVALID";
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_UNKNOWN_ENUM = 11;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_AUTHORIZATION_PLAN_CHANGED = 12;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_DURABLE_AUTHORIZATION_UNAVAILABLE = 13;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_CATALOG_PROJECTION_PENDING = 14;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_LLM_ROUTE_UNAVAILABLE = 15;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_LLM_MODEL_NOT_VERIFIABLE = 16;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_LLM_MODEL_UNAVAILABLE = 17;
+}
+
+message StudioMemberInvocationTarget {
+  string scope_id = 1;
+  string team_id = 2;
+  string member_id = 3;
+  string published_service_id = 4;
+  string draft_workflow_id = 5;
+  string workflow_revision_id = 6;
+}
+
+message ScheduledAgentInvocationTarget {
+  string registration_scope_id = 1;
+  string execution_scope_id = 2;
+  string scheduled_agent_id = 3;
+}
+
+message DeliveryInvocationTarget {
+  string registration_scope_id = 1;
+  string delivery_target_id = 2;
+}
+
+message ScheduledInvocationTarget {
+  oneof target {
+    StudioMemberInvocationTarget studio_member = 1;
+    ScheduledAgentInvocationTarget scheduled_agent = 2;
+    DeliveryInvocationTarget delivery = 3;
+  }
+}
+
+message NyxIdServiceGrant {
+  string user_service_id = 1;
+  string service_slug = 2;
+  string display_name = 3;
+  AuthorizationOwnerIdentity resource_owner = 4;
+  AuthorizationGrantRequirement node_grant_requirement = 5;
+  repeated string node_ids = 6;
+}
+
+message AuthorizationSourceStamp {
+  AuthorizationSourceKind source_kind = 1;
+  string source_id = 2;
+  int64 state_version = 3;
+  string content_digest = 4;
+}
+
+message NyxIdCatalogAuthorityStamp {
+  reserved 4;
+  reserved "external_revision";
+
+  int64 actor_state_version = 1;
+  google.protobuf.Timestamp observed_at = 2;
+  google.protobuf.Timestamp fresh_until = 3;
+  string content_digest = 5;
+  string contract_version = 6;
+  string policy_version = 7;
+  google.protobuf.Timestamp evaluated_at = 8;
+}
+
+message ScheduledInvocationCredentialPolicy {
+  repeated NyxIdCredentialScope scopes = 1;
+  bool allow_all_services = 2;
+  bool allow_all_nodes = 3;
+  AuthorizationGrantRequirement service_grant_requirement = 4;
+  AuthorizationGrantRequirement node_grant_requirement = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  string policy_version = 7;
+}
+
+message ScheduledInvocationOwnerLLMSelection {
+  aevatar.ai.LLMRouteKind route_kind = 1;
+  string route_value = 2;
+  string nyx_id_user_service_id = 3;
+  string service_slug_snapshot = 4;
+  string model = 5;
+}
+
+message ScheduledInvocationAuthorizationPlan {
+  reserved 5;
+  reserved "nyx_id_node_grants";
+
+  string schema_version = 1;
+  ScheduledInvocationTarget invocation_target = 2;
+  AuthorizationOwnerIdentity owner = 3;
+  repeated NyxIdServiceGrant nyx_id_service_grants = 4;
+  ScheduledInvocationCredentialPolicy credential_policy = 6;
+  repeated AuthorizationSourceStamp source_stamps = 7;
+  NyxIdCatalogAuthorityStamp catalog_authority = 8;
+  repeated ScheduledInvocationDisclosure disclosures = 9;
+  string permission_digest = 10;
+  AuthorizationOwnerIdentity authenticated_actor = 11;
+  ScheduledInvocationOwnerLLMSelection owner_llm_selection = 12;
+}
+
+message ScheduledInvocationAuthorizationConfirmation {
+  ScheduledInvocationTarget invocation_target = 1;
+  AuthorizationOwnerIdentity owner = 2;
+  string schema_version = 3;
+  string policy_version = 4;
+  string permission_digest = 5;
+}

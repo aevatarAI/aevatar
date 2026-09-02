@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -10,7 +11,7 @@ namespace Aevatar.Studio.Tests;
 public sealed class ActorDispatchUserConfigCommandServiceTests
 {
     [Fact]
-    public async Task SaveAsync_ShouldMapDispatchAdmissionReceiptAndEnvelope()
+    public async Task UpdateAsync_ShouldMapDispatchAdmissionReceiptAndEnvelope()
     {
         var ackedAt = new DateTimeOffset(2026, 5, 26, 10, 30, 0, TimeSpan.Zero);
         var bootstrap = new RecordingBootstrap();
@@ -22,16 +23,16 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
             CorrelationId: "corr-1"));
         var service = new ActorDispatchUserConfigCommandService(
             bootstrap,
-            dispatch,
-            new StubScopeResolver("scope-1"));
+            dispatch);
 
-        var receipt = await service.SaveAsync(new UserConfig(
-            DefaultModel: "gpt-5.5",
-            PreferredLlmRoute: "/api/v1/proxy/s/openai-work",
+        var receipt = await service.UpdateAsync(
+            UserConfigResourceKey.ForOwnerScope("scope-1"),
+            new UserConfigUpdate(
+            LlmSelection: UserServiceSelection("us-openai", "openai-work", "gpt-5.5"),
             RuntimeMode: "remote",
-            LocalRuntimeBaseUrl: "http://127.0.0.1:5080/",
-            RemoteRuntimeBaseUrl: "https://runtime.example.com/",
-            GithubUsername: " octocat ",
+            LocalRuntimeBaseUrl: "http://127.0.0.1:5080",
+            RemoteRuntimeBaseUrl: "https://runtime.example.com",
+            GithubUsername: "octocat",
             MaxToolRounds: 7));
 
         bootstrap.EnsuredActorIds.Should().ContainSingle().Which.Should().Be("user-config-scope-1");
@@ -40,11 +41,14 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
         dispatched.ActorId.Should().Be("user-config-scope-1");
         dispatched.Envelope.Route.Direct.TargetActorId.Should().Be("user-config-scope-1");
         dispatched.Envelope.Route.PublisherActorId.Should().Be("aevatar.studio.projection.user-config");
-        dispatched.Envelope.Payload.Is(UserConfigUpdatedEvent.Descriptor).Should().BeTrue();
+        dispatched.Envelope.Payload.Is(UpdateUserConfigCommand.Descriptor).Should().BeTrue();
 
-        var payload = dispatched.Envelope.Payload.Unpack<UserConfigUpdatedEvent>();
-        payload.DefaultModel.Should().Be("gpt-5.5");
-        payload.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/openai-work");
+        var payload = dispatched.Envelope.Payload.Unpack<UpdateUserConfigCommand>();
+        UpdateUserConfigCommand.Descriptor.FindFieldByName("default_model").Should().BeNull();
+        payload.LlmSelection.RouteValue.Should().Be("/api/v1/proxy/s/openai-work");
+        payload.LlmSelection.NyxIdUserServiceId.Should().Be("us-openai");
+        payload.LlmSelection.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.ExplicitModel);
+        payload.LlmSelection.ModelSelection.ModelId.Should().Be("gpt-5.5");
         payload.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.RemoteMode);
         payload.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:5080");
         payload.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example.com");
@@ -60,28 +64,69 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
     }
 
     [Fact]
-    public async Task SaveAsync_WhenDispatchAdmissionIsNotAccepted_ShouldReturnRejectedReceipt()
+    public void UserConfigUpdate_ShouldNotExposeModelOnlyMutation()
     {
-        var ackedAt = new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero);
-        var service = new ActorDispatchUserConfigCommandService(
-            new RecordingBootstrap(),
-            new RecordingDispatchPort(new DispatchAdmission(
-                Accepted: false,
-                CommandId: "rejected-command",
-                AckedAt: ackedAt,
-                ActorId: "user-config-scope-1",
-                CorrelationId: "corr-1")),
-            new StubScopeResolver("scope-1"));
-
-        var receipt = await service.SaveAsync(new UserConfig(DefaultModel: "gpt-5.5"));
-
-        receipt.Accepted.Should().BeFalse();
-        receipt.CommandId.Should().Be("rejected-command");
-        receipt.AckStage.Should().Be(UserConfigCommandAckStage.AdmissionRejected);
-        receipt.ActorId.Should().Be("user-config-scope-1");
-        receipt.CorrelationId.Should().Be("corr-1");
-        receipt.AckedAtUtc.Should().Be(ackedAt);
+        var dispatch = new RecordingDispatchPort(new DispatchAdmission(
+            Accepted: false,
+            CommandId: "rejected-command",
+            AckedAt: new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero),
+            ActorId: "user-config-scope-1",
+            CorrelationId: "corr-1"));
+        typeof(UserConfigUpdate).GetProperty("DefaultModel").Should().BeNull();
+        dispatch.Dispatches.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldMapOnlyPresentFieldsAndKeepResourceKindsDistinct()
+    {
+        var dispatch = RecordingDispatchPort.Accepting();
+        var service = CreateService(dispatch);
+        var selection = UserServiceSelection("us-alpha", "chrono-llm-public", "gpt-5.5");
+
+        await service.UpdateAsync(
+            UserConfigResourceKey.ForOwnerScope("binding-alpha"),
+            new UserConfigUpdate(LlmSelection: selection));
+        await service.UpdateAsync(
+            UserConfigResourceKey.ForChannelBinding("alpha"),
+            new UserConfigUpdate(GithubUsername: "octocat"));
+
+        dispatch.Dispatches.Select(x => x.ActorId).Should().Equal(
+            "user-config-binding-alpha",
+            "channel-user-config-alpha");
+        var command = dispatch.Dispatches[0].Envelope.Payload.Unpack<UpdateUserConfigCommand>();
+        command.HasRuntimeMode.Should().BeFalse();
+        command.LlmSelection.NyxIdUserServiceId.Should().Be("us-alpha");
+        command.LlmSelection.ModelSelection.ModelId.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldRejectUnknownResourceKind()
+    {
+        var dispatch = RecordingDispatchPort.Accepting();
+        var service = CreateService(dispatch);
+        var resource = new UserConfigResourceKey((UserConfigResourceKind)99, "unknown-alpha");
+
+        var act = () => service.UpdateAsync(resource, new UserConfigUpdate(GithubUsername: "octocat"));
+
+        await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+        dispatch.Dispatches.Should().BeEmpty();
+    }
+
+    private static ActorDispatchUserConfigCommandService CreateService(RecordingDispatchPort dispatch) =>
+        new(new RecordingBootstrap(), dispatch);
+
+    private static LLMSelection UserServiceSelection(string id, string slug, string model) => new()
+    {
+        RouteKind = LLMRouteKind.NyxIdUserService,
+        RouteValue = $"/api/v1/proxy/s/{slug}",
+        NyxIdUserServiceId = id,
+        ServiceSlugSnapshot = slug,
+        ModelSelection = new LLMModelSelection
+        {
+            Kind = LLMModelSelectionKind.ExplicitModel,
+            ModelId = model,
+        },
+    };
 
     private sealed class RecordingBootstrap : IStudioActorBootstrap
     {
@@ -112,6 +157,14 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
     {
         public List<DispatchedCommand> Dispatches { get; } = [];
 
+        public static RecordingDispatchPort Accepting() =>
+            new(new DispatchAdmission(
+                Accepted: true,
+                CommandId: "command-alpha",
+                AckedAt: DateTimeOffset.Parse("2026-07-22T08:00:00Z"),
+                ActorId: "user-config-binding-alpha",
+                CorrelationId: "correlation-alpha"));
+
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add(new DispatchedCommand(actorId, envelope));
@@ -128,5 +181,7 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
 
         public bool HasAuthenticatedRequestWithoutScope(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) =>
             false;
+
+        public bool HasHttpRequestContext(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => false;
     }
 }

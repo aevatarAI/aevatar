@@ -446,7 +446,11 @@ function renderRecentRunCards(
                     {resolveRunEndpointId(record.endpointKind, record.endpointId)}
                   </Tag>
                   <Tag>{formatDateTime(record.recordedAt)}</Tag>
-                  <Tag>{record.runId || t("pages.runs.runslaunchrail.no.runid", "No runId")}</Tag>
+                  <Tag>
+                    {record.runId
+                      ? t("pages.runs.runslaunchrail.run.ready", "Run ready")
+                      : t("pages.runs.runslaunchrail.no.run", "No run")}
+                  </Tag>
                 </div>
               </div>
             </div>

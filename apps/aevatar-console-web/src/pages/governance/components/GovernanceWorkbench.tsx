@@ -44,8 +44,10 @@ import {
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
 import { AevatarCompactText } from "@/shared/ui/compactText";
+import AevatarContentSkeleton from "@/shared/ui/AevatarContentSkeleton";
 import type { AevatarBreadcrumbItem } from "@/shared/ui/aevatarPageShells";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
+import ConsoleOperationNotice from "@/shared/ui/ConsoleOperationNotice";
 import GovernanceAuditTimeline, {
   type GovernanceAuditEvent,
 } from "./GovernanceAuditTimeline";
@@ -82,6 +84,7 @@ import {
   t,
   type ConsoleMessageDescriptor,
 } from "@/shared/i18n/messages";
+import { getUserFacingIdentifierLabel } from "@/shared/ui/userFacingIdentifiers";
 
 type GovernanceNotice = {
   message: string;
@@ -95,6 +98,19 @@ type GovernanceViewMeta = {
 
 const defaultScopeServiceAppId = "default";
 const defaultScopeServiceNamespace = "default";
+
+function formatGovernanceVersionLabel(value: string | null | undefined): string {
+  return value?.trim()
+    ? t("pages.governance.governanceworkbench.version.ready", "Version ready")
+    : t("pages.governance.governanceworkbench.version.pending", "Version pending");
+}
+
+function formatGovernanceResourceLabel(
+  value: string | null | undefined,
+  fallback: string,
+): string {
+  return getUserFacingIdentifierLabel(value, fallback);
+}
 
 type GovernanceViewActionConfig = {
   label: string;
@@ -240,11 +256,13 @@ function buildBlankEndpoint(): ServiceEndpointExposureSnapshot {
 
 function buildBindingTargetLabel(record: ServiceBindingSnapshot): string {
   if (record.serviceRef) {
-    return `${record.serviceRef.identity.serviceId}:${record.serviceRef.endpointId || "*"}`;
+    return record.serviceRef.endpointId
+      ? t("pages.governance.governanceworkbench.service.endpoint.target", "Service endpoint target")
+      : t("pages.governance.governanceworkbench.service.target", "Service target");
   }
 
   if (record.connectorRef) {
-    return `${record.connectorRef.connectorType}:${record.connectorRef.connectorId}`;
+    return formatAevatarStatusLabel(record.connectorRef.connectorType || "connector");
   }
 
   if (record.secretRef) {
@@ -328,10 +346,18 @@ function buildAuditEvents(input: {
       at: selectedService.updatedAt,
       id: `service-${selectedService.serviceId}-${selectedService.updatedAt}`,
       status: selectedService.deploymentStatus || "active",
-      summary: t("pages.governance.governanceworkbench.governance.is.now.anchored.to", "Governance is now anchored to {value1}.", { value1: selectedService.displayName || selectedService.serviceId }),
+      summary: t("pages.governance.governanceworkbench.governance.is.now.anchored.to", "Governance is now anchored to {value1}.", {
+        value1: formatGovernanceResourceLabel(
+          selectedService.displayName || selectedService.serviceId,
+          t("pages.governance.governanceworkbench.service", "Service"),
+        ),
+      }),
       targetId: selectedService.serviceId,
       targetKind: "service",
-      targetLabel: selectedService.displayName || selectedService.serviceId,
+      targetLabel: formatGovernanceResourceLabel(
+        selectedService.displayName || selectedService.serviceId,
+        t("pages.governance.governanceworkbench.service", "Service"),
+      ),
     });
   }
 
@@ -343,10 +369,10 @@ function buildAuditEvents(input: {
         at: revision.publishedAt,
         id: `revision-published-${revision.revisionId}`,
         status: "published",
-        summary: t("pages.governance.governanceworkbench.revision.was.published.for.governance.evaluation", "Revision {value1} was published for governance evaluation.", { value1: revision.revisionId }),
+        summary: t("pages.governance.governanceworkbench.revision.was.published.for.governance.evaluation", "Revision was published for governance evaluation."),
         targetId: revision.revisionId,
         targetKind: "activation",
-        targetLabel: revision.revisionId,
+        targetLabel: formatGovernanceVersionLabel(revision.revisionId),
       });
     } else if (revision.preparedAt) {
       events.push({
@@ -355,10 +381,10 @@ function buildAuditEvents(input: {
         at: revision.preparedAt,
         id: `revision-prepared-${revision.revisionId}`,
         status: revision.status || "pending",
-        summary: t("pages.governance.governanceworkbench.revision.is.prepared.and.waiting.for", "Revision {value1} is prepared and waiting for promotion decisions.", { value1: revision.revisionId }),
+        summary: t("pages.governance.governanceworkbench.revision.is.prepared.and.waiting.for", "Revision is prepared and waiting for promotion decisions."),
         targetId: revision.revisionId,
         targetKind: "activation",
-        targetLabel: revision.revisionId,
+        targetLabel: formatGovernanceVersionLabel(revision.revisionId),
       });
     }
   }
@@ -384,10 +410,18 @@ function buildAuditEvents(input: {
       at: bindingsUpdatedAt || selectedService?.updatedAt || "",
       id: `binding-retired-${binding.bindingId}`,
       status: "retired",
-      summary: t("pages.governance.governanceworkbench.was.removed.from.the.active.dependency", "{value1} was removed from the active dependency surface.", { value1: binding.displayName || binding.bindingId }),
+      summary: t("pages.governance.governanceworkbench.was.removed.from.the.active.dependency", "{value1} was removed from the active dependency surface.", {
+        value1: formatGovernanceResourceLabel(
+          binding.displayName || binding.bindingId,
+          t("pages.governance.governanceworkbench.binding", "Binding"),
+        ),
+      }),
       targetId: binding.bindingId,
       targetKind: "binding",
-      targetLabel: binding.displayName || binding.bindingId,
+      targetLabel: formatGovernanceResourceLabel(
+        binding.displayName || binding.bindingId,
+        t("pages.governance.governanceworkbench.binding", "Binding"),
+      ),
     });
   }
 
@@ -473,11 +507,20 @@ function buildAuditEvents(input: {
         activationView.missingPolicyIds.length > 0 ? "blocked" : "ready",
       summary:
         activationView.missingPolicyIds.length > 0
-          ? `Revision ${activationView.revisionId || "unresolved"} is missing policies: ${activationView.missingPolicyIds.join(", ")}.`
-          : `Revision ${activationView.revisionId || "unresolved"} has a complete governance envelope.`,
+          ? t(
+              "pages.governance.governanceworkbench.revision.missing.policies",
+              "Revision is missing {value1} required policies.",
+              { value1: activationView.missingPolicyIds.length },
+            )
+          : t(
+              "pages.governance.governanceworkbench.revision.complete.envelope",
+              "Revision has a complete governance envelope.",
+            ),
       targetId: activationView.revisionId || "activation",
       targetKind: "activation",
-      targetLabel: activationView.revisionId || "Activation view",
+      targetLabel: activationView.revisionId
+        ? formatGovernanceVersionLabel(activationView.revisionId)
+        : "Activation view",
     });
   }
 
@@ -634,7 +677,10 @@ const GovernanceWorkbench: React.FC = () => {
   const revisionOptions = useMemo<GovernanceRevisionOption[]>(
     () =>
       (revisionsQuery.data?.revisions ?? []).map((revision) => ({
-        label: t("pages.governance.governanceworkbench.copy.110", "{value1} · {value2}", { value1: revision.revisionId, value2: revision.status }),
+        label: t("pages.governance.governanceworkbench.copy.110", "{value1} · {value2}", {
+          value1: formatGovernanceVersionLabel(revision.revisionId),
+          value2: revision.status,
+        }),
         value: revision.revisionId,
       })),
     [revisionsQuery.data],
@@ -996,13 +1042,11 @@ const GovernanceWorkbench: React.FC = () => {
         render: (_, record) => (
           <Space orientation="vertical" size={2}>
             <Typography.Text strong>
-              {record.displayName || record.policyId}
+              {formatGovernanceResourceLabel(
+                record.displayName || record.policyId,
+                t("pages.governance.governanceworkbench.policy", "Policy"),
+              )}
             </Typography.Text>
-            <AevatarCompactText
-              color="var(--ant-color-text-secondary)"
-              monospace
-              value={record.policyId}
-            />
           </Space>
         ),
       },
@@ -1064,13 +1108,11 @@ const GovernanceWorkbench: React.FC = () => {
         render: (_, record) => (
           <Space orientation="vertical" size={2}>
             <Typography.Text strong>
-              {record.displayName || record.bindingId}
+              {formatGovernanceResourceLabel(
+                record.displayName || record.bindingId,
+                t("pages.governance.governanceworkbench.binding", "Binding"),
+              )}
             </Typography.Text>
-            <AevatarCompactText
-              color="var(--ant-color-text-secondary)"
-              monospace
-              value={record.bindingId}
-            />
           </Space>
         ),
       },
@@ -1084,13 +1126,7 @@ const GovernanceWorkbench: React.FC = () => {
       {
         key: "target",
         title: t("pages.governance.governanceworkbench.copy.22", "Target"),
-        render: (_, record) => (
-          <AevatarCompactText
-            maxWidth={240}
-            monospace
-            value={buildBindingTargetLabel(record)}
-          />
-        ),
+        render: (_, record) => buildBindingTargetLabel(record),
       },
       {
         key: "policies",
@@ -1137,13 +1173,11 @@ const GovernanceWorkbench: React.FC = () => {
         render: (_, record) => (
           <Space orientation="vertical" size={2}>
             <Typography.Text strong>
-              {record.displayName || record.endpointId}
+              {formatGovernanceResourceLabel(
+                record.displayName || record.endpointId,
+                t("pages.governance.governanceworkbench.endpoint", "Endpoint"),
+              )}
             </Typography.Text>
-            <AevatarCompactText
-              color="var(--ant-color-text-secondary)"
-              monospace
-              value={record.endpointId}
-            />
           </Space>
         ),
       },
@@ -1264,7 +1298,10 @@ const GovernanceWorkbench: React.FC = () => {
         "create-policy",
         "policies",
         input.policyId,
-        `Policy ${input.policyId} was accepted for governance creation.`,
+        t(
+          "pages.governance.governanceworkbench.policy.accepted.for.creation",
+          "Policy was accepted for governance creation.",
+        ),
         () => governanceApi.createPolicy(activeDraft.serviceId, input),
         true,
       );
@@ -1278,7 +1315,10 @@ const GovernanceWorkbench: React.FC = () => {
         "create-binding",
         "bindings",
         input.bindingId,
-        `Binding ${input.bindingId} was accepted for governance creation.`,
+        t(
+          "pages.governance.governanceworkbench.binding.accepted.for.creation",
+          "Binding was accepted for governance creation.",
+        ),
         () => governanceApi.createBinding(activeDraft.serviceId, input),
         true,
       );
@@ -1292,7 +1332,10 @@ const GovernanceWorkbench: React.FC = () => {
         "save-binding",
         "bindings",
         bindingId,
-        `Binding ${bindingId} was accepted for update.`,
+        t(
+          "pages.governance.governanceworkbench.binding.accepted.for.update",
+          "Binding was accepted for update.",
+        ),
         () => governanceApi.updateBinding(activeDraft.serviceId, bindingId, input),
         true,
       );
@@ -1306,7 +1349,10 @@ const GovernanceWorkbench: React.FC = () => {
         "save-policy",
         "policies",
         policyId,
-        `Policy ${policyId} was accepted for update.`,
+        t(
+          "pages.governance.governanceworkbench.policy.accepted.for.update",
+          "Policy was accepted for update.",
+        ),
         () => governanceApi.updatePolicy(activeDraft.serviceId, policyId, input),
         true,
       );
@@ -1324,7 +1370,10 @@ const GovernanceWorkbench: React.FC = () => {
         "retire-policy",
         "policies",
         policyId,
-        `Policy ${policyId} was accepted for retirement.`,
+        t(
+          "pages.governance.governanceworkbench.policy.accepted.for.retirement",
+          "Policy was accepted for retirement.",
+        ),
         () => governanceApi.retirePolicy(activeDraft.serviceId, policyId, activeIdentity),
         true,
       );
@@ -1342,7 +1391,10 @@ const GovernanceWorkbench: React.FC = () => {
         "retire-binding",
         "bindings",
         bindingId,
-        `Binding ${bindingId} was accepted for retirement.`,
+        t(
+          "pages.governance.governanceworkbench.binding.accepted.for.retirement",
+          "Binding was accepted for retirement.",
+        ),
         () =>
           governanceApi.retireBinding(
             activeDraft.serviceId,
@@ -1377,7 +1429,11 @@ const GovernanceWorkbench: React.FC = () => {
         `set-endpoint-exposure:${exposureKind}`,
         "endpoints",
         endpointId,
-        `Endpoint ${endpointId} was accepted for ${formatAevatarStatusLabel(exposureKind).toLowerCase()} exposure.`,
+        t(
+          "pages.governance.governanceworkbench.endpoint.accepted.for.exposure",
+          "Endpoint was accepted for {value1} exposure.",
+          { value1: formatAevatarStatusLabel(exposureKind).toLowerCase() },
+        ),
         () => governanceApi.updateEndpointCatalog(activeDraft.serviceId, payload),
         true,
       );
@@ -1401,7 +1457,10 @@ const GovernanceWorkbench: React.FC = () => {
         "create-endpoint",
         "endpoints",
         input.endpointId,
-        `Endpoint ${input.endpointId} was accepted for governance creation.`,
+        t(
+          "pages.governance.governanceworkbench.endpoint.accepted.for.creation",
+          "Endpoint was accepted for governance creation.",
+        ),
         () =>
           endpointsQuery.data
             ? governanceApi.updateEndpointCatalog(activeDraft.serviceId, payload)
@@ -1429,7 +1488,10 @@ const GovernanceWorkbench: React.FC = () => {
         "save-endpoint",
         "endpoints",
         endpointId,
-        `Endpoint ${endpointId} was accepted for update.`,
+        t(
+          "pages.governance.governanceworkbench.endpoint.accepted.for.update",
+          "Endpoint was accepted for update.",
+        ),
         () => governanceApi.updateEndpointCatalog(activeDraft.serviceId, payload),
         true,
       );
@@ -1710,18 +1772,25 @@ const GovernanceWorkbench: React.FC = () => {
             ]}
           />
           <div style={stageTableShellStyle}>
-            <Table<ServicePolicySnapshot>
-              columns={policyTableColumns}
-              dataSource={policiesQuery.data?.policies ?? []}
-              locale={{
-                emptyText: policiesQuery.isLoading
-                  ? t("pages.governance.governanceworkbench.copy.77", "Loading policies...")
-                  : t("pages.governance.governanceworkbench.copy.78", "This service has no governance policies yet."),
-              }}
-              pagination={{ pageSize: 8, showSizeChanger: false }}
-              rowKey="policyId"
-              size="middle"
-            />
+            {policiesQuery.isLoading ? (
+              <AevatarContentSkeleton
+                ariaLabel={t("pages.governance.governanceworkbench.copy.77", "Loading policies...")}
+                columnWidths={["1.4fr", "1fr", "1fr", 120]}
+                rows={4}
+                variant="table"
+              />
+            ) : (
+              <Table<ServicePolicySnapshot>
+                columns={policyTableColumns}
+                dataSource={policiesQuery.data?.policies ?? []}
+                locale={{
+                  emptyText: t("pages.governance.governanceworkbench.copy.78", "This service has no governance policies yet."),
+                }}
+                pagination={{ pageSize: 8, showSizeChanger: false }}
+                rowKey="policyId"
+                size="middle"
+              />
+            )}
           </div>
         </div>
       );
@@ -1754,18 +1823,25 @@ const GovernanceWorkbench: React.FC = () => {
             ]}
           />
           <div style={stageTableShellStyle}>
-            <Table<ServiceBindingSnapshot>
-              columns={bindingTableColumns}
-              dataSource={bindingsQuery.data?.bindings ?? []}
-              locale={{
-                emptyText: bindingsQuery.isLoading
-                  ? t("pages.governance.governanceworkbench.copy.80", "Loading bindings...")
-                  : t("pages.governance.governanceworkbench.copy.81", "This service has no binding dependencies yet."),
-              }}
-              pagination={{ pageSize: 8, showSizeChanger: false }}
-              rowKey="bindingId"
-              size="middle"
-            />
+            {bindingsQuery.isLoading ? (
+              <AevatarContentSkeleton
+                ariaLabel={t("pages.governance.governanceworkbench.copy.80", "Loading bindings...")}
+                columnWidths={["1.2fr", "1fr", "1.4fr", 120]}
+                rows={4}
+                variant="table"
+              />
+            ) : (
+              <Table<ServiceBindingSnapshot>
+                columns={bindingTableColumns}
+                dataSource={bindingsQuery.data?.bindings ?? []}
+                locale={{
+                  emptyText: t("pages.governance.governanceworkbench.copy.81", "This service has no binding dependencies yet."),
+                }}
+                pagination={{ pageSize: 8, showSizeChanger: false }}
+                rowKey="bindingId"
+                size="middle"
+              />
+            )}
           </div>
         </div>
       );
@@ -1783,18 +1859,25 @@ const GovernanceWorkbench: React.FC = () => {
             ]}
           />
           <div style={stageTableShellStyle}>
-            <Table<ServiceEndpointExposureSnapshot>
-              columns={endpointTableColumns}
-              dataSource={endpointsQuery.data?.endpoints ?? []}
-              locale={{
-                emptyText: endpointsQuery.isLoading
-                  ? t("pages.governance.governanceworkbench.copy.86", "Loading endpoint catalog...")
-                  : t("pages.governance.governanceworkbench.copy.87", "This service has no endpoint catalog yet."),
-              }}
-              pagination={{ pageSize: 8, showSizeChanger: false }}
-              rowKey="endpointId"
-              size="middle"
-            />
+            {endpointsQuery.isLoading ? (
+              <AevatarContentSkeleton
+                ariaLabel={t("pages.governance.governanceworkbench.copy.86", "Loading endpoint catalog...")}
+                columnWidths={["1.2fr", "1fr", "1.4fr", "1fr", 120]}
+                rows={4}
+                variant="table"
+              />
+            ) : (
+              <Table<ServiceEndpointExposureSnapshot>
+                columns={endpointTableColumns}
+                dataSource={endpointsQuery.data?.endpoints ?? []}
+                locale={{
+                  emptyText: t("pages.governance.governanceworkbench.copy.87", "This service has no endpoint catalog yet."),
+                }}
+                pagination={{ pageSize: 8, showSizeChanger: false }}
+                rowKey="endpointId"
+                size="middle"
+              />
+            )}
           </div>
         </div>
       );
@@ -1855,7 +1938,7 @@ const GovernanceWorkbench: React.FC = () => {
               (activationQuery.data?.missingPolicyIds ?? []).length > 0
                 ? activationQuery.data?.missingPolicyIds.map((policyId) => ({
                     key: policyId,
-                    label: buildGovernanceCompactValue(policyId),
+                    label: t("pages.governance.governanceworkbench.policy", "Policy"),
                     value: t("pages.governance.governanceworkbench.copy.96", "Missing"),
                   })) ?? []
                 : [{ label: t("pages.governance.governanceworkbench.copy.97", "Status"), value: t("pages.governance.governanceworkbench.copy.98", "No missing policies") }]
@@ -1868,8 +1951,11 @@ const GovernanceWorkbench: React.FC = () => {
               (activationQuery.data?.bindings ?? []).length > 0
                 ? (activationQuery.data?.bindings ?? []).slice(0, 4).map((binding) => ({
                     key: binding.bindingId,
-                    label: buildGovernanceCompactValue(binding.bindingId),
-                    value: t("pages.governance.governanceworkbench.copy.111", "{value1} · {value2}", { value1: binding.displayName || binding.bindingId, value2: formatAevatarStatusLabel(binding.bindingKind) }),
+                    label: formatGovernanceResourceLabel(
+                      binding.displayName || binding.bindingId,
+                      t("pages.governance.governanceworkbench.binding", "Binding"),
+                    ),
+                    value: formatAevatarStatusLabel(binding.bindingKind),
                   }))
                 : [{ label: t("pages.governance.governanceworkbench.copy.100", "Status"), value: t("pages.governance.governanceworkbench.copy.101", "There are currently no visible bindings") }]
             }
@@ -1881,8 +1967,11 @@ const GovernanceWorkbench: React.FC = () => {
               (activationQuery.data?.endpoints ?? []).length > 0
                 ? (activationQuery.data?.endpoints ?? []).slice(0, 4).map((endpoint) => ({
                     key: endpoint.endpointId,
-                    label: buildGovernanceCompactValue(endpoint.endpointId),
-                    value: t("pages.governance.governanceworkbench.copy.112", "{value1} · {value2}", { value1: endpoint.displayName || endpoint.endpointId, value2: formatAevatarStatusLabel(endpoint.exposureKind) }),
+                    label: formatGovernanceResourceLabel(
+                      endpoint.displayName || endpoint.endpointId,
+                      t("pages.governance.governanceworkbench.endpoint", "Endpoint"),
+                    ),
+                    value: formatAevatarStatusLabel(endpoint.exposureKind),
                   }))
                 : [{ label: t("pages.governance.governanceworkbench.copy.103", "Status"), value: t("pages.governance.governanceworkbench.copy.104", "There is currently no visible entrance") }]
             }
@@ -1926,15 +2015,16 @@ const GovernanceWorkbench: React.FC = () => {
       title="Governance"
     >
       <div style={buildAevatarViewportStyle(surfaceToken)}>
-        {notice ? (
-          <Alert
-            closable
-            message={notice.message}
-            showIcon
-            type={notice.tone}
-            onClose={() => setNotice(null)}
-          />
-        ) : null}
+        <ConsoleOperationNotice
+          errorMessage={t(
+            "pages.governance.governanceworkbench.actionFailed",
+            "Governance action could not be completed. Try again.",
+          )}
+          notice={
+            notice ? { message: notice.message, type: notice.tone } : null
+          }
+          onClose={() => setNotice(null)}
+        />
         {commandReceipt && commandReceiptObservation ? (
           <Alert
             closable

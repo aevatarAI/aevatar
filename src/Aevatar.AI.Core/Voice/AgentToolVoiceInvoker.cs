@@ -14,15 +14,18 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 {
     private readonly IEnumerable<IAgentToolSource> _toolSources;
     private readonly IReadOnlyList<ICredentialProvider> _credentialProviders;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly ILogger _logger;
     private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _toolIndex;
 
     public AgentToolVoiceInvoker(
         IEnumerable<IAgentToolSource> toolSources,
+        IAgentToolExecutionPort toolExecutionPort,
         ICredentialProvider? credentialProvider = null,
         ILogger<AgentToolVoiceInvoker>? logger = null)
         : this(
             toolSources,
+            toolExecutionPort,
             credentialProvider is null ? [] : [credentialProvider],
             logger)
     {
@@ -30,22 +33,40 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 
     public AgentToolVoiceInvoker(
         IEnumerable<IAgentToolSource> toolSources,
+        IAgentToolExecutionPort toolExecutionPort,
         IEnumerable<ICredentialProvider> credentialProviders,
         ILogger<AgentToolVoiceInvoker>? logger = null)
     {
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _credentialProviders = credentialProviders?.ToList() ?? [];
         _logger = logger ?? NullLogger<AgentToolVoiceInvoker>.Instance;
     }
 
     public async Task<string> ExecuteAsync(
+        string ownerActorId,
+        string sessionId,
+        string callId,
+        long issuedAtUnixMs,
         string toolName,
         string argumentsJson,
         VoiceToolExecutionContext? toolContext = null,
         CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(ownerActorId))
+            throw new ArgumentException("Owner actor id is required.", nameof(ownerActorId));
+        if (string.IsNullOrWhiteSpace(sessionId))
+            throw new ArgumentException("Voice session id is required.", nameof(sessionId));
+        if (string.IsNullOrWhiteSpace(callId))
+            throw new ArgumentException("Provider call id is required.", nameof(callId));
+        if (issuedAtUnixMs <= 0)
+            throw new ArgumentOutOfRangeException(nameof(issuedAtUnixMs));
         if (string.IsNullOrWhiteSpace(toolName))
             throw new ArgumentException("Tool name is required.", nameof(toolName));
+
+        var normalizedOwnerActorId = ownerActorId.Trim();
+        var normalizedSessionId = sessionId.Trim();
+        var normalizedCallId = callId.Trim();
 
         var toolIndex = await GetOrDiscoverAsync(ct);
         if (!toolIndex.TryGetValue(toolName, out var tool))
@@ -55,17 +76,73 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 
         if (toolContext is null ||
             !VoiceToolExecutionContextMapper.IsUsableCredentialRef(toolContext, DateTimeOffset.UtcNow))
-            return await tool.ExecuteAsync(arguments, ct);
+            return await ExecuteAdmittedAsync(
+                tool,
+                arguments,
+                normalizedOwnerActorId,
+                normalizedSessionId,
+                normalizedCallId,
+                issuedAtUnixMs,
+                AgentToolExecutionContext.Empty,
+                ct);
 
         var agentToolContext = await ResolveToolContextAsync(toolContext, ct);
         if (agentToolContext is null)
-            return await tool.ExecuteAsync(arguments, ct);
+            return await ExecuteAdmittedAsync(
+                tool,
+                arguments,
+                normalizedOwnerActorId,
+                normalizedSessionId,
+                normalizedCallId,
+                issuedAtUnixMs,
+                AgentToolExecutionContext.Empty,
+                ct);
         if (!agentToolContext.ToolVisibility.Allows(toolName))
             throw new InvalidOperationException($"Tool '{toolName}' not found");
 
-        using var scope = AgentToolContextScope.Push(agentToolContext);
-        return await tool.ExecuteAsync(arguments, ct);
+        return await ExecuteAdmittedAsync(
+            tool,
+            arguments,
+            normalizedOwnerActorId,
+            normalizedSessionId,
+            normalizedCallId,
+            issuedAtUnixMs,
+            agentToolContext,
+            ct);
     }
+
+    private async Task<string> ExecuteAdmittedAsync(
+        IAgentTool tool,
+        string argumentsJson,
+        string ownerActorId,
+        string sessionId,
+        string callId,
+        long issuedAtUnixMs,
+        AgentToolExecutionContext executionContext,
+        CancellationToken ct)
+    {
+        var requestId = CreateRequestId(sessionId, callId);
+        var outcome = await _toolExecutionPort.ExecuteAsync(
+            new AgentToolExecutionRequest(
+                tool,
+                argumentsJson,
+                executionContext with
+                {
+                    Request = new AgentToolRequestIdentity(
+                        requestId,
+                        callId,
+                        requestId,
+                        issuedAtUnixMs),
+                    ExecutionOwner = AgentToolExecutionOwners.Actor(ownerActorId),
+                },
+                AgentToolApprovalContinuationMode.None,
+                null),
+            ct).ConfigureAwait(false);
+        return outcome.ResultJson;
+    }
+
+    private static string CreateRequestId(string sessionId, string callId) =>
+        $"voice:v1:{Uri.EscapeDataString(sessionId)}:{Uri.EscapeDataString(callId)}";
 
     private async Task<AgentToolExecutionContext?> ResolveToolContextAsync(
         VoiceToolExecutionContext toolContext,

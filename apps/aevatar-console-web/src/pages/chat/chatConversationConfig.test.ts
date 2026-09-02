@@ -1,18 +1,27 @@
+import type { StudioUserLlmSettings } from "@/shared/studio/models";
 import {
-  buildConversationRouteOptions,
   buildConversationModelGroups,
+  buildConversationRouteOptions,
+  resolveSavedConversationLlmConfig,
   USER_LLM_ROUTE_GATEWAY,
 } from "./chatConversationConfig";
 
-const llmSettings = {
-  savedRoute: USER_LLM_ROUTE_GATEWAY,
-  savedRouteLabel: "Company LLM Gateway",
-  effectiveRoute: USER_LLM_ROUTE_GATEWAY,
-  effectiveRouteLabel: "Company LLM Gateway",
-  routeFallbackActive: false,
-  fallbackReason: null,
+const llmSettings: StudioUserLlmSettings = {
+  savedSelection: {
+    routeKind: "nyx_id_user_service",
+    routeValue: "/api/v1/proxy/s/anthropic-team",
+    nyxIdUserServiceId: "us-anthropic",
+    serviceSlugSnapshot: "anthropic-team",
+    modelSelection: {
+      kind: "explicit_model",
+      modelId: "claude-3-haiku",
+    },
+  },
+  savedRouteLabel: "Anthropic Team Service",
+  selectionStatus: "ready",
+  catalogDiagnostic: "unspecified",
+  remediation: "none",
   catalogStatus: "ready",
-  defaultModel: "",
   capabilities: {
     canEditRoute: true,
     canEditModel: true,
@@ -27,8 +36,14 @@ const llmSettings = {
       status: "ready",
       allowed: true,
       ready: true,
-      serviceId: null,
+      userServiceId: null,
       serviceSlug: null,
+      modelCatalog: {
+        certainty: "not_verifiable",
+        modelIds: [],
+        defaultModelId: null,
+        diagnostic: "not_published",
+      },
       description: null,
     },
     {
@@ -38,8 +53,14 @@ const llmSettings = {
       status: "ready",
       allowed: true,
       ready: true,
-      serviceId: "svc-anthropic",
+      userServiceId: "us-anthropic",
       serviceSlug: "anthropic-team",
+      modelCatalog: {
+        certainty: "enumerated",
+        modelIds: ["claude-3-haiku"],
+        defaultModelId: "claude-3-haiku",
+        diagnostic: "unspecified",
+      },
       description: null,
     },
   ],
@@ -51,12 +72,6 @@ const llmSettings = {
       models: ["gpt-4o"],
     },
     {
-      routeValue: USER_LLM_ROUTE_GATEWAY,
-      groupId: "anthropic",
-      label: "Anthropic Gateway",
-      models: ["claude-3-5-sonnet"],
-    },
-    {
       routeValue: "/api/v1/proxy/s/anthropic-team",
       groupId: "anthropic-team",
       label: "Anthropic Team Service",
@@ -65,75 +80,77 @@ const llmSettings = {
   ],
 };
 
-describe("buildConversationRouteOptions", () => {
-  it("uses backend route options without deriving routes from provider slugs", () => {
-    expect(buildConversationRouteOptions(llmSettings).map((option) => option.label)).toEqual([
-      "Company LLM Gateway",
-      "Anthropic Team Service",
+describe("chatConversationConfig", () => {
+  it("uses backend routes without deriving identities from provider labels", () => {
+    expect(USER_LLM_ROUTE_GATEWAY).toBe("/api/v1/llm/gateway/v1");
+    expect(buildConversationRouteOptions(llmSettings)).toEqual([
+      { label: "Company LLM Gateway", value: USER_LLM_ROUTE_GATEWAY },
+      {
+        label: "Anthropic Team Service",
+        value: "/api/v1/proxy/s/anthropic-team",
+      },
     ]);
   });
 
-  it("uses a generic gateway label when backend sends a blank gateway label", () => {
+  it("uses a generic Gateway label only for an explicit Gateway option", () => {
     expect(
       buildConversationRouteOptions({
         ...llmSettings,
-        routeOptions: [
-          {
-            ...llmSettings.routeOptions[0],
-            label: " ",
-          },
-        ],
-      }).map((option) => option.label)
-    ).toEqual(["Gateway"]);
+        routeOptions: [{ ...llmSettings.routeOptions[0], label: " " }],
+      }),
+    ).toEqual([{ label: "Gateway", value: USER_LLM_ROUTE_GATEWAY }]);
   });
 
-  it("does not add saved global or conversation routes when backend omits them", () => {
-    const options = buildConversationRouteOptions({
+  it("uses only backend model groups for the requested route", () => {
+    expect(
+      buildConversationModelGroups({
+        route: "/api/v1/proxy/s/anthropic-team",
+        settings: llmSettings,
+      }).map((group) => group.models),
+    ).toEqual([["claude-3-haiku"]]);
+    expect(
+      buildConversationModelGroups({
+        route: "/api/v1/proxy/s/missing",
+        settings: llmSettings,
+      }),
+    ).toEqual([]);
+  });
+
+  it("derives ready conversation settings only from savedSelection", () => {
+    expect(resolveSavedConversationLlmConfig(llmSettings)).toEqual({
+      status: "ready",
+      route: "/api/v1/proxy/s/anthropic-team",
+      model: "claude-3-haiku",
+      routeLabel: "Anthropic Team Service",
+    });
+  });
+
+  it("surfaces repair action without silently substituting Gateway", () => {
+    const result = resolveSavedConversationLlmConfig({
       ...llmSettings,
-      routeOptions: [llmSettings.routeOptions[0]],
+      selectionStatus: "needs_repair",
+      remediation: "choose_replacement",
     });
 
-    expect(options).toEqual([
-      {
-        label: "Company LLM Gateway",
-        value: USER_LLM_ROUTE_GATEWAY,
-      },
-    ]);
-    expect(options.map((option) => option.value)).not.toContain(
-      "/api/v1/proxy/s/retired-team"
-    );
-  });
-});
-
-describe("buildConversationModelGroups", () => {
-  it("keeps gateway route models from backend-provided model groups", () => {
-    expect(
-      buildConversationModelGroups({
-        effectiveRoute: USER_LLM_ROUTE_GATEWAY,
-        settings: llmSettings,
-      }).map((group) => group.label)
-    ).toEqual(["OpenAI Gateway", "Anthropic Gateway"]);
+    expect(result).toEqual({
+      status: "action_required",
+      remediation: "choose_replacement",
+      routeLabel: "Anthropic Team Service",
+    });
+    expect(result).not.toHaveProperty("route", USER_LLM_ROUTE_GATEWAY);
   });
 
-  it("does not invent a service-specific catalog when backend sends no group for the route", () => {
+  it("keeps System default distinct from Gateway", () => {
     expect(
-      buildConversationModelGroups({
-        effectiveRoute: "/api/v1/proxy/s/missing",
-        settings: llmSettings,
-      })
-    ).toEqual([]);
-  });
-
-  it("does not emit a current group from selected or default models outside backend groups", () => {
-    expect(
-      buildConversationModelGroups({
-        effectiveRoute: USER_LLM_ROUTE_GATEWAY,
-        settings: {
-          ...llmSettings,
-          defaultModel: "retired-default-model",
-          modelGroupsByRoute: [],
+      resolveSavedConversationLlmConfig({
+        ...llmSettings,
+        savedSelection: {
+          routeKind: "unspecified",
+          modelSelection: { kind: "unspecified" },
         },
-      })
-    ).toEqual([]);
+        savedRouteLabel: "System default",
+        selectionStatus: "system_default",
+      }),
+    ).toEqual({ status: "system_default" });
   });
 });

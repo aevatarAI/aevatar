@@ -14,10 +14,16 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
     public string Name => "ornn_search_skills";
 
     public string Description =>
-        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
-        //   Old pattern: skill lookup guidance competed with deleted NyxID generic service capability discovery.
-        //   New principle: Ornn skill discovery remains the typed instruction-package lookup; nyxid_proxy is only a live downstream proxy surface.
-        "Search the user's Ornn skill library for matching skill packages. " +
+        // Refactor (06-22-ornn-search-org-shared-scope):
+        //   Old pattern: a model-facing `scope` knob (public/private/mixed) let the model pick `public`,
+        //     which the Ornn server resolves to isPrivate:false only — silently excluding every
+        //     org/team-shared skill the caller can actually use.
+        //   New principle: a discovery-for-use tool always searches the full accessible set (mixed);
+        //     there is no visibility knob to get wrong. Management/ownership flows, if ever needed,
+        //     belong in a separate tool, not as a filter on discovery.
+        "Search the skills you can use for matching skill packages. This always searches the full set " +
+        "you have access to — your own, the public catalog, and skills shared with you directly or through " +
+        "your organization/team. There is no visibility filter to choose. " +
         "Call this FIRST whenever the user mentions a named skill (in quotes, slug-like, or Title Case), " +
         "asks which Ornn skills they have, wants to list or browse available skills, " +
         "asks for a specialized capability (translation, content generation, analysis, network or device discovery, " +
@@ -26,15 +32,15 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         "unavailable service, unknown API contract, or repeated tool failure. " +
         "Prefer this over nyxid_proxy path-guessing; proxy discovery lists service APIs, " +
         "this discovers ready-made instruction packages. " +
-        "Returns matching skill names + descriptions; follow up with use_skill to load and activate one. " +
-        "When the user asks what skills are available without a keyword, call this with an empty or omitted query.";
+        "Returns matching skill names + descriptions (the header states how many matched versus shown); " +
+        "follow up with use_skill to load and activate one. " +
+        "To browse available skills, call this with an empty or omitted query.";
 
     public string ParametersSchema => """
         {
           "type": "object",
           "properties": {
-            "query": { "type": "string", "description": "Search keywords. Omit or pass an empty string to list/browse available skills." },
-            "scope": { "type": "string", "enum": ["public", "private", "mixed"], "description": "Search scope (default: mixed)" }
+            "query": { "type": "string", "description": "Search keywords. Omit or pass an empty string to browse available skills." }
           }
         }
         """;
@@ -59,19 +65,21 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         }
 
         string query = "";
-        string scope = "mixed";
 
         try
         {
             using var doc = JsonDocument.Parse(argumentsJson);
             if (doc.RootElement.TryGetProperty("query", out var q))
                 query = q.GetString() ?? "";
-            if (doc.RootElement.TryGetProperty("scope", out var s))
-                scope = s.GetString() ?? "mixed";
         }
-        catch { /* use defaults */ }
+        catch (JsonException) { /* malformed arguments → fall back to an empty (browse-all) query */ }
 
-        var result = await _client.SearchSkillsAsync(token, query, scope, ct: ct);
+        // No model-facing scope knob: a discovery-for-use tool must never let the model narrow
+        // visibility and hide skills the caller can actually use. Always search the full accessible
+        // set (mixed) at the server's max page size so a normal catalog returns in one call. Any
+        // `scope` a model puts in the arguments is intentionally ignored.
+        const string scope = "mixed";
+        var result = await _client.SearchSkillsAsync(token, query, scope, pageSize: 100, ct: ct);
 
         if (!string.IsNullOrEmpty(result.Error))
         {

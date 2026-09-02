@@ -27,7 +27,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             AgentToolRequestContext.Current = BuildContext();
 
             var result = await tool.ExecuteAsync(
-                """{"slug":"storage","path":"/records","method":"GET"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/records","method":"GET"}""");
 
             result.Should().Be("""{"ok":true}""");
             handler.Requests.Should().ContainSingle();
@@ -54,7 +54,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             AgentToolRequestContext.Current = BuildContext();
 
             var result = await tool.ExecuteAsync(
-                """{"slug":"storage","path":"/records","method":"GET","response_mode":"text"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/records","method":"GET","response_mode":"text"}""");
 
             result.Should().Be("""{"ok":true}""");
             ingress.Requests.Should().BeEmpty();
@@ -100,7 +100,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
                 rootRunId: "root-a");
 
             var result = await tool.ExecuteAsync(
-                """{"slug":"storage","path":"/reports/1","method":"GET","response_mode":"file_artifact","headers":{"X-Trace":"trace-1"}}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/reports/1","method":"GET","response_mode":"file_artifact","headers":{"X-Trace":"trace-1"}}""");
 
             using var document = JsonDocument.Parse(result);
             var root = document.RootElement;
@@ -119,8 +119,8 @@ public sealed class NyxIdProxyToolFileArtifactTests
             ingress.Requests.Should().ContainSingle();
             var ingressRequest = ingress.Requests[0];
             ingressRequest.Content.ToArray().Should().Equal(body);
-            ingressRequest.SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
-            ingressRequest.SourceMessageId.Should().Be("nyxid_proxy:storage");
+            ingressRequest.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
+            ingressRequest.SourceMessageId.Should().Be("nyxid_proxy:us-storage-alpha");
             ingressRequest.SourceResourceKey.Should().Be("/reports/1");
             ingressRequest.FileName.Should().Be("report.csv");
             ingressRequest.MediaType.Should().Be("text/csv");
@@ -159,6 +159,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             var result = await tool.ExecuteAsync(
                 JsonSerializer.Serialize(new
                 {
+                    service_id = "us-storage-alpha",
                     slug = "storage",
                     path = "/reports/1",
                     method,
@@ -202,7 +203,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             };
 
             var result = await tool.ExecuteAsync(
-                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
 
             AssertFileArtifactError(
                 result,
@@ -262,7 +263,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             AgentToolRequestContext.Current = BuildContext();
 
             var result = await tool.ExecuteAsync(
-                """{"slug":"storage","response_mode":"file_artifact"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","response_mode":"file_artifact"}""");
 
             AssertFileArtifactError(
                 result,
@@ -290,7 +291,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             AgentToolRequestContext.Current = BuildContext();
 
             var missingIngress = await toolWithoutIngress.ExecuteAsync(
-                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
             using (var document = JsonDocument.Parse(missingIngress))
             {
                 document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
@@ -310,7 +311,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
                 new RecordingNyxIdProxyFileArtifactIngress());
 
             var missingWorkflowRuntime = await toolWithIngress.ExecuteAsync(
-                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
             using (var document = JsonDocument.Parse(missingWorkflowRuntime))
             {
                 document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
@@ -344,7 +345,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             AgentToolRequestContext.Current = BuildContext();
 
             var result = await tool.ExecuteAsync(
-                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
 
             AssertFileArtifactError(
                 result,
@@ -376,7 +377,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             AgentToolRequestContext.Current = BuildContext();
 
             var result = await tool.ExecuteAsync(
-                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
 
             AssertFileArtifactError(
                 result,
@@ -413,7 +414,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             AgentToolRequestContext.Current = BuildContext();
 
             var result = await tool.ExecuteAsync(
-                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
 
             AssertFileArtifactError(
                 result,
@@ -450,7 +451,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             AgentToolRequestContext.Current = BuildContext();
 
             var result = await tool.ExecuteAsync(
-                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
 
             AssertFileArtifactError(
                 result,
@@ -481,7 +482,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             AgentToolRequestContext.Current = BuildContext();
 
             var result = await tool.ExecuteAsync(
-                """{"slug":"storage","path":"/reports/1","response_mode":"binary_base64"}""");
+                """{"service_id":"us-storage-alpha","slug":"storage","path":"/reports/1","response_mode":"binary_base64"}""");
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
@@ -556,17 +557,17 @@ public sealed class NyxIdProxyToolFileArtifactTests
             _exception = exception;
         }
 
-        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
             if (_exception != null)
                 throw _exception;
 
-            return ValueTask.FromResult(new WorkflowFileIngressResult(new WorkflowFileRef
+            return ValueTask.FromResult(new FileArtifactIngressResult(new FileArtifactRef
             {
                 FileId = "file-1",
                 ArtifactId = "artifact-1",

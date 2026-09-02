@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package aevatar.ai.tool_providers;
+
+option csharp_namespace = "Aevatar.AI.Abstractions.ToolProviders";
+
+enum AgentToolExecutionOwnerKind {
+  AGENT_TOOL_EXECUTION_OWNER_KIND_UNSPECIFIED = 0;
+  AGENT_TOOL_EXECUTION_OWNER_KIND_ACTOR = 1;
+  AGENT_TOOL_EXECUTION_OWNER_KIND_SCOPE = 2;
+  AGENT_TOOL_EXECUTION_OWNER_KIND_WORKFLOW_RUN = 3;
+  AGENT_TOOL_EXECUTION_OWNER_KIND_CHANNEL_REGISTRATION = 4;
+  AGENT_TOOL_EXECUTION_OWNER_KIND_CONNECTOR = 5;
+  AGENT_TOOL_EXECUTION_OWNER_KIND_HOST_SERVICE = 6;
+}
+
+message AgentToolExecutionOwner {
+  AgentToolExecutionOwnerKind kind = 1;
+  string owner_id = 2;
+}
+
+enum AgentToolReplayPolicy {
+  AGENT_TOOL_REPLAY_POLICY_UNSPECIFIED = 0;
+  AGENT_TOOL_REPLAY_POLICY_READ_ONLY_RETRYABLE = 1;
+  AGENT_TOOL_REPLAY_POLICY_IDEMPOTENT_RETRYABLE = 2;
+  AGENT_TOOL_REPLAY_POLICY_RECONCILABLE = 3;
+  AGENT_TOOL_REPLAY_POLICY_NON_REPLAYABLE = 4;
+}
+
+message AgentToolAdmissionFact {
+  string admission_id = 1;
+  string request_id = 2;
+  string tool_call_id = 3;
+  string tool_name = 4;
+  string arguments_sha256 = 5;
+  AgentToolExecutionOwner execution_owner = 6;
+  int64 issued_at_unix_ms = 7;
+  string operation_id = 8;
+  AgentToolReplayPolicy replay_policy = 9;
+  reserved 10;
+  reserved "admission_kind";
+}

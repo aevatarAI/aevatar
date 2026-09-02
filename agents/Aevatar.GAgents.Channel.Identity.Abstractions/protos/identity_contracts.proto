@@ -4,6 +4,10 @@ package aevatar.gagents.channel.identity.abstractions;
 
 option csharp_namespace = "Aevatar.GAgents.Channel.Identity.Abstractions";
 
+import "google/protobuf/timestamp.proto";
+import "channel_contracts.proto";
+import "Credentials/credential_secret_references.proto";
+
 // ExternalSubjectRef lives in Channel.Abstractions (channel_contracts.proto)
 // because Identity is a consumer of channel concepts — see ADR-0018 §Actor
 // Architecture. C# callers reach it via the `Aevatar.GAgents.Channel.Abstractions`
@@ -14,6 +18,14 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Identity.Abstractions";
 // underlying refresh_token never leaves NyxID. See ADR-0018 §Storage Boundary.
 message BindingId {
   // Opaque identifier. Format owned by NyxID#549 (suggested prefix "bnd_").
+  string value = 1;
+}
+
+// Canonical business data ownership scope shared by native API login and
+// channel bindings. This is deliberately separate from ExternalSubjectRef and
+// channel registration scope: provider subjects and bot configuration scopes
+// remain routing/audit identities, while owner_scope_id keys user-owned data.
+message OwnerScopeId {
   string value = 1;
 }
 
@@ -45,4 +57,52 @@ message BindingChallenge {
   string authorize_url = 1;
   // UNIX seconds-since-epoch when the challenge state_token expires.
   int64 expires_at_unix = 2;
+  // True when /init is renewing service authorization by issuing a new
+  // binding that may replace the current binding after callback validation.
+  bool renews_existing_binding = 3;
+}
+
+enum ManagedCodexCredentialStatus {
+  MANAGED_CODEX_CREDENTIAL_STATUS_UNSPECIFIED = 0;
+  MANAGED_CODEX_CREDENTIAL_STATUS_ACTIVE = 1;
+  MANAGED_CODEX_CREDENTIAL_STATUS_REVOKED = 2;
+}
+
+message ManagedCodexCredentialDescriptor {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef owner = 1;
+  string api_key_id = 2;
+  aevatar.credentials.SecretReference secret_reference = 3;
+  string chrono_sandbox_user_service_id = 4;
+  string chrono_sandbox_service_slug = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  ManagedCodexCredentialStatus status = 7;
+  string chrono_llm_user_service_id = 8;
+}
+
+enum ManagedCodexCredentialReadinessEvidence {
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_UNSPECIFIED = 0;
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_CURRENT_STATE_CONFIRMED = 1;
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_REMOTE_VALIDATED = 2;
+}
+
+message ManagedCodexCredentialSnapshot {
+  ManagedCodexCredentialDescriptor credential = 1;
+  repeated ManagedCodexCredentialCleanup pending_revocations = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  ManagedCodexCredentialReadinessEvidence readiness_evidence = 5;
+}
+
+message ManagedCodexCredentialCleanup {
+  string api_key_id = 1;
+  string secret_ref = 2;
+  bool nyx_id_pending = 3;
+  bool vault_pending = 4;
+  google.protobuf.Timestamp requested_at = 5;
+}
+
+enum ManagedCodexCredentialCleanupTrack {
+  MANAGED_CODEX_CREDENTIAL_CLEANUP_TRACK_UNSPECIFIED = 0;
+  MANAGED_CODEX_CREDENTIAL_CLEANUP_TRACK_NYX_ID = 1;
+  MANAGED_CODEX_CREDENTIAL_CLEANUP_TRACK_VAULT = 2;
 }

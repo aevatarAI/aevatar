@@ -147,19 +147,19 @@ public sealed class WorkflowMultipartFileInputParser
     public static bool IsMultipartForm(string? contentType) =>
         contentType?.StartsWith("multipart/form-data", StringComparison.OrdinalIgnoreCase) == true;
 
-    public static WorkflowFileIngressRequest BuildIngressRequest(
+    public static FileArtifactIngressRequest BuildIngressRequest(
         WorkflowPendingMultipartFile file,
         string? ownerScopeId) =>
         new(
             file.Content,
-            WorkflowFileSourceKind.FormUpload,
+            FileArtifactSourceKind.FormUpload,
             FileName: file.FileName,
             MediaType: file.MediaType,
             OwnerScopeId: Normalize(ownerScopeId));
 
     public static ChatInputContentPart BuildInputPart(
         WorkflowPendingMultipartFile file,
-        WorkflowFileRef fileRef)
+        FileArtifactRef fileRef)
     {
         var inputFileRef = ToInputFileRef(fileRef);
         return new ChatInputContentPart
@@ -172,7 +172,7 @@ public sealed class WorkflowMultipartFileInputParser
         };
     }
 
-    private static ChatInputFileRef ToInputFileRef(WorkflowFileRef fileRef) =>
+    private static ChatInputFileRef ToInputFileRef(FileArtifactRef fileRef) =>
         new()
         {
             FileId = fileRef.FileId,

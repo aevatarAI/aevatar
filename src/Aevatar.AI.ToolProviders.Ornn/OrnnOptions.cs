@@ -3,6 +3,8 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 /// <summary>Ornn 技能平台配置。</summary>
 public sealed class OrnnOptions
 {
+    public const string DefaultNyxIdSlug = "ornn-api";
+
     /// <summary>
     /// NyxID-bound service slug used to reach the Ornn skill API. Default <c>"ornn-api"</c>
     /// matches the slug under which the chrono-ornn HTTP service is currently registered in
@@ -13,7 +15,7 @@ public sealed class OrnnOptions
     /// Deployments using a non-default registration name should set
     /// <c>Aevatar:Ornn:NyxIdSlug</c> in configuration.
     /// </summary>
-    public string NyxIdSlug { get; set; } = "ornn-api";
+    public string NyxIdSlug { get; set; } = DefaultNyxIdSlug;
 
     /// <summary>
     /// Per-call timeout used for Ornn read, validation, and publish requests through NyxID.

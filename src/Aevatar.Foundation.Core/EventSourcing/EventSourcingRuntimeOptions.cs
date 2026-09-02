@@ -16,7 +16,7 @@ public sealed class EventSourcingRuntimeOptions
     public int SnapshotInterval { get; set; } = 200;
 
     /// <summary>
-    /// Enables deleting historical events after a snapshot is successfully saved.
+    /// Enables deleting historical events in the same actor turn after a snapshot is successfully saved.
     /// </summary>
     public bool EnableEventCompaction { get; set; } = true;
 

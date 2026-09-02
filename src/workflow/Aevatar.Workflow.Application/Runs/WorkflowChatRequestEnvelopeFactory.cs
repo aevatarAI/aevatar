@@ -34,6 +34,10 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             chatRequest.ForkSeed = ToProto(command.ForkSeed);
         if (command.ExternalIngress != null)
             chatRequest.ExternalIngress = ToProto(command.ExternalIngress);
+        if (command.CompletionNotificationTarget != null)
+            chatRequest.CompletionNotificationTarget = ToProto(command.CompletionNotificationTarget);
+        if (command.ConversationContext != null)
+            chatRequest.ConversationContext = ToProto(command.ConversationContext);
 
         var envelope = new EventEnvelope
         {
@@ -82,7 +86,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
     }
 
     private static Aevatar.Workflow.Abstractions.WorkflowFileRef ToProto(
-        Application.Abstractions.Runs.WorkflowFileRef source)
+        Application.Abstractions.Runs.FileArtifactRef source)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -92,11 +96,11 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             ArtifactId = source.ArtifactId ?? string.Empty,
             SourceKind = source.SourceKind switch
             {
-                Application.Abstractions.Runs.WorkflowFileSourceKind.ChatInput => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput,
-                Application.Abstractions.Runs.WorkflowFileSourceKind.FormUpload => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.FormUpload,
-                Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
-                Application.Abstractions.Runs.WorkflowFileSourceKind.ExternalResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ExternalResource,
-                Application.Abstractions.Runs.WorkflowFileSourceKind.Generated => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Generated,
+                Application.Abstractions.Runs.FileArtifactSourceKind.ChatInput => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput,
+                Application.Abstractions.Runs.FileArtifactSourceKind.FormUpload => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.FormUpload,
+                Application.Abstractions.Runs.FileArtifactSourceKind.ConnectedServiceResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
+                Application.Abstractions.Runs.FileArtifactSourceKind.ExternalResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ExternalResource,
+                Application.Abstractions.Runs.FileArtifactSourceKind.Generated => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Generated,
                 _ => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified,
             },
             SourceMessageId = source.SourceMessageId ?? string.Empty,
@@ -130,13 +134,53 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         Application.Abstractions.Runs.WorkflowCallerCredential? source)
     {
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
-        if (parsed.IsInvalid)
+        var sourceReadable = WorkflowCallerCredentialTokens.ParseOptional(
+            source?.SourceReadableUserBearerToken);
+        if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                source?.BearerToken,
+                source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+                source?.SourceReadableUserBearerToken))
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(source));
 
-        return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
+        var authority = source?.NyxIdAuthority;
+        if (authority != null && !parsed.IsValid)
+        {
+            throw new ArgumentException(
+                "Workflow caller NyxID authority requires a valid caller credential.",
+                nameof(source));
+        }
+
+        var credential = new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
         {
             BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
+            Kind = source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+            SourceReadableUserBearerToken = sourceReadable.NormalizedBearerToken ?? string.Empty,
         };
+        if (authority != null)
+        {
+            var platform = Normalize(authority.Platform);
+            var externalUserId = Normalize(authority.ExternalUserId);
+            var scope = Normalize(authority.Scope);
+            if (string.IsNullOrWhiteSpace(platform) ||
+                string.IsNullOrWhiteSpace(externalUserId) ||
+                string.IsNullOrWhiteSpace(scope))
+            {
+                throw new ArgumentException(
+                    "Workflow caller NyxID authority is incomplete.",
+                    nameof(source));
+            }
+
+            credential.NyxIdAuthority = new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
+            {
+                Platform = platform,
+                Tenant = Normalize(authority.Tenant),
+                ExternalUserId = externalUserId,
+                Scope = scope,
+                BindingId = Normalize(authority.BindingId),
+            };
+        }
+
+        return credential;
     }
 
     private static Aevatar.Workflow.Abstractions.WorkflowRunForkSeed ToProto(
@@ -163,6 +207,15 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         return payload;
     }
 
+    private static Aevatar.Workflow.Abstractions.WorkflowCompletionNotificationTarget ToProto(
+        Application.Abstractions.Runs.WorkflowCompletionNotificationTarget source) =>
+        new()
+        {
+            ActorId = Normalize(source.ActorId),
+            DeliveryId = Normalize(source.DeliveryId),
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+        };
+
     private static Aevatar.Workflow.Abstractions.WorkflowExternalIngressContext ToProto(
         Application.Abstractions.Runs.WorkflowExternalIngressContext source)
     {
@@ -179,6 +232,37 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             AuthScheme = Normalize(source.AuthScheme),
             PrincipalSubject = Normalize(source.PrincipalSubject),
         };
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowConversationContext ToProto(
+        WorkflowConversationExecutionContext source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var payload = new Aevatar.Workflow.Abstractions.WorkflowConversationContext
+        {
+            ScopeId = Normalize(source.ScopeId),
+            ConversationId = Normalize(source.ConversationId),
+            StateVersion = Math.Max(0, source.StateVersion),
+            Truncated = source.Truncated,
+            MaxMessageCount = Math.Max(0, source.MaxMessageCount),
+        };
+        payload.Messages.Add(source.Messages
+            .Where(static message => !string.IsNullOrWhiteSpace(message.Content))
+            .Select(static message => new Aevatar.Workflow.Abstractions.WorkflowConversationMessage
+            {
+                Sequence = Math.Max(0, message.Sequence),
+                TurnId = Normalize(message.TurnId),
+                Role = message.Role switch
+                {
+                    WorkflowConversationExecutionRole.User => Aevatar.Workflow.Abstractions.WorkflowConversationRole.User,
+                    WorkflowConversationExecutionRole.Assistant => Aevatar.Workflow.Abstractions.WorkflowConversationRole.Assistant,
+                    WorkflowConversationExecutionRole.Tool => Aevatar.Workflow.Abstractions.WorkflowConversationRole.Tool,
+                    _ => Aevatar.Workflow.Abstractions.WorkflowConversationRole.Unspecified,
+                },
+                Content = message.Content.Trim(),
+            }));
+        return payload;
     }
 
     private static void AppendMetadata(

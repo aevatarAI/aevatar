@@ -284,7 +284,7 @@ internal sealed class DeviceCallbackCommandEnvelopeFactory
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, context.TargetId),
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = ResolveOperationId(command, context),
                 },

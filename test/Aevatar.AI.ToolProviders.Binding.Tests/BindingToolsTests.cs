@@ -1,10 +1,13 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Binding.Models;
 using Aevatar.AI.ToolProviders.Binding.Ports;
 using Aevatar.AI.ToolProviders.Binding.Tools;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Xunit;
 
@@ -26,11 +29,7 @@ public class BindingToolsTests
         var options = new BindingToolOptions();
         var tool = new BindingListTool(queryAdapter, options);
 
-        // Set scope_id in request context
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "test-scope"
-        });
+        AgentToolRequestContext.Current = OwnerContext("test-scope");
 
         try
         {
@@ -54,18 +53,269 @@ public class BindingToolsTests
     }
 
     [Fact]
-    public async Task BindingBindTool_RequiresScope()
+    public async Task BindingBindTool_RequiresOwnerScope()
     {
         var commandPort = new StubCommandPort();
         var tool = new BindingBindTool(commandPort);
 
-        // Ensure no scope_id in context
         AgentToolRequestContext.Current = null;
 
         var result = await tool.ExecuteAsync("""{"kind":"workflow","workflow_yamls":["name: wf1"]}""");
 
         result.Should().Contain("error");
-        result.Should().Contain("scope_id");
+        result.Should().Contain("owner_scope_id");
+    }
+
+    [Fact]
+    public async Task BindingBindTool_RejectsCallerScopeWithoutOwnerScope()
+    {
+        var commandPort = new StubCommandPort();
+        var tool = new BindingBindTool(commandPort);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            ["scope_id"] = "caller-scope-1",
+        });
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"kind":"workflow","workflow_yamls":["name: wf1"]}""");
+
+            result.Should().Contain("error");
+            result.Should().Contain("owner_scope_id not available");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    #endregion
+
+    #region External workflow capability tools
+
+    [Fact]
+    public async Task ListExternalWorkflowCapabilitiesTool_UsesCurrentAuthorityAndPreservesExactInstances()
+    {
+        const string callerBearer = "caller-secret-that-must-not-be-serialized";
+        const string organizationBearer = "organization-secret-that-must-not-be-serialized";
+        var discovery = new ExternalWorkflowCapabilityDiscoveryResult
+        {
+            CandidateCount = 3,
+            RejectedCount = 1,
+        };
+        discovery.Capabilities.Add(
+        [
+            Descriptor(NyxIdSelector("us-home-alpha"), "Home alpha"),
+            Descriptor(NyxIdSelector("us-home-beta"), "Home beta"),
+        ]);
+        discovery.Diagnostics.Add(new ExternalCapabilityDiscoveryDiagnostic
+        {
+            Code = ExternalCapabilityDiscoveryDiagnosticCode.GenericProxyRejected,
+            SafeMessage = "Generic proxy services are not eligible for workflow admission.",
+            Count = 1,
+        });
+        var listPort = new StubExternalWorkflowCapabilityListPort(discovery);
+        var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
+
+        tool.Name.Should().Be("list_external_workflow_capabilities");
+        tool.IsReadOnly.Should().BeTrue();
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            callerBearer,
+            organizationBearer);
+
+        try
+        {
+            var result = await tool.ExecuteAsync("{}");
+
+            listPort.Request.Should().NotBeNull();
+            listPort.Request!.Access.ScopeId.Should().Be("owner-scope-alpha");
+            listPort.Request.Access.CallerId.Should().Be("caller-subject-alpha");
+            listPort.Request.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+                .Should().Be(callerBearer);
+            listPort.Request.Access.NyxIdOrganizationBearerToken.Should().Be(organizationBearer);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("candidate_count").GetInt32().Should().Be(3);
+            document.RootElement.GetProperty("rejected_count").GetInt32().Should().Be(1);
+            document.RootElement.GetProperty("diagnostics")[0].GetProperty("code").GetString().Should()
+                .Be("EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_GENERIC_PROXY_REJECTED");
+            var capabilities = document.RootElement.GetProperty("capabilities");
+            capabilities.GetArrayLength().Should().Be(2);
+            capabilities[0].GetProperty("selector").GetProperty("nyx_id_operation")
+                .GetProperty("user_service_id").GetString().Should().Be("us-home-alpha");
+            capabilities[1].GetProperty("selector").GetProperty("nyx_id_operation")
+                .GetProperty("user_service_id").GetString().Should().Be("us-home-beta");
+            result.Should().NotContain("contract_digest");
+            result.Should().NotContain(callerBearer);
+            result.Should().NotContain(organizationBearer);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExternalWorkflowCapabilityToolSupport_PreservesProxyDelegationCredentialKind()
+    {
+        var listPort = new StubExternalWorkflowCapabilityListPort(
+            new ExternalWorkflowCapabilityDiscoveryResult());
+        var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            "delegation-alpha",
+            "organization-bearer-alpha") with
+        {
+            Credentials = new AgentToolCredentials(
+                "delegation-alpha",
+                "organization-bearer-alpha",
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+        };
+
+        try
+        {
+            await tool.ExecuteAsync("{}");
+
+            var credential = listPort.Request!.Access.NyxIdCallerCredential!;
+            credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+            credential.ProxyDelegationToken.Should().Be("delegation-alpha");
+            credential.SourceReadableUserBearerToken.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExternalWorkflowCapabilityToolSupport_DoesNotPromoteUnspecifiedCredentialKind()
+    {
+        var listPort = new StubExternalWorkflowCapabilityListPort(
+            new ExternalWorkflowCapabilityDiscoveryResult());
+        var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            "legacy-alpha",
+            "organization-bearer-alpha") with
+        {
+            Credentials = new AgentToolCredentials("legacy-alpha", "organization-bearer-alpha", null),
+        };
+
+        try
+        {
+            await tool.ExecuteAsync("{}");
+
+            listPort.Request!.Access.NyxIdCallerCredential.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ListExternalWorkflowCapabilitiesTool_RejectsOwnerSubjectWithoutNyxIdAuthority()
+    {
+        var listPort = new StubExternalWorkflowCapabilityListPort(
+            new ExternalWorkflowCapabilityDiscoveryResult());
+        var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
+        AgentToolRequestContext.Current = OwnerContext("scope-owner-alpha") with
+        {
+            Caller = new AgentToolCallerContext(
+                "scope-owner-alpha",
+                "scope-owner-alpha",
+                ResponseId: null,
+                OwnerScopeId: "scope-owner-alpha"),
+            Credentials = new AgentToolCredentials("caller-bearer-alpha", null, null),
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("{}");
+
+            result.Should().Contain("verified caller identity not available");
+            listPort.Request.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task InspectExternalWorkflowCapabilityReadinessTool_UsesExactTypedCandidate()
+    {
+        var readinessPort = new StubExternalWorkflowCapabilityReadinessPort();
+        var tool = new InspectExternalWorkflowCapabilityReadinessTool(readinessPort);
+
+        tool.Name.Should().Be("inspect_external_workflow_capability_readiness");
+        tool.IsReadOnly.Should().BeTrue();
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """
+                {
+                  "selector": {
+                    "nyx_id_operation": {
+                      "user_service_id": "us-home-alpha",
+                      "endpoint_id": "read_states"
+                    }
+                  },
+                  "execution_mode": "interactive"
+                }
+                """);
+
+            readinessPort.Request.Should().NotBeNull();
+            readinessPort.Request!.Access.ScopeId.Should().Be("owner-scope-alpha");
+            readinessPort.Request.Access.CallerId.Should().Be("caller-subject-alpha");
+            readinessPort.Request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+            readinessPort.Request.Selector.NyxIdOperation.UserServiceId.Should().Be("us-home-alpha");
+            readinessPort.Request.Selector.NyxIdOperation.EndpointId.Should().Be("read_states");
+            tool.ParametersSchema.Should().Contain("endpoint_id");
+            tool.ParametersSchema.Should().NotContain("operation_id");
+            tool.ParametersSchema.Should().NotContain("contract_digest");
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should()
+                .Be("EXTERNAL_CAPABILITY_READINESS_STATUS_READY");
+            document.RootElement.GetProperty("selected_capability")
+                .GetProperty("nyx_id_user_service")
+                .GetProperty("user_service_id").GetString().Should().Be("us-home-alpha");
+            result.Should().NotContain("caller-bearer-alpha");
+            result.Should().NotContain("organization-bearer-alpha");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task BindingAgentToolSource_RegistersExternalCapabilityToolsConditionally()
+    {
+        var source = new BindingAgentToolSource(
+            new BindingToolOptions(),
+            externalCapabilityListPort: new StubExternalWorkflowCapabilityListPort(
+                new ExternalWorkflowCapabilityDiscoveryResult()),
+            externalCapabilityReadinessPort: new StubExternalWorkflowCapabilityReadinessPort());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().HaveCount(2);
+        tools.Should().ContainSingle(tool => tool is ListExternalWorkflowCapabilitiesTool);
+        tools.Should().ContainSingle(tool => tool is InspectExternalWorkflowCapabilityReadinessTool);
     }
 
     #endregion
@@ -79,10 +329,7 @@ public class BindingToolsTests
             "svc-1", "Service One", "workflow", "healthy", "actor-1", "actor-1", null, DateTimeOffset.UtcNow));
         var tool = new BindingStatusTool(queryAdapter);
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "test-scope"
-        });
+        AgentToolRequestContext.Current = OwnerContext("test-scope");
 
         try
         {
@@ -110,10 +357,11 @@ public class BindingToolsTests
         var commandPort = new StubCommandPort(captureRequest: r => captured = r);
         var tool = new BindingBindTool(commandPort);
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-1"
-        });
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-1",
+            "caller-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
 
         try
         {
@@ -124,7 +372,7 @@ public class BindingToolsTests
             doc.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
 
             captured.Should().NotBeNull();
-            captured!.ScopeId.Should().Be("scope-1");
+            captured!.ScopeId.Should().Be("owner-scope-1");
             captured.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
             captured.Workflow.Should().NotBeNull();
             captured.Workflow!.WorkflowYamls.Should().HaveCount(1);
@@ -143,10 +391,7 @@ public class BindingToolsTests
         var commandPort = new StubCommandPort(captureRequest: r => captured = r);
         var tool = new BindingBindTool(commandPort);
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-2"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-2");
 
         try
         {
@@ -176,10 +421,7 @@ public class BindingToolsTests
         var commandPort = new StubCommandPort(captureRequest: r => captured = r);
         var tool = new BindingBindTool(commandPort);
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-gagent"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-gagent");
 
         try
         {
@@ -208,10 +450,7 @@ public class BindingToolsTests
         var commandPort = new StubCommandPort();
         var tool = new BindingBindTool(commandPort);
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-gagent"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-gagent");
 
         try
         {
@@ -238,10 +477,11 @@ public class BindingToolsTests
         var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort(
             captureRequest: r => captured = r));
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-workflows"
-        });
+        AgentToolRequestContext.Current = CapabilityContext(
+            "scope-workflows",
+            "caller-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
 
         try
         {
@@ -288,10 +528,7 @@ public class BindingToolsTests
     {
         var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort());
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-workflows"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
 
         try
         {
@@ -317,10 +554,11 @@ public class BindingToolsTests
         var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort(
             exception: new InvalidOperationException("bad request")));
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-workflows"
-        });
+        AgentToolRequestContext.Current = CapabilityContext(
+            "scope-workflows",
+            "caller-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
 
         try
         {
@@ -347,10 +585,7 @@ public class BindingToolsTests
             new StubScopeWorkflowQueryPort(listResult: workflows),
             new BindingToolOptions { MaxListResults = 1 });
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-workflows"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
 
         try
         {
@@ -379,7 +614,7 @@ public class BindingToolsTests
 
         var result = await tool.ExecuteAsync("{}");
 
-        result.Should().Contain("scope_id not available");
+        result.Should().Contain("owner_scope_id not available");
     }
 
     [Fact]
@@ -389,10 +624,7 @@ public class BindingToolsTests
             new StubScopeWorkflowQueryPort(exception: new InvalidOperationException("query failed")),
             new BindingToolOptions());
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-workflows"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
 
         try
         {
@@ -413,10 +645,7 @@ public class BindingToolsTests
         var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(
             getResult: BuildWorkflowSummary("scope-workflows", "wf-1")));
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-workflows"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
 
         try
         {
@@ -438,10 +667,7 @@ public class BindingToolsTests
     {
         var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort());
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-workflows"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
 
         try
         {
@@ -460,10 +686,7 @@ public class BindingToolsTests
     {
         var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(getResult: null));
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-workflows"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
 
         try
         {
@@ -485,10 +708,7 @@ public class BindingToolsTests
         var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(
             exception: new InvalidOperationException("query failed")));
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-workflows"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
 
         try
         {
@@ -531,10 +751,7 @@ public class BindingToolsTests
 
         var tool = new BindingUnbindTool(unbindAdapter);
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            ["scope_id"] = "scope-unbind"
-        });
+        AgentToolRequestContext.Current = OwnerContext("scope-unbind");
 
         try
         {
@@ -708,6 +925,19 @@ public class BindingToolsTests
             return Task.FromResult(_listResult);
         }
 
+        public Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default)
+        {
+            if (_exception is not null)
+                throw _exception;
+
+            return Task.FromResult(_getResult is null
+                ? new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, "test_not_found")
+                : new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Runnable, _getResult, "test_runnable"));
+        }
+
         public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
             string scopeId,
             string workflowId,
@@ -726,6 +956,70 @@ public class BindingToolsTests
             Task.FromResult<ScopeWorkflowSummary?>(null);
     }
 
+    private sealed class StubExternalWorkflowCapabilityListPort(
+        ExternalWorkflowCapabilityDiscoveryResult discovery) : IExternalWorkflowCapabilityListPort
+    {
+        public ListExternalWorkflowCapabilitiesRequest? Request { get; private set; }
+
+        public Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
+            ListExternalWorkflowCapabilitiesRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            return Task.FromResult(discovery.Clone());
+        }
+    }
+
+    private sealed class StubExternalWorkflowCapabilityReadinessPort : IExternalWorkflowCapabilityReadinessPort
+    {
+        public InspectExternalWorkflowCapabilityReadinessRequest? Request { get; private set; }
+
+        public Task<ExternalCapabilityReadiness> InspectAsync(
+            InspectExternalWorkflowCapabilityReadinessRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            return Task.FromResult(new ExternalCapabilityReadiness
+            {
+                ExecutionMode = request.ExecutionMode,
+                Status = ExternalCapabilityReadinessStatus.Ready,
+                SelectedSelector = request.Selector.Clone(),
+                SelectedCapability = new ExternalWorkflowCapabilityRef
+                {
+                    NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                    {
+                        UserServiceId = request.Selector.NyxIdOperation.UserServiceId,
+                        ServiceSlugSnapshot = "home-assistant",
+                        EndpointId = request.Selector.NyxIdOperation.EndpointId,
+                        HttpMethod = "GET",
+                        PathTemplate = "/api/states",
+                        ContractDigest = "server-derived-contract-digest",
+                    },
+                },
+            });
+        }
+    }
+
+    private static ExternalWorkflowCapabilityDescriptor Descriptor(
+        ExternalWorkflowCapabilitySelector selector,
+        string displayName) =>
+        new()
+        {
+            Selector = selector,
+            DisplayName = displayName,
+            ReadOnly = true,
+        };
+
+    private static ExternalWorkflowCapabilitySelector NyxIdSelector(string userServiceId) =>
+        new()
+        {
+            NyxIdOperation = new NyxIdOperationSelector
+            {
+                UserServiceId = userServiceId,
+                EndpointId = "read_states",
+            },
+        };
+
     private static ScopeWorkflowSummary BuildWorkflowSummary(
         string scopeId,
         string workflowId) =>
@@ -740,6 +1034,33 @@ public class BindingToolsTests
             "deployment-1",
             "active",
             DateTimeOffset.Parse("2026-05-25T00:00:00Z"));
+
+    private static AgentToolExecutionContext OwnerContext(string ownerScopeId, string? scopeId = null) =>
+        global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            ["scope_id"] = scopeId ?? ownerScopeId,
+            [LLMRequestMetadataKeys.OwnerScopeId] = ownerScopeId,
+        });
+
+    private static AgentToolExecutionContext CapabilityContext(
+        string ownerScopeId,
+        string callerSubject,
+        string callerBearer,
+        string organizationBearer) =>
+        OwnerContext(ownerScopeId) with
+        {
+            Caller = new AgentToolCallerContext(
+                ownerScopeId,
+                callerSubject,
+                ResponseId: "response-alpha",
+                OwnerScopeId: ownerScopeId),
+            Credentials = new AgentToolCredentials(
+                callerBearer,
+                organizationBearer,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", callerSubject),
+        };
 
     private static string? ReadError(string json)
     {

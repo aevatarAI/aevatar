@@ -4,8 +4,28 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-public sealed class NyxIdOrgTool : IAgentTool
+public sealed class NyxIdOrgTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    private static readonly NyxIdClosedActionParser<NyxIdOrgAction> ActionParser = new(
+    [
+        new("list", NyxIdOrgAction.List, new(false, true, false)),
+        new("show", NyxIdOrgAction.Show, new(false, true, false)),
+        new("create", NyxIdOrgAction.Create, new(true, false, false)),
+        new("update", NyxIdOrgAction.Update, new(true, false, false)),
+        new("delete", NyxIdOrgAction.Delete, new(true, false, true)),
+        new("join", NyxIdOrgAction.Join, new(true, false, false)),
+        new("set_primary", NyxIdOrgAction.SetPrimary, new(true, false, false)),
+        new("list_members", NyxIdOrgAction.ListMembers, new(false, true, false)),
+        new("add_member", NyxIdOrgAction.AddMember, new(true, false, false)),
+        new("update_member", NyxIdOrgAction.UpdateMember, new(true, false, false)),
+        new("remove_member", NyxIdOrgAction.RemoveMember, new(true, false, true)),
+        new("list_invites", NyxIdOrgAction.ListInvites, new(false, true, false)),
+        new("create_invite", NyxIdOrgAction.CreateInvite, new(true, false, false)),
+        new("cancel_invite", NyxIdOrgAction.CancelInvite, new(true, false, true)),
+    ]);
+
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdOrgTool(NyxIdApiClient client) => _client = client;
@@ -18,13 +38,13 @@ public sealed class NyxIdOrgTool : IAgentTool
         "Member actions: list_members, add_member, update_member, remove_member. " +
         "Invite actions: list_invites, create_invite, cancel_invite.";
 
-    public string ParametersSchema => """
+    public string ParametersSchema => $$"""
         {
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "create", "update", "delete", "join", "set_primary", "list_members", "add_member", "update_member", "remove_member", "list_invites", "create_invite", "cancel_invite"],
+              "enum": {{ActionParser.ActionNamesJson}},
               "description": "Action to perform (default: list)"
             },
             "org_id": {
@@ -80,49 +100,66 @@ public sealed class NyxIdOrgTool : IAgentTool
         }
         """;
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+        ActionParser.Classify(argumentsJson);
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (!parsed.IsValid)
+            return NyxIdClosedActionParser<NyxIdOrgAction>.InvalidActionJson;
+
         var args = ToolArgs.Parse(argumentsJson);
-        var action = args.Str("action", "list");
         var orgId = args.Str("org_id");
 
-        return action switch
+        return parsed.Action switch
         {
-            "show" when !string.IsNullOrWhiteSpace(orgId) =>
+            NyxIdOrgAction.Show when !string.IsNullOrWhiteSpace(orgId) =>
                 await _client.GetOrgAsync(token, orgId, ct),
-            "create" => await CreateOrgAsync(token, args, ct),
-            "update" when !string.IsNullOrWhiteSpace(orgId) =>
+            NyxIdOrgAction.Create => await CreateOrgAsync(token, args, ct),
+            NyxIdOrgAction.Update when !string.IsNullOrWhiteSpace(orgId) =>
                 await UpdateOrgAsync(token, orgId, args, ct),
-            "delete" when !string.IsNullOrWhiteSpace(orgId) =>
+            NyxIdOrgAction.Delete when !string.IsNullOrWhiteSpace(orgId) =>
                 await _client.DeleteOrgAsync(token, orgId, ct),
-            "join" => await JoinOrgAsync(token, args, ct),
-            "set_primary" => await SetPrimaryOrgAsync(token, args, ct),
+            NyxIdOrgAction.Join => await JoinOrgAsync(token, args, ct),
+            NyxIdOrgAction.SetPrimary => await SetPrimaryOrgAsync(token, args, ct),
 
-            "list_members" when !string.IsNullOrWhiteSpace(orgId) =>
+            NyxIdOrgAction.ListMembers when !string.IsNullOrWhiteSpace(orgId) =>
                 await _client.ListOrgMembersAsync(token, orgId, ct),
-            "add_member" when !string.IsNullOrWhiteSpace(orgId) =>
+            NyxIdOrgAction.AddMember when !string.IsNullOrWhiteSpace(orgId) =>
                 await AddMemberAsync(token, orgId, args, ct),
-            "update_member" when !string.IsNullOrWhiteSpace(orgId) =>
+            NyxIdOrgAction.UpdateMember when !string.IsNullOrWhiteSpace(orgId) =>
                 await UpdateMemberAsync(token, orgId, args, ct),
-            "remove_member" when !string.IsNullOrWhiteSpace(orgId) =>
+            NyxIdOrgAction.RemoveMember when !string.IsNullOrWhiteSpace(orgId) =>
                 await RemoveMemberAsync(token, orgId, args, ct),
 
-            "list_invites" when !string.IsNullOrWhiteSpace(orgId) =>
+            NyxIdOrgAction.ListInvites when !string.IsNullOrWhiteSpace(orgId) =>
                 await _client.ListOrgInvitesAsync(token, orgId, ct),
-            "create_invite" when !string.IsNullOrWhiteSpace(orgId) =>
+            NyxIdOrgAction.CreateInvite when !string.IsNullOrWhiteSpace(orgId) =>
                 await CreateInviteAsync(token, orgId, args, ct),
-            "cancel_invite" when !string.IsNullOrWhiteSpace(orgId) =>
+            NyxIdOrgAction.CancelInvite when !string.IsNullOrWhiteSpace(orgId) =>
                 await CancelInviteAsync(token, orgId, args, ct),
 
-            "show" or "update" or "delete" or "list_members" or "add_member" or
-            "update_member" or "remove_member" or "list_invites" or "create_invite" or "cancel_invite" =>
-                $"{{\"error\":\"'org_id' is required for {action}\"}}",
+            NyxIdOrgAction.Show or
+            NyxIdOrgAction.Update or
+            NyxIdOrgAction.Delete or
+            NyxIdOrgAction.ListMembers or
+            NyxIdOrgAction.AddMember or
+            NyxIdOrgAction.UpdateMember or
+            NyxIdOrgAction.RemoveMember or
+            NyxIdOrgAction.ListInvites or
+            NyxIdOrgAction.CreateInvite or
+            NyxIdOrgAction.CancelInvite =>
+                $"{{\"error\":\"'org_id' is required for {parsed.Name}\"}}",
 
-            _ => await _client.ListOrgsAsync(token, ct),
+            NyxIdOrgAction.List => await _client.ListOrgsAsync(token, ct),
+            _ => NyxIdClosedActionParser<NyxIdOrgAction>.InvalidActionJson,
         };
     }
 
@@ -257,4 +294,22 @@ public sealed class NyxIdOrgTool : IAgentTool
 
         return await _client.CancelOrgInviteAsync(token, orgId, inviteId, ct);
     }
+}
+
+internal enum NyxIdOrgAction
+{
+    List,
+    Show,
+    Create,
+    Update,
+    Delete,
+    Join,
+    SetPrimary,
+    ListMembers,
+    AddMember,
+    UpdateMember,
+    RemoveMember,
+    ListInvites,
+    CreateInvite,
+    CancelInvite,
 }

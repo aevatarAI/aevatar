@@ -3,11 +3,9 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.Channel.Identity;
 
 /// <summary>
-/// Resolves the OAuth callback URL the broker registers at NyxID DCR and
-/// the URL it sends to NyxID at authorize / token-exchange time. Both call
-/// sites MUST resolve to the same PUBLIC URL — DCR's redirect_uri is
-/// echoed back to the user's browser at /authorize, so it has to be a real
-/// hostname the browser can reach.
+/// Resolves the OAuth callback URL registered on the configured NyxID client
+/// and sent at authorize / token-exchange time. Both uses MUST resolve to the
+/// same PUBLIC URL, so it has to be a real hostname the browser can reach.
 /// </summary>
 /// <remarks>
 /// Mirrors <see cref="NyxIdAuthorityResolver"/>: hardcoded production
@@ -46,7 +44,15 @@ public static class NyxIdRedirectUriResolver
     public const string OverrideEnvVar = "AEVATAR_OAUTH_REDIRECT_BASE_URL";
 
     /// <summary>
-    /// Returns the absolute callback URL DCR + authorize must use. Reads
+    /// Optional comma/semicolon/newline separated list of additional redirect
+    /// URIs to register on the same NyxID OAuth client. Used for external
+    /// callbacks such as the Console SPA <c>/auth/callback</c> route. The
+    /// backend does not infer these deployment-specific frontend URLs.
+    /// </summary>
+    public const string AdditionalRedirectUrisEnvVar = "AEVATAR_OAUTH_ADDITIONAL_REDIRECT_URIS";
+
+    /// <summary>
+    /// Returns the absolute callback URL client registration + authorize must use. Reads
     /// <see cref="OverrideEnvVar"/> if set; otherwise returns the
     /// hardcoded production default. A wildcard / unspecified-host
     /// override (e.g. <c>http://+:8080</c>) is rejected with a warning
@@ -59,6 +65,47 @@ public static class NyxIdRedirectUriResolver
         return $"{baseUrl.TrimEnd('/')}{CallbackPath}";
     }
 
+    public static IReadOnlyList<string> ResolveRegisteredRedirectUris(ILogger? logger = null)
+    {
+        var values = new List<string> { Resolve(logger) };
+        var additional = Environment.GetEnvironmentVariable(AdditionalRedirectUrisEnvVar);
+        if (!string.IsNullOrWhiteSpace(additional))
+        {
+            foreach (var candidate in additional.Split([',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (IsWildcardListenAddress(candidate))
+                {
+                    logger?.LogWarning(
+                        "Ignoring additional OAuth redirect URI from {EnvVar}: '{Value}' is a wildcard / unspecified-host listen address.",
+                        AdditionalRedirectUrisEnvVar,
+                        candidate);
+                    continue;
+                }
+
+                values.Add(candidate);
+            }
+        }
+
+        return NormalizeRedirectUris(values);
+    }
+
+    public static IReadOnlyList<string> NormalizeRedirectUris(IEnumerable<string> redirectUris)
+    {
+        var unique = new HashSet<string>(StringComparer.Ordinal);
+        var values = new List<string>();
+        foreach (var raw in redirectUris)
+        {
+            var normalized = raw?.Trim();
+            if (string.IsNullOrWhiteSpace(normalized))
+                continue;
+
+            if (unique.Add(normalized))
+                values.Add(normalized);
+        }
+
+        return values;
+    }
+
     private static string ResolveBaseUrl(ILogger? logger)
     {
         var raw = Environment.GetEnvironmentVariable(OverrideEnvVar);
@@ -66,7 +113,7 @@ public static class NyxIdRedirectUriResolver
             return DefaultPublicBaseUrl;
 
         var trimmed = raw.Trim();
-        if (IsWildcardListenAddress(trimmed))
+        if (!TryResolveExplicitBaseUrl(trimmed, out var baseUrl))
         {
             logger?.LogWarning(
                 "Ignoring {EnvVar}='{Value}': it is a Kestrel listen address (wildcard / unspecified host) " +
@@ -79,7 +126,21 @@ public static class NyxIdRedirectUriResolver
             return DefaultPublicBaseUrl;
         }
 
-        return trimmed;
+        return baseUrl;
+    }
+
+    internal static bool TryResolveExplicitBaseUrl(string? raw, out string baseUrl)
+    {
+        baseUrl = string.Empty;
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        var trimmed = raw.Trim();
+        if (IsWildcardListenAddress(trimmed))
+            return false;
+
+        baseUrl = trimmed;
+        return true;
     }
 
     /// <summary>

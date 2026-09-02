@@ -35,6 +35,7 @@ public sealed class ChannelIdentityOAuthCommandDispatchTests
         {
             ExternalSubject = subject,
             BindingId = "bnd-1",
+            OwnerScopeId = "owner-user-1",
         };
 
         var result = await service.DispatchAsync(command);
@@ -74,6 +75,7 @@ public sealed class ChannelIdentityOAuthCommandDispatchTests
                 ExternalUserId = "user-1",
             },
             BindingId = "bnd-1",
+            OwnerScopeId = "owner-user-1",
         });
 
         result.Succeeded.Should().BeFalse();

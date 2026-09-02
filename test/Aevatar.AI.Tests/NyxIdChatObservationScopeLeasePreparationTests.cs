@@ -19,7 +19,7 @@ public sealed class NyxIdChatObservationScopeLeasePreparationTests
         var preparation = new NyxIdChatObservationScopeLeasePreparation<NyxIdChatCommand>(
             activation,
             release,
-            static command => command.SessionId);
+            static command => command.TurnId);
         var execution = CreateExecution(" actor-1 ", "cmd-1", " session-1 ");
 
         var result = await preparation.PrepareAsync(
@@ -47,7 +47,7 @@ public sealed class NyxIdChatObservationScopeLeasePreparationTests
         var preparation = new NyxIdChatObservationScopeLeasePreparation<NyxIdApprovalCommand>(
             activation,
             new RecordingReleaseService(),
-            static command => command.SessionId);
+            static command => command.TurnId);
         var execution = CreateExecution("actor-2", "cmd-2", "session-2");
 
         var result = await preparation.PrepareAsync(
@@ -74,7 +74,7 @@ public sealed class NyxIdChatObservationScopeLeasePreparationTests
         var preparation = new NyxIdChatObservationScopeLeasePreparation<NyxIdChatCommand>(
             activation,
             new RecordingReleaseService(),
-            static command => command.SessionId);
+            static command => command.TurnId);
 
         var result = await preparation.PrepareAsync(
             new NyxIdChatCommand(actorId, "scope-1", "hello", sessionId, "token", null, null),
@@ -95,7 +95,7 @@ public sealed class NyxIdChatObservationScopeLeasePreparationTests
         var preparation = new NyxIdChatObservationScopeLeasePreparation<NyxIdChatCommand>(
             activation,
             release,
-            static command => command.SessionId);
+            static command => command.TurnId);
 
         var result = await preparation.PrepareAsync(
             new NyxIdChatCommand("actor-1", "scope-1", "hello", "session-1", "token", null, null),
@@ -114,7 +114,7 @@ public sealed class NyxIdChatObservationScopeLeasePreparationTests
         var preparation = new NyxIdChatObservationScopeLeasePreparation<NyxIdChatCommand>(
             new RecordingActivationService(),
             new RecordingReleaseService(),
-            static command => command.SessionId);
+            static command => command.TurnId);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 

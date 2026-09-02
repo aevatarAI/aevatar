@@ -1,0 +1,761 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aevatar Chat MVP Prototype</title>
+    <style>
+      :root {
+        --page-bg: #f5f7fb;
+        --panel: #ffffff;
+        --panel-muted: #f8fafc;
+        --rail-bg: #fbfcff;
+        --text: #1f2937;
+        --heading: #111827;
+        --muted: #667085;
+        --faint: #98a2b3;
+        --border: #e5e7eb;
+        --border-strong: #d8dee8;
+        --primary: #2563eb;
+        --primary-soft: #eef4ff;
+        --success: #16883a;
+        --success-soft: #eefaf2;
+        --warning: #d97706;
+        --warning-soft: #fff7ed;
+        --danger: #dc2626;
+        --radius: 8px;
+        --radius-lg: 16px;
+        --shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        background: var(--page-bg);
+        color: var(--text);
+        font-family:
+          AlibabaSans, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        margin: 0;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .page {
+        margin: 0 auto;
+        max-width: 1480px;
+        padding: 20px;
+      }
+
+      .header {
+        align-items: flex-end;
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      .header h1 {
+        color: var(--heading);
+        font-size: 20px;
+        line-height: 1.3;
+        margin: 0;
+      }
+
+      .header p {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+        margin: 4px 0 0;
+        max-width: 760px;
+      }
+
+      .scope-chip {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+        padding: 7px 12px;
+        white-space: nowrap;
+      }
+
+      .app-shell {
+        background: var(--panel);
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1fr);
+        min-height: 900px;
+        overflow: hidden;
+      }
+
+      .history-rail {
+        background: var(--rail-bg);
+        border-right: 1px solid var(--border-strong);
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .new-chat-area {
+        border-bottom: 1px solid var(--border);
+        padding: 16px 14px;
+      }
+
+      .new-chat {
+        align-items: center;
+        background: transparent;
+        border: 1px dashed #8b98aa;
+        border-radius: var(--radius);
+        color: var(--heading);
+        display: flex;
+        font-size: 15px;
+        font-weight: 750;
+        gap: 10px;
+        height: 48px;
+        justify-content: center;
+        width: 100%;
+      }
+
+      .new-chat span {
+        font-size: 20px;
+        line-height: 1;
+      }
+
+      .history-list {
+        display: grid;
+        gap: 0;
+        overflow: auto;
+        padding: 10px;
+      }
+
+      .history-item {
+        border: 1px solid transparent;
+        border-radius: var(--radius);
+        display: grid;
+        gap: 5px;
+        grid-template-columns: 10px minmax(0, 1fr) auto;
+        margin-bottom: 8px;
+        padding: 12px;
+      }
+
+      .history-item.active {
+        background: #eaf0ff;
+        border-color: #9bb8ff;
+        box-shadow: inset 3px 0 0 #3b65f3;
+      }
+
+      .status-dot {
+        align-self: start;
+        border-radius: 999px;
+        height: 8px;
+        margin-top: 7px;
+        width: 8px;
+      }
+
+      .status-dot.done {
+        background: var(--success);
+      }
+
+      .status-dot.pending {
+        background: var(--warning);
+      }
+
+      .status-dot.error {
+        background: var(--danger);
+      }
+
+      .history-title {
+        color: var(--heading);
+        font-size: 14px;
+        font-weight: 750;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .history-meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .row-actions {
+        align-items: center;
+        display: flex;
+        gap: 6px;
+      }
+
+      .icon-button {
+        align-items: center;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        color: var(--muted);
+        display: inline-flex;
+        font-size: 13px;
+        height: 28px;
+        justify-content: center;
+        width: 28px;
+      }
+
+      .main {
+        background: #f8fafc;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        min-width: 0;
+      }
+
+      .conversation-header {
+        align-items: center;
+        background: rgba(255, 255, 255, 0.96);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        min-height: 62px;
+        padding: 12px 32px;
+      }
+
+      .conversation-title {
+        color: var(--heading);
+        font-size: 15px;
+        font-weight: 750;
+      }
+
+      .chips {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .chip {
+        background: #f2f4f7;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+        padding: 6px 10px;
+      }
+
+      .chip.success {
+        background: var(--success-soft);
+        border-color: #b9efc8;
+        color: var(--success);
+      }
+
+      .chat-scroll {
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+        overflow: auto;
+        padding: 34px 40px 28px;
+      }
+
+      .chat-scroll > * {
+        margin-left: auto;
+        margin-right: auto;
+        max-width: 940px;
+        width: 100%;
+      }
+
+      .state-flow {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        padding: 14px;
+      }
+
+      .state-step {
+        background: var(--panel-muted);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        min-height: 64px;
+        padding: 10px;
+      }
+
+      .state-step strong {
+        color: var(--heading);
+        display: block;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .state-step span {
+        color: var(--muted);
+        display: block;
+        font-size: 12px;
+        line-height: 1.4;
+        margin-top: 4px;
+      }
+
+      .message {
+        display: flex;
+        gap: 14px;
+      }
+
+      .message.user {
+        justify-content: flex-end;
+      }
+
+      .user-bubble {
+        background: #dfe9ff;
+        border: 1px solid #9bb8ff;
+        border-radius: 18px;
+        border-bottom-right-radius: 8px;
+        color: var(--heading);
+        font-size: 15px;
+        line-height: 1.6;
+        max-width: 360px;
+        padding: 12px 16px;
+      }
+
+      .avatar {
+        align-items: center;
+        background: #4962e9;
+        border-radius: 12px;
+        color: #ffffff;
+        display: inline-flex;
+        flex: 0 0 auto;
+        font-size: 16px;
+        font-weight: 800;
+        height: 38px;
+        justify-content: center;
+        margin-top: 2px;
+        width: 38px;
+      }
+
+      .assistant-stack {
+        display: grid;
+        gap: 12px;
+        max-width: 760px;
+        min-width: 0;
+      }
+
+      .agent-line {
+        align-items: baseline;
+        display: flex;
+        gap: 8px;
+      }
+
+      .agent-line strong {
+        color: var(--heading);
+        font-size: 15px;
+      }
+
+      .agent-line span {
+        color: var(--faint);
+        font-size: 14px;
+      }
+
+      .assistant-text {
+        color: var(--text);
+        font-size: 15px;
+        line-height: 1.75;
+      }
+
+      .plan-panel,
+      .result-panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 16px;
+      }
+
+      .panel-title {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      .panel-title strong {
+        color: var(--heading);
+        font-size: 15px;
+      }
+
+      .tag {
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 5px 9px;
+      }
+
+      .tag.warning {
+        background: var(--warning-soft);
+        color: var(--warning);
+      }
+
+      .tag.success {
+        background: var(--success-soft);
+        color: var(--success);
+      }
+
+      .plan-grid {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .plan-cell {
+        background: var(--panel-muted);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        min-height: 64px;
+        padding: 10px;
+      }
+
+      .plan-cell span {
+        color: var(--muted);
+        display: block;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .plan-cell strong {
+        color: var(--heading);
+        display: block;
+        font-size: 13px;
+        line-height: 1.35;
+        margin-top: 4px;
+      }
+
+      .actions {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .button {
+        align-items: center;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--heading);
+        display: inline-flex;
+        font-size: 13px;
+        font-weight: 700;
+        height: 34px;
+        justify-content: center;
+        padding: 0 13px;
+      }
+
+      .button.primary {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: #ffffff;
+      }
+
+      .usage {
+        border-top: 1px dashed var(--border);
+        color: var(--muted);
+        font-family: "SFMono-Regular", ui-monospace, Menlo, monospace;
+        font-size: 13px;
+        margin-top: 12px;
+        padding-top: 12px;
+      }
+
+      .jump-rule {
+        background: var(--primary-soft);
+        border: 1px solid #b7ccff;
+        border-radius: var(--radius);
+        color: #2446a8;
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.45;
+        padding: 10px 12px;
+      }
+
+      .composer {
+        background: var(--panel);
+        border-top: 1px solid var(--border);
+        padding: 18px 32px 20px;
+      }
+
+      .composer-box {
+        align-items: center;
+        background: var(--panel);
+        border: 1px solid #d7dfec;
+        border-radius: var(--radius-lg);
+        display: grid;
+        grid-template-columns: 1fr 44px;
+        margin: 0 auto;
+        max-width: 940px;
+        min-height: 64px;
+        padding: 0 10px 0 18px;
+      }
+
+      .placeholder {
+        color: var(--faint);
+        font-size: 15px;
+      }
+
+      .send-button {
+        align-items: center;
+        background: #9db5f4;
+        border: 0;
+        border-radius: 14px;
+        color: #ffffff;
+        display: flex;
+        font-size: 20px;
+        height: 44px;
+        justify-content: center;
+        width: 44px;
+      }
+
+      .composer-help {
+        color: var(--muted);
+        display: flex;
+        gap: 8px;
+        margin: 10px auto 0;
+        max-width: 940px;
+        font-size: 12px;
+      }
+
+      .kbd {
+        background: var(--panel-muted);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--muted);
+        font-family: "SFMono-Regular", ui-monospace, Menlo, monospace;
+        padding: 2px 7px;
+      }
+
+      @media (max-width: 920px) {
+        .app-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .history-rail {
+          border-bottom: 1px solid var(--border);
+          border-right: 0;
+          max-height: 290px;
+        }
+
+        .state-flow,
+        .plan-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .chat-scroll {
+          padding: 22px 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <div>
+          <h1>Aevatar Chat MVP Prototype</h1>
+          <p>
+            Simplified v1: create a chat session, create Team / Member /
+            Workflow through conversation, and return to local history. Studio
+            is the only primary jump after creation.
+          </p>
+        </div>
+        <span class="scope-chip">Chat + local history</span>
+      </header>
+
+      <section class="app-shell" aria-label="Aevatar Chat MVP">
+        <aside class="history-rail" aria-label="Local chat history">
+          <div class="new-chat-area">
+            <button class="new-chat" type="button">
+              <span>+</span>
+              New Chat
+            </button>
+          </div>
+
+          <div class="history-list">
+            <article class="history-item active">
+              <span class="status-dot done"></span>
+              <div>
+                <div class="history-title">Create support team</div>
+                <div class="history-meta">completed with Studio target · just now</div>
+              </div>
+              <div class="row-actions">
+                <button class="icon-button" aria-label="Rename" type="button">E</button>
+                <button class="icon-button" aria-label="Delete" type="button">D</button>
+              </div>
+            </article>
+
+            <article class="history-item">
+              <span class="status-dot pending"></span>
+              <div>
+                <div class="history-title">Add weekly report member</div>
+                <div class="history-meta">needs confirmation · 19 min ago</div>
+              </div>
+            </article>
+
+            <article class="history-item">
+              <span class="status-dot done"></span>
+              <div>
+                <div class="history-title">Daily tech news workflow</div>
+                <div class="history-meta">text result only · 1 hour ago</div>
+              </div>
+            </article>
+
+            <article class="history-item">
+              <span class="status-dot error"></span>
+              <div>
+                <div class="history-title">Invoice PDF intake flow</div>
+                <div class="history-meta">error saved · 1 hour ago</div>
+              </div>
+            </article>
+          </div>
+        </aside>
+
+        <section class="main" aria-label="Active chat session">
+          <header class="conversation-header">
+            <div>
+              <div class="conversation-title">Create support team</div>
+              <div class="chips">
+                <span class="chip">session local-42</span>
+                <span class="chip">POST /api/chat</span>
+                <span class="chip success">completed_with_studio_target</span>
+              </div>
+            </div>
+            <span class="chip">scope-a</span>
+          </header>
+
+          <div class="chat-scroll">
+            <section class="state-flow" aria-label="State flow">
+              <div class="state-step">
+                <strong>1. New Chat</strong>
+                <span>Create local sessionId.</span>
+              </div>
+              <div class="state-step">
+                <strong>2. Streaming</strong>
+                <span>Read /api/chat SSE frames.</span>
+              </div>
+              <div class="state-step">
+                <strong>3. Confirm</strong>
+                <span>Button or natural language.</span>
+              </div>
+              <div class="state-step">
+                <strong>4. Complete</strong>
+                <span>Text + usage saved locally.</span>
+              </div>
+              <div class="state-step">
+                <strong>5. Jump</strong>
+                <span>Open Studio only when IDs exist.</span>
+              </div>
+            </section>
+
+            <div class="message user">
+              <div class="user-bubble">
+                Create a customer support team with refund and order lookup
+                members.
+              </div>
+            </div>
+
+            <div class="message">
+              <div class="avatar">A</div>
+              <div class="assistant-stack">
+                <div class="agent-line">
+                  <strong>aevatar</strong>
+                  <span>· Studio agent</span>
+                </div>
+                <div class="assistant-text">
+                  I can create this in the current workspace. I will create one
+                  Team, add two workflow Members, and bind the generated
+                  workflow behavior after you confirm.
+                </div>
+
+                <article class="plan-panel" aria-label="Plan confirmation">
+                  <div class="panel-title">
+                    <strong>Plan before create</strong>
+                    <span class="tag warning">needs_confirmation</span>
+                  </div>
+                  <div class="plan-grid">
+                    <div class="plan-cell">
+                      <span>Team</span>
+                      <strong>Customer Support</strong>
+                    </div>
+                    <div class="plan-cell">
+                      <span>Members</span>
+                      <strong>Refund Agent, Order Lookup</strong>
+                    </div>
+                    <div class="plan-cell">
+                      <span>Workflow</span>
+                      <strong>Route intent to the right member</strong>
+                    </div>
+                  </div>
+                  <div class="actions">
+                    <button class="button primary" type="button">Confirm Create</button>
+                    <button class="button" type="button">Edit prompt</button>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <div class="message user">
+              <div class="user-bubble">Confirm Create</div>
+            </div>
+
+            <div class="message">
+              <div class="avatar">A</div>
+              <div class="assistant-stack">
+                <div class="agent-line">
+                  <strong>aevatar</strong>
+                  <span>· Studio agent</span>
+                </div>
+                <div class="assistant-text">
+                  Creation completed. I saved this conversation to local history.
+                  The response includes scoped Team and Member identifiers, so
+                  the next step can open Workflow Studio.
+                </div>
+
+                <article class="result-panel" aria-label="Completion result">
+                  <div class="panel-title">
+                    <strong>Completion</strong>
+                    <span class="tag success">completed_with_studio_target</span>
+                  </div>
+                  <div class="jump-rule">
+                    Jump rule: studioUrl or scopeId + teamId + memberId enables
+                    Open Workflow Studio. Text-only results stay in Chat.
+                  </div>
+                  <div class="usage">
+                    1,720 tokens · 1,284 in · 436 out · saved to local history
+                  </div>
+                  <div class="actions">
+                    <button class="button primary" type="button">Open Workflow Studio</button>
+                    <button class="button" type="button">Continue Chat</button>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </div>
+
+          <footer class="composer" aria-label="Message composer">
+            <div class="composer-box">
+              <div class="placeholder">
+                Describe the Team, Member, or Workflow you want to create...
+              </div>
+              <button class="send-button" aria-label="Send" type="button">^</button>
+            </div>
+            <div class="composer-help">
+              <span class="kbd">Enter</span>
+              <span>send</span>
+              <span class="kbd">Shift+Enter</span>
+              <span>new line</span>
+              <span>History is stored in this browser for the MVP.</span>
+            </div>
+          </footer>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

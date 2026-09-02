@@ -1,5 +1,6 @@
-using Aevatar.AI.Abstractions.ToolProviders;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -67,6 +68,68 @@ public sealed record ChatInput
 
     // Refactor (issue1332): Old pattern: workflow chat control used metadata or LlmControl only. New principle: reuse AgentToolExecutionContext as typed ToolContext without adding a workflow-specific abstraction.
     public AgentToolExecutionContext? ToolContext { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record HttpChatInput
+{
+    /// <summary>User prompt for this HTTP chat run.</summary>
+    public string? Prompt { get; init; }
+
+    /// <summary>Structured multimodal input parts for this HTTP chat run.</summary>
+    public IReadOnlyList<ChatInputContentPart>? InputParts { get; init; }
+
+    public ChatConversationInput? Conversation { get; init; }
+
+    /// <summary>Client-controlled idempotency identity for retryable HTTP chat create requests.</summary>
+    public string? CommandId { get; init; }
+
+    /// <summary>Ignored legacy HTTP body field; trusted caller scope owns request scope.</summary>
+    public JsonElement? ScopeId { get; init; }
+
+    public WorkflowChatSourceInput? Source { get; init; }
+
+    /// <summary>Legacy workflow identifier lookup. Prefer <see cref="Source"/>.</summary>
+    public string? Workflow { get; init; }
+
+    /// <summary>
+    /// Optional client-controlled session identifier for downstream chat correlation.
+    /// This is independent from Chat History conversation identity.
+    /// </summary>
+    public string? SessionId { get; init; }
+
+    /// <summary>
+    /// Legacy single inline workflow YAML field.
+    /// Prefer <see cref="WorkflowYamls"/> for new clients.
+    /// </summary>
+    public string? WorkflowYaml { get; init; }
+
+    /// <summary>
+    /// Inline workflow YAML bundle for this request.
+    /// The first item is treated as the entry workflow.
+    /// </summary>
+    public IReadOnlyList<string>? WorkflowYamls { get; init; }
+
+    /// <summary>
+    /// Optional run metadata passthrough for internal bridge integrations.
+    /// </summary>
+    public IDictionary<string, string>? Metadata { get; init; }
+
+    /// <summary>
+    /// Optional command transport headers for downstream runtime adapters.
+    /// </summary>
+    public IDictionary<string, string>? Headers { get; init; }
+
+    public ChatLlmControlInput? LlmControl { get; init; }
+
+    public AgentToolExecutionContext? ToolContext { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ChatConversationInput
+{
+    public string? ConversationId { get; init; }
+    public long? MinimumStateVersion { get; init; }
 }
 
 public sealed record ChatLlmControlInput
@@ -221,7 +284,6 @@ public sealed record WorkflowForkRunInput
     public IDictionary<string, string>? InlineSubYamls { get; init; }
     public IDictionary<string, string>? VariableOverrides { get; init; }
     public string? Input { get; init; }
-    public string? ScopeId { get; init; }
     public string? CommandId { get; init; }
     public string? CorrelationId { get; init; }
 }

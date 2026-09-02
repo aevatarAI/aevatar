@@ -11,11 +11,14 @@ public sealed class WorkflowExecutionReadModelMapper
         {
             ActorId = source.RootActorId,
             WorkflowName = source.WorkflowName,
+            ScopeId = source.ScopeId,
+            RunOrigin = source.RunOrigin,
             LastCommandId = source.CommandId,
             CompletionStatus = MapCompletionStatus(source.Status),
             StateVersion = source.StateVersion,
             LastEventId = source.LastEventId,
             LastUpdatedAt = source.UpdatedAt,
+            StartedAtUtc = source.StartedAtUtcValue,
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,
@@ -28,6 +31,7 @@ public sealed class WorkflowExecutionReadModelMapper
             CompletedSteps = 0,
             RoleReplyCount = 0,
             InputFileRefs = { source.InputFileRefs.Select(MapInputFileRef) },
+            ConnectorApprovals = { source.ConnectorApprovals.Select(static approval => approval.Clone()) },
         };
     }
 
@@ -228,6 +232,7 @@ public sealed class WorkflowExecutionReadModelMapper
             AssignedValue = source.AssignedValue,
             SuspensionType = source.SuspensionType,
             SuspensionPrompt = source.SuspensionPrompt,
+            SuspensionContent = source.SuspensionContent,
             SuspensionTimeoutSeconds = source.SuspensionTimeoutSecondsValue == 0 ? null : source.SuspensionTimeoutSecondsValue,
             RequestedVariableName = source.RequestedVariableName,
             Usage = MapUsage(source.Usage),

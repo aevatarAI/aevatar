@@ -20,6 +20,7 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
     {
         var state = new RuntimeCallbackSchedulerState
         {
+            PendingReminderUnregistrations = { "cb-pending" },
             ReminderCallbacks =
             {
                 ["cb-1"] = new RuntimeScheduledCallback
@@ -57,6 +58,8 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         callback.TriggerEnvelope.Payload.Unpack<StringValue>().Value.Should().Be("payload");
         callback.NextDueAtUnixTimeMs.Should().Be(1_780_000_000_000);
         callback.OverduePolicy.Should().Be(RuntimeCallbackOverduePolicy.Deliver);
+        roundTripped.PendingReminderUnregistrations.Should().ContainSingle()
+            .Which.Should().Be("cb-pending");
     }
 
     [Fact]
@@ -141,7 +144,12 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             .Should()
             .ContainSingle()
             .Subject;
-        var parameter = constructor.GetParameters().Should().ContainSingle().Subject;
+        var parameter = constructor.GetParameters()
+            .Should()
+            .ContainSingle(candidate =>
+                candidate.ParameterType ==
+                typeof(IPersistentState<RuntimeCallbackSchedulerState>))
+            .Subject;
         var attribute = parameter.GetCustomAttribute<PersistentStateAttribute>();
 
         attribute.Should().NotBeNull();
@@ -157,7 +165,12 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             .Should()
             .ContainSingle()
             .Subject;
-        var parameter = constructor.GetParameters().Should().ContainSingle().Subject;
+        var parameter = constructor.GetParameters()
+            .Should()
+            .ContainSingle(candidate =>
+                candidate.ParameterType ==
+                typeof(IPersistentState<RuntimeCallbackSchedulerState>))
+            .Subject;
 
         parameter.ParameterType.Should().Be(typeof(IPersistentState<RuntimeCallbackSchedulerState>));
         var attribute = parameter.GetCustomAttribute<PersistentStateAttribute>();
@@ -183,7 +196,7 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             TriggerEnvelope = CreateEnvelope("evt-1"),
         };
         var proxy = (RuntimeCallbackPersistentStateProxy)(object)persistentState;
-        var grain = new RuntimeCallbackSchedulerGrain(persistentState);
+        var grain = CreateGrain(persistentState);
 
         await grain.CancelAsync(
             "cb-1",
@@ -201,7 +214,7 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             DispatchProxy.Create<IPersistentState<RuntimeCallbackSchedulerState>, RuntimeCallbackPersistentStateProxy>();
         persistentState.State.ReminderCallbacks["cb-1"] = CreateScheduledCallback("cb-1", generation: 2);
         var proxy = (RuntimeCallbackPersistentStateProxy)(object)persistentState;
-        var grain = new RuntimeCallbackSchedulerGrain(persistentState);
+        var grain = CreateGrain(persistentState);
 
         await grain.CancelAsync(
             "cb-1",
@@ -218,7 +231,7 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         var persistentState =
             DispatchProxy.Create<IPersistentState<RuntimeCallbackSchedulerState>, RuntimeCallbackPersistentStateProxy>();
         persistentState.State.ReminderCallbacks["cb-1"] = CreateScheduledCallback("cb-1", generation: 1);
-        var grain = new RuntimeCallbackSchedulerGrain(persistentState);
+        var grain = CreateGrain(persistentState);
 
         var act = () => grain.CancelAsync(
             "cb-1",
@@ -235,7 +248,7 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
     {
         var persistentState =
             DispatchProxy.Create<IPersistentState<RuntimeCallbackSchedulerState>, RuntimeCallbackPersistentStateProxy>();
-        var grain = new RuntimeCallbackSchedulerGrain(persistentState);
+        var grain = CreateGrain(persistentState);
 
         var act = () => grain.ScheduleTimerAsync(
             "timer-callback",
@@ -253,7 +266,7 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
     {
         var persistentState =
             DispatchProxy.Create<IPersistentState<RuntimeCallbackSchedulerState>, RuntimeCallbackPersistentStateProxy>();
-        var grain = new RuntimeCallbackSchedulerGrain(persistentState);
+        var grain = CreateGrain(persistentState);
         var envelope = CreateEnvelope(
             "evt-credential",
             new NeedsCredentialPayload
@@ -421,6 +434,13 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         NextDueAtUnixTimeMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
     };
+
+    // Constructed outside a silo: the grain has no Orleans execution context, so any reminder
+    // interaction fails fast. These tests only cover the state-machine and validation paths that
+    // run before the grain reaches its reminders.
+    private static RuntimeCallbackSchedulerGrain CreateGrain(
+        IPersistentState<RuntimeCallbackSchedulerState> persistentState) =>
+        new(persistentState);
 
     private class RuntimeCallbackPersistentStateProxy : DispatchProxy
     {

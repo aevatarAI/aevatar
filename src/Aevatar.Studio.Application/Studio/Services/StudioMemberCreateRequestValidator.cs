@@ -15,9 +15,14 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// </summary>
 internal static class StudioMemberCreateRequestValidator
 {
-    public static CreateStudioMemberRequest Validate(CreateStudioMemberRequest request)
+    public static CreateStudioMemberRequest Validate(string scopeId, CreateStudioMemberRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        if (request.ImplementationRef != null)
+        {
+            throw new StudioMemberCreateImplementationRefNotAllowedException(scopeId);
+        }
 
         ValidateDisplayName(request.DisplayName);
         ValidateDescription(request.Description);
@@ -25,11 +30,10 @@ internal static class StudioMemberCreateRequestValidator
         ValidateTeamId(request.TeamId);
 
         var implementationKind = ValidateImplementationKind(request.ImplementationKind);
-        var implementationRef = request.ImplementationRef == null
-            ? null
-            : StudioMemberService.NormalizeImplementationRef(
-                implementationKind,
-                request.ImplementationRef);
+        if (implementationKind == MemberImplementationKindNames.Workflow && request.TeamId is null)
+        {
+            throw new InvalidOperationException("teamId is required for workflow members.");
+        }
 
         return request with
         {
@@ -38,9 +42,12 @@ internal static class StudioMemberCreateRequestValidator
             MemberId = string.IsNullOrWhiteSpace(request.MemberId) ? null : request.MemberId.Trim(),
             TeamId = request.TeamId?.Trim(),
             ImplementationKind = implementationKind,
-            ImplementationRef = implementationRef,
+            ImplementationRef = null,
         };
     }
+
+    public static CreateStudioMemberRequest Validate(CreateStudioMemberRequest request) =>
+        Validate(string.Empty, request);
 
     private static string ValidateImplementationKind(string? implementationKind)
     {

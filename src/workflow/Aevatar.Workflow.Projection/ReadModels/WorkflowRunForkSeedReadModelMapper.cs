@@ -22,6 +22,7 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             source.Status ?? string.Empty,
             source.WorkflowYaml ?? string.Empty,
             CopyMap(source.InlineWorkflowYamls),
+            source.ExpectedExecutionMode,
             CopyMap(source.ForkSeedVariables),
             source.ForkSeedCompletedStepIds.ToList(),
             source.ForkSeedLastFailedStepId ?? string.Empty,
@@ -30,7 +31,8 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             source.ForkSeedIdempotencies.ToDictionary(
                 x => x.Key,
                 x => ToView(x.Value),
-                StringComparer.Ordinal));
+                StringComparer.Ordinal),
+            source.CapabilityAdmissionPlan?.Clone());
     }
 
     public WorkflowRunForkSeedProjectionSnapshot ToProjectionSnapshot(WorkflowRunState state)
@@ -49,6 +51,7 @@ public sealed class WorkflowRunForkSeedReadModelMapper
         return new WorkflowRunForkSeedProjectionSnapshot(
             state.WorkflowYaml ?? string.Empty,
             CopyMap(state.InlineWorkflowYamls),
+            state.ExpectedExecutionMode,
             variables,
             completedStepIds,
             lastFailedStepId,
@@ -104,6 +107,7 @@ public sealed class WorkflowRunForkSeedReadModelMapper
 public sealed record WorkflowRunForkSeedProjectionSnapshot(
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode ExpectedExecutionMode,
     IReadOnlyDictionary<string, string> Variables,
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,

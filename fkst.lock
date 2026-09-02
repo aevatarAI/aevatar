@@ -1,0 +1,35 @@
+[[external_source]]
+id = "fkst-packages"
+git = "https://github.com/eanz17/fkst-packages.git"
+
+[external_source.intent]
+rev = "16c14ae0d84fd0b0bbc0e93cdd75320a36c3ba42"
+
+[external_source.resolved]
+rev = "16c14ae0d84fd0b0bbc0e93cdd75320a36c3ba42"
+tree_sha256 = "sha256-4daa7da2dcd818ed948a36eca1c8272aa9bbcfc781698e49d64fc4ced0d8e239"
+
+[[external_source.libraries]]
+name = "contract"
+unit = "libraries/contract"
+exports_sha256 = "sha256-c600e57cc7529db6cb2d75119b70c335ae5ffb752aa2b594d16aa09a508c9a19"
+
+[[external_source.libraries]]
+name = "forge"
+unit = "libraries/forge"
+exports_sha256 = "sha256-2b0b799b77be3318d4405cc6a988b90c9929bc31e15da3ede20cbe45043efc63"
+
+[[external_source.libraries]]
+name = "testkit"
+unit = "libraries/testkit"
+exports_sha256 = "sha256-e8b9b223638f453299ae24b898f2aad51d0ce76ea7edc29e0ffc2bb1a1d85204"
+
+[[external_source.libraries]]
+name = "workflow"
+unit = "libraries/workflow"
+exports_sha256 = "sha256-4b33c2f9e7002470fa6f9db800fa5f8e137e19a5f3a717ed2b2d027c90af5065"
+
+[[external_source.libraries]]
+name = "devloop"
+unit = "libraries/devloop"
+exports_sha256 = "sha256-288aa3dbf1b1324c3ad4e6b86a4c2bef448b12ae2f66ddd53f99e8384d023ebb"

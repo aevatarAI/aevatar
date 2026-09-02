@@ -7,6 +7,7 @@
 
 using System.Collections.Immutable;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -20,10 +21,16 @@ namespace Aevatar.AI.LLMProviders.MEAI;
 /// </summary>
 public sealed class MEAILLMProviderFactory : ILLMProviderFactory, IMEAILLMProviderRegistry
 {
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
     private ImmutableDictionary<string, MEAILLMProvider> _providers =
         ImmutableDictionary<string, MEAILLMProvider>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
 
     private string _defaultName = "openai";
+
+    public MEAILLMProviderFactory(IAgentToolExecutionPort? toolExecutionPort = null)
+    {
+        _toolExecutionPort = toolExecutionPort;
+    }
 
     /// <summary>
     /// 注册一个命名的 LLM Provider。
@@ -33,7 +40,7 @@ public sealed class MEAILLMProviderFactory : ILLMProviderFactory, IMEAILLMProvid
     /// <param name="logger">日志记录器。</param>
     public IMEAILLMProviderRegistry Register(string name, IChatClient client, ILogger? logger = null)
     {
-        var provider = new MEAILLMProvider(name, client, logger);
+        var provider = new MEAILLMProvider(name, client, logger, _toolExecutionPort);
         ImmutableInterlocked.AddOrUpdate(ref _providers, name, provider, (_, _) => provider);
         return this;
     }

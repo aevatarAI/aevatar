@@ -16,13 +16,14 @@
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
-    <Project Path="agents\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
     <Project Path="agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
     <Project Path="agents\Aevatar.GAgents.StatusDashboard\Aevatar.GAgents.StatusDashboard.csproj" />
     <Project Path="agents\Aevatar.GAgents.Device\Aevatar.GAgents.Device.csproj" />
     <Project Path="agents\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
     <Project Path="agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
     <Project Path="agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
+    <Project Path="agents/Aevatar.GAgents.WorkOrder/Aevatar.GAgents.WorkOrder.csproj" />
+    <Project Path="agents/Aevatar.GAgents.ContentArtifacts/Aevatar.GAgents.ContentArtifacts.csproj" />
     <Project Path="agents/Aevatar.GAgents.ChatRouting/Aevatar.GAgents.ChatRouting.csproj" />
   </Folder>
   <Folder Name="/docs/">
@@ -39,11 +40,18 @@
     <File Path="Directory.Packages.props" />
     <File Path="Directory.Build.props" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/secret-store/Aevatar.SecretStore.Tools.csproj" />
+  </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Aevatar.ContentArtifacts.Abstractions/Aevatar.ContentArtifacts.Abstractions.csproj" />
+    <Project Path="src/Aevatar.Audit.Abstractions/Aevatar.Audit.Abstractions.csproj" />
+    <Project Path="src/Aevatar.Audit.Core/Aevatar.Audit.Core.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Binding/Aevatar.AI.ToolProviders.Binding.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ChronoStorage/Aevatar.AI.ToolProviders.ChronoStorage.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.AgentCatalog/Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.AevatarInvocation/Aevatar.AI.ToolProviders.AevatarInvocation.csproj" />
+    <Project Path="src/Aevatar.AI.ToolProviders.StudioProvisioning/Aevatar.AI.ToolProviders.StudioProvisioning.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Channel/Aevatar.AI.ToolProviders.Channel.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ChannelAdmin/Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ToolSetRegistry/Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
@@ -56,6 +64,7 @@
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans/Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
     <Project Path="src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+    <Project Path="src\Aevatar.AI.Application.CodexExecution\Aevatar.AI.Application.CodexExecution.csproj" />
     <Project Path="src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <Project Path="src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
     <Project Path="src\Aevatar.AI.LLMProviders.NyxId\Aevatar.AI.LLMProviders.NyxId.csproj" />
@@ -68,7 +77,10 @@
     <Project Path="src\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.Scripting\Aevatar.AI.ToolProviders.Scripting.csproj" />
     <Project Path="src\Aevatar.AI.Infrastructure.Local\Aevatar.AI.Infrastructure.Local.csproj" />
+    <Project Path="src\Aevatar.AI.Infrastructure.ChronoSandbox\Aevatar.AI.Infrastructure.ChronoSandbox.csproj" />
+    <Project Path="src\Aevatar.AI.Infrastructure.ToolExecution\Aevatar.AI.Infrastructure.ToolExecution.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
+    <Project Path="src\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
     <Project Path="src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <Project Path="src\Aevatar.ChatRouting.Abstractions\Aevatar.ChatRouting.Abstractions.csproj" />
@@ -114,6 +126,7 @@
     <Project Path="src/Aevatar.Authentication.Abstractions/Aevatar.Authentication.Abstractions.csproj" />
     <Project Path="src/Aevatar.Authentication.Hosting/Aevatar.Authentication.Hosting.csproj" />
     <Project Path="src/Aevatar.Authentication.Providers.NyxId/Aevatar.Authentication.Providers.NyxId.csproj" />
+    <Project Path="src/Aevatar.Authentication.ScopeServiceTokens/Aevatar.Authentication.ScopeServiceTokens.csproj" />
   </Folder>
   <Folder Name="/src/studio/">
     <Project Path="src/Aevatar.Studio.Domain/Aevatar.Studio.Domain.csproj" />
@@ -151,6 +164,8 @@
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Schedules/Aevatar.Workflow.Extensions.Schedules.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test/Aevatar.Audit.Abstractions.Tests/Aevatar.Audit.Abstractions.Tests.csproj" />
+    <Project Path="test/Aevatar.Audit.Core.Tests/Aevatar.Audit.Core.Tests.csproj" />
     <Project Path="test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj" />
     <Project Path="test/Aevatar.ChatRouting.Core.Tests/Aevatar.ChatRouting.Core.Tests.csproj" />
     <Project Path="test/Aevatar.ChatRouting.Voice.Integration.Tests/Aevatar.ChatRouting.Voice.Integration.Tests.csproj" />
@@ -160,6 +175,7 @@
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
     <Project Path="test/Aevatar.AI.ToolProviders.AevatarInvocation.Tests/Aevatar.AI.ToolProviders.AevatarInvocation.Tests.csproj" />
+    <Project Path="test/Aevatar.AI.ToolProviders.StudioProvisioning.Tests/Aevatar.AI.ToolProviders.StudioProvisioning.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Ornn.Tests\Aevatar.AI.ToolProviders.Ornn.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.ServiceInvoke.Tests\Aevatar.AI.ToolProviders.ServiceInvoke.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Lark.Tests\Aevatar.AI.ToolProviders.Lark.Tests.csproj" />
@@ -167,12 +183,15 @@
     <Project Path="test\Aevatar.AI.ToolProviders.Workflow.Tests\Aevatar.AI.ToolProviders.Workflow.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Binding.Tests\Aevatar.AI.ToolProviders.Binding.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Infrastructure.Local.Tests\Aevatar.AI.Infrastructure.Local.Tests.csproj" />
+    <Project Path="test\Aevatar.AI.Infrastructure.ChronoSandbox.Tests\Aevatar.AI.Infrastructure.ChronoSandbox.Tests.csproj" />
+    <Project Path="test\Aevatar.Audit.Hosting.Tests\Aevatar.Audit.Hosting.Tests.csproj" />
     <Project Path="test\Aevatar.Bootstrap.Tests\Aevatar.Bootstrap.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Core.Tests\Aevatar.CQRS.Core.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Projection.Core.Tests\Aevatar.CQRS.Projection.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Runtime.Hosting.Tests\Aevatar.Foundation.Runtime.Hosting.Tests.csproj" />
+    <Project Path="test/Aevatar.SecretStore.Tools.Tests/Aevatar.SecretStore.Tools.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.VoicePresence.Tests\Aevatar.Foundation.VoicePresence.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.VoicePresence.MiniCPM.Tests\Aevatar.Foundation.VoicePresence.MiniCPM.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.VoicePresence.OpenAI.Tests\Aevatar.Foundation.VoicePresence.OpenAI.Tests.csproj" />

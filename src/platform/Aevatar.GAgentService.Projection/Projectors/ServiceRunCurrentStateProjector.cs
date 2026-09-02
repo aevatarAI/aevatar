@@ -58,6 +58,7 @@ public sealed class ServiceRunCurrentStateProjector
             CommandId = record.CommandId ?? string.Empty,
             CorrelationId = record.CorrelationId ?? string.Empty,
             EndpointId = record.EndpointId ?? string.Empty,
+            ScheduleId = record.ScheduleId ?? string.Empty,
             ImplementationKind = (int)record.ImplementationKind,
             TargetActorId = record.TargetActorId ?? string.Empty,
             RevisionId = record.RevisionId ?? string.Empty,
@@ -73,6 +74,7 @@ public sealed class ServiceRunCurrentStateProjector
             LastOutput = record.LastOutput ?? string.Empty,
             LastError = record.LastError ?? string.Empty,
         };
+        document.ResultArtifacts.Add(record.ResultArtifacts.Select(static artifact => artifact.Clone()));
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }

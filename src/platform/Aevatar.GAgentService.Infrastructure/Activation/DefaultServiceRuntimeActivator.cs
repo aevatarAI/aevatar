@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GAgentService.Infrastructure.Activation;
@@ -11,19 +12,21 @@ namespace Aevatar.GAgentService.Infrastructure.Activation;
 public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
 {
     private readonly IActorRuntime _runtime;
-    private readonly IScriptDefinitionSnapshotPort _scriptDefinitionSnapshotPort;
-    private readonly IScriptRuntimeProvisioningPort _scriptRuntimeProvisioningPort;
+    // Nullable by design: the scripting capability is optional. Hosts composed without it
+    // resolve these ports to null, and scripting deployment plans are rejected on activation.
+    private readonly IScriptDefinitionSnapshotPort? _scriptDefinitionSnapshotPort;
+    private readonly IScriptRuntimeProvisioningPort? _scriptRuntimeProvisioningPort;
     private readonly IWorkflowDefinitionProvisioningPort _workflowDefinitionProvisioningPort;
 
     public DefaultServiceRuntimeActivator(
         IActorRuntime runtime,
-        IScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
-        IScriptRuntimeProvisioningPort scriptRuntimeProvisioningPort,
+        IScriptDefinitionSnapshotPort? scriptDefinitionSnapshotPort,
+        IScriptRuntimeProvisioningPort? scriptRuntimeProvisioningPort,
         IWorkflowDefinitionProvisioningPort workflowDefinitionProvisioningPort)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort ?? throw new ArgumentNullException(nameof(scriptDefinitionSnapshotPort));
-        _scriptRuntimeProvisioningPort = scriptRuntimeProvisioningPort ?? throw new ArgumentNullException(nameof(scriptRuntimeProvisioningPort));
+        _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort;
+        _scriptRuntimeProvisioningPort = scriptRuntimeProvisioningPort;
         _workflowDefinitionProvisioningPort = workflowDefinitionProvisioningPort ?? throw new ArgumentNullException(nameof(workflowDefinitionProvisioningPort));
     }
 
@@ -45,7 +48,12 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                     request.Identity?.TenantId,
                     ct),
             ServiceDeploymentPlan.PlanSpecOneofCase.WorkflowPlan =>
-                await ActivateWorkflowAsync(request.Artifact.DeploymentPlan.WorkflowPlan, deploymentId, ct),
+                await ActivateWorkflowAsync(
+                    request.Artifact,
+                    request.RevisionId,
+                    deploymentId,
+                    request.Identity?.TenantId,
+                    ct),
             _ => throw new InvalidOperationException("Unsupported deployment plan."),
         };
     }
@@ -92,12 +100,19 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
         string? scopeId,
         CancellationToken ct)
     {
-        var definitionSnapshot = await _scriptDefinitionSnapshotPort.GetRequiredAsync(
+        if (_scriptDefinitionSnapshotPort is not { } scriptDefinitionSnapshotPort ||
+            _scriptRuntimeProvisioningPort is not { } scriptRuntimeProvisioningPort)
+        {
+            throw new InvalidOperationException(
+                "Scripting capability is not enabled on this host; scripting deployment plans cannot be activated.");
+        }
+
+        var definitionSnapshot = await scriptDefinitionSnapshotPort.GetRequiredAsync(
             plan.DefinitionActorId,
             plan.Revision,
             ct);
         var runtimeActorId = $"gagent-service:script-runtime:{deploymentId}";
-        var actorId = await _scriptRuntimeProvisioningPort.EnsureRuntimeAsync(
+        var actorId = await scriptRuntimeProvisioningPort.EnsureRuntimeAsync(
             plan.DefinitionActorId,
             plan.Revision,
             runtimeActorId,
@@ -108,10 +123,21 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
     }
 
     private async Task<ServiceRuntimeActivationResult> ActivateWorkflowAsync(
-        WorkflowServiceDeploymentPlan plan,
+        PreparedServiceRevisionArtifact artifact,
+        string resolvedRevisionId,
         string deploymentId,
+        string? scopeId,
         CancellationToken ct)
     {
+        var plan = artifact.DeploymentPlan.WorkflowPlan;
+        if (plan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !Enum.IsDefined(plan.ExecutionMode))
+        {
+            throw new InvalidOperationException("Workflow service deployment execution mode is required.");
+        }
+        var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
+            artifact,
+            resolvedRevisionId);
         var preferredActorId = string.IsNullOrWhiteSpace(plan.DefinitionActorId)
             ? $"gagent-service:workflow-definition:{deploymentId}"
             : $"{plan.DefinitionActorId}:{deploymentId}";
@@ -120,7 +146,13 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                 preferredActorId,
                 plan.WorkflowName,
                 plan.WorkflowYaml,
-                plan.InlineWorkflowYamls),
+                plan.InlineWorkflowYamls,
+                plan.ExecutionMode,
+                ScopeId: scopeId?.Trim() ?? string.Empty,
+                SourceKind: "service_revision",
+                CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),
+                WorkflowId: bindingIdentity.WorkflowId,
+                RevisionId: bindingIdentity.RevisionId),
             preferredActorId,
             ct);
 

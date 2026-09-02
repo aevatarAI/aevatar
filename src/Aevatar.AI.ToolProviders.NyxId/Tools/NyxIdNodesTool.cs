@@ -5,8 +5,19 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID on-premise node agents.</summary>
-public sealed class NyxIdNodesTool : IAgentTool
+public sealed class NyxIdNodesTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    private static readonly NyxIdClosedActionParser<NyxIdNodesAction> ActionParser = new(
+    [
+        new("list", NyxIdNodesAction.List, new(false, true, false)),
+        new("show", NyxIdNodesAction.Show, new(false, true, false)),
+        new("delete", NyxIdNodesAction.Delete, new(true, false, true)),
+        new("register_token", NyxIdNodesAction.RegisterToken, new(true, false, false)),
+        new("rotate_token", NyxIdNodesAction.RotateToken, new(true, false, true)),
+    ]);
+
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdNodesTool(NyxIdApiClient client) => _client = client;
@@ -17,13 +28,13 @@ public sealed class NyxIdNodesTool : IAgentTool
         "Manage on-premise node agents. " +
         "Actions: list, show, delete, register_token, rotate_token.";
 
-    public string ParametersSchema => """
+    public string ParametersSchema => $$"""
         {
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "delete", "register_token", "rotate_token"],
+              "enum": {{ActionParser.ActionNamesJson}},
               "description": "Action to perform (default: list)"
             },
             "id": {
@@ -38,29 +49,38 @@ public sealed class NyxIdNodesTool : IAgentTool
         }
         """;
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+        ActionParser.Classify(argumentsJson);
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (!parsed.IsValid)
+            return NyxIdClosedActionParser<NyxIdNodesAction>.InvalidActionJson;
+
         var args = ToolArgs.Parse(argumentsJson);
-        var action = args.Str("action", "list");
         var id = args.Str("id");
 
-        return action switch
+        return parsed.Action switch
         {
-            "show" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdNodesAction.Show when !string.IsNullOrWhiteSpace(id) =>
                 await _client.GetNodeAsync(token, id, ct),
-            "delete" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdNodesAction.Delete when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteNodeAsync(token, id, ct),
-            "rotate_token" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdNodesAction.RotateToken when !string.IsNullOrWhiteSpace(id) =>
                 await _client.RotateNodeTokenAsync(token, id, ct),
-            "register_token" => await RegisterTokenAsync(token, args, ct),
+            NyxIdNodesAction.RegisterToken => await RegisterTokenAsync(token, args, ct),
 
-            "show" or "delete" or "rotate_token" =>
-                $"{{\"error\":\"'id' is required for {action}\"}}",
-            _ => await _client.ListNodesAsync(token, ct),
+            NyxIdNodesAction.Show or NyxIdNodesAction.Delete or NyxIdNodesAction.RotateToken =>
+                $"{{\"error\":\"'id' is required for {parsed.Name}\"}}",
+            NyxIdNodesAction.List => await _client.ListNodesAsync(token, ct),
+            _ => NyxIdClosedActionParser<NyxIdNodesAction>.InvalidActionJson,
         };
     }
 
@@ -72,4 +92,13 @@ public sealed class NyxIdNodesTool : IAgentTool
         return await _client.GenerateNodeRegistrationTokenAsync(token,
             JsonSerializer.Serialize(new { name }), ct);
     }
+}
+
+internal enum NyxIdNodesAction
+{
+    List,
+    Show,
+    Delete,
+    RegisterToken,
+    RotateToken,
 }

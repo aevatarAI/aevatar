@@ -1,12 +1,16 @@
+using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Runtime.Audit;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -81,6 +85,32 @@ public static class ChannelRuntimeServiceCollectionExtensions
             IProjectionActivationPlanProvider,
             ConversationDeliveryCommittedStateProjectionActivationPlanProvider>());
 
+        // ─── Workflow result delivery repair committed-outcome observation ───
+        services.AddEventSinkProjectionRuntimeCore<
+            ChannelWorkflowResultDeliveryRepairProjectionContext,
+            ChannelWorkflowResultDeliveryRepairRuntimeLease,
+            ChannelBotWorkflowResultDeliveryRepairOutcome,
+            ProjectionSessionScopeGAgent<ChannelWorkflowResultDeliveryRepairProjectionContext>>(
+            static scopeKey => new ChannelWorkflowResultDeliveryRepairProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ChannelWorkflowResultDeliveryRepairRuntimeLease(context));
+        services.TryAddSingleton<
+            IProjectionSessionEventCodec<ChannelBotWorkflowResultDeliveryRepairOutcome>,
+            ChannelWorkflowResultDeliveryRepairOutcomeCodec>();
+        services.TryAddSingleton<
+            IProjectionSessionEventHub<ChannelBotWorkflowResultDeliveryRepairOutcome>,
+            ProjectionSessionEventHub<ChannelBotWorkflowResultDeliveryRepairOutcome>>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ChannelWorkflowResultDeliveryRepairProjectionContext>,
+            ChannelWorkflowResultDeliveryRepairOutcomeProjector>());
+        services.TryAddSingleton<
+            IChannelWorkflowResultDeliveryRepairObservationPort,
+            ChannelWorkflowResultDeliveryRepairObservationPort>();
+
         // ─── Channel Bot Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
             ChannelBotRegistrationMaterializationContext,
@@ -95,6 +125,10 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             ChannelBotRegistrationMaterializationContext,
             ChannelBotRegistrationProjector>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ChannelBotRegisteredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ChannelBotUnregisteredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ChannelBotRegistrationRejectedAuditTranslator>());
+        services.AddAuditCommittedFactMaterializer<ChannelBotRegistrationMaterializationContext>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();

@@ -6,8 +6,8 @@ using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Infrastructure.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
-using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 using ProtoWorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
 using ProtoWorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
 using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSourceKind;
@@ -30,9 +30,9 @@ public sealed class WorkflowSpreadsheetExtractToolTests
                 new[] { "Name", "Amount" },
                 new[] { "Alice", "42" },
             }));
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 workbookBytes,
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.xlsx",
                 MediaType: $"{XlsxMediaType}; charset=binary"));
             var tool = await GetSpreadsheetExtractToolAsync(port);
@@ -87,9 +87,9 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 BuildWorkbook(("Sheet1", new[] { new[] { "single input" } })),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "single.xlsx",
                 MediaType: XlsxMediaType));
             var tool = await GetSpreadsheetExtractToolAsync(port);
@@ -120,10 +120,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
     public async Task WorkflowSpreadsheetExtractTool_ShouldFailClosedWhenNoInputFileRefsAreAvailable()
     {
         var tool = await GetSpreadsheetExtractToolAsync(new StaticWorkflowFileArtifactReadPort(
-            new ApplicationWorkflowFileRef
+            new ApplicationFileArtifactRef
             {
                 FileId = "unread-workbook",
-                SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+                SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
                 FileName = "unread.xlsx",
                 MediaType = XlsxMediaType,
                 SizeBytes = 13,
@@ -143,6 +143,9 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
         document.RootElement.GetProperty("detail").GetString()
             .Should().Contain("requires a fileRef object or exactly one input file ref");
+        output.Failure.Should().NotBeNull();
+        output.Failure!.ErrorCode.Should().Be("invalid_arguments");
+        output.Failure.ErrorMessage.Should().Contain("requires a fileRef object");
         output.ResultJson.Should().NotContain("hidden workbook");
         output.ResultJson.Should().NotContain("xl/");
     }
@@ -151,27 +154,27 @@ public sealed class WorkflowSpreadsheetExtractToolTests
     public async Task WorkflowSpreadsheetExtractTool_ShouldFailClosedWhenInputFileRefsAreAmbiguous()
     {
         var tool = await GetSpreadsheetExtractToolAsync(new StaticWorkflowFileArtifactReadPort(
-            new ApplicationWorkflowFileRef
+            new ApplicationFileArtifactRef
             {
                 FileId = "unread-workbook",
-                SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+                SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
                 FileName = "unread.xlsx",
                 MediaType = XlsxMediaType,
                 SizeBytes = 13,
             },
             new MemoryStream(Encoding.UTF8.GetBytes("hidden workbook"))));
-        var firstFileRef = new ApplicationWorkflowFileRef
+        var firstFileRef = new ApplicationFileArtifactRef
         {
             FileId = "first-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = "first.xlsx",
             MediaType = XlsxMediaType,
             SizeBytes = 1,
         };
-        var secondFileRef = new ApplicationWorkflowFileRef
+        var secondFileRef = new ApplicationFileArtifactRef
         {
             FileId = "second-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = "second.xlsx",
             MediaType = XlsxMediaType,
             SizeBytes = 1,
@@ -202,10 +205,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
     public async Task WorkflowSpreadsheetExtractTool_ShouldRejectEmptyExplicitFileRef()
     {
         var tool = await GetSpreadsheetExtractToolAsync(new StaticWorkflowFileArtifactReadPort(
-            new ApplicationWorkflowFileRef
+            new ApplicationFileArtifactRef
             {
                 FileId = "unread-workbook",
-                SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+                SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
                 FileName = "unread.xlsx",
                 MediaType = XlsxMediaType,
                 SizeBytes = 13,
@@ -240,10 +243,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         string fileName,
         string expectedError)
     {
-        var fileRef = new ApplicationWorkflowFileRef
+        var fileRef = new ApplicationFileArtifactRef
         {
             FileId = "unsupported-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = fileName,
             MediaType = mediaType,
             SizeBytes = 3,
@@ -271,10 +274,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
     public async Task WorkflowSpreadsheetExtractTool_ShouldRejectWorkbookOverConfiguredByteLimit()
     {
         var workbookBytes = BuildWorkbook(("Sheet1", new[] { new[] { "too large" } }));
-        var fileRef = new ApplicationWorkflowFileRef
+        var fileRef = new ApplicationFileArtifactRef
         {
             FileId = "large-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = "large.xlsx",
             MediaType = XlsxMediaType,
             SizeBytes = workbookBytes.Length,
@@ -304,10 +307,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
     public async Task WorkflowSpreadsheetExtractTool_ShouldRejectUnderreportedStreamOverConfiguredByteLimit()
     {
         var workbookBytes = BuildWorkbook(("Sheet1", new[] { new[] { "stream too large" } }));
-        var fileRef = new ApplicationWorkflowFileRef
+        var fileRef = new ApplicationFileArtifactRef
         {
             FileId = "underreported-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = "underreported.xlsx",
             MediaType = XlsxMediaType,
             SizeBytes = 0,
@@ -416,10 +419,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         string fileName)
     {
         var workbookBytes = BuildWorkbook(("Sheet1", new[] { new[] { "mislabeled" } }));
-        var fileRef = new ApplicationWorkflowFileRef
+        var fileRef = new ApplicationFileArtifactRef
         {
             FileId = "mislabeled-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = fileName,
             MediaType = XlsxMediaType,
             SizeBytes = workbookBytes.Length,
@@ -445,10 +448,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
     public async Task WorkflowSpreadsheetExtractTool_ShouldRejectMacroWorkbookPackage()
     {
         var workbookBytes = BuildWorkbook(("Sheet1", new[] { new[] { "macro" } }), includeMacroProject: true);
-        var fileRef = new ApplicationWorkflowFileRef
+        var fileRef = new ApplicationFileArtifactRef
         {
             FileId = "macro-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = "macro.xlsx",
             MediaType = XlsxMediaType,
             SizeBytes = workbookBytes.Length,
@@ -475,10 +478,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
     public async Task WorkflowSpreadsheetExtractTool_ShouldRejectExternalLinkWorkbookPackage()
     {
         var workbookBytes = BuildWorkbook(("Sheet1", new[] { new[] { "external" } }), includeExternalRelationship: true);
-        var fileRef = new ApplicationWorkflowFileRef
+        var fileRef = new ApplicationFileArtifactRef
         {
             FileId = "external-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = "external.xlsx",
             MediaType = XlsxMediaType,
             SizeBytes = workbookBytes.Length,
@@ -505,10 +508,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
     public async Task WorkflowSpreadsheetExtractTool_ShouldRejectEncryptedWorkbookPackage()
     {
         var workbookBytes = BuildEncryptedWorkbookPackage();
-        var fileRef = new ApplicationWorkflowFileRef
+        var fileRef = new ApplicationFileArtifactRef
         {
             FileId = "encrypted-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = "encrypted.xlsx",
             MediaType = XlsxMediaType,
             SizeBytes = workbookBytes.Length,
@@ -539,10 +542,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
             new[] { "very-long-cell-value", "hidden-column" },
             new[] { "hidden-row", "hidden-value" },
         }));
-        var fileRef = new ApplicationWorkflowFileRef
+        var fileRef = new ApplicationFileArtifactRef
         {
             FileId = "bounded-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = "bounded.xlsx",
             MediaType = XlsxMediaType,
             SizeBytes = workbookBytes.Length,
@@ -585,10 +588,10 @@ public sealed class WorkflowSpreadsheetExtractToolTests
             ("Visible", new[] { new[] { "visible-sheet" } }),
             ("Hidden", new[] { new[] { "hidden-sheet" } }),
         ]);
-        var fileRef = new ApplicationWorkflowFileRef
+        var fileRef = new ApplicationFileArtifactRef
         {
             FileId = "sheet-limited-workbook",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = "sheet-limited.xlsx",
             MediaType = XlsxMediaType,
             SizeBytes = workbookBytes.Length,
@@ -623,15 +626,15 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         output.ResultJson.Should().NotContain("hidden-sheet");
     }
 
-    private static FileSystemWorkflowFileIngressPort CreateFileArtifactPort(string root) =>
-        new(Options.Create(new FileSystemWorkflowFileIngressOptions
+    private static FileSystemFileArtifactPort CreateFileArtifactPort(string root) =>
+        new(Options.Create(new FileSystemFileArtifactOptions
         {
             RootDirectory = root,
             TimeToLive = TimeSpan.FromMinutes(30),
         }));
 
     private static async Task<IWorkflowTool> GetSpreadsheetExtractToolAsync(
-        IWorkflowFileArtifactReadPort readPort,
+        IFileArtifactReadPort readPort,
         WorkflowSpreadsheetExtractOptions? options = null)
     {
         var source = new WorkflowSpreadsheetExtractToolSource(
@@ -642,7 +645,7 @@ public sealed class WorkflowSpreadsheetExtractToolTests
     }
 
     private static async Task<WorkflowToolExecutionResult> ExecuteSpreadsheetExtractAsync(
-        ApplicationWorkflowFileRef fileRef,
+        ApplicationFileArtifactRef fileRef,
         byte[] workbookBytes,
         WorkflowSpreadsheetExtractOptions options)
     {
@@ -660,20 +663,20 @@ public sealed class WorkflowSpreadsheetExtractToolTests
             new ProtoWorkflowCallerCredential()));
     }
 
-    private static ApplicationWorkflowFileRef BuildXlsxFileRef(
+    private static ApplicationFileArtifactRef BuildXlsxFileRef(
         string fileId,
         string fileName,
         byte[] workbookBytes) =>
         new()
         {
             FileId = fileId,
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = fileName,
             MediaType = XlsxMediaType,
             SizeBytes = workbookBytes.Length,
         };
 
-    private static string BuildSpreadsheetExtractArguments(ApplicationWorkflowFileRef fileRef)
+    private static string BuildSpreadsheetExtractArguments(ApplicationFileArtifactRef fileRef)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -694,18 +697,18 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         return JsonSerializer.Serialize(payload);
     }
 
-    private static ProtoWorkflowFileRef ToProtoWorkflowFileRef(ApplicationWorkflowFileRef source) =>
+    private static ProtoWorkflowFileRef ToProtoWorkflowFileRef(ApplicationFileArtifactRef source) =>
         new()
         {
             FileId = source.FileId ?? string.Empty,
             ArtifactId = source.ArtifactId ?? string.Empty,
             SourceKind = source.SourceKind switch
             {
-                ApplicationWorkflowFileSourceKind.ChatInput => ProtoWorkflowFileSourceKind.ChatInput,
-                ApplicationWorkflowFileSourceKind.FormUpload => ProtoWorkflowFileSourceKind.FormUpload,
-                ApplicationWorkflowFileSourceKind.ConnectedServiceResource => ProtoWorkflowFileSourceKind.ConnectedServiceResource,
-                ApplicationWorkflowFileSourceKind.ExternalResource => ProtoWorkflowFileSourceKind.ExternalResource,
-                ApplicationWorkflowFileSourceKind.Generated => ProtoWorkflowFileSourceKind.Generated,
+                ApplicationFileArtifactSourceKind.ChatInput => ProtoWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.FormUpload => ProtoWorkflowFileSourceKind.FormUpload,
+                ApplicationFileArtifactSourceKind.ConnectedServiceResource => ProtoWorkflowFileSourceKind.ConnectedServiceResource,
+                ApplicationFileArtifactSourceKind.ExternalResource => ProtoWorkflowFileSourceKind.ExternalResource,
+                ApplicationFileArtifactSourceKind.Generated => ProtoWorkflowFileSourceKind.Generated,
                 _ => ProtoWorkflowFileSourceKind.Unspecified,
             },
             SourceMessageId = source.SourceMessageId ?? string.Empty,
@@ -953,17 +956,17 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         FormattableString.Invariant(value);
 
     private sealed class StaticWorkflowFileArtifactReadPort(
-        ApplicationWorkflowFileRef fileRef,
-        Stream content) : IWorkflowFileArtifactReadPort
+        ApplicationFileArtifactRef fileRef,
+        Stream content) : IFileArtifactReadPort
     {
-        public ValueTask<ApplicationWorkflowFileRef> DescribeAsync(
-            ApplicationWorkflowFileRef requestedFileRef,
+        public ValueTask<ApplicationFileArtifactRef> DescribeAsync(
+            ApplicationFileArtifactRef requestedFileRef,
             CancellationToken cancellationToken = default) =>
             ValueTask.FromResult(fileRef);
 
-        public ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
-            ApplicationWorkflowFileRef requestedFileRef,
+        public ValueTask<FileArtifactContent> OpenReadAsync(
+            ApplicationFileArtifactRef requestedFileRef,
             CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(new WorkflowFileArtifactContent(fileRef, content));
+            ValueTask.FromResult(new FileArtifactContent(fileRef, content));
     }
 }

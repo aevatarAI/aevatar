@@ -11,6 +11,8 @@ using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Microsoft.AspNetCore.Builder;
@@ -44,10 +46,7 @@ public sealed class ServiceEndpointsTests
                     "type.googleapis.com/demo.Submit",
                     string.Empty,
                     "submit command"),
-            ],
-            ExternalExposure: new ServiceEndpoints.ExternalExposureHttpRequest(
-                " aevatar-orders ",
-                DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))));
+            ]));
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
         host.CommandPort.CreateServiceCommand.Should().NotBeNull();
@@ -60,53 +59,59 @@ public sealed class ServiceEndpointsTests
         });
         host.CommandPort.CreateServiceCommand.Spec.Endpoints.Should().ContainSingle();
         host.CommandPort.CreateServiceCommand.Spec.Endpoints[0].Kind.Should().Be(ServiceEndpointKind.Command);
-        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.Should().NotBeNull();
-        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.NyxidSlug.Should().Be("aevatar-orders");
-        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.RegisteredAt.ToDateTimeOffset()
-            .Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.Should().BeNull();
     }
 
     [Fact]
-    public async Task UpdateServiceAsync_ShouldDispatchTypedExternalExposure()
+    public async Task UpdateExternalExposureAsync_ShouldReturnNotFound()
     {
         await using var host = await EndpointTestHost.StartAsync();
 
-        var response = await host.Client.PutAsJsonAsync("/api/services/orders/external-exposure", new ServiceEndpoints.UpdateServiceExternalExposureHttpRequest(
-            "tenant",
-            "app",
-            "ns",
-            "aevatar-orders",
-            DateTimeOffset.Parse("2026-06-11T01:02:03+00:00")));
-
-        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        host.CommandPort.UpdateExternalExposureCommand.Should().NotBeNull();
-        host.CommandPort.UpdateExternalExposureCommand!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        var response = await host.Client.PutAsJsonAsync("/api/services/orders/external-exposure", new
         {
-            TenantId = "tenant",
-            AppId = "app",
-            Namespace = "ns",
-            ServiceId = "orders",
+            tenantId = "tenant",
+            appId = "app",
+            @namespace = "ns",
+            nyxidSlug = "aevatar-orders",
         });
-        host.CommandPort.UpdateExternalExposureCommand.ExternalExposure.Should().NotBeNull();
-        host.CommandPort.UpdateExternalExposureCommand.ExternalExposure.NyxidSlug.Should().Be("aevatar-orders");
-        host.CommandPort.UpdateExternalExposureCommand.ExternalExposure.RegisteredAt.ToDateTimeOffset()
-            .Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        host.CommandPort.ReconcileExternalExposureCommand.Should().BeNull();
     }
 
     [Fact]
-    public async Task UpdateServiceAsync_WhenReadModelMissing_ShouldStillDispatchAuthoritativeCommand()
+    public async Task CreateServiceAsync_ShouldIgnoreInlineExternalExposureJson()
     {
         await using var host = await EndpointTestHost.StartAsync();
 
-        var response = await host.Client.PutAsJsonAsync("/api/services/orders/external-exposure", new ServiceEndpoints.UpdateServiceExternalExposureHttpRequest(
-            "tenant",
-            "app",
-            "ns",
-            "aevatar-orders",
-            DateTimeOffset.Parse("2026-06-11T01:02:03+00:00")));
+        var response = await host.Client.PostAsJsonAsync("/api/services/", new
+        {
+            tenantId = "tenant",
+            appId = "app",
+            @namespace = "ns",
+            serviceId = "orders",
+            displayName = "Orders",
+            endpoints = new[]
+            {
+                new
+                {
+                    endpointId = "submit",
+                    displayName = "Submit",
+                    kind = "command",
+                    requestTypeUrl = "type.googleapis.com/demo.Submit",
+                    responseTypeUrl = "",
+                    description = "submit command",
+                },
+            },
+            externalExposure = new
+            {
+                nyxidSlug = "aevatar-orders",
+            },
+        });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        host.CommandPort.UpdateExternalExposureCommand.Should().NotBeNull();
+        host.CommandPort.CreateServiceCommand.Should().NotBeNull();
+        host.CommandPort.CreateServiceCommand!.Spec.ExternalExposure.Should().BeNull();
     }
 
     [Fact]
@@ -236,6 +241,248 @@ public sealed class ServiceEndpointsTests
         host.CommandPort.CreateRevisionCommand!.Spec.WorkflowSpec.Should().NotBeNull();
         host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.WorkflowName.Should().Be("approval");
         host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.InlineWorkflowYamls.Should().ContainKey("child.yaml");
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_WhenWorkflowAdmissionFails_ShouldNotDispatchRevisionCommand()
+    {
+        await using var host = await EndpointTestHost.StartAsync(
+            new InvalidOperationException("external capability is not ready"));
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/services/orders/revisions",
+            new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant",
+                "app",
+                "ns",
+                "rev-workflow",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "approval",
+                    "name: approval",
+                    "workflow-definition",
+                    new Dictionary<string, string>())));
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        host.CapabilityAdmission.Requests.Should().ContainSingle();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_WhenExplicitRequestAdmissionFails_ShouldReturnBadRequestWithoutDispatch()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+            Code = "NYXID_EXPLICIT_REQUEST_CONFIRMATION_STALE",
+            SafeMessage = "Explicit request confirmation no longer matches the current contract.",
+        });
+        await using var host = await EndpointTestHost.StartAsync(
+            new WorkflowExternalCapabilityAdmissionException(readiness));
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/services/svc-alpha/revisions",
+            new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant-alpha",
+                "app-alpha",
+                "ns-alpha",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha",
+                    "workflow-definition-alpha",
+                    null),
+                [new NyxIdExplicitRequestConfirmationInput(
+                    "wf-alpha/request-alpha",
+                    "stale-digest",
+                    "read_only")]));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.CapabilityAdmission.Requests.Should().ContainSingle();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_ForWorkflow_ShouldAdmitExactBundleWithTransientHttpAuthority()
+    {
+        const string publishedServiceId = "svc-published-alpha";
+        const string workflowId = "wf-draft-alpha";
+        const string revisionId = "rev-alpha";
+        new[] { publishedServiceId, workflowId, revisionId }
+            .Distinct(StringComparer.Ordinal).Should().HaveCount(3);
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/services/{publishedServiceId}/revisions")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
+                "spoof-tenant",
+                "spoof-app",
+                "spoof-ns",
+                revisionId,
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "approval",
+                    "name: approval",
+                    "workflow-definition",
+                    new Dictionary<string, string>
+                    {
+                        ["child"] = "name: child",
+                    },
+                    workflowId))),
+        };
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer",
+            "runtime-caller-credential");
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+        request.Headers.Add("X-Test-Caller-Id", "caller-alpha");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var admissionRequest = host.CapabilityAdmission.Requests.Should().ContainSingle().Which;
+        admissionRequest.Access.ScopeId.Should().Be("tenant-claim");
+        admissionRequest.Access.CallerId.Should().Be("caller-alpha");
+        admissionRequest.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("runtime-caller-credential");
+        admissionRequest.WorkflowYaml.Should().Be("name: approval");
+        admissionRequest.InlineWorkflowYamls.Should().Contain("child", "name: child");
+        admissionRequest.SourceKind.Should().Be("service_revision");
+        admissionRequest.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        admissionRequest.WorkflowId.Should().Be(workflowId);
+        admissionRequest.RevisionId.Should().Be(revisionId);
+        host.CommandPort.CreateRevisionCommand!.Spec.WorkflowSpec.CapabilityAdmissionPlan.Should().NotBeNull();
+        host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.WorkflowId.Should().Be(workflowId);
+        host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.CapabilityAdmissionPlan.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
+        host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.ExpectedExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_ForWorkflow_ShouldMapExplicitRequestConfirmationWithoutCallerSuppliedGrantor()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/svc-alpha/revisions")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
+                "spoof-tenant",
+                "spoof-app",
+                "spoof-ns",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha",
+                    "workflow-definition-alpha",
+                    null),
+                [
+                    new NyxIdExplicitRequestConfirmationInput(
+                        "wf-alpha/request-alpha",
+                        "digest-alpha",
+                        "read_only"),
+                ])),
+        };
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+        request.Headers.Add("X-Test-Caller-Id", "authenticated-owner-alpha");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var admission = host.CapabilityAdmission.Requests.Should().ContainSingle().Which;
+        admission.Access.CallerId.Should().Be("authenticated-owner-alpha");
+        admission.ExplicitRequestConfirmations.Should().ContainSingle().Which.Should()
+            .BeEquivalentTo(new NyxIdExplicitRequestConfirmation
+            {
+                CallSiteId = "wf-alpha/request-alpha",
+                RequestContractDigest = "digest-alpha",
+                AttestedRisk = NyxIdOperationRisk.ReadOnly,
+            });
+        host.CommandPort.CreateRevisionCommand.Should().NotBeNull();
+        host.CommandPort.CreateRevisionCommand!.ToString().Should().NotContain("attested_risk");
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_WithNullExplicitRequestConfirmation_ShouldReturnTypedBadRequestWithoutAdmissionOrDispatch()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/services/svc-alpha/revisions",
+            new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant-alpha",
+                "app-alpha",
+                "ns-alpha",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha",
+                    "workflow-definition-alpha",
+                    null),
+                [null!]));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should()
+            .Contain("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        host.CapabilityAdmission.Requests.Should().BeEmpty();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_WithMalformedAuthorizationAndDelegation_ShouldRejectBeforeAdmissionOrDispatch()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/svc-alpha/revisions")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant-alpha",
+                "app-alpha",
+                "ns-alpha",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha\nsteps: []\n",
+                    "definition-alpha",
+                    null))),
+        };
+        request.Headers.TryAddWithoutValidation("Authorization", "Bearer token with spaces");
+        request.Headers.TryAddWithoutValidation("X-NyxID-Delegation-Token", "delegation-token");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().Contain("INVALID_WORKFLOW_CALLER_CREDENTIAL");
+        body.Should().NotContain("token with spaces");
+        body.Should().NotContain("delegation-token");
+        host.CapabilityAdmission.Requests.Should().BeEmpty();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
     }
 
     [Fact]
@@ -545,7 +792,17 @@ public sealed class ServiceEndpointsTests
                 DateTimeOffset.Parse("2026-03-14T00:00:00+00:00"),
                 new ServiceExternalExposureSnapshot(
                     "aevatar-orders",
-                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))),
+                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"),
+                    ServiceRegistrationStatus.Registered,
+                    "nyx-svc-1",
+                    "hash-1",
+                    "hash-1",
+                    "",
+                    2,
+                    null,
+                    "kid-1",
+                    true,
+                    42)),
             new ServiceCatalogSnapshot(
                 "tenant/app/ns/billing",
                 "tenant",
@@ -640,6 +897,14 @@ public sealed class ServiceEndpointsTests
         getResponse.ExternalExposure.Should().NotBeNull();
         getResponse.ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
         getResponse.ExternalExposure.RegisteredAt.Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+        getResponse.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Registered.ToString());
+        getResponse.ExternalExposure.NyxidServiceId.Should().Be("nyx-svc-1");
+        getResponse.ExternalExposure.DesiredSpecHash.Should().Be("hash-1");
+        getResponse.ExternalExposure.RegisteredSpecHash.Should().Be("hash-1");
+        getResponse.ExternalExposure.Attempt.Should().Be(2);
+        getResponse.ExternalExposure.CredentialKid.Should().Be("kid-1");
+        getResponse.ExternalExposure.ExposureDesired.Should().BeTrue();
+        getResponse.ExternalExposure.SourceStateVersion.Should().Be(42);
         revisionResponse!.Revisions.Should().ContainSingle();
         host.QueryPort.LastListServicesTake.Should().Be(10);
         host.QueryPort.LastGetServiceIdentity!.ServiceId.Should().Be("orders");
@@ -868,6 +1133,68 @@ public sealed class ServiceEndpointsTests
         var decoded = ServiceIdentity.Parser.ParseFrom(host.InvocationPort.LastRequest.Payload.Value);
         decoded.TenantId.Should().Be("hello-tenant");
         decoded.ServiceId.Should().Be("orders");
+    }
+
+    [Fact]
+    public async Task OpenApiAsync_ShouldReturnAnonymousReadOnlyToolDocument()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.CatalogReader.Service = new ServiceCatalogSnapshot(
+            ServiceKey: "tenant:app:ns:orders",
+            TenantId: "tenant",
+            AppId: "app",
+            Namespace: "ns",
+            ServiceId: "orders",
+            DisplayName: "Orders",
+            DefaultServingRevisionId: "rev-active",
+            ActiveServingRevisionId: "rev-active",
+            DeploymentId: "dep-1",
+            PrimaryActorId: "actor-1",
+            DeploymentStatus: "Active",
+            Endpoints:
+            [
+                new ServiceEndpointSnapshot(
+                    "submit",
+                    "Submit",
+                    "Command",
+                    "type.googleapis.com/aevatar.gagentservice.ServiceIdentity",
+                    string.Empty,
+                    "submit command"),
+            ],
+            PolicyIds: [],
+            UpdatedAt: DateTimeOffset.UtcNow);
+        await host.RevisionCatalog.UpsertRevisionAsync(
+            "tenant:app:ns:orders",
+            "rev-active",
+            new PreparedServiceRevisionArtifact
+            {
+                RevisionId = "rev-active",
+                ImplementationKind = ServiceImplementationKind.Static,
+                ProtocolDescriptorSet = BuildProtocolDescriptorSetFor(ServiceIdentity.Descriptor),
+            });
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/services/orders/openapi.json?tenantId=tenant&appId=app&namespace=ns");
+        request.Headers.Add("X-Test-Authenticated", "false");
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        root.GetProperty("openapi").GetString().Should().Be("3.1.0");
+        var operation = root.GetProperty("paths")
+            .GetProperty("/api/services/orders/invoke/submit")
+            .GetProperty("post");
+        operation.GetProperty("operationId").GetString().Should().Be("orders_submit");
+        operation.GetProperty("x-aevatar-tool").GetProperty("serviceKey").GetString().Should().Be("tenant:app:ns:orders");
+        operation.GetProperty("x-aevatar-tool").GetProperty("endpointId").GetString().Should().Be("submit");
+        operation.GetProperty("requestBody")
+            .GetProperty("content")
+            .GetProperty("application/json")
+            .GetProperty("schema")
+            .GetProperty("properties")
+            .TryGetProperty("tenantId", out _)
+            .Should()
+            .BeTrue();
     }
 
     [Fact]
@@ -1403,7 +1730,8 @@ public sealed class ServiceEndpointsTests
             RecordingServiceInvocationPort invocationPort,
             FakeServiceCatalogQueryReader catalogReader,
             FakeServiceInvocationCatalogQueryReader invocationCatalogReader,
-            FakeServiceRevisionCatalogQueryReader revisionCatalog)
+            FakeServiceRevisionCatalogQueryReader revisionCatalog,
+            RecordingWorkflowCapabilityAdmissionService capabilityAdmission)
         {
             _app = app;
             Client = client;
@@ -1413,6 +1741,7 @@ public sealed class ServiceEndpointsTests
             CatalogReader = catalogReader;
             InvocationCatalogReader = invocationCatalogReader;
             RevisionCatalog = revisionCatalog;
+            CapabilityAdmission = capabilityAdmission;
         }
 
         public HttpClient Client { get; }
@@ -1429,7 +1758,9 @@ public sealed class ServiceEndpointsTests
 
         public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
 
-        public static async Task<EndpointTestHost> StartAsync()
+        public RecordingWorkflowCapabilityAdmissionService CapabilityAdmission { get; }
+
+        public static async Task<EndpointTestHost> StartAsync(Exception? admissionFailure = null)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
@@ -1443,6 +1774,7 @@ public sealed class ServiceEndpointsTests
             var catalogReader = new FakeServiceCatalogQueryReader();
             var invocationCatalogReader = new FakeServiceInvocationCatalogQueryReader(catalogReader);
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+            var capabilityAdmission = new RecordingWorkflowCapabilityAdmissionService(admissionFailure);
             builder.Services.AddHttpContextAccessor();
             builder.Services.AddSingleton<IServiceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(queryPort);
@@ -1451,6 +1783,7 @@ public sealed class ServiceEndpointsTests
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
             builder.Services.AddSingleton<IServiceInvocationCatalogQueryReader>(invocationCatalogReader);
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
+            builder.Services.AddSingleton<IWorkflowExternalCapabilityAdmissionService>(capabilityAdmission);
             builder.Services.AddSingleton<ServiceInvokeReadinessErrorMapper>();
             builder.Services.AddSingleton<IServiceIdentityContextResolver, DefaultServiceIdentityContextResolver>();
 
@@ -1465,6 +1798,7 @@ public sealed class ServiceEndpointsTests
                     AddClaims(http, "X-Test-Tenant-Id", AevatarStandardClaimTypes.TenantId, claims);
                     AddClaims(http, "X-Test-App-Id", AevatarStandardClaimTypes.AppId, claims);
                     AddClaims(http, "X-Test-Namespace", AevatarStandardClaimTypes.Namespace, claims);
+                    AddClaims(http, "X-Test-Caller-Id", "sub", claims);
                     http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
                 }
 
@@ -1484,7 +1818,16 @@ public sealed class ServiceEndpointsTests
                 BaseAddress = new Uri(address),
             };
 
-            return new EndpointTestHost(app, client, commandPort, queryPort, invocationPort, catalogReader, invocationCatalogReader, revisionCatalog);
+            return new EndpointTestHost(
+                app,
+                client,
+                commandPort,
+                queryPort,
+                invocationPort,
+                catalogReader,
+                invocationCatalogReader,
+                revisionCatalog,
+                capabilityAdmission);
         }
 
         public async ValueTask DisposeAsync()
@@ -1505,13 +1848,57 @@ public sealed class ServiceEndpointsTests
         }
     }
 
+    private sealed class RecordingWorkflowCapabilityAdmissionService :
+        IWorkflowExternalCapabilityAdmissionService
+    {
+        private readonly Exception? _failure;
+
+        public RecordingWorkflowCapabilityAdmissionService(Exception? failure = null)
+        {
+            _failure = failure;
+        }
+
+        public List<WorkflowExternalCapabilityAdmissionRequest> Requests { get; } = [];
+
+        public List<PersistedWorkflowCapabilityAdmissionRequest> PersistedRequests { get; } = [];
+
+        public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
+            WorkflowExternalCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            if (_failure is not null)
+                return Task.FromException<WorkflowCapabilityAdmissionPlan>(_failure);
+
+            return Task.FromResult(WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                request.WorkflowYaml,
+                request.InlineWorkflowYamls,
+                request.ExecutionMode,
+                [],
+                []));
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            PersistedRequests.Add(request);
+            if (_failure is not null)
+                return Task.FromException<WorkflowCapabilityAdmissionPlan>(_failure);
+
+            return Task.FromResult(request.Plan.Clone());
+        }
+    }
+
     private sealed class RecordingServiceCommandPort : IServiceCommandPort
     {
         public CreateServiceDefinitionCommand? CreateServiceCommand { get; private set; }
 
         public UpdateServiceDefinitionCommand? UpdateServiceCommand { get; private set; }
 
-        public UpdateServiceExternalExposureCommand? UpdateExternalExposureCommand { get; private set; }
+        public ReconcileExternalExposureCommand? ReconcileExternalExposureCommand { get; private set; }
+
+        public RetireExternalExposureCommand? RetireExternalExposureCommand { get; private set; }
 
         public CreateServiceRevisionCommand? CreateRevisionCommand { get; private set; }
 
@@ -1551,10 +1938,16 @@ public sealed class ServiceEndpointsTests
             return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-update-service", "corr-update-service"));
         }
 
-        public Task<ServiceCommandAcceptedReceipt> UpdateServiceExternalExposureAsync(UpdateServiceExternalExposureCommand command, CancellationToken ct = default)
+        public Task<ServiceCommandAcceptedReceipt> ReconcileExternalExposureAsync(ReconcileExternalExposureCommand command, CancellationToken ct = default)
         {
-            UpdateExternalExposureCommand = command;
-            return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-update-external-exposure", "corr-update-external-exposure"));
+            ReconcileExternalExposureCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-reconcile-external-exposure", "corr-reconcile-external-exposure"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> RetireExternalExposureAsync(RetireExternalExposureCommand command, CancellationToken ct = default)
+        {
+            RetireExternalExposureCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-retire-external-exposure", "corr-retire-external-exposure"));
         }
 
         public Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(CreateServiceRevisionCommand command, CancellationToken ct = default)

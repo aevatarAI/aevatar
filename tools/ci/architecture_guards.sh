@@ -2,6 +2,40 @@
 
 set -euo pipefail
 
+scan_projection_document_reader_list_async() {
+  local projection_document_reader_scan_roots=("$@")
+  local projection_document_reader_file
+  local projection_document_reader_names
+  local projection_document_reader_name
+
+  while IFS= read -r projection_document_reader_file; do
+    [[ -z "${projection_document_reader_file}" ]] && continue
+
+    projection_document_reader_names="$(
+      {
+        rg --no-filename --no-line-number -o \
+          'IProjectionDocumentReader<[^>]+>[[:space:]]+_?[A-Za-z][A-Za-z0-9_]*' \
+          "${projection_document_reader_file}" \
+          | rg -o '_?[A-Za-z][A-Za-z0-9_]*$' \
+          | sort -u
+      } || true
+    )"
+
+    while IFS= read -r projection_document_reader_name; do
+      [[ -z "${projection_document_reader_name}" ]] && continue
+
+      rg -n --with-filename \
+        "(^|[^A-Za-z0-9_])${projection_document_reader_name}\\.ListAsync\\(" \
+        "${projection_document_reader_file}" || true
+    done <<< "${projection_document_reader_names}"
+  done < <(rg -l "IProjectionDocumentReader<" "${projection_document_reader_scan_roots[@]}" 2>/dev/null)
+}
+
+if [[ "${AEVATAR_ARCHITECTURE_GUARDS_RUN_PROJECTION_DOCUMENT_READER_SCAN_ONLY:-}" == "1" ]]; then
+  scan_projection_document_reader_list_async "$@"
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
@@ -541,63 +575,21 @@ if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   exit 1
 fi
 
-# Refactor (PR #1010 r3):
-#   Old pattern: /run-agent, /disable-agent, and /enable-agent used runner execution
-#   readmodel Status as a cross-authority business admission view.
-#   New principle: lifecycle command admission is catalog-only. Runner Enabled/Disabled
-#   is authoritative inside SkillRunnerGAgent's own turn and is later observed via readmodel.
-python3 - <<'PY'
-from pathlib import Path
-import sys
-
-path = Path("agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderTool.cs")
-text = path.read_text()
-methods = [
-    "RunAgentAsync",
-    "DisableAgentAsync",
-    "EnableAgentAsync",
-    "RequireManagedAgentAsync",
-]
-forbidden = [
-    "executionQueryPort",
-    "_executionQueryPort",
-    "QueryAgentForCallerAsync",
-    "MergeExecution",
-    "StatusDisabled",
-    "StatusRunning",
-]
-
-def method_body(source: str, name: str) -> str:
-    marker = name + "("
-    start = source.find(marker)
-    if start < 0:
-        raise RuntimeError(f"method not found: {name}")
-    open_brace = source.find("{", start)
-    if open_brace < 0:
-        raise RuntimeError(f"method body not found: {name}")
-    depth = 0
-    for index in range(open_brace, len(source)):
-        char = source[index]
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return source[open_brace:index + 1]
-    raise RuntimeError(f"method body unterminated: {name}")
-
-violations = []
-for method in methods:
-    body = method_body(text, method)
-    for token in forbidden:
-        if token in body:
-            violations.append(f"{path}:{method}: forbidden lifecycle admission token `{token}`")
-
-if violations:
-    print("\n".join(violations))
-    print("Scheduled-agent lifecycle command admission must stay catalog-only; execution Status belongs to runner-owned observation.")
-    sys.exit(1)
-PY
+# Final SkillRunner cleanup (#2733): scheduled workflow/team execution must stay on
+# ScheduledDispatch + workflow/team service invocation. Do not reintroduce the legacy
+# SkillRunnerGAgent runtime, ports, proto, readmodel, tests, or schedule-kind branch.
+skill_runner_reintro_report="$(
+  rg -n "SkillRunnerGAgent|ISkillRunner(CommandPort|CronSchedulePort|ExecutionQueryPort)|SkillRunner(CommandPort|CronSchedulePort|ExecutionDocument|ExecutionProjector|ExecutionQueryPort|State|LegacyAliases|OutboundDeliveryPort|StreamingReplySink|OutputChunker|ToolFailureCounter|InteractiveDeliveryTrackingMiddleware)|InitializeSkillRunnerCommand|TriggerSkillRunnerExecutionCommand|AdmitSkillRunnerExternalTriggerCommand|ScheduledDispatchScheduleKind\\.SkillRunner|ScheduledDispatchScheduleKindState\\.SkillRunner" \
+    agents src test \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    || true
+)"
+if [ -n "${skill_runner_reintro_report}" ]; then
+  echo "${skill_runner_reintro_report}"
+  echo "Legacy SkillRunner scheduled runtime/model is forbidden; use ScheduledDispatch + workflow/team service invocation."
+  exit 1
+fi
 
 # Refactor (iter92/cluster-645):
 #   Old pattern: no guard blocked new production consumers from depending on StreamingProxy.
@@ -938,6 +930,7 @@ END {
 fi
 
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
+bash "${SCRIPT_DIR}/nyxid_chat_semantics_guard.sh"
 bash "${SCRIPT_DIR}/workflow_call_context_guard.sh"
 bash "${SCRIPT_DIR}/command_observation_attach_only_guard.sh"
 bash "${SCRIPT_DIR}/projection_attach_existing_side_read_guard.sh"
@@ -965,6 +958,8 @@ bash "${SCRIPT_DIR}/studio_projection_readmodel_registration_guard.sh"
 bash "${SCRIPT_DIR}/studio_fact_owner_guard.sh"
 bash "${SCRIPT_DIR}/studio_catalog_storage_serializer_guard.sh"
 bash "${SCRIPT_DIR}/frontend_static_boundary_guard.sh"
+bash "${SCRIPT_DIR}/workflow_observatory_readonly_guard.sh"
+bash "${SCRIPT_DIR}/backend_console_static_asset_guard.sh"
 
 studio_catalog_query_ports=(
   "src/Aevatar.Studio.Application/Studio/Abstractions/IConnectorCatalogQueryPort.cs"
@@ -1047,17 +1042,14 @@ if rg -n "Projection:ReadModel:Bindings" src test; then
 fi
 
 set +e
-# Check for reader.ListAsync() calls (dot-prefixed) in files that use IProjectionDocumentReader.
-# Business-domain ListAsync methods (e.g., IStreamingProxyParticipantStore.ListAsync) are excluded
-# by requiring the call to be on a reader/document field (dot prefix pattern).
+# Check only ListAsync() calls on variables declared as IProjectionDocumentReader.
+# Business query ports may expose ListAsync and must not be inferred from file or path names.
 projection_document_reader_scan_roots=(src test)
 if [[ -d demos ]]; then
   projection_document_reader_scan_roots+=(demos)
 fi
 projection_document_reader_list_report="$(
-  rg -l "IProjectionDocumentReader<" "${projection_document_reader_scan_roots[@]}" \
-    | xargs -r rg -n "\.ListAsync\(" \
-    | rg -i "(reader|document|projection).*\.ListAsync"
+  scan_projection_document_reader_list_async "${projection_document_reader_scan_roots[@]}"
 )"
 projection_document_reader_list_status=$?
 set -e
@@ -1838,7 +1830,8 @@ command_side_readmodel_violations="$(
     src/Aevatar.Mainnet.Host.Api \
     -g '*.cs' \
     -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs' \
-    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs' || true
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/HttpOAuthClientEsAclProbe.cs' || true
 )"
 
 if [ -n "${command_side_readmodel_violations}" ]; then
@@ -1997,6 +1990,133 @@ check_orchestration_class_guard() {
   fi
 }
 
+check_system_skill_overlay_dual_seam_injection() {
+  local nyxid_chat_gagent_file="agents/Aevatar.GAgents.NyxidChat/NyxIdChatGAgent.cs"
+  local conversation_reply_generator_file="agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs"
+  local nyxid_di_file="agents/Aevatar.GAgents.NyxidChat/ServiceCollectionExtensions.cs"
+  local ornn_di_file="src/Aevatar.AI.ToolProviders.Ornn/ServiceCollectionExtensions.cs"
+  local ornn_provider_file="src/Aevatar.AI.ToolProviders.Ornn/SystemSkillOverlay/OrnnSystemSkillOverlayProvider.cs"
+  local prompt_injection_test_file="test/Aevatar.AI.Tests/SystemSkillOverlayPromptInjectionTests.cs"
+
+  if ! rg -q "override string DecorateSystemPrompt" "${nyxid_chat_gagent_file}" \
+    || ! rg -q "SystemSkillOverlayRequest\.DirectChat" "${nyxid_chat_gagent_file}" \
+    || ! rg -q "SystemPromptLayerComposer\.Compose" "${nyxid_chat_gagent_file}" \
+    || ! rg -q "IBuiltInPromptFloorProvider" "${nyxid_chat_gagent_file}"; then
+    echo "NyxIdChatGAgent.DecorateSystemPrompt must compose the typed kernel, mandatory floor, dm global layer, and runtime facts."
+    exit 1
+  fi
+
+  if ! awk '
+    /private string BuildSystemPrompt[[:space:]]*\(/ { in_func = 1; body_started = 0; brace_depth = 0 }
+    in_func {
+      line = $0
+      if (line ~ /SystemPromptLayerComposer\.Compose[[:space:]]*\(/) found_composer = 1
+      if (line ~ /_builtInPromptFloorProvider\.GetFloor[[:space:]]*\(/) found_floor = 1
+      opens = gsub(/\{/, "{", line)
+      closes = gsub(/\}/, "}", line)
+      if (!body_started && opens > 0) body_started = 1
+      brace_depth += opens - closes
+      if (body_started && brace_depth == 0) in_func = 0
+    }
+    END { exit(found_composer && found_floor ? 0 : 1) }
+  ' "${conversation_reply_generator_file}"; then
+    echo "ConversationReplyGenerator.BuildSystemPrompt must compose the typed kernel and mandatory floor through SystemPromptLayerComposer."
+    exit 1
+  fi
+
+  if rg -q -e 'AppendSystemSkillOverlay|LoadBaseSystemPrompt' \
+    "${nyxid_chat_gagent_file}" "${conversation_reply_generator_file}"; then
+    echo "Direct and relay prompt seams must not retain hand-written overlay append or duplicate kernel loading paths."
+    exit 1
+  fi
+
+  if rg -q -e 'Services\.GetService<(IBuiltInPromptFloorProvider|ISystemSkillOverlayProvider)>' \
+    -e 'new[[:space:]]+BuiltInPromptFloorProvider[[:space:]]*\(' \
+    "${nyxid_chat_gagent_file}" "${conversation_reply_generator_file}"; then
+    echo "Direct and relay prompt seams must receive prompt providers through explicit constructor dependencies."
+    exit 1
+  fi
+
+  if [ ! -f "${prompt_injection_test_file}" ]; then
+    echo "System skill overlay prompt injection tests are required."
+    exit 1
+  fi
+
+  if ! rg -q 'TryAddSingleton<IBuiltInPromptFloorProvider>' "${nyxid_di_file}"; then
+    echo "AddNyxIdChat must always register the mandatory built-in prompt floor."
+    exit 1
+  fi
+
+  if ! rg -q 'TryAddSingleton<.*ISystemSkillOverlayProvider' "${ornn_di_file}"; then
+    echo "The optional Ornn global prompt layer must have an independent production DI registration."
+    exit 1
+  fi
+
+  if rg -q -e 'ISystemSkillOverlayFallback|IBuiltInPromptFloorProvider' "${ornn_provider_file}"; then
+    echo "The Ornn global provider must not depend on or return the mandatory built-in floor."
+    exit 1
+  fi
+
+  if rg -q 'ISystemSkillOverlayFallback' agents src -g '*.cs'; then
+    echo "The retired remote-or-floor fallback contract must not be reintroduced."
+    exit 1
+  fi
+
+  # Core owns only pure composition and must not resolve host providers.
+  if rg -q -e 'Get(Service|RequiredService)<(ISystemSkillOverlayProvider|IBuiltInPromptFloorProvider)>' \
+    src/Aevatar.AI.Core -g '*.cs'; then
+    echo "Aevatar.AI.Core must remain provider-neutral; host seams supply all typed prompt layers."
+    exit 1
+  fi
+}
+
+check_system_skill_overlay_eval_docs() {
+  local eval_file="tools/eval/system_skill_overlay_golden_tasks.md"
+
+  if [ ! -s "${eval_file}" ]; then
+    echo "System skill overlay golden-tasks document is required (tools/eval/system_skill_overlay_golden_tasks.md)."
+    exit 1
+  fi
+}
+
+check_system_skill_overlay_set_source() {
+  local options_file="src/Aevatar.AI.Abstractions/ToolProviders/SystemSkillOverlayOptions.cs"
+  local provider_file="src/Aevatar.AI.ToolProviders.Ornn/SystemSkillOverlay/OrnnSystemSkillOverlayProvider.cs"
+  local provider_interface="src/Aevatar.AI.Abstractions/ToolProviders/ISystemSkillOverlayProvider.cs"
+
+  # The overlay source is a public, org-owned skillset resolved by a non-secret name — never an org
+  # service token secret (issue #2498). Reintroducing OrgServiceToken re-adds a secret and a squat vector.
+  if rg -q -e 'OrgServiceToken' agents src -g '*.cs'; then
+    echo "System skill overlay must not reintroduce OrgServiceToken; the public org-owned set is read with no secret."
+    exit 1
+  fi
+  if ! rg -q -e '\bSetName\b' "${options_file}"; then
+    echo "System skill overlay options must expose the non-secret SetName as the overlay source."
+    exit 1
+  fi
+
+  # Members come from the skillset (membership = trust anchor), not a squattable tag search.
+  if ! rg -q -e 'GetSkillSetAsync' "${provider_file}"; then
+    echo "The Ornn overlay provider must resolve members from the skillset (GetSkillSetAsync)."
+    exit 1
+  fi
+  if rg -q -e 'SearchSkillsAsync' "${provider_file}"; then
+    echo "The Ornn overlay provider must not fall back to a tag search (SearchSkillsAsync); the set is the source."
+    exit 1
+  fi
+
+  # Never query-time: the seam read GetCurrent must be a synchronous cached read, not an awaited fetch.
+  if rg -q -e 'Task<[^>]*>[[:space:]]+GetCurrent' "${provider_interface}"; then
+    echo "ISystemSkillOverlayProvider.GetCurrent must be a synchronous cached read (never a query-time fetch)."
+    exit 1
+  fi
+
+  if rg -q -e 'ISystemSkillOverlayFallback|IBuiltInPromptFloorProvider' "${provider_file}"; then
+    echo "Remote gate, TTL, and last-known-good behavior must remain confined to the optional global layer."
+    exit 1
+  fi
+}
+
 check_orchestration_class_guard \
   "src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRunApplicationService.cs" \
   60 \
@@ -2009,12 +2129,21 @@ check_orchestration_class_guard \
   "src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs" \
   190 \
   10
+check_system_skill_overlay_dual_seam_injection
+check_system_skill_overlay_eval_docs
+check_system_skill_overlay_set_source
+
+echo "Running agent profile governance guard..."
+bash tools/ci/agent_profile_governance_guard.sh
 
 echo "Running CQRS/EventSourcing boundary guard..."
 bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
 
 echo "Running committed-state projection guard..."
 bash tools/ci/committed_state_projection_guard.sh
+
+echo "Running audit trail guard..."
+bash tools/ci/audit_trail_guards.sh
 
 echo "Running projection activation provider coverage guard..."
 bash tools/ci/projection_activation_provider_coverage_guard.sh
@@ -2028,11 +2157,11 @@ bash tools/ci/runtime_callback_guards.sh
 echo "Running channel card literal guard..."
 bash tools/ci/channel_card_literal_guard.sh
 
-echo "Running tool approval wiring guard..."
-bash tools/ci/tool_approval_wiring_guard.sh
-
 echo "Running Nyx relay replay authority guard..."
 python3 tools/ci/guards/nyx_relay_replay_authority_guard.py
+
+echo "Running Lark agent path contract guard..."
+bash tools/ci/lark_agent_path_contract_guard.sh
 
 echo "Running docs lint guard..."
 bash tools/docs/lint.sh

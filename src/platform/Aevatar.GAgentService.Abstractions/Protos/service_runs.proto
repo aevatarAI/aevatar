@@ -8,6 +8,7 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
 import "service_endpoint.proto";
 import "service_revision.proto";
+import "content_artifact_messages.proto";
 
 enum ServiceRunStatus {
   SERVICE_RUN_STATUS_UNSPECIFIED = 0;
@@ -15,6 +16,15 @@ enum ServiceRunStatus {
   SERVICE_RUN_STATUS_COMPLETED = 2;
   SERVICE_RUN_STATUS_FAILED = 3;
   SERVICE_RUN_STATUS_STOPPED = 4;
+  SERVICE_RUN_STATUS_OUTCOME_UNCERTAIN = 5;
+}
+
+enum ServiceRunTerminalNotificationDeliveryStatus {
+  SERVICE_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_UNSPECIFIED = 0;
+  SERVICE_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_PREPARED = 1;
+  SERVICE_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_DISPATCHED = 2;
+  SERVICE_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_EXPIRED = 3;
+  SERVICE_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_RETRY_SCHEDULED = 4;
 }
 
 message ServiceRunRecord {
@@ -35,12 +45,33 @@ message ServiceRunRecord {
   ServiceIdentity identity = 15;
   string last_output = 16;
   string last_error = 17;
+  string schedule_id = 18;
+  ServiceRunCompletionNotificationTarget completion_notification_target = 19;
+  repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 20;
 }
 
 message ServiceRunState {
   ServiceRunRecord record = 1;
   int64 last_applied_event_version = 2;
   string last_event_id = 3;
+  ServiceRunTerminalNotification pending_terminal_notification = 4;
+  ServiceRunTerminalNotificationDeliveryStatus terminal_notification_delivery_status = 5;
+  int32 terminal_notification_attempt = 6;
+  string terminal_notification_retry_callback_id = 7;
+  google.protobuf.Timestamp terminal_notification_retry_at = 8;
+}
+
+message ServiceRunTerminalNotification {
+  string delivery_id = 1;
+  string run_id = 2;
+  string target_actor_id = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+  ServiceRunStatus status = 6;
+  string output = 7;
+  string error = 8;
+  google.protobuf.Timestamp terminal_at = 9;
+  repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 10;
 }
 
 message RegisterServiceRunRequested {
@@ -52,6 +83,13 @@ message UpdateServiceRunStatusRequested {
   ServiceRunStatus status = 2;
   google.protobuf.StringValue last_output = 3;
   google.protobuf.StringValue last_error = 4;
+  repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 5;
+}
+
+message AttachServiceRunResultArtifactsRequested {
+  string run_id = 1;
+  int64 expected_state_version = 2;
+  repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 3;
 }
 
 message ServiceRunRegisteredEvent {
@@ -64,4 +102,39 @@ message ServiceRunStatusUpdatedEvent {
   google.protobuf.Timestamp updated_at = 3;
   google.protobuf.StringValue last_output = 4;
   google.protobuf.StringValue last_error = 5;
+  repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 6;
+}
+
+message ServiceRunResultArtifactsAttachedEvent {
+  string run_id = 1;
+  repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 2;
+  google.protobuf.Timestamp attached_at = 3;
+}
+
+message ServiceRunTerminalNotificationPreparedEvent {
+  ServiceRunTerminalNotification notification = 1;
+}
+
+message ServiceRunTerminalNotificationDispatchedEvent {
+  string delivery_id = 1;
+  google.protobuf.Timestamp dispatched_at = 2;
+  optional int32 attempt = 3;
+}
+
+message ServiceRunTerminalNotificationExpiredEvent {
+  string delivery_id = 1;
+  google.protobuf.Timestamp expired_at = 2;
+  optional int32 attempt = 3;
+}
+
+message ServiceRunTerminalNotificationRetryScheduledEvent {
+  string delivery_id = 1;
+  int32 attempt = 2;
+  string callback_id = 3;
+  google.protobuf.Timestamp retry_at = 4;
+}
+
+message ServiceRunTerminalNotificationRetryFiredEvent {
+  string delivery_id = 1;
+  int32 attempt = 2;
 }

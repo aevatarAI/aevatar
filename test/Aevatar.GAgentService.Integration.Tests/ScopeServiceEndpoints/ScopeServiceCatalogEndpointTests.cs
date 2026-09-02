@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -10,23 +11,22 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
-using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
-using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -35,10 +35,10 @@ using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -80,7 +80,8 @@ public sealed class ScopeServiceCatalogEndpointTests : ScopeServiceEndpointTestK
                 DateTimeOffset.UtcNow,
                 new ServiceExternalExposureSnapshot(
                     "aevatar-orders",
-                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))),
+                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"),
+                    SourceStateVersion: 44)),
             new ServiceCatalogSnapshot(
                 "scope-a:default:default:billing",
                 "scope-a",
@@ -190,6 +191,7 @@ public sealed class ScopeServiceCatalogEndpointTests : ScopeServiceEndpointTestK
         body.Single(x => x.ServiceId == "orders").ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
         body.Single(x => x.ServiceId == "orders").ExternalExposure!.RegisteredAt.Should()
             .Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+        body.Single(x => x.ServiceId == "orders").ExternalExposure!.SourceStateVersion.Should().Be(44);
         body.Single(x => x.ServiceId == "orders").InvokeReady.Should().BeTrue();
         body.Single(x => x.ServiceId == "orders").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         body.Single(x => x.ServiceId == "orders").InvokeUnavailableReason.Should().BeNull();
@@ -394,14 +396,20 @@ public sealed class ScopeServiceCatalogEndpointTests : ScopeServiceEndpointTestK
     }
 
     [Fact]
-    public async Task GetMemberPublishedServiceEndpoint_ShouldRejectDifferentAuthenticatedMember()
+    public async Task GetMemberPublishedServiceEndpoint_ShouldAllowMatchingAuthenticatedMember()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/members/member-a/published-service");
-        request.Headers.Add("X-Test-Member-Id", "member-b");
+        request.Headers.Add("X-Test-Scope-Id", "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-a");
 
         var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberPublishedServiceHttpResponse>();
 
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().NotBeNull();
+        body!.ScopeId.Should().Be("scope-a");
+        body.MemberId.Should().Be("member-a");
+        body.PublishedServiceId.Should().Be("member-a");
     }
 }

@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
@@ -19,7 +21,14 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
     public static void Map(IEndpointRouteBuilder group)
     {
         group.MapPost("/workflow-external-approvals/{routeKey}", HandleAsync)
-            .WithName("PostWorkflowExternalApprovalCallback");
+            .WithName("PostWorkflowExternalApprovalCallback")
+            .WithEndpointAudit(
+                "workflow.external-approval.callback",
+                AuditSensitivityLevel.Confidential,
+                "workflow_run",
+                // Static target: {routeKey} is an opaque continuation key, never recorded.
+                EndpointAuditTargetResolvers.Static("workflow_run", "external-approval"),
+                captureUnauthenticated: true);
     }
 
     internal static async Task<IResult> HandleAsync(

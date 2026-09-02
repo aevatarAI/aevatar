@@ -15,6 +15,8 @@ import {
   AevatarStatusTag,
   AevatarWorkbenchLayout,
 } from "@/shared/ui/aevatarPageShells";
+import AevatarContentSkeleton from "@/shared/ui/AevatarContentSkeleton";
+import AevatarTooltip from "@/shared/ui/AevatarTooltip";
 import {
   cardListActionStyle,
   cardListStyle,
@@ -131,15 +133,17 @@ const PrimitiveCatalogCard: React.FC<{
         <Typography.Text strong style={{ fontSize: 16, lineHeight: 1.4 }}>
           {primitive.name}
         </Typography.Text>
-        <Typography.Paragraph
-          ellipsis={{ rows: 2, tooltip: summary }}
-          style={{
-            color: "var(--ant-color-text-secondary)",
-            margin: 0,
-          }}
-        >
-          {summary}
-        </Typography.Paragraph>
+        <AevatarTooltip title={summary}>
+          <Typography.Paragraph
+            ellipsis={{ rows: 2 }}
+            style={{
+              color: "var(--ant-color-text-secondary)",
+              margin: 0,
+            }}
+          >
+            {summary}
+          </Typography.Paragraph>
+        </AevatarTooltip>
       </div>
 
       <div
@@ -320,7 +324,14 @@ const PrimitivesPage: React.FC = () => {
             title={t("pages.primitives.index.available.connectors", "Available connectors")}
             titleHelp={t("pages.primitives.index.the.card.flow.catalog", "The card flow catalog helps you quickly browse capability categories, parameter contracts, and sample behavior definitions.")}
           >
-            {filteredRows.length === 0 ? (
+            {primitivesQuery.isLoading ? (
+              <AevatarContentSkeleton
+                ariaLabel={t("pages.primitives.index.loading.connectors", "Loading connectors")}
+                listLayout="grid"
+                rows={4}
+                variant="list"
+              />
+            ) : filteredRows.length === 0 ? (
               <Empty
                 description={t("pages.primitives.index.there.are.no.matching", "There are no matching connectors under the current filter criteria.")}
                 image={Empty.PRESENTED_IMAGE_SIMPLE}

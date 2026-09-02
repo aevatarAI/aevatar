@@ -1,19 +1,23 @@
-import type { Edge, Node } from "@xyflow/react";
-import React from "react";
-import GraphCanvas from "@/shared/graphs/GraphCanvas";
+import type { Edge, Node } from '@xyflow/react';
+import React from 'react';
+import GraphCanvas from '@/shared/graphs/GraphCanvas';
 import type {
   StudioGraphEdgeData,
   StudioGraphNodeData,
-} from "@/shared/studio/graph";
-import WorkflowStudioEmptyState from "./WorkflowStudioEmptyState";
+} from '@/shared/studio/graph';
+import WorkflowStudioEmptyState from './WorkflowStudioEmptyState';
 
 type WorkflowStudioCanvasProps = {
+  readonly addFirstStepDisabled?: boolean;
   readonly edges: readonly Edge<StudioGraphEdgeData>[];
   readonly emptyDescription?: string;
   readonly nodes: readonly Node<StudioGraphNodeData>[];
   readonly onAddFirstStep?: () => void;
   readonly onCanvasSelect?: () => void;
-  readonly onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
+  readonly onConnectNodes?: (
+    sourceNodeId: string,
+    targetNodeId: string,
+  ) => void;
   readonly onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
   readonly onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
   readonly onEdgeSelect?: (edgeId: string) => void;
@@ -24,6 +28,7 @@ type WorkflowStudioCanvasProps = {
 };
 
 const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
+  addFirstStepDisabled,
   edges,
   emptyDescription,
   nodes,
@@ -41,10 +46,11 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
   <div
     data-testid="workflow-studio-canvas"
     style={{
-      background: "#fbfbfc",
+      background: '#eef3f8',
       flex: 1,
       minHeight: 0,
-      position: "relative",
+      padding: 10,
+      position: 'relative',
     }}
   >
     <GraphCanvas
@@ -60,6 +66,7 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
         nodes.length === 0 ? (
           <WorkflowStudioEmptyState
             description={emptyDescription}
+            disabled={addFirstStepDisabled}
             onAddFirstStep={onAddFirstStep}
           />
         ) : null

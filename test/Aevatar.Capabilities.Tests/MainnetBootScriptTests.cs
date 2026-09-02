@@ -6,6 +6,54 @@ namespace Aevatar.Capabilities.Tests;
 public sealed class MainnetBootScriptTests
 {
     [Fact]
+    public async Task BootScript_LocalMode_ShouldPassCompleteDevelopmentStartupBoundary()
+    {
+        var repoRoot = FindRepoRoot();
+        var sourceDir = Path.Combine(repoRoot, "src", "Aevatar.Mainnet.Host.Api");
+
+        using var tempDir = new TemporaryDirectory();
+        var scriptPath = Path.Combine(tempDir.Path, "boot.sh");
+        var projectPath = Path.Combine(tempDir.Path, "Aevatar.Mainnet.Host.Api.csproj");
+        var fakeDotnetPath = Path.Combine(tempDir.Path, "record-dotnet-env.sh");
+        var recordedEnvironmentPath = Path.Combine(tempDir.Path, "dotnet-env.txt");
+        File.Copy(Path.Combine(sourceDir, "boot.sh"), scriptPath);
+        File.Copy(Path.Combine(sourceDir, "Aevatar.Mainnet.Host.Api.csproj"), projectPath);
+        File.WriteAllText(
+            fakeDotnetPath,
+            $"#!/usr/bin/env bash\nenv > '{recordedEnvironmentPath}'\nexit 1\n");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                fakeDotnetPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        using var process = Process.Start(CreateProcessStartInfo(
+            scriptPath,
+            tempDir.Path,
+            overrides: new Dictionary<string, string?>
+            {
+                ["DOTNET_CMD"] = fakeDotnetPath,
+                ["AEVATAR_Audit__ActorIdentityHasher__ActiveKeyId"] = null,
+                ["AEVATAR_Audit__ActorIdentityHasher__Keys__0__KeyId"] = null,
+                ["AEVATAR_Audit__ActorIdentityHasher__Keys__0__Key"] = null,
+            }));
+        process.Should().NotBeNull();
+
+        await process!.WaitForExitAsync();
+
+        process.ExitCode.Should().NotBe(0);
+        var environment = await File.ReadAllTextAsync(recordedEnvironmentPath);
+        environment.Should().Contain("AEVATAR_Aevatar__Authentication__Enabled=false");
+        environment.Should().Contain("AEVATAR_Audit__ActorIdentityHasher__ActiveKeyId=local-development-key");
+        environment.Should().Contain("AEVATAR_Audit__ActorIdentityHasher__Keys__0__KeyId=local-development-key");
+        environment.Should().Contain("AEVATAR_Audit__ActorIdentityHasher__Keys__0__Key=local-development-audit-identity-key");
+        environment.Should().Contain("AEVATAR_ActorRuntime__Provider=InMemory");
+        environment.Should().Contain("AEVATAR_ActorRuntime__SecretStoreBackend=InMemory");
+        environment.Should().Contain("AEVATAR_ChannelIdentity__OAuthClient__Bootstrap__Enabled=false");
+    }
+
+    [Fact]
     public async Task BootScript_LocalMode_ShouldNotRequireNeo4jPasswordFromInheritedDistributedEnv()
     {
         var repoRoot = FindRepoRoot();

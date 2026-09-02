@@ -5,12 +5,10 @@ using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Runs;
 using FluentAssertions;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using ProtoWorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
 using AppWorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
-using AppWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using AppFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -26,428 +24,706 @@ public sealed class WorkflowFileSubmitToolTests
         services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IWorkflowToolSource) &&
             x.ImplementationType == typeof(WorkflowFileSubmitToolSource));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IWorkflowFileMultipartUploadPolicyResolver));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IWorkflowFileMultipartUploadPort));
     }
 
     [Fact]
-    public void AddWorkflowCapabilityServices_ShouldBindWorkflowFileSubmitTargetsFromStableSection()
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(BuildWorkflowFileSubmitTargetConfiguration())
-            .Build();
-
-        services.AddWorkflowCapability(configuration);
-
-        using var provider = services.BuildServiceProvider();
-        var options = provider.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>().Value;
-
-        var target = options.Targets.Should().ContainSingle().Subject;
-        target.Target.Should().Be("submit_invoice");
-        target.Provider.Should().Be("nyxid_connected_service");
-        target.OutputField.Should().Be("document_id");
-        target.MaxFileBytes.Should().Be(1024);
-        target.AllowedMediaTypes.Should().Equal("text/plain");
-        target.Arguments.Should().ContainKey("folder");
-        target.Arguments["folder"].Required.Should().BeTrue();
-        target.Arguments["folder"].AllowedValues.Should().Equal("reports");
-        target.Endpoint.Should().NotBeNull();
-        target.Endpoint!.ServiceSlug.Should().Be("storage");
-        target.Endpoint.Path.Should().Be("files/upload");
-        target.Endpoint.Method.Should().Be("POST");
-        target.Endpoint.FileFieldName.Should().Be("upload");
-        target.Endpoint.Headers.Should().ContainKey("X-Trace").WhoseValue.Should().Be("trace-1");
-        target.Endpoint.Body.Should().ContainKey("bucket").WhoseValue.Should().Be("reports");
-    }
-
-    [Theory]
-    [InlineData("Endpoint:ServiceSlug", "")]
-    [InlineData("Endpoint:Path", "")]
-    [InlineData("Endpoint:Path", "https://storage.example.test/files/upload")]
-    [InlineData("Endpoint:Method", "GET")]
-    [InlineData("Endpoint:FileFieldName", "")]
-    public void AddWorkflowCapabilityServices_ShouldValidateConfiguredWorkflowFileSubmitEndpointPolicy(
-        string setting,
-        string value)
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        var configurationValues = BuildWorkflowFileSubmitTargetConfiguration();
-        configurationValues[$"WorkflowConnectedServiceFileSubmit:Targets:0:{setting}"] = value;
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(configurationValues)
-            .Build();
-
-        services.AddWorkflowCapability(configuration);
-
-        using var provider = services.BuildServiceProvider();
-        var act = () => provider.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>().Value;
-
-        act.Should()
-            .Throw<OptionsValidationException>()
-            .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].Endpoint*");
-    }
-
-    [Theory]
-    [InlineData("Target", "", "Target")]
-    [InlineData("Provider", "", "Provider")]
-    [InlineData("OutputField", "", "OutputField")]
-    [InlineData("MaxFileBytes", "0", "MaxFileBytes")]
-    [InlineData("Arguments:folder:Name", "", "Arguments[folder].Name")]
-    public void AddWorkflowCapabilityServices_ShouldValidateConfiguredWorkflowFileSubmitTargetPolicy(
-        string setting,
-        string value,
-        string expectedPath)
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        var configurationValues = BuildWorkflowFileSubmitTargetConfiguration();
-        var configurationKey = $"WorkflowConnectedServiceFileSubmit:Targets:0:{setting}";
-        configurationValues[configurationKey] = value;
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(configurationValues)
-            .Build();
-
-        services.AddWorkflowCapability(configuration);
-
-        using var provider = services.BuildServiceProvider();
-        var act = () => provider.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>().Value;
-
-        act.Should()
-            .Throw<OptionsValidationException>()
-            .WithMessage($"*WorkflowConnectedServiceFileSubmit:Targets[0].{expectedPath}*");
-    }
-
-    [Fact]
-    public void AddWorkflowCapabilityServices_ShouldValidateEmptyWorkflowFileSubmitAllowedMediaTypes()
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        var configuration = new ConfigurationBuilder().Build();
-
-        services.AddWorkflowCapability(configuration);
-        services.Configure<WorkflowConnectedServiceFileSubmitOptions>(options =>
-        {
-            options.Targets.Add(new WorkflowConnectedServiceFileSubmitTarget(
-                Target: "submit_invoice",
-                Provider: "nyxid_connected_service",
-                OutputField: "document_id",
-                MaxFileBytes: 1024,
-                AllowedMediaTypes: new HashSet<string>(StringComparer.Ordinal),
-                Arguments: new Dictionary<string, WorkflowConnectedServiceFileSubmitArgumentPolicy>(StringComparer.Ordinal)));
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var act = () => provider.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>().Value;
-
-        act.Should()
-            .Throw<OptionsValidationException>()
-            .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].AllowedMediaTypes*");
-    }
-
-    [Fact]
-    public void AddWorkflowCapabilityServices_ShouldValidateBlankWorkflowFileSubmitArgumentKey()
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        var configuration = new ConfigurationBuilder().Build();
-
-        services.AddWorkflowCapability(configuration);
-        services.Configure<WorkflowConnectedServiceFileSubmitOptions>(options =>
-        {
-            options.Targets.Add(new WorkflowConnectedServiceFileSubmitTarget(
-                Target: "submit_invoice",
-                Provider: "nyxid_connected_service",
-                OutputField: "document_id",
-                MaxFileBytes: 1024,
-                AllowedMediaTypes: new HashSet<string>(StringComparer.Ordinal) { "text/plain" },
-                Arguments: new Dictionary<string, WorkflowConnectedServiceFileSubmitArgumentPolicy>(StringComparer.Ordinal)
-                {
-                    [" "] = new(
-                        Name: "folder",
-                        Required: true),
-                }));
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var act = () => provider.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>().Value;
-
-        act.Should()
-            .Throw<OptionsValidationException>()
-            .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].Arguments contains a blank key*");
-    }
-
-    [Fact]
-    public async Task GetToolsAsync_ShouldReturnNoToolWhenNoFileSubmitTargetsExist()
+    public async Task GetToolsAsync_ShouldExposeWorkflowFileSubmitWithoutHostTargets()
     {
         var descriptor = BuildFileRef(sizeBytes: 12);
         var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
         var source = new WorkflowFileSubmitToolSource(
-            [],
             artifactPort,
-            Options.Create(new WorkflowConnectedServiceFileSubmitOptions()));
+            new RecordingMultipartUploadPolicyResolver
+            {
+                Resolution = WorkflowFileMultipartUploadPolicyResolution.Denied(
+                    "destination_not_allowed",
+                    "not allowed"),
+            },
+            new RecordingMultipartUploadPort());
 
         var tools = await source.GetToolsAsync();
 
-        tools.Should().BeEmpty();
+        tools.Should().ContainSingle(tool => tool.Name == "workflow_file_submit");
         artifactPort.OpenCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldSubmitHostConfiguredTargetThroughMatchingProvider()
+    public async Task ExecuteAsync_ShouldFailClosedWhenPolicyResolverDeniesDestination()
     {
         var descriptor = BuildFileRef(sizeBytes: 12);
         var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
-        var adapter = new RecordingFileSubmitAdapter("nyxid_connected_service")
+        var resolver = new RecordingMultipartUploadPolicyResolver
         {
-            Result = new WorkflowConnectedServiceFileSubmitResult(
-                Succeeded: true,
-                OutputCode: "doc_123",
-                Code: 0),
+            Resolution = WorkflowFileMultipartUploadPolicyResolution.Denied(
+                "destination_not_allowed",
+                "workflow_file_submit destination is not allowed by the multipart upload policy."),
         };
-        var tool = await GetSubmitToolAsync(
-            [adapter],
-            artifactPort,
-            BuildConfiguredOptions(ConfiguredNyxIdTarget));
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
 
-        var result = await tool.ExecuteAsync(NewSubmitRequest(NewConfiguredSubmitArguments(
-            folder: "reports",
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeFalse();
+        root.GetProperty("error").GetString().Should().Be("destination_not_allowed");
+        result.Failure.Should().NotBeNull();
+        result.Failure!.ErrorCode.Should().Be("destination_not_allowed");
+        result.Failure.ErrorMessage.Should().Contain("not allowed");
+        root.GetProperty("destination").GetProperty("slug").GetString().Should().Be("api-storage");
+        artifactPort.DescribeCount.Should().Be(1);
+        artifactPort.OpenCount.Should().Be(0);
+        resolver.Candidates.Should().ContainSingle();
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailClosedWhenPolicyResolverIsUnavailable()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver
+        {
+            Exception = new InvalidOperationException("discovery unavailable"),
+        };
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeFalse();
+        root.GetProperty("error").GetString().Should().Be("policy_unavailable");
+        root.GetProperty("detail").GetString().Should().Be("workflow_file_submit multipart upload policy is unavailable.");
+        artifactPort.OpenCount.Should().Be(0);
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldUploadCanonicalPolicyRequestAndReturnFixedSanitizedSchema()
+    {
+        var descriptor = BuildFileRef(
+            sizeBytes: 12,
             mediaType: "text/plain",
-            sizeBytes: 12)));
+            fileName: "descriptor.txt",
+            sha256: "descriptor-sha");
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver
+        {
+            Resolution = WorkflowFileMultipartUploadPolicyResolution.Allowed(new WorkflowFileMultipartUploadPolicy(
+                ServiceSlug: "canonical-storage",
+                Path: "/canonical/upload",
+                Method: "PUT",
+                FileFieldName: "document",
+                FormFields: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["folder"] = "reports",
+                },
+                OutputKind: "external_resource_id",
+                OutputSelector: "data.document_id",
+                MaxFileBytes: 100)),
+        };
+        var uploadPort = new RecordingMultipartUploadPort
+        {
+            Result = WorkflowFileMultipartUploadResult.Success(
+                "doc_123",
+                providerCode: 0,
+                httpStatus: 200),
+        };
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
 
-        adapter.Requests.Should().ContainSingle();
-        var submitRequest = adapter.Requests[0];
-        submitRequest.Target.Should().BeEquivalentTo(ConfiguredNyxIdTarget);
-        submitRequest.Target.Endpoint.Should().NotBeNull();
-        submitRequest.Target.Endpoint!.ServiceSlug.Should().Be("storage");
-        submitRequest.Target.Endpoint.Path.Should().Be("files/upload");
-        submitRequest.Target.Endpoint.Method.Should().Be("POST");
-        submitRequest.Target.Endpoint.FileFieldName.Should().Be("upload");
-        submitRequest.Target.Endpoint.Headers.Should().ContainKey("X-Trace").WhoseValue.Should().Be("trace-1");
-        submitRequest.Target.Endpoint.Body.Should().ContainKey("bucket").WhoseValue.Should().Be("reports");
-        submitRequest.CallerCredential.BearerToken.Should().Be("token-123");
-        submitRequest.FileName.Should().Be("report.txt");
-        submitRequest.MediaType.Should().Be("text/plain");
-        submitRequest.SizeBytes.Should().Be(12);
-        submitRequest.Arguments.Should().ContainKey("folder").WhoseValue.Should().Be("reports");
-        submitRequest.UploadedBytes.Should().Equal(Encoding.UTF8.GetBytes("upload bytes"));
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        resolver.Candidates.Should().ContainSingle();
+        resolver.Candidates[0].ServiceSlug.Should().Be("api-storage");
+        resolver.Candidates[0].Path.Should().Be("/files/upload");
+        resolver.Candidates[0].Method.Should().Be("POST");
+        resolver.Candidates[0].FileFieldName.Should().Be("file");
+        resolver.Candidates[0].FormFields.Should().ContainKey("folder").WhoseValue.Should().Be("reports");
+        resolver.Candidates[0].OutputKind.Should().Be("ignored_kind");
+        resolver.Candidates[0].OutputSelector.Should().Be("data.ignored");
+
+        uploadPort.Requests.Should().ContainSingle();
+        var uploadRequest = uploadPort.Requests[0];
+        uploadRequest.CallerCredential.BearerToken.Should().Be("token-123");
+        uploadRequest.ServiceSlug.Should().Be("canonical-storage");
+        uploadRequest.Path.Should().Be("/canonical/upload");
+        uploadRequest.Method.Should().Be("PUT");
+        uploadRequest.FileFieldName.Should().Be("document");
+        uploadRequest.FormFields.Should().ContainKey("folder").WhoseValue.Should().Be("reports");
+        uploadRequest.OutputSelector.Should().Be("data.document_id");
+        uploadRequest.FileName.Should().Be("descriptor.txt");
+        uploadRequest.MediaType.Should().Be("text/plain");
+        uploadRequest.SizeBytes.Should().Be(12);
+        uploadRequest.Sha256.Should().Be("descriptor-sha");
+        uploadRequest.UploadedBytes.Should().Equal(Encoding.UTF8.GetBytes("upload bytes"));
 
         using var document = JsonDocument.Parse(result.ResultJson);
         var root = document.RootElement;
         root.GetProperty("success").GetBoolean().Should().BeTrue();
-        root.GetProperty("provider").GetString().Should().Be("nyxid_connected_service");
-        root.GetProperty("target").GetString().Should().Be("submit_invoice");
-        root.GetProperty("output_field").GetString().Should().Be("document_id");
+        root.GetProperty("error").ValueKind.Should().Be(JsonValueKind.Null);
+        root.GetProperty("detail").ValueKind.Should().Be(JsonValueKind.Null);
         root.GetProperty("output_code").GetString().Should().Be("doc_123");
+        root.GetProperty("output_kind").GetString().Should().Be("external_resource_id");
+        root.GetProperty("http_status").GetInt32().Should().Be(200);
+        root.GetProperty("provider_code").GetInt32().Should().Be(0);
+        root.GetProperty("destination").GetProperty("slug").GetString().Should().Be("canonical-storage");
+        root.GetProperty("destination").GetProperty("path").GetString().Should().Be("/canonical/upload");
+        root.GetProperty("destination").GetProperty("method").GetString().Should().Be("PUT");
+        root.GetProperty("file").GetProperty("file_name").GetString().Should().Be("descriptor.txt");
+        root.GetProperty("file").GetProperty("media_type").GetString().Should().Be("text/plain");
+        root.GetProperty("file").GetProperty("size_bytes").GetInt64().Should().Be(12);
+        root.GetProperty("file").GetProperty("sha256").GetString().Should().Be("descriptor-sha");
         root.TryGetProperty("file_token", out _).Should().BeFalse();
         root.TryGetProperty("file_code", out _).Should().BeFalse();
-        root.ToString().Should().NotContain("upload bytes");
-        root.ToString().Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        root.TryGetProperty("body", out _).Should().BeFalse();
+        root.TryGetProperty("data_base64", out _).Should().BeFalse();
+        result.ResultJson.Should().NotContain("upload bytes");
+        result.ResultJson.Should().NotContain("raw");
+        result.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
     }
 
     [Theory]
-    [InlineData("sales", "text/plain", 12, "unsupported_argument_value")]
-    [InlineData("reports", "application/pdf", 12, "unsupported_media_type")]
-    [InlineData("reports", "text/plain", 101, "file_too_large")]
-    public async Task ExecuteAsync_ShouldEnforceHostConfiguredTargetPolicyBeforeAdapterDispatch(
-        string folder,
-        string mediaType,
-        long sizeBytes,
-        string expectedError)
-    {
-        var descriptor = BuildFileRef(sizeBytes, mediaType);
-        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
-        var adapter = new RecordingFileSubmitAdapter("nyxid_connected_service");
-        var tool = await GetSubmitToolAsync(
-            [adapter],
-            artifactPort,
-            BuildConfiguredOptions(ConfiguredNyxIdTarget));
-
-        var result = await tool.ExecuteAsync(NewSubmitRequest(NewConfiguredSubmitArguments(
-            folder,
-            mediaType,
-            sizeBytes)));
-
-        using var document = JsonDocument.Parse(result.ResultJson);
-        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
-        document.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
-        artifactPort.OpenCount.Should().Be(0);
-        adapter.Requests.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_ShouldValidateArtifactAndReturnTypedAdapterOutputOnly()
+    [InlineData("file_token", "provider_file_token", "data.file_token", "tok_123")]
+    [InlineData("file_code", "provider_file_code", "data.file_code", "code_123")]
+    public async Task ExecuteAsync_ShouldNotReturnDynamicProviderAliases(
+        string providerField,
+        string outputKind,
+        string outputSelector,
+        string outputCode)
     {
         var descriptor = BuildFileRef(sizeBytes: 12);
         var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
-        var adapter = new RecordingFileSubmitAdapter(SubmitTarget)
+        var resolver = new RecordingMultipartUploadPolicyResolver
         {
-            Result = new WorkflowConnectedServiceFileSubmitResult(
-                Succeeded: true,
-                OutputCode: "tok_123",
-                Code: 0),
+            Resolution = WorkflowFileMultipartUploadPolicyResolution.Allowed(new WorkflowFileMultipartUploadPolicy(
+                ServiceSlug: "api-lark-bot",
+                Path: "/open-apis/example/upload",
+                Method: "POST",
+                FileFieldName: "file",
+                FormFields: new Dictionary<string, string>(StringComparer.Ordinal),
+                OutputKind: outputKind,
+                OutputSelector: outputSelector,
+                MaxFileBytes: 100)),
         };
-        var tool = await GetSubmitToolAsync([adapter], artifactPort);
-
-        var result = await tool.ExecuteAsync(NewSubmitRequest("""
+        var uploadPort = new RecordingMultipartUploadPort
         {
-          "target": "acme_file_token",
-          "folder": "reports",
-          "file_ref": {
-            "file_id": "file-1",
-            "artifact_id": "artifact-1",
-            "file_name": "report.txt",
-            "media_type": "text/plain",
-            "size_bytes": 12,
-            "sha256": "sha256-value",
-            "owner_run_id": "run-1",
-            "owner_scope_id": "scope-1"
-          }
-        }
-        """));
+            Result = WorkflowFileMultipartUploadResult.Success(
+                outputCode,
+                providerCode: 0),
+        };
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
 
-        adapter.Requests.Should().ContainSingle();
-        var submitRequest = adapter.Requests[0];
-        submitRequest.Target.Target.Should().Be("acme_file_token");
-        submitRequest.CallerCredential.BearerToken.Should().Be("token-123");
-        submitRequest.FileName.Should().Be("report.txt");
-        submitRequest.MediaType.Should().Be("text/plain");
-        submitRequest.SizeBytes.Should().Be(12);
-        submitRequest.Arguments.Should().ContainKey("folder").WhoseValue.Should().Be("reports");
-        submitRequest.UploadedBytes.Should().Equal(Encoding.UTF8.GetBytes("upload bytes"));
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
 
         using var document = JsonDocument.Parse(result.ResultJson);
         var root = document.RootElement;
         root.GetProperty("success").GetBoolean().Should().BeTrue();
-        root.GetProperty("provider").GetString().Should().Be("acme");
-        root.GetProperty("target").GetString().Should().Be("acme_file_token");
-        root.GetProperty("output_field").GetString().Should().Be("file_token");
-        root.GetProperty("file_token").GetString().Should().Be("tok_123");
-        root.ToString().Should().NotContain("upload bytes");
-        root.ToString().Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        root.GetProperty("output_code").GetString().Should().Be(outputCode);
+        root.GetProperty("output_kind").GetString().Should().Be(outputKind);
+        root.TryGetProperty(providerField, out _).Should().BeFalse();
     }
 
     [Theory]
-    [InlineData("service_slug")]
-    [InlineData("path")]
-    [InlineData("method")]
-    [InlineData("file_field_name")]
-    [InlineData("headers")]
-    [InlineData("body")]
-    public async Task ExecuteAsync_ShouldRejectHostConfiguredEndpointOverrideArgumentsBeforeArtifactOpen(
-        string reservedPropertyName)
+    [InlineData("\"path\": \"https://storage.example.test/files/upload\",", "invalid_destination")]
+    [InlineData("\"path\": \"//storage.example.test/files/upload\",", "invalid_destination")]
+    [InlineData("\"path\": \"data:text/plain;base64,AAAA\",", "invalid_destination")]
+    [InlineData("\"path\": \"javascript:alert(1)\",", "invalid_destination")]
+    [InlineData("\"path\": \".\",", "invalid_destination")]
+    [InlineData("\"path\": \"..\",", "invalid_destination")]
+    [InlineData("\"path\": \"./files/upload\",", "invalid_destination")]
+    [InlineData("\"path\": \"files/../upload\",", "invalid_destination")]
+    [InlineData("\"path\": \"files/./upload\",", "invalid_destination")]
+    [InlineData("\"method\": \"GET\",", "unsupported_method")]
+    [InlineData("\"headers\": { \"X-Test\": \"value\" },", "invalid_arguments")]
+    [InlineData("\"body\": \"raw\",", "invalid_arguments")]
+    [InlineData("\"bytes\": \"AAAA\",", "invalid_arguments")]
+    [InlineData("\"base64\": \"AAAA\",", "invalid_arguments")]
+    [InlineData("\"data_uri\": \"data:text/plain;base64,AAAA\",", "invalid_arguments")]
+    public async Task ExecuteAsync_ShouldRejectForbiddenCandidateArgumentsBeforePolicy(
+        string overrideJson,
+        string expectedError)
     {
         var descriptor = BuildFileRef(sizeBytes: 12);
         var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
-        var adapter = new RecordingFileSubmitAdapter("nyxid_connected_service");
-        var tool = await GetSubmitToolAsync(
-            [adapter],
-            artifactPort,
-            BuildConfiguredOptions(ConfiguredNyxIdTarget));
+        var resolver = new RecordingMultipartUploadPolicyResolver();
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
 
-        var result = await tool.ExecuteAsync(NewSubmitRequest($$"""
-        {
-          "target": "submit_invoice",
-          "folder": "reports",
-          "{{reservedPropertyName}}": "attempted override",
-          "file_ref": {
-            "file_id": "file-1",
-            "artifact_id": "artifact-1",
-            "file_name": "report.txt",
-            "media_type": "text/plain",
-            "size_bytes": 12,
-            "owner_run_id": "run-1",
-            "owner_scope_id": "scope-1"
-          }
-        }
-        """));
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments(extraTopLevelJson: overrideJson)));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeFalse();
+        root.GetProperty("error").GetString().Should().Be(expectedError);
+        root.GetProperty("destination").ValueKind.Should().Be(JsonValueKind.Null);
+        result.ResultJson.Contains("data:text/plain", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        result.ResultJson.Contains("javascript:", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        artifactPort.DescribeCount.Should().Be(0);
+        artifactPort.OpenCount.Should().Be(0);
+        resolver.Candidates.Should().BeEmpty();
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectInvalidFileRefSourceKindBeforeArtifactRead()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver();
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments("""
+          "source_kind": "not-a-source-kind",
+        """)));
 
         using var document = JsonDocument.Parse(result.ResultJson);
         document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
-        document.RootElement.GetProperty("error").GetString().Should().Be("reserved_argument");
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_file_ref");
+        artifactPort.DescribeCount.Should().Be(0);
         artifactPort.OpenCount.Should().Be(0);
-        adapter.Requests.Should().BeEmpty();
+        resolver.Candidates.Should().BeEmpty();
+        uploadPort.Requests.Should().BeEmpty();
     }
 
-    private static readonly WorkflowConnectedServiceFileSubmitTarget SubmitTarget = new(
-        Target: "acme_file_token",
-        Provider: "acme",
-        OutputField: "file_token",
-        MaxFileBytes: 100,
-        AllowedMediaTypes: new HashSet<string>(StringComparer.Ordinal) { "text/plain" },
-        Arguments: new Dictionary<string, WorkflowConnectedServiceFileSubmitArgumentPolicy>(StringComparer.Ordinal)
-        {
-            ["folder"] = new(
-                Name: "folder",
-                Required: true,
-                AllowedValues: new HashSet<string>(StringComparer.Ordinal) { "reports" }),
-        });
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectOutputSelectorWithEmptySegmentBeforeArtifactRead()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver();
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
 
-    private static readonly WorkflowConnectedServiceFileSubmitTarget ConfiguredNyxIdTarget = new(
-        Target: "submit_invoice",
-        Provider: "nyxid_connected_service",
-        OutputField: "document_id",
-        MaxFileBytes: 100,
-        AllowedMediaTypes: new HashSet<string>(StringComparer.Ordinal) { "text/plain" },
-        Arguments: new Dictionary<string, WorkflowConnectedServiceFileSubmitArgumentPolicy>(StringComparer.Ordinal)
-        {
-            ["folder"] = new(
-                Name: "folder",
-                Required: true,
-                AllowedValues: new HashSet<string>(StringComparer.Ordinal) { "reports" }),
-        },
-        Endpoint: new WorkflowConnectedServiceFileSubmitEndpoint(
-            ServiceSlug: "storage",
-            Path: "files/upload",
-            Method: "POST",
-            FileFieldName: "upload",
-            Headers: new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["X-Trace"] = "trace-1",
-            },
-            Body: new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["bucket"] = "reports",
-            }));
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments(
+            outputSelector: "data..ignored")));
 
-    private static Dictionary<string, string?> BuildWorkflowFileSubmitTargetConfiguration() =>
-        new()
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_destination");
+        artifactPort.DescribeCount.Should().Be(0);
+        artifactPort.OpenCount.Should().Be(0);
+        resolver.Candidates.Should().BeEmpty();
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("body")]
+    [InlineData("bytes")]
+    [InlineData("raw_body")]
+    [InlineData("base64")]
+    [InlineData("data_base64")]
+    [InlineData("data_uri")]
+    [InlineData("raw")]
+    [InlineData("rawBody")]
+    [InlineData("dataUri")]
+    [InlineData("dataBase64")]
+    [InlineData("data.bytes")]
+    [InlineData("data.raw_body")]
+    [InlineData("data.raw")]
+    [InlineData("data.rawBody")]
+    [InlineData("data.dataUri")]
+    [InlineData("data.dataBase64")]
+    public async Task ExecuteAsync_ShouldRejectUnsafeCandidateOutputSelectorBeforeArtifactRead(string outputSelector)
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver();
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments(
+            outputSelector: outputSelector)));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_destination");
+        artifactPort.DescribeCount.Should().Be(0);
+        artifactPort.OpenCount.Should().Be(0);
+        resolver.Candidates.Should().BeEmpty();
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("body")]
+    [InlineData("bytes")]
+    [InlineData("raw_body")]
+    [InlineData("base64")]
+    [InlineData("data_base64")]
+    [InlineData("data_uri")]
+    [InlineData("raw")]
+    [InlineData("rawBody")]
+    [InlineData("dataUri")]
+    [InlineData("dataBase64")]
+    [InlineData("data.bytes")]
+    [InlineData("data.raw_body")]
+    [InlineData("data.raw")]
+    [InlineData("data.rawBody")]
+    [InlineData("data.dataUri")]
+    [InlineData("data.dataBase64")]
+    public async Task ExecuteAsync_ShouldRejectUnsafeResolvedPolicyOutputSelectorBeforeUpload(string outputSelector)
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver
         {
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Target"] = "submit_invoice",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Provider"] = "nyxid_connected_service",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:OutputField"] = "document_id",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:MaxFileBytes"] = "1024",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:AllowedMediaTypes:0"] = "text/plain",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:Name"] = "folder",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:Required"] = "true",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:AllowedValues:0"] = "reports",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:ServiceSlug"] = "storage",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Path"] = "files/upload",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Method"] = "POST",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:FileFieldName"] = "upload",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Headers:X-Trace"] = "trace-1",
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Body:bucket"] = "reports",
+            Resolution = WorkflowFileMultipartUploadPolicyResolution.Allowed(new WorkflowFileMultipartUploadPolicy(
+                ServiceSlug: "canonical-storage",
+                Path: "/canonical/upload",
+                Method: "POST",
+                FileFieldName: "file",
+                FormFields: new Dictionary<string, string>(StringComparer.Ordinal),
+                OutputKind: "external_resource_id",
+                OutputSelector: outputSelector,
+                MaxFileBytes: 100)),
         };
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("destination_not_allowed");
+        artifactPort.DescribeCount.Should().Be(1);
+        artifactPort.OpenCount.Should().Be(0);
+        resolver.Candidates.Should().ContainSingle();
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectPublicFileRefFactsBeforeArtifactRead()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver();
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments("""
+          "file_name": "argument.txt",
+          "media_type": "text/plain",
+          "size_bytes": 12,
+          "sha256": "argument-sha",
+        """)));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_file_ref");
+        artifactPort.DescribeCount.Should().Be(0);
+        artifactPort.OpenCount.Should().Be(0);
+        resolver.Candidates.Should().BeEmpty();
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldEnforceRequestedMaxFileBytesAfterPolicyResolution()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 80, mediaType: "text/plain");
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver
+        {
+            Resolution = WorkflowFileMultipartUploadPolicyResolution.Allowed(new WorkflowFileMultipartUploadPolicy(
+                ServiceSlug: "canonical-storage",
+                Path: "/canonical/upload",
+                Method: "POST",
+                FileFieldName: "file",
+                FormFields: new Dictionary<string, string>(StringComparer.Ordinal),
+                OutputKind: "external_resource_id",
+                OutputSelector: "data.document_id",
+                MaxFileBytes: 100)),
+        };
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments(
+            extraTopLevelJson: """
+          "max_file_bytes": 64,
+""")));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("file_too_large");
+        artifactPort.DescribeCount.Should().Be(1);
+        artifactPort.OpenCount.Should().Be(0);
+        resolver.Candidates.Should().ContainSingle()
+            .Which.MaxFileBytes.Should().Be(64);
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldEnforceResolvedPolicyBeforeOpeningArtifact()
+    {
+        var descriptor = BuildFileRef(101, "text/plain");
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver
+        {
+            Resolution = WorkflowFileMultipartUploadPolicyResolution.Allowed(new WorkflowFileMultipartUploadPolicy(
+                ServiceSlug: "canonical-storage",
+                Path: "/canonical/upload",
+                Method: "POST",
+                FileFieldName: "file",
+                FormFields: new Dictionary<string, string>(StringComparer.Ordinal),
+                OutputKind: "external_resource_id",
+                OutputSelector: "data.document_id",
+                MaxFileBytes: 100)),
+        };
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("file_too_large");
+        artifactPort.OpenCount.Should().Be(0);
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotApplyDestinationMediaTypePolicy()
+    {
+        var descriptor = BuildFileRef(12, "application/pdf");
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver
+        {
+            Resolution = WorkflowFileMultipartUploadPolicyResolution.Allowed(new WorkflowFileMultipartUploadPolicy(
+                ServiceSlug: "canonical-storage",
+                Path: "/canonical/upload",
+                Method: "POST",
+                FileFieldName: "file",
+                FormFields: new Dictionary<string, string>(StringComparer.Ordinal),
+                OutputKind: "external_resource_id",
+                OutputSelector: "data.document_id",
+                MaxFileBytes: 100)),
+        };
+        var uploadPort = new RecordingMultipartUploadPort
+        {
+            Result = WorkflowFileMultipartUploadResult.Success("doc_pdf"),
+        };
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        uploadPort.Requests.Should().ContainSingle()
+            .Which.MediaType.Should().Be("application/pdf");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldReturnArtifactUnavailableWhenDescriptorCannotBeRead()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"))
+        {
+            DescribeException = new FileNotFoundException("missing descriptor"),
+        };
+        var resolver = new RecordingMultipartUploadPolicyResolver();
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("artifact_unavailable");
+        artifactPort.DescribeCount.Should().Be(1);
+        artifactPort.OpenCount.Should().Be(0);
+        resolver.Candidates.Should().BeEmpty();
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectDescriptorOwnerMismatchBeforePolicyResolution()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12, ownerRunId: "other-run");
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver();
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_file_scope");
+        artifactPort.DescribeCount.Should().Be(1);
+        artifactPort.OpenCount.Should().Be(0);
+        resolver.Candidates.Should().BeEmpty();
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldReturnArtifactUnavailableWhenContentCannotBeOpened()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"))
+        {
+            OpenException = new IOException("content unavailable"),
+        };
+        var resolver = new RecordingMultipartUploadPolicyResolver
+        {
+            Resolution = AllowedPolicy(),
+        };
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("artifact_unavailable");
+        artifactPort.DescribeCount.Should().Be(1);
+        artifactPort.OpenCount.Should().Be(1);
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectOpenedArtifactOwnerMismatchBeforeUpload()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var openedDescriptor = BuildFileRef(sizeBytes: 12, ownerRunId: "other-run");
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(
+            descriptor,
+            Encoding.UTF8.GetBytes("upload bytes"))
+        {
+            OpenDescriptor = openedDescriptor,
+        };
+        var resolver = new RecordingMultipartUploadPolicyResolver
+        {
+            Resolution = AllowedPolicy(),
+        };
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_file_scope");
+        artifactPort.OpenCount.Should().Be(1);
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldReturnProviderCallFailedWhenUploadThrows()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver
+        {
+            Resolution = AllowedPolicy(),
+        };
+        var uploadPort = new RecordingMultipartUploadPort
+        {
+            Exception = new HttpRequestException("network failed"),
+        };
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("provider_call_failed");
+        uploadPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldReturnUploadFailureWithoutOpeningProviderBody()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver
+        {
+            Resolution = AllowedPolicy(),
+        };
+        var uploadPort = new RecordingMultipartUploadPort
+        {
+            Result = WorkflowFileMultipartUploadResult.Failure(
+                "provider_error",
+                "provider_code=403",
+                providerCode: 403,
+                httpStatus: 200),
+        };
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeFalse();
+        root.GetProperty("error").GetString().Should().Be("provider_error");
+        root.GetProperty("provider_code").GetInt32().Should().Be(403);
+        root.GetProperty("http_status").GetInt32().Should().Be(200);
+        uploadPort.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailClosedWhenSanitizedUploadSuccessOmitsOutputCode()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver
+        {
+            Resolution = AllowedPolicy(),
+        };
+        var uploadPort = new RecordingMultipartUploadPort
+        {
+            Result = new WorkflowFileMultipartUploadResult(
+                Succeeded: true,
+                OutputCode: null,
+                Error: null,
+                Detail: null,
+                ProviderCode: 0,
+                HttpStatus: 200),
+        };
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments()));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeFalse();
+        root.GetProperty("error").GetString().Should().Be("missing_output_code");
+        root.GetProperty("provider_code").GetInt32().Should().Be(0);
+        root.GetProperty("http_status").GetInt32().Should().Be(200);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectForeignFileRefBeforePolicy()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var resolver = new RecordingMultipartUploadPolicyResolver();
+        var uploadPort = new RecordingMultipartUploadPort();
+        var tool = await GetSubmitToolAsync(artifactPort, resolver, uploadPort);
+
+        var result = await tool.ExecuteAsync(NewSubmitRequest(NewSubmitArguments(ownerRunId: "other-run")));
+
+        using var document = JsonDocument.Parse(result.ResultJson);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_file_scope");
+        artifactPort.DescribeCount.Should().Be(0);
+        artifactPort.OpenCount.Should().Be(0);
+        resolver.Candidates.Should().BeEmpty();
+        uploadPort.Requests.Should().BeEmpty();
+    }
 
     private static async Task<IWorkflowTool> GetSubmitToolAsync(
-        IReadOnlyList<IWorkflowConnectedServiceFileSubmitAdapter> adapters,
-        IWorkflowFileArtifactReadPort artifactPort,
-        WorkflowConnectedServiceFileSubmitOptions? options = null)
+        IFileArtifactReadPort artifactPort,
+        IWorkflowFileMultipartUploadPolicyResolver policyResolver,
+        IWorkflowFileMultipartUploadPort uploadPort)
     {
-        var source = new WorkflowFileSubmitToolSource(
-            adapters,
-            artifactPort,
-            Options.Create(options ?? new WorkflowConnectedServiceFileSubmitOptions()));
+        var source = new WorkflowFileSubmitToolSource(artifactPort, policyResolver, uploadPort);
         var tools = await source.GetToolsAsync();
         return tools.Should().ContainSingle(x => x.Name == "workflow_file_submit").Subject;
-    }
-
-    private static WorkflowConnectedServiceFileSubmitOptions BuildConfiguredOptions(
-        WorkflowConnectedServiceFileSubmitTarget target)
-    {
-        var options = new WorkflowConnectedServiceFileSubmitOptions();
-        options.Targets.Add(target);
-        return options;
     }
 
     private static WorkflowToolExecutionRequest NewSubmitRequest(string argumentsJson, string? bearerToken = "token-123") =>
@@ -463,111 +739,170 @@ public sealed class WorkflowFileSubmitToolTests
                 BearerToken = bearerToken ?? string.Empty,
             });
 
-    private static string NewConfiguredSubmitArguments(
-        string folder,
-        string mediaType,
-        long sizeBytes) =>
+    private static string NewSubmitArguments(
+        string fileRefFactsJson = "",
+        string extraTopLevelJson = "",
+        string ownerRunId = "run-1",
+        string ownerScopeId = "scope-1",
+        string outputSelector = "data.ignored") =>
         $$"""
         {
-          "target": "submit_invoice",
-          "folder": "{{folder}}",
+          "slug": "api-storage",
+          "path": "/files/upload",
+          "method": "POST",
+          "file_field_name": "file",
+          {{extraTopLevelJson}}
+          "form": {
+            "folder": "reports"
+          },
+          "output": {
+            "kind": "ignored_kind",
+            "selector": "{{outputSelector}}"
+          },
           "file_ref": {
             "file_id": "file-1",
             "artifact_id": "artifact-1",
-            "file_name": "report.txt",
-            "media_type": "{{mediaType}}",
-            "size_bytes": {{sizeBytes}},
-            "sha256": "sha256-value",
-            "owner_run_id": "run-1",
-            "owner_scope_id": "scope-1"
+            {{fileRefFactsJson}}
+            "owner_run_id": "{{ownerRunId}}",
+            "owner_scope_id": "{{ownerScopeId}}"
           }
         }
         """;
 
-    private static AppWorkflowFileRef BuildFileRef(long sizeBytes, string mediaType = "text/plain") =>
+    private static AppFileArtifactRef BuildFileRef(
+        long sizeBytes,
+        string mediaType = "text/plain",
+        string fileName = "report.txt",
+        string sha256 = "sha256-value",
+        string ownerRunId = "run-1",
+        string ownerScopeId = "scope-1") =>
         new()
         {
             FileId = "file-1",
             ArtifactId = "artifact-1",
-            FileName = "report.txt",
+            SourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind.ExternalResource,
+            FileName = fileName,
             MediaType = mediaType,
             SizeBytes = sizeBytes,
-            Sha256 = "sha256-value",
-            OwnerRunId = "run-1",
-            OwnerScopeId = "scope-1",
+            Sha256 = sha256,
+            OwnerRunId = ownerRunId,
+            OwnerScopeId = ownerScopeId,
         };
 
-    private sealed class RecordingFileSubmitAdapter : IWorkflowConnectedServiceFileSubmitAdapter
+    private static WorkflowFileMultipartUploadPolicyResolution AllowedPolicy() =>
+        WorkflowFileMultipartUploadPolicyResolution.Allowed(new WorkflowFileMultipartUploadPolicy(
+            ServiceSlug: "canonical-storage",
+            Path: "/canonical/upload",
+            Method: "POST",
+            FileFieldName: "file",
+            FormFields: new Dictionary<string, string>(StringComparer.Ordinal),
+            OutputKind: "external_resource_id",
+            OutputSelector: "data.document_id",
+            MaxFileBytes: 100));
+
+    private sealed class RecordingMultipartUploadPolicyResolver : IWorkflowFileMultipartUploadPolicyResolver
     {
-        public RecordingFileSubmitAdapter(WorkflowConnectedServiceFileSubmitTarget target)
-            : this(target.Provider, [target])
-        {
-        }
+        public List<WorkflowFileMultipartUploadCandidate> Candidates { get; } = [];
 
-        public RecordingFileSubmitAdapter(
-            string provider,
-            IReadOnlyList<WorkflowConnectedServiceFileSubmitTarget>? targets = null)
-        {
-            Provider = provider;
-            Targets = targets ?? [];
-        }
+        public WorkflowFileMultipartUploadPolicyResolution Resolution { get; init; } =
+            WorkflowFileMultipartUploadPolicyResolution.Denied("destination_not_allowed", "not allowed");
 
-        public string Provider { get; }
+        public Exception? Exception { get; init; }
 
-        public IReadOnlyList<WorkflowConnectedServiceFileSubmitTarget> Targets { get; }
-
-        public List<RecordedSubmitRequest> Requests { get; } = [];
-
-        public WorkflowConnectedServiceFileSubmitResult Result { get; init; } =
-            new(Succeeded: true, OutputCode: "tok_default");
-
-        public async ValueTask<WorkflowConnectedServiceFileSubmitResult> SubmitAsync(
-            WorkflowConnectedServiceFileSubmitRequest request,
+        public ValueTask<WorkflowFileMultipartUploadPolicyResolution> ResolveAsync(
+            WorkflowFileMultipartUploadCandidate candidate,
+            AppFileArtifactRef descriptor,
+            WorkflowFileMultipartUploadExecutionContext context,
             CancellationToken cancellationToken = default)
         {
+            if (Exception != null)
+                throw Exception;
+
+            Candidates.Add(candidate);
+            return ValueTask.FromResult(Resolution);
+        }
+    }
+
+    private sealed class RecordingMultipartUploadPort : IWorkflowFileMultipartUploadPort
+    {
+        public List<RecordedMultipartUploadRequest> Requests { get; } = [];
+
+        public WorkflowFileMultipartUploadResult Result { get; init; } =
+            WorkflowFileMultipartUploadResult.Success("doc_default");
+
+        public Exception? Exception { get; init; }
+
+        public async ValueTask<WorkflowFileMultipartUploadResult> UploadAsync(
+            WorkflowFileMultipartUploadRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (Exception != null)
+                throw Exception;
+
             using var buffer = new MemoryStream();
             await request.Content.CopyToAsync(buffer, cancellationToken);
-            Requests.Add(new RecordedSubmitRequest(
-                request.Target,
-                request.FileRef,
+            Requests.Add(new RecordedMultipartUploadRequest(
+                request.CallerCredential,
+                request.ServiceSlug,
+                request.Path,
+                request.Method,
+                request.FileFieldName,
+                request.FormFields,
+                request.OutputSelector,
                 request.FileName,
                 request.MediaType,
                 request.SizeBytes,
-                request.CallerCredential,
-                request.Arguments,
+                request.Sha256,
                 buffer.ToArray()));
             return Result;
         }
     }
 
-    private sealed record RecordedSubmitRequest(
-        WorkflowConnectedServiceFileSubmitTarget Target,
-        AppWorkflowFileRef FileRef,
+    private sealed record RecordedMultipartUploadRequest(
+        AppWorkflowCallerCredential CallerCredential,
+        string ServiceSlug,
+        string Path,
+        string Method,
+        string FileFieldName,
+        IReadOnlyDictionary<string, string> FormFields,
+        string OutputSelector,
         string FileName,
         string MediaType,
         long SizeBytes,
-        AppWorkflowCallerCredential CallerCredential,
-        IReadOnlyDictionary<string, string> Arguments,
+        string? Sha256,
         byte[] UploadedBytes);
 
     private sealed class RecordingWorkflowFileArtifactReadPort(
-        AppWorkflowFileRef descriptor,
-        byte[] content) : IWorkflowFileArtifactReadPort
+        AppFileArtifactRef descriptor,
+        byte[] content) : IFileArtifactReadPort
     {
+        public int DescribeCount { get; private set; }
         public int OpenCount { get; private set; }
+        public Exception? DescribeException { get; init; }
+        public Exception? OpenException { get; init; }
+        public AppFileArtifactRef? OpenDescriptor { get; init; }
 
-        public ValueTask<AppWorkflowFileRef> DescribeAsync(
-            AppWorkflowFileRef fileRef,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(descriptor);
+        public ValueTask<AppFileArtifactRef> DescribeAsync(
+            AppFileArtifactRef fileRef,
+            CancellationToken cancellationToken = default)
+        {
+            DescribeCount++;
+            if (DescribeException != null)
+                throw DescribeException;
 
-        public ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
-            AppWorkflowFileRef fileRef,
+            return ValueTask.FromResult(descriptor);
+        }
+
+        public ValueTask<FileArtifactContent> OpenReadAsync(
+            AppFileArtifactRef fileRef,
             CancellationToken cancellationToken = default)
         {
             OpenCount++;
-            return ValueTask.FromResult(new WorkflowFileArtifactContent(
-                descriptor,
+            if (OpenException != null)
+                throw OpenException;
+
+            return ValueTask.FromResult(new FileArtifactContent(
+                OpenDescriptor ?? descriptor,
                 new MemoryStream(content, writable: false)));
         }
     }

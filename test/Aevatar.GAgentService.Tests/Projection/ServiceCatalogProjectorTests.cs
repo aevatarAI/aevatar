@@ -55,6 +55,50 @@ public sealed class ServiceCatalogProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldMaterializePendingExposureWithoutSlugOrRegisteredAt()
+    {
+        var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
+        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var state = new ServiceDefinitionState
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        };
+        state.Spec.ExternalExposure = new ExternalExposure
+        {
+            Status = ServiceRegistrationStatus.Pending,
+            DesiredSpecHash = "hash-pending",
+            Attempt = 1,
+            ExposureDesired = true,
+        };
+
+        await projector.ProjectAsync(
+            new ServiceCatalogProjectionContext
+            {
+                RootActorId = "tenant:app:default:svc",
+                ProjectionKind = "service-catalog",
+            },
+            BuildCommittedEnvelope(
+                new ServiceRegistrationRequestedEvent
+                {
+                    Identity = identity.Clone(),
+                    DesiredSpecHash = "hash-pending",
+                    Attempt = 1,
+                },
+                state,
+                eventId: "evt-registration-requested",
+                stateVersion: 4,
+                observedAt: DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+
+        var readModel = await store.GetAsync("tenant:app:default:svc");
+        readModel.Should().NotBeNull();
+        readModel!.ExternalExposure.Should().NotBeNull();
+        readModel.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Pending);
+        readModel.ExternalExposure.DesiredSpecHash.Should().Be("hash-pending");
+        readModel.ExternalExposure.ExposureDesired.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldIgnoreUnrelatedPayload()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);

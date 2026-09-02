@@ -147,6 +147,16 @@ public enum ContentPartKind
     Video = 4,
 }
 
+public enum ChatFileSourceKind
+{
+    Unspecified = 0,
+    ChatInput = 1,
+    FormUpload = 2,
+    ConnectedServiceResource = 3,
+    ExternalResource = 4,
+    Generated = 5,
+}
+
 /// <summary>Multimodal content part.</summary>
 public sealed class ContentPart
 {
@@ -167,6 +177,9 @@ public sealed class ContentPart
 
     /// <summary>Optional display name or file name.</summary>
     public string? Name { get; init; }
+
+    /// <summary>Durable media/file reference for media parts; provider adapters materialize it per request.</summary>
+    public ChatFileRef? FileRef { get; init; }
 
     /// <summary>Creates a text part.</summary>
     public static ContentPart TextPart(string text) =>
@@ -190,6 +203,32 @@ public sealed class ContentPart
 
     public static ContentPart VideoUriPart(string uri, string mediaType = "video/mp4", string? name = null) =>
         new() { Kind = ContentPartKind.Video, Uri = uri, MediaType = mediaType, Name = name };
+
+    public static ContentPart ImageFileRefPart(ChatFileRef fileRef, string mediaType = "image/png", string? name = null) =>
+        new()
+        {
+            Kind = ContentPartKind.Image,
+            FileRef = fileRef,
+            MediaType = string.IsNullOrWhiteSpace(mediaType) ? fileRef.MediaType : mediaType,
+            Name = string.IsNullOrWhiteSpace(name) ? fileRef.FileName : name,
+        };
+}
+
+public sealed record ChatFileRef
+{
+    public string? FileId { get; init; }
+    public string? ArtifactId { get; init; }
+    public ChatFileSourceKind SourceKind { get; init; }
+    public string? SourceMessageId { get; init; }
+    public string? SourceResourceKey { get; init; }
+    public string? FileName { get; init; }
+    public string? MediaType { get; init; }
+    public long SizeBytes { get; init; }
+    public string? Sha256 { get; init; }
+    public long CreatedAtUnixMs { get; init; }
+    public long ExpiresAtUnixMs { get; init; }
+    public string? OwnerRunId { get; init; }
+    public string? OwnerScopeId { get; init; }
 }
 
 /// <summary>A single tool call. Includes Id, name, and parameter JSON.</summary>

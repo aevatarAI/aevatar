@@ -3,6 +3,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -75,6 +76,8 @@ public sealed partial class ConversationGAgent :
     private const int RecentAttachmentActivityCap = 5;
     private const int RecentDeliveriesCap = 100;
     private const int MaxNyxRelayInterimUpdateRetryCount = 2;
+    private const string RelayReplyTokenSecretPurpose = "channel-relay-reply-token";
+    private const string RelayUserAccessTokenSecretPurpose = "channel-relay-user-access-token";
     private static readonly TimeSpan RecentAttachmentActivityWindow = TimeSpan.FromMinutes(10);
     private const int RuntimeCredentialLocalOccRetryCount = 3;
 
@@ -289,6 +292,23 @@ public sealed partial class ConversationGAgent :
                 activity.ReplyToActivityId),
         };
         var result = await runner.RunInboundAsync(activity, inboundContext, CancellationToken.None);
+        var runnerResultKind = result.LlmReplyRequest is not null
+            ? "llm_reply_requested"
+            : result.WorkflowDraftRunRequest is not null
+                ? "workflow_draft_run_requested"
+                : result.Success && result.SentActivityId.StartsWith("ignored:", StringComparison.Ordinal)
+                    ? "ignored"
+                    : result.Success
+                        ? "sent"
+                        : "failed";
+        Logger.LogInformation(
+            "Conversation inbound runner result: activity={ActivityId}, kind={ResultKind}, sent={SentId}, failureKind={FailureKind}, errorCode={ErrorCode}, retainedHistoryClear={RetainedHistoryClear}",
+            activity.Id,
+            runnerResultKind,
+            result.SentActivityId,
+            result.FailureKind,
+            result.ErrorCode,
+            result.RetainedHistoryClearRequested);
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (result.RetainedHistoryClearRequested)
@@ -314,10 +334,9 @@ public sealed partial class ConversationGAgent :
                 return;
             }
 
-            // The transient run command copy keeps reply_token + expiry + per-call credentials
-            // in Metadata so the run actor can echo them back inside LlmReplyReadyEvent and
-            // forward them to the LLM call; the persisted state copy must not carry any of
-            // those credentials into the event store / projection / read model.
+            // The transient run command copy keeps the raw reply token and per-call credentials
+            // so the run actor can echo them back inside LlmReplyReadyEvent and forward them to
+            // the LLM call. The persisted copy keeps only encrypted runtime-secret references.
             var runCopy = result.LlmReplyRequest.Clone();
             runCopy.TargetActorId = Id;
             runCopy.TargetRef = targetRef.Clone();
@@ -325,6 +344,7 @@ public sealed partial class ConversationGAgent :
             runCopy.RunId = NormalizeOptional(runCopy.RunId)!;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);
             RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
+            await AttachRelayRuntimeSecretReferencesAsync(runCopy, runtimeContext, CancellationToken.None);
             runCopy.PriorHistory.Clear();
             runCopy.PriorHistory.AddRange(State.RetainedHistory.Select(entry => entry.Clone()));
             runCopy.RecentAttachmentActivities.Clear();
@@ -363,6 +383,7 @@ public sealed partial class ConversationGAgent :
             RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
             if (!string.IsNullOrWhiteSpace(runtimeContext.NyxUserAccessToken))
                 runCopy.NyxUserAccessToken = runtimeContext.NyxUserAccessToken.Trim();
+            await AttachWorkflowRuntimeSecretReferencesAsync(runCopy, runtimeContext, CancellationToken.None);
 
             var persistedCopy = runCopy.Clone();
             persistedCopy.ReplyToken = string.Empty;
@@ -450,6 +471,8 @@ public sealed partial class ConversationGAgent :
         !string.IsNullOrWhiteSpace(context.Channel.PlatformMessageId) ||
         !string.IsNullOrWhiteSpace(context.Channel.DeliveryTargetId) ||
         !string.IsNullOrWhiteSpace(context.SenderBinding.BindingId) ||
+        !string.IsNullOrWhiteSpace(context.SenderBinding.NyxUserId) ||
+        context.NyxIdAuthority.IsComplete ||
         !string.IsNullOrWhiteSpace(context.Routing.ModelOverride) ||
         !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
         context.Routing.MaxToolRoundsOverride.HasValue ||
@@ -703,20 +726,39 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
-        if (IsRelayActivity(request.Activity) && string.IsNullOrWhiteSpace(request.ReplyToken))
+        var dispatchRequest = request.Clone();
+        try
+        {
+            await RestoreRelayRuntimeCredentialsAsync(dispatchRequest, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "Failed to resolve relay runtime credentials; scheduling durable retry: correlation={CorrelationId}",
+                request.CorrelationId);
+            await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
+            return;
+        }
+
+        if (IsRelayActivity(dispatchRequest.Activity) && string.IsNullOrWhiteSpace(dispatchRequest.ReplyToken))
         {
             await PersistMissingRuntimeCredentialFailureAsync(
-                BuildLlmReplyCommandId(request.CorrelationId),
-                request.CorrelationId,
+                BuildLlmReplyCommandId(dispatchRequest.CorrelationId),
+                dispatchRequest.CorrelationId,
                 "missing_runtime_reply_token",
-                "Pending relay LLM reply cannot be dispatched after rehydration because reply credentials are runtime-only.",
+                "Pending relay LLM reply cannot be dispatched because its runtime reply credential is unavailable or expired.",
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(request.RunId))
+        if (string.IsNullOrWhiteSpace(dispatchRequest.RunId))
         {
-            await DropLegacyPendingLlmReplyWithoutRunIdAsync(request);
+            await DropLegacyPendingLlmReplyWithoutRunIdAsync(dispatchRequest);
             return;
         }
 
@@ -725,12 +767,12 @@ public sealed partial class ConversationGAgent :
             // Refactor (iter56/cluster-935-agent-run-actor-admission): old=dispatcher in-process admission, new=actor-owned admission with plain Task
             //   Conversation observes only dispatch handoff success/failure here.
             //   Run duplicate/stale decisions are committed by AgentRunGAgent events.
-            await dispatcher.DispatchAsync(request.Clone(), ct);
+            await dispatcher.DispatchAsync(dispatchRequest, ct);
             Logger.LogInformation(
                 "Dispatched LLM reply run request: runId={RunId} correlation={CorrelationId} conversation={Key}",
-                request.RunId,
-                request.CorrelationId,
-                request.Activity?.Conversation?.CanonicalKey);
+                dispatchRequest.RunId,
+                dispatchRequest.CorrelationId,
+                dispatchRequest.Activity?.Conversation?.CanonicalKey);
         }
         catch (Exception ex)
         {
@@ -758,9 +800,32 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
-        if (IsRelayActivity(request.Activity))
+        var dispatchRequest = request.Clone();
+        try
         {
-            if (string.IsNullOrWhiteSpace(request.ReplyToken))
+            await RestoreWorkflowRuntimeCredentialsAsync(dispatchRequest, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "Failed to resolve workflow draft-run runtime credentials: correlation={CorrelationId}",
+                request.CorrelationId);
+            await PersistWorkflowDraftRunFailureAsync(
+                request,
+                "workflow_draft_run_runtime_credential_unavailable",
+                "Workflow draft-run runtime credentials could not be resolved.",
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            return;
+        }
+
+        if (IsRelayActivity(dispatchRequest.Activity))
+        {
+            if (string.IsNullOrWhiteSpace(dispatchRequest.ReplyToken))
             {
                 await PersistMissingRuntimeCredentialFailureAsync(
                     BuildWorkflowDraftRunCommandId(request.CorrelationId),
@@ -771,7 +836,7 @@ public sealed partial class ConversationGAgent :
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(request.NyxUserAccessToken))
+            if (string.IsNullOrWhiteSpace(dispatchRequest.NyxUserAccessToken))
             {
                 await PersistMissingRuntimeCredentialFailureAsync(
                     BuildWorkflowDraftRunCommandId(request.CorrelationId),
@@ -785,7 +850,7 @@ public sealed partial class ConversationGAgent :
 
         try
         {
-            await dispatcher.DispatchAsync(request.Clone(), ct);
+            await dispatcher.DispatchAsync(dispatchRequest, ct);
             Logger.LogInformation(
                 "Dispatched workflow draft-run request: runId={RunId} correlation={CorrelationId} conversation={Key}",
                 request.RunId,
@@ -902,7 +967,10 @@ public sealed partial class ConversationGAgent :
         }
 
         var referenceActivity = pendingRequest?.Activity ?? pendingWorkflowRequest?.Activity ?? evt.Activity;
-        var runtimeContext = BuildNyxRelayRuntimeContextForReply(evt, referenceActivity);
+        var runtimeContext = await BuildNyxRelayRuntimeContextForReplyAsync(
+            evt,
+            referenceActivity,
+            CancellationToken.None);
         Logger.LogInformation(
             "Received LLM reply ready: correlation={CorrelationId} terminal={TerminalState} replyTokenSource={Source}",
             evt.CorrelationId,
@@ -952,7 +1020,7 @@ public sealed partial class ConversationGAgent :
                 evt.CorrelationId,
                 commandId,
                 sourceEventId: evt.CorrelationId,
-                larkMessageId: result.OutboundDelivery?.ReplyMessageId,
+                providerMessageId: result.OutboundDelivery?.ReplyMessageId,
                 cardId: string.Empty);
             await PersistReplyReadyEventsWithLocalRetryAsync(
                 evt.CorrelationId,
@@ -998,7 +1066,7 @@ public sealed partial class ConversationGAgent :
             evt.CorrelationId,
             commandId,
             sourceEventId: evt.CorrelationId,
-            larkMessageId: string.Empty,
+            providerMessageId: string.Empty,
             cardId: string.Empty);
         await PersistReplyReadyEventsWithLocalRetryAsync(
             evt.CorrelationId,
@@ -1084,7 +1152,7 @@ public sealed partial class ConversationGAgent :
                 evt.CorrelationId,
                 commandId,
                 sourceEventId: evt.CorrelationId,
-                larkMessageId: completed.SentActivityId,
+                providerMessageId: completed.SentActivityId,
                 cardId: string.Empty,
                 conversation: completed.Conversation);
             await PersistReplyReadyEventsWithLocalRetryAsync(
@@ -1112,7 +1180,7 @@ public sealed partial class ConversationGAgent :
                 evt.CorrelationId,
                 commandId,
                 sourceEventId: evt.CorrelationId,
-                larkMessageId: completed.SentActivityId,
+                providerMessageId: completed.SentActivityId,
                 cardId: string.Empty,
                 conversation: completed.Conversation);
             await PersistReplyReadyEventsWithLocalRetryAsync(
@@ -1396,6 +1464,7 @@ public sealed partial class ConversationGAgent :
                 AccumulatedText = failureText,
                 ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
+            ApplyRuntimeReplyToken(failureChunk, runtimeContext);
             var sequence = state.EditCount + 1L;
             var generation = NextNyxRelayTextOperationGeneration(state);
             await TransitionNyxRelayStreamingPhaseAsync(
@@ -1470,6 +1539,7 @@ public sealed partial class ConversationGAgent :
                 AccumulatedText = finalText,
                 ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
+            ApplyRuntimeReplyToken(finalChunk, runtimeContext);
             var sequence = state.EditCount + 1L;
             var generation = NextNyxRelayTextOperationGeneration(state);
             await TransitionNyxRelayStreamingPhaseAsync(
@@ -2092,7 +2162,7 @@ public sealed partial class ConversationGAgent :
             evt.CorrelationId,
             commandId,
             sourceEventId: evt.CorrelationId,
-            larkMessageId: delivered.ChannelMessageId,
+            providerMessageId: delivered.ChannelMessageId,
             cardId: string.Empty,
             conversation: completed.Conversation);
         deliveryProduced.ProducedAtVersion = NextCommittedVersion(1);
@@ -2159,7 +2229,7 @@ public sealed partial class ConversationGAgent :
                 turnId: cmd.CorrelationId,
                 requestId: cmd.CommandId,
                 sourceEventId: cmd.CausationId,
-                larkMessageId: result.OutboundDelivery?.ReplyMessageId,
+                providerMessageId: result.OutboundDelivery?.ReplyMessageId,
                 cardId: string.Empty,
                 conversation: cmd.Conversation);
             await PersistDomainEventsAsync([deliveryProduced, completed]);
@@ -2494,18 +2564,53 @@ public sealed partial class ConversationGAgent :
             accessToken);
     }
 
-    private ConversationTurnRuntimeContext BuildNyxRelayRuntimeContextForReply(
+    private async Task<ConversationTurnRuntimeContext> BuildNyxRelayRuntimeContextForReplyAsync(
         LlmReplyReadyEvent evt,
-        ChatActivity? pendingActivity)
+        ChatActivity? pendingActivity,
+        CancellationToken ct)
     {
         var activity = pendingActivity ?? evt.Activity;
+        var replyToken = NormalizeOptional(evt.ReplyToken);
+        var replyTokenExpiresAtUnixMs = evt.ReplyTokenExpiresAtUnixMs;
+        var userAccessToken = NormalizeOptional(evt.Activity?.TransportExtras?.NyxUserAccessToken);
+
+        if (Services.GetService<IRuntimeSecretStore>() is { } secretStore)
+        {
+            if (replyToken is null && evt.RelayReplyTokenRef is { Ref.Length: > 0 } replyTokenRef)
+            {
+                var resolved = await secretStore.ResolveAsync(
+                    new ResolveRuntimeSecretRequest(
+                        replyTokenRef.Ref,
+                        RelayReplyTokenSecretPurpose,
+                        evt.RunId,
+                        evt.CorrelationId,
+                        "Resolve durable terminal outbox reply credential."),
+                    ct);
+                replyToken = NormalizeOptional(resolved.Secret);
+                replyTokenExpiresAtUnixMs = replyTokenRef.ExpiresAtUnixMs;
+            }
+
+            if (userAccessToken is null &&
+                evt.RelayUserAccessTokenRef is { Ref.Length: > 0 } userAccessTokenRef)
+            {
+                var resolved = await secretStore.ResolveAsync(
+                    new ResolveRuntimeSecretRequest(
+                        userAccessTokenRef.Ref,
+                        RelayUserAccessTokenSecretPurpose,
+                        evt.RunId,
+                        evt.CorrelationId,
+                        "Resolve durable terminal outbox user credential."),
+                    ct);
+                userAccessToken = NormalizeOptional(resolved.Secret);
+            }
+        }
 
         return BuildNyxRelayRuntimeContext(
             evt.CorrelationId,
             activity,
-            evt.ReplyToken,
-            evt.ReplyTokenExpiresAtUnixMs,
-            evt.Activity?.TransportExtras?.NyxUserAccessToken);
+            replyToken,
+            replyTokenExpiresAtUnixMs,
+            userAccessToken);
     }
 
     private DeliveryProducedEvent BuildDeliveryProducedEvent(
@@ -2516,7 +2621,7 @@ public sealed partial class ConversationGAgent :
         string? turnId,
         string? requestId,
         string? sourceEventId,
-        string? larkMessageId,
+        string? providerMessageId,
         string? cardId,
         ConversationReference? conversation = null)
     {
@@ -2528,7 +2633,7 @@ public sealed partial class ConversationGAgent :
             DeliveryKind = kind,
             Target = BuildDeliveryTarget(activity, resolvedConversation),
             Status = status,
-            LarkMessageId = NormalizeOptional(larkMessageId) ?? string.Empty,
+            ProviderMessageId = NormalizeOptional(providerMessageId) ?? string.Empty,
             CardId = NormalizeOptional(cardId) ?? string.Empty,
             RequestId = NormalizeOptional(requestId) ?? string.Empty,
             SourceEventId = NormalizeOptional(sourceEventId) ?? string.Empty,
@@ -2547,17 +2652,17 @@ public sealed partial class ConversationGAgent :
             Channel = conversation?.Channel?.Clone() ?? activity?.ChannelId?.Clone() ?? new ChannelId(),
             ConversationKey = conversation?.CanonicalKey ?? string.Empty,
             Platform = NormalizeOptional(extras?.NyxPlatform) ?? conversation?.Channel?.Value ?? activity?.ChannelId?.Value ?? string.Empty,
-            ReceiveId = NormalizeOptional(extras?.NyxLarkChatId) ??
+            AddressId = NormalizeOptional(extras?.NyxLarkChatId) ??
                         NormalizeOptional(extras?.NyxLarkUnionId) ??
                         NormalizeOptional(outbound?.ReplyMessageId) ??
                         string.Empty,
-            ReceiveIdType = ResolveReceiveIdType(extras),
+            AddressType = ResolveAddressType(extras),
             ConversationId = NormalizeOptional(extras?.NyxConversationId) ?? conversation?.CanonicalKey ?? string.Empty,
             ReplyMessageId = outbound?.ReplyMessageId ?? string.Empty,
         };
     }
 
-    private static string ResolveReceiveIdType(TransportExtras? extras)
+    private static string ResolveAddressType(TransportExtras? extras)
     {
         if (!string.IsNullOrWhiteSpace(extras?.NyxLarkChatId))
             return "chat_id";
@@ -2599,6 +2704,223 @@ public sealed partial class ConversationGAgent :
 
         activity.TransportExtras ??= new TransportExtras();
         activity.TransportExtras.NyxUserAccessToken = accessToken;
+    }
+
+    private async Task AttachRelayRuntimeSecretReferencesAsync(
+        NeedsLlmReplyEvent request,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (!IsRelayActivity(request.Activity) ||
+            runtimeContext.NyxRelayReplyToken is not { } replyContext ||
+            Services.GetService<IRuntimeSecretStore>() is not { } secretStore)
+        {
+            return;
+        }
+
+        var timeToLive = replyContext.ExpiresAtUtc - DateTimeOffset.UtcNow;
+        if (timeToLive <= TimeSpan.Zero)
+            return;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.RelayReplyTokenRef?.Ref) &&
+                NormalizeOptional(replyContext.ReplyToken) is { } replyToken)
+            {
+                request.RelayReplyTokenRef = (await secretStore.PutAsync(
+                    new StoreRuntimeSecretRequest(
+                        RelayReplyTokenSecretPurpose,
+                        request.RunId,
+                        request.CorrelationId,
+                        replyToken,
+                        timeToLive,
+                        ConsumeOnce: false,
+                        AuditReason: "Preserve relay reply credential for actor-dispatch recovery."),
+                    ct)).Reference;
+            }
+
+            if (string.IsNullOrWhiteSpace(request.RelayUserAccessTokenRef?.Ref) &&
+                NormalizeOptional(runtimeContext.NyxUserAccessToken) is { } userAccessToken)
+            {
+                request.RelayUserAccessTokenRef = (await secretStore.PutAsync(
+                    new StoreRuntimeSecretRequest(
+                        RelayUserAccessTokenSecretPurpose,
+                        request.RunId,
+                        request.CorrelationId,
+                        userAccessToken,
+                        timeToLive,
+                        ConsumeOnce: false,
+                        AuditReason: "Preserve relay user credential for actor-dispatch recovery."),
+                    ct)).Reference;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // The same-turn dispatch still carries both raw credentials. A secret-store
+            // outage must not turn an otherwise healthy inbound turn into a failure.
+            Logger.LogWarning(
+                ex,
+                "Failed to preserve relay runtime credentials for dispatch recovery: runId={RunId} correlation={CorrelationId}",
+                request.RunId,
+                request.CorrelationId);
+        }
+    }
+
+    private async Task AttachWorkflowRuntimeSecretReferencesAsync(
+        NeedsWorkflowDraftRunEvent request,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (!IsRelayActivity(request.Activity) ||
+            runtimeContext.NyxRelayReplyToken is not { } replyContext ||
+            Services.GetService<IRuntimeSecretStore>() is not { } secretStore)
+        {
+            return;
+        }
+
+        var timeToLive = replyContext.ExpiresAtUtc - DateTimeOffset.UtcNow;
+        if (timeToLive <= TimeSpan.Zero)
+            return;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.RelayReplyTokenRef?.Ref) &&
+                NormalizeOptional(replyContext.ReplyToken) is { } replyToken)
+            {
+                request.RelayReplyTokenRef = (await secretStore.PutAsync(
+                    new StoreRuntimeSecretRequest(
+                        RelayReplyTokenSecretPurpose,
+                        request.RunId,
+                        request.CorrelationId,
+                        replyToken,
+                        timeToLive,
+                        ConsumeOnce: false,
+                        AuditReason: "Preserve workflow draft-run reply credential for durable recovery."),
+                    ct)).Reference;
+            }
+
+            if (string.IsNullOrWhiteSpace(request.RelayUserAccessTokenRef?.Ref) &&
+                NormalizeOptional(runtimeContext.NyxUserAccessToken) is { } userAccessToken)
+            {
+                request.RelayUserAccessTokenRef = (await secretStore.PutAsync(
+                    new StoreRuntimeSecretRequest(
+                        RelayUserAccessTokenSecretPurpose,
+                        request.RunId,
+                        request.CorrelationId,
+                        userAccessToken,
+                        timeToLive,
+                        ConsumeOnce: false,
+                        AuditReason: "Preserve workflow draft-run user credential for durable recovery."),
+                    ct)).Reference;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Failed to preserve workflow draft-run runtime credentials: runId={RunId} correlation={CorrelationId}",
+                request.RunId,
+                request.CorrelationId);
+        }
+    }
+
+    private async Task RestoreRelayRuntimeCredentialsAsync(
+        NeedsLlmReplyEvent request,
+        CancellationToken ct)
+    {
+        if (!IsRelayActivity(request.Activity) ||
+            Services.GetService<IRuntimeSecretStore>() is not { } secretStore)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ReplyToken) &&
+            request.RelayReplyTokenRef is { Ref.Length: > 0 } replyTokenRef)
+        {
+            var resolved = await secretStore.ResolveAsync(
+                new ResolveRuntimeSecretRequest(
+                    replyTokenRef.Ref,
+                    RelayReplyTokenSecretPurpose,
+                    request.RunId,
+                    request.CorrelationId,
+                    "Recover relay reply credential after actor-dispatch failure."),
+                ct);
+            if (NormalizeOptional(resolved.Secret) is { } replyToken)
+            {
+                request.ReplyToken = replyToken;
+                request.ReplyTokenExpiresAtUnixMs = replyTokenRef.ExpiresAtUnixMs;
+            }
+        }
+
+        if (NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken) is null &&
+            request.RelayUserAccessTokenRef is { Ref.Length: > 0 } userAccessTokenRef)
+        {
+            var resolved = await secretStore.ResolveAsync(
+                new ResolveRuntimeSecretRequest(
+                    userAccessTokenRef.Ref,
+                    RelayUserAccessTokenSecretPurpose,
+                    request.RunId,
+                    request.CorrelationId,
+                    "Recover relay user credential after actor-dispatch failure."),
+                ct);
+            if (NormalizeOptional(resolved.Secret) is { } userAccessToken)
+                RestoreRuntimeTransportCredentials(request.Activity, userAccessToken);
+        }
+    }
+
+    private async Task RestoreWorkflowRuntimeCredentialsAsync(
+        NeedsWorkflowDraftRunEvent request,
+        CancellationToken ct)
+    {
+        if (!IsRelayActivity(request.Activity) ||
+            Services.GetService<IRuntimeSecretStore>() is not { } secretStore)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ReplyToken) &&
+            request.RelayReplyTokenRef is { Ref.Length: > 0 } replyTokenRef)
+        {
+            var resolved = await secretStore.ResolveAsync(
+                new ResolveRuntimeSecretRequest(
+                    replyTokenRef.Ref,
+                    RelayReplyTokenSecretPurpose,
+                    request.RunId,
+                    request.CorrelationId,
+                    "Recover workflow draft-run reply credential."),
+                ct);
+            if (NormalizeOptional(resolved.Secret) is { } replyToken)
+            {
+                request.ReplyToken = replyToken;
+                request.ReplyTokenExpiresAtUnixMs = replyTokenRef.ExpiresAtUnixMs;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(request.NyxUserAccessToken) &&
+            request.RelayUserAccessTokenRef is { Ref.Length: > 0 } userAccessTokenRef)
+        {
+            var resolved = await secretStore.ResolveAsync(
+                new ResolveRuntimeSecretRequest(
+                    userAccessTokenRef.Ref,
+                    RelayUserAccessTokenSecretPurpose,
+                    request.RunId,
+                    request.CorrelationId,
+                    "Recover workflow draft-run user credential."),
+                ct);
+            if (NormalizeOptional(resolved.Secret) is { } userAccessToken)
+            {
+                request.NyxUserAccessToken = userAccessToken;
+                RestoreRuntimeTransportCredentials(request.Activity, userAccessToken);
+            }
+        }
     }
 
     private string DescribeReplyTokenSource(LlmReplyReadyEvent evt, ConversationTurnRuntimeContext runtimeContext)
@@ -2662,6 +2984,17 @@ public sealed partial class ConversationGAgent :
 
         request.ReplyToken = token.ReplyToken;
         request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
+    }
+
+    private static void ApplyRuntimeReplyToken(
+        LlmReplyStreamChunkEvent chunk,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        if (runtimeContext.NyxRelayReplyToken is not { } token)
+            return;
+
+        chunk.ReplyToken = token.ReplyToken;
+        chunk.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
     }
 
     private async Task PersistMissingRuntimeCredentialFailureAsync(
@@ -3528,7 +3861,7 @@ public sealed partial class ConversationGAgent :
             DeliveryKind = produced.DeliveryKind,
             Status = produced.Status,
             Target = produced.Target?.Clone() ?? new DeliveryTarget(),
-            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            ProviderMessageId = produced.ProviderMessageId ?? string.Empty,
             CardId = produced.CardId ?? string.Empty,
             RequestId = produced.RequestId ?? string.Empty,
             SourceEventId = produced.SourceEventId ?? string.Empty,

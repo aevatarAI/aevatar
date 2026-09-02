@@ -13,7 +13,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Infrastructure.DependencyInjection;
 
@@ -27,7 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<WorkflowRunReportExportOptions>();
         if (configureReportExport != null)
             services.Configure(configureReportExport);
-        services.AddOptions<FileSystemWorkflowFileIngressOptions>();
+        services.AddOptions<FileSystemFileArtifactOptions>();
         var artifactOptions = services.AddOptions<WorkflowFileArtifactOptions>();
         if (configuration != null)
         {
@@ -35,24 +34,12 @@ public static class ServiceCollectionExtensions
         }
 
         ConfigureWorkflowFileArtifacts(services, configuration);
-        var submitOptions = services.AddOptions<WorkflowConnectedServiceFileSubmitOptions>();
-        if (configuration != null)
-        {
-            submitOptions.Bind(
-                configuration.GetSection(WorkflowConnectedServiceFileSubmitOptions.SectionName));
-        }
-
-        submitOptions.ValidateOnStart();
         var spreadsheetOptions = services.AddOptions<WorkflowSpreadsheetExtractOptions>();
         if (configuration != null)
         {
             spreadsheetOptions.Bind(
                 configuration.GetSection(WorkflowSpreadsheetExtractOptions.SectionName));
         }
-
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IValidateOptions<WorkflowConnectedServiceFileSubmitOptions>,
-            WorkflowConnectedServiceFileSubmitOptionsValidator>());
 
         // Replace the Noop fallback from Application layer with the real file export adapter.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunReportExportPort, FileSystemWorkflowRunReportExporter>());
@@ -61,13 +48,27 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowSpreadsheetExtractToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowConnectedServiceResourceFetchToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowFileSubmitToolSource>());
+        services.TryAddSingleton<
+            IWorkflowFileMultipartUploadPolicyResolver,
+            UnavailableWorkflowFileMultipartUploadPolicyResolver>();
+        services.TryAddSingleton<
+            IWorkflowFileMultipartUploadPort,
+            UnavailableWorkflowFileMultipartUploadPort>();
         services.TryAddSingleton<WorkflowRunActorPort>();
         services.TryAddSingleton<IWorkflowDefinitionProvisioningPort>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());
         services.TryAddSingleton<IWorkflowRunProvisioningPort>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());
+        services.TryAddSingleton<WorkflowDefinitionParser>();
         services.TryAddSingleton<IWorkflowDefinitionParser>(sp =>
-            sp.GetRequiredService<WorkflowRunActorPort>());
+            sp.GetRequiredService<WorkflowDefinitionParser>());
+        // 06-20-observatory-run-state-feed (R2): read ports backing the ad-hoc run reclaim gate.
+        //   - committed head version from the run actor's event-store head;
+        //   - durable materialization watermark from the projection-scope status readmodel (optional:
+        //     IProjectionScopeWatermarkQueryPort is only registered where AddProjectionScopeStatusRuntimeCore
+        //     runs, e.g. the channel/mainnet host; absent → the gate defers and never destroys).
+        services.TryAddSingleton<IWorkflowRunCommittedVersionPort, WorkflowRunCommittedVersionPort>();
+        services.TryAddSingleton<IWorkflowRunMaterializationWatermarkPort, WorkflowRunMaterializationWatermarkPort>();
         services.TryAddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
         return services;
     }
@@ -79,10 +80,10 @@ public static class ServiceCollectionExtensions
         var backend = ResolveWorkflowFileArtifactBackend(configuration);
         if (string.Equals(backend, "External", StringComparison.OrdinalIgnoreCase))
         {
-            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileIngressPort>(services);
-            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileArtifactReadPort>(services);
-            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileArtifactOwnershipPort>(services);
-            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileArtifactCleanupPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IFileArtifactIngressPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IFileArtifactReadPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IFileArtifactOwnershipPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IFileArtifactCleanupPort>(services);
             return;
         }
 
@@ -92,15 +93,15 @@ public static class ServiceCollectionExtensions
                 "WorkflowFileArtifacts:Backend must be either FileSystem or External.");
         }
 
-        services.TryAddSingleton<FileSystemWorkflowFileIngressPort>();
-        services.TryAddSingleton<IWorkflowFileIngressPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
-        services.TryAddSingleton<IWorkflowFileArtifactReadPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
-        services.TryAddSingleton<IWorkflowFileArtifactOwnershipPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
-        services.TryAddSingleton<IWorkflowFileArtifactCleanupPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
+        services.TryAddSingleton<FileSystemFileArtifactPort>();
+        services.TryAddSingleton<IFileArtifactIngressPort>(sp =>
+            sp.GetRequiredService<FileSystemFileArtifactPort>());
+        services.TryAddSingleton<IFileArtifactReadPort>(sp =>
+            sp.GetRequiredService<FileSystemFileArtifactPort>());
+        services.TryAddSingleton<IFileArtifactOwnershipPort>(sp =>
+            sp.GetRequiredService<FileSystemFileArtifactPort>());
+        services.TryAddSingleton<IFileArtifactCleanupPort>(sp =>
+            sp.GetRequiredService<FileSystemFileArtifactPort>());
     }
 
     private static string ResolveWorkflowFileArtifactBackend(IConfiguration? configuration)

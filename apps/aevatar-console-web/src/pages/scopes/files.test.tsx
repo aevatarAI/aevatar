@@ -52,10 +52,6 @@ jest.mock('@/shared/studio/api', () => ({
         readModelFields: ['input', 'output'],
       },
     })),
-    getWorkspaceSettings: jest.fn(async () => ({
-      runtimeBaseUrl: 'https://runtime.example.test',
-      directories: [],
-    })),
     listWorkflows: jest.fn(async () => []),
     getConnectorCatalog: jest.fn(async () => ({
       homeDirectory: 'actor://connector-catalog',
@@ -69,12 +65,6 @@ jest.mock('@/shared/studio/api', () => ({
       fileExists: true,
       roles: [],
     })),
-    getSettings: jest.fn(async () => ({
-      runtimeBaseUrl: 'https://runtime.example.test',
-      defaultProviderName: 'tornado',
-      providerTypes: [],
-      providers: [],
-    })),
     addWorkflowDirectory: jest.fn(async () => undefined),
     removeWorkflowDirectory: jest.fn(async () => undefined),
   },
@@ -82,7 +72,15 @@ jest.mock('@/shared/studio/api', () => ({
 
 describe('ProjectFilesPage', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     window.history.replaceState({}, '', '/scopes/files');
+  });
+
+  it('does not expose host provider settings in the Files surface', async () => {
+    renderWithQueryClient(React.createElement(ProjectFilesPage));
+
+    expect(await screen.findByText('Files explorer')).toBeInTheDocument();
+    expect(screen.queryByText('settings.json')).not.toBeInTheDocument();
   });
 
   it('mounts Files as a top-level page beside Assets and hydrates the resolved scope', async () => {

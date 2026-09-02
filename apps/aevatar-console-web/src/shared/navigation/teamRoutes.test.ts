@@ -88,9 +88,10 @@ describe("teamRoutes", () => {
         scopeId: "scope-alpha",
         teamId: "t-alpha",
         workflowId: " workflow-alpha ",
+        workflowSource: "published",
       }),
     ).toBe(
-      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha&workflowSource=published",
     );
 
     expect(
@@ -137,11 +138,23 @@ describe("teamRoutes", () => {
         actorId: " actor://scope-alpha/run-1 ",
         memberId: " member-alpha ",
         runId: " run-1 ",
+        scheduleId: " sch-alpha ",
         scopeId: " scope-alpha ",
         teamId: " t-alpha ",
       }),
     ).toBe(
-      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?runId=run-1&actorId=actor%3A%2F%2Fscope-alpha%2Frun-1",
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?runId=run-1&actorId=actor%3A%2F%2Fscope-alpha%2Frun-1&scheduleId=sch-alpha",
+    );
+
+    expect(
+      buildTeamMemberPublishedRunsHref({
+        memberId: "member-alpha",
+        scheduleId: "schedule-alpha",
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }),
+    ).toBe(
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?scheduleId=schedule-alpha",
     );
 
     expect(
@@ -211,7 +224,7 @@ describe("teamRoutes", () => {
     );
   });
 
-  it("reads the canonical team detail route state from path and query", () => {
+  it("keeps query member candidates separate from canonical member path identity", () => {
     expect(
       readTeamDetailRouteState(
         "?memberId=member-alpha&teamId=stale-team&workflowId=wf-1&serviceId=service-1&runId=run-1&tab=members",
@@ -219,6 +232,7 @@ describe("teamRoutes", () => {
       ),
     ).toEqual({
       memberId: "member-alpha",
+      routeMemberId: "",
       runId: "run-1",
       scopeId: "scope-alpha",
       serviceId: "service-1",
@@ -237,6 +251,7 @@ describe("teamRoutes", () => {
       ),
     ).toMatchObject({
       memberId: "member-alpha",
+      routeMemberId: "member-alpha",
       scopeId: "scope-alpha",
       teamId: "t-alpha",
       workflowId: "wf-alpha",
@@ -251,6 +266,7 @@ describe("teamRoutes", () => {
       ),
     ).toMatchObject({
       memberId: "member-alpha",
+      routeMemberId: "member-alpha",
       scopeId: "scope-alpha",
       tab: "automations",
       teamId: "t-alpha",
@@ -265,6 +281,7 @@ describe("teamRoutes", () => {
       ),
     ).toMatchObject({
       memberId: "",
+      routeMemberId: "",
       scopeId: "",
       teamId: "",
       workflowId: "wf-alpha",
@@ -279,6 +296,7 @@ describe("teamRoutes", () => {
       ),
     ).toMatchObject({
       memberId: "member-alpha",
+      routeMemberId: "",
       scopeId: "scope-alpha",
       teamId: "t-alpha",
       testTeam: true,
@@ -306,6 +324,7 @@ describe("teamRoutes", () => {
       ),
     ).toEqual({
       memberId: "",
+      routeMemberId: "",
       runId: "",
       scopeId: "scope-query",
       serviceId: "",
@@ -324,6 +343,7 @@ describe("teamRoutes", () => {
       ),
     ).toEqual({
       memberId: "",
+      routeMemberId: "",
       runId: "",
       scopeId: "scope-query",
       serviceId: "",

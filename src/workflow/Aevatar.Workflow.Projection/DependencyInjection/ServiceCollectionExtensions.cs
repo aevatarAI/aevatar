@@ -1,4 +1,7 @@
+using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.Workflow.Projection.Audit;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.Orchestration;
@@ -10,6 +13,8 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -35,6 +40,14 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
         services.AddProjectionReadModelRuntime();
+        // Heal/guard the workflow binding write path so a definition actor's binding slot can never
+        // stay Run-kind (a relayed run-bind clobber frozen at a high run version). Scoped to
+        // WorkflowActorBindingDocument only; the generic ProjectionWriteResultEvaluator is untouched.
+        services.AddSingleton<ObservedProjectionWriteDispatcher<WorkflowActorBindingDocument>>();
+        services.AddSingleton<IProjectionWriteDispatcher<WorkflowActorBindingDocument>>(sp =>
+            new WorkflowActorBindingHealingWriteDispatcher(
+                sp.GetRequiredService<ObservedProjectionWriteDispatcher<WorkflowActorBindingDocument>>(),
+                sp.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>()));
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>, WorkflowExecutionCurrentStateDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
@@ -124,6 +137,35 @@ public static class ServiceCollectionExtensions
         services.AddProjectionArtifactMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowRunInsightReportArtifactProjector>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator,
+            WorkflowHumanApprovalResolvedAuditTranslator>());
+        // Run lifecycle + run-side definition bind: flow through WorkflowRunGAgent's
+        // ExecutionMaterialization scope (every WorkflowRunGAgent commit activates it).
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator,
+            WorkflowRunExecutionStartedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator,
+            WorkflowCompletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator,
+            WorkflowStoppedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator,
+            WorkflowRunStoppedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator,
+            WorkflowRunForkRequestedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator,
+            BindWorkflowRunDefinitionAuditTranslator>());
+        // Definition bind: flows through WorkflowGAgent's Binding scope only.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator,
+            BindWorkflowDefinitionAuditTranslator>());
+        services.AddAuditCommittedFactMaterializer<WorkflowExecutionMaterializationContext>();
+        services.AddAuditCommittedFactMaterializer<WorkflowBindingProjectionContext>();
         return services;
     }
 }

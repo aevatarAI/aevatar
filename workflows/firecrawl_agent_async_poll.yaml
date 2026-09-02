@@ -1,0 +1,87 @@
+name: firecrawl_agent_async_poll
+description: Poll one Firecrawl crawl job once; terminal statuses disable the same deterministic poll schedule.
+steps:
+  - id: poll_job
+    type: tool_call
+    idempotency_key: "${input.idempotency_key}"
+    parameters:
+      tool: firecrawl_crawl_status
+      arguments: '{"job_id":"${json(input.job_id)}","idempotency_key":"${json(input.idempotency_key)}"}'
+    next: route_status
+
+  - id: route_status
+    type: switch
+    parameters:
+      on: "${steps.poll_job.json.status}"
+      branch.completed: stop_completed_schedule
+      branch.failed: stop_failed_schedule
+      branch.cancelled: stop_cancelled_schedule
+      branch._default: mark_pending
+    branches:
+      completed: stop_completed_schedule
+      failed: stop_failed_schedule
+      cancelled: stop_cancelled_schedule
+      _default: mark_pending
+
+  - id: stop_completed_schedule
+    type: self_reschedule
+    parameters:
+      schedule_id: "${input.schedule_id}"
+      display_name: "Firecrawl poll ${input.job_id}"
+      cron_expression: "*/5 * * * *"
+      timezone: "UTC"
+      workflow_name: firecrawl_agent_async_poll
+      scope_id: "${input.scope_id}"
+      prompt: "$input"
+      enabled: "false"
+    next: mark_completed
+
+  - id: stop_failed_schedule
+    type: self_reschedule
+    parameters:
+      schedule_id: "${input.schedule_id}"
+      display_name: "Firecrawl poll ${input.job_id}"
+      cron_expression: "*/5 * * * *"
+      timezone: "UTC"
+      workflow_name: firecrawl_agent_async_poll
+      scope_id: "${input.scope_id}"
+      prompt: "$input"
+      enabled: "false"
+    next: mark_failed
+
+  - id: stop_cancelled_schedule
+    type: self_reschedule
+    parameters:
+      schedule_id: "${input.schedule_id}"
+      display_name: "Firecrawl poll ${input.job_id}"
+      cron_expression: "*/5 * * * *"
+      timezone: "UTC"
+      workflow_name: firecrawl_agent_async_poll
+      scope_id: "${input.scope_id}"
+      prompt: "$input"
+      enabled: "false"
+    next: mark_cancelled
+
+  - id: mark_completed
+    type: assign
+    parameters:
+      target: firecrawl_async_job
+      value: '{"status":"completed","job_id":"${json(input.job_id)}","schedule_id":"${json(input.schedule_id)}","result_url":"${json(steps.poll_job.json.result_url)}"}'
+
+  - id: mark_failed
+    type: assign
+    parameters:
+      target: firecrawl_async_job
+      value: '{"status":"failed","job_id":"${json(input.job_id)}","schedule_id":"${json(input.schedule_id)}","error":"${json(steps.poll_job.json.error)}"}'
+
+  - id: mark_cancelled
+    type: assign
+    parameters:
+      target: firecrawl_async_job
+      value: '{"status":"cancelled","job_id":"${json(input.job_id)}","schedule_id":"${json(input.schedule_id)}"}'
+
+  - id: mark_pending
+    type: assign
+    parameters:
+      target: firecrawl_async_job
+      value: '{"status":"pending","job_id":"${json(input.job_id)}","schedule_id":"${json(input.schedule_id)}","attempt":"${input.attempt}","max_attempts":"${input.max_attempts}","deadline_utc":"${json(input.deadline_utc)}"}'

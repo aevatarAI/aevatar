@@ -9,6 +9,7 @@ import "chat_activity.proto";
 import "channel_contracts.proto";
 import "chat_route_policy.proto";
 import "ai_messages.proto";
+import "Credentials/credential_secret_references.proto";
 
 message OutboundDeliveryReceipt {
   string reply_message_id = 1;
@@ -84,6 +85,13 @@ message NeedsLlmReplyEvent {
   // transient run command so the chat LLM path can include recent image context
   // or inject an honest degradation warning.
   repeated RecentConversationAttachmentActivity recent_attachment_activities = 14;
+  // Durable handle to the encrypted, TTL-bound relay reply token. The raw token
+  // remains runtime-only; this reference lets a transient actor-dispatch failure
+  // retry without silently abandoning the accepted inbound turn.
+  aevatar.credentials.RuntimeSecretReference relay_reply_token_ref = 15;
+  // Durable handle to the encrypted, TTL-bound NyxID user access token used by
+  // the LLM gateway. The raw access token is never persisted in actor state.
+  aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 16;
 }
 
 enum ChannelWorkflowDraftRunSourceKind {
@@ -112,6 +120,10 @@ message NeedsWorkflowDraftRunEvent {
   string reply_token = 10;
   int64 reply_token_expires_at_unix_ms = 11;
   string nyx_user_access_token = 12;
+  // Durable encrypted handles for workflow-run recovery. Raw credentials stay
+  // command-only and are cleared before this request enters actor state.
+  aevatar.credentials.RuntimeSecretReference relay_reply_token_ref = 13;
+  aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 14;
 }
 
 message ConversationHistoryEntry {
@@ -198,6 +210,11 @@ message LlmReplyReadyEvent {
   // History entries produced by this LLM turn. ConversationGAgent persists
   // them only after the reply reaches a terminal user-visible outcome.
   repeated ConversationHistoryEntry appended_history = 13;
+  // Optional encrypted handles used by durable output outboxes. ConversationGAgent
+  // resolves them only for the outbound operation; raw credentials never enter
+  // the producer actor's committed state.
+  aevatar.credentials.RuntimeSecretReference relay_reply_token_ref = 14;
+  aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 15;
 }
 
 enum ConversationReplyLifecycleMode {
@@ -332,6 +349,9 @@ message LlmReplyCardStreamChunkEvent {
   // AgentRunGAgent run_id that owns the CardKit lifecycle. Card-mode chunks are
   // sent directly to that run actor; ConversationGAgent must not receive them.
   string run_id = 8;
+  // Set on the terminal chunk so the run actor never caps the final accumulated
+  // text on the text-edit fallback path.
+  bool is_final = 9;
 }
 
 message LarkCardDeliveryCompletedEvent {

@@ -15,10 +15,16 @@ import { Empty } from "antd";
 import { RuntimeEventPreviewPanel } from "@/shared/agui/runtimeConversationPresentation";
 import { AevatarHeaderSelect } from "@/shared/ui/AevatarHeaderSelect";
 import {
+  AevatarLoadingDots,
+  AevatarLoadingPulseDot,
+  AevatarStreamingCursor,
+} from "@/shared/ui/AevatarLoading";
+import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
   AEVATAR_INTERACTIVE_CHIP_CLASS,
   joinInteractiveClassNames,
 } from "@/shared/ui/interactionStandards";
+import { sanitizeUserFacingText } from "@/shared/ui/userFacingIdentifiers";
 import {
   CONVERSATION_ROUTE_DEFAULT_VALUE,
   USER_LLM_ROUTE_GATEWAY,
@@ -46,6 +52,7 @@ import type {
   ToolCallInfo,
 } from "./chatTypes";
 import { t } from "@/shared/i18n/messages";
+import { isMachineIdentifierValue } from "@/shared/ui/userFacingIdentifiers";
 
 function renderInlineTokens(
   tokens: readonly InlineContentToken[],
@@ -112,6 +119,40 @@ function renderLineCollection(
     </span>
   ));
 }
+
+const markdownTableRegionStyle: React.CSSProperties = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 8,
+  margin: "8px 0 12px",
+  maxWidth: "100%",
+  overflowX: "auto",
+};
+
+const markdownTableStyle: React.CSSProperties = {
+  borderCollapse: "collapse",
+  fontSize: 13,
+  minWidth: "100%",
+  width: "max-content",
+};
+
+const markdownTableHeaderCellStyle: React.CSSProperties = {
+  background: "#f8fafc",
+  borderBottom: "1px solid #d1d5db",
+  color: "#475569",
+  fontWeight: 700,
+  padding: "9px 11px",
+  textAlign: "left",
+  whiteSpace: "nowrap",
+};
+
+const markdownTableCellStyle: React.CSSProperties = {
+  borderTop: "1px solid #eef2f7",
+  maxWidth: 320,
+  overflowWrap: "anywhere",
+  padding: "9px 11px",
+  verticalAlign: "top",
+  wordBreak: "normal",
+};
 
 function renderMarkdownBlock(
   block: MarkdownBlock,
@@ -193,6 +234,61 @@ function renderMarkdownBlock(
           ))}
         </div>
       );
+    case "table":
+      return (
+        <div
+          aria-label={t(
+            "pages.chat.chatpresentation.message.table",
+            "Message table"
+          )}
+          key={`block-${blockIndex}`}
+          role="region"
+          style={markdownTableRegionStyle}
+          tabIndex={0}
+        >
+          <table style={markdownTableStyle}>
+            <thead>
+              <tr>
+                {block.headers.map((header, cellIndex) => (
+                  <th
+                    key={`table-${blockIndex}-header-${cellIndex}`}
+                    scope="col"
+                    style={{
+                      ...markdownTableHeaderCellStyle,
+                      textAlign: block.alignments[cellIndex] ?? "left",
+                    }}
+                  >
+                    {renderInlineTokens(
+                      tokenizeInlineContent(header),
+                      `table-${blockIndex}-header-${cellIndex}`
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {block.rows.map((row, rowIndex) => (
+                <tr key={`table-${blockIndex}-row-${rowIndex}`}>
+                  {block.headers.map((_, cellIndex) => (
+                    <td
+                      key={`table-${blockIndex}-row-${rowIndex}-${cellIndex}`}
+                      style={{
+                        ...markdownTableCellStyle,
+                        textAlign: block.alignments[cellIndex] ?? "left",
+                      }}
+                    >
+                      {renderInlineTokens(
+                        tokenizeInlineContent(row[cellIndex] ?? ""),
+                        `table-${blockIndex}-row-${rowIndex}-${cellIndex}`
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
     case "code":
       return (
         <div
@@ -245,8 +341,6 @@ function renderMarkdownBlock(
           }}
         />
       );
-    default:
-      return null;
   }
 }
 
@@ -311,16 +405,7 @@ function StepIndicator({ step }: { step: StepInfo }): React.ReactElement {
         }}
       >
         {isRunning ? (
-          <span
-            style={{
-              animation: "pulse 1.5s ease-in-out infinite",
-              background: "#f59e0b",
-              borderRadius: 999,
-              display: "block",
-              height: 8,
-              width: 8,
-            }}
-          />
+          <AevatarLoadingPulseDot color="#f59e0b" size={8} />
         ) : isError ? (
           <span
             style={{
@@ -419,16 +504,7 @@ function ToolCallIndicator({ tool }: { tool: ToolCallInfo }): React.ReactElement
           }}
         >
           {tool.status === "running" ? (
-            <span
-              style={{
-                animation: "pulse 1.5s ease-in-out infinite",
-                background: "#60a5fa",
-                borderRadius: 999,
-                display: "block",
-                height: 6,
-                width: 6,
-              }}
-            />
+            <AevatarLoadingPulseDot color="#60a5fa" size={6} />
           ) : (
             <svg
               fill="none"
@@ -470,7 +546,7 @@ function ToolCallIndicator({ tool }: { tool: ToolCallInfo }): React.ReactElement
             whiteSpace: "pre-wrap",
           }}
         >
-          {tool.result.slice(0, 500)}
+          {sanitizeUserFacingText(tool.result).slice(0, 500)}
         </pre>
       ) : null}
     </div>
@@ -527,16 +603,7 @@ function ThinkingBlock({
         </svg>
         <span>{t("pages.chat.chatpresentation.thinking", "Thinking")}</span>
         {isStreaming ? (
-          <span
-            style={{
-              animation: "pulse 1.5s ease-in-out infinite",
-              background: "#a855f7",
-              borderRadius: 999,
-              display: "block",
-              height: 6,
-              width: 6,
-            }}
-          />
+          <AevatarLoadingPulseDot color="#a855f7" size={6} />
         ) : null}
       </button>
       {open ? (
@@ -1252,13 +1319,13 @@ export function ChatMessageBubble({
         <div
           style={{
             background: "#2563eb",
-            borderRadius: 18,
-            borderBottomRightRadius: 8,
+            borderRadius: 10,
+            borderBottomRightRadius: 4,
             color: "#ffffff",
             fontSize: 14,
-            lineHeight: 1.7,
-            maxWidth: "80%",
-            padding: "12px 16px",
+            lineHeight: 1.6,
+            maxWidth: "72%",
+            padding: "9px 12px",
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
           }}
@@ -1270,27 +1337,27 @@ export function ChatMessageBubble({
   }
 
   return (
-    <div style={{ display: "flex", gap: 12 }}>
+    <div style={{ display: "flex", gap: 10 }}>
       <div
         style={{
           alignItems: "center",
-          background: "linear-gradient(135deg, #8b5cf6 0%, #4f46e5 100%)",
+          background: "#eef2ff",
+          border: "1px solid #dbe4ff",
           borderRadius: 999,
-          boxShadow: "0 10px 25px rgba(99, 102, 241, 0.18)",
-          color: "#ffffff",
+          color: "#2563eb",
           display: "flex",
           flexShrink: 0,
-          height: 28,
+          height: 24,
           justifyContent: "center",
-          marginTop: 4,
-          width: 28,
+          marginTop: 3,
+          width: 24,
         }}
       >
         <svg
           fill="none"
           stroke="currentColor"
           strokeWidth={2}
-          style={{ height: 14, width: 14 }}
+          style={{ height: 12, width: 12 }}
           viewBox="0 0 24 24"
         >
           <path
@@ -1301,7 +1368,7 @@ export function ChatMessageBubble({
         </svg>
       </div>
 
-      <div style={{ flex: 1, maxWidth: "85%", minWidth: 0 }}>
+      <div style={{ flex: 1, maxWidth: "82%", minWidth: 0 }}>
         {message.thinking ? (
           <ThinkingBlock
             isStreaming={message.status === "streaming"}
@@ -1375,16 +1442,7 @@ export function ChatMessageBubble({
               </span>
               {message.steps?.some((step) => step.status === "running") ||
               message.toolCalls?.some((tool) => tool.status === "running") ? (
-                <span
-                  style={{
-                    animation: "pulse 1.5s ease-in-out infinite",
-                    background: "#f59e0b",
-                    borderRadius: 999,
-                    display: "block",
-                    height: 6,
-                    width: 6,
-                  }}
-                />
+                <AevatarLoadingPulseDot color="#f59e0b" size={6} />
               ) : null}
             </button>
             {actionsOpen ? (
@@ -1417,23 +1475,13 @@ export function ChatMessageBubble({
           style={{
             color: "#1f2937",
             fontSize: 14,
-            lineHeight: 1.75,
+            lineHeight: 1.65,
           }}
         >
           <div style={{ wordBreak: "break-word" }}>
             {renderContent(message.content)}
             {message.status === "streaming" && message.content ? (
-              <span
-                style={{
-                  animation: "blink 1s step-end infinite",
-                  background: "#9ca3af",
-                  display: "inline-block",
-                  height: 18,
-                  marginLeft: 4,
-                  verticalAlign: "text-bottom",
-                  width: 2,
-                }}
-              />
+              <AevatarStreamingCursor color="#9ca3af" />
             ) : null}
           </div>
           {!message.content && message.status === "streaming" ? (
@@ -1445,20 +1493,11 @@ export function ChatMessageBubble({
                 padding: "10px 0",
               }}
             >
-              {[0, 1, 2].map((index) => (
-                <span
-                  key={index}
-                  style={{
-                    animation: "bounce 1s ease-in-out infinite",
-                    animationDelay: `${index * 160}ms`,
-                    background: "#d1d5db",
-                    borderRadius: 999,
-                    display: "block",
-                    height: 6,
-                    width: 6,
-                  }}
-                />
-              ))}
+              <AevatarLoadingDots
+                ariaLabel="Assistant is responding"
+                color="#d1d5db"
+                size={6}
+              />
             </div>
           ) : null}
         </div>
@@ -1525,17 +1564,10 @@ export function ServiceSelector({
       minWidth={168}
       onChange={onSelect}
       options={services.map((service) => ({
-        badge:
-          service.kind === "nyxid-chat"
-            ? "Built-in"
-            : service.kind === "onboarding"
-              ? "Setup"
-              : "Service",
+        badge: service.kind === "nyxid-chat" ? "Built-in" : "Service",
         description:
           service.kind === "nyxid-chat"
             ? "Built-in console assistant"
-            : service.kind === "onboarding"
-              ? "Connect an AI provider and save it to Studio Settings"
             : `${service.id}${service.deploymentStatus ? ` · ${service.deploymentStatus}` : ""}`,
         label: service.label,
         value: service.id,
@@ -2017,7 +2049,10 @@ export function ConversationLlmConfigBar({
             <option value={CONVERSATION_ROUTE_DEFAULT_VALUE}>
               {t("pages.chat.chatpresentation.config.default", "Config default")}</option>
             {routeOptions.map((option) => (
-              <option key={option.value} value={option.value}>
+              <option
+                key={option.value}
+                value={encodeConversationRouteSelectValue(option.value)}
+              >
                 {option.label}
               </option>
             ))}
@@ -2117,6 +2152,8 @@ export function ConversationLlmConfigBar({
   );
 }
 
+const IME_PROCESSING_KEY_CODE = 229;
+
 export function ChatInput({
   disabled,
   footer,
@@ -2136,6 +2173,7 @@ export function ChatInput({
   onStop: () => void;
   value: string;
 }): React.ReactElement {
+  const isComposingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const resizeTextarea = useCallback(() => {
@@ -2164,9 +2202,9 @@ export function ChatInput({
       <div
         style={{
           background: "#ffffff",
-          border: "1px solid #e7e5e4",
-          borderRadius: 18,
-          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.06)",
+          border: "1px solid #d8dee8",
+          borderRadius: 10,
+          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -2184,8 +2222,22 @@ export function ChatInput({
               onChange(event.target.value);
               resizeTextarea();
             }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false;
+            }}
+            onCompositionStart={() => {
+              isComposingRef.current = true;
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
+                if (
+                  isComposingRef.current ||
+                  event.nativeEvent.isComposing ||
+                  event.nativeEvent.keyCode === IME_PROCESSING_KEY_CODE
+                ) {
+                  return;
+                }
+
                 event.preventDefault();
                 handleSend();
               }
@@ -2199,9 +2251,9 @@ export function ChatInput({
               color: "#111827",
               flex: 1,
               fontSize: 14,
-              minHeight: 62,
+              minHeight: 48,
               outline: "none",
-              padding: "12px 16px 8px",
+              padding: "11px 14px 8px",
               resize: "none",
             }}
             value={value}
@@ -2216,13 +2268,13 @@ export function ChatInput({
                   alignItems: "center",
                   background: "#ef4444",
                   border: "none",
-                  borderRadius: 10,
+                  borderRadius: 8,
                   color: "#ffffff",
                   cursor: "pointer",
                   display: "flex",
-                  height: 34,
+                  height: 32,
                   justifyContent: "center",
-                  width: 34,
+                  width: 32,
                 }}
                 type="button"
               >
@@ -2240,15 +2292,15 @@ export function ChatInput({
                   alignItems: "center",
                   background: "#18181b",
                   border: "none",
-                  borderRadius: 10,
+                  borderRadius: 8,
                   color: "#ffffff",
                   cursor:
                     !value.trim() || disabled ? "not-allowed" : "pointer",
                   display: "flex",
-                  height: 34,
+                  height: 32,
                   justifyContent: "center",
                   opacity: !value.trim() || disabled ? 0.28 : 1,
-                  width: 34,
+                  width: 32,
                 }}
                 type="button"
               >
@@ -2512,18 +2564,6 @@ export function ConversationSidebar({
                   marginTop: 4,
                 }}
               >
-                {conversation.serviceId ? (
-                  <span
-                    style={{
-                      color: "#6b7280",
-                      fontFamily:
-                        "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
-                    }}
-                  >
-                    {conversation.serviceId}
-                  </span>
-                ) : null}
-                {conversation.serviceId ? " · " : ""}
                 {t(
                   conversation.messageCount === 1
                     ? "pages.chat.chatpresentation.message.count.one"
@@ -2606,16 +2646,10 @@ export function ChatMetaStrip({
 }): React.ReactElement {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const primaryItems = [
-    serviceId ? { label: t("pages.chat.chatpresentation.service", "Service"), value: serviceId } : null,
-    routeLabel ? { label: t("pages.chat.chatpresentation.route", "Route"), value: routeLabel } : null,
+    routeLabel && !isMachineIdentifierValue(routeLabel) ? { label: t("pages.chat.chatpresentation.route", "Route"), value: routeLabel } : null,
     modelLabel ? { label: t("pages.chat.chatpresentation.model", "Model"), value: modelLabel } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
-  const detailItems = [
-    scopeId ? { label: t("pages.chat.chatpresentation.workspace.id", "Workspace ID"), value: scopeId } : null,
-    runId ? { label: t("pages.chat.chatpresentation.run", "Run"), value: runId } : null,
-    actorId ? { label: t("pages.chat.chatpresentation.actor", "Actor"), value: actorId } : null,
-    commandId ? { label: t("pages.chat.chatpresentation.command", "Command"), value: commandId } : null,
-  ].filter(Boolean) as Array<{ label: string; value: string }>;
+  const detailItems: Array<{ label: string; value: string }> = [];
 
   const renderChip = (
     item: { label: string; value: string },

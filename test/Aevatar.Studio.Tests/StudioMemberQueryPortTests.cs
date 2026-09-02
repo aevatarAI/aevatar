@@ -58,6 +58,8 @@ public sealed class ProjectionStudioMemberQueryPortTests
         detail.CurrentBindingRun!.BindingRunId.Should().Be("bind-1");
         detail.CurrentBindingRun.Status.Should().Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
         detail.CurrentBindingRun.StateVersion.Should().Be(7);
+        detail.CurrentBindingRun.Result.Should().NotBeNull();
+        detail.CurrentBindingRun.Result!.ExpectedActorId.Should().Be("scope-workflow:scope-1:m-1");
     }
 
     [Fact]
@@ -355,6 +357,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
             doc.BindingCurrentRunId = "bind-1";
             doc.BindingCurrentStatus = StudioMemberBindingRunStatusNames.PlatformBindingPending;
             doc.BindingUpdatedAt = now;
+            doc.LastBoundExpectedActorId = "scope-workflow:scope-1:m-1";
         }
 
         if (teamId != null)

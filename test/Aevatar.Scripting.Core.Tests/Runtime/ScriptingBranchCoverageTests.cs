@@ -1094,21 +1094,6 @@ internal sealed class RecordingRuntimeProvisioningPort : IScriptRuntimeProvision
     }
 }
 
-internal sealed class RecordingRuntimeCommandPort : IScriptRuntimeCommandPort
-{
-    public Task RunRuntimeAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct)
-    {
-        _ = runtimeActorId;
-        _ = runId;
-        _ = inputPayload;
-        _ = scriptRevision;
-        _ = definitionActorId;
-        _ = requestedEventType;
-        ct.ThrowIfCancellationRequested();
-        return Task.CompletedTask;
-    }
-}
-
 internal sealed class RecordingCatalogCommandPort : IScriptCatalogCommandPort
 {
     public Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(string? catalogActorId, string scriptId, string expectedBaseRevision, string revision, string definitionActorId, string sourceHash, string proposalId, CancellationToken ct)

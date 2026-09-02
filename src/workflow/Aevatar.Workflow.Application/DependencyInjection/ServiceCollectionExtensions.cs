@@ -4,20 +4,24 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
-using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.ExternalCapabilities;
+using Aevatar.Workflow.Application.Observatory;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.RunForks;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Schedules;
 using Aevatar.Workflow.Application.Workflows;
-using Aevatar.Foundation.Abstractions.EventSourcing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -35,12 +39,25 @@ public static class ServiceCollectionExtensions
         var runBehaviorOptions = new WorkflowRunBehaviorOptions();
         configureRunBehavior?.Invoke(runBehaviorOptions);
         services.AddSingleton(runBehaviorOptions);
+        services.TryAddTransient<ExternalWorkflowCapabilityReadinessService>();
+        services.TryAddTransient<IExternalWorkflowCapabilityListPort>(provider =>
+            provider.GetRequiredService<ExternalWorkflowCapabilityReadinessService>());
+        services.TryAddTransient<IExternalWorkflowCapabilityReadinessPort>(provider =>
+            provider.GetRequiredService<ExternalWorkflowCapabilityReadinessService>());
+        services.TryAddTransient<IWorkflowExternalCapabilityAdmissionService,
+            WorkflowExternalCapabilityAdmissionService>();
+        services.TryAddTransient<IWorkflowArtifactCompatibilityPreflight,
+            WorkflowArtifactCompatibilityPreflight>();
+        services.TryAddTransient<IWorkflowExplicitRequestPreviewService,
+            WorkflowExplicitRequestPreviewService>();
 
         services.AddSingleton<IWorkflowDefinitionCatalog>(_ =>
         {
             var catalog = new WorkflowDefinitionCatalog();
             if (options.RegisterBuiltInDirectWorkflow)
                 catalog.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
+            if (options.RegisterBuiltInStudioWorkflow)
+                catalog.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
             if (options.RegisterBuiltInAutoWorkflow)
                 catalog.Register("auto", WorkflowDefinitionCatalog.CreateBuiltInAutoYaml());
             if (options.RegisterBuiltInAutoReviewWorkflow)
@@ -86,6 +103,16 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<WorkflowRunDurableCompletionResolver>();
         services.TryAddSingleton<ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>>(sp =>
             sp.GetRequiredService<WorkflowRunDurableCompletionResolver>());
+        // 06-20-observatory-run-state-feed (R2): gate that confirms an ad-hoc run's current-state doc has
+        // materialized before its throwaway actors are reclaimed. Built from the head-version + durable
+        // materialization-watermark read ports (supplied by Infrastructure); options bound by the host.
+        services.TryAddSingleton<WorkflowRunReclaimOptions>();
+        services.TryAddSingleton<WorkflowRunMaterializationReclaimGate>(sp =>
+            new WorkflowRunMaterializationReclaimGate(
+                sp.GetRequiredService<IWorkflowRunCommittedVersionPort>(),
+                sp.GetRequiredService<IWorkflowRunMaterializationWatermarkPort>(),
+                sp.GetRequiredService<WorkflowRunReclaimOptions>(),
+                logger: sp.GetService<Microsoft.Extensions.Logging.ILogger<WorkflowRunMaterializationReclaimGate>>()));
         services.TryAddSingleton<ICommandObservationScopeLeasePreparation<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>, WorkflowRunObservationScopeLeasePreparation>();
         services.TryAddSingleton<ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>, WorkflowRunObservationLifecycle>();
         services.TryAddSingleton<IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>, IdentityEventFrameMapper<WorkflowRunEventEnvelope>>();
@@ -107,7 +134,9 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IWorkflowExecutionProjectionPort>(),
                 sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
                 sp.GetRequiredService<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(),
-                sp.GetRequiredService<WorkflowDirectFallbackPolicy>()));
+                sp.GetRequiredService<WorkflowDirectFallbackPolicy>(),
+                sp.GetService<IWorkflowChatHistoryTerminalDeliveryPort>(),
+                sp.GetService<IWorkflowChatHistoryCreateRecoveryReadPort>()));
         services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();
         // Refactor (iter18/cluster-005):
         //   Old pattern: accepted-only dispatch used a detached live-sink monitor service
@@ -141,7 +170,19 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
         services.TryAddSingleton<IWorkflowCapabilitiesPort>(sp =>
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
-        services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
+        services.AddSingleton<WorkflowExecutionQueryApplicationService>();
+        services.AddSingleton<IWorkflowExecutionQueryApplicationService>(sp =>
+            sp.GetRequiredService<WorkflowExecutionQueryApplicationService>());
+        services.AddSingleton<IWorkflowExecutionScopeQueryApplicationService>(sp =>
+            sp.GetRequiredService<WorkflowExecutionQueryApplicationService>());
+        // 06-19-workflow-run-observatory (C2): scope-enforcement seam for the read-only run viewer.
+        // 06-20-observatory-admin-cross-scope (G3): one instance backs both the scope-bound reads and the
+        // separate cross-scope admin query contract.
+        services.TryAddSingleton<WorkflowRunObservatoryQueryService>();
+        services.TryAddSingleton<IWorkflowRunObservatoryQueryService>(sp =>
+            sp.GetRequiredService<WorkflowRunObservatoryQueryService>());
+        services.TryAddSingleton<IWorkflowRunAdminQueryService>(sp =>
+            sp.GetRequiredService<WorkflowRunObservatoryQueryService>());
         services.TryAddSingleton<IWorkflowScheduleApplicationService, WorkflowScheduleApplicationService>();
         services.TryAddSingleton<IWorkflowScheduleCommandPort, WorkflowScheduleCommandPort>();
         return services;

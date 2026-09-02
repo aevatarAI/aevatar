@@ -32,7 +32,8 @@ public sealed class LlmSessionObservationSessionEventProjector
         if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) || payload == null)
             return EmptyEntries;
 
-        if (!payload.Is(LlmStreamChunkObserved.Descriptor) &&
+        if (!payload.Is(LlmRunStartedEvent.Descriptor) &&
+            !payload.Is(LlmStreamChunkObserved.Descriptor) &&
             !payload.Is(LlmToolCallObserved.Descriptor) &&
             !payload.Is(LlmRunCompleted.Descriptor) &&
             !payload.Is(LlmRunFailed.Descriptor) &&

@@ -4,8 +4,17 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-public sealed class NyxIdAdminTool : IAgentTool
+public sealed class NyxIdAdminTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    private static readonly NyxIdClosedActionParser<NyxIdAdminAction> ActionParser = new(
+    [
+        new("list_invite_codes", NyxIdAdminAction.ListInviteCodes, new(false, true, false)),
+        new("create_invite_code", NyxIdAdminAction.CreateInviteCode, new(true, false, false)),
+        new("deactivate_invite_code", NyxIdAdminAction.DeactivateInviteCode, new(true, false, true)),
+    ], "list_invite_codes");
+
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdAdminTool(NyxIdApiClient client) => _client = client;
@@ -16,13 +25,13 @@ public sealed class NyxIdAdminTool : IAgentTool
         "NyxID administrative commands (admin role required). " +
         "Actions: list_invite_codes, create_invite_code, deactivate_invite_code.";
 
-    public string ParametersSchema => """
+    public string ParametersSchema => $$"""
         {
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list_invite_codes", "create_invite_code", "deactivate_invite_code"],
+              "enum": {{ActionParser.ActionNamesJson}},
               "description": "Action to perform (default: list_invite_codes)"
             },
             "id": {
@@ -41,20 +50,28 @@ public sealed class NyxIdAdminTool : IAgentTool
         }
         """;
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+        ActionParser.Classify(argumentsJson);
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        var args = ToolArgs.Parse(argumentsJson);
-        var action = args.Str("action", "list_invite_codes");
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (!parsed.IsValid)
+            return NyxIdClosedActionParser<NyxIdAdminAction>.InvalidActionJson;
 
-        return action switch
+        var args = ToolArgs.Parse(argumentsJson);
+        return parsed.Action switch
         {
-            "create_invite_code" => await CreateInviteCodeAsync(token, args, ct),
-            "deactivate_invite_code" => await DeactivateInviteCodeAsync(token, args, ct),
-            _ => await _client.ListInviteCodesAsync(token, ct),
+            NyxIdAdminAction.CreateInviteCode => await CreateInviteCodeAsync(token, args, ct),
+            NyxIdAdminAction.DeactivateInviteCode => await DeactivateInviteCodeAsync(token, args, ct),
+            NyxIdAdminAction.ListInviteCodes => await _client.ListInviteCodesAsync(token, ct),
+            _ => NyxIdClosedActionParser<NyxIdAdminAction>.InvalidActionJson,
         };
     }
 
@@ -79,4 +96,11 @@ public sealed class NyxIdAdminTool : IAgentTool
 
         return await _client.DeactivateInviteCodeAsync(token, id, ct);
     }
+}
+
+internal enum NyxIdAdminAction
+{
+    ListInviteCodes,
+    CreateInviteCode,
+    DeactivateInviteCode,
 }

@@ -360,9 +360,9 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
         outcome.StateVersion.Should().Be(factStateEvent.Version + 1);
         outcome.Result.Should().NotBeNull();
-        harness.Agent.State.LastRunOutcome.Should().NotBeNull();
-        harness.Agent.State.LastRunOutcome.ScriptRunId.Should().Be("run-committed");
-        harness.Agent.State.LastRunOutcome.CommittedFactCount.Should().Be(1);
+        var delivery = harness.Agent.State.RunOutcomes["run-committed"];
+        delivery.Outcome.ScriptRunId.Should().Be("run-committed");
+        delivery.Outcome.CommittedFactCount.Should().Be(1);
     }
 
     [Fact]
@@ -398,7 +398,7 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         outcome.CommittedFactCount.Should().Be(0);
         outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
         outcome.Result.Should().BeNull();
-        harness.Agent.State.LastRunOutcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
+        harness.Agent.State.RunOutcomes["run-no-facts"].Outcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
     }
 
     [Fact]
@@ -435,7 +435,7 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         outcome.Error.Should().Be("script contract rejected");
         outcome.CommittedFactCount.Should().Be(0);
         outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
-        harness.Agent.State.LastRunOutcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
+        harness.Agent.State.RunOutcomes["run-failed"].Outcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
     }
 
     [Theory]

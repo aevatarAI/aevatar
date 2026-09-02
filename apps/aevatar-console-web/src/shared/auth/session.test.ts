@@ -73,7 +73,7 @@ describe('auth session storage', () => {
     expect(window.localStorage.length).toBe(0);
   });
 
-  it('keeps an expired session when a refresh token can restore it', () => {
+  it('keeps expired sessions with a refresh token available for async restoration', () => {
     persistAuthSession({
       tokens: {
         accessToken: 'token-3',
@@ -100,12 +100,26 @@ describe('auth session storage', () => {
         sub: 'user-3',
       },
     });
-    expect(readStoredAuthSession()).not.toBeNull();
+    expect(readStoredAuthSession()).toEqual({
+      tokens: {
+        accessToken: 'token-3',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() - 1,
+        refreshToken: 'refresh-token-3',
+      },
+      user: {
+        sub: 'user-3',
+      },
+    });
   });
 
   it('accepts only safe in-app redirect targets', () => {
     expect(sanitizeReturnTo('/runs?tab=active')).toBe('/runtime/runs?tab=active');
     expect(sanitizeReturnTo('/gagents?scopeId=scope-a')).toBe('/runtime/gagents?scopeId=scope-a');
+    expect(sanitizeReturnTo('/mission-wall?focusRunId=run-1')).toBe(
+      '/runtime/mission-wall?focusRunId=run-1',
+    );
     expect(sanitizeReturnTo('https://example.com')).toBe(CONSOLE_HOME_ROUTE);
     expect(sanitizeReturnTo('/login?redirect=/overview')).toBe(CONSOLE_HOME_ROUTE);
     expect(sanitizeReturnTo('//evil.example.com')).toBe(CONSOLE_HOME_ROUTE);

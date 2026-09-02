@@ -3,35 +3,42 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
-using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChatbotClassifier;
 
 /// <summary>
 /// NyxID Chatbot Classifier GAgent.
-/// Stateless intent classification service: receives a user message (with context),
+/// Intent classification actor: receives a user message (with context),
 /// classifies intent (FAQ / action / chitchat / unknown), generates a natural language
 /// reply, and extracts structured parameters for action intents.
 ///
-/// Uses authoritative ChatStreamAsync plus offline aggregation for reliable JSON output parsing.
+/// Uses the RoleGAgent authoritative streaming, deadline, and terminal commit pipeline.
 /// No tools — pure LLM classification with MaxToolRounds=0.
 /// </summary>
 [GAgent("chatbot.classifier")]
 public sealed class ChatbotClassifierGAgent : RoleGAgent
 {
     public ChatbotClassifierGAgent(
+        IAgentToolExecutionPort toolExecutionPort,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        TimeProvider? timeProvider = null,
+        RoleChatExecutionOptions? chatExecutionOptions = null)
+        : base(
+            toolExecutionPort,
+            llmProviderFactory,
+            additionalHooks,
+            agentMiddlewares,
+            llmMiddlewares,
+            toolSources,
+            timeProvider: timeProvider,
+            chatExecutionOptions: chatExecutionOptions)
     {
     }
 
@@ -50,53 +57,14 @@ public sealed class ChatbotClassifierGAgent : RoleGAgent
         await base.OnActivateAsync(ct);
     }
 
-    [EventHandler]
-    public override async Task HandleChatRequest(ChatRequestEvent request)
+    protected override string BuildNonTimeoutLlmFailureContent(
+        string safeError,
+        string toolNames,
+        bool useWorkflowFailureMarker)
     {
-        IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count == 0
-            ? null
-            : new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
-
-        await PublishAsync(new TextMessageStartEvent
-        {
-            SessionId = request.SessionId,
-            AgentId = Id,
-        }, TopologyAudience.Parent);
-
-        string? result;
-        try
-        {
-            // Refactor (iter15/cluster-024):
-            //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
-            //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
-            result = await ChatStreamContentAggregator.AggregateContentAsync(
-                ChatStreamAsync(request.Prompt, request.SessionId, metadata, CancellationToken.None),
-                ct: CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            var inner = ex;
-            while (inner.InnerException != null) inner = inner.InnerException;
-            var errorDetail = !string.IsNullOrWhiteSpace(ex.Message) ? ex.Message
-                : !string.IsNullOrWhiteSpace(inner.Message) ? inner.Message
-                : ex.GetType().Name;
-            Logger.LogWarning(ex, "[ChatbotClassifier] LLM request failed: {Error}", errorDetail);
-            result = """{"intent":"unknown","intent_type":"unknown","reply":"Sorry, I'm having trouble right now. Please try again.","context_summary":null,"params":{}}""";
-        }
-
-        if (!string.IsNullOrEmpty(result))
-        {
-            await PublishAsync(new TextMessageContentEvent
-            {
-                Delta = result,
-                SessionId = request.SessionId,
-            }, TopologyAudience.Parent);
-        }
-
-        await PublishAsync(new TextMessageEndEvent
-        {
-            Content = result ?? string.Empty,
-            SessionId = request.SessionId,
-        }, TopologyAudience.Parent);
+        _ = safeError;
+        _ = toolNames;
+        _ = useWorkflowFailureMarker;
+        return """{"intent":"unknown","intent_type":"unknown","reply":"Sorry, I'm having trouble right now. Please try again.","context_summary":null,"params":{}}""";
     }
 }

@@ -9,6 +9,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -157,6 +158,8 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(new ThrowingServiceLifecycleQueryPort());
             builder.Services.AddSingleton<IScopeBindingReadinessQueryPort>(new ThrowingScopeBindingReadinessQueryPort());
             builder.Services.AddSingleton<IServiceCommandPort>(new ThrowingServiceCommandPort());
+            builder.Services.AddSingleton<IWorkflowExternalCapabilityAdmissionService>(
+                new StudioWorkflowCapabilityAdmissionTestService());
             builder.Services.AddSingleton<IStudioMemberService, StudioMemberService>();
             builder.Services.AddAuthorization();
 
@@ -233,6 +236,13 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             CancellationToken ct = default) =>
             throw new NotSupportedException("Implementation update is not exercised by this hosted consistency test.");
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException("Published binding record is not exercised by this hosted consistency test.");
+
         public Task RenameAsync(
             string scopeId,
             string memberId,
@@ -255,6 +265,12 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             string? targetTeamId,
             CancellationToken ct = default) =>
             throw new NotSupportedException("Team reassignment is not exercised by this hosted consistency test.");
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException("Delete is not exercised by this hosted consistency test.");
     }
 
     private sealed class MutableMemberQueryPort : IStudioMemberQueryPort

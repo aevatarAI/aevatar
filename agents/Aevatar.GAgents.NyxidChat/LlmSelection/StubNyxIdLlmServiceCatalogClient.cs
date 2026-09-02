@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat.LlmSelection;
@@ -18,7 +19,7 @@ public sealed class StubNyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogCl
                 Title: "使用 chrono-llm 共享额度",
                 Description: "使用集群共享 LLM service,无需自带 key。",
                 Activation: new UseExistingService(
-                    ServiceId: SharedServiceId,
+                    UserServiceId: SharedServiceId,
                     RouteValue: SharedRouteValue,
                     DefaultModel: SharedDefaultModel)),
         ]);
@@ -49,15 +50,22 @@ public sealed class StubNyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogCl
     {
         ArgumentNullException.ThrowIfNull(context);
         return Task.FromResult(new NyxIdLlmService(
-            UserServiceId: SharedServiceId,
+            CatalogEntryId: null,
             ServiceSlug: SharedServiceSlug,
             DisplayName: "chrono-llm shared",
             RouteValue: SharedRouteValue,
-            DefaultModel: SharedDefaultModel,
-            Models: [SharedDefaultModel],
+            ModelCatalog: new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Enumerated,
+                DefaultModelId = SharedDefaultModel,
+                ModelIds = { SharedDefaultModel },
+            },
             Status: "ready",
             Source: "shared",
             Allowed: true,
-            Description: "Shared cluster LLM service."));
+            Description: "Shared cluster LLM service.",
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                SharedServiceId)));
     }
 }

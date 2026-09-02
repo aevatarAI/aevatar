@@ -2,6 +2,12 @@ name: ci
 
 on:
   pull_request:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  issue_comment:
+    types: [created, edited, deleted]
   push:
     branches:
       - main
@@ -11,7 +17,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -26,11 +32,13 @@ env:
 
 jobs:
   changes:
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.docs_only_route.outputs.docs_only }}
       all_changed: ${{ steps.filter.outputs.all_changed }}
       core_code: ${{ steps.filter.outputs.core_code }}
+      product_runtime: ${{ steps.filter.outputs.product_runtime }}
       host_composition: ${{ steps.filter.outputs.host_composition }}
       projection_provider: ${{ steps.filter.outputs.projection_provider }}
       kafka_runtime: ${{ steps.filter.outputs.kafka_runtime }}
@@ -65,6 +73,18 @@ jobs:
               - 'Directory.Packages.props'
               - 'global.json'
               - 'tools/ci/**'
+              - '.github/workflows/ci.yml'
+            product_runtime:
+              - 'src/**'
+              - 'agents/**'
+              - 'aevatar.slnx'
+              - 'aevatar.*.slnf'
+              - '.editorconfig'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'global.json'
+              - 'scripts/run.sh'
+              - 'tools/ci/main_flow_runtime_smoke.sh'
               - '.github/workflows/ci.yml'
             host_composition:
               - 'src/**'
@@ -101,6 +121,8 @@ jobs:
               - 'src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/**'
               - 'test/Aevatar.Foundation.Core.Tests/**'
               - 'test/Aevatar.Foundation.Runtime.Hosting.Tests/**'
+              - 'test/Aevatar.SecretStore.Tools.Tests/**'
+              - 'tools/secret-store/**'
               - 'tools/ci/event_sourcing_regression.sh'
               - 'tools/ci/orleans_garnet_persistence_smoke.sh'
               - 'tools/ci/architecture_guards.sh'
@@ -120,6 +142,56 @@ jobs:
           else
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
           fi
+
+  fkst-host-policy:
+    if: |
+      github.event_name == 'pull_request' ||
+      (
+        github.event_name == 'pull_request_review' &&
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
+      ) ||
+      (
+        github.event_name == 'pull_request_review_comment' &&
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: FKST Host Policy Guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: bash tools/ci/fkst_host_policy_guard.sh
+
+  runtime-main-flow-smoke:
+    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.product_runtime == 'true'
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Main Flow Runtime Smoke
+        run: bash scripts/run.sh main-flow-smoke
 
   fast-gates:
     # Refactor (iter16/cluster-ci-systemic-refactor):
@@ -168,7 +240,11 @@ jobs:
     if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
     needs: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The serial suite grew into this budget: recent runs took 19m02s, 19m35s,
+    # 19m57s, then 20m10s and 20m17s, the last two cancelled mid-test at the
+    # 20m cap. The ~18m of test work is real, so give it headroom rather than
+    # letting every run decide the build on runner jitter.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -304,13 +380,32 @@ jobs:
     #   Old pattern: coverage_quality_guard.sh 吞 test fail 继续 emit coverage;split-test-guards 漏跑 22 orphan project
     #   New principle: strict-coverage fail-fast(不吞 fail);aevatar.slnx-or-slow-test 唯一测试权威;
     #   retire slnf 测试执行(只保留 slnf build boundary);slow-tests 独立 CI job
+    # Workflow Activity vNext implementation PRs target an integration baseline branch.
+    # Keep this as a job-level skip so the required check is concluded instead of pending.
     if: |
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-      needs.changes.outputs.docs_only == 'false'
+      (
+        github.event_name == 'pull_request' &&
+        github.base_ref != 'feat/2026-08-04_workflow-activity-vnext' &&
+        needs.changes.outputs.docs_only == 'false'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    services:
+      agent-tool-admission-redis:
+        image: redis:7.2.3
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      AGENT_TOOL_ADMISSION_REDIS_CONNECTION_STRING: >-
+        127.0.0.1:6379,abortConnect=true,allowAdmin=true,connectTimeout=5000,syncTimeout=5000
     steps:
       - uses: actions/checkout@v4
 

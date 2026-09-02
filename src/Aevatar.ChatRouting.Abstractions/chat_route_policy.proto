@@ -235,14 +235,6 @@ message ChatRoutePolicyUpdated {
 // Resolver-level telemetry MAY record matched_rule_id + used_fallback +
 // resolved_at for observability, but the structured fields below stay
 // transient at the ingress boundary.
-message ChatRouteDeprecation {
-  string code = 1;
-  string message = 2;
-  string action_kind = 3;
-  string matched_rule_id = 4;
-  string translated_target = 5;
-}
-
 message ChatRouteDecision {
   ChatRouteAction action = 1;
   // rule_id of the matching ChatRouteRule. Empty when used_fallback=true
@@ -252,10 +244,12 @@ message ChatRouteDecision {
   // True iff resolver fell back to env-driven default because the
   // policy actor didn't exist or readmodel snapshot was unavailable.
   bool used_fallback = 4;
-  repeated ChatRouteDeprecation deprecations = 5;
-  // Original matched policy action before runtime canonicalization. This is
-  // transient ingress context for non-LLM actor-bound entries that still need
-  // actor-specific fields (for example voice_module_name); it must not be
-  // persisted.
-  ChatRouteAction original_action = 6;
+  // tags 5 (`deprecations`) and 6 (`original_action`) were removed when route
+  // policies became tool-first. The translation/multi-target era populated
+  // neither: canonicalization is now identity (single forward shape
+  // ForwardToModel), so `action` already is the matched policy action, and no
+  // deprecation warning was ever emitted. Voice attach reads its typed target
+  // from `action.forward_to_model.tool_choice_hint.voice_attach_target`.
+  reserved 5, 6;
+  reserved "deprecations", "original_action";
 }

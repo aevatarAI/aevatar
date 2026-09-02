@@ -13,6 +13,8 @@ export KUBECONFIG=/Users/zhaoyiqi/Code/aelf-shared-k8s-prod.yaml
 
 Do not print kubeconfig contents, tokens, or bearer headers. Do not modify `~/.kube/config`. Default to read-only commands: `get`, `describe`, `logs`, and `auth can-i`. Do not `exec`, `delete`, `apply`, or restart prod workloads unless the user explicitly asks.
 
+This skill is evidence-only. For any user-authenticated Aevatar production API call, workflow run, canary, or reproduction, **REQUIRED SUB-SKILL:** use `aevatar-prod-verify`. Never obtain API credentials through browser automation or replace `nyxid proxy request` with direct `curl`.
+
 ## Known Scope
 
 The token is namespace-scoped. Avoid cluster-wide discovery such as `kubectl get pods --all-namespaces`.

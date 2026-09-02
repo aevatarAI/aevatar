@@ -1,0 +1,253 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions";
+
+import "ai_messages.proto";
+import "google/protobuf/timestamp.proto";
+
+message AgentProfileScopeOwner {
+  string scope_id = 1;
+}
+
+message AgentProfileSystemOwner {
+  string platform_id = 1;
+}
+
+message AgentProfileOwner {
+  oneof owner {
+    AgentProfileScopeOwner scope = 1;
+    AgentProfileSystemOwner system = 2;
+  }
+}
+
+enum AgentProfileReferenceOwnerKind {
+  AGENT_PROFILE_REFERENCE_OWNER_KIND_UNSPECIFIED = 0;
+  AGENT_PROFILE_REFERENCE_OWNER_KIND_CALLER = 1;
+  AGENT_PROFILE_REFERENCE_OWNER_KIND_SYSTEM = 2;
+}
+
+message AgentProfileReference {
+  AgentProfileReferenceOwnerKind owner_kind = 1;
+  string profile_slug = 2;
+}
+
+message AgentProfileIdentity {
+  string profile_id = 1;
+  AgentProfileOwner owner = 2;
+  string profile_slug = 3;
+}
+
+message AgentProfileDraft {
+  string display_name = 1;
+  string purpose = 2;
+  string instructions = 3;
+  aevatar.ai.AgentProfileSnapshot runtime_profile = 4;
+}
+
+message AgentProfilePublishedSnapshot {
+  AgentProfileIdentity identity = 1;
+  string display_name = 2;
+  string purpose = 3;
+  string instructions = 4;
+  aevatar.ai.AgentProfileSnapshot runtime_profile = 5;
+  int64 draft_revision = 6;
+  bytes draft_sha256 = 7;
+  int64 published_revision = 8;
+  bytes snapshot_sha256 = 9;
+  google.protobuf.Timestamp published_at = 10;
+}
+
+message AgentProfileDiagnostic {
+  string code = 1;
+  string field = 2;
+  string message = 3;
+}
+
+enum AgentProfileMutationStatus {
+  AGENT_PROFILE_MUTATION_STATUS_UNSPECIFIED = 0;
+  AGENT_PROFILE_MUTATION_STATUS_SUCCEEDED = 1;
+  AGENT_PROFILE_MUTATION_STATUS_NO_CHANGE = 2;
+  AGENT_PROFILE_MUTATION_STATUS_REJECTED = 3;
+}
+
+message AgentProfileOperationFact {
+  string operation_id = 1;
+  string command_id = 2;
+  string correlation_id = 3;
+  bytes input_sha256 = 4;
+  google.protobuf.Timestamp requested_at = 5;
+  string audit_subject = 6;
+}
+
+message AgentProfileMutationOutcome {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileMutationStatus status = 2;
+  string code = 3;
+  int64 authority_state_version = 4;
+  int64 draft_revision = 5;
+  int64 published_revision = 6;
+  google.protobuf.Timestamp recorded_at = 7;
+}
+
+enum AgentProfileProvisioningStatus {
+  AGENT_PROFILE_PROVISIONING_STATUS_UNSPECIFIED = 0;
+  AGENT_PROFILE_PROVISIONING_STATUS_PROVISIONING = 1;
+  AGENT_PROFILE_PROVISIONING_STATUS_ACTIVE = 2;
+  AGENT_PROFILE_PROVISIONING_STATUS_FAILED = 3;
+}
+
+message AgentProfileCatalogEntry {
+  string profile_id = 1;
+  string profile_slug = 2;
+  string profile_actor_id = 3;
+  AgentProfileProvisioningStatus status = 4;
+  string display_name = 5;
+  string purpose = 6;
+  int64 published_revision = 7;
+  bytes snapshot_sha256 = 8;
+  string provisioning_operation_id = 9;
+  bytes provisioning_input_sha256 = 10;
+  string provisioning_timeout_callback_id = 11;
+  int32 provisioning_attempt = 12;
+}
+
+message AgentProfileBindingTarget {
+  AgentProfileOwner owner = 1;
+  string profile_id = 2;
+  int64 published_revision = 3;
+  bytes snapshot_sha256 = 4;
+}
+
+message AgentProfileScopeBindingAdmission {}
+
+message AgentProfileSystemBindingAdmission {
+  bool enabled = 1;
+  int32 cohort_basis_points = 2;
+}
+
+message AgentProfileDefaultBinding {
+  string agent_kind = 1;
+  AgentProfileBindingTarget target = 2;
+  oneof admission {
+    AgentProfileScopeBindingAdmission scope = 3;
+    AgentProfileSystemBindingAdmission system = 4;
+  }
+}
+
+message AgentProfileNamespaceState {
+  AgentProfileOwner owner = 1;
+  repeated AgentProfileCatalogEntry profiles = 2;
+  repeated AgentProfileDefaultBinding default_bindings = 3;
+  repeated AgentProfileOperationFact operations = 4;
+  AgentProfileMutationOutcome last_mutation = 5;
+}
+
+message AgentProfileState {
+  AgentProfileIdentity identity = 1;
+  string namespace_actor_id = 2;
+  AgentProfileDraft draft = 3;
+  int64 draft_revision = 4;
+  bytes draft_sha256 = 5;
+  AgentProfilePublishedSnapshot published = 6;
+  int64 published_revision = 7;
+  AgentProfileMutationOutcome last_mutation = 8;
+  repeated AgentProfileOperationFact operations = 9;
+}
+
+message CreateAgentProfileCommand {
+  AgentProfileOwner owner = 1;
+  string profile_id = 2;
+  string profile_slug = 3;
+  reserved 4;
+  reserved "profile_actor_id";
+  AgentProfileOperationFact operation = 5;
+}
+
+message InitializeAgentProfileCommand {
+  AgentProfileIdentity identity = 1;
+  reserved 2;
+  reserved "namespace_actor_id";
+  AgentProfileDraft initial_draft = 3;
+  AgentProfileOperationFact operation = 4;
+}
+
+message AgentProfileInitialized {
+  AgentProfileIdentity identity = 1;
+  AgentProfileOperationFact operation = 2;
+  string source_profile_actor_id = 3;
+  int64 source_authority_state_version = 4;
+  string provisioning_operation_id = 5;
+}
+
+message AgentProfileInitializationFailed {
+  AgentProfileIdentity identity = 1;
+  AgentProfileOperationFact operation = 2;
+  string source_profile_actor_id = 3;
+  int64 source_authority_state_version = 4;
+  string provisioning_operation_id = 5;
+  string failure_code = 6;
+}
+
+message AgentProfileProvisioningTimedOut {
+  string profile_id = 1;
+  string provisioning_operation_id = 2;
+  int32 provisioning_attempt = 3;
+  string callback_id = 4;
+}
+
+message UpdateAgentProfileDraftCommand {
+  AgentProfileIdentity identity = 1;
+  AgentProfileDraft draft = 2;
+  int64 expected_authority_state_version = 3;
+  AgentProfileOperationFact operation = 4;
+}
+
+message PublishAgentProfileCommand {
+  AgentProfileIdentity identity = 1;
+  AgentProfilePublishedSnapshot snapshot = 2;
+  bytes source_draft_sha256 = 3;
+  int64 expected_authority_state_version = 4;
+  AgentProfileOperationFact operation = 5;
+}
+
+message ObserveAgentProfilePublishedCommand {
+  AgentProfileIdentity identity = 1;
+  string display_name = 2;
+  string purpose = 3;
+  int64 published_revision = 4;
+  bytes snapshot_sha256 = 5;
+  string source_profile_actor_id = 6;
+  int64 source_authority_state_version = 7;
+  string source_operation_id = 8;
+}
+
+message SetAgentProfileDefaultBindingCommand {
+  AgentProfileOwner owner = 1;
+  string agent_kind = 2;
+  AgentProfileBindingTarget target = 3;
+  oneof admission {
+    AgentProfileScopeBindingAdmission scope = 4;
+    AgentProfileSystemBindingAdmission system = 5;
+  }
+  int64 expected_authority_state_version = 6;
+  AgentProfileOperationFact operation = 7;
+}
+
+message ClearAgentProfileDefaultBindingCommand {
+  AgentProfileOwner owner = 1;
+  string agent_kind = 2;
+  int64 expected_authority_state_version = 3;
+  AgentProfileOperationFact operation = 4;
+}
+
+message AgentProfileNamespaceStateChangedEvent {
+  AgentProfileNamespaceState state = 1;
+  string change_kind = 2;
+}
+
+message AgentProfileStateChangedEvent {
+  AgentProfileState state = 1;
+  string change_kind = 2;
+}

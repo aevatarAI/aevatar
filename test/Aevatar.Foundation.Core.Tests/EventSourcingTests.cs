@@ -143,6 +143,27 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
+    public async Task ConfirmEventsAsync_WhenAppendFails_ShouldDropRejectedPrefixAndKeepUncommittedSuffix()
+    {
+        var store = new FailOnceReentrantAppendEventStore();
+        var behavior = new CounterEventSourcingBehavior(store, "agent-failed-prefix");
+        store.OnFirstAppend = () => behavior.RaiseEvent(new IncrementEvent { Amount = 2 });
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+
+        await Should.ThrowAsync<InvalidOperationException>(() => behavior.ConfirmEventsAsync());
+        await behavior.ConfirmEventsAsync();
+
+        behavior.CurrentVersion.ShouldBe(1);
+        var events = await store.GetEventsAsync("agent-failed-prefix");
+        events.Count.ShouldBe(1);
+        events[0].EventData.Unpack<IncrementEvent>().Amount.ShouldBe(2);
+        var replayed = await behavior.ReplayAsync("agent-failed-prefix");
+        replayed.ShouldNotBeNull();
+        replayed!.Count.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task PersistSnapshotAsync_WhenSnapshotStrategyMatches_ShouldPersistSnapshot()
     {
         var store = new InMemoryEventStore();
@@ -185,29 +206,22 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
-    public async Task PersistSnapshotAsync_WhenCompactionEnabled_ShouldDeferDeletion_UntilDeferredCompactionRuns()
+    public async Task PersistSnapshotAsync_WhenCompactionEnabled_ShouldDeleteAfterSnapshotIsSaved()
     {
         var store = new InMemoryEventStore();
         var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
-        var scheduler = new DeferredEventStoreCompactionScheduler(store);
         var behavior = new CounterEventSourcingBehavior(
             store,
             "agent-snapshot-compact",
             snapshotStore: snapshotStore,
             snapshotStrategy: new IntervalSnapshotStrategy(1),
             enableEventCompaction: true,
-            retainedEventsAfterSnapshot: 0,
-            compactionScheduler: scheduler);
+            retainedEventsAfterSnapshot: 0);
 
         behavior.RaiseEvent(new IncrementEvent { Amount = 4 });
         behavior.RaiseEvent(new IncrementEvent { Amount = 6 });
         await behavior.ConfirmEventsAsync();
         await behavior.PersistSnapshotAsync(new CounterState { Count = 10, Name = "snapshot" });
-
-        var events = await store.GetEventsAsync("agent-snapshot-compact");
-        events.Count.ShouldBe(2);
-
-        await scheduler.RunOnIdleAsync("agent-snapshot-compact");
 
         var version = await store.GetVersionAsync("agent-snapshot-compact");
         var compacted = await store.GetEventsAsync("agent-snapshot-compact");
@@ -218,6 +232,35 @@ public class EventSourcingBehaviorTests
         replayed.ShouldNotBeNull();
         replayed!.Count.ShouldBe(10);
         behavior.CurrentVersion.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task PersistSnapshotAsync_WhenBatchCrossesInterval_ShouldSnapshotAtCommittedVersion()
+    {
+        var store = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
+        var behavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-batch-snapshot",
+            snapshotStore: snapshotStore,
+            snapshotStrategy: new IntervalSnapshotStrategy(2),
+            enableEventCompaction: true,
+            retainedEventsAfterSnapshot: 0);
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+        await behavior.ConfirmEventsAsync();
+        await behavior.PersistSnapshotAsync(new CounterState { Count = 1 });
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+        await behavior.ConfirmEventsAsync();
+        await behavior.PersistSnapshotAsync(new CounterState { Count = 3 });
+
+        var snapshot = await snapshotStore.LoadAsync("agent-batch-snapshot");
+        snapshot.ShouldNotBeNull();
+        snapshot!.Version.ShouldBe(3);
+        snapshot.State.Count.ShouldBe(3);
+        (await store.GetEventsAsync("agent-batch-snapshot")).ShouldBeEmpty();
     }
 
     [Fact]
@@ -581,7 +624,6 @@ public class EventSourcingBehaviorTests
             ISnapshotStrategy? snapshotStrategy = null,
             bool enableEventCompaction = false,
             int retainedEventsAfterSnapshot = 0,
-            IEventStoreCompactionScheduler? compactionScheduler = null,
             bool recoverFromVersionDriftOnReplay = false)
             : base(
                 eventStore,
@@ -590,7 +632,6 @@ public class EventSourcingBehaviorTests
                 snapshotStrategy,
                 enableEventCompaction: enableEventCompaction,
                 retainedEventsAfterSnapshot: retainedEventsAfterSnapshot,
-                compactionScheduler: compactionScheduler,
                 recoverFromVersionDriftOnReplay: recoverFromVersionDriftOnReplay) { }
 
         public override CounterState TransitionState(CounterState current, IMessage evt)
@@ -731,6 +772,47 @@ public class EventSourcingBehaviorTests
             CancellationToken ct = default) =>
             _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
+
+    private sealed class FailOnceReentrantAppendEventStore : IEventStore
+    {
+        private readonly InMemoryEventStore _inner = new();
+        private bool _shouldFail = true;
+
+        public Action? OnFirstAppend { get; set; }
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            if (_shouldFail)
+            {
+                _shouldFail = false;
+                var callback = OnFirstAppend;
+                OnFirstAppend = null;
+                callback?.Invoke();
+                throw new InvalidOperationException("append-failed");
+            }
+
+            return _inner.AppendAsync(agentId, events, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
 }
 
 /// <summary>Event Sourcing agent: state restored from event replay on activate, handlers RaiseEvent + ConfirmEventsAsync.</summary>
@@ -854,6 +936,47 @@ public class EventSourcingAgentTests
 
 public class StateEventApplierIntegrationTests
 {
+    [Fact]
+    public async Task PersistDomainEventAsync_WhenCheckpointReached_ShouldCompactWhileActorRemainsActive()
+    {
+        var store = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
+        var services = new ServiceCollection()
+            .AddRuntimeScheduler()
+            .AddSingleton<IEventStore>(store)
+            .AddSingleton<IEventSourcingSnapshotStore<CounterState>>(snapshotStore)
+            .AddSingleton(new EventSourcingRuntimeOptions
+            {
+                EnableSnapshots = true,
+                SnapshotInterval = 2,
+                EnableEventCompaction = true,
+                RetainedEventsAfterSnapshot = 0,
+            })
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .AddSingleton<IStateEventApplier<CounterState>, CounterIncrementApplier>()
+            .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>())
+            .BuildServiceProvider();
+
+        var agent = new ApplierBackedCounterAgent
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<CounterState>>(),
+        };
+        agent.SetId("active-checkpoint-agent");
+        await agent.ActivateAsync();
+
+        await agent.HandleEventAsync(TestHelper.Envelope(new IncrementEvent { Amount = 1 }));
+        await agent.HandleEventAsync(TestHelper.Envelope(new IncrementEvent { Amount = 1 }));
+
+        agent.State.Count.ShouldBe(2);
+        agent.EventSourcing!.CurrentVersion.ShouldBe(2);
+        (await store.GetEventsAsync("active-checkpoint-agent")).ShouldBeEmpty();
+        var snapshot = await snapshotStore.LoadAsync("active-checkpoint-agent");
+        snapshot.ShouldNotBeNull();
+        snapshot!.Version.ShouldBe(2);
+        snapshot.State.Count.ShouldBe(2);
+    }
+
     [Fact]
     public async Task PersistDomainEventAsync_ShouldUseRegisteredAppliers_ForRuntimeAndReplay()
     {

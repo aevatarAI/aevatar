@@ -64,6 +64,7 @@ public sealed class ExternalIdentityBindingProjector
             Id = context.RootActorId,
             ExternalSubject = state.ExternalSubject?.Clone(),
             BindingId = state.BindingId ?? string.Empty,
+            OwnerScopeId = state.OwnerScopeId ?? string.Empty,
             BoundAtUtcValue = state.BoundAt,
             RevokedAtUtcValue = state.RevokedAt,
             StateVersion = stateEvent.Version,

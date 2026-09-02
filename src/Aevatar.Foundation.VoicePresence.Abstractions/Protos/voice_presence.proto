@@ -35,6 +35,14 @@ enum VoiceToolOwner {
   VOICE_TOOL_OWNER_CLIENT = 2;
 }
 
+enum VoiceTransportAttachOutcome {
+  VOICE_TRANSPORT_ATTACH_OUTCOME_UNSPECIFIED = 0;
+  VOICE_TRANSPORT_ATTACH_OUTCOME_NEW_SESSION = 1;
+  VOICE_TRANSPORT_ATTACH_OUTCOME_RESTARTED = 2;
+  reserved 3;
+  reserved "VOICE_TRANSPORT_ATTACH_OUTCOME_REATTACHED";
+}
+
 message VoiceProviderConfig {
   string provider_name = 1;
   string endpoint = 2;
@@ -272,6 +280,20 @@ message VoiceTranscriptCompleted {
   int32 response_id = 3;
 }
 
+message VoiceDisplayText {
+  string text = 1;
+  string provider_response_id = 2;
+  int32 response_id = 3;
+}
+
+message VoiceDisplayImage {
+  string media_type = 1;
+  bytes data = 2;
+  string alt_text = 3;
+  string provider_response_id = 4;
+  int32 response_id = 5;
+}
+
 message VoiceRealtimeFrame {
   string module_name = 1;
   string session_id = 2;
@@ -288,6 +310,8 @@ message VoiceRealtimeFrame {
     VoiceTranscriptDelta transcript_delta = 11;
     VoiceTranscriptCompleted transcript_completed = 12;
     VoiceRemoteSessionClosed session_closed = 13;
+    VoiceDisplayText display_text = 14;
+    VoiceDisplayImage display_image = 15;
   }
 }
 
@@ -309,6 +333,7 @@ message VoiceTransportSessionAccepted {
   int64 observed_state_version = 5;
   string wire_contract_version = 6;
   VoiceInputImagePolicy input_image_policy = 7;
+  VoiceTransportAttachOutcome attach_outcome = 8;
 }
 
 message VoiceControlFrame {

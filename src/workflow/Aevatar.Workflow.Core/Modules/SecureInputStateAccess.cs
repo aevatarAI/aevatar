@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions.Credentials;
 using System.Linq;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
@@ -51,6 +52,24 @@ internal static class SecureInputStateAccess
         };
     }
 
+    public static void SetCapturedReference(
+        SecureInputModuleState state,
+        string? runId,
+        string? variable,
+        RuntimeSecretReference? valueReference)
+    {
+        if (!TryBuildCapturedKey(runId, variable, out var key, out var normalizedRunId, out var normalizedVariable))
+            return;
+
+        state.Captured[key] = new CapturedSecureInputState
+        {
+            RunId = normalizedRunId,
+            VariableName = normalizedVariable,
+            Value = string.Empty,
+            ValueReference = valueReference?.Clone(),
+        };
+    }
+
     public static bool TryGetCaptured(
         SecureInputModuleState state,
         string? runId,
@@ -60,8 +79,18 @@ internal static class SecureInputStateAccess
         if (TryBuildCapturedKey(runId, variable, out var key, out _, out _) &&
             state.Captured.TryGetValue(key, out var captured))
         {
-            value = captured.Value ?? string.Empty;
-            return true;
+            if (!string.IsNullOrWhiteSpace(captured.ValueReference?.Ref))
+            {
+                value = string.Empty;
+                return false;
+            }
+
+            var legacyValue = captured.Value ?? string.Empty;
+            if (!string.IsNullOrEmpty(legacyValue))
+            {
+                value = legacyValue;
+                return true;
+            }
         }
 
         value = string.Empty;

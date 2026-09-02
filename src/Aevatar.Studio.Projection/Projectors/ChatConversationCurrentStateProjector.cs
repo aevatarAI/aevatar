@@ -55,9 +55,45 @@ public sealed class ChatConversationCurrentStateProjector
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),
-            StateRoot = Any.Pack(state),
+            ScopeId = state.ScopeId,
+            ConversationId = state.ConversationId,
+            Title = state.Title,
+            ServiceId = state.ServiceId,
+            ServiceKind = state.ServiceKind,
+            CreatedAtMs = state.CreatedAtMs,
+            UpdatedAtMs = state.UpdatedAtMs,
+            MessageCount = state.Turns.Count,
+            LlmRoute = state.Turns.LastOrDefault()?.LlmRoute ?? string.Empty,
+            LlmModel = state.Turns.LastOrDefault()?.LlmModel ?? string.Empty,
+            Deleted = state.Deleted,
         };
+        document.Turns.AddRange(state.Turns.Select(ToTurnDocument));
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }
+
+    private static ChatConversationTurnDocument ToTurnDocument(ChatTurn turn) =>
+        new()
+        {
+            TurnId = turn.TurnId,
+            Sequence = turn.Sequence,
+            UserText = turn.UserText,
+            AssistantText = turn.AssistantText,
+            TerminalStatus = ToTerminalStatusName(turn.TerminalStatus),
+            SanitizedError = turn.SanitizedError,
+            TerminalTimeMs = turn.TerminalTime?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0,
+            LlmRoute = turn.LlmRoute,
+            LlmModel = turn.LlmModel,
+        };
+
+    private static string ToTerminalStatusName(ChatTurnTerminalStatus status) =>
+        status switch
+        {
+            ChatTurnTerminalStatus.Completed => "complete",
+            ChatTurnTerminalStatus.Failed => "error",
+            ChatTurnTerminalStatus.Stopped => "stopped",
+            ChatTurnTerminalStatus.Blocked => "blocked",
+            ChatTurnTerminalStatus.OutcomeUncertain => "outcome_uncertain",
+            _ => string.Empty,
+        };
 }

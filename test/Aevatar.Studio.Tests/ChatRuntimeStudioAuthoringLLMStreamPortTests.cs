@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Infrastructure.Authoring;
+using Aevatar.Workflow.Abstractions.Workflows;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -48,6 +49,36 @@ public sealed class ChatRuntimeStudioAuthoringLLMStreamPortTests
             .ToListAsync();
 
         provider.LastSystemPrompt.Should().Contain(expectedPromptText);
+    }
+
+    [Fact]
+    public async Task StreamAsync_WhenWorkflowAuthoring_ShouldConstrainPromptToCanonicalRootSchema()
+    {
+        var provider = new SplitStreamingProviderFactory([new LLMStreamChunk { DeltaContent = "ok" }]);
+        var port = CreatePort(provider);
+
+        _ = await port.StreamAsync(
+                new StudioAuthoringLLMRequest(
+                    StudioAuthoringKind.Workflow,
+                    "prompt",
+                    "request-workflow-schema",
+                    null),
+                CancellationToken.None)
+            .ToListAsync();
+
+        provider.LastSystemPrompt.Should().Contain(
+            $"The only supported top-level fields are: {WorkflowYamlRootSchema.FormatAuthorableRootFields()}.");
+        provider.LastSystemPrompt.Should().Contain(
+            $"The only supported top-level fields are {WorkflowYamlRootSchema.FormatAuthorableRootFields()}.");
+        provider.LastSystemPrompt.Should().Contain(
+            $"Do not emit top-level fields from other workflow dialects, including {WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}.");
+        provider.LastSystemPrompt.Should().NotContain("{{workflow_authorable_root_fields}}");
+        provider.LastSystemPrompt.Should().NotContain("{{workflow_unsupported_dialect_root_fields}}");
+        provider.LastSystemPrompt.Should().NotContain("The only supported top-level fields are `name`, `description`, `configuration`, `roles`, and `steps`.");
+        provider.LastSystemPrompt.Should().NotContain("including `version`, `inputs`, `outputs`, `triggers`, `on`, `env`, or `jobs`.");
+        provider.LastSystemPrompt.Should().NotContain("stream_buffer_capacity");
+        provider.LastSystemPrompt.Should().NotContain("agent_type: RoleGAgent");
+        provider.LastSystemPrompt.Should().NotContain("agent_id: role");
     }
 
     private static ChatRuntimeStudioAuthoringLLMStreamPort CreatePort(SplitStreamingProviderFactory provider) =>

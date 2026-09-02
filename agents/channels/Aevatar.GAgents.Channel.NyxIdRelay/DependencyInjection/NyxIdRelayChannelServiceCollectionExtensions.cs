@@ -1,6 +1,8 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Commands;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
@@ -28,6 +30,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public/manual projection refresh dispatch, new=startup-owned projection refresh
         ArgumentNullException.ThrowIfNull(services);
 
+        services.TryAddSingleton<NyxIdToolOptions>();
         services.TryAddSingleton<NyxIdApiClient>();
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.TryAddSingleton<ChannelRegistrationCommandFacade>();
@@ -44,9 +47,33 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<ICommandDispatchPipeline<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>, DefaultCommandDispatchPipeline<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>, DefaultCommandDispatchService<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>, DefaultCommandDispatchService<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>();
+        AddRegistrationCommand<ChannelBotWorkflowResultDeliveryRepairRequestCommand>(
+            services,
+            static serviceProvider => serviceProvider.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());
+        AddRegistrationCommand<ChannelBotWorkflowResultDeliveryRepairPrepareCommand>(
+            services,
+            static serviceProvider => serviceProvider.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());
+        AddRegistrationCommand<ChannelBotWorkflowResultDeliveryRepairCompleteCommand>(
+            services,
+            static serviceProvider => serviceProvider.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());
+        AddRegistrationCommand<ChannelBotWorkflowResultDeliveryRepairFailCommand>(
+            services,
+            static serviceProvider => serviceProvider.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());
+        services.TryAddSingleton<
+            IChannelWorkflowResultDeliveryRepairCommandPort,
+            ChannelWorkflowResultDeliveryRepairCommandPort>();
+        services.TryAddSingleton<
+            IChannelWorkflowResultDeliveryRepairNyxPort,
+            ChannelWorkflowResultDeliveryRepairNyxPort>();
+        services.TryAddSingleton<
+            IChannelWorkflowResultDeliveryRepairService,
+            ChannelWorkflowResultDeliveryRepairService>();
         services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
         services.TryAddSingleton<INyxTelegramProvisioningService, NyxTelegramProvisioningService>();
+        services.TryAddSingleton<INyxChannelBotDeprovisioningService, NyxChannelBotDeprovisioningService>();
         services.TryAddSingleton<INyxIdRelayScopeResolver, NyxIdRelayScopeResolver>();
+        services.TryAddSingleton<IChannelRelayActivityRecorder, ChannelRelayActivityRecorder>();
+        services.TryAddSingleton<ChannelDeliveryTargetResolver>();
 
         // Provisioning service set — both Lark + Telegram are concrete provisioning sources.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxLarkProvisioningService>());
@@ -54,8 +81,46 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
 
         services.TryAddSingleton<ChannelPlatformReplyService>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
+        // Mainnet workflow/human interaction delivery must go through the channel-neutral
+        // relay path; platform packages keep only native rendering/transport adapters.
+        services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, NyxIdRelayChannelInteractionNotificationPort>());
+        services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, NyxIdRelayRemoteToolApprovalNotificationPort>());
         services.TryAddSingleton<IInteractiveReplyDispatcher, NyxIdRelayInteractiveReplyDispatcher>();
 
         return services;
+    }
+
+    private static void AddRegistrationCommand<TCommand>(
+        IServiceCollection services,
+        Func<IServiceProvider, ICommandEnvelopeFactory<TCommand>> envelopeFactory)
+    {
+        services.TryAddSingleton<
+            ICommandTargetResolver<
+                TCommand,
+                ChannelBotRegistrationCommandTarget,
+                ChannelRegistrationCommandStartError>,
+            ChannelBotRegistrationCommandTargetResolver<TCommand>>();
+        services.TryAddSingleton(envelopeFactory);
+        services.TryAddSingleton<
+            ICommandDispatchPipeline<
+                TCommand,
+                ChannelBotRegistrationCommandTarget,
+                ChannelRegistrationCommandAcceptedReceipt,
+                ChannelRegistrationCommandStartError>,
+            DefaultCommandDispatchPipeline<
+                TCommand,
+                ChannelBotRegistrationCommandTarget,
+                ChannelRegistrationCommandAcceptedReceipt,
+                ChannelRegistrationCommandStartError>>();
+        services.TryAddSingleton<
+            ICommandDispatchService<
+                TCommand,
+                ChannelRegistrationCommandAcceptedReceipt,
+                ChannelRegistrationCommandStartError>,
+            DefaultCommandDispatchService<
+                TCommand,
+                ChannelBotRegistrationCommandTarget,
+                ChannelRegistrationCommandAcceptedReceipt,
+                ChannelRegistrationCommandStartError>>();
     }
 }

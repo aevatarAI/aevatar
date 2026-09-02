@@ -12,17 +12,9 @@ public sealed class ChannelUserLlmPreferencePort : IChannelUserLlmPreferencePort
     }
 
     public Task<UserConfigSaveReceipt> SaveAsync(
-        string scopeId,
+        string bindingId,
         string? bearerToken,
-        SaveUserLlmPreferenceCommand command,
+        UserLlmPreferenceIntent intent,
         CancellationToken ct) =>
-        _writer.SaveAsync(scopeId, bearerToken, command, ct);
-
-    public Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
-        string scopeId,
-        UserLlmOption option,
-        string? model,
-        bool preserveCurrentModelWhenMissing,
-        CancellationToken ct) =>
-        _writer.SaveSelectedOptionAsync(scopeId, option, model, preserveCurrentModelWhenMissing, ct);
+        _writer.SaveAsync(UserConfigResourceKey.ForChannelBinding(bindingId), bearerToken, intent, ct);
 }

@@ -313,18 +313,18 @@ public sealed class BackpressureModuleTopUpTests
                 Parameters =
                 {
                     ["signal_name"] = "codex_worker_done",
-                    ["timeout_ms"] = "5400000",
+                    ["timeout_ms"] = "86400000",
                 },
             }),
             context,
             CancellationToken.None);
 
         var waiting = context.Published.Select(x => x.Event).OfType<WaitingForSignalEvent>().Single();
-        waiting.TimeoutMs.Should().Be(5_400_000);
+        waiting.TimeoutMs.Should().Be(86_400_000);
 
         var scheduled = context.Scheduled.Should().ContainSingle().Subject;
-        scheduled.DueTime.Should().Be(TimeSpan.FromMilliseconds(5_400_000));
-        scheduled.Event.Should().BeOfType<WaitSignalTimeoutFiredEvent>().Which.TimeoutMs.Should().Be(5_400_000);
+        scheduled.DueTime.Should().Be(TimeSpan.FromHours(24));
+        scheduled.Event.Should().BeOfType<WaitSignalTimeoutFiredEvent>().Which.TimeoutMs.Should().Be(86_400_000);
     }
 
     private static EventEnvelope Envelope(IMessage evt) =>

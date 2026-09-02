@@ -30,8 +30,8 @@ public sealed class LlmSessionObservationSessionEventProjectorTests
             ProjectionKind = "llm-session-observation",
         };
 
-        await projector.ProjectAsync(context, CommittedEnvelope("resp-1"));
-        await projector.ProjectAsync(context, CommittedEnvelope("resp-1:llm-run"));
+        await projector.ProjectAsync(context, CommittedEnvelope("resp-1", RunStartedPayload()));
+        await projector.ProjectAsync(context, CommittedEnvelope("resp-1:llm-run", RunStartedPayload()));
 
         var stream = streams.Streams.Should().ContainSingle().Subject.Value;
         stream.Produced.Should().ContainSingle();
@@ -42,14 +42,17 @@ public sealed class LlmSessionObservationSessionEventProjectorTests
         routed.Propagation!.CorrelationId.Should().Be("resp-1");
     }
 
-    private static EventEnvelope CommittedEnvelope(string correlationId)
-    {
-        var payload = new LlmStreamChunkObserved
+    private static LlmRunStartedEvent RunStartedPayload() =>
+        new()
         {
             ResponseId = "resp-1",
             RunId = "resp-1:llm-run",
-            DeltaText = "hello",
+            Sequence = 1,
+            StartedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
+
+    private static EventEnvelope CommittedEnvelope(string correlationId, IMessage payload)
+    {
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),

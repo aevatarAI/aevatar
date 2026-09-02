@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package aevatar.ai;
+
+option csharp_namespace = "Aevatar.AI.Abstractions";
+
+enum LLMRouteKind {
+  LLM_ROUTE_KIND_UNSPECIFIED = 0;
+  LLM_ROUTE_KIND_GATEWAY = 1;
+  LLM_ROUTE_KIND_NYX_ID_USER_SERVICE = 2;
+}
+
+enum LLMModelSelectionKind {
+  LLM_MODEL_SELECTION_KIND_UNSPECIFIED = 0;
+  LLM_MODEL_SELECTION_KIND_PROVIDER_DEFAULT = 1;
+  LLM_MODEL_SELECTION_KIND_EXPLICIT_MODEL = 2;
+}
+
+message LLMModelSelection {
+  LLMModelSelectionKind kind = 1;
+  string model_id = 2;
+}
+
+enum LLMModelCatalogCertainty {
+  LLM_MODEL_CATALOG_CERTAINTY_UNSPECIFIED = 0;
+  LLM_MODEL_CATALOG_CERTAINTY_ENUMERATED = 1;
+  LLM_MODEL_CATALOG_CERTAINTY_NOT_VERIFIABLE = 2;
+  LLM_MODEL_CATALOG_CERTAINTY_UNAVAILABLE = 3;
+}
+
+enum LLMModelCatalogDiagnosticKind {
+  LLM_MODEL_CATALOG_DIAGNOSTIC_KIND_UNSPECIFIED = 0;
+  LLM_MODEL_CATALOG_DIAGNOSTIC_KIND_NOT_PUBLISHED = 1;
+  LLM_MODEL_CATALOG_DIAGNOSTIC_KIND_ROUTE_NOT_READY = 2;
+  LLM_MODEL_CATALOG_DIAGNOSTIC_KIND_ACCESS_DENIED = 3;
+  LLM_MODEL_CATALOG_DIAGNOSTIC_KIND_OBSERVATION_UNAVAILABLE = 4;
+  LLM_MODEL_CATALOG_DIAGNOSTIC_KIND_RESPONSE_INVALID = 5;
+  LLM_MODEL_CATALOG_DIAGNOSTIC_KIND_RESPONSE_TOO_LARGE = 6;
+  LLM_MODEL_CATALOG_DIAGNOSTIC_KIND_PATTERN_ONLY = 7;
+}
+
+message LLMModelCatalog {
+  LLMModelCatalogCertainty certainty = 1;
+  repeated string model_ids = 2;
+  string default_model_id = 3;
+  LLMModelCatalogDiagnosticKind diagnostic_kind = 4;
+}
+
+message LLMSelection {
+  LLMRouteKind route_kind = 1;
+  string route_value = 2;
+  string nyx_id_user_service_id = 3;
+  string service_slug_snapshot = 4;
+  LLMModelSelection model_selection = 5;
+}

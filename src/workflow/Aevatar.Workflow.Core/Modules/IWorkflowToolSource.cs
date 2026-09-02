@@ -12,11 +12,34 @@ public interface IWorkflowTool
 public sealed record WorkflowToolExecutionResult(
     string ResultJson,
     WorkflowManagedHandoffOutcome? ManagedHandoff = null,
-    WorkflowToolApprovalPendingOutcome? PendingApproval = null)
+    WorkflowToolApprovalPendingOutcome? PendingApproval = null,
+    WorkflowToolExecutionFailure? Failure = null)
 {
-    public static WorkflowToolExecutionResult Success(string resultJson) =>
-        new(resultJson ?? string.Empty);
+    public static WorkflowToolExecutionResult Success(
+        string resultJson,
+        WorkflowManagedHandoffOutcome? managedHandoff = null) =>
+        new(resultJson ?? string.Empty, managedHandoff);
+
+    public static WorkflowToolExecutionResult Failed(
+        string resultJson,
+        string errorCode,
+        string errorMessage,
+        bool terminalInvoked = false,
+        bool retryable = false) =>
+        new(
+            resultJson ?? string.Empty,
+            Failure: new WorkflowToolExecutionFailure(
+                errorCode ?? string.Empty,
+                errorMessage ?? string.Empty,
+                terminalInvoked,
+                retryable));
 }
+
+public sealed record WorkflowToolExecutionFailure(
+    string ErrorCode,
+    string ErrorMessage,
+    bool TerminalInvoked = false,
+    bool Retryable = false);
 
 public sealed record WorkflowToolApprovalPendingOutcome(
     string ApprovalRequestId,
@@ -48,6 +71,7 @@ public sealed record WorkflowToolExecutionRequest
             WorkflowToolRuntimeContext.Empty,
             null,
             null,
+            string.Empty,
             string.Empty)
     {
     }
@@ -72,6 +96,7 @@ public sealed record WorkflowToolExecutionRequest
             WorkflowToolRuntimeContext.Empty,
             null,
             InputFileRefs,
+            string.Empty,
             string.Empty)
     {
     }
@@ -87,7 +112,11 @@ public sealed record WorkflowToolExecutionRequest
         WorkflowToolRuntimeContext RuntimeContext,
         ToolApprovalGrant? ApprovalGrant = null,
         IReadOnlyList<WorkflowFileRef>? InputFileRefs = null,
-        string IdempotencyKey = "")
+        string IdempotencyKey = "",
+        string ScheduleId = "",
+        WorkflowCapabilityInvocationAdmission? InvocationAdmission = null,
+        WorkflowLlmControlContext? LlmControl = null,
+        long IssuedAtUnixMs = 0)
     {
         this.ArgumentsJson = ArgumentsJson;
         this.RunId = RunId;
@@ -100,6 +129,10 @@ public sealed record WorkflowToolExecutionRequest
         this.ApprovalGrant = ApprovalGrant;
         this.InputFileRefs = CopyInputFileRefs(InputFileRefs);
         this.IdempotencyKey = IdempotencyKey ?? string.Empty;
+        this.ScheduleId = ScheduleId ?? string.Empty;
+        this.InvocationAdmission = InvocationAdmission?.Clone();
+        this.LlmControl = LlmControl?.Clone();
+        this.IssuedAtUnixMs = IssuedAtUnixMs;
     }
 
     public string ArgumentsJson { get; init; }
@@ -123,6 +156,18 @@ public sealed record WorkflowToolExecutionRequest
     public IReadOnlyList<WorkflowFileRef> InputFileRefs { get; private init; }
 
     public string IdempotencyKey { get; init; }
+
+    public string ScheduleId { get; init; }
+
+    public long IssuedAtUnixMs { get; init; }
+
+    /// <summary>
+    /// Server-generated proof for exactly this call site, resolved from actor-owned Run state.
+    /// Null when the compiled step is not an admitted external tool invocation.
+    /// </summary>
+    public WorkflowCapabilityInvocationAdmission? InvocationAdmission { get; init; }
+
+    public WorkflowLlmControlContext? LlmControl { get; init; }
 
     private static IReadOnlyList<WorkflowFileRef> CopyInputFileRefs(
         IReadOnlyList<WorkflowFileRef>? inputFileRefs) =>

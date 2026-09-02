@@ -54,7 +54,10 @@ type TeamTestPanelProps = {
   readonly onClearEntry?: () => void;
   readonly onNavigate?: (href: string) => void;
   readonly onPromptChange: (value: string) => void;
-  readonly onSetEntryAndTest: (memberId: string) => void;
+  readonly onSetEntry: (
+    memberId: string,
+    options?: { readonly test?: boolean },
+  ) => void;
   readonly onStop: () => void;
   readonly onTest: () => void;
   readonly prompt: string;
@@ -157,7 +160,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
   onClearEntry,
   onNavigate,
   onPromptChange,
-  onSetEntryAndTest,
+  onSetEntry,
   onStop,
   onTest,
   prompt,
@@ -267,101 +270,111 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             })}
           />
         ) : null}
-        {rosterRows.map((row) => (
-          <div
-            key={row.memberId}
-            style={{
-              alignItems: "center",
-              background: token.colorBgContainer,
-              border: `1px solid ${token.colorBorderSecondary}`,
-              borderRadius: 18,
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 12,
-              justifyContent: "space-between",
-              padding: 14,
-            }}
-          >
+        {rosterRows.map((row) => {
+          const canSelectMissingEntryBeforePrompt = !normalizedEntryMemberId;
+          const promptRequired = !hasPrompt && !canSelectMissingEntryBeforePrompt;
+          const actionStartsTest = hasPrompt;
+
+          return (
             <div
+              key={row.memberId}
               style={{
+                alignItems: "center",
+                background: token.colorBgContainer,
+                border: `1px solid ${token.colorBorderSecondary}`,
+                borderRadius: 18,
                 display: "flex",
-                flex: "1 1 220px",
-                flexDirection: "column",
-                gap: 4,
-                minWidth: 0,
+                flexWrap: "wrap",
+                gap: 12,
+                justifyContent: "space-between",
+                padding: 14,
               }}
             >
-              <Typography.Text strong>{row.name}</Typography.Text>
-              <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                {row.implementationKind}
-              </Typography.Text>
-            </div>
-            <Space size={6} style={{ flex: "1 1 150px" }} wrap>
-              <DetailPill
-                compact
-                style={row.lifecycleStyle}
-                text={formatLifecycleLabelForTeamTest(row.lifecycleLabel, intl)}
-              />
-              {row.canInvokeAsEntry ? (
+              <div
+                style={{
+                  display: "flex",
+                  flex: "1 1 220px",
+                  flexDirection: "column",
+                  gap: 4,
+                  minWidth: 0,
+                }}
+              >
+                <Typography.Text strong>{row.name}</Typography.Text>
+                <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  {row.implementationKind}
+                </Typography.Text>
+              </div>
+              <Space size={6} style={{ flex: "1 1 150px" }} wrap>
                 <DetailPill
                   compact
-                  style={{
-                    background: token.colorSuccessBg,
-                    border: `1px solid ${token.colorSuccessBorder}`,
-                    color: token.colorSuccess,
-                  }}
-                  text={intl.formatMessage({ id: "teams.detail.test.entry.testable" })}
+                  style={row.lifecycleStyle}
+                  text={formatLifecycleLabelForTeamTest(row.lifecycleLabel, intl)}
                 />
-              ) : null}
-            </Space>
-            <Space size={8} style={{ flex: "0 1 auto" }} wrap>
-              {row.canInvokeAsEntry ? (
-                <Button
-                  disabled={
-                    !hasPrompt ||
-                    disabled ||
-                    isRunning ||
-                    isSettingEntry ||
-                    (isEntryActionBusy && entryActionBusyMemberId !== row.memberId)
-                  }
-                  loading={entryActionBusyMemberId === row.memberId}
-                  onClick={() => onSetEntryAndTest(row.memberId)}
-                  size="small"
-                  title={
-                    !hasPrompt
-                      ? intl.formatMessage({
-                          id: "teams.detail.test.entry.promptRequiredTitle",
-                        })
-                      : undefined
-                  }
-                  type="primary"
-                >
-                  {intl.formatMessage({ id: "teams.detail.test.entry.setAndTest" })}
-                </Button>
-              ) : (
-                <Button
-                  href={row.workflowSupported ? row.buildStudioHref : undefined}
-                  disabled={isEntryActionBusy || !row.workflowSupported}
-                  onClick={
-                    row.workflowSupported
-                      ? handleNavigate(row.buildStudioHref)
-                      : undefined
-                  }
-                  size="small"
-                  title={
-                    row.workflowSupported
-                      ? undefined
-                      : intl.formatMessage({
-                          id: "teams.detail.test.entry.noReady.description",
-                        })
-                  }
-                >
-                  {intl.formatMessage({ id: "teams.detail.test.entry.buildFirst" })}
-                </Button>
-              )}
-            </Space>
-          </div>
-        ))}
+                {row.canInvokeAsEntry ? (
+                  <DetailPill
+                    compact
+                    style={{
+                      background: token.colorSuccessBg,
+                      border: `1px solid ${token.colorSuccessBorder}`,
+                      color: token.colorSuccess,
+                    }}
+                    text={intl.formatMessage({ id: "teams.detail.test.entry.testable" })}
+                  />
+                ) : null}
+              </Space>
+              <Space size={8} style={{ flex: "0 1 auto" }} wrap>
+                {row.canInvokeAsEntry ? (
+                  <Button
+                    disabled={
+                      promptRequired ||
+                      disabled ||
+                      isRunning ||
+                      isSettingEntry ||
+                      (isEntryActionBusy && entryActionBusyMemberId !== row.memberId)
+                    }
+                    loading={entryActionBusyMemberId === row.memberId}
+                    onClick={() => onSetEntry(row.memberId, { test: actionStartsTest })}
+                    size="small"
+                    title={
+                      promptRequired
+                        ? intl.formatMessage({
+                            id: "teams.detail.test.entry.promptRequiredTitle",
+                          })
+                        : undefined
+                    }
+                    type="primary"
+                  >
+                    {intl.formatMessage({
+                      id: actionStartsTest
+                        ? "teams.detail.test.entry.setAndTest"
+                        : "teams.members.actions.setEntry",
+                    })}
+                  </Button>
+                ) : (
+                  <Button
+                    href={row.workflowSupported ? row.buildStudioHref : undefined}
+                    disabled={isEntryActionBusy || !row.workflowSupported}
+                    onClick={
+                      row.workflowSupported
+                        ? handleNavigate(row.buildStudioHref)
+                        : undefined
+                    }
+                    size="small"
+                    title={
+                      row.workflowSupported
+                        ? undefined
+                        : intl.formatMessage({
+                            id: "teams.detail.test.entry.noReady.description",
+                          })
+                    }
+                  >
+                    {intl.formatMessage({ id: "teams.detail.test.entry.buildFirst" })}
+                  </Button>
+                )}
+              </Space>
+            </div>
+          );
+        })}
       </div>
     );
   };

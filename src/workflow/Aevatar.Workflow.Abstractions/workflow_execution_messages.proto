@@ -3,7 +3,11 @@ package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+import "Credentials/credential_secret_references.proto";
 import "Interactions/interaction_spec.proto";
+import "workflow_capability_admission.proto";
+import "workflow_external_action.proto";
 
 enum WorkflowChatInputPartKind {
   WORKFLOW_CHAT_INPUT_PART_KIND_UNSPECIFIED = 0;
@@ -34,6 +38,92 @@ enum WorkflowStepFailureOutcome {
   WORKFLOW_STEP_FAILURE_OUTCOME_UNSPECIFIED = 0;
   WORKFLOW_STEP_FAILURE_OUTCOME_CALLEE_CONFIRMED = 1;
   WORKFLOW_STEP_FAILURE_OUTCOME_OUTCOME_UNCERTAIN = 2;
+}
+
+enum WorkflowRunTerminalStatus {
+  WORKFLOW_RUN_TERMINAL_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_RUN_TERMINAL_STATUS_COMPLETED = 1;
+  WORKFLOW_RUN_TERMINAL_STATUS_FAILED = 2;
+  WORKFLOW_RUN_TERMINAL_STATUS_STOPPED = 3;
+}
+
+enum WorkflowRunTerminalNotificationDeliveryStatus {
+  WORKFLOW_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_PREPARED = 1;
+  WORKFLOW_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_RETRY_SCHEDULED = 2;
+  WORKFLOW_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_DISPATCHED = 3;
+  WORKFLOW_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_EXPIRED = 4;
+}
+
+message WorkflowCompletionNotificationTarget {
+  string actor_id = 1;
+  string delivery_id = 2;
+  int64 expires_at_unix_ms = 3;
+}
+
+message WorkflowRunTerminalNotification {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  WorkflowRunTerminalStatus status = 6;
+  string output = 7;
+  string error = 8;
+  google.protobuf.Timestamp terminal_at = 9;
+}
+
+message WorkflowRunStartedNotification {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  google.protobuf.Timestamp started_at = 6;
+}
+
+message WorkflowRunCompletionNotificationTargetAdoptedEvent {
+  WorkflowCompletionNotificationTarget completion_notification_target = 1;
+  string workflow_run_id = 2;
+  string scope_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  google.protobuf.Timestamp adopted_at = 6;
+}
+
+message WorkflowRunTerminalNotificationPreparedEvent {
+  WorkflowRunTerminalNotification notification = 1;
+  int32 attempt = 2;
+  google.protobuf.Timestamp prepared_at = 3;
+}
+
+message WorkflowRunTerminalNotificationDispatchedEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  int32 attempt = 3;
+  google.protobuf.Timestamp dispatched_at = 4;
+}
+
+message WorkflowRunTerminalNotificationRetryScheduledEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  int32 attempt = 3;
+  string callback_id = 4;
+  google.protobuf.Timestamp retry_at = 5;
+}
+
+message WorkflowRunTerminalNotificationRetryFiredEvent {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_command_id = 3;
+  int32 attempt = 4;
+}
+
+message WorkflowRunTerminalNotificationExpiredEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  int32 attempt = 3;
+  google.protobuf.Timestamp expired_at = 4;
 }
 
 message WorkflowFileRef {
@@ -70,8 +160,28 @@ message WorkflowLlmControlContext {
   string sender_nyx_id_access_token = 5;
 }
 
+enum NyxIdCallerCredentialKind {
+  NYX_ID_CALLER_CREDENTIAL_KIND_UNSPECIFIED = 0;
+  NYX_ID_CALLER_CREDENTIAL_KIND_SOURCE_READABLE_USER_BEARER = 1;
+  NYX_ID_CALLER_CREDENTIAL_KIND_PROXY_DELEGATION = 2;
+}
+
 message WorkflowCallerCredential {
   string bearer_token = 1;
+  aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
+  aevatar.credentials.DurableCallerCredentialRef durable_caller_credential = 3;
+  WorkflowCallerNyxIdAuthority nyx_id_authority = 4;
+  NyxIdCallerCredentialKind kind = 5;
+  string source_readable_user_bearer_token = 6;
+  aevatar.credentials.RuntimeSecretReference source_readable_user_bearer_runtime_secret_reference = 7;
+}
+
+message WorkflowCallerNyxIdAuthority {
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
+  string scope = 4;
+  string binding_id = 5;
 }
 
 message WorkflowExternalIngressContext {
@@ -109,6 +219,31 @@ message WorkflowChatRequestEvent {
   WorkflowCallerCredential caller_credential = 10;
   WorkflowRunForkSeed fork_seed = 11;
   WorkflowExternalIngressContext external_ingress = 12;
+  WorkflowCompletionNotificationTarget completion_notification_target = 13;
+  WorkflowConversationContext conversation_context = 14;
+}
+
+enum WorkflowConversationRole {
+  WORKFLOW_CONVERSATION_ROLE_UNSPECIFIED = 0;
+  WORKFLOW_CONVERSATION_ROLE_USER = 1;
+  WORKFLOW_CONVERSATION_ROLE_ASSISTANT = 2;
+  WORKFLOW_CONVERSATION_ROLE_TOOL = 3;
+}
+
+message WorkflowConversationMessage {
+  int32 sequence = 1;
+  string turn_id = 2;
+  WorkflowConversationRole role = 3;
+  string content = 4;
+}
+
+message WorkflowConversationContext {
+  string scope_id = 1;
+  string conversation_id = 2;
+  int64 state_version = 3;
+  repeated WorkflowConversationMessage messages = 4;
+  bool truncated = 5;
+  int32 max_message_count = 6;
 }
 
 message WorkflowRunForkSeed
@@ -154,14 +289,57 @@ message BindWorkflowRunDefinitionEvent
   map<string, string> inline_workflow_yamls = 4;
   string run_id = 5;
   string scope_id = 6;
+  // Canonical run origin/type stamped by the creating ingress (draft | member-invoke |
+  // default-invoke | team-invoke | service-invoke | ad-hoc-chat | provisioned). Observatory
+  // filter dimension; empty for legacy/unstamped runs.
+  string run_origin = 7;
+  // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
+  // non-scheduled runs. Carried from ServiceInvocationRequest.schedule_id via WorkflowDefinitionBinding.
+  string schedule_id = 8;
+  // Committed call-site admission proof copied from the authoritative Definition binding.
+  // The Run actor owns this copy for its whole lifetime; runtime never re-reads the Definition.
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 9;
+  ExternalCapabilityExecutionMode expected_execution_mode = 10;
+}
+
+// Idempotent provisioning command for a stable Run actor identity. The first
+// delivery binds an empty Run; subsequent identical deliveries are no-ops;
+// any conflicting binding is rejected without resetting execution state. When
+// execution_request is present, binding validation and first execution happen
+// in the same actor turn.
+message EnsureWorkflowRunDefinitionEvent
+{
+  BindWorkflowRunDefinitionEvent binding = 1;
+  WorkflowChatRequestEvent execution_request = 2;
 }
 message BindWorkflowDefinitionEvent
 {
   string workflow_name = 1;
   string workflow_yaml = 2;
   map<string, string> inline_workflow_yamls = 3;
-  string scope_id = 4;
+  optional string scope_id = 4;
   string source_kind = 5;
+  WorkflowAuthorizationDependencies authorization_dependencies = 6;
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 7;
+  string workflow_id = 8;
+  string revision_id = 9;
+  ExternalCapabilityExecutionMode expected_execution_mode = 10;
+}
+
+enum WorkflowServiceGrantPolicy {
+  WORKFLOW_SERVICE_GRANT_POLICY_UNSPECIFIED = 0;
+  WORKFLOW_SERVICE_GRANT_POLICY_REQUIRED = 1;
+  WORKFLOW_SERVICE_GRANT_POLICY_NOT_REQUIRED_NO_EXTERNAL_SERVICE = 2;
+}
+
+message WorkflowAuthorizationDependencies {
+  reserved 1, 3, 4;
+  reserved "connector_capability_refs", "nyx_id_service_ids", "nyx_id_service_slugs";
+  bool owner_llm_route_required = 2;
+  WorkflowServiceGrantPolicy service_grant_policy = 5;
+  // Legacy v2 projection/read slot. New compilation writes only external_invocations.
+  repeated ExternalWorkflowCapabilityRef external_capabilities = 6 [deprecated = true];
+  repeated ExternalToolInvocationSpec external_invocations = 7;
 }
 message WorkflowRunExecutionStartedEvent
 {
@@ -173,6 +351,10 @@ message WorkflowRunExecutionStartedEvent
   WorkflowRunExecutionContextDelta execution_context_delta = 6;
   int32 attempt = 7;
   repeated WorkflowFileRef input_file_refs = 8;
+  google.protobuf.Timestamp started_at_utc = 9;
+  WorkflowCompletionNotificationTarget completion_notification_target = 10;
+  string workflow_command_id = 11;
+  string workflow_correlation_id = 12;
 }
 message WorkflowRunExecutionContextDelta
 {
@@ -367,6 +549,7 @@ message WorkflowStepParameters
   WorkflowAgentToolScope agent_tool_scope = 8;
   WorkflowHumanApprovalOptions human_approval = 9;
   WorkflowExternalApprovalWaitOptions external_approval = 10;
+  WorkflowConnectorApprovalOptions connector_approval = 11;
 }
 message StepRequestEvent
 {
@@ -380,6 +563,9 @@ message StepRequestEvent
   WorkflowStepParameters step_parameters = 8;
   repeated WorkflowFileRef input_file_refs = 9;
   string idempotency_key = 10;
+  // Compiled external tool invocation for this call site. Present for direct external tool
+  // steps and for the primitives that synthesize external sub-steps at runtime.
+  ExternalToolInvocationSpec external_invocation = 11;
 }
 message WorkflowUsageMetrics {
   int32 prompt_tokens = 1;
@@ -428,6 +614,7 @@ message SubWorkflowInvokeRequestedEvent
   string requested_by_actor_id = 7;
   string root_run_id = 8;
   int32 requested_depth = 9;
+  repeated WorkflowFileRef input_file_refs = 10;
 }
 message WorkflowDefinitionSnapshot
 {
@@ -486,6 +673,7 @@ message SubWorkflowDefinitionResolutionRegisteredEvent
   int32 timeout_callback_slot_epoch = 13;
   string root_run_id = 14;
   int32 requested_depth = 15;
+  repeated WorkflowFileRef input_file_refs = 16;
 }
 message SubWorkflowDefinitionResolutionClearedEvent
 {
@@ -517,6 +705,7 @@ message SubWorkflowInvocationRegisteredEvent
   map<string, string> inline_workflow_yamls = 14;
   string root_run_id = 15;
   int32 depth = 16;
+  repeated WorkflowFileRef input_file_refs = 17;
 }
 message SubWorkflowInvocationHandoffAdvancedEvent
 {
@@ -587,7 +776,13 @@ message WorkflowHumanApprovalResolvedEvent
   string feedback = 8;
   WorkflowHumanApprovalResolutionSource resolution_source = 9;
 }
-message SecureValueCapturedEvent { string run_id = 1; string step_id = 2; string variable = 3; string value = 4; }
+message SecureValueCapturedEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string variable = 3;
+  string value = 4;
+  aevatar.credentials.RuntimeSecretReference value_reference = 5;
+}
 message WorkflowRunStoppedEvent { string run_id = 1; string reason = 2; }
 message WorkflowRoleActorLinkedEvent
 {
@@ -613,6 +808,10 @@ message WorkflowRoleReplyToolCall
 {
   string tool_name = 1;
   string call_id = 2;
+  string arguments_json = 3;
+  string result_json = 4;
+  bool success = 5;
+  string error = 6;
 }
 message WorkflowRoleReplyRecordedEvent
 {
@@ -647,6 +846,13 @@ message WorkflowLlmExecutionIntent
   WorkflowToolRuntimeContextPayload workflow_runtime_context = 15;
   repeated WorkflowFileRef input_file_refs = 16;
   WorkflowAgentToolScope agent_tool_scope = 17;
+  // Authoritative scope id of the owning workflow run (WorkflowRunGAgent.State.ScopeId).
+  // Threaded so the role actor can populate the tool caller scope on the channel-less
+  // Direct/studio path, where no inbound channel stamps the caller scope. Empty when the
+  // run has no scope (e.g. anonymous local runs); the role actor only fills an empty caller.
+  string scope_id = 18;
+  // Per-schedule correlation id threaded from the owning workflow run for tool audit identity.
+  string schedule_id = 19;
 }
 
 message WorkflowToolRuntimeContextPayload
@@ -661,6 +867,9 @@ message WorkflowToolRuntimeContextPayload
 message WorkflowAgentToolScope
 {
   repeated string allowed_tool_names = 1;
+  repeated string tool_set_refs = 2;
+  bool restrict_allowed_tool_names = 3;
+  bool restrict_tool_sets = 4;
 }
 
 message WorkflowLlmInvocationStartedEvent
@@ -908,6 +1117,8 @@ message WorkflowConnectorAttemptCompletedEvent {
   string error = 7;
   map<string, string> annotations = 8;
   string execution_id = 9;
+  optional bool terminal_invoked = 10;
+  optional bool retryable = 11;
 }
 message WorkflowSignalBufferedEvent
 {

@@ -619,6 +619,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                     RevisionId = State.PlatformResult.RevisionId,
                     ImplementationKind = State.PlatformResult.ImplementationKind,
                     ImplementationRef = State.PlatformResult.ImplementationRef?.Clone(),
+                    ExpectedActorId = State.PlatformResult.ExpectedActorId,
                     CompletedAtUtc = State.UpdatedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 },
                 ct);

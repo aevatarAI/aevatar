@@ -3,7 +3,12 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
@@ -72,9 +77,16 @@ public class AIGAgentBaseToolRefreshTests
         var services = new ServiceCollection();
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddSingleton<IAuditTrailAppender, AppendedAuditTrail>();
+        services.AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>();
+        services.AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance);
+        services.AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         using var provider = services.BuildServiceProvider();
-        var agent = new TestAIGAgent([], providerFactory)
+        var agent = new TestAIGAgent(
+            [],
+            providerFactory,
+            provider.GetRequiredService<IAgentToolExecutionPort>())
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -87,23 +99,40 @@ public class AIGAgentBaseToolRefreshTests
 
         chunks.Select(x => x.DeltaContent).Where(x => x is not null).Should()
             .ContainSingle()
-            .Which.Should().Contain("approval-gated tools cannot run here");
+            .Which.Should().Contain("actor-owned durable approval continuation");
         tool.ExecuteCount.Should().Be(0);
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "test-key");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class TestAIGAgent : AIGAgentBase<RoleGAgentState>
     {
         public TestAIGAgent(
             IEnumerable<IAgentToolSource> toolSources,
-            ILLMProviderFactory? llmProviderFactory = null)
+            ILLMProviderFactory? llmProviderFactory = null,
+            IAgentToolExecutionPort? toolExecutionPort = null)
             : base(
+                toolExecutionPort ?? TestAgentToolExecutionPort.Instance,
                 llmProviderFactory ?? new StubLLMProviderFactory(),
                 Array.Empty<IAIGAgentExecutionHook>(),
                 Array.Empty<IAgentRunMiddleware>(),
-                Array.Empty<IToolCallMiddleware>(),
                 Array.Empty<ILLMCallMiddleware>(),
                 toolSources)
         {
+            InitializeId();
         }
 
         public IReadOnlyList<string> GetRegisteredToolNames() => Tools.GetAll()
@@ -120,7 +149,10 @@ public class AIGAgentBaseToolRefreshTests
         public async Task<IReadOnlyList<LLMStreamChunk>> StreamAsync(string userMessage)
         {
             var chunks = new List<LLMStreamChunk>();
-            await foreach (var chunk in ChatStreamAsync(userMessage))
+            await foreach (var chunk in ChatStreamAsync(
+                               userMessage,
+                               requestId: "request-approval",
+                               turnCatalog: null))
                 chunks.Add(chunk);
             return chunks;
         }
@@ -250,5 +282,94 @@ public class AIGAgentBaseToolRefreshTests
             yield return new LLMStreamChunk { IsLast = true };
             await Task.CompletedTask;
         }
+    }
+}
+
+internal sealed class TestAgentToolExecutionPort : IAgentToolExecutionPort
+{
+    public static TestAgentToolExecutionPort Instance { get; } = new();
+
+    public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+        AgentToolExecutionRequest request,
+        CancellationToken ct = default)
+    {
+        var safety = request.Tool.GetCallSafety(request.ArgumentsJson);
+        try
+        {
+            string resultJson;
+            using (AgentToolContextScope.Push(request.ExecutionContext))
+                resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            return CreateOutcome(
+                request,
+                safety,
+                AgentToolExecutionOutcomeKind.Executed,
+                AgentToolReceiptStatus.Success,
+                resultJson,
+                string.Empty,
+                string.Empty);
+        }
+        catch (Exception ex)
+        {
+            var resultJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                error = "tool_execution_failed",
+                code = "tool_execution_failed",
+                message = ex.GetType().Name,
+                tool_name = request.Tool.Name,
+            });
+            return CreateOutcome(
+                request,
+                safety,
+                AgentToolExecutionOutcomeKind.Failed,
+                AgentToolReceiptStatus.Error,
+                resultJson,
+                "tool_execution_failed",
+                ex.GetType().Name);
+        }
+    }
+
+    private static AgentToolExecutionOutcome CreateOutcome(
+        AgentToolExecutionRequest request,
+        AgentToolCallSafety safety,
+        AgentToolExecutionOutcomeKind kind,
+        AgentToolReceiptStatus status,
+        string resultJson,
+        string failureCode,
+        string safeMessage) =>
+        new(
+            kind,
+            resultJson,
+            new AgentToolReceipt
+            {
+                CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                ToolName = request.Tool.Name,
+                Status = status,
+                ResultJson = resultJson,
+                ErrorCode = failureCode,
+                ErrorMessage = safeMessage,
+                IsDestructive = safety.IsDestructive,
+            },
+            IsMutation: !safety.IsReadOnly,
+            failureCode,
+            safeMessage,
+            kind == AgentToolExecutionOutcomeKind.Executed
+                ? AgentToolExecutionFailureStage.None
+                : AgentToolExecutionFailureStage.TerminalExecution,
+            TerminalInvoked: true,
+            Retryable: false,
+            AuditCompleted: true);
+}
+
+internal sealed class AlwaysStartingAgentToolAdmissionLedger : IAgentToolAdmissionLedger
+{
+    public static AlwaysStartingAgentToolAdmissionLedger Instance { get; } = new();
+
+    public Task<AgentToolAdmissionResult> TryStartAsync(
+        AgentToolAdmissionFact fact,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(fact);
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
     }
 }

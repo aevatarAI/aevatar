@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,6 +32,9 @@ public sealed class ScopeScriptSaveObservationRuntimeTests
             .Build();
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
+        // Scripting is opt-in: the host composes the scripting capability first, and
+        // AddGAgentServiceCapability bridges to it only when present.
+        services.AddScriptCapability(configuration);
         services.AddGAgentServiceCapability(configuration);
 
         await using var provider = services.BuildServiceProvider();

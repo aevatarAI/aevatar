@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Builder;
@@ -560,7 +562,8 @@ public class DeviceEventEndpointsTests
         HttpContext context,
         string registrationId,
         IDeviceRegistrationQueryPort queryPort,
-        IDeviceCallbackCommandService callbackCommandService)
+        IDeviceCallbackCommandService callbackCommandService,
+        ISecretVault? secretVault = null)
     {
         var method = typeof(DeviceEventEndpoints)
             .GetMethod("HandleDeviceCallbackAsync", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
@@ -572,6 +575,7 @@ public class DeviceEventEndpointsTests
             registrationId,
             queryPort,
             callbackCommandService,
+            secretVault ?? new InMemorySecretVault(),
             Options.Create(new DeviceEventOptions { SkipHmacVerification = true }),
             LoggerFactory.Create(static _ => { }),
             CancellationToken.None,
@@ -614,7 +618,7 @@ public class DeviceEventEndpointsTests
     }
 
     [Fact]
-    public void HmacVerification_valid_signature_returns_true()
+    public async Task HmacVerification_valid_signature_returns_true()
     {
         const string hmacKey = "my-secret-key";
         var body = EncodeCallbackPayload(JsonSerializer.Serialize(new
@@ -628,13 +632,14 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration(hmacKey);
         var options = new DeviceEventOptions { SkipHmacVerification = false };
 
-        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, new InMemorySecretVault(), CancellationToken.None);
 
         result.Should().BeTrue();
     }
 
     [Fact]
-    public void AdmitCallback_rejects_signed_body_outside_freshness_window()
+    public async Task AdmitCallback_rejects_signed_body_outside_freshness_window()
     {
         const string hmacKey = "my-secret-key";
         var now = DateTimeOffset.Parse("2026-04-09T10:00:20Z");
@@ -648,19 +653,21 @@ public class DeviceEventEndpointsTests
             callbackTimestamp: "2026-04-09T10:00:00Z");
         var (context, bodyBytes) = CreateContextWithSignature(body, hmacKey);
 
-        var result = DeviceEventEndpoints.AdmitCallback(
+        var result = await DeviceEventEndpoints.AdmitCallback(
             context,
             bodyBytes,
             MakeRegistration(hmacKey),
             new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) },
-            now);
+            now,
+            new InMemorySecretVault(),
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(DeviceCallbackAdmissionError.StaleSignedBodyTimestamp);
     }
 
     [Fact]
-    public void AdmitCallback_rejects_captured_signed_body_replayed_after_window()
+    public async Task AdmitCallback_rejects_captured_signed_body_replayed_after_window()
     {
         const string hmacKey = "my-secret-key";
         var signedAt = DateTimeOffset.Parse("2026-04-09T10:00:00Z");
@@ -674,19 +681,24 @@ public class DeviceEventEndpointsTests
             callbackTimestamp: "2026-04-09T10:00:00Z");
         var (context, bodyBytes) = CreateContextWithSignature(body, hmacKey);
         var options = new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) };
+        var vault = new InMemorySecretVault();
 
-        var first = DeviceEventEndpoints.AdmitCallback(
+        var first = await DeviceEventEndpoints.AdmitCallback(
             context,
             bodyBytes,
             MakeRegistration(hmacKey),
             options,
-            signedAt.AddSeconds(2));
-        var replay = DeviceEventEndpoints.AdmitCallback(
+            signedAt.AddSeconds(2),
+            vault,
+            CancellationToken.None);
+        var replay = await DeviceEventEndpoints.AdmitCallback(
             context,
             bodyBytes,
             MakeRegistration(hmacKey),
             options,
-            signedAt.AddSeconds(11));
+            signedAt.AddSeconds(11),
+            vault,
+            CancellationToken.None);
 
         first.Succeeded.Should().BeTrue();
         replay.Succeeded.Should().BeFalse();
@@ -694,7 +706,7 @@ public class DeviceEventEndpointsTests
     }
 
     [Fact]
-    public void AdmitCallback_uses_body_timestamp_not_X_NyxID_Timestamp_as_freshness_authority()
+    public async Task AdmitCallback_uses_body_timestamp_not_X_NyxID_Timestamp_as_freshness_authority()
     {
         const string hmacKey = "my-secret-key";
         var body = EncodeCallbackPayload(
@@ -710,19 +722,21 @@ public class DeviceEventEndpointsTests
             hmacKey,
             nyxTimestampHeader: "2026-04-09T10:00:20Z");
 
-        var result = DeviceEventEndpoints.AdmitCallback(
+        var result = await DeviceEventEndpoints.AdmitCallback(
             context,
             bodyBytes,
             MakeRegistration(hmacKey),
             new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) },
-            DateTimeOffset.Parse("2026-04-09T10:00:20Z"));
+            DateTimeOffset.Parse("2026-04-09T10:00:20Z"),
+            new InMemorySecretVault(),
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(DeviceCallbackAdmissionError.StaleSignedBodyTimestamp);
     }
 
     [Fact]
-    public void AdmitCallback_rejects_body_timestamp_tampering_without_resigning()
+    public async Task AdmitCallback_rejects_body_timestamp_tampering_without_resigning()
     {
         const string hmacKey = "my-secret-key";
         var originalBody = EncodeCallbackPayload(
@@ -739,19 +753,21 @@ public class DeviceEventEndpointsTests
             "2026-04-09T10:00:20Z",
             StringComparison.Ordinal);
 
-        var result = DeviceEventEndpoints.AdmitCallback(
+        var result = await DeviceEventEndpoints.AdmitCallback(
             context,
             Encoding.UTF8.GetBytes(tamperedBody),
             MakeRegistration(hmacKey),
             new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) },
-            DateTimeOffset.Parse("2026-04-09T10:00:20Z"));
+            DateTimeOffset.Parse("2026-04-09T10:00:20Z"),
+            new InMemorySecretVault(),
+            CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(DeviceCallbackAdmissionError.SignatureRejected);
     }
 
     [Fact]
-    public void AdmitCallback_uses_inner_body_timestamp_when_outer_timestamp_is_absent()
+    public async Task AdmitCallback_uses_inner_body_timestamp_when_outer_timestamp_is_absent()
     {
         const string hmacKey = "my-secret-key";
         var body = JsonSerializer.Serialize(new
@@ -772,12 +788,14 @@ public class DeviceEventEndpointsTests
         });
         var (context, bodyBytes) = CreateContextWithSignature(body, hmacKey);
 
-        var result = DeviceEventEndpoints.AdmitCallback(
+        var result = await DeviceEventEndpoints.AdmitCallback(
             context,
             bodyBytes,
             MakeRegistration(hmacKey),
             new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) },
-            DateTimeOffset.Parse("2026-04-09T10:00:02Z"));
+            DateTimeOffset.Parse("2026-04-09T10:00:02Z"),
+            new InMemorySecretVault(),
+            CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         result.Admission!.SignedBodyTimestampValue.Should().Be("2026-04-09T10:00:00Z");
@@ -785,7 +803,7 @@ public class DeviceEventEndpointsTests
     }
 
     [Fact]
-    public void HmacVerification_invalid_signature_returns_false()
+    public async Task HmacVerification_invalid_signature_returns_false()
     {
         var bodyBytes = Encoding.UTF8.GetBytes("{\"test\":\"data\"}");
         var context = new DefaultHttpContext();
@@ -794,13 +812,14 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration("my-secret-key");
         var options = new DeviceEventOptions { SkipHmacVerification = false };
 
-        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, new InMemorySecretVault(), CancellationToken.None);
 
         result.Should().BeFalse();
     }
 
     [Fact]
-    public void HmacVerification_missing_signature_header_returns_false()
+    public async Task HmacVerification_missing_signature_header_returns_false()
     {
         var bodyBytes = Encoding.UTF8.GetBytes("{\"test\":\"data\"}");
         var context = new DefaultHttpContext();
@@ -809,13 +828,14 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration("my-secret-key");
         var options = new DeviceEventOptions { SkipHmacVerification = false };
 
-        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, new InMemorySecretVault(), CancellationToken.None);
 
         result.Should().BeFalse();
     }
 
     [Fact]
-    public void HmacVerification_empty_hmac_key_returns_false()
+    public async Task HmacVerification_empty_hmac_key_returns_false()
     {
         var bodyBytes = Encoding.UTF8.GetBytes("{\"test\":\"data\"}");
         var context = new DefaultHttpContext();
@@ -824,13 +844,14 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration(hmacKey: "");
         var options = new DeviceEventOptions { SkipHmacVerification = false };
 
-        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, new InMemorySecretVault(), CancellationToken.None);
 
         result.Should().BeFalse();
     }
 
     [Fact]
-    public void HmacVerification_skip_enabled_always_returns_true()
+    public async Task HmacVerification_skip_enabled_always_returns_true()
     {
         var bodyBytes = Encoding.UTF8.GetBytes("{\"test\":\"data\"}");
         var context = new DefaultHttpContext();
@@ -839,13 +860,14 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration("any-key");
         var options = new DeviceEventOptions { SkipHmacVerification = true };
 
-        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, new InMemorySecretVault(), CancellationToken.None);
 
         result.Should().BeTrue();
     }
 
     [Fact]
-    public void HmacVerification_skip_enabled_ignores_wrong_signature()
+    public async Task HmacVerification_skip_enabled_ignores_wrong_signature()
     {
         var bodyBytes = Encoding.UTF8.GetBytes("{\"test\":\"data\"}");
         var context = new DefaultHttpContext();
@@ -854,8 +876,340 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration("secret");
         var options = new DeviceEventOptions { SkipHmacVerification = true };
 
-        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, new InMemorySecretVault(), CancellationToken.None);
 
         result.Should().BeTrue();
+    }
+
+    // ─── Secret-vault migration (dual-read) ───
+
+    [Fact]
+    public async Task HmacVerification_resolves_key_from_vault_reference()
+    {
+        const string hmacKey = "vault-backed-signing-key-01234567";
+        const string scopeId = "scope-vault";
+        const string conversationId = "conv-vault";
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(
+            new StoreSecretRequest(
+                CredentialSecretPurposes.DeviceHmacSigningKey,
+                scopeId,
+                conversationId,
+                hmacKey,
+                "device.register"),
+            CancellationToken.None);
+
+        var body = EncodeCallbackPayload(JsonSerializer.Serialize(new
+        {
+            event_id = "evt-vault",
+            event_type = "motion_detected",
+            detected = true,
+        }));
+        var (context, bodyBytes) = CreateContextWithSignature(body, hmacKey);
+
+        // New-write shape: HmacKey empty, only the reference present.
+        var registration = new DeviceRegistrationEntry
+        {
+            Id = "reg-vault",
+            ScopeId = scopeId,
+            NyxConversationId = conversationId,
+            HmacKeyRef = stored.Reference,
+            CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var options = new DeviceEventOptions { SkipHmacVerification = false };
+
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, vault, CancellationToken.None);
+
+        result.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HmacVerification_unresolvable_reference_fails_closed()
+    {
+        const string scopeId = "scope-missing";
+        var vault = new InMemorySecretVault();
+        var body = EncodeCallbackPayload(JsonSerializer.Serialize(new
+        {
+            event_id = "evt-missing",
+            event_type = "motion_detected",
+            detected = true,
+        }));
+        var (context, bodyBytes) = CreateContextWithSignature(body, "anything-goes-here-32-characters!");
+
+        // Reference points at a secret the vault never stored → resolve returns not-found → fail closed.
+        var registration = new DeviceRegistrationEntry
+        {
+            Id = "reg-missing",
+            ScopeId = scopeId,
+            HmacKeyRef = new Aevatar.Foundation.Abstractions.Credentials.SecretReference
+            {
+                Ref = "sec_0000000000000099",
+                Purpose = CredentialSecretPurposes.DeviceHmacSigningKey,
+                OwnerScopeKey = scopeId,
+            },
+            CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var options = new DeviceEventOptions { SkipHmacVerification = false };
+
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, vault, CancellationToken.None);
+
+        result.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HmacVerification_legacy_plaintext_key_without_reference_still_verifies()
+    {
+        const string hmacKey = "legacy-plaintext-signing-key-0123";
+        var vault = new InMemorySecretVault();
+        var body = EncodeCallbackPayload(JsonSerializer.Serialize(new
+        {
+            event_id = "evt-legacy",
+            event_type = "motion_detected",
+            detected = true,
+        }));
+        var (context, bodyBytes) = CreateContextWithSignature(body, hmacKey);
+
+        // Legacy shape: plaintext HmacKey present, no reference. Dual-read falls back to it.
+        var registration = MakeRegistration(hmacKey, registrationId: "reg-legacy");
+        var options = new DeviceEventOptions { SkipHmacVerification = false };
+
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, vault, CancellationToken.None);
+
+        result.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HmacVerification_dangling_reference_does_not_fall_through_to_legacy_key()
+    {
+        // Branch-exclusivity guard: when a reference is present but unresolvable, the
+        // verifier must fail closed — it must NOT silently fall back to a still-populated
+        // legacy plaintext key. The body is signed with the legacy key on purpose, so a
+        // fall-through regression would accept it (this test would then catch it).
+        const string legacyKey = "legacy-key-must-not-be-used-01234";
+        const string scopeId = "scope-danglingref";
+        var vault = new InMemorySecretVault();
+        var body = EncodeCallbackPayload(JsonSerializer.Serialize(new
+        {
+            event_id = "evt-dangling",
+            event_type = "motion_detected",
+            detected = true,
+        }));
+        var (context, bodyBytes) = CreateContextWithSignature(body, legacyKey);
+
+        var registration = new DeviceRegistrationEntry
+        {
+            Id = "reg-dangling",
+            ScopeId = scopeId,
+            HmacKey = legacyKey, // populated legacy key that must be ignored once a ref is present
+            HmacKeyRef = new Aevatar.Foundation.Abstractions.Credentials.SecretReference
+            {
+                Ref = "sec_0000000000000099", // never stored → unresolvable
+                Purpose = CredentialSecretPurposes.DeviceHmacSigningKey,
+                OwnerScopeKey = scopeId,
+            },
+            CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var options = new DeviceEventOptions { SkipHmacVerification = false };
+
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, vault, CancellationToken.None);
+
+        result.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HmacVerification_unauthorized_reference_does_not_fall_through_to_legacy_key()
+    {
+        // The reference resolves to a real vault secret, but stored under a DIFFERENT owner
+        // scope/subject than the registration claims, so the vault's purpose+owner+subject
+        // binding denies it. Verification must fail closed, not fall back to the legacy key.
+        const string legacyKey = "legacy-key-must-not-be-used-56789";
+        const string vaultKey = "vault-secret-under-other-scope-01";
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(
+            new StoreSecretRequest(
+                CredentialSecretPurposes.DeviceHmacSigningKey,
+                "scope-owner-a",
+                "conv-owner-a",
+                vaultKey,
+                "device.register"),
+            CancellationToken.None);
+
+        var body = EncodeCallbackPayload(JsonSerializer.Serialize(new
+        {
+            event_id = "evt-unauthorized",
+            event_type = "motion_detected",
+            detected = true,
+        }));
+        var (context, bodyBytes) = CreateContextWithSignature(body, legacyKey);
+
+        // Registration claims scope-owner-b but points at scope-owner-a's secret → vault denies.
+        var registration = new DeviceRegistrationEntry
+        {
+            Id = "reg-unauthorized",
+            ScopeId = "scope-owner-b",
+            HmacKey = legacyKey, // populated legacy key that must be ignored once a ref is present
+            HmacKeyRef = stored.Reference,
+            CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var options = new DeviceEventOptions { SkipHmacVerification = false };
+
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, vault, CancellationToken.None);
+
+        result.Should().BeFalse();
+    }
+
+    // ─── Registration ingress: length gate + encrypt-on-ingress ───
+
+    [Fact]
+    public async Task HandleRegisterDeviceAsync_short_key_returns_bad_request()
+    {
+        var facade = DeviceRegistrationCommandFacadeStub.ThatFailsIfCalled();
+        var vault = new InMemorySecretVault();
+        var context = CreateJsonHttpContext(JsonSerializer.Serialize(new
+        {
+            scope_id = "scope-short",
+            hmac_key = "too-short",
+            device_event_target_actor_id = "household-scope-short",
+        }));
+
+        var result = await InvokeHandleRegisterDeviceAsync(
+            context, facade, vault, new DeviceEventOptions { SkipHmacVerification = false });
+        var (statusCode, body) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("at least 32");
+    }
+
+    [Fact]
+    public async Task HandleRegisterDeviceAsync_stores_key_as_vault_reference_and_leaves_legacy_field_empty()
+    {
+        DeviceRegisterCommand? capturedCommand = null;
+        var facade = DeviceRegistrationCommandFacadeStub.Capturing(command => capturedCommand = command);
+        var vault = new InMemorySecretVault();
+        const string hmacKey = "a-sufficiently-long-signing-key-01";
+        var context = CreateJsonHttpContext(JsonSerializer.Serialize(new
+        {
+            scope_id = "scope-ingress",
+            hmac_key = hmacKey,
+            nyx_conversation_id = "conv-ingress",
+            device_event_target_actor_id = "household-scope-ingress",
+        }));
+
+        var result = await InvokeHandleRegisterDeviceAsync(
+            context, facade, vault, new DeviceEventOptions { SkipHmacVerification = false });
+        var (statusCode, _) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status202Accepted);
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.HmacKey.Should().BeEmpty();
+        capturedCommand.HmacKeyRef.Should().NotBeNull();
+        capturedCommand.HmacKeyRef!.Ref.Should().NotBeNullOrEmpty();
+        capturedCommand.HmacKeyRef.Purpose.Should().Be(CredentialSecretPurposes.DeviceHmacSigningKey);
+
+        // The reference resolves the original plaintext back through the vault
+        // using the same subject helper (conversation id present → conversation id).
+        var resolved = await vault.ResolveAsync(
+            new ResolveSecretRequest(
+                capturedCommand.HmacKeyRef.Ref,
+                CredentialSecretPurposes.DeviceHmacSigningKey,
+                "scope-ingress",
+                "conv-ingress",
+                "device.verify-callback"),
+            CancellationToken.None);
+        resolved.Resolved.Should().BeTrue();
+        resolved.Secret.Should().Be(hmacKey);
+    }
+
+    // ─── Production fail-fast gate ───
+
+    [Fact]
+    public void EnsureNotSkippingHmacInProduction_throws_when_skip_enabled_in_production()
+    {
+        var options = new DeviceEventOptions { SkipHmacVerification = true };
+
+        var act = () => options.EnsureNotSkippingHmacInProduction(isProduction: true);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*SkipHmacVerification*");
+    }
+
+    [Fact]
+    public void EnsureNotSkippingHmacInProduction_allows_skip_outside_production()
+    {
+        var options = new DeviceEventOptions { SkipHmacVerification = true };
+
+        var act = () => options.EnsureNotSkippingHmacInProduction(isProduction: false);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void EnsureNotSkippingHmacInProduction_allows_verification_enabled_in_production()
+    {
+        var options = new DeviceEventOptions { SkipHmacVerification = false };
+
+        var act = () => options.EnsureNotSkippingHmacInProduction(isProduction: true);
+
+        act.Should().NotThrow();
+    }
+
+    private static async Task<IResult> InvokeHandleRegisterDeviceAsync(
+        HttpContext context,
+        DeviceRegistrationCommandFacade facade,
+        ISecretVault secretVault,
+        DeviceEventOptions options)
+    {
+        var method = typeof(DeviceEventEndpoints)
+            .GetMethod("HandleRegisterDeviceAsync", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("HandleRegisterDeviceAsync was not found.");
+
+        var invocationResult = method.Invoke(null, new object[]
+        {
+            context,
+            facade,
+            secretVault,
+            Options.Create(options),
+            LoggerFactory.Create(static _ => { }),
+            CancellationToken.None,
+        });
+
+        if (invocationResult is Task<IResult> resultTask)
+            return await resultTask;
+
+        throw new InvalidOperationException("HandleRegisterDeviceAsync did not return Task<IResult>.");
+    }
+}
+
+/// <summary>
+/// Test double for <see cref="DeviceRegistrationCommandFacade"/> that captures the dispatched
+/// <see cref="DeviceRegisterCommand"/> without exercising the actor runtime.
+/// </summary>
+file static class DeviceRegistrationCommandFacadeStub
+{
+    public static DeviceRegistrationCommandFacade Capturing(Action<DeviceRegisterCommand> onRegister)
+    {
+        var registerDispatch = Substitute.For<ICommandDispatchService<DeviceRegisterCommand, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>>();
+        registerDispatch.DispatchAsync(Arg.Do<DeviceRegisterCommand>(onRegister), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(
+                CommandDispatchResult<DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>.Success(
+                    new DeviceCommandAcceptedReceipt("device-registration-store", "cmd-x", "corr-x"))));
+        var unregisterDispatch = Substitute.For<ICommandDispatchService<DeviceUnregisterCommand, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>>();
+        return new DeviceRegistrationCommandFacade(registerDispatch, unregisterDispatch);
+    }
+
+    public static DeviceRegistrationCommandFacade ThatFailsIfCalled()
+    {
+        var registerDispatch = Substitute.For<ICommandDispatchService<DeviceRegisterCommand, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>>();
+        registerDispatch.DispatchAsync(Arg.Any<DeviceRegisterCommand>(), Arg.Any<CancellationToken>())
+            .Returns<Task<CommandDispatchResult<DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>>>(
+                _ => throw new InvalidOperationException("Registration dispatch must not be reached for a rejected request."));
+        var unregisterDispatch = Substitute.For<ICommandDispatchService<DeviceUnregisterCommand, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>>();
+        return new DeviceRegistrationCommandFacade(registerDispatch, unregisterDispatch);
     }
 }

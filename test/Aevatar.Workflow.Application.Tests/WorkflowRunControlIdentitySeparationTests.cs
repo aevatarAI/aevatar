@@ -26,7 +26,7 @@ public sealed class WorkflowRunControlIdentitySeparationTests
                 runId,
                 "direct",
                 "yaml",
-                new Dictionary<string, string>())));
+                new Dictionary<string, string>(), ExternalCapabilityExecutionMode.Interactive)));
 
         var command = new WorkflowResumeCommand(
             actorId,

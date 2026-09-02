@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 
@@ -48,7 +49,9 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
 
         try
         {
-            var channelContext = BuildChannelContextSection(metadata);
+            var channelContext = BuildChannelContextSection(
+                metadata,
+                context.Request.ToolContext?.Channel.IdentityHints);
             if (string.IsNullOrWhiteSpace(channelContext))
                 return;
 
@@ -72,7 +75,9 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
         }
     }
 
-    internal static string BuildChannelContextSection(IReadOnlyDictionary<string, string> metadata)
+    internal static string BuildChannelContextSection(
+        IReadOnlyDictionary<string, string> metadata,
+        IReadOnlyList<AgentToolChannelIdentityHint>? identityHints = null)
     {
         if (metadata.Count == 0 ||
             !metadata.TryGetValue(ChannelMetadataKeys.Platform, out var platform) ||
@@ -84,24 +89,55 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
         static string Resolve(IReadOnlyDictionary<string, string> values, string key) =>
             values.TryGetValue(key, out var value) ? JsonSerializer.Serialize(value ?? string.Empty) : "\"\"";
 
-        return string.Join(
-            "\n",
-            [
-                "<channel-context>",
-                $"platform: {Resolve(metadata, ChannelMetadataKeys.Platform)}",
-                $"chat_type: {Resolve(metadata, ChannelMetadataKeys.ChatType)}",
-                $"sender_id: {Resolve(metadata, ChannelMetadataKeys.SenderId)}",
-                $"sender_name: {Resolve(metadata, ChannelMetadataKeys.SenderName)}",
-                $"conversation_id: {Resolve(metadata, ChannelMetadataKeys.ConversationId)}",
-                $"platform_message_id: {Resolve(metadata, ChannelMetadataKeys.PlatformMessageId)}",
-                $"lark_union_id: {Resolve(metadata, ChannelMetadataKeys.LarkUnionId)}",
-                $"lark_chat_id: {Resolve(metadata, ChannelMetadataKeys.LarkChatId)}",
-                $"operator_user_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorUserId)}",
-                $"operator_open_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorOpenId)}",
-                $"operator_union_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorUnionId)}",
-                $"subject_user_id: {Resolve(metadata, ChannelMetadataKeys.LarkSubjectUserId)}",
-                $"subject_employee_id: {Resolve(metadata, ChannelMetadataKeys.LarkSubjectEmployeeId)}",
-                "</channel-context>",
-            ]);
+        static IEnumerable<string> BuildIdentityHintLines(IReadOnlyList<AgentToolChannelIdentityHint>? hints)
+        {
+            if (hints is null)
+                yield break;
+
+            foreach (var hint in hints)
+            {
+                if (string.IsNullOrWhiteSpace(hint.Subject) ||
+                    string.IsNullOrWhiteSpace(hint.Kind) ||
+                    string.IsNullOrWhiteSpace(hint.Value))
+                {
+                    continue;
+                }
+
+                yield return
+                    $"- subject: {JsonSerializer.Serialize(hint.Subject)}, kind: {JsonSerializer.Serialize(hint.Kind)}, value: {JsonSerializer.Serialize(hint.Value)}";
+            }
+        }
+
+        var lines = new List<string>
+        {
+            "<channel-context>",
+            $"platform: {Resolve(metadata, ChannelMetadataKeys.Platform)}",
+            $"chat_type: {Resolve(metadata, ChannelMetadataKeys.ChatType)}",
+            $"sender_id: {Resolve(metadata, ChannelMetadataKeys.SenderId)}",
+            $"sender_name: {Resolve(metadata, ChannelMetadataKeys.SenderName)}",
+        };
+
+        // Only emit the mentions line when the message actually mentioned someone, so turns with no
+        // @-mentions don't carry a noisy empty field. The value is already a readable
+        // `name <platform_id>; ...` list, so emit it raw rather than through Resolve; JSON-escaping would
+        // mangle the `<>` delimiters and any non-ASCII (e.g. CJK) display names into `\uXXXX`.
+        if (metadata.TryGetValue(ChannelMetadataKeys.Mentions, out var mentions) &&
+            !string.IsNullOrWhiteSpace(mentions))
+        {
+            lines.Add($"mentions: {mentions}");
+        }
+
+        lines.Add($"conversation_id: {Resolve(metadata, ChannelMetadataKeys.ConversationId)}");
+        lines.Add($"platform_message_id: {Resolve(metadata, ChannelMetadataKeys.PlatformMessageId)}");
+
+        var identityHintLines = BuildIdentityHintLines(identityHints).ToList();
+        if (identityHintLines.Count > 0)
+        {
+            lines.Add("identity_hints:");
+            lines.AddRange(identityHintLines);
+        }
+
+        lines.Add("</channel-context>");
+        return string.Join("\n", lines);
     }
 }

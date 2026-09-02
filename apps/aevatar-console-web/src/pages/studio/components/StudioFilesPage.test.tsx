@@ -18,11 +18,8 @@ jest.mock('@/pages/chat/chatHistoryApi', () => ({
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
     getWorkflow: jest.fn(),
-    saveSettings: jest.fn(),
     saveRoleCatalog: jest.fn(),
     saveConnectorCatalog: jest.fn(),
-    addWorkflowDirectory: jest.fn(),
-    removeWorkflowDirectory: jest.fn(),
   },
 }));
 
@@ -40,18 +37,6 @@ jest.mock('@/shared/studio/scriptsApi', () => ({
     listScripts: jest.fn(),
   },
 }));
-
-const workspaceSettings = {
-  runtimeBaseUrl: 'https://runtime.example.test',
-  directories: [
-    {
-      directoryId: 'dir-1',
-      label: 'Workspace',
-      path: '/tmp/workflows',
-      isBuiltIn: false,
-    },
-  ],
-};
 
 const workflows = [
   {
@@ -106,13 +91,6 @@ const connectors = {
   ],
 };
 
-const settings = {
-  runtimeBaseUrl: 'https://runtime.example.test',
-  defaultProviderName: 'tornado',
-  providerTypes: [],
-  providers: [],
-};
-
 function createProps(overrides: Record<string, unknown> = {}) {
   return {
     workflows: {
@@ -120,12 +98,6 @@ function createProps(overrides: Record<string, unknown> = {}) {
       isError: false,
       error: null,
       data: workflows,
-    },
-    workspaceSettings: {
-      isLoading: false,
-      isError: false,
-      error: null,
-      data: workspaceSettings,
     },
     roles: {
       isLoading: false,
@@ -139,14 +111,7 @@ function createProps(overrides: Record<string, unknown> = {}) {
       error: null,
       data: connectors,
     },
-    settings: {
-      isLoading: false,
-      isError: false,
-      error: null,
-      data: settings,
-    },
     scopeId: 'scope-1',
-    workflowStorageMode: 'workspace',
     scriptsEnabled: true,
     onOpenWorkflowInStudio: jest.fn(),
     onOpenScriptInStudio: jest.fn(),
@@ -167,13 +132,6 @@ describe('StudioFilesPage', () => {
       findings: [],
       updatedAtUtc: '2026-03-18T00:00:00Z',
     });
-    (studioApi.saveSettings as jest.Mock).mockImplementation(async (input) => ({
-      ...settings,
-      runtimeBaseUrl: input.runtimeBaseUrl || settings.runtimeBaseUrl,
-      defaultProviderName:
-        input.defaultProviderName || settings.defaultProviderName,
-      providers: input.providers || settings.providers,
-    }));
     (studioApi.saveRoleCatalog as jest.Mock).mockImplementation(async (input) => ({
       ...roles,
       roles: input.roles,
@@ -208,9 +166,6 @@ describe('StudioFilesPage', () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       {
         id: 'conversation-1',
-        actorId: 'NyxIdChat:scope-1',
-        commandId: 'command-1',
-        runId: 'run-1',
         title: 'Scope conversation',
         serviceId: 'service-1',
         serviceKind: 'nyxid-chat',
@@ -219,22 +174,42 @@ describe('StudioFilesPage', () => {
         messageCount: 2,
       },
     ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([
-      {
-        id: 'message-1',
-        role: 'user',
-        content: 'hello from user',
-        timestamp: Date.parse('2026-03-18T01:00:00Z'),
-        status: 'complete',
-      },
-      {
-        id: 'message-2',
-        role: 'assistant',
-        content: 'assistant reply',
-        timestamp: Date.parse('2026-03-18T01:01:00Z'),
-        status: 'complete',
-      },
-    ]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue({
+      messages: [
+        {
+          id: 'message-1',
+          role: 'user',
+          content: 'hello from user',
+          authorName: 'Alice',
+          timestamp: Date.parse('2026-03-18T01:00:00Z'),
+          status: 'complete',
+        },
+        {
+          id: 'message-2',
+          role: 'assistant',
+          content: 'assistant reply',
+          thinking: 'Planning the response',
+          timestamp: Date.parse('2026-03-18T01:01:00Z'),
+          status: 'complete',
+        },
+        {
+          id: 'message-3',
+          role: 'user',
+          content: 'run it now',
+          timestamp: Date.parse('2026-03-18T01:02:00Z'),
+          status: 'complete',
+        },
+        {
+          id: 'message-4',
+          role: 'assistant',
+          content: '',
+          error: 'workflow_run_error: Dispatch failed.',
+          timestamp: Date.parse('2026-03-18T01:03:00Z'),
+          status: 'error',
+        },
+      ],
+      stateVersion: 7,
+    });
     (chatHistoryApi.deleteConversation as jest.Mock).mockResolvedValue(undefined);
     (explorerApi.putFile as jest.Mock).mockResolvedValue(undefined);
     (explorerApi.deleteFile as jest.Mock).mockResolvedValue(undefined);
@@ -242,9 +217,9 @@ describe('StudioFilesPage', () => {
       version: 1,
       files: [
         {
-          key: 'settings.json',
+          key: 'notes.txt',
           type: 'config',
-          name: 'settings.json',
+          name: 'notes.txt',
           updatedAt: '2026-03-18T00:00:00Z',
         },
         {
@@ -300,7 +275,7 @@ describe('StudioFilesPage', () => {
         ]);
       }
 
-      return '{\n  "runtimeBaseUrl": "https://runtime.example.test"\n}\n';
+      return 'draft content';
     });
   });
 
@@ -308,34 +283,55 @@ describe('StudioFilesPage', () => {
     jest.restoreAllMocks();
   });
 
-  it('shows settings by default and saves edited settings.json content', async () => {
+  it('renders tree skeletons for loading workflow and script folders', async () => {
+    (scriptsApi.listScripts as jest.Mock).mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    const props = createProps({
+      workflows: {
+        isLoading: true,
+        isError: false,
+        error: null,
+        data: undefined,
+      },
+    });
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, props));
+
+    const loadingFolders = await screen.findAllByRole('status');
+    expect(loadingFolders).toHaveLength(2);
+    for (const folder of loadingFolders) {
+      expect(folder).toHaveAttribute('data-list-layout', 'tree');
+      expect(folder).toHaveAttribute('data-variant', 'list');
+    }
+    expect(screen.getByText('Loading workflows...')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+    expect(screen.getByText('Loading scripts...')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+  });
+
+  it('does not expose host provider settings as an editable file', () => {
     const props = createProps();
 
     renderWithQueryClient(React.createElement(StudioFilesPage, props));
 
-    expect(screen.getByText('Configuration')).toBeInTheDocument();
-    const editor = screen.getByLabelText(
-      'Settings.json editor',
-    ) as HTMLTextAreaElement;
-    expect(editor.value).toContain('https://runtime.example.test');
+    expect(screen.queryByText('settings.json')).not.toBeInTheDocument();
+    expect(screen.queryByText('Configuration')).not.toBeInTheDocument();
+  });
 
-    fireEvent.change(editor, {
-      target: {
-        value: editor.value.replace(
-          'https://runtime.example.test',
-          'https://runtime.changed.test',
-        ),
-      },
+  it('falls back to the first visible catalog when search hides the selected panel', async () => {
+    const props = createProps();
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, props));
+    fireEvent.click(screen.getByRole('button', { name: 'Connector Catalog' }));
+    fireEvent.change(screen.getByLabelText('Search files'), {
+      target: { value: 'Role Catalog' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => {
-      expect(studioApi.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtimeBaseUrl: 'https://runtime.changed.test',
-        }),
-      );
-    });
+    expect(await screen.findByRole('button', { name: 'Add Role' })).toBeInTheDocument();
+    expect(screen.getAllByText('Role Catalog').length).toBeGreaterThan(1);
   });
 
   it('lets roles and connectors follow the cli-style catalog workflow', async () => {
@@ -380,7 +376,7 @@ describe('StudioFilesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open in Studio' }));
     expect(props.onOpenWorkflowInStudio).toHaveBeenCalledWith('workflow-1');
 
-    fireEvent.click(await screen.findByRole('button', { name: /script-alpha\.cs/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /script-1\.cs/i }));
 
     await waitFor(() => {
       expect(screen.getByLabelText('Script source preview')).toHaveTextContent(
@@ -392,13 +388,13 @@ describe('StudioFilesPage', () => {
     expect(props.onOpenScriptInStudio).toHaveBeenCalledWith('script-alpha');
   });
 
-  it('shows chat histories and lets users delete a conversation', async () => {
+  it('shows chat-history turns and confirms conversation deletion', async () => {
     const props = createProps();
 
     renderWithQueryClient(React.createElement(StudioFilesPage, props));
 
     fireEvent.click(screen.getByRole('button', { name: /chat-histories\//i }));
-    fireEvent.click(await screen.findByText(/NyxIdChat:scope-1/i));
+    fireEvent.click(await screen.findByText('Scope conversation'));
 
     expect(await screen.findByLabelText('Chat history messages')).toHaveTextContent(
       'hello from user',
@@ -406,8 +402,30 @@ describe('StudioFilesPage', () => {
     expect(screen.getByLabelText('Chat history messages')).toHaveTextContent(
       'assistant reply',
     );
+    expect(screen.getAllByText(/2 turns/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/2 messages/)).toBeNull();
+    expect(screen.getByLabelText('Chat history messages')).toHaveTextContent(
+      'Alice',
+    );
+    expect(screen.getByLabelText('Chat history messages')).toHaveTextContent(
+      'Planning the response',
+    );
+    expect(screen.getByLabelText('Chat history messages')).toHaveTextContent(
+      'workflow_run_error: Dispatch failed.',
+    );
+    expect(screen.queryByText('(empty message)')).toBeNull();
+    expect(screen.queryByText(/NyxIdChat:scope-1/i)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(chatHistoryApi.deleteConversation).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete this conversation?')).toBeInTheDocument();
+    expect(screen.getByText(/Scope conversation will be removed/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep conversation' }));
+    expect(screen.queryByText('Delete this conversation?')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
 
     await waitFor(() => {
       expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
@@ -415,6 +433,117 @@ describe('StudioFilesPage', () => {
         'conversation-1',
       );
     });
+    expect(screen.queryByText('Scope conversation')).toBeNull();
+  });
+
+  it('shows chat-history list failures and retries them from the tree', async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock)
+      .mockRejectedValueOnce(new Error('History access denied'))
+      .mockResolvedValueOnce([]);
+    const props = createProps();
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, props));
+    fireEvent.click(screen.getByRole('button', { name: /chat-histories\//i }));
+
+    expect(await screen.findByText('Failed to load conversations')).toBeInTheDocument();
+    expect(screen.getByText('History access denied')).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Retry conversations' }),
+    );
+
+    expect(await screen.findByText('No conversations matched.')).toBeInTheDocument();
+    expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not apply a delayed chat deletion to a new scope', async () => {
+    let resolveDelete = (): void => undefined;
+    let switchScope = (_scopeId: string): void => undefined;
+    const deletePromise = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    (chatHistoryApi.deleteConversation as jest.Mock).mockReturnValue(deletePromise);
+
+    function ScopeHarness() {
+      const [scopeId, setScopeId] = React.useState('scope-1');
+      switchScope = setScopeId;
+      return React.createElement(StudioFilesPage, createProps({ scopeId }));
+    }
+
+    renderWithQueryClient(React.createElement(ScopeHarness));
+    fireEvent.click(screen.getByRole('button', { name: /chat-histories\//i }));
+    fireEvent.click(await screen.findByText('Scope conversation'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
+    await waitFor(() =>
+      expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
+        'scope-1',
+        'conversation-1',
+      ),
+    );
+
+    React.act(() => switchScope('scope-2'));
+    await waitFor(() =>
+      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledWith('scope-2'),
+    );
+    expect(await screen.findByText('Scope conversation')).toBeInTheDocument();
+    await React.act(async () => resolveDelete());
+
+    expect(screen.getByText('Scope conversation')).toBeInTheDocument();
+  });
+
+  it('keeps a delayed deletion bound to its original conversation', async () => {
+    let resolveDelete = (): void => undefined;
+    const deletePromise = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    (chatHistoryApi.deleteConversation as jest.Mock).mockReturnValue(deletePromise);
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      {
+        id: 'conversation-1',
+        title: 'Scope conversation',
+        serviceId: 'service-1',
+        serviceKind: 'nyxid-chat',
+        createdAt: '2026-03-18T00:00:00Z',
+        updatedAt: '2026-03-18T01:00:00Z',
+        messageCount: 2,
+      },
+      {
+        id: 'conversation-2',
+        title: 'Second conversation',
+        serviceId: 'service-1',
+        serviceKind: 'nyxid-chat',
+        createdAt: '2026-03-18T00:00:00Z',
+        updatedAt: '2026-03-18T02:00:00Z',
+        messageCount: 2,
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, createProps()));
+    fireEvent.click(screen.getByRole('button', { name: /chat-histories\//i }));
+    fireEvent.click(await screen.findByText('Scope conversation'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
+    await waitFor(() =>
+      expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
+        'scope-1',
+        'conversation-1',
+      ),
+    );
+
+    fireEvent.click(await screen.findByText('Second conversation'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled(),
+    );
+
+    await React.act(async () => resolveDelete());
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled(),
+    );
+    expect(screen.queryByText('Scope conversation')).toBeNull();
+    expect(screen.getAllByText('Second conversation').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Conversation deleted.')).toBeNull();
+    expect(chatHistoryApi.deleteConversation).toHaveBeenCalledTimes(1);
   });
 
   it('switches to explorer and previews chrono-storage files', async () => {
@@ -455,14 +584,11 @@ describe('StudioFilesPage', () => {
     const editor = (await screen.findByLabelText(
       'Explorer file editor',
     )) as HTMLTextAreaElement;
-    expect(editor.value).toContain('runtime.example.test');
+    expect(editor.value).toContain('draft content');
 
     fireEvent.change(editor, {
       target: {
-        value: editor.value.replace(
-          'https://runtime.example.test',
-          'https://runtime.changed.test',
-        ),
+        value: editor.value.replace('draft content', 'updated content'),
       },
     });
 
@@ -473,7 +599,7 @@ describe('StudioFilesPage', () => {
     expect(screen.queryByText('Read-only in Explorer')).not.toBeInTheDocument();
     expect(
       (screen.getByLabelText('Explorer file editor') as HTMLTextAreaElement).value,
-    ).toContain('runtime.changed.test');
+    ).toContain('updated content');
     expect(
       screen.getByText('You have unsaved Explorer changes'),
     ).toBeInTheDocument();
@@ -485,8 +611,8 @@ describe('StudioFilesPage', () => {
 
     await waitFor(() => {
       expect(explorerApi.putFile).toHaveBeenCalledWith(
-        'settings.json',
-        expect.stringContaining('https://runtime.changed.test'),
+        'notes.txt',
+        expect.stringContaining('updated content'),
       );
     });
   });

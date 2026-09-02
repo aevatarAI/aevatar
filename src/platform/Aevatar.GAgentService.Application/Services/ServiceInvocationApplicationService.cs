@@ -6,12 +6,12 @@ namespace Aevatar.GAgentService.Application.Services;
 
 public sealed class ServiceInvocationApplicationService : IServiceInvocationPort
 {
-    private readonly ServiceInvocationResolutionService _resolutionService;
+    private readonly IServiceInvocationResolutionPort _resolutionService;
     private readonly IInvokeAdmissionAuthorizer _admissionAuthorizer;
     private readonly IServiceInvocationDispatcher _dispatcher;
 
     public ServiceInvocationApplicationService(
-        ServiceInvocationResolutionService resolutionService,
+        IServiceInvocationResolutionPort resolutionService,
         IInvokeAdmissionAuthorizer admissionAuthorizer,
         IServiceInvocationDispatcher dispatcher)
     {

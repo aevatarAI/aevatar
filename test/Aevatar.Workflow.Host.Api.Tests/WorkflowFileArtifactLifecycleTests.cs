@@ -8,8 +8,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
-using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -27,10 +27,10 @@ public sealed class WorkflowFileArtifactLifecycleTests
             services.AddWorkflowInfrastructure();
 
             using var provider = services.BuildServiceProvider();
-            provider.GetRequiredService<IWorkflowFileArtifactOwnershipPort>()
-                .Should().BeSameAs(provider.GetRequiredService<IWorkflowFileIngressPort>());
-            provider.GetRequiredService<IWorkflowFileArtifactCleanupPort>()
-                .Should().BeSameAs(provider.GetRequiredService<IWorkflowFileIngressPort>());
+            provider.GetRequiredService<IFileArtifactOwnershipPort>()
+                .Should().BeSameAs(provider.GetRequiredService<IFileArtifactIngressPort>());
+            provider.GetRequiredService<IFileArtifactCleanupPort>()
+                .Should().BeSameAs(provider.GetRequiredService<IFileArtifactIngressPort>());
             services.Should().Contain(x =>
                 x.ServiceType == typeof(IHostedService) &&
                 x.ImplementationType == typeof(WorkflowFileArtifactCleanupHostedService));
@@ -49,10 +49,10 @@ public sealed class WorkflowFileArtifactLifecycleTests
             services.AddWorkflowCapability(configuration);
 
             services.Should().Contain(x =>
-                x.ServiceType == typeof(IWorkflowFileArtifactOwnershipPort) &&
+                x.ServiceType == typeof(IFileArtifactOwnershipPort) &&
                 x.ImplementationFactory != null);
             services.Should().Contain(x =>
-                x.ServiceType == typeof(IWorkflowFileArtifactCleanupPort) &&
+                x.ServiceType == typeof(IFileArtifactCleanupPort) &&
                 x.ImplementationFactory != null);
             services.Should().Contain(x =>
                 x.ServiceType == typeof(IHostedService) &&
@@ -126,7 +126,7 @@ public sealed class WorkflowFileArtifactLifecycleTests
         var act = () => services.AddWorkflowInfrastructure(configuration: configuration);
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*IWorkflowFileArtifactCleanupPort*");
+            .WithMessage("*IFileArtifactCleanupPort*");
     }
 
     [Fact]
@@ -145,10 +145,10 @@ public sealed class WorkflowFileArtifactLifecycleTests
         services.AddWorkflowInfrastructure(configuration: configuration);
 
         using var provider = services.BuildServiceProvider();
-        provider.GetService<FileSystemWorkflowFileIngressPort>().Should().BeNull();
-        provider.GetRequiredService<IWorkflowFileIngressPort>()
+        provider.GetService<FileSystemFileArtifactPort>().Should().BeNull();
+        provider.GetRequiredService<IFileArtifactIngressPort>()
             .Should().BeSameAs(provider.GetRequiredService<RecordingWorkflowFileArtifactPort>());
-        provider.GetRequiredService<IWorkflowFileArtifactCleanupPort>()
+        provider.GetRequiredService<IFileArtifactCleanupPort>()
             .Should().BeSameAs(provider.GetRequiredService<RecordingWorkflowFileArtifactPort>());
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
@@ -173,11 +173,11 @@ public sealed class WorkflowFileArtifactLifecycleTests
 
         using var provider = services.BuildServiceProvider();
         var artifactPort = provider.GetRequiredService<RecordingWorkflowFileArtifactPort>();
-        provider.GetService<FileSystemWorkflowFileIngressPort>().Should().BeNull();
-        provider.GetRequiredService<IWorkflowFileIngressPort>().Should().BeSameAs(artifactPort);
-        provider.GetRequiredService<IWorkflowFileArtifactReadPort>().Should().BeSameAs(artifactPort);
-        provider.GetRequiredService<IWorkflowFileArtifactOwnershipPort>().Should().BeSameAs(artifactPort);
-        provider.GetRequiredService<IWorkflowFileArtifactCleanupPort>().Should().BeSameAs(artifactPort);
+        provider.GetService<FileSystemFileArtifactPort>().Should().BeNull();
+        provider.GetRequiredService<IFileArtifactIngressPort>().Should().BeSameAs(artifactPort);
+        provider.GetRequiredService<IFileArtifactReadPort>().Should().BeSameAs(artifactPort);
+        provider.GetRequiredService<IFileArtifactOwnershipPort>().Should().BeSameAs(artifactPort);
+        provider.GetRequiredService<IFileArtifactCleanupPort>().Should().BeSameAs(artifactPort);
     }
 
     [Fact]
@@ -202,27 +202,27 @@ public sealed class WorkflowFileArtifactLifecycleTests
     }
 
     [Fact]
-    public async Task FileSystemWorkflowFileIngressPort_ShouldCleanupExpiredAndIncompleteArtifacts()
+    public async Task FileSystemFileArtifactPort_ShouldCleanupExpiredAndIncompleteArtifacts()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-file-cleanup-tests", Guid.NewGuid().ToString("N"));
         try
         {
             var now = DateTimeOffset.UtcNow;
-            var port = new FileSystemWorkflowFileIngressPort(
-                Options.Create(new FileSystemWorkflowFileIngressOptions
+            var port = new FileSystemFileArtifactPort(
+                Options.Create(new FileSystemFileArtifactOptions
                 {
                     RootDirectory = root,
                     TimeToLive = TimeSpan.FromMinutes(30),
                     IncompleteArtifactAge = TimeSpan.FromMinutes(10),
                 }));
 
-            var live = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var live = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("live"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 ExpiresAtUnixMs: now.AddMinutes(30).ToUnixTimeMilliseconds()));
-            var expired = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var expired = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("expired"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 ExpiresAtUnixMs: now.AddMinutes(-1).ToUnixTimeMilliseconds()));
             var staleIncomplete = Path.Combine(root, "wf-file-incomplete-stale");
             var freshIncomplete = Path.Combine(root, "wf-file-incomplete-fresh");
@@ -233,8 +233,8 @@ public sealed class WorkflowFileArtifactLifecycleTests
             Directory.SetLastWriteTimeUtc(staleIncomplete, now.AddHours(-1).UtcDateTime);
             Directory.SetLastWriteTimeUtc(freshIncomplete, now.UtcDateTime);
 
-            var result = await ((IWorkflowFileArtifactCleanupPort)port).CleanupAsync(
-                new WorkflowFileArtifactCleanupRequest(now.ToUnixTimeMilliseconds()));
+            var result = await ((IFileArtifactCleanupPort)port).CleanupAsync(
+                new FileArtifactCleanupRequest(now.ToUnixTimeMilliseconds()));
 
             result.ScannedArtifactCount.Should().Be(4);
             result.DeletedExpiredArtifactCount.Should().Be(1);
@@ -371,30 +371,30 @@ public sealed class WorkflowFileArtifactLifecycleTests
         bool includeCleanup = true)
     {
         services.AddSingleton<RecordingWorkflowFileArtifactPort>();
-        services.AddSingleton<IWorkflowFileIngressPort>(sp =>
+        services.AddSingleton<IFileArtifactIngressPort>(sp =>
             sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
-        services.AddSingleton<IWorkflowFileArtifactReadPort>(sp =>
+        services.AddSingleton<IFileArtifactReadPort>(sp =>
             sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
-        services.AddSingleton<IWorkflowFileArtifactOwnershipPort>(sp =>
+        services.AddSingleton<IFileArtifactOwnershipPort>(sp =>
             sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
         if (includeCleanup)
         {
-            services.AddSingleton<IWorkflowFileArtifactCleanupPort>(sp =>
+            services.AddSingleton<IFileArtifactCleanupPort>(sp =>
                 sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
         }
     }
 
     private sealed class RecordingWorkflowFileArtifactPort(bool completeCleanupWhenCanceled = false) :
-        IWorkflowFileIngressPort,
-        IWorkflowFileArtifactReadPort,
-        IWorkflowFileArtifactOwnershipPort,
-        IWorkflowFileArtifactCleanupPort
+        IFileArtifactIngressPort,
+        IFileArtifactReadPort,
+        IFileArtifactOwnershipPort,
+        IFileArtifactCleanupPort
     {
         private readonly object _cleanupRequestLock = new();
-        private readonly List<WorkflowFileArtifactCleanupRequest> _cleanupRequests = [];
-        private TaskCompletionSource<WorkflowFileArtifactCleanupRequest>? _nextCleanupRequest;
+        private readonly List<FileArtifactCleanupRequest> _cleanupRequests = [];
+        private TaskCompletionSource<FileArtifactCleanupRequest>? _nextCleanupRequest;
 
-        public IReadOnlyList<WorkflowFileArtifactCleanupRequest> CleanupRequests
+        public IReadOnlyList<FileArtifactCleanupRequest> CleanupRequests
         {
             get
             {
@@ -405,46 +405,46 @@ public sealed class WorkflowFileArtifactLifecycleTests
             }
         }
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public ValueTask<ApplicationWorkflowFileRef> DescribeAsync(
-            ApplicationWorkflowFileRef fileRef,
+        public ValueTask<ApplicationFileArtifactRef> DescribeAsync(
+            ApplicationFileArtifactRef fileRef,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
-            ApplicationWorkflowFileRef fileRef,
+        public ValueTask<FileArtifactContent> OpenReadAsync(
+            ApplicationFileArtifactRef fileRef,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public ValueTask BindOwnerAsync(
-            ApplicationWorkflowFileRef fileRef,
+            ApplicationFileArtifactRef fileRef,
             string ownerRunId,
             string? ownerScopeId,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<WorkflowFileArtifactCleanupRequest> WaitForCleanupAsync(CancellationToken cancellationToken)
+        public Task<FileArtifactCleanupRequest> WaitForCleanupAsync(CancellationToken cancellationToken)
         {
             lock (_cleanupRequestLock)
             {
                 if (_cleanupRequests.Count > 0)
                     return Task.FromResult(_cleanupRequests[^1]);
 
-                _nextCleanupRequest ??= new TaskCompletionSource<WorkflowFileArtifactCleanupRequest>(
+                _nextCleanupRequest ??= new TaskCompletionSource<FileArtifactCleanupRequest>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
                 return _nextCleanupRequest.Task.WaitAsync(cancellationToken);
             }
         }
 
-        public async ValueTask<WorkflowFileArtifactCleanupResult> CleanupAsync(
-            WorkflowFileArtifactCleanupRequest request,
+        public async ValueTask<FileArtifactCleanupResult> CleanupAsync(
+            FileArtifactCleanupRequest request,
             CancellationToken cancellationToken = default)
         {
-            TaskCompletionSource<WorkflowFileArtifactCleanupRequest>? nextCleanupRequest;
+            TaskCompletionSource<FileArtifactCleanupRequest>? nextCleanupRequest;
             lock (_cleanupRequestLock)
             {
                 _cleanupRequests.Add(request);
@@ -456,7 +456,7 @@ public sealed class WorkflowFileArtifactLifecycleTests
             if (completeCleanupWhenCanceled)
                 await WaitForCancellationAsync(cancellationToken).ConfigureAwait(false);
 
-            return new WorkflowFileArtifactCleanupResult(
+            return new FileArtifactCleanupResult(
                 ScannedArtifactCount: 0,
                 DeletedExpiredArtifactCount: 0,
                 DeletedIncompleteArtifactCount: 0);

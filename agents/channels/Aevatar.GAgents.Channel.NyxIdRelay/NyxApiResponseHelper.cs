@@ -1,9 +1,8 @@
 using System.Text.Json;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
-
-internal sealed record NyxRelayApiKeyCredentials(string Id, string FullKey);
 
 /// <summary>
 /// Shared parsing / rollback helpers for the Nyx-side responses consumed by per-platform
@@ -72,27 +71,204 @@ internal static class NyxApiResponseHelper
         }
     }
 
-    public static NyxRelayApiKeyCredentials ExtractRequiredApiKeyCredentials(string response)
+    /// <summary>
+    /// Returns the one-time <c>full_key</c> from a Nyx create-api-key response, or <c>null</c>
+    /// when the response is an error envelope, unparseable, or carries no full_key. NyxID returns
+    /// the raw key material exactly once at creation; the caller must hand it straight to the
+    /// secret vault and never persist or log it.
+    /// </summary>
+    public static string? ExtractOptionalApiKeyFullKey(string response)
     {
-        var id = ExtractRequiredApiKeyId(response);
+        if (LooksLikeErrorEnvelope(response))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            return ReadNonEmptyString(document.RootElement, "full_key");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Returns the trimmed per-connection proxy slug from a Nyx <c>POST /api/v1/keys</c>
+    /// (connect-service) response — <c>slug</c> preferred, <c>proxy_url_slug</c> normalized as
+    /// fallback — or <c>null</c> when the response is an error envelope, unparseable, or carries
+    /// neither field.
+    /// NyxID auto-numbers a base slug that is already taken (<c>api-lark-bot</c> →
+    /// <c>api-lark-bot-2</c>/<c>-3</c>), so a user with several Lark bots gets a distinct proxy
+    /// service per app. Capturing the slug NyxID actually assigned is what lets a later reply proxy
+    /// through the SAME Lark app this connection was created for, instead of always the first one.
+    /// </summary>
+    public static string? ExtractOptionalProxyUrlSlug(string response)
+    {
+        if (LooksLikeErrorEnvelope(response))
+            return null;
 
         try
         {
             using var document = JsonDocument.Parse(response);
             var root = document.RootElement;
-            if (!root.TryGetProperty("full_key", out var fullKeyElement) || fullKeyElement.ValueKind != JsonValueKind.String)
-                throw new InvalidOperationException("missing_full_key_in_api_key_id_response");
-
-            var fullKey = fullKeyElement.GetString()?.Trim();
-            if (string.IsNullOrWhiteSpace(fullKey))
-                throw new InvalidOperationException("empty_full_key_in_api_key_id_response");
-
-            return new NyxRelayApiKeyCredentials(id, fullKey);
+            return NormalizeProxyUrlSlug(ReadNonEmptyString(root, "slug")) ??
+                   NormalizeProxyUrlSlug(ReadNonEmptyString(root, "proxy_url_slug"));
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            throw new InvalidOperationException($"invalid_json_in_api_key_id_response {ex.Message}", ex);
+            return null;
         }
+    }
+
+    /// <summary>
+    /// Returns the ids of every Lark channel-bot in a Nyx <c>GET /api/v1/channel-bots</c> list
+    /// response (each list item carries <c>id</c> + <c>platform</c>, but NOT <c>platform_bot_id</c>:
+    /// the per-app identifier lives only on the per-bot detail <c>GET /channel-bots/{id}</c>). The
+    /// caller fetches each returned bot's detail and matches <c>platform_bot_id</c> against the Lark
+    /// app being (re-)registered via <see cref="ChannelBotDetailMatchesApp"/>, so only the conflicting
+    /// app's bot is deleted before the create retry — NyxID rejects a second channel-bot for an app
+    /// that already has one with <c>409 already-exists</c>, which otherwise aborts a re-bind (the 502
+    /// the /channels wizard surfaced). Returns an empty list when the response is an error envelope,
+    /// unparseable, or carries no Lark bot.
+    /// </summary>
+    public static IReadOnlyList<string> ExtractLarkChannelBotIds(string listResponse)
+    {
+        if (LooksLikeErrorEnvelope(listResponse))
+            return Array.Empty<string>();
+
+        try
+        {
+            using var document = JsonDocument.Parse(listResponse);
+            if (!TryGetBotArray(document.RootElement, out var bots))
+                return Array.Empty<string>();
+
+            var ids = new List<string>();
+            foreach (var bot in bots.EnumerateArray())
+            {
+                if (bot.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var platform = ReadNonEmptyString(bot, "platform");
+                if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var id = ReadNonEmptyString(bot, "id");
+                if (id is not null)
+                    ids.Add(id);
+            }
+
+            return ids;
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// Returns true when a Nyx per-bot detail <c>GET /api/v1/channel-bots/{id}</c> response is for
+    /// the Lark app <paramref name="appId"/>, i.e. its <c>platform_bot_id</c> equals the app id.
+    /// This is the field the list response omits, so the conflicting-bot match must be made against
+    /// the detail. Returns false for an error envelope, an unparseable body, a non-Lark bot, or any
+    /// other app, so cleanup never deletes a bot belonging to a different Lark app.
+    /// </summary>
+    public static bool ChannelBotDetailMatchesApp(string detailResponse, string appId)
+    {
+        var normalizedAppId = appId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedAppId) || LooksLikeErrorEnvelope(detailResponse))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(detailResponse);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return false;
+
+            var platform = ReadNonEmptyString(root, "platform");
+            if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return string.Equals(ReadNonEmptyString(root, "platform_bot_id"), normalizedAppId, StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetBotArray(JsonElement root, out JsonElement array)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            array = root;
+            return true;
+        }
+
+        foreach (var key in new[] { "data", "channel_bots", "channelBots", "items", "bots" })
+        {
+            if (root.TryGetProperty(key, out var element) && element.ValueKind == JsonValueKind.Array)
+            {
+                array = element;
+                return true;
+            }
+        }
+
+        array = default;
+        return false;
+    }
+
+    private static string? NormalizeProxyUrlSlug(string? value)
+    {
+        var trimmed = value?.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+
+        var extracted = ExtractProxySlugFromRouteTemplate(trimmed);
+        if (!string.IsNullOrWhiteSpace(extracted))
+            return extracted;
+
+        return LooksLikeProxyUrlTemplate(trimmed) ? null : trimmed;
+    }
+
+    private static string? ExtractProxySlugFromRouteTemplate(string value)
+    {
+        var path = Uri.TryCreate(value, UriKind.Absolute, out var uri) ? uri.AbsolutePath : value;
+        const string marker = "/proxy/s/";
+        var index = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+            return null;
+
+        var start = index + marker.Length;
+        var end = path.IndexOfAny(new[] { '/', '?', '#' }, start);
+        var segment = end < 0 ? path[start..] : path[start..end];
+        string slug;
+        try
+        {
+            slug = Uri.UnescapeDataString(segment).Trim();
+        }
+        catch (UriFormatException)
+        {
+            return null;
+        }
+        return string.IsNullOrWhiteSpace(slug) || LooksLikeProxyUrlTemplate(slug) ? null : slug;
+    }
+
+    private static bool LooksLikeProxyUrlTemplate(string value) =>
+        value.Contains("://", StringComparison.Ordinal) ||
+        value.Contains('/', StringComparison.Ordinal) ||
+        value.Contains('\\', StringComparison.Ordinal) ||
+        value.Contains('?', StringComparison.Ordinal) ||
+        value.Contains('#', StringComparison.Ordinal);
+
+    private static string? ReadNonEmptyString(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var element) || element.ValueKind != JsonValueKind.String)
+            return null;
+
+        var value = element.GetString()?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     /// <summary>
@@ -107,7 +283,11 @@ internal static class NyxApiResponseHelper
         try
         {
             using var document = JsonDocument.Parse(response);
-            return document.RootElement.TryGetProperty("error", out var errorProp) &&
+            var root = document.RootElement;
+            // A list response (e.g. GET /api/v1/channel-bots) is a JSON array, never an error
+            // envelope; guard the object check so TryGetProperty does not throw on a non-object root.
+            return root.ValueKind == JsonValueKind.Object &&
+                   root.TryGetProperty("error", out var errorProp) &&
                    errorProp.ValueKind == JsonValueKind.True;
         }
         catch (JsonException)
@@ -139,9 +319,12 @@ internal static class NyxApiResponseHelper
                 ? messageElement.GetString()
                 : string.Empty;
 
+            // The body/message are relayed from the upstream platform and surface into the
+            // registration error string (which is logged); scrub secret-shaped content so a
+            // misbehaving upstream cannot echo a submitted secret back into our logs.
             return $"nyx_status={status}" +
-                   (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}") +
-                   (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
+                   (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={SecretScrubber.Scrub(body)}") +
+                   (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={SecretScrubber.Scrub(message)}");
         }
         catch (JsonException)
         {
@@ -169,7 +352,7 @@ internal static class NyxApiResponseHelper
                     "Nyx rollback returned an error envelope: type={ResourceType}, id={ResourceId}, response={Response}",
                     resourceType,
                     resourceId,
-                    response);
+                    SecretScrubber.Scrub(response));
             }
         }
         catch (Exception ex)

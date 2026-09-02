@@ -5,7 +5,6 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Persistence;
@@ -66,10 +65,17 @@ public class WorkflowExecutionProjectionRegistrationTests
         continuationDispatcher.Should().NotBeNull();
         graphWriter.Should().NotBeNull();
         currentStateMaterializers.Should().ContainSingle();
-        artifactMaterializers.Should().HaveCount(2);
+        // Continuation projector, insight report projector, and the committed-fact audit materializer.
+        artifactMaterializers.Should().HaveCount(3);
         provider.GetRequiredService<WorkflowExecutionCurrentStateProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowExternalApprovalContinuationProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowRunInsightReportArtifactProjector>().Should().NotBeNull();
+
+        // The binding write path is decorated with the heal/guard dispatcher (Definition supersedes a
+        // clobbered Run-kind slot) and the binding projector consumes it.
+        provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowActorBindingDocument>>()
+            .Should().BeOfType<Aevatar.Workflow.Projection.Orchestration.WorkflowActorBindingHealingWriteDispatcher>();
+        provider.GetRequiredService<WorkflowActorBindingProjector>().Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();
@@ -112,18 +118,6 @@ public class WorkflowExecutionProjectionRegistrationTests
         provider.Metadata.Aliases.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task AddWorkflowExecutionProjectionCQRS_ShouldNotRegisterLegacyEventDeduplicator()
-    {
-        var services = new ServiceCollection();
-        RegisterEventStore(services);
-        RegisterInMemoryProviders(services);
-        services.AddWorkflowExecutionProjectionCQRS();
-
-        await using var provider = services.BuildServiceProvider();
-        provider.GetService<IEventDeduplicator>().Should().BeNull();
-    }
-
     private static void RegisterInMemoryProviders(IServiceCollection services)
     {
         services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
@@ -137,6 +131,11 @@ public class WorkflowExecutionProjectionRegistrationTests
             defaultSortSelector: report => report.CreatedAt,
             queryTakeMax: 200);
         services.AddInMemoryDocumentProjectionStore<WorkflowExternalApprovalContinuationDocument, string>(
+            keySelector: document => document.Id,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             keySelector: document => document.Id,
             keyFormatter: key => key,
             defaultSortSelector: document => document.UpdatedAt,

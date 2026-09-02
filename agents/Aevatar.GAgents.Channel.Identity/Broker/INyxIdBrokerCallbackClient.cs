@@ -1,4 +1,5 @@
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 
 namespace Aevatar.GAgents.Channel.Identity.Broker;
 
@@ -33,6 +34,26 @@ public interface INyxIdBrokerCallbackClient
         CancellationToken ct = default);
 
     /// <summary>
+    /// Exchanges an OAuth authorization code that was issued for a caller-provided
+    /// redirect URI. Used by Studio login finalization where the SPA owns the
+    /// callback URL and the backend only performs the single-use code exchange.
+    /// </summary>
+    Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
+        string authorizationCode,
+        string codeVerifier,
+        string redirectUri,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Resolves the NyxID owner of an existing binding through the owning
+    /// client's binding-introspection endpoint. Used only to migrate legacy
+    /// Aevatar binding documents that predate <c>owner_scope_id</c>.
+    /// </summary>
+    Task<OwnerScopeId?> ResolveBindingOwnerScopeAsync(
+        string bindingId,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Revoke a specific NyxID-issued <paramref name="bindingId"/> by id.
     /// Used by the callback handler to clean up an orphan binding when the
     /// sender is already bound (race / replay) — without the subject lookup
@@ -47,4 +68,15 @@ public interface INyxIdBrokerCallbackClient
 /// may be null when NyxID has not yet enabled <c>broker_capability_enabled</c>
 /// on this client (see ADR-0018 §Decision).
 /// </summary>
-public sealed record BrokerAuthorizationCodeResult(string? BindingId, string? IdToken, string? AccessToken);
+public sealed record BrokerAuthorizationCodeResult(string? BindingId, string? IdToken, string? AccessToken)
+{
+    public bool BindingUpdated { get; init; }
+
+    public string? RefreshToken { get; init; }
+
+    public string? TokenType { get; init; }
+
+    public int? ExpiresIn { get; init; }
+
+    public string? Scope { get; init; }
+}

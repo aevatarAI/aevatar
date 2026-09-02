@@ -62,6 +62,7 @@ public sealed class ReplyStreamRendererTests
         await renderer.ExecuteAsync(context, step, CancellationToken.None);
 
         runner.StreamChunks.Should().ContainSingle();
+        runner.StreamOperations.Should().ContainSingle().Which.Should().Be(NyxRelayTextOperationKind.Final);
         context.Dispatched.Should().ContainSingle();
         var completed = context.Dispatched[0].Event.Should().BeOfType<NyxRelayTextOperationCompletedEvent>().Subject;
         completed.Operation.Should().Be(NyxRelayTextOperationKind.Final);
@@ -274,6 +275,7 @@ public sealed class ReplyStreamRendererTests
     private sealed class RecordingTurnRunner : IConversationTurnRunner
     {
         public List<LlmReplyStreamChunkEvent> StreamChunks { get; } = [];
+        public List<NyxRelayTextOperationKind> StreamOperations { get; } = [];
 
         public Task<ConversationTurnResult> RunInboundAsync(
             ChatActivity activity,
@@ -295,10 +297,12 @@ public sealed class ReplyStreamRendererTests
         public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
             LlmReplyStreamChunkEvent chunk,
             string? currentPlatformMessageId,
+            NyxRelayTextOperationKind operation,
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct)
         {
             StreamChunks.Add(chunk.Clone());
+            StreamOperations.Add(operation);
             return Task.FromResult(ConversationStreamChunkResult.Succeeded("platform-result"));
         }
     }

@@ -1,11 +1,5 @@
 path	line	message
-agents/Aevatar.GAgents.NyxidChat/AgentRunReplyGenerationExecutor.cs	155	empty broad catch block
-agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.ConnectedServices.cs	109	empty broad catch block
-agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs	376	empty broad catch block
-agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.cs	333	broad catch returns null without visible failure signal
 src/Aevatar.AI.Core/Routing/EventRoute.cs	68	empty broad catch block
-src/Aevatar.AI.Core/Tools/StreamingToolExecutor.cs	318	empty broad catch block
-src/Aevatar.AI.Core/Tools/StreamingToolExecutor.cs	400	empty broad catch block
 src/Aevatar.AI.Core/Tools/TextToolCallParser.cs	169	empty broad catch block
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoDiffTool.cs	64	empty broad catch block
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoFileEditTool.cs	74	empty broad catch block
@@ -14,25 +8,12 @@ src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoFileWriteTool.cs	60	empty
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoGlobTool.cs	51	empty broad catch block
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoGrepTool.cs	65	empty broad catch block
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoTreeTool.cs	70	empty broad catch block
-src/Aevatar.AI.ToolProviders.MCP/MCPConnector.cs	209	empty broad catch block
-src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdApiKeysTool.cs	161	empty broad catch block
-src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdApiKeysTool.cs	188	empty broad catch block
-src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdServicesTool.cs	149	empty broad catch block
-src/Aevatar.AI.ToolProviders.Ornn/OrnnSearchSkillsTool.cs	72	empty broad catch block
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Schema/EndpointSchemaProvider.cs	92	broad catch returns null without visible failure signal
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Schema/EndpointSchemaProvider.cs	153	empty broad catch block
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Tools/ListServicesTool.cs	157	empty broad catch block
 src/Aevatar.AI.ToolProviders.Skills/SkillScriptExtractor.cs	119	empty broad catch block
-src/Aevatar.AI.ToolProviders.Skills/UseSkillTool.cs	348	empty broad catch block
 src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSinkProjectionLeaseOrchestrator.cs	47	empty broad catch block
 src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSinkProjectionLeaseOrchestrator.cs	59	empty broad catch block
-src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs	170	broad catch returns null without visible failure signal
-src/Aevatar.Configuration/AevatarSecretsStore.cs	217	empty broad catch block
-src/Aevatar.Configuration/AevatarSecretsStore.cs	231	empty broad catch block
-src/Aevatar.Configuration/AevatarSecretsStore.cs	253	broad catch returns null without visible failure signal
-src/Aevatar.Configuration/AevatarSecretsStore.cs	300	empty broad catch block
-src/Aevatar.Configuration/AevatarSecretsStore.cs	310	broad catch returns null without visible failure signal
-src/Aevatar.Configuration/AevatarSecretsStore.cs	324	broad catch returns null without visible failure signal
 src/Aevatar.Foundation.Abstractions/Observability/AevatarActivitySource.cs	248	empty broad catch block
 src/Aevatar.Foundation.Abstractions/Observability/AevatarActivitySource.cs	263	empty broad catch block
 src/Aevatar.Foundation.Abstractions/Observability/AevatarActivitySource.cs	275	broad catch returns null without visible failure signal
@@ -42,32 +23,21 @@ src/Aevatar.Foundation.Core/Pipeline/StaticHandlerAdapter.cs	50	broad catch retu
 src/Aevatar.Foundation.Core/Pipeline/StaticHandlerAdapter.cs	67	broad catch returns null without visible failure signal
 src/Aevatar.Foundation.Runtime/Streaming/InMemoryStreamProvider.cs	162	empty broad catch block
 src/Aevatar.Foundation.Runtime/Streaming/InMemoryStreamProvider.cs	178	empty broad catch block
-src/Aevatar.Foundation.VoicePresence/Transport/WebRtcVoiceTransport.cs	111	empty broad catch block
-src/Aevatar.Foundation.VoicePresence/Transport/WebRtcVoiceTransport.cs	127	empty broad catch block
 src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent.cs	423	empty broad catch block
 src/Aevatar.Scripting.Infrastructure/Compilation/CachedScriptBehaviorArtifactResolver.cs	295	empty broad catch block
 src/Aevatar.Scripting.Infrastructure/Compilation/GrpcToolsScriptProtoCompiler.cs	131	empty broad catch block
 src/Aevatar.Studio.Application/AppScopedScriptService.cs	404	empty broad catch block
 src/Aevatar.Studio.Application/Studio/Services/ExecutionService.cs	270	empty broad catch block
-src/Aevatar.Studio.Hosting/Endpoints/StudioEndpoints.cs	1288	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	76	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	102	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	140	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	156	broad catch returns null without visible failure signal
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	174	broad catch returns null without visible failure signal
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	323	empty broad catch block
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	341	empty broad catch block
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	394	empty broad catch block
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	410	broad catch returns null without visible failure signal
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	428	broad catch returns null without visible failure signal
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	452	broad catch returns null without visible failure signal
 src/platform/Aevatar.GAgentService.Application/ScopeGAgents/ScopeGAgentActorTypeResolver.cs	27	empty broad catch block
 src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeGAgentEndpoints.cs	186	empty broad catch block
 src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeGAgentEndpoints.cs	213	empty broad catch block
-src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeWorkflowEndpoints.cs	649	empty broad catch block
 src/platform/Aevatar.GAgentService.Projection/Orchestration/GAgentDraftRunObservationScopeActivationPort.cs	71	broad catch returns null without visible failure signal
 src/platform/Aevatar.GAgentService.Projection/Orchestration/LlmSessionObservationScopeLeasePreparationPort.cs	47	broad catch returns null without visible failure signal
 src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunFinalizeEmitter.cs	65	broad catch returns null without visible failure signal
 src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunFinalizeEmitter.cs	81	broad catch returns null without visible failure signal
-src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs	323	empty broad catch block
 src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowChatRunObservationScopeActivationPort.cs	46	broad catch returns null without visible failure signal

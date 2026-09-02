@@ -337,17 +337,8 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         var replayRevisionId = ResolveReplayRevisionId(request, revisionId);
         return bindingRequest.ImplementationCase switch
         {
-            StudioMemberBindingRequest.ImplementationOneofCase.Workflow => new ScopeBindingUpsertRequest(
-                ScopeId: bindingRequest.ScopeId,
-                ImplementationKind: ScopeBindingImplementationKind.Workflow,
-                Workflow: new ScopeBindingWorkflowSpec(
-                    bindingRequest.Workflow.WorkflowId,
-                    bindingRequest.Workflow.WorkflowYamls.ToArray()),
-                DisplayName: request.Admitted.DisplayName,
-                RevisionId: revisionId,
-                ServiceId: request.Admitted.PublishedServiceId,
-                AllowExistingRevisionReplay: true,
-                ReplayRevisionId: revisionId),
+            StudioMemberBindingRequest.ImplementationOneofCase.Workflow =>
+                BuildWorkflowScopeBindingRequest(request, revisionId),
             StudioMemberBindingRequest.ImplementationOneofCase.Script => new ScopeBindingUpsertRequest(
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.Scripting,
@@ -371,6 +362,33 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 AllowExistingRevisionReplay: true,
                 ReplayRevisionId: revisionId),
             _ => throw new InvalidOperationException("binding request must carry exactly one implementation payload."),
+        };
+    }
+
+    private static ScopeBindingUpsertRequest BuildWorkflowScopeBindingRequest(
+        StudioMemberPlatformBindingStartRequested request,
+        string revisionId)
+    {
+        var bindingRequest = request.Request;
+        var admissionPlan = bindingRequest.Workflow.CapabilityAdmissionPlan
+            ?? throw new InvalidOperationException(
+                "workflow capability admission plan is required for Studio member binding.");
+        return new ScopeBindingUpsertRequest(
+            ScopeId: bindingRequest.ScopeId,
+            ImplementationKind: ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec(
+                bindingRequest.Workflow.WorkflowId,
+                bindingRequest.Workflow.WorkflowYamls.ToArray()),
+            DisplayName: request.Admitted.DisplayName,
+            RevisionId: revisionId,
+            ServiceId: request.Admitted.PublishedServiceId,
+            AllowExistingRevisionReplay: true,
+            ReplayRevisionId: revisionId)
+        {
+            CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                string.Empty,
+                executionMode: admissionPlan.ExecutionMode,
+                existingPlan: admissionPlan),
         };
     }
 

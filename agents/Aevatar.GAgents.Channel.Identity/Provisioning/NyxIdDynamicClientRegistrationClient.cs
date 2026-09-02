@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.Identity;
@@ -38,21 +39,31 @@ public class NyxIdDynamicClientRegistrationClient
     /// registration call fails (HTTP non-success, malformed body, missing
     /// client_id) so the bootstrap caller can decide whether to retry.
     /// </summary>
-    public virtual async Task<RegistrationResult> RegisterPublicClientAsync(
+    public virtual Task<RegistrationResult> RegisterPublicClientAsync(
         string authority,
         string clientName,
         string redirectUri,
+        CancellationToken ct = default) =>
+        RegisterPublicClientAsync(authority, clientName, [redirectUri], ct);
+
+    public virtual async Task<RegistrationResult> RegisterPublicClientAsync(
+        string authority,
+        string clientName,
+        IReadOnlyCollection<string> redirectUris,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(authority);
         ArgumentException.ThrowIfNullOrWhiteSpace(clientName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(redirectUri);
+        ArgumentNullException.ThrowIfNull(redirectUris);
+        var normalizedRedirectUris = NyxIdRedirectUriResolver.NormalizeRedirectUris(redirectUris);
+        if (normalizedRedirectUris.Count == 0)
+            throw new ArgumentException("At least one redirect URI is required.", nameof(redirectUris));
 
         var url = $"{authority.TrimEnd('/')}{RegisterEndpoint}";
         var request = new RegistrationRequest
         {
             ClientName = clientName,
-            RedirectUris = [redirectUri],
+            RedirectUris = normalizedRedirectUris.ToArray(),
             GrantTypes = ["authorization_code"],
             ResponseTypes = ["code"],
             TokenEndpointAuthMethod = "none",
@@ -66,7 +77,7 @@ public class NyxIdDynamicClientRegistrationClient
             _logger.LogError(
                 "NyxID DCR failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
-                Truncate(body, 256));
+                Truncate(SecretScrubber.Scrub(body), 256));
             response.EnsureSuccessStatusCode();
         }
 

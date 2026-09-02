@@ -1,0 +1,27 @@
+name: firecrawl_agent_async_submit
+description: Submit one Firecrawl crawl job and hand polling to a deterministic ScheduledDispatchGAgent schedule.
+steps:
+  - id: submit_crawl
+    type: tool_call
+    idempotency_key: "${input.idempotency_key}"
+    parameters:
+      tool: firecrawl_crawl_submit
+      arguments: '{"url":"${json(input.url)}","idempotency_key":"${json(input.idempotency_key)}"}'
+    next: ensure_poll_schedule
+
+  - id: ensure_poll_schedule
+    type: self_reschedule
+    parameters:
+      schedule_id: "firecrawl:${steps.submit_crawl.json.job_id}"
+      display_name: "Firecrawl poll ${steps.submit_crawl.json.job_id}"
+      cron_expression: "*/5 * * * *"
+      timezone: "UTC"
+      workflow_name: firecrawl_agent_async_poll
+      scope_id: "${input.scope_id}"
+      prompt: '{"job_id":"${json(steps.submit_crawl.json.job_id)}","idempotency_key":"${json(input.idempotency_key)}","schedule_id":"firecrawl:${steps.submit_crawl.json.job_id}","scope_id":"${json(input.scope_id)}","submitted_at":"${json(steps.submit_crawl.json.submitted_at)}","attempt":"0","max_attempts":"288","deadline_utc":"${json(input.deadline_utc)}"}'
+
+  - id: accepted
+    type: assign
+    parameters:
+      target: firecrawl_async_job
+      value: '{"status":"accepted","job_id":"${json(steps.submit_crawl.json.job_id)}","idempotency_key":"${json(input.idempotency_key)}","schedule_id":"firecrawl:${steps.submit_crawl.json.job_id}"}'

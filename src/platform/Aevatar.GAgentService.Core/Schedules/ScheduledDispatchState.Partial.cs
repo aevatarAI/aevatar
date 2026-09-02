@@ -29,10 +29,28 @@ public sealed partial class ScheduledDispatchState
         set => LastFireAtUtcValue = value.HasValue ? ToTimestamp(value.Value) : null;
     }
 
+    public DateTimeOffset? LastOverdueFireAt
+    {
+        get => LastOverdueFireAtUtcValue == null ? null : LastOverdueFireAtUtcValue.ToDateTimeOffset();
+        set => LastOverdueFireAtUtcValue = value.HasValue ? ToTimestamp(value.Value) : null;
+    }
+
     public DateTimeOffset? DeletedAt
     {
         get => DeletedAtUtcValue == null ? null : DeletedAtUtcValue.ToDateTimeOffset();
         set => DeletedAtUtcValue = value.HasValue ? ToTimestamp(value.Value) : null;
+    }
+
+    public DateTimeOffset? OneShotFireAt
+    {
+        get => OneShotFireAtUtcValue == null ? null : OneShotFireAtUtcValue.ToDateTimeOffset();
+        set => OneShotFireAtUtcValue = value.HasValue ? ToTimestamp(value.Value) : null;
+    }
+
+    public DateTimeOffset? CompletedAt
+    {
+        get => CompletedAtUtcValue == null ? null : CompletedAtUtcValue.ToDateTimeOffset();
+        set => CompletedAtUtcValue = value.HasValue ? ToTimestamp(value.Value) : null;
     }
 
     private static Timestamp ToTimestamp(DateTimeOffset value) =>

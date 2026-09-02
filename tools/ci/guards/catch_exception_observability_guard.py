@@ -159,12 +159,93 @@ def find_matching_brace(text: str, open_index: int) -> int | None:
     return None
 
 
+def find_catch_body_open_brace(text: str, start_index: int) -> int | None:
+    in_string = False
+    in_verbatim_string = False
+    in_char = False
+    in_line_comment = False
+    in_block_comment = False
+    paren_depth = 0
+    i = start_index
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+
+        if in_line_comment:
+            if ch in "\r\n":
+                in_line_comment = False
+            i += 1
+            continue
+        if in_block_comment:
+            if ch == "*" and nxt == "/":
+                in_block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if in_string:
+            if in_verbatim_string:
+                if ch == '"' and nxt == '"':
+                    i += 2
+                    continue
+                if ch == '"':
+                    in_string = False
+                    in_verbatim_string = False
+            else:
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == '"':
+                    in_string = False
+            i += 1
+            continue
+        if in_char:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == "'":
+                in_char = False
+            i += 1
+            continue
+
+        if ch == "/" and nxt == "/":
+            in_line_comment = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            in_block_comment = True
+            i += 2
+            continue
+        if ch == "@" and nxt == '"':
+            in_string = True
+            in_verbatim_string = True
+            i += 2
+            continue
+        if ch == '"':
+            in_string = True
+            i += 1
+            continue
+        if ch == "'":
+            in_char = True
+            i += 1
+            continue
+
+        if ch == "(":
+            paren_depth += 1
+        elif ch == ")" and paren_depth > 0:
+            paren_depth -= 1
+        elif ch == "{" and paren_depth == 0:
+            return i
+        i += 1
+    return None
+
+
 def iter_catches(path: Path) -> list[CatchBlock]:
     text = path.read_text(encoding="utf-8")
     catches: list[CatchBlock] = []
     for match in re.finditer(r"\bcatch\b", text):
-        open_brace = text.find("{", match.end())
-        if open_brace == -1:
+        open_brace = find_catch_body_open_brace(text, match.end())
+        if open_brace is None:
             continue
         header = text[match.start():open_brace]
         if not BROAD_CATCH_RE.search(header):

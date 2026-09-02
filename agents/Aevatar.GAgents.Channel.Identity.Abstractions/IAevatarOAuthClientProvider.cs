@@ -1,22 +1,19 @@
 namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 
 /// <summary>
-/// Read seam exposing the aevatar host's own OAuth client provisioning state
-/// (client_id, HMAC keys, broker capability) to the broker / state-token
-/// codec / OAuth callback. Backed by a cluster-singleton actor so every silo
-/// sees the same registration without per-host config drift. Production
-/// wiring is gated on the bootstrap service having completed at least one
-/// DCR call.
+/// Read seam exposing the aevatar host's configured OAuth client identity plus
+/// actor-owned HMAC, callback/scope, and broker-capability state to the broker,
+/// state-token codec, and OAuth callback.
 /// </summary>
 public interface IAevatarOAuthClientProvider
 {
     /// <summary>
-    /// Returns the cluster-shared OAuth client snapshot, awaiting the
-    /// bootstrap actor activation if necessary. Throws
+    /// Returns the cluster-shared OAuth client snapshot. The client id comes
+    /// from deployment configuration; actor projection owns the remaining
+    /// runtime facts. Throws
     /// <see cref="AevatarOAuthClientNotProvisionedException"/> when the
-    /// cluster has never successfully called NyxID DCR (production
-    /// deployments treat this as a startup-time failure, not a per-request
-    /// fault). The snapshot includes the active HMAC key plus (optionally)
+    /// configured client id or materialized actor facts are unavailable. The
+    /// snapshot includes the active HMAC key plus (optionally)
     /// the demoted previous key kept inside the rotation grace window so
     /// in-flight state tokens signed by the prior key still verify (PR
     /// #521 review v4-pro on kid rotation).
@@ -48,13 +45,12 @@ public sealed record AevatarOAuthClientSnapshot(
     byte[]? PreviousHmacKey = null,
     DateTimeOffset? PreviousHmacDemotedAt = null,
     string? RedirectUri = null,
-    string? OauthScope = null);
+    string? OauthScope = null,
+    IReadOnlyList<string>? RedirectUris = null);
 
 /// <summary>
-/// Thrown when an OAuth flow tries to use the cluster client before the
-/// bootstrap service has registered against NyxID. Surfaces actionable ops
-/// guidance: "wait for the host to finish startup, or check the bootstrap
-/// service logs for a NyxID DCR error".
+/// Thrown when an OAuth flow cannot resolve the configured client identity or
+/// its actor-owned runtime facts.
 /// </summary>
 public sealed class AevatarOAuthClientNotProvisionedException : Exception
 {
@@ -62,7 +58,7 @@ public sealed class AevatarOAuthClientNotProvisionedException : Exception
     /// Creates a new <see cref="AevatarOAuthClientNotProvisionedException"/>.
     /// </summary>
     public AevatarOAuthClientNotProvisionedException(string? message = null)
-        : base(message ?? "Aevatar OAuth client has not been provisioned at NyxID. Wait for the cluster bootstrap service to complete, or inspect its logs for a registration error.")
+        : base(message ?? "Aevatar OAuth client configuration or actor materialization is unavailable. Check host configuration and bootstrap logs.")
     {
     }
 }

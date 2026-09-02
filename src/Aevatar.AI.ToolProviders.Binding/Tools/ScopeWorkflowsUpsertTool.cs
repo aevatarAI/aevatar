@@ -68,9 +68,9 @@ public sealed class ScopeWorkflowsUpsertTool : IAgentTool
             if (args.ParseError != null)
                 return JsonDefaults.Error(args.ParseError);
 
-            var scopeId = AgentToolRequestContext.ScopeId;
+            var scopeId = ToolOwnerScopeResolver.Resolve();
             if (string.IsNullOrWhiteSpace(scopeId))
-                return JsonDefaults.Error("scope_id not available in request context");
+                return JsonDefaults.Error(ToolOwnerScopeResolver.MissingMessage);
 
             var workflowId = args.Str("workflow_id");
             if (string.IsNullOrWhiteSpace(workflowId))
@@ -83,6 +83,8 @@ public sealed class ScopeWorkflowsUpsertTool : IAgentTool
             var inlineWorkflowYamls = args.StrDictionary("inline_workflow_yamls");
             if (inlineWorkflowYamls is null && args.Has("inline_workflow_yamls"))
                 return JsonDefaults.Error("'inline_workflow_yamls' must be an object whose values are strings");
+            if (!ExternalWorkflowCapabilityToolSupport.TryResolveAccess(out var access, out var accessError))
+                return JsonDefaults.Error(accessError ?? "verified caller context is required");
 
             // Refactor (iter97/cluster-598): Old/New
             //   Old pattern: Ornn-facing workflow recipes had no direct LLM adapter over the scope workflow ports.
@@ -94,7 +96,13 @@ public sealed class ScopeWorkflowsUpsertTool : IAgentTool
                 args.Str("workflow_name"),
                 args.Str("display_name"),
                 inlineWorkflowYamls,
-                args.Str("revision_id")), ct);
+                args.Str("revision_id"))
+            {
+                CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                    access!.CallerId,
+                    access.NyxIdCallerCredential,
+                    access.NyxIdOrganizationBearerToken),
+            }, ct);
 
             return JsonSerializer.Serialize(new
             {

@@ -43,6 +43,12 @@ concrete aliases are data-driven. Dynamic scopes remain write-side first-touch
 only for greenfield or legacy bare lifecycle; they do not get startup clean
 drift migration.
 
+Hosts that compose startup readers must register the static index reconcile
+initializer before those readers. Mainnet starts hosted services sequentially
+in registration order, so this ordering is part of the lifecycle contract: a
+startup migration or bootstrap query must not observe a drifted alias before
+the provider-local reconcile has had a chance to migrate it.
+
 ## Write-Side Ensure
 
 `EnsureIndexAsync` handles four states:

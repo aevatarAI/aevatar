@@ -4,6 +4,7 @@ import {
   connectStepToTarget,
   insertStepAfter,
   insertStepByType,
+  materializeImplicitSequentialTransitions,
   parseInspectorBranches,
   parseInspectorParameters,
   removeStep,
@@ -14,6 +15,95 @@ import {
 import type { StudioWorkflowDocument } from './models';
 
 describe('studio document helpers', () => {
+  it('materializes only eligible implicit sequential transitions without mutating the document', () => {
+    const document: StudioWorkflowDocument = {
+      name: 'workspace-demo',
+      roles: [],
+      steps: [
+        {
+          id: 'draft_step',
+          type: 'llm_call',
+          next: null,
+          branches: {},
+        },
+        {
+          id: 'review_step',
+          type: 'human_approval',
+          next: 'publish_step',
+          branches: {},
+        },
+        {
+          id: 'publish_step',
+          type: 'emit',
+          next: null,
+          branches: {},
+        },
+      ],
+    };
+    const snapshot = structuredClone(document);
+
+    const result = materializeImplicitSequentialTransitions(document);
+
+    expect(result.steps?.map((step) => step.next)).toEqual([
+      'review_step',
+      'publish_step',
+      null,
+    ]);
+    expect(document).toEqual(snapshot);
+    expect(result).not.toBe(document);
+  });
+
+  it('preserves branched transitions and terminal documents', () => {
+    const branched = materializeImplicitSequentialTransitions({
+      name: 'branched',
+      roles: [],
+      steps: [
+        {
+          id: 'approval_step',
+          type: 'human_approval',
+          next: null,
+          branches: { approved: 'publish_step' },
+        },
+        {
+          id: 'publish_step',
+          type: 'emit',
+          next: null,
+          branches: {},
+        },
+      ],
+    });
+
+    expect(branched.steps?.[0]).toEqual(
+      expect.objectContaining({
+        next: null,
+        branches: { approved: 'publish_step' },
+      }),
+    );
+    expect(
+      materializeImplicitSequentialTransitions({ steps: [] }).steps,
+    ).toEqual([]);
+    expect(
+      materializeImplicitSequentialTransitions({
+        steps: [
+          {
+            id: 'only_step',
+            type: 'llm_call',
+            next: null,
+            branches: {},
+          },
+        ],
+      }).steps?.[0]?.next,
+    ).toBeNull();
+
+    const firstInsertion = insertStepByType(
+      materializeImplicitSequentialTransitions({ steps: [] }),
+      'assign',
+    );
+    expect(firstInsertion.document.steps).toEqual([
+      expect.objectContaining({ id: 'assign_step', next: null }),
+    ]);
+  });
+
   it('creates inserted step ids from product names instead of backend step type ids', () => {
     const document: StudioWorkflowDocument = {
       name: 'workspace-demo',

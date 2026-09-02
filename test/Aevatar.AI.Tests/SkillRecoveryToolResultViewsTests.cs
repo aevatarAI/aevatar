@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.Chat;
 using FluentAssertions;
@@ -294,5 +295,60 @@ public sealed class SkillRecoveryToolResultViewsTests
         result.ToolCallId.Should().Be("call-1");
         result.Content.Should().Be("shown to user");
         result.ToolResultView!.SkillLoad!.SkillName.Should().Be("alpha");
+    }
+
+    [Theory]
+    [InlineData(AgentToolReceiptStatus.Error)]
+    [InlineData(AgentToolReceiptStatus.Denied)]
+    [InlineData(AgentToolReceiptStatus.AuthorizationRequired)]
+    public void Attach_WhenReceiptRepresentsFailure_ProjectsOnlyNarrowSafeFailureView(
+        AgentToolReceiptStatus status)
+    {
+        var message = ChatMessage.Tool("call-failure", "safe display text");
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "call-failure",
+            ToolName = "aevatar_invoke_team",
+            Status = status,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ErrorCode = "backend_unavailable",
+            ErrorMessage = "safe failure message",
+            ResultJson = """{"full_key":"must-not-enter-history"}""",
+        };
+
+        var result = SkillRecoveryToolResultViews.Attach(
+            message,
+            "aevatar_invoke_team",
+            message.Content!,
+            receipt);
+
+        result.Should().NotBeSameAs(message);
+        result.Content.Should().Be("safe display text");
+        result.ToolResultView!.Failure.Should().Be(new ToolFailureResultView(
+            status,
+            "backend_unavailable",
+            "safe failure message"));
+        result.ToolResultView.ToString().Should().NotContain("must-not-enter-history");
+    }
+
+    [Fact]
+    public void Attach_WhenReceiptIsSuccessful_DoesNotCreateFailureView()
+    {
+        var message = ChatMessage.Tool("call-success", "success");
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "call-success",
+            ToolName = "aevatar_invoke_team",
+            Status = AgentToolReceiptStatus.Success,
+            ResultJson = """{"status":"accepted"}""",
+        };
+
+        var result = SkillRecoveryToolResultViews.Attach(
+            message,
+            "aevatar_invoke_team",
+            message.Content!,
+            receipt);
+
+        result.Should().BeSameAs(message);
     }
 }

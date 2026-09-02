@@ -1,3 +1,5 @@
+using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -10,6 +12,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Projection.Audit;
 using Aevatar.Scripting.Projection.Configuration;
 using Aevatar.Scripting.Projection.Materialization;
 using Aevatar.Scripting.Projection.Metadata;
@@ -149,6 +152,31 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptEvolutionSessionProjectionContext>,
             ScriptEvolutionSessionCompletedEventProjector>());
+
+        // ─── Committed-fact audit (platform governance trail) ───
+        // Single-write governance facts translated into the audit trail. The
+        // authority events (definition upsert + catalog promote/rollback) are
+        // observed by the authority materialization scope their own commit
+        // activates; the terminal evolution-session decision is observed by the
+        // evolution materialization scope. Double-written evolution index-mirror
+        // events are intentionally NOT registered (see audit translators file).
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, ScriptDefinitionUpsertedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, ScriptCatalogRevisionPromotedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, ScriptCatalogRollbackRequestedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, ScriptCatalogRolledBackAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, ScriptEvolutionSessionCompletedAuditTranslator>());
+        // The run-terminal outcome fact is committed by the run actor (ScriptBehaviorGAgent)
+        // and observed by the execution materialization scope its own commit activates.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, ScriptRunOutcomeRecordedAuditTranslator>());
+        services.AddAuditCommittedFactMaterializer<ScriptAuthorityProjectionContext>();
+        services.AddAuditCommittedFactMaterializer<ScriptEvolutionMaterializationContext>();
+        services.AddAuditCommittedFactMaterializer<ScriptExecutionMaterializationContext>();
 
         return services;
     }

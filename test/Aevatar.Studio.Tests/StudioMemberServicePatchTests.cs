@@ -420,6 +420,38 @@ public sealed class StudioMemberServicePatchTests
             .WithMessage("*implementationKind is locked at create*");
     }
 
+    [Fact]
+    public async Task DeleteAsync_ShouldDispatchMemberDelete_WhenReadModelExists()
+    {
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(
+            commandPort,
+            NewQueryPort(MemberImplementationKindNames.Workflow));
+
+        var response = await service.DeleteAsync(ScopeId, MemberId, CancellationToken.None);
+
+        commandPort.Deletes.Should().ContainSingle()
+            .Which.Should().Be(new DeleteUpdate(ScopeId, MemberId));
+        commandPort.Renames.Should().BeEmpty();
+        commandPort.ImplementationUpdates.Should().BeEmpty();
+        response.Status.Should().Be(StudioMemberCommandStatusNames.DeleteAccepted);
+        response.ScopeId.Should().Be(ScopeId);
+        response.MemberId.Should().Be(MemberId);
+        response.AckedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ShouldReturnNotFoundSemantics_WhenReadModelMissing()
+    {
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(commandPort, new InMemoryQueryPort());
+
+        var act = () => service.DeleteAsync(ScopeId, MemberId, CancellationToken.None);
+
+        await act.Should().ThrowAsync<StudioMemberNotFoundException>();
+        commandPort.Deletes.Should().BeEmpty();
+    }
+
     private static UpdateStudioMemberRequest ImplementationPatch(
         StudioMemberImplementationRefResponse implementation) =>
         new(ImplementationRef: PatchValue<StudioMemberImplementationRefResponse>.Of(implementation));
@@ -434,7 +466,8 @@ public sealed class StudioMemberServicePatchTests
             new ThrowingTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingScopeBindingReadinessQueryPort(),
-            new ThrowingServiceCommandPort());
+            new ThrowingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
 
     private static InMemoryQueryPort NewQueryPort(string implementationKind) =>
         new(NewDetail(implementationKind));
@@ -483,13 +516,16 @@ public sealed class StudioMemberServicePatchTests
             string memberId,
             CancellationToken ct = default) =>
             Task.FromResult<StudioMemberDetailResponse?>(
-                _details.Count > 1 ? _details.Dequeue() : _details.Peek());
+                _details.Count == 0
+                    ? null
+                    : _details.Count > 1 ? _details.Dequeue() : _details.Peek());
     }
 
     private sealed class RecordingMemberCommandPort : IStudioMemberCommandPort
     {
         public List<ImplementationUpdate> ImplementationUpdates { get; } = [];
         public List<RenameUpdate> Renames { get; } = [];
+        public List<DeleteUpdate> Deletes { get; } = [];
         public List<string> RecordedBindings { get; } = [];
 
         public Task<StudioMemberSummaryResponse> CreateAsync(
@@ -507,6 +543,13 @@ public sealed class StudioMemberServicePatchTests
             ImplementationUpdates.Add(new ImplementationUpdate(scopeId, memberId, implementation));
             return Task.CompletedTask;
         }
+
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("member patch must not record published bindings.");
 
         public Task RenameAsync(
             string scopeId,
@@ -529,6 +572,15 @@ public sealed class StudioMemberServicePatchTests
             string? targetTeamId,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("implementationRef patch must not patch team assignment.");
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default)
+        {
+            Deletes.Add(new DeleteUpdate(scopeId, memberId));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed record ImplementationUpdate(
@@ -537,6 +589,8 @@ public sealed class StudioMemberServicePatchTests
         StudioMemberImplementationRefResponse Implementation);
 
     private sealed record RenameUpdate(string ScopeId, string MemberId, string DisplayName);
+
+    private sealed record DeleteUpdate(string ScopeId, string MemberId);
 
     private sealed class ThrowingBindingRunQueryPort : IStudioMemberBindingRunQueryPort
     {

@@ -82,7 +82,7 @@ public sealed class WorkspaceControllerWorkflowDraftCreateTests
             new WorkspaceService(workspaceQueryPort, workspaceCommandPort, yamlDocumentService),
             new AppScopedWorkflowService(
                 yamlDocumentService,
-                new RecordingWorkflowDefinitionParser(),
+                new StubWorkflowDefinitionParser(),
                 workspaceQueryPort,
                 workspaceCommandPort),
             new StubAppScopeResolver(scopeContext),
@@ -118,6 +118,8 @@ public sealed class WorkspaceControllerWorkflowDraftCreateTests
 
         public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) =>
             false;
+
+        public bool HasHttpRequestContext(HttpContext? httpContext = null) => false;
     }
 
     private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService
@@ -149,11 +151,18 @@ public sealed class WorkspaceControllerWorkflowDraftCreateTests
         }
     }
 
-    private sealed class RecordingWorkflowDefinitionParser : IWorkflowDefinitionParser
+    private sealed class StubWorkflowDefinitionParser : IWorkflowDefinitionParser
     {
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
             string workflowYaml,
             CancellationToken ct = default) =>
-            Task.FromResult(WorkflowYamlParseResult.Success("workflow"));
+            Task.FromResult(WorkflowYamlParseResult.Success(
+                workflowYaml.Split('\n')[0][5..].Trim()));
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
+
 }

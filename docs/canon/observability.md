@@ -8,10 +8,10 @@ owner: eanzhao
 
 ## 1. 目的
 
-定义 aevatar 仓库内 OpenTelemetry `ActivitySource` 发出的 activity 名称、tag
-键、稳定性等级，以及 Host → browser demo 边界的 JSON wire 形式例外。
-这是 aevatar 可观测面的唯一权威清单 —— 加新 activity / tag、改名、提升稳定
-性，都要先动这份文档再动代码。
+定义 aevatar 仓库内 OpenTelemetry `ActivitySource` 与 `Meter` 发出的 activity、
+metric、tag 键、稳定性等级，以及 Host → browser demo 边界的 JSON wire 形式例外。
+这是 aevatar 可观测面的唯一权威清单 —— 加新 activity / metric / tag、改名、
+提升稳定性，都要先动这份文档再动代码。
 
 ## 2. ActivitySources
 
@@ -43,6 +43,30 @@ owner: eanzhao
 ActivityListener 消费方过滤：`source.Name == "Aevatar.Agents"`（单源
 模式，对应 ADR [0022](../adr/0022-otel-aevatar-semantic-conventions.md)
 的决定）。
+
+### 2.1 Runtime terminal-failure metric
+
+`Aevatar.Agents` meter 发出
+`aevatar.runtime.envelope_terminal_failures_total` counter。它记录 runtime envelope
+已到达 terminal failure，而不是 handler success。该 counter 使用两个低基数 tag：
+
+| Tag | Values | 语义 |
+|-----|--------|------|
+| `failure_reason` | `handler_retry_exhausted` / `compatibility_retry_exhausted` / `actor_unavailable` / `invalid_envelope` | terminal 原因；不得写 exception message、actor id 或 envelope id |
+| `failure_disposition` | `returned` / `propagated` | `returned` 只表示 runtime 的 terminal-failure policy 正常返回；它不表示 Orleans 已调用 `MessagesDeliveredAsync` 或 Kafka offset 已提交。`propagated` 表示异常穿透 observer，persistent provider 应保留 redelivery 能力 |
+
+该 metric 是 retry exhausted、actor unavailable 与 malformed Kafka envelope 的告警入口。
+具体 consume → observer → handler → retry → `MessagesDeliveredAsync` → offset commit
+语义及 operator recovery 见
+[`Aevatar.Foundation.Runtime.Implementations.Orleans/README.md`](../../src/Aevatar.Foundation.Runtime.Implementations.Orleans/README.md#kafka-入站投递与失败语义)。
+当前没有通用 durable poison-envelope/DLQ owner；因此默认 terminal failure 使用
+`returned`，只有 envelope 显式请求 `PropagateFailure` 时才使用 `propagated`，
+避免永久业务错误默认无限阻塞 Kafka partition。
+
+#3145 已删除 runtime process-local envelope filter 及其 DI seam。每次 transport delivery 都进入 authoritative
+actor；重复消息是否已完成只能由 actor committed state、稳定 command/operation identity 或外部权威
+idempotency contract 判断。`RuntimeEnvelopeDeliveryIdentity` 只解析 typed delivery operation lineage/retry attempt，不记录事实、
+不抑制 redelivery，也不提供 durable idempotency 或 exactly-once 保证。
 
 ## 3. Activity 清单 (`Aevatar.Agents`)
 
@@ -211,6 +235,8 @@ implemented: `channel.ingress.verify`, `channel.ingress.commit`,
 | `aevatar.event.type` | `Aevatar.Agents` | stable | HandleEvent |
 | `aevatar.event.direction` | `Aevatar.Agents` | stable | HandleEvent |
 | `aevatar.event.publisher` | `Aevatar.Agents` | stable | HandleEvent |
+| `failure_reason` | `Aevatar.Agents` metric | experimental | `aevatar.runtime.envelope_terminal_failures_total` |
+| `failure_disposition` | `Aevatar.Agents` metric | experimental | `aevatar.runtime.envelope_terminal_failures_total` |
 | `aevatar.projection.name` | `Aevatar.Agents` | experimental | projection.materialize |
 | `aevatar.projection.last_event_id` | `Aevatar.Agents` | experimental | projection.materialize |
 | `aevatar.projection.state.version` | `Aevatar.Agents` | experimental | projection.materialize (success) |
@@ -369,7 +395,111 @@ SSE 通道，由 `WorkflowExecutionRunEventProjector` 派发。本文档新增�
   projection 语义）。
 - `tools/ci/architecture_guards.sh`：主入口，运行上述两条 + 其他。
 
-## 12. 参考
+## 12. Projection 与 Kafka metrics
+
+Projection processing 与 transport backlog 是两个独立观测域。Projection scope actor
+持久化处理事实与 repair backlog；Meter 只观察这些事实，不触发 actor lifecycle、
+projection priming、query replay 或额外业务状态变更。Kafka lag 只来自
+`librdkafka` statistics 的 `consumer_lag`，不得从 projection version 推导。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    A["Committed envelope"] --> B["Scope actor: received + attempted"]
+    B --> C["Materialization attempt"]
+    C -->|"success"| D["Success total + per-source version axis"]
+    C -->|"failure"| E["Durable repair backlog"]
+    E --> F["Payload-free diagnostic ring: 64"]
+    F -->|"trim diagnostic only"| G["Drop alert + dropped total"]
+    H["librdkafka statistics"] --> I["Kafka consumer-group lag"]
+    J["Orleans receiver queue"] --> K["Receiver buffer depth"]
+```
+
+### 12.1 Projection processing state
+
+`ProjectionScopeStatusDocument` 是 actor-scoped current-state readmodel，公开以下稳定
+查询语义：
+
+- `received_envelope_total`：从 observation 主链收到的 envelope 数；repair replay
+  不是新 receipt。
+- `attempted_envelope_total`：通过 successful-version fence 后实际尝试物化的次数，
+  包含 replay。
+- `successful_materialization_total`、`failed_attempt_total`：分别表示成功与失败尝试的
+  累计次数。
+- `retry_exhausted_total`：failure 首次达到 retry limit 的累计历史次数；repair 成功后
+  不递减，因此不得用于判断当前健康。
+- `retry_exhausted_failure_count`：当前 durable repair backlog 中已经耗尽自动重试的
+  failure 数；健康、告警与排序使用该字段。
+- `unresolved_failure_count`、`oldest_unresolved_failure_at_utc`：durable operator
+  repair backlog 的数量与最旧发生时间。每条 failure 及其 payload-free diagnostic
+  都保留权威 `source_actor_id`；较新版本成功不会消除较旧 failure hole。
+- `failure_diagnostic_dropped_total`：64 条 payload-free diagnostic ring 被裁剪的累计数。
+  第 65 条 failure 只裁剪 diagnostic 副本；durable repair record 不裁剪，并通过
+  `IProjectionFailureAlertSink` 发出包含 dropped failure identity 的专项 signal。
+- `source_versions`：按 authoritative `source_actor_id` 分组的
+  `highest_seen_version / last_successful_version / version_gap`。版本差只允许在同一个
+  source actor 轴内计算。多 actor scope 不提供聚合 version subtraction。
+
+Observatory list API 仅在 scope 恰好有一个 source actor 时返回
+`singleSourceVersionGap`；否则返回 `null`。跨 scope 健康度与排序使用 unresolved
+failure、当前 `retryExhaustedFailureCount`、处理计数和 oldest age，不把 `null`
+伪装成 0，也不使用累计 `retryExhaustedTotal` 表示当前异常。
+
+### 12.2 Meter 清单
+
+`Aevatar.CQRS.Projection`：
+
+| Instrument | Type | Unit | Allowed labels |
+|------------|------|------|----------------|
+| `aevatar.projection.envelope.received` | Counter | count | `projection.kind`, `event.kind` |
+| `aevatar.projection.envelope.attempted` | Counter | count | `projection.kind`, `event.kind` |
+| `aevatar.projection.materialization.succeeded` | Counter | count | `projection.kind`, `event.kind` |
+| `aevatar.projection.materialization.failed` | Counter | count | `projection.kind`, `event.kind` |
+| `aevatar.projection.retry.exhausted` | Counter | count | `projection.kind`, `event.kind` |
+| `aevatar.projection.unresolved_failure.change` | UpDownCounter | count | `projection.kind` |
+| `aevatar.projection.oldest_unresolved_failure.age` | Histogram | s | `projection.kind` |
+| `aevatar.projection.materialization.latency` | Histogram | ms | `projection.kind`, `event.kind` |
+| `aevatar.projection.failure_diagnostic.dropped` | Counter | count | `projection.kind` |
+
+`Aevatar.Kafka.Transport`：
+
+| Instrument | Type | Unit | Allowed labels |
+|------------|------|------|----------------|
+| `aevatar.kafka.consumer_group.lag` | Gauge | messages | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.buffer_depth` | Gauge | messages | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.buffer_capacity` | Gauge | messages | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.paused_partitions` | Gauge | partitions | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.pause_resume` | Counter | operations | `provider`, `topic`, `partition`, `operation` (`pause` / `resume`) |
+| `aevatar.kafka.receiver.pause_duration` | Histogram | ms | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.buffer_saturations` | Counter | transitions | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.consume_errors` | Counter | errors | `provider`, `topic`, `partition` |
+
+当 statistics disabled、provider unavailable、partition 缺失或 `consumer_lag` 无效时，
+不 emit Kafka lag sample；这表示 unavailable，而不是 0。receiver buffer depth 与
+consumer-group lag 必须使用不同 instrument 和 dashboard panel。
+
+Receiver capacity、high watermark 与 low watermark 是 Host typed options，并满足
+`0 < low < high <= capacity`。`buffer_saturations` 只在进入 high-watermark backpressure
+时增加，不在每次 paused poll 时重复增加；`pause_duration` 在固定 receiver partition 恢复或
+receiver shutdown 时记录。Orleans queue balancer 拥有 `QueueId -> partition` receiver 生命周期；
+这里的 consumer 使用手动 `Assign`，不通过 Kafka subscription/rebalance 竞争第二套 ownership。
+pause 期间的定期 `Consume(timeout)` 仅用于推进 librdkafka broker/protocol 处理，不宣称 group heartbeat。
+这些指标只观察 transport working state，不定义 delivery 完成事实，也不改变
+`MessagesDeliveredAsync -> contiguous offset commit` 的 ACK watermark。
+
+### 12.3 Cardinality 与 Host 注册
+
+Metric label 禁止包含 `actorId`、`sessionId`、`commandId`、failure identity、exception
+message 或其他业务身份。具体 scope/actor failure identity 只通过 readmodel query、日志、
+trace 或 alert payload 获取。Workflow Host 必须注册 `Aevatar.CQRS.Projection` 与
+`Aevatar.Kafka.Transport` 两个 Meter，OTLP exporter 才会采集上述 instrument。
+
+`unresolved_failure.change` 只表示当前进程观测到的 backlog 增减，不是跨 actor 激活或
+进程重启可恢复的权威 current count。`oldest_unresolved_failure.age` 也只在 backlog 变化时
+产生年龄样本。当前 unresolved 数量与最旧发生时间始终读取
+`ProjectionScopeStatusDocument`，不得用 Meter 聚合值反向定义事实。
+
+## 13. 参考
 
 - ADR [0022](../adr/0022-otel-aevatar-semantic-conventions.md) —
   semantic conventions 的决议。

@@ -41,6 +41,7 @@ public sealed class ResponsesToolClassificationTests
         result.ForwardedTools.Should().ContainSingle(x => x.Name == "client_tool");
         result.SubstitutedToolNames.Should().ContainSingle("web_search");
         result.AdditiveToolNames.Should().Equal("aevatar_todo_write", "custom_additive");
+        result.OwnedToolNames.Should().Equal("web_search", "aevatar_todo_write", "custom_additive");
         result.EffectiveTools.Select(static tool => tool.Name)
             .Should().Equal("web_search", "client_tool", "aevatar_todo_write", "custom_additive");
         logger.Messages.Should().Contain(message =>
@@ -52,7 +53,7 @@ public sealed class ResponsesToolClassificationTests
     }
 
     [Fact]
-    public async Task ClassifyAsync_ShouldSkipAdditiveToolsThatCollideWithEffectiveTools()
+    public async Task ClassifyAsync_ShouldTreatClientDeclaredAdditiveNameAsOwned()
     {
         var logger = new RecordingLogger();
 
@@ -71,13 +72,14 @@ public sealed class ResponsesToolClassificationTests
             ToolProviderContext,
             logger);
 
-        result.ForwardedTools.Should().ContainSingle(x => x.Name == "use_skill");
+        result.ForwardedTools.Should().BeEmpty();
         result.EffectiveTools.Select(static tool => tool.Name)
             .Should().Equal("use_skill", "ornn_search_skills");
-        result.AdditiveToolNames.Should().ContainSingle("ornn_search_skills");
-        logger.Messages.Should().ContainSingle(message =>
-            message.Contains("skipped", StringComparison.Ordinal) &&
-            message.Contains("use_skill", StringComparison.Ordinal));
+        result.SubstitutedToolNames.Should().BeEmpty();
+        result.AdditiveToolNames.Should().Equal("use_skill", "ornn_search_skills");
+        result.OwnedToolNames.Should().Equal("use_skill", "ornn_search_skills");
+        logger.Messages.Should().NotContain(message =>
+            message.Contains("skipped", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -101,6 +103,7 @@ public sealed class ResponsesToolClassificationTests
         result.ForwardedTools.Should().BeEmpty();
         result.SubstitutedToolNames.Should().ContainSingle("client_tool");
         result.AdditiveToolNames.Should().ContainSingle("use_skill");
+        result.OwnedToolNames.Should().Equal("client_tool", "use_skill");
         result.EffectiveTools.Select(static tool => tool.Name)
             .Should().Equal("client_tool", "use_skill");
         logger.Messages.Should().Contain(message =>

@@ -57,16 +57,20 @@ public sealed class NyxIdClaimsTransformerTests
     }
 
     [Fact]
-    public void TransformClaims_ShouldFallbackToGenericIdClaim()
+    public void TransformClaims_ShouldYieldNothing_WhenOnlyGenericIdClaimPresent()
     {
-        var principal = CreatePrincipal(new Claim("tenant_id", "t-1"));
-        var claims = _transformer.TransformClaims(principal).ToList();
-        claims.Should().ContainSingle();
-        claims[0].Value.Should().Be("t-1");
+        // Hardening (M7): the generic "any *_id" fallback was removed. A token whose scope
+        // only lives in an arbitrary *_id claim (e.g. org_id / team_id / tenant_id) now maps
+        // to NO scope_id, so the caller is denied rather than bound to an unvetted claim.
+        var principal = CreatePrincipal(
+            new Claim("org_id", "o-1"),
+            new Claim("team_id", "t-1"),
+            new Claim("tenant_id", "ten-1"));
+        _transformer.TransformClaims(principal).Should().BeEmpty();
     }
 
     [Fact]
-    public void TransformClaims_ShouldIgnoreClientIdAndSessionId()
+    public void TransformClaims_ShouldYieldNothing_WhenClientIdAndSessionIdPresent()
     {
         var principal = CreatePrincipal(
             new Claim("client_id", "c1"),
@@ -76,14 +80,16 @@ public sealed class NyxIdClaimsTransformerTests
     }
 
     [Fact]
-    public void TransformClaims_ShouldPreferUidOverGenericId()
+    public void TransformClaims_ShouldMapExplicitSub_WhenGenericIdClaimAlsoPresent()
     {
+        // An explicit known claim still maps; the sibling generic *_id claim is never consulted.
         var principal = CreatePrincipal(
-            new Claim("uid", "uid-val"),
+            new Claim("sub", "sub-val"),
             new Claim("tenant_id", "tenant-val"));
         var claims = _transformer.TransformClaims(principal).ToList();
         claims.Should().ContainSingle();
-        claims[0].Value.Should().Be("uid-val");
+        claims[0].Type.Should().Be(AevatarStandardClaimTypes.ScopeId);
+        claims[0].Value.Should().Be("sub-val");
     }
 
     [Fact]

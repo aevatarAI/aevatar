@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Tools;
 
 namespace Aevatar.AI.ToolProviders.Web.Tools;
 
@@ -56,6 +57,9 @@ public sealed class AskUserTool : IAgentTool
           "required": ["question", "options"]
         }
         """;
+
+    public ToolPresentationDescriptor Presentation =>
+        ToolPresentationDescriptors.BuiltIn(Name, "Ask user", Description);
 
     public bool IsReadOnly => true;
 

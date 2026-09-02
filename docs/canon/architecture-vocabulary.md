@@ -17,6 +17,10 @@ owner: eanzhao
 
 如果只是讲业务功能（"member-first", "channel relay", "scripting"），用领域词汇即可，不必套用本表。
 
+Chat 相关的 transcript、execution state、prompt context 与 user memory 不是通用架构词的
+别名；其稳定产品语义见
+[conversation-context-and-memory.md](conversation-context-and-memory.md)。
+
 ## 1. 核心词汇映射
 
 | 通用词汇 | aevatar 已有术语 | 含义与口径 |

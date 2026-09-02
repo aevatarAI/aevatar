@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Runs;
@@ -216,6 +217,178 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     }
 
     [Fact]
+    public async Task ReleaseAfterInteractionAsync_WhenTerminalAndMaterializationConfirmed_ShouldReclaimCreatedActors()
+    {
+        // 06-20-observatory-run-state-feed (R2): a completed ad-hoc run releases the lease/sink in-request
+        // (never destroys synchronously), then the gated reclaim destroys the throwaway actors only after the
+        // current-state doc is confirmed materialized (watermark >= head version).
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var gate = CreateReclaimGate(headVersion: 5, materializedVersion: 5);
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            createdActorIds: ["definition-1", "run-1"],
+            reclaimGate: gate);
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
+
+        await target.ReleaseAfterInteractionAsync(
+            new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1"),
+            new CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus>(
+                true,
+                WorkflowProjectionCompletionStatus.Completed,
+                CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete),
+            CancellationToken.None);
+        await target.PendingReclaimTask;
+
+        projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
+        actorPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task ReleaseAfterInteractionAsync_WhenTerminalButMaterializationNotConfirmed_ShouldNotDestroyCreatedActors()
+    {
+        // 06-20-observatory-run-state-feed (R2b): on watermark-unreached the gate DEFERS — the throwaway
+        // actors are intentionally left persisted (no silent current-state doc loss), and the run does not fail.
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var gate = CreateReclaimGate(headVersion: 9, materializedVersion: 2, maxPolls: 2);
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            createdActorIds: ["definition-1", "run-1"],
+            reclaimGate: gate);
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
+
+        await target.ReleaseAfterInteractionAsync(
+            new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1"),
+            new CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus>(
+                true,
+                WorkflowProjectionCompletionStatus.Completed,
+                CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete),
+            CancellationToken.None);
+        await target.PendingReclaimTask;
+
+        projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
+        actorPort.DestroyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReleaseAfterInteractionAsync_WhenMaterializationScopeAbsent_ShouldNotDestroyCreatedActors()
+    {
+        // 06-20-observatory-run-state-feed (R2b): an absent materialization status scope (null watermark) →
+        // defer, never destroy on unconfirmed materialization.
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var gate = CreateReclaimGate(headVersion: 4, materializedVersion: null, maxPolls: 2);
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            createdActorIds: ["definition-1", "run-1"],
+            reclaimGate: gate);
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
+
+        await target.ReleaseAfterInteractionAsync(
+            new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1"),
+            new CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus>(
+                true,
+                WorkflowProjectionCompletionStatus.Completed,
+                CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete),
+            CancellationToken.None);
+        await target.PendingReclaimTask;
+
+        actorPort.DestroyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReleaseAfterInteractionAsync_WhenNonTerminalWithGate_ShouldNotScheduleReclaim()
+    {
+        // A still-running run never schedules reclaim regardless of the gate.
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var gate = CreateReclaimGate(headVersion: 5, materializedVersion: 5);
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            createdActorIds: ["definition-1", "run-1"],
+            reclaimGate: gate);
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
+
+        await target.ReleaseAfterInteractionAsync(
+            new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1"),
+            new CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus>(
+                false,
+                WorkflowProjectionCompletionStatus.Unknown,
+                CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete),
+            CancellationToken.None);
+        await target.PendingReclaimTask;
+
+        actorPort.DestroyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveSeededTarget_WhenTerminalAndMaterializationConfirmed_ShouldReclaimCreatedActors()
+    {
+        // 06-20-observatory-run-state-feed (R2, codex DIFF review §10 C5): /api/chat pre-creates the ad-hoc
+        // run and dispatches it via WorkflowRunTargetSeed, so the SEEDED resolver branch is the real ad-hoc
+        // teardown. It MUST thread the reclaim gate into the constructed target — otherwise the throwaway
+        // actors are destroyed immediately and the current-state doc is dropped before it materializes. This
+        // regression proves the seeded path is gated: a confirmed watermark reclaims after release.
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var gate = CreateReclaimGate(headVersion: 5, materializedVersion: 5);
+        var resolver = CreateResolver(projectionPort, actorPort, gate);
+        var seededRequest = CreateSeededRequest(["definition-1", "run-1"]);
+
+        var resolution = await resolver.ResolveAsync(seededRequest, CancellationToken.None);
+
+        resolution.Succeeded.Should().BeTrue();
+        var target = resolution.Target!;
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
+
+        await target.ReleaseAfterInteractionAsync(
+            new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1"),
+            new CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus>(
+                true,
+                WorkflowProjectionCompletionStatus.Completed,
+                CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete),
+            CancellationToken.None);
+        await target.PendingReclaimTask;
+
+        actorPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task ResolveSeededTarget_WhenTerminalButMaterializationNotConfirmed_ShouldNotDestroyCreatedActors()
+    {
+        // 06-20-observatory-run-state-feed (R2, codex DIFF review §10 C5+R2b): the seeded path is gated, so an
+        // unconfirmed watermark DEFERS — the throwaway actors are left persisted (no silent doc loss). Before
+        // the C5 fix this seeded target had no gate and destroyed immediately regardless of materialization.
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var gate = CreateReclaimGate(headVersion: 9, materializedVersion: 2, maxPolls: 2);
+        var resolver = CreateResolver(projectionPort, actorPort, gate);
+        var seededRequest = CreateSeededRequest(["definition-1", "run-1"]);
+
+        var resolution = await resolver.ResolveAsync(seededRequest, CancellationToken.None);
+
+        resolution.Succeeded.Should().BeTrue();
+        var target = resolution.Target!;
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
+
+        await target.ReleaseAfterInteractionAsync(
+            new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1"),
+            new CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus>(
+                true,
+                WorkflowProjectionCompletionStatus.Completed,
+                CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete),
+            CancellationToken.None);
+        await target.PendingReclaimTask;
+
+        actorPort.DestroyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ReleaseAsync_ShouldDisposeSinkAndReleaseLease_WhenOnlyOneSideBound()
     {
         var projectionPort = new FakeProjectionPort();
@@ -372,7 +545,8 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         FakeProjectionPort? projectionPort = null,
         FakeWorkflowRunActorPort? actorPort = null,
         FakeCurrentStateQueryPort? currentStateQueryPort = null,
-        IReadOnlyList<string>? createdActorIds = null)
+        IReadOnlyList<string>? createdActorIds = null,
+        WorkflowRunMaterializationReclaimGate? reclaimGate = null)
     {
         projectionPort ??= new FakeProjectionPort();
         actorPort ??= new FakeWorkflowRunActorPort();
@@ -382,7 +556,73 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             createdActorIds ?? [],
             projectionPort,
             actorPort,
-            new WorkflowRunDurableCompletionResolver(currentStateQueryPort));
+            new WorkflowRunDurableCompletionResolver(currentStateQueryPort),
+            reclaimGate: reclaimGate,
+            // 06-20-observatory-run-state-feed (R2): run the detached reclaim inline so the scheduled
+            // reclaim completes deterministically within the test (no Task.Delay / no fire-and-forget race).
+            detachedReclaimLauncher: reclaim => reclaim());
+    }
+
+    private static WorkflowRunCommandTargetResolver CreateResolver(
+        FakeProjectionPort projectionPort,
+        FakeWorkflowRunActorPort actorPort,
+        WorkflowRunMaterializationReclaimGate? reclaimGate)
+    {
+        return new WorkflowRunCommandTargetResolver(
+            new FakeWorkflowRunActorResolver(),
+            projectionPort,
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new FakeCurrentStateQueryPort()),
+            reclaimGate);
+    }
+
+    private static WorkflowChatRunRequest CreateSeededRequest(IReadOnlyList<string> createdActorIds) =>
+        new(
+            "hello",
+            WorkflowChatSource.CatalogWorkflow("direct"),
+            ExternalCapabilityExecutionMode.Interactive,
+            TargetSeed: new WorkflowRunTargetSeed(
+                "run-1",
+                "direct",
+                createdActorIds,
+                WorkflowChatSource.CatalogWorkflow("direct")));
+
+    private static WorkflowRunMaterializationReclaimGate CreateReclaimGate(
+        long? headVersion,
+        long? materializedVersion,
+        int maxPolls = 3)
+    {
+        return new WorkflowRunMaterializationReclaimGate(
+            new FakeCommittedVersionPort(headVersion),
+            new FakeMaterializationWatermarkPort(materializedVersion),
+            new WorkflowRunReclaimOptions
+            {
+                MaxWatermarkPolls = maxPolls,
+                WatermarkPollInterval = TimeSpan.Zero,
+            },
+            delayAsync: (_, _) => Task.CompletedTask);
+    }
+
+    private sealed class FakeWorkflowRunActorResolver : IWorkflowRunActorResolver
+    {
+        // The seeded resolver branch never calls the actor resolver (it short-circuits on TargetSeed); this
+        // fake only satisfies the constructor.
+        public Task<WorkflowActorResolutionResult> ResolveOrCreateAsync(
+            WorkflowChatRunRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException("Seeded resolution must not call the actor resolver.");
+    }
+
+    private sealed class FakeCommittedVersionPort(long? version) : IWorkflowRunCommittedVersionPort
+    {
+        public Task<long?> GetCommittedVersionAsync(string runActorId, CancellationToken ct = default) =>
+            Task.FromResult(version);
+    }
+
+    private sealed class FakeMaterializationWatermarkPort(long? version) : IWorkflowRunMaterializationWatermarkPort
+    {
+        public Task<long?> GetMaterializedVersionAsync(string runActorId, CancellationToken ct = default) =>
+            Task.FromResult(version);
     }
 
     private sealed class FakeProjectionPort
@@ -478,6 +718,11 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

@@ -1,8 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
-using Aevatar.Foundation.Abstractions.Persistence;
-using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StatusDashboard.Executors;
@@ -14,32 +12,28 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.StatusDashboard;
 
 /// <summary>
-/// Per-target probe actor — one instance per configured health probe target.
-/// Owns: the immutable descriptor, the latest probe outcome, and the
-/// self-rescheduling tick that drives recurring execution.
-///
-/// Actor id convention: opaque, derived from the slug at startup (see
-/// <see cref="HealthProbeStoreCommands.BuildActorId(string)"/>). Callers query
-/// the read model by slug, not by actor id.
+/// Per-target probe actor. Only the target descriptor is event sourced;
+/// recurring samples are ephemeral operational state overwritten in the
+/// configured snapshot store.
 /// </summary>
 [GAgent("status.dashboard.health-probe-target")]
-public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>, IProjectedActor
+public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 {
-    public static string ProjectionKind => "health-probe-target";
+    internal const string LegacyProjectionKind = "health-probe-target";
 
-    internal const string TickCallbackId = "health-probe-tick";
-    internal const string ExecutionTimeoutCallbackPrefix = "health-probe-execution-timeout";
     internal const int RetainedOutcomeCount = 120;
     private static readonly TimeSpan RetainedOutcomeWindow = TimeSpan.FromHours(2);
-    private TimeProvider? _cachedTimeProvider;
 
-    // ─── Commands ───
+    private HealthProbeTargetState _runtimeState = new();
+    private TimeProvider? _cachedTimeProvider;
+    private CancellationTokenSource? _lifetimeCts;
+    private CancellationTokenSource? _nextTickCts;
+    private CancellationTokenSource? _executionTimeoutCts;
 
     [EventHandler(EndpointName = "configure")]
     public async Task HandleConfigureAsync(HealthProbeConfigureCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var timeProvider = ResolveTimeProvider();
         if (command.Spec == null || string.IsNullOrWhiteSpace(command.Spec.Slug))
         {
             Logger.LogWarning("Ignoring HealthProbeConfigureCommand with missing descriptor for actor {ActorId}", Id);
@@ -47,29 +41,28 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         }
 
         if (DescriptorsEquivalent(State.Spec, command.Spec))
-        {
-            // OnActivateAsync re-arms existing probes after a host restart.
-            // Re-arming here as well creates duplicate first ticks during
-            // rolling deploys, which can make the persisted probe stream race
-            // with itself.
             return;
-        }
 
         await PersistDomainEventAsync(new HealthProbeConfigured
         {
             Spec = command.Spec,
-            ConfiguredAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow()),
+            ConfiguredAt = Timestamp.FromDateTimeOffset(ResolveTimeProvider().GetUtcNow()),
         });
 
-        await EnsureNextTickAsync(initial: true);
+        CancelAndDispose(ref _nextTickCts);
+        CancelAndDispose(ref _executionTimeoutCts);
+        _runtimeState = NewRuntimeState(State.Spec);
+        await TryWriteOperationalSnapshotAsync();
+        ScheduleNextTick(initial: true);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleTickAsync(HealthProbeTickRequested tick)
     {
         ArgumentNullException.ThrowIfNull(tick);
+        CancelAndDispose(ref _nextTickCts);
 
-        var descriptor = State.Spec;
+        var descriptor = _runtimeState.Spec;
         if (descriptor == null || string.IsNullOrWhiteSpace(descriptor.Slug))
         {
             Logger.LogDebug("Tick fired for unconfigured probe actor {ActorId} — dropping", Id);
@@ -78,9 +71,13 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 
         if (!descriptor.Enabled)
         {
-            // Stop the self-rescheduling chain when an operator disables the
-            // target via Configure. EnsureNextTick is not called.
             Logger.LogDebug("Probe {Slug} is disabled — skipping tick", descriptor.Slug);
+            return;
+        }
+
+        if (_runtimeState.ActiveExecution != null)
+        {
+            Logger.LogDebug("Probe {Slug} already has an active execution — ignoring duplicate tick", descriptor.Slug);
             return;
         }
 
@@ -91,90 +88,44 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
     public async Task HandleTimeoutFiredAsync(HealthProbeTimeoutFiredEvent timeout)
     {
         ArgumentNullException.ThrowIfNull(timeout);
-        var active = State.ActiveExecution;
-        if (active == null ||
-            string.IsNullOrWhiteSpace(timeout.OperationId) ||
-            !string.Equals(active.OperationId, timeout.OperationId, StringComparison.Ordinal))
-        {
+        var active = _runtimeState.ActiveExecution;
+        if (!Matches(active, timeout.OperationId))
             return;
-        }
 
+        CancelAndDispose(ref _executionTimeoutCts);
         var timedOutAt = timeout.TimedOutAt ?? Timestamp.FromDateTimeOffset(ResolveTimeProvider().GetUtcNow());
-        var startedAt = active.StartedAt?.ToDateTimeOffset() ?? timedOutAt.ToDateTimeOffset();
-        var latencyMs = Math.Max(0, (int)Math.Round((timedOutAt.ToDateTimeOffset() - startedAt).TotalMilliseconds));
+        var startedAt = active!.StartedAt?.ToDateTimeOffset() ?? timedOutAt.ToDateTimeOffset();
         var timeoutMs = timeout.TimeoutMs > 0 ? timeout.TimeoutMs : active.TimeoutMs;
-        var descriptor = State.Spec;
-        var outcome = new HealthProbeOutcome
+        ApplyOutcome(new HealthProbeOutcome
         {
             Status = HealthOutcomeStatus.Down,
-            LatencyMs = latencyMs,
+            LatencyMs = Math.Max(0, (int)Math.Round((timedOutAt.ToDateTimeOffset() - startedAt).TotalMilliseconds)),
             Detail = "timeout",
-            ErrorMessage = $"Probe '{descriptor?.ProbeKind ?? active.Slug}' exceeded {timeoutMs}ms.",
+            ErrorMessage = $"Probe '{_runtimeState.Spec?.ProbeKind ?? active.Slug}' exceeded {timeoutMs}ms.",
             ObservedAt = timedOutAt,
-        };
-
-        try
-        {
-            await PersistProbeTerminalEventsAsync(outcome, active.OperationId);
-        }
-        catch (EventStoreOptimisticConcurrencyException ex)
-        {
-            Logger.LogInformation(ex,
-                "Probe {Slug} timeout outcome lost a concurrent tick race; next tick will be re-armed",
-                timeout.Slug);
-        }
-
-        await EnsureNextTickAsync(initial: false);
+        }, active.OperationId);
+        await TryWriteOperationalSnapshotAsync();
+        ScheduleNextTick(initial: false);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleCompletedAsync(HealthProbeCompletedEvent completed)
     {
         ArgumentNullException.ThrowIfNull(completed);
-        var active = State.ActiveExecution;
-        if (active == null ||
-            string.IsNullOrWhiteSpace(completed.OperationId) ||
-            !string.Equals(active.OperationId, completed.OperationId, StringComparison.Ordinal))
-        {
+        var active = _runtimeState.ActiveExecution;
+        if (!Matches(active, completed.OperationId))
             return;
-        }
 
-        try
-        {
-            await PersistProbeTerminalEventsAsync(completed.Outcome, active.OperationId);
-        }
-        catch (EventStoreOptimisticConcurrencyException ex)
-        {
-            Logger.LogInformation(ex,
-                "Probe {Slug} observed outcome lost a concurrent tick race; next tick will be re-armed",
-                completed.Slug);
-        }
-
-        await EnsureNextTickAsync(initial: false);
+        CancelAndDispose(ref _executionTimeoutCts);
+        ApplyOutcome(completed.Outcome, active!.OperationId);
+        await TryWriteOperationalSnapshotAsync();
+        ScheduleNextTick(initial: false);
     }
-
-    private Task PersistProbeTerminalEventsAsync(HealthProbeOutcome outcome, string operationId)
-    {
-        // Refactor (iter158/cluster-157-004-timeout-cts):
-        // Old: HealthProbeObserved also cleared ActiveExecution, leaving the typed
-        //      HealthProbeExecutionCleared domain event with no producer.
-        // New: probe completion persists observed outcome and explicit clear event
-        //      together, so execution lifecycle remains actor-owned and observable.
-        return PersistDomainEventsAsync([
-            new HealthProbeObserved { Outcome = outcome },
-            new HealthProbeExecutionCleared { OperationId = operationId },
-        ]);
-    }
-
-    // ─── Probe execution ───
 
     private async Task StartProbeExecutionAsync(HealthProbeTargetDescriptor descriptor)
     {
         var registry = Services.GetService<IHealthProbeExecutorRegistry>();
         var timeProvider = ResolveTimeProvider();
-        // Refactor (iter89/cluster-089-status-dashboard-probe-clock):
-        // Old: sample DateTimeOffset.UtcNow and Stopwatch directly inside the actor.
-        // New: use the injected TimeProvider for observed_at, timeout budget, and monotonic elapsed latency.
         var observedAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow());
 
         if (registry == null)
@@ -202,30 +153,46 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             return;
         }
 
-        var startedAt = timeProvider.GetTimestamp();
         var timeoutMs = descriptor.TimeoutMs > 0 ? descriptor.TimeoutMs : 5_000;
-        var execution = await RegisterExecutionTimeoutAsync(descriptor, timeoutMs);
-        _ = ExecuteProbeAndSignalAsync(executor, descriptor.Clone(), execution, startedAt);
+        var execution = new HealthProbeExecutionState
+        {
+            OperationId = Guid.NewGuid().ToString("N"),
+            Slug = descriptor.Slug,
+            StartedAt = observedAt,
+            TimeoutMs = timeoutMs,
+        };
+        _runtimeState.ActiveExecution = execution;
+        ScheduleExecutionTimeout(execution);
+        _ = ExecuteProbeAndSignalAsync(
+            executor,
+            descriptor.Clone(),
+            execution.Clone(),
+            timeProvider.GetTimestamp(),
+            _lifetimeCts?.Token ?? CancellationToken.None);
     }
 
     private async Task ExecuteProbeAndSignalAsync(
         IHealthProbeExecutor executor,
         HealthProbeTargetDescriptor descriptor,
         HealthProbeExecutionState execution,
-        long startedAt)
+        long startedAt,
+        CancellationToken ct)
     {
         var timeProvider = ResolveTimeProvider();
         HealthProbeOutcome outcome;
         try
         {
-            outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
+            outcome = await executor.ProbeAsync(descriptor, ct);
             outcome.LatencyMs = ToLatencyMs(timeProvider.GetElapsedTime(startedAt));
             outcome.ObservedAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow());
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Probe '{Kind}' for {Slug} threw unexpectedly",
-                descriptor.ProbeKind, descriptor.Slug);
+            Logger.LogWarning(ex, "Probe '{Kind}' for {Slug} threw unexpectedly", descriptor.ProbeKind, descriptor.Slug);
             outcome = new HealthProbeOutcome
             {
                 Status = HealthOutcomeStatus.Down,
@@ -236,108 +203,197 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             };
         }
 
-        await SendToAsync(Id, new HealthProbeCompletedEvent
+        try
         {
-            Slug = descriptor.Slug,
-            OperationId = execution.OperationId,
-            Outcome = outcome,
-        }, CancellationToken.None);
+            await EventPublisher.PublishAsync(
+                new HealthProbeCompletedEvent
+                {
+                    Slug = descriptor.Slug,
+                    OperationId = execution.OperationId,
+                    Outcome = outcome,
+                },
+                TopologyAudience.Self,
+                ct,
+                sourceEnvelope: null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to publish health-probe completion for actor {ActorId}", Id);
+        }
     }
 
     private async Task ObserveImmediateOutcomeAsync(HealthProbeOutcome outcome)
     {
-        try
-        {
-            await PersistDomainEventAsync(new HealthProbeObserved { Outcome = outcome });
-        }
-        catch (EventStoreOptimisticConcurrencyException ex)
-        {
-            Logger.LogInformation(ex, "Immediate probe outcome lost a concurrent tick race; next tick will be re-armed");
-        }
-
-        await EnsureNextTickAsync(initial: false);
+        ApplyOutcome(outcome, operationId: null);
+        await TryWriteOperationalSnapshotAsync();
+        ScheduleNextTick(initial: false);
     }
 
-    // ─── Self-scheduling ───
-
-    private async Task EnsureNextTickAsync(bool initial)
+    private void ApplyOutcome(HealthProbeOutcome outcome, string? operationId)
     {
-        var descriptor = State.Spec;
-        _ = descriptor; // ensures usage below;
-        if (descriptor == null || !descriptor.Enabled) return;
+        var cloned = outcome?.Clone() ?? new HealthProbeOutcome
+        {
+            Status = HealthOutcomeStatus.Unknown,
+            ObservedAt = Timestamp.FromDateTimeOffset(ResolveTimeProvider().GetUtcNow()),
+        };
+        _runtimeState.LastOutcome = cloned;
+        _runtimeState.LastCheckAt = cloned.ObservedAt;
+        _runtimeState.RecentOutcomes.Add(cloned.Clone());
+        TrimRecentOutcomes(_runtimeState, cloned.ObservedAt);
 
-        var intervalSeconds = descriptor.IntervalSeconds > 0 ? descriptor.IntervalSeconds : 60;
+        if (cloned.Status == HealthOutcomeStatus.Ok)
+        {
+            _runtimeState.ConsecutiveFailures = 0;
+            _runtimeState.LastSuccessAt = cloned.ObservedAt;
+        }
+        else
+        {
+            _runtimeState.ConsecutiveFailures += 1;
+        }
+
+        if (Matches(_runtimeState.ActiveExecution, operationId))
+            _runtimeState.ActiveExecution = null;
+    }
+
+    private void ScheduleNextTick(bool initial)
+    {
+        CancelAndDispose(ref _nextTickCts);
+        var descriptor = _runtimeState.Spec;
+        if (descriptor == null || !descriptor.Enabled || _lifetimeCts == null)
+            return;
+
         var dueTime = initial
             ? TimeSpan.FromSeconds(1)
-            : TimeSpan.FromSeconds(intervalSeconds);
-        var scheduledFor = ResolveTimeProvider().GetUtcNow().Add(dueTime);
-
-        await ScheduleSelfDurableTimeoutAsync(
-            callbackId: TickCallbackId,
-            dueTime: dueTime,
-            evt: new HealthProbeTickRequested
+            : TimeSpan.FromSeconds(descriptor.IntervalSeconds > 0 ? descriptor.IntervalSeconds : 60);
+        _nextTickCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+        _ = DelayAndPublishSelfAsync(
+            dueTime,
+            new HealthProbeTickRequested
             {
                 Slug = descriptor.Slug,
-                ScheduledFor = Timestamp.FromDateTimeOffset(scheduledFor),
-            });
+                ScheduledFor = Timestamp.FromDateTimeOffset(ResolveTimeProvider().GetUtcNow().Add(dueTime)),
+            },
+            _nextTickCts.Token);
     }
 
-    private async Task<HealthProbeExecutionState> RegisterExecutionTimeoutAsync(
-        HealthProbeTargetDescriptor descriptor,
-        int timeoutMs)
+    private void ScheduleExecutionTimeout(HealthProbeExecutionState execution)
     {
-        var now = ResolveTimeProvider().GetUtcNow();
-        var ticks = ResolveTimeProvider().GetTimestamp();
-        var operationId = RuntimeCallbackKeyComposer.BuildCallbackId(
-            "health-probe-operation",
-            descriptor.Slug,
-            now.ToUnixTimeMilliseconds().ToString(),
-            ticks.ToString());
-        var execution = new HealthProbeExecutionState
-        {
-            OperationId = operationId,
-            Slug = descriptor.Slug,
-            StartedAt = Timestamp.FromDateTimeOffset(now),
-            TimeoutMs = timeoutMs,
-        };
-        await PersistDomainEventAsync(new HealthProbeExecutionStarted
-        {
-            Execution = execution.Clone(),
-        });
+        CancelAndDispose(ref _executionTimeoutCts);
+        if (_lifetimeCts == null)
+            return;
 
-        await ScheduleSelfDurableTimeoutAsync(
-            RuntimeCallbackKeyComposer.BuildCallbackId(
-                ExecutionTimeoutCallbackPrefix,
-                descriptor.Slug,
-                operationId),
-            TimeSpan.FromMilliseconds(timeoutMs),
+        var dueTime = TimeSpan.FromMilliseconds(execution.TimeoutMs);
+        _executionTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+        _ = DelayAndPublishSelfAsync(
+            dueTime,
             new HealthProbeTimeoutFiredEvent
             {
-                Slug = descriptor.Slug,
-                OperationId = operationId,
-                TimedOutAt = Timestamp.FromDateTimeOffset(now.AddMilliseconds(timeoutMs)),
-                TimeoutMs = timeoutMs,
-            });
-
-        return execution;
+                Slug = execution.Slug,
+                OperationId = execution.OperationId,
+                TimedOutAt = Timestamp.FromDateTimeOffset(
+                    (execution.StartedAt?.ToDateTimeOffset() ?? ResolveTimeProvider().GetUtcNow()).Add(dueTime)),
+                TimeoutMs = execution.TimeoutMs,
+            },
+            _executionTimeoutCts.Token);
     }
 
-    // ─── Activation ───
+    private async Task DelayAndPublishSelfAsync<TEvent>(
+        TimeSpan delay,
+        TEvent evt,
+        CancellationToken ct)
+        where TEvent : IMessage
+    {
+        try
+        {
+            await Task.Delay(delay, ResolveTimeProvider(), ct);
+            ct.ThrowIfCancellationRequested();
+            await EventPublisher.PublishAsync(
+                evt,
+                TopologyAudience.Self,
+                CancellationToken.None,
+                sourceEnvelope: null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to publish delayed health-probe self signal for actor {ActorId}", Id);
+        }
+    }
+
+    private async Task TryWriteOperationalSnapshotAsync(CancellationToken ct = default)
+    {
+        var spec = _runtimeState.Spec;
+        if (spec == null || string.IsNullOrWhiteSpace(spec.Slug))
+            return;
+
+        var snapshot = new HealthProbeOperationalSnapshot
+        {
+            Target = spec.Clone(),
+            ConsecutiveFailures = _runtimeState.ConsecutiveFailures,
+            UpdatedAt = Timestamp.FromDateTimeOffset(ResolveTimeProvider().GetUtcNow()),
+        };
+        if (_runtimeState.LastOutcome != null)
+            snapshot.LastOutcome = _runtimeState.LastOutcome.Clone();
+        if (_runtimeState.LastCheckAt != null)
+            snapshot.LastCheckAt = _runtimeState.LastCheckAt.Clone();
+        if (_runtimeState.LastSuccessAt != null)
+            snapshot.LastSuccessAt = _runtimeState.LastSuccessAt.Clone();
+        snapshot.RecentOutcomes.AddRange(_runtimeState.RecentOutcomes.Select(static outcome => outcome.Clone()));
+
+        try
+        {
+            var store = Services.GetService<IHealthProbeOperationalSnapshotStore>()
+                ?? throw new InvalidOperationException("IHealthProbeOperationalSnapshotStore is not registered.");
+            await store.UpsertAsync(snapshot, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to overwrite operational health snapshot for probe {Slug}", spec.Slug);
+        }
+    }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-
-        if (State.Spec != null && State.Spec.Enabled)
-        {
-            // Local runtime loses callback state across restarts — re-arm the
-            // self-tick chain so probing resumes without operator action. The
-            // Orleans reminder backend is idempotent under the same callback id.
-            await EnsureNextTickAsync(initial: true);
-        }
+        CancelAndDispose(ref _lifetimeCts);
+        _lifetimeCts = new CancellationTokenSource();
+        State = NewRuntimeState(State.Spec);
+        _runtimeState = State.Clone();
+        await TryWriteOperationalSnapshotAsync(ct);
+        await TryPurgeLegacyDurableCallbacksAsync(ct);
+        ScheduleNextTick(initial: true);
     }
 
-    // ─── State reducer ───
+    protected override async Task OnDeactivateAsync(CancellationToken ct)
+    {
+        CancelAndDispose(ref _nextTickCts);
+        CancelAndDispose(ref _executionTimeoutCts);
+        CancelAndDispose(ref _lifetimeCts);
+        await base.OnDeactivateAsync(ct);
+    }
+
+    private async Task TryPurgeLegacyDurableCallbacksAsync(CancellationToken ct)
+    {
+        try
+        {
+            await PurgeDurableCallbacksAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to purge legacy durable health-probe callbacks for actor {ActorId}", Id);
+        }
+    }
 
     protected override HealthProbeTargetState TransitionState(HealthProbeTargetState current, IMessage evt) =>
         StateTransitionMatcher
@@ -348,9 +404,9 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             .On<HealthProbeExecutionCleared>(ApplyExecutionCleared)
             .OrCurrent();
 
-    private static HealthProbeTargetState ApplyConfigured(HealthProbeTargetState s, HealthProbeConfigured evt)
+    private static HealthProbeTargetState ApplyConfigured(HealthProbeTargetState state, HealthProbeConfigured evt)
     {
-        var next = s.Clone();
+        var next = state.Clone();
         next.Spec = evt.Spec?.Clone();
         next.LastOutcome = null;
         next.LastCheckAt = null;
@@ -361,9 +417,9 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         return next;
     }
 
-    private static HealthProbeTargetState ApplyObserved(HealthProbeTargetState s, HealthProbeObserved evt)
+    private static HealthProbeTargetState ApplyObserved(HealthProbeTargetState state, HealthProbeObserved evt)
     {
-        var next = s.Clone();
+        var next = state.Clone();
         var outcome = evt.Outcome?.Clone();
         next.LastOutcome = outcome;
         next.LastCheckAt = outcome?.ObservedAt;
@@ -382,43 +438,50 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         {
             next.ConsecutiveFailures += 1;
         }
+
+        if (Matches(next.ActiveExecution, evt.OperationId))
+            next.ActiveExecution = null;
         return next;
     }
 
-    private static HealthProbeTargetState ApplyExecutionStarted(HealthProbeTargetState s, HealthProbeExecutionStarted evt)
+    private static HealthProbeTargetState ApplyExecutionStarted(
+        HealthProbeTargetState state,
+        HealthProbeExecutionStarted evt)
     {
-        var next = s.Clone();
+        var next = state.Clone();
         next.ActiveExecution = evt.Execution?.Clone();
         return next;
     }
 
-    private static HealthProbeTargetState ApplyExecutionCleared(HealthProbeTargetState s, HealthProbeExecutionCleared evt)
+    private static HealthProbeTargetState ApplyExecutionCleared(
+        HealthProbeTargetState state,
+        HealthProbeExecutionCleared evt)
     {
-        var next = s.Clone();
-        if (next.ActiveExecution != null &&
-            string.Equals(next.ActiveExecution.OperationId, evt.OperationId, StringComparison.Ordinal))
-        {
+        var next = state.Clone();
+        if (Matches(next.ActiveExecution, evt.OperationId))
             next.ActiveExecution = null;
-        }
         return next;
     }
+
+    private static HealthProbeTargetState NewRuntimeState(HealthProbeTargetDescriptor? spec) =>
+        new() { Spec = spec?.Clone() };
+
+    private static bool Matches(HealthProbeExecutionState? execution, string? operationId) =>
+        execution != null &&
+        !string.IsNullOrWhiteSpace(operationId) &&
+        string.Equals(execution.OperationId, operationId, StringComparison.Ordinal);
 
     private static void TrimRecentOutcomes(HealthProbeTargetState state, Timestamp? latestObservedAt)
     {
         if (latestObservedAt != null)
         {
             var cutoff = latestObservedAt.ToDateTimeOffset() - RetainedOutcomeWindow;
-            while (state.RecentOutcomes.Count > 0 &&
-                   IsBefore(state.RecentOutcomes[0].ObservedAt, cutoff))
-            {
+            while (state.RecentOutcomes.Count > 0 && IsBefore(state.RecentOutcomes[0].ObservedAt, cutoff))
                 state.RecentOutcomes.RemoveAt(0);
-            }
         }
 
         while (state.RecentOutcomes.Count > RetainedOutcomeCount)
-        {
             state.RecentOutcomes.RemoveAt(0);
-        }
     }
 
     private static bool IsBefore(Timestamp? timestamp, DateTimeOffset cutoff) =>
@@ -430,10 +493,13 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
     private static int ToLatencyMs(TimeSpan elapsed) =>
         (int)Math.Clamp(elapsed.TotalMilliseconds, 0, int.MaxValue);
 
-    private static bool DescriptorsEquivalent(HealthProbeTargetDescriptor? a, HealthProbeTargetDescriptor? b)
+    private static bool DescriptorsEquivalent(HealthProbeTargetDescriptor? a, HealthProbeTargetDescriptor? b) =>
+        ReferenceEquals(a, b) || (a != null && b != null && a.Equals(b));
+
+    private static void CancelAndDispose(ref CancellationTokenSource? source)
     {
-        if (ReferenceEquals(a, b)) return true;
-        if (a == null || b == null) return false;
-        return a.Equals(b);
+        source?.Cancel();
+        source?.Dispose();
+        source = null;
     }
 }

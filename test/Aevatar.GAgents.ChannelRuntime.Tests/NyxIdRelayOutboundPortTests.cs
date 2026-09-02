@@ -50,11 +50,9 @@ public sealed class NyxIdRelayOutboundPortTests
 
         result.Success.Should().BeTrue();
         result.SentActivityId.Should().Be("reply-1");
-        handler.Requests.Should().ContainSingle();
         handler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
         handler.Requests[0].Authorization.Should().Be("Bearer relay-token");
-        handler.Requests[0].Body.Should().Contain("\"message_id\":\"msg-1\"");
-        handler.Requests[0].Body.Should().Contain("\"text\":\"rendered:hello relay\"");
+        AssertSingleRelayTextRequest(handler, "msg-1", "rendered:hello relay");
     }
 
     [Fact]
@@ -75,11 +73,9 @@ public sealed class NyxIdRelayOutboundPortTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        handler.Requests.Should().ContainSingle();
         handler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
         handler.Requests[0].Authorization.Should().Be("Bearer bot-agent-key-1");
-        handler.Requests[0].Body.Should().Contain("\"message_id\":\"msg-1\"");
-        handler.Requests[0].Body.Should().Contain("\"text\":\"rendered:workflow done\"");
+        AssertSingleRelayTextRequest(handler, "msg-1", "rendered:workflow done");
     }
 
     [Theory]
@@ -236,7 +232,7 @@ public sealed class NyxIdRelayOutboundPortTests
     }
 
     [Fact]
-    public async Task SendAsync_ShouldRejectMissingComposer()
+    public async Task SendAsync_ShouldUsePlainTextFallbackWhenComposerIsMissing()
     {
         var handler = new RecordingJsonHandler();
         var port = CreatePort(handler);
@@ -252,8 +248,63 @@ public sealed class NyxIdRelayOutboundPortTests
             "relay-token",
             CancellationToken.None);
 
+        result.Success.Should().BeTrue();
+        AssertSingleRelayTextRequest(handler, "msg-1", "hello relay");
+    }
+
+    [Fact]
+    public async Task SendAsync_ShouldFlattenCardAndActionsWhenComposerIsMissing()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler);
+        var content = BuildInteractiveContent();
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            content,
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-options-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        AssertSingleRelayTextRequest(
+            handler,
+            "msg-lark-options-1",
+            string.Join(
+                "\n",
+                "Choose route",
+                "Model settings",
+                "Current: no service selected",
+                "Service: openai",
+                "\u2022 Select service",
+                "  - OpenAI",
+                "  - Azure OpenAI",
+                "\u2022 Refresh"));
+    }
+
+    [Fact]
+    public async Task SendAsync_ShouldRejectEmptyPlainTextFallbackWithoutHttpRequest()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler);
+
+        var result = await port.SendAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent(),
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
         result.Success.Should().BeFalse();
-        result.ErrorCode.Should().Be("composer_not_found");
+        result.ErrorCode.Should().Be("empty_reply");
         handler.Requests.Should().BeEmpty();
     }
 
@@ -276,6 +327,28 @@ public sealed class NyxIdRelayOutboundPortTests
 
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("composer_unsupported");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SendAsync_ShouldRejectRegisteredComposerWithoutPlainTextPayload()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new NonPlainTextComposer("slack"));
+
+        var result = await port.SendAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello relay" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("plain_text_payload_unavailable");
         handler.Requests.Should().BeEmpty();
     }
 
@@ -462,6 +535,49 @@ public sealed class NyxIdRelayOutboundPortTests
             "group",
             "conv-1");
 
+    private static MessageContent BuildInteractiveContent()
+    {
+        var content = new MessageContent { Text = "Choose route" };
+        var card = new CardBlock
+        {
+            Title = "Model settings",
+            Text = "Current: no service selected",
+        };
+        card.Fields.Add(new CardField { Title = "Service", Text = "openai" });
+        card.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "refresh",
+            Label = "Refresh",
+        });
+        content.Cards.Add(card);
+        var select = new ActionElement
+        {
+            Kind = ActionElementKind.Select,
+            ActionId = "service",
+            Label = "Select service",
+        };
+        select.Options.Add(new ActionOption { Label = "OpenAI", Value = "openai" });
+        select.Options.Add(new ActionOption { Label = "Azure OpenAI", Value = "azure-openai" });
+        content.Actions.Add(select);
+
+        return content;
+    }
+
+    private static void AssertSingleRelayTextRequest(
+        RecordingJsonHandler handler,
+        string expectedMessageId,
+        string expectedText)
+    {
+        handler.Requests.Should().ContainSingle();
+        using var document = JsonDocument.Parse(handler.Requests[0].Body);
+        var root = document.RootElement;
+        root.GetProperty("message_id").GetString().Should().Be(expectedMessageId);
+        var reply = root.GetProperty("reply");
+        reply.GetProperty("text").GetString().Should().Be(expectedText);
+        reply.TryGetProperty("metadata", out _).Should().BeFalse();
+    }
+
     private sealed class RecordingJsonHandler(
         HttpStatusCode status = HttpStatusCode.OK,
         string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""",
@@ -504,4 +620,15 @@ public sealed class NyxIdRelayOutboundPortTests
     }
 
     private sealed record StubNativePayload(string PlainText) : IPlainTextComposedMessage;
+
+    private sealed class NonPlainTextComposer(string platform) : IMessageComposer<object>
+    {
+        public ChannelId Channel { get; } = ChannelId.From(platform);
+
+        public object Compose(MessageContent intent, ComposeContext context) => new();
+
+        object IMessageComposer.Compose(MessageContent intent, ComposeContext context) => Compose(intent, context);
+
+        public ComposeCapability Evaluate(MessageContent intent, ComposeContext context) => ComposeCapability.Exact;
+    }
 }

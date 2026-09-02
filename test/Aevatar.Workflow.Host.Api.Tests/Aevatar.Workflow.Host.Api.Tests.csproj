@@ -9,11 +9,15 @@
     <RootNamespace>Aevatar.Workflow.Host.Api.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.BackendConsole.Hosting\Aevatar.BackendConsole.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Runtime.Abstractions\Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Projection\Aevatar.AI.Projection.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Local\Aevatar.Foundation.Runtime.Implementations.Local.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Core\Aevatar.GAgentService.Core.csproj" />
@@ -22,6 +26,7 @@
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Integration.AI\Aevatar.Workflow.Integration.AI.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Host.Api\Aevatar.Workflow.Host.Api.csproj" />
     <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Hosting\Aevatar.Workflow.Extensions.Hosting.csproj" />
   </ItemGroup>

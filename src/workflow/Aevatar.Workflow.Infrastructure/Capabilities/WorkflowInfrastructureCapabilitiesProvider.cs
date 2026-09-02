@@ -18,7 +18,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                 "Suspends workflow execution until an external signal arrives.",
                 [
                     new PrimitiveParameterDescriptor("signal_name", "string", true, "Signal name used to resume this waiter."),
-                    new PrimitiveParameterDescriptor("timeout_ms", "int", false, "Maximum wait duration in milliseconds."),
+                    new PrimitiveParameterDescriptor("timeout_ms", "int", false, "Maximum wait duration in milliseconds, capped at 86400000."),
                 ]),
             ["workflow_call"] = new(
                 "Invokes another workflow definition as a sub-workflow.",
@@ -28,16 +28,10 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                 ]),
             ["connector_call"] = new(
                 "Invokes an external connector configured in connectors.json.",
-                [
-                    new PrimitiveParameterDescriptor("connector", "string", true, "Connector name."),
-                    new PrimitiveParameterDescriptor("operation", "string", false, "Connector-specific operation or method."),
-                ]),
+                ConnectorParameterDescriptors()),
             ["secure_connector_call"] = new(
                 "Invokes an external connector with secure payload handling.",
-                [
-                    new PrimitiveParameterDescriptor("connector", "string", true, "Connector name."),
-                    new PrimitiveParameterDescriptor("operation", "string", false, "Connector-specific operation or method."),
-                ]),
+                ConnectorParameterDescriptors()),
             ["llm_call"] = new(
                 "Runs an LLM role step and returns generated output.",
                 [
@@ -65,6 +59,31 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                     new PrimitiveParameterDescriptor("prompt", "string", false, "Prompt for the scheduled workflow chat request."),
                 ]),
         };
+
+    private static IReadOnlyList<PrimitiveParameterDescriptor> ConnectorParameterDescriptors() =>
+    [
+        new("connector", "string", true, "Connector name."),
+        new("operation", "string", false, "Connector-specific operation or method."),
+        new("approval.policy", "string", false, "Set to required to suspend before connector execution.", EnumValuesInput: ["required"]),
+        new("approval.service_ref", "string", false, "NyxID connected-service reference bound to the approval."),
+        new("approval.node_id", "string", false, "Required NyxID node routing identity."),
+        new("approval.http_verb", "string", false, "Normalized external action HTTP verb."),
+        new("approval.resource", "string", false, "Redacted external resource identity."),
+        new("approval.permission_scope", "string", false, "Permission scope granted by this single action approval."),
+        new("approval.expiration_seconds", "int", false, "Local approval validity window in seconds."),
+        new(
+            "approval.status_check_interval_seconds",
+            "int",
+            false,
+            "Durable remote status check interval in seconds.",
+            DefaultValue: $"{ConnectorApprovalOptionsDefinition.DefaultStatusCheckIntervalSeconds}"),
+        new("approval.destructive", "bool", false, "Whether the action is destructive."),
+        new("approval.team_id", "string", false, "Owning Studio team identity."),
+        new("approval.member_id", "string", false, "Owning Studio member identity."),
+        new("approval.workflow_id", "string", false, "Workflow definition identity."),
+        new("approval.published_service_id", "string", false, "Published service runtime identity."),
+        new("approval.policy_reason", "string", false, "Stable reason code for requiring approval."),
+    ];
 
     private readonly IEnumerable<IWorkflowModulePack> _modulePacks;
     private readonly WorkflowCatalogReadModelQueryPort _catalogQueryPort;

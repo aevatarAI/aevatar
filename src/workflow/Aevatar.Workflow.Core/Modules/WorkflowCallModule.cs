@@ -92,6 +92,7 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
             RootRunId = runtimeContext.RootRunId,
             RequestedDepth = Math.Max(0, runtimeContext.Depth) + 1,
         };
+        invocation.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
 
         await ctx.PublishAsync(invocation, TopologyAudience.Self, ct);
     }

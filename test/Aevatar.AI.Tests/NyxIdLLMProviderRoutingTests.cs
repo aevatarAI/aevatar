@@ -1,3 +1,4 @@
+using System.Reflection;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.LLMProviders.NyxId;
@@ -30,15 +31,15 @@ public sealed class NyxIdLLMProviderRoutingTests
     }
 
     [Fact]
-    public async Task ResolveRouteAsync_ShouldUseDefaultGateway_WhenRoutePreferenceIsGateway()
+    public async Task ResolveRouteAsync_ShouldUseCanonicalGateway_WhenRoutePreferenceIsGateway()
     {
         var provider = CreateProvider();
 
         var route = await provider.ResolveRouteAsync(
             CreateRequest(routePreference: "gateway"));
 
-        route.RouteName.Should().Be("nyxid");
-        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1/"));
+        route.RouteName.Should().Be("/api/v1/llm/gateway/v1");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1"));
     }
 
     [Fact]
@@ -60,6 +61,18 @@ public sealed class NyxIdLLMProviderRoutingTests
 
         var route = await provider.ResolveRouteAsync(
             CreateRequest(routePreference: "chrono-llm"));
+
+        route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm"));
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldRouteToServiceProxy_WhenRoutePreferenceIsCanonicalProxyPath()
+    {
+        var provider = CreateProvider();
+
+        var route = await provider.ResolveRouteAsync(
+            CreateRequest(routePreference: "/api/v1/proxy/s/chrono-llm"));
 
         route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm");
         route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm"));
@@ -312,28 +325,58 @@ public sealed class NyxIdLLMProviderRoutingTests
         route.Request.Temperature.Should().Be(0.2);
     }
 
-    [Fact]
-    public async Task ResolveRouteAsync_ShouldIgnoreAbsoluteUriInRoutePreference()
+    [Theory]
+    [InlineData("/https://attacker.example")]
+    [InlineData("//attacker.example")]
+    [InlineData("https://attacker.example")]
+    [InlineData("/api/v1/proxy/s/chrono-llm?target=https://attacker.example")]
+    [InlineData("/api/v1/proxy/s/chrono-llm#https://attacker.example")]
+    [InlineData("user@attacker.example")]
+    [InlineData("/custom/path")]
+    [InlineData("/api/v1/proxy/s/chrono-llm/extra")]
+    [InlineData("Bad-Slug")]
+    [InlineData("bad_slug")]
+    [InlineData("bad.slug")]
+    [InlineData("bad-")]
+    [InlineData("bad--slug")]
+    [InlineData("/api/v1/proxy/s/Bad-Slug")]
+    [InlineData("/api/v1/proxy/s/bad_slug")]
+    [InlineData("/api/v1/proxy/s/bad.slug")]
+    [InlineData("/api/v1/proxy/s/bad-")]
+    [InlineData("/api/v1/proxy/s/bad--slug")]
+    public async Task ResolveRouteAsync_ShouldRejectNonCanonicalRoutePreference(string routePreference)
     {
         var provider = CreateProvider();
 
         var route = await provider.ResolveRouteAsync(
-            CreateRequest(routePreference: "https://evil.com"));
+            CreateRequest(routePreference: routePreference));
 
         route.RouteName.Should().Be("nyxid");
         route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1/"));
+        route.Endpoint.Scheme.Should().Be(Uri.UriSchemeHttps);
+        route.Endpoint.Authority.Should().Be("nyx.example.com");
     }
 
-    [Fact]
-    public async Task ResolveRouteAsync_ShouldHandleAbsolutePathRoutePreference()
+    [Theory]
+    [InlineData("/https://attacker.example")]
+    [InlineData("//attacker.example")]
+    [InlineData("https://attacker.example")]
+    [InlineData("Bad-Slug")]
+    [InlineData("bad_slug")]
+    [InlineData("bad.slug")]
+    [InlineData("bad-")]
+    [InlineData("bad--slug")]
+    public async Task ResolveRouteAsync_ShouldRejectNonCanonicalConfiguredDefaultRoutePreference(
+        string defaultRoutePreference)
     {
-        var provider = CreateProvider();
+        var provider = CreateProviderWithDefaultRoute(defaultRoutePreference);
 
-        var route = await provider.ResolveRouteAsync(
-            CreateRequest(routePreference: "/custom/path"));
+        var route = await provider.ResolveRouteAsync(CreateRequest());
 
-        route.RouteName.Should().Be("/custom/path");
-        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/custom/path"));
+        route.RouteName.Should().Be("nyxid");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1/"));
+        route.Endpoint.Scheme.Should().Be(Uri.UriSchemeHttps);
+        route.Endpoint.Authority.Should().Be("nyx.example.com");
     }
 
     [Fact]
@@ -351,14 +394,26 @@ public sealed class NyxIdLLMProviderRoutingTests
     }
 
     [Fact]
-    public async Task ResolveRouteAsync_ShouldUseDefaultRoutePreference_WhenRequestPreferenceIsGatewayAlias()
+    public async Task ResolveRouteAsync_ExplicitGatewayAlias_ShouldBeatConfiguredProxyDefault()
     {
         var provider = CreateProviderWithDefaultRoute("chrono-llm-public");
 
         var route = await provider.ResolveRouteAsync(CreateRequest(routePreference: "gateway"));
 
-        route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm-public");
-        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm-public"));
+        route.RouteName.Should().Be("/api/v1/llm/gateway/v1");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1"));
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ExplicitGateway_ShouldBeatConfiguredProxyDefault()
+    {
+        var provider = CreateProviderWithDefaultRoute("chrono-llm-public");
+
+        var route = await provider.ResolveRouteAsync(
+            CreateRequest(routePreference: "/api/v1/llm/gateway/v1"));
+
+        route.RouteName.Should().Be("/api/v1/llm/gateway/v1");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1"));
     }
 
     [Fact]
@@ -370,6 +425,36 @@ public sealed class NyxIdLLMProviderRoutingTests
 
         route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm");
         route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm"));
+    }
+
+    [Fact]
+    public void CreateDelegateProvider_ShouldPassToolExecutionPortToMeaiProvider()
+    {
+        var executionPort = new RecordingExecutionPort();
+        var provider = new NyxIdLLMProvider(
+            name: "nyxid",
+            defaultModel: "gpt-5.5",
+            nyxEndpoint: "https://nyx.example.com/api/v1/llm/gateway/v1",
+            accessTokenAccessor: static () => null,
+            toolExecutionPort: executionPort);
+        var method = typeof(NyxIdLLMProvider).GetMethod(
+            "CreateDelegateProvider",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
+        var delegateProvider = method!.Invoke(provider,
+            [
+                new LLMRequest { Messages = [ChatMessage.User("hi")], Model = "gpt-5.5" },
+                new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm-public"),
+                "/api/v1/proxy/s/chrono-llm-public",
+                "test-token",
+            ]);
+
+        delegateProvider.Should().NotBeNull();
+        var executionPortField = delegateProvider!.GetType().GetField(
+            "_toolExecutionPort",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        executionPortField.Should().NotBeNull();
+        executionPortField!.GetValue(delegateProvider).Should().BeSameAs(executionPort);
     }
 
     private static NyxIdLLMProvider CreateProvider() =>
@@ -407,4 +492,12 @@ public sealed class NyxIdLLMProviderRoutingTests
             NyxIdRoutePreference: routePreference,
             MaxToolRoundsOverride: null,
             UserMemoryPrompt: null);
+
+    private sealed class RecordingExecutionPort : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
 }

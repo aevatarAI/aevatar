@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Microsoft.Extensions.Configuration;
@@ -161,18 +162,22 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
             })
             .ToList();
 
-        var preferences = await preferencesTask;
+        var preferenceControl = (await preferencesTask).ApplyTo(LLMControlContext.Empty);
         if (preferredRoute is not null || defaultModel is not null)
         {
-            preferences = preferences with
+            preferenceControl = preferenceControl with
             {
-                PreferredRoute = preferredRoute is null ? preferences.PreferredRoute : preferredRoute.Trim(),
-                DefaultModel = defaultModel is null ? preferences.DefaultModel : defaultModel.Trim(),
+                NyxIdRoutePreference = preferredRoute is null
+                    ? preferenceControl.NyxIdRoutePreference
+                    : preferredRoute.Trim(),
+                ModelOverride = defaultModel is null
+                    ? preferenceControl.ModelOverride
+                    : defaultModel.Trim(),
             };
         }
 
         var ordered = candidates
-            .OrderByDescending(candidate => IsPreferredParticipant(candidate, preferences.PreferredRoute))
+            .OrderByDescending(candidate => IsPreferredParticipant(candidate, preferenceControl.NyxIdRoutePreference))
             .ThenBy(candidate => candidate.Provider.ProviderName ?? candidate.Provider.ProviderSlug ?? candidate.ParticipantId, StringComparer.OrdinalIgnoreCase)
             .ThenBy(candidate => candidate.ParticipantId, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -184,7 +189,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
             if (!seenParticipantIds.Add(candidate.ParticipantId))
                 continue;
 
-            var model = ResolveParticipantModel(preferences.DefaultModel, ResolveProviderModels(candidate.Provider));
+            var model = ResolveParticipantModel(preferenceControl.ModelOverride, ResolveProviderModels(candidate.Provider));
             participants.Add(new StreamingProxyNyxParticipantDefinition(
                 candidate.ParticipantId,
                 candidate.RoutePreference,
@@ -380,7 +385,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     private async Task<NyxIdUserLlmPreferences> GetPreferencesAsync(CancellationToken ct)
     {
         if (_preferencesStore == null)
-            return new NyxIdUserLlmPreferences(string.Empty, string.Empty);
+            return NyxIdUserLlmPreferences.Empty;
 
         try
         {
@@ -388,7 +393,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         }
         catch
         {
-            return new NyxIdUserLlmPreferences(string.Empty, string.Empty);
+            return NyxIdUserLlmPreferences.Empty;
         }
     }
 

@@ -8,11 +8,18 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Workflow.Extensions.Hosting;
 
 public static class WorkflowProjectionProviderServiceCollectionExtensions
 {
+    // Engine labels surfaced by the read-model inventory (GET /api/cqrs/readmodels). The workflow
+    // document store/engine choice is a branch in this file (ES vs InMemory), so the inventory
+    // descriptors are declared right next to the store registrations that pick the engine.
+    private const string ElasticsearchEngineLabel = "Elasticsearch";
+    private const string InMemoryEngineLabel = "dev/InMemory";
+
     public static IServiceCollection AddWorkflowProjectionReadModelProviders(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -86,6 +93,8 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             configuration,
             static document => document.Id);
+
+        AddWorkflowReadModelInventoryDescriptors(services, ElasticsearchEngineLabel);
     }
 
     private static void AddInMemoryDocumentStores(IServiceCollection services)
@@ -110,6 +119,53 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             static document => document.Id,
             static document => document.UpdatedAt);
+
+        AddWorkflowReadModelInventoryDescriptors(services, InMemoryEngineLabel);
+    }
+
+    // Opt-in read-model inventory descriptors, one per workflow document read-model registered above.
+    // shape = Document on Elasticsearch, Memory on the InMemory dev store. actorKind is the best-available
+    // GAgent/actor kind whose current state each read-model replicates. The graph store is intentionally
+    // NOT inventoried here: it exposes no per-read-model document reader, so it cannot cheaply report
+    // count/version/updated for a single read-model type (an honest omission, not a faked group).
+    private static void AddWorkflowReadModelInventoryDescriptors(IServiceCollection services, string engineLabel)
+    {
+        var shape = ReferenceEquals(engineLabel, ElasticsearchEngineLabel)
+            ? ProjectionReadModelSinkShape.Document
+            : ProjectionReadModelSinkShape.Memory;
+
+        TryAddWorkflowReadModelDescriptor<WorkflowExecutionCurrentStateDocument>(services, "workflow-execution-current-state", "WorkflowRunGAgent", engineLabel, shape);
+        TryAddWorkflowReadModelDescriptor<WorkflowRunInsightReportDocument>(services, "workflow-run-insight-report", "WorkflowRunGAgent", engineLabel, shape);
+        TryAddWorkflowReadModelDescriptor<WorkflowActorBindingDocument>(services, "workflow-actor-binding", "WorkflowDefinitionGAgent", engineLabel, shape);
+        TryAddWorkflowReadModelDescriptor<WorkflowCatalogCurrentStateDocument>(services, "workflow-catalog-current-state", "WorkflowDefinitionGAgent", engineLabel, shape);
+        TryAddWorkflowReadModelDescriptor<WorkflowExternalApprovalContinuationDocument>(services, "workflow-external-approval-continuation", "WorkflowRunGAgent", engineLabel, shape);
+    }
+
+    // Registers a single inventory descriptor that delegates to the read-model's already-registered
+    // document reader. The closed concrete descriptor type is the idempotence key; TryAddEnumerable
+    // cannot be used for the interface factory because factory descriptors have no distinct
+    // implementation type and are indistinguishable when more than one read-model is registered.
+    private static void TryAddWorkflowReadModelDescriptor<TDocument>(
+        IServiceCollection services,
+        string name,
+        string actorKind,
+        string engineLabel,
+        ProjectionReadModelSinkShape shape)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        if (services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(ProjectionDocumentReadModelDescriptor<TDocument>)))
+            return;
+
+        services.AddSingleton<ProjectionDocumentReadModelDescriptor<TDocument>>(sp =>
+            new ProjectionDocumentReadModelDescriptor<TDocument>(
+                name,
+                shape,
+                engineLabel,
+                actorKind,
+                sp.GetRequiredService<IProjectionDocumentReader<TDocument, string>>()));
+        services.AddSingleton<IProjectionReadModelDescriptor>(sp =>
+            sp.GetRequiredService<ProjectionDocumentReadModelDescriptor<TDocument>>());
     }
 
     private static bool HasAllWorkflowDocumentReaders(

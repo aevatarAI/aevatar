@@ -14,6 +14,14 @@ public interface IEventStore
     /// Append state events. expectedVersion is used for optimistic concurrency control.
     /// Returns the committed event records and latest version after appending.
     /// </summary>
+    /// <remarks>
+    /// The cancellation token controls append admission, not an already admitted atomic commit.
+    /// An adapter may throw <see cref="OperationCanceledException"/> only when no event from the
+    /// batch was committed. Once its non-cancellable atomic commit starts, or once a commit result
+    /// is available, it must stop observing cancellation and return the authoritative result.
+    /// Implementations must commit the whole batch or none of it; optimistic-concurrency failures
+    /// likewise guarantee that none of the supplied events were committed.
+    /// </remarks>
     Task<EventStoreCommitResult> AppendAsync(
         string agentId,
         IEnumerable<StateEvent> events,

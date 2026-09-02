@@ -5,13 +5,14 @@ package aevatar.gagents.device;
 option csharp_namespace = "Aevatar.GAgents.Device";
 
 import "google/protobuf/timestamp.proto";
+import "Credentials/credential_secret_references.proto";
 
 // ─── Device Registration (Actor-backed, #164 pattern) ───
 
 message DeviceRegistrationEntry {
   string id = 1;
   string scope_id = 2;                    // Device registration scope
-  string hmac_key = 3;                    // HMAC-SHA256 signing key for NyxID relay verification
+  string hmac_key = 3;                    // Legacy plaintext HMAC-SHA256 signing key (dual-read fallback; empty for new writes)
   string nyx_conversation_id = 4;         // NyxID conversation ID
   string description = 5;                 // Human-readable label
   google.protobuf.Timestamp created_at = 6;
@@ -22,6 +23,9 @@ message DeviceRegistrationEntry {
   bool tombstoned = 7;
   int64 tombstone_state_version = 8;
   string device_event_target_actor_id = 9; // Explicit callback target selected during registration admission
+  // Secret-vault reference to the HMAC signing key. New writes populate this and
+  // leave hmac_key empty; reads prefer this ref then fall back to legacy hmac_key.
+  aevatar.credentials.SecretReference hmac_key_ref = 10;
 }
 
 message DeviceRegistrationState {
@@ -41,10 +45,12 @@ message DeviceUnregisteredEvent {
 // Commands dispatched to DeviceRegistrationGAgent via EventEnvelope
 message DeviceRegisterCommand {
   string scope_id = 1;
-  string hmac_key = 2;
+  string hmac_key = 2;                    // Legacy plaintext key (empty for new writes; retained for back-compat)
   string nyx_conversation_id = 3;
   string description = 4;
   string device_event_target_actor_id = 5;
+  // Secret-vault reference produced at ingress; carried to the actor and persisted on the entry.
+  aevatar.credentials.SecretReference hmac_key_ref = 6;
 }
 
 message DeviceUnregisterCommand {
@@ -64,7 +70,7 @@ message DeviceTombstonesCompactedEvent {
 message DeviceRegistrationDocument {
   string id = 1;                          // Registration ID (= document key)
   string scope_id = 2;
-  string hmac_key = 3;
+  string hmac_key = 3;                    // Legacy plaintext key (empty for new writes; dual-read fallback)
   string nyx_conversation_id = 4;
   string description = 5;
   int64 state_version = 6;
@@ -72,4 +78,6 @@ message DeviceRegistrationDocument {
   google.protobuf.Timestamp updated_at_utc = 8;
   string actor_id = 9;                    // Source actor ID
   string device_event_target_actor_id = 10;
+  // Secret-vault reference to the HMAC signing key (opaque out of the query surface).
+  aevatar.credentials.SecretReference hmac_key_ref = 11;
 }

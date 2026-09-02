@@ -106,9 +106,27 @@ internal sealed class RecordingDocumentStore<TReadModel> :
                 value?.ToString() ?? string.Empty,
                 filter.Value.RawValue?.ToString() ?? string.Empty,
                 StringComparison.Ordinal),
+            ProjectionDocumentFilterOperator.Gte => Compare(value, filter.Value.RawValue) >= 0,
+            ProjectionDocumentFilterOperator.Lte => Compare(value, filter.Value.RawValue) <= 0,
             _ => throw new NotSupportedException($"Filter operator '{filter.Operator}' is not supported by RecordingDocumentStore."),
         };
     }
+
+    private static int Compare(object? left, object? right)
+    {
+        var normalizedLeft = NormalizeComparable(left);
+        var normalizedRight = NormalizeComparable(right);
+        return normalizedLeft.CompareTo(normalizedRight);
+    }
+
+    private static IComparable NormalizeComparable(object? value) =>
+        value switch
+        {
+            DateTimeOffset dateTimeOffset => dateTimeOffset.UtcDateTime,
+            DateTime dateTime => dateTime.Kind == DateTimeKind.Utc ? dateTime : dateTime.ToUniversalTime(),
+            IComparable comparable => comparable,
+            _ => string.Empty,
+        };
 }
 
 internal sealed class RecordingProjectionActivationService<TContext>
@@ -143,11 +161,15 @@ internal sealed class RecordingProjectionReleaseService<TLease>
 {
     public List<TLease> Released { get; } = [];
 
+    public Exception? Exception { get; init; }
+
     public Task ReleaseIfIdleAsync(TLease lease, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(lease);
         Released.Add(lease);
-        return Task.CompletedTask;
+        return Exception == null
+            ? Task.CompletedTask
+            : Task.FromException(Exception);
     }
 }
 

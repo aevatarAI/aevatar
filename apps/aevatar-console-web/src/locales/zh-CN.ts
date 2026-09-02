@@ -1,16 +1,21 @@
 import projectMessages from './projectMessages.zh-CN';
+import workflowActivityVNextMessages from './workflowActivityVNextMessages.zh-CN';
 
 const zhCNMessages = {
   ...projectMessages,
+  ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
   'common.language.english': 'English',
   'common.language.label': '语言',
   'common.language.switch': '切换语言',
   'common.language.zhCN': '中文',
+  'common.user.account': '账户',
   'common.user.logout': '退出登录',
   'common.user.settings': '设置',
+  'common.user.signIn': '登录',
   'menu.Connectors': '连接器',
   'menu.Create Team': '创建团队',
+  'menu.Chat': 'Chat',
   'menu.Deployments': '部署',
   'menu.Event Stream': '事件流',
   'menu.Files': '文件',
@@ -25,10 +30,12 @@ const zhCNMessages = {
   'menu.Team Member Published Runs': '团队成员发布运行记录',
   'menu.Team Member Workflow Studio': '团队成员 Workflow Studio',
   'menu.Topology': '拓扑',
+  'nav.groups.chat': 'Chat',
   'nav.groups.platform': '平台',
   'nav.groups.settings': '设置',
   'nav.groups.teams': '团队',
   'nav.items.deployments': '部署',
+  'nav.items.chat': 'Chat',
   'nav.items.eventStream': '事件流',
   'nav.items.governance': '治理',
   'nav.items.myTeams': '我的团队',
@@ -36,9 +43,152 @@ const zhCNMessages = {
   'nav.items.settings': '设置',
   'nav.items.topology': '拓扑',
   'pages.gagents.index.platformBreadcrumb': '平台',
+  'pages.chat.index.chatStopped': 'Chat 已停止。',
+  'pages.chat.index.composerPlaceholder':
+    '描述你想要的 workflow，或询问当前配置...',
+  'pages.chat.index.confirmAndCreate': '确认并创建',
+  'pages.chat.index.confirmPrompt': '确认，请现在创建。',
+  'pages.chat.index.continuationContextMissing':
+    '续聊请求可能已经被接受，但未收到本轮身份。请重新加载此页面后再继续。',
+  'pages.chat.index.cancel': '取消',
+  'pages.chat.index.delete': '删除',
+  'pages.chat.index.deleteChat': '删除 {title}',
+  'pages.chat.index.deleteChatDescription':
+    '永久删除“{title}”？此会话无法恢复。',
+  'pages.chat.index.deleteChatFailed': '无法删除会话',
+  'pages.chat.index.deleteChatTitle': '删除会话？',
+  'pages.chat.index.emptyDescription':
+    '描述你想创建的 Team、Member 或 Workflow。',
+  'pages.chat.index.failedToLoadConversation': '无法加载会话',
+  'pages.chat.index.failedToLoadHistory': '无法加载会话历史',
+  'pages.chat.index.historyStoredInWorkspace': '历史记录会保存到当前工作区。',
+  'pages.chat.index.chatRequiresAuthentication':
+    '新建或继续 Chat 需要带可信 scope 的认证身份。现有会话历史仍可查看和管理。',
+  'pages.chat.index.historyTitle': '会话历史',
+  'pages.chat.index.loadingConversation': '正在加载会话',
+  'pages.chat.index.loadingHistory': '正在加载会话历史',
+  'pages.chat.index.historySynchronizing': '会话历史仍在同步，请稍后重试。',
+  'pages.chat.index.missingChatHistoryContext':
+    'Chat 已完成，但未返回会话上下文。',
+  'pages.chat.index.newChat': '新会话',
+  'pages.chat.index.newChatAction': '新建会话',
+  'pages.chat.index.noChatHistory': '暂无会话历史',
+  'pages.chat.index.noScope': '当前账号没有解析出可用 scope，请刷新后重试。',
+  'pages.chat.index.openTeam': '打开 Team',
+  'pages.chat.index.openHistory': '打开会话历史',
+  'pages.chat.index.openWorkflowStudio': '打开 Workflow Studio',
+  'pages.chat.index.resolvingScope': '正在解析 scope',
+  'pages.chat.index.retry': '重试',
+  'pages.chat.index.retryHistory': '重新加载会话历史',
+  'pages.chat.index.reviewPlan': '创建资源前请先确认计划。',
+  'pages.chat.index.scopeMismatch':
+    '请求的 scope {requestedScopeId} 与当前认证 scope {authenticatedScopeId} 不一致。请从当前工作区重新打开 Chat，或重新登录。',
+  'pages.chat.index.scopeValue': 'Scope {scopeId}',
+  'pages.chat.index.status.completed': '已完成',
+  'pages.chat.index.status.creating': '创建中',
+  'pages.chat.index.status.draft': '草稿',
+  'pages.chat.index.status.error': '错误',
+  'pages.chat.index.status.needsConfirmation': '待确认',
+  'pages.chat.index.status.streaming': '生成中',
+  'pages.chat.index.status.studioReady': 'Studio 已就绪',
+  'pages.chat.index.time.daysAgo': '{count} 天前',
+  'pages.chat.index.time.hoursAgo': '{count} 小时前',
+  'pages.chat.index.time.justNow': '刚刚',
+  'pages.chat.index.time.minutesAgo': '{count} 分钟前',
+  'pages.chat.index.title': 'Chat',
+  'pages.chat.index.tokenSplit': '{input} 输入 / {output} 输出',
+  'pages.chat.index.totalTokens': '{count} tokens',
+  'pages.chat.index.unknownRole': '消息',
+  'pages.chat.index.turnCount': '{count} 轮',
   'pages.gagents.index.teamMembersBreadcrumb': '团队成员',
   'pages.missioncontrol.index.missionControlBreadcrumb': '任务控制',
   'pages.missioncontrol.index.platformBreadcrumb': '平台',
+  'pages.missionwall.focus': '焦点',
+  'pages.missionwall.focusReason.failed': '失败',
+  'pages.missionwall.focusReason.latestRunning': '最新运行',
+  'pages.missionwall.focusReason.none': '无焦点',
+  'pages.missionwall.focusReason.recentlyCompleted': '最近完成',
+  'pages.missionwall.focusReason.retrying': '重试中',
+  'pages.missionwall.focusReason.staleLive': '过期',
+  'pages.missionwall.focusReason.staleProjection': '过期',
+  'pages.missionwall.focusReason.timedOut': '超时',
+  'pages.missionwall.focusReason.unknown': '未知',
+  'pages.missionwall.focusReason.waitingHuman': '等待审批',
+  'pages.missionwall.latencyMs': '{latency}ms',
+  'pages.missionwall.latencySeconds': '{latency}s',
+  'pages.missionwall.liveState.connected':
+    '已连接到已发布 workflow run read models。',
+  'pages.missionwall.liveState.empty': '暂无可见的已发布 workflow runs。',
+  'pages.missionwall.liveState.loading': '正在加载已发布 workflow runs。',
+  'pages.missionwall.liveState.partialRunError':
+    '部分已发布 service runs 无法加载。',
+  'pages.missionwall.liveState.scopeUnavailable':
+    'Mission wall 无法加载已认证 scope。',
+  'pages.missionwall.liveState.snapshotUnavailable':
+    'Mission wall snapshot 无法加载。',
+  'pages.missionwall.liveStatus.degraded': '降级',
+  'pages.missionwall.liveStatus.disconnected': '已断开',
+  'pages.missionwall.liveStatus.idle': '空闲',
+  'pages.missionwall.liveStatus.live': 'On',
+  'pages.missionwall.liveStatus.unknown': '未知',
+  'pages.missionwall.metric.failed': '失败',
+  'pages.missionwall.metric.live': '实时',
+  'pages.missionwall.metric.retrying': '重试',
+  'pages.missionwall.metric.running': '运行中',
+  'pages.missionwall.metric.waiting': '等待中',
+  'pages.missionwall.noFocusExplain': '选择一个 workflow。',
+  'pages.missionwall.noFocusRun': '暂无焦点 run',
+  'pages.missionwall.branchLabel': 'branch: {label}',
+  'pages.missionwall.publishedRunWindow': 'Published Run Window',
+  'pages.missionwall.publishedRunWindowAria': 'Published run window',
+  'pages.missionwall.runProgress': '{completed} / {total} steps',
+  'pages.missionwall.runStage.failedAtStep': '{step} 失败',
+  'pages.missionwall.runStage.retryingAtStep': '重试 {step}',
+  'pages.missionwall.runStage.runningAtStep': '运行 {step}',
+  'pages.missionwall.runStage.staleAtStep': '{step} 已过期',
+  'pages.missionwall.runStage.timedOutAtStep': '{step} 超时',
+  'pages.missionwall.runStage.waitingAtStep': '等待 {step}',
+  'pages.missionwall.runtimeKicker': 'AEVATAR WORKFLOW RUNTIME',
+  'pages.missionwall.runtimeData.completed': '已完成',
+  'pages.missionwall.runtimeData.failed': '失败',
+  'pages.missionwall.runtimeData.retrying': '重试中',
+  'pages.missionwall.runtimeData.running': '运行中',
+  'pages.missionwall.runtimeData.stopped': '已停止',
+  'pages.missionwall.runtimeData.timedOut': '已超时',
+  'pages.missionwall.runtimeData.unknown': '未知',
+  'pages.missionwall.runtimeData.noRuntimeRun': '暂无可见 run',
+  'pages.missionwall.runtimeData.unnamedWorkflow': '未命名 Workflow',
+  'pages.missionwall.runtimeData.waiting': '等待中',
+  'pages.missionwall.status.completed': '完成',
+  'pages.missionwall.status.failed': '失败',
+  'pages.missionwall.status.retrying': '重试',
+  'pages.missionwall.status.running': '实时',
+  'pages.missionwall.status.published': '已发布',
+  'pages.missionwall.status.stale': '过期',
+  'pages.missionwall.status.stopped': '停止',
+  'pages.missionwall.status.timedOut': '超时',
+  'pages.missionwall.status.unknown': '未知',
+  'pages.missionwall.status.waiting': '等待',
+  'pages.missionwall.state.auditLoading': '正在加载选中 run',
+  'pages.missionwall.state.auditPendingTitle': '这个 run 暂无步骤流',
+  'pages.missionwall.state.emptyKicker': '等待运行记录',
+  'pages.missionwall.state.emptyTitle': '暂无可见的已发布 workflow',
+  'pages.missionwall.state.loadingKicker': '加载运行态',
+  'pages.missionwall.state.loadingTitle': '正在加载 workflow runs',
+  'pages.missionwall.state.publishedWorkflowTitle': '暂无可见 run',
+  'pages.missionwall.stageSubtitle': 'Team {teamName} · {memberName}',
+  'pages.missionwall.stageTitle': '{workflowName} · Step Flow',
+  'pages.missionwall.stepFlow': 'Step Flow',
+  'pages.missionwall.stepStatus.active': '运行中',
+  'pages.missionwall.stepStatus.completed': '已完成',
+  'pages.missionwall.stepStatus.failed': '失败',
+  'pages.missionwall.stepStatus.idle': 'NEXT',
+  'pages.missionwall.stepStatus.retrying': '重试中',
+  'pages.missionwall.stepStatus.unknown': '未知',
+  'pages.missionwall.stepStatus.waiting': '等待中',
+  'pages.missionwall.title': 'Published Run Mission Wall',
+  'pages.missionwall.unknownEntryMember': '未知入口成员',
+  'pages.missionwall.unknownTeam': '未知团队',
   'pages.scopes.assets.legacyAssetsBreadcrumb': '旧版资产',
   'pages.scopes.assets.legacyAssetsContent':
     '团队主页现在位于 /scopes/:scopeId/teams。这里保留给旧资产深链、源码检查和目录详情使用，直到 scoped team 流程完全接管。',
@@ -53,8 +203,7 @@ const zhCNMessages = {
   'pages.scopes.invoke.legacyInvokeTitleHelp':
     '用于直接探测端点的旧版深链 playground。团队主页仍是主入口，这里处理原始载荷和旧操作流。',
   'pages.scopes.invoke.teamsBreadcrumb': '团队',
-  'pages.settings.index.accountContent':
-    '当前浏览器的身份、会话和访问详情。',
+  'pages.settings.index.accountContent': '当前浏览器的身份、会话和访问详情。',
   'pages.settings.index.llmContent': 'Chat 和 Studio 的个人默认配置。',
   'pages.settings.index.title': '设置',
   'pages.studio.index.studioBreadcrumb': 'Studio',
@@ -73,21 +222,19 @@ const zhCNMessages = {
   'teams.home.actions.createTeam': '组建新团队',
   'teams.home.actions.createMember': '创建成员',
   'teams.home.actions.createWorkflowMember': '创建工作流成员',
-  'teams.home.actions.debugEntryWorkflow': '调试入口工作流',
-  'teams.home.actions.debugWorkflow': '调试工作流',
-  'teams.home.actions.editEntryMember': '编辑入口成员',
-  'teams.home.actions.editMember': '编辑成员',
   'teams.home.actions.manageMembers': '管理成员',
   'teams.home.actions.viewMembers': '查看成员',
   'teams.home.actions.viewTeam': '查看团队',
   'teams.home.alerts.authFailedTitle': '当前登录态校验失败',
-  'teams.home.alerts.authUnavailableDescription': '登录状态暂时不可用，请刷新后重试。',
+  'teams.home.alerts.authUnavailableDescription':
+    '登录状态暂时不可用，请刷新后重试。',
   'teams.home.alerts.localAuthFallbackDescription':
     '{issue} 已使用本地登录信息继续加载团队。',
   'teams.home.alerts.localAuthFallbackTitle':
     '当前登录态校验失败，已使用本地登录信息',
   'teams.home.alerts.membersUnavailable': '当前工作区的成员清单暂时不可见。',
-  'teams.home.alerts.noScope': '当前登录状态还没有解析出可用的团队 Scope，请刷新后重试。',
+  'teams.home.alerts.noScope':
+    '当前登录状态还没有解析出可用的团队 Scope，请刷新后重试。',
   'teams.home.alerts.partialSignals': '部分团队信号暂时不可见',
   'teams.home.alerts.teamsUnavailable': '当前工作区的团队成员清单暂时不可见。',
   'teams.home.attention.draft': '草稿中',
@@ -98,10 +245,12 @@ const zhCNMessages = {
   'teams.home.attention.unknown': '待确认',
   'teams.home.attention.waiting': '待关注',
   'teams.home.attentionDetail.memberFailed': '最近一次成员运行处于异常状态。',
-  'teams.home.attentionDetail.memberHealthy': '最近一次成员运行正常，可继续进入详情查看。',
+  'teams.home.attentionDetail.memberHealthy':
+    '最近一次成员运行正常，可继续进入详情查看。',
   'teams.home.attentionDetail.memberNoBoundService':
     '当前成员已经准备好绑定，但还没有稳定的成员调用入口。',
-  'teams.home.attentionDetail.memberNoRecentRuns': '成员已绑定服务，最近还没有运行记录。',
+  'teams.home.attentionDetail.memberNoRecentRuns':
+    '成员已绑定服务，最近还没有运行记录。',
   'teams.home.attentionDetail.memberStage': '当前成员还处于 {stage} 阶段。',
   'teams.home.attentionDetail.memberWaiting':
     '最近一次成员运行正在等待人工或外部信号。',
@@ -190,9 +339,11 @@ const zhCNMessages = {
   'teams.detail.messages.archiveFailed': '团队归档失败。',
   'teams.detail.messages.archiveSuccess': '团队已归档。',
   'teams.detail.messages.entryClearFailed': '团队入口更新失败。',
-  'teams.detail.messages.entryClearSubmitted': '团队入口清除已提交，正在等待同步确认。',
+  'teams.detail.messages.entryClearSubmitted':
+    '团队入口清除已提交，正在等待同步确认。',
   'teams.detail.messages.entrySetFailed': '团队入口更新失败。',
-  'teams.detail.messages.entrySetSubmitted': '团队入口变更已提交，正在等待同步确认。',
+  'teams.detail.messages.entrySetSubmitted':
+    '团队入口变更已提交，正在等待同步确认。',
   'teams.detail.messages.nameRequired': '团队名称不能为空。',
   'teams.detail.messages.teamTestEmpty': '团队返回了空响应。',
   'teams.detail.messages.teamTestStopped': '团队测试已停止。',
@@ -210,22 +361,25 @@ const zhCNMessages = {
     '当前还没有足够事实来生成团队构成。',
   'teams.detail.overview.composition.empty.title': '暂无团队构成',
   'teams.detail.overview.composition.title': '团队构成',
-  'teams.detail.overview.configuration.bindingCurrentService': '当前会落到 {service}',
+  'teams.detail.overview.configuration.bindingCurrentService':
+    '当前会落到 {service}',
   'teams.detail.overview.configuration.bindingMode': '绑定方式',
   'teams.detail.overview.configuration.bindingNoService':
     '当前还没有匹配到主服务入口',
   'teams.detail.overview.configuration.primaryService': '主服务入口',
   'teams.detail.overview.configuration.title': '配置明细',
   'teams.detail.overview.configuration.versionIdentity': '版本标识',
+  'teams.detail.overview.configuration.versionStatus': '版本状态',
   'teams.detail.overview.configuration.workflow': '团队 Workflow',
-  'teams.detail.overview.entry.configuredCaption': '调用这支团队时会先路由到这个成员。',
+  'teams.detail.overview.entry.configuredCaption':
+    '调用这支团队时会先路由到这个成员。',
   'teams.detail.overview.entry.unconfigured': '未配置',
   'teams.detail.overview.entry.unconfiguredCaption':
     '测试或调用前，请先设置一个入口成员。',
   'teams.detail.overview.fallback.currentExecution': '当前执行',
   'teams.detail.overview.fallback.noRecentRun': '暂无最近运行',
   'teams.detail.overview.fallback.primaryService': '主服务',
-  'teams.detail.overview.fallback.serviceEntry': '服务入口 {serviceId}',
+  'teams.detail.overview.fallback.serviceEntry': '服务入口',
   'teams.detail.overview.fallback.teamWorkflow': '团队 Workflow',
   'teams.detail.overview.identity.noService': '当前还没有可见服务',
   'teams.detail.overview.identity.noVisibleRun': '当前还没有同步到可见运行',
@@ -234,7 +388,8 @@ const zhCNMessages = {
   'teams.detail.overview.configuration.versionAvailable': '当前服务版本可用。',
   'teams.detail.overview.configuration.versionPending': '服务版本待确认。',
   'teams.detail.overview.configuration.workflowLinked': 'Workflow 草稿已关联。',
-  'teams.detail.overview.configuration.workflowPending': 'Workflow 草稿尚未关联。',
+  'teams.detail.overview.configuration.workflowPending':
+    'Workflow 草稿尚未关联。',
   'teams.detail.overview.member.selectedCaption': '当前从团队成员中选中。',
   'teams.detail.overview.run.visibleCaption': '最近运行已可见。',
   'teams.detail.overview.service.boundCaption': '流量会通过已绑定服务路由。',
@@ -326,9 +481,11 @@ const zhCNMessages = {
   'teams.detail.test.errors.network.description':
     '网络请求中断，请检查登录状态或稍后重试。',
   'teams.detail.test.errors.network.title': '网络请求失败',
-  'teams.detail.test.errors.permissionDenied.description': '当前账号没有修改或测试这支团队的权限。',
+  'teams.detail.test.errors.permissionDenied.description':
+    '当前账号没有修改或测试这支团队的权限。',
   'teams.detail.test.errors.permissionDenied.title': '权限不足',
-  'teams.detail.test.errors.teamArchived.description': '归档后的团队不能继续发起测试。',
+  'teams.detail.test.errors.teamArchived.description':
+    '归档后的团队不能继续发起测试。',
   'teams.detail.test.errors.teamArchived.title': '团队已归档',
   'teams.detail.test.errors.teamNotFound.description':
     '这支团队在当前工作区中不可见，请返回团队列表重新选择。',
@@ -350,7 +507,7 @@ const zhCNMessages = {
   'teams.detail.test.archivedHint': '归档后的团队不能继续发起测试。',
   'teams.detail.test.subtitle': '通过入口成员发起一次真实团队调用。',
   'teams.detail.update.empty': '当前还没有可见更新时间',
-  'teams.detail.update.fromRun': '来自运行 {runId}',
+  'teams.detail.update.fromRun': '来自最近运行',
   'teams.detail.update.fromTeam': '来自团队更新时间',
   'teams.detail.update.fromVisibleRun': '来自最近可见运行',
   'teams.detail.update.fromWorkflow': '来自 Workflow 更新时间',
@@ -364,7 +521,8 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.cache.ttl.label': 'TTL 秒数',
   'shared.studio.nodeConfiguration.cache.ttl.placeholder': '600',
   'shared.studio.nodeConfiguration.checkpoint.name.label': '检查点名称',
-  'shared.studio.nodeConfiguration.checkpoint.name.placeholder': 'before_publish',
+  'shared.studio.nodeConfiguration.checkpoint.name.placeholder':
+    'before_publish',
   'shared.studio.nodeConfiguration.conditional.condition.label': '条件',
   'shared.studio.nodeConfiguration.conditional.condition.placeholder':
     'eq($input, "ok")',
@@ -372,7 +530,8 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.connectorCall.connector.placeholder':
     '已配置的 Connector 名称',
   'shared.studio.nodeConfiguration.connectorCall.method.label': '方法',
-  'shared.studio.nodeConfiguration.connectorCall.method.option.delete': 'DELETE',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.delete':
+    'DELETE',
   'shared.studio.nodeConfiguration.connectorCall.method.option.get': 'GET',
   'shared.studio.nodeConfiguration.connectorCall.method.option.patch': 'PATCH',
   'shared.studio.nodeConfiguration.connectorCall.method.option.post': 'POST',
@@ -444,7 +603,8 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.llmCall.instruction.placeholder':
     '告诉这个角色该步骤要做什么。',
   'shared.studio.nodeConfiguration.mapReduce.delimiter.label': '分隔符',
-  'shared.studio.nodeConfiguration.mapReduce.delimiter.placeholder': '\\n---\\n',
+  'shared.studio.nodeConfiguration.mapReduce.delimiter.placeholder':
+    '\\n---\\n',
   'shared.studio.nodeConfiguration.mapReduce.mapStepType.label': 'Map 步骤',
   'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.label':
     'Map 目标角色',
@@ -522,10 +682,11 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.toolCall.tool.label': '工具',
   'shared.studio.nodeConfiguration.toolCall.tool.placeholder': 'web_search',
   'shared.studio.nodeConfiguration.transform.operation.label': '操作',
-  'shared.studio.nodeConfiguration.transform.operation.option.count': '统计行数',
-  'shared.studio.nodeConfiguration.transform.operation.option.identity': '原样传递',
-  'shared.studio.nodeConfiguration.transform.operation.option.join':
-    '合并分段',
+  'shared.studio.nodeConfiguration.transform.operation.option.count':
+    '统计行数',
+  'shared.studio.nodeConfiguration.transform.operation.option.identity':
+    '原样传递',
+  'shared.studio.nodeConfiguration.transform.operation.option.join': '合并分段',
   'shared.studio.nodeConfiguration.transform.operation.option.jsonExtract':
     '提取 JSON',
   'shared.studio.nodeConfiguration.transform.operation.option.lowercase':
@@ -541,7 +702,8 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.transform.operation.option.uppercase':
     '转大写',
   'shared.studio.nodeConfiguration.waitSignal.signalName.label': '信号名',
-  'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder': 'continue',
+  'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder':
+    'continue',
   'shared.studio.nodeConfiguration.waitSignal.timeout.label': '超时毫秒',
   'shared.studio.nodeConfiguration.waitSignal.timeout.placeholder': '60000',
   'shared.studio.nodeConfiguration.while.condition.label': '条件',
@@ -558,29 +720,77 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.workflowCall.workflow.label': 'Workflow',
   'shared.studio.nodeConfiguration.workflowCall.workflow.placeholder':
     'child_workflow',
+  'shared.workflowExecutionLogs.collapse': '收起工作流日志',
+  'shared.workflowExecutionLogs.consoleAria': '工作流运行控制台',
+  'shared.workflowExecutionLogs.tokenUsage': '令牌用量',
   'teams.members.actions.build': '构建',
   'teams.members.actions.clearEntry': '清除入口成员',
   'teams.members.actions.create': '创建成员',
   'teams.members.actions.createFirst': '创建第一个成员',
   'teams.members.actions.createFirstWorkflow': '创建第一个工作流成员',
   'teams.members.actions.createWorkflowMember': '创建工作流成员',
+  'teams.members.actions.delete': '删除成员',
   'teams.members.actions.editInStudio': '在 Studio 中编辑',
   'teams.members.actions.automate': '自动化',
-  'teams.members.actions.invokeRequiresBinding': '请先绑定这个 Workflow 成员再调用。',
+  'teams.members.actions.invokeRequiresBinding':
+    '请先绑定这个 Workflow 成员再调用。',
   'teams.members.actions.invokeWorkflow': '调用',
   'teams.members.actions.publishedRuns': '发布运行记录',
-  'teams.members.actions.publishedRuns.publishFirst': '请先发布这个成员再查看发布运行记录。',
+  'teams.members.actions.publishedRuns.publishFirst':
+    '请先发布这个成员再查看发布运行记录。',
   'teams.members.actions.setEntry': '设为入口成员',
   'teams.members.actions.workflowOnly': '仅支持 Workflow',
-  'teams.members.actions.workflowOnlyTitle': '当前控制台暂只支持 Workflow 类型成员。',
+  'teams.members.actions.workflowOnlyTitle':
+    '当前控制台暂只支持 Workflow 类型成员。',
   'teams.members.actions.workflowStudio': 'Workflow Studio',
   'teams.automations.actions.addRecurringWork': '添加周期任务',
   'teams.automations.actions.create': '新建自动化',
   'teams.automations.actions.delete': '删除',
   'teams.automations.actions.edit': '编辑',
   'teams.automations.actions.pause': '暂停',
+  'teams.automations.actions.reauthorize': '检查并重新授权',
+  'teams.automations.actions.refresh': '刷新',
+  'teams.automations.actions.retryRevocation': '重试撤销',
   'teams.automations.actions.resume': '恢复',
   'teams.automations.actions.runNow': '立即运行',
+  'teams.automations.actions.runHistory': '查看成员运行记录',
+  'teams.automations.actions.tryAgain': '重试',
+  'teams.automations.authorization.back': '返回',
+  'teams.automations.authorization.confirm': '授权并继续',
+  'teams.automations.authorization.description':
+    'Aevatar 将该计划的受限密钥保存在 Vault 中。浏览器永远不会收到密钥；暂停会保留密钥，删除会撤销密钥。',
+  'teams.automations.authorization.diagnostics': '授权诊断信息',
+  'teams.automations.authorization.disclosure.aevatar_secret_custody':
+    '密钥由 Aevatar 保管',
+  'teams.automations.authorization.disclosure.browser_never_receives_secret':
+    '浏览器永远不会收到密钥',
+  'teams.automations.authorization.disclosure.dedicated_credential':
+    '该计划使用独立凭证',
+  'teams.automations.authorization.disclosure.delete_revokes_credential':
+    '删除会撤销凭证',
+  'teams.automations.authorization.disclosure.node_ids_are_permission_set':
+    '节点 ID 定义权限范围',
+  'teams.automations.authorization.disclosure.pause_resume_preserves_credential':
+    '暂停和恢复不会更换凭证',
+  'teams.automations.authorization.error': '无法继续授权',
+  'teams.automations.authorization.exactAccess': '精确权限',
+  'teams.automations.authorization.expiry': '凭证有效期',
+  'teams.automations.authorization.noExternalGrants':
+    '无需外部 NyxID 服务或所有者 LLM 模型授权。',
+  'teams.automations.authorization.noOwnerLLMGrant':
+    '此工作流无需所有者 LLM 模型授权。',
+  'teams.automations.authorization.preparing': '正在准备授权检查',
+  'teams.automations.authorization.review': '检查授权',
+  'teams.automations.authorization.reviewAgain': '重新检查',
+  'teams.automations.authorization.serviceModel': '服务与模型',
+  'teams.automations.authorization.title': '专用 Agent Key',
+  'teams.automations.authorizationStatus.active': '凭证有效',
+  'teams.automations.authorizationStatus.deleting': '正在删除',
+  'teams.automations.authorizationStatus.failed': '授权失败',
+  'teams.automations.authorizationStatus.needs_authorization': '需要重新授权',
+  'teams.automations.authorizationStatus.provisioning_pending': '正在准备授权',
+  'teams.automations.authorizationStatus.replacement_pending': '正在更换授权',
+  'teams.automations.authorizationStatus.revocation_pending': '正在撤销凭证',
   'teams.automations.columns.actions': '操作',
   'teams.automations.columns.automation': '自动化',
   'teams.automations.columns.member': '成员',
@@ -602,11 +812,17 @@ const zhCNMessages = {
   'teams.automations.empty.createFirst': '创建第一个自动化',
   'teams.automations.empty.description':
     '从已发布成员创建自动化后，这支团队就会拥有可见的周期承诺。',
-  'teams.automations.empty.publishHint': '先发布一个 Workflow 成员，再安排周期任务。',
+  'teams.automations.empty.publishHint':
+    '先发布一个 Workflow 成员，再安排周期任务。',
   'teams.automations.empty.title': '还没有周期任务',
+  'teams.automations.empty.member': '这个成员还没有自动化',
   'teams.automations.error.description':
     '刷新页面，或等定时任务服务可用后再试。',
   'teams.automations.error.title': '自动化加载失败',
+  'teams.automations.error.stateLoad': '无法加载自动化状态',
+  'teams.automations.expiry.soon': '凭证将在 14 天内过期',
+  'teams.automations.firing.enabled': '触发已启用',
+  'teams.automations.firing.paused': '触发已暂停',
   'teams.automations.form.cadence': '节奏',
   'teams.automations.form.cadenceAria': '自动化节奏',
   'teams.automations.form.create': '创建自动化',
@@ -618,11 +834,17 @@ const zhCNMessages = {
   'teams.automations.form.displayName': '名称',
   'teams.automations.form.displayNameAria': '自动化名称',
   'teams.automations.form.displayNamePlaceholder': '每日升级摘要',
-  'teams.automations.form.editPromptHint': '选填：留空也可以保存为无周期 Prompt。',
+  'teams.automations.form.editPromptHint':
+    '选填：留空也可以保存为无周期 Prompt。',
   'teams.automations.form.editTitle': '编辑自动化',
   'teams.automations.form.enabled': '启用',
-  'teams.automations.form.identityMissing': '正在等待这个成员的已发布服务身份。',
-  'teams.automations.form.identityReady': '目标服务为 {serviceId}。',
+  'teams.automations.form.enableAfterAuthorization': '授权后启用触发',
+  'teams.automations.form.firingEnabled': '触发已启用',
+  'teams.automations.form.description':
+    '为 {memberName} 配置周期任务。创建或更换凭证前需要单独检查授权。',
+  'teams.automations.form.identityMissing':
+    '正在等待这个成员的已发布服务身份。',
+  'teams.automations.form.identityReady': '目标为该成员的已发布服务。',
   'teams.automations.form.member': '成员',
   'teams.automations.form.memberAria': '自动化成员',
   'teams.automations.form.preset.custom': '自定义 Cron',
@@ -636,7 +858,8 @@ const zhCNMessages = {
   'teams.automations.form.prompt': '周期 Prompt（选填）',
   'teams.automations.form.promptAria': '周期 Prompt（选填）',
   'teams.automations.form.promptLimit': '选填，最多 {maxLength} 个字符。',
-  'teams.automations.form.promptPlaceholder': '汇总升级工单、受阻账号和后续负责人。',
+  'teams.automations.form.promptPlaceholder':
+    '汇总升级工单、受阻账号和后续负责人。',
   'teams.automations.form.save': '保存修改',
   'teams.automations.form.scheduleReadsAs': '计划解读为',
   'teams.automations.form.section.schedule': '3. 运行节奏',
@@ -651,26 +874,64 @@ const zhCNMessages = {
   'teams.automations.form.timezone': '时区',
   'teams.automations.form.timezoneAria': '时区',
   'teams.automations.form.title': '新建成员自动化',
+  'teams.automations.loading': '正在加载自动化',
   'teams.automations.member.publishFirst': '先发布这个成员，再添加周期任务。',
+  'teams.automations.member.publishedServiceReady': '已发布服务可用',
   'teams.automations.member.unknown': '未知成员',
-  'teams.automations.member.workflowOnly': '只有 Workflow 成员可以添加周期任务。',
+  'teams.automations.memberDescription':
+    '每个计划单独授权 Agent Key，并由 Aevatar 保管。',
+  'teams.automations.memberSelector.description':
+    '每个自动化只归属于一个已发布成员。请选择成员并打开其规范资源。',
+  'teams.automations.memberSelector.title': '选择团队成员',
+  'teams.automations.memberTitle': '{memberName} 的自动化',
+  'teams.automations.memberUnavailable.description':
+    '该成员不属于当前团队，请选择其他成员。',
+  'teams.automations.memberUnavailable.title': '该成员无法配置自动化',
+  'teams.automations.member.workflowOnly':
+    '只有 Workflow 成员可以添加周期任务。',
+  'teams.automations.schedule.next': '下次 {time}',
+  'teams.automations.schedule.notScheduled': '尚未安排',
   'teams.automations.messages.createFailed': '自动化未创建：{message}',
   'teams.automations.messages.createSuccess': '自动化已创建。',
+  'teams.automations.messages.authorizationAccepted': '授权请求已受理',
+  'teams.automations.messages.actionFailed': '无法完成自动化操作。',
+  'teams.automations.messages.deleteAccepted': '删除请求已受理',
   'teams.automations.messages.cronRequired': '请先填写 Cron 表达式。',
   'teams.automations.messages.deleteSuccess': '自动化已删除。',
   'teams.automations.messages.disableSuccess': '自动化已暂停。',
   'teams.automations.messages.enableSuccess': '自动化已恢复。',
   'teams.automations.messages.previewFailed': '预览失败：{message}',
-  'teams.automations.messages.promptTooLong': '周期 Prompt 最多 {maxLength} 个字符。',
+  'teams.automations.messages.previewFailedGeneric': '无法预览后续计划运行。',
+  'teams.automations.messages.promptTooLong':
+    '周期 Prompt 最多 {maxLength} 个字符。',
   'teams.automations.messages.runNowFailed': '立即运行请求失败：{message}',
   'teams.automations.messages.runNowSuccess': '已请求立即运行。',
+  'teams.automations.messages.pauseAccepted': '暂停请求已受理',
+  'teams.automations.messages.resumeAccepted': '恢复请求已受理',
+  'teams.automations.messages.revocationRetryAccepted': '撤销重试已受理',
+  'teams.automations.messages.runAccepted': '运行请求已受理',
+  'teams.automations.messages.updateAccepted': '更新请求已受理',
   'teams.automations.messages.serviceIdentityLoading': '服务身份仍在加载中。',
-  'teams.automations.messages.serviceIdentityMissing': '所选成员还没有服务身份。',
+  'teams.automations.messages.serviceIdentityMissing':
+    '所选成员还没有服务身份。',
   'teams.automations.messages.updateFailed': '自动化未更新：{message}',
+  'teams.automations.messages.updateFailedGeneric': '无法更新自动化。',
   'teams.automations.messages.updateSuccess': '自动化已更新。',
   'teams.automations.noPublishedMember.description':
     '自动化需要成员拥有已发布的服务身份后才能运行。',
   'teams.automations.noPublishedMember.title': '先发布一个成员',
+  'teams.automations.pending.description':
+    '自动刷新已停止，请点击刷新读取权威状态。',
+  'teams.automations.pending.title': '仍在处理中',
+  'teams.automations.planChanged.description':
+    '旧的摘要和操作身份已丢弃，请重新执行预检并确认授权。',
+  'teams.automations.planChanged.title': '授权计划已变化',
+  'teams.automations.delete.description':
+    '在 NyxID 与 Vault 撤销全部完成前，该行会继续显示。',
+  'teams.automations.delete.title': '删除自动化？',
+  'teams.automations.revocation.nyxId': 'NyxID：{status}',
+  'teams.automations.revocation.vault': 'Vault：{status}',
+  'teams.automations.row.noPrompt': '未配置周期 Prompt',
   'teams.automations.preview.daily.cadence': '每个工作日 · 09:00',
   'teams.automations.preview.daily.member': 'Support Analyst',
   'teams.automations.preview.daily.nextRun': '今天下一次运行',
@@ -678,14 +939,13 @@ const zhCNMessages = {
     '汇总升级工单、受阻账号和后续负责人。',
   'teams.automations.preview.daily.title': '每日客户升级摘要',
   'teams.automations.preview.runsThroughMember': '通过成员服务运行',
-  'teams.automations.preview.runsThroughService': '通过 {serviceId} 运行',
+  'teams.automations.preview.runsThroughService': '通过已发布服务运行',
   'teams.automations.preview.status.active': '运行中',
   'teams.automations.preview.status.attention': '需要关注',
   'teams.automations.preview.weekly.cadence': '周五 · 16:30',
   'teams.automations.preview.weekly.member': 'Release Manager',
   'teams.automations.preview.weekly.nextRun': '需要频道权限',
-  'teams.automations.preview.weekly.prompt':
-    '准备发布交接说明并标记部署风险。',
+  'teams.automations.preview.weekly.prompt': '准备发布交接说明并标记部署风险。',
   'teams.automations.preview.weekly.title': '每周发布交接',
   'teams.automations.previewOnly': '自动化 API 接入会在下一步完成。',
   'teams.automations.row.nextRun': '下次 {time}',
@@ -724,6 +984,19 @@ const zhCNMessages = {
   'teams.members.columns.role': '职责',
   'teams.members.columns.service': '服务',
   'teams.members.count': '{count} 个成员',
+  'teams.members.delete.confirm.body': '删除',
+  'teams.members.delete.confirm.body.suffix': '从这个团队中删除？',
+  'teams.members.delete.entry.warning':
+    '这个成员是团队入口成员。删除后会移除成员权威状态并从团队成员列表中清除；已发布服务产物、修订和历史运行记录会保留。',
+  'teams.members.delete.failed': '删除成员失败。',
+  'teams.members.delete.keep': '保留成员',
+  'teams.members.delete.notConfirmed':
+    '删除尚未确认。成员仍保留在列表中，请刷新后重试。',
+  'teams.members.delete.submitted': '删除请求已提交，正在等待确认。',
+  'teams.members.delete.success': '已删除成员 {member}。',
+  'teams.members.delete.title': '删除成员',
+  'teams.members.delete.warning':
+    '这会移除 Studio 成员权威状态并从团队成员列表中清除；已发布服务产物、修订和历史运行记录会保留。',
   'teams.members.description':
     '在这里查看团队成员、选择团队入口，并进入 Workflow Studio 编辑成员。只有已经绑定到发布服务的 Workflow 成员才可以调用。',
   'teams.members.empty.description':
@@ -742,7 +1015,8 @@ const zhCNMessages = {
     '请先从列表中选择一支团队，再查看它的成员。',
   'teams.members.noSelection.title': '尚未选中真实团队',
   'teams.members.roster': '成员清单',
-  'teams.members.syncing.description': '团队已创建，成员清单正在同步。这里会自动刷新。',
+  'teams.members.syncing.description':
+    '团队已创建，成员清单正在同步。这里会自动刷新。',
   'teams.members.syncing.title': '成员清单正在同步',
   'teams.members.title': '团队成员',
   'teams.members.unavailable.description': '当前无法读取这支团队的成员清单。',
@@ -784,13 +1058,11 @@ const zhCNMessages = {
   'pages.teammemberinvoke.workflow.only': '只有 Workflow 成员可以在这里调用。',
   'pages.teammemberinvoke.workflow.only.description':
     '这个页面只运行 Workflow 成员。其他实现类型请使用对应成员自己的入口。',
-  'pages.runs.memberPublishedRuns.auditUnavailable':
-    '发布运行审计暂不可见。',
+  'pages.runs.memberPublishedRuns.auditUnavailable': '发布运行审计暂不可见。',
   'pages.runs.memberPublishedRuns.backToTeamMembers': '返回团队成员',
   'pages.runs.memberPublishedRuns.details': '详情',
   'pages.runs.memberPublishedRuns.input': '输入',
-  'pages.runs.memberPublishedRuns.listUnavailable':
-    '发布运行记录暂不可见。',
+  'pages.runs.memberPublishedRuns.listUnavailable': '发布运行记录暂不可见。',
   'pages.runs.memberPublishedRuns.logs': '日志',
   'pages.runs.memberPublishedRuns.noAuditSteps':
     '这次发布运行没有记录审计步骤。',
@@ -800,20 +1072,50 @@ const zhCNMessages = {
   'pages.runs.memberPublishedRuns.output': '输出',
   'pages.runs.memberPublishedRuns.publishedRuns': '发布运行记录',
   'pages.runs.memberPublishedRuns.refresh': '刷新',
-  'pages.runs.memberPublishedRuns.selectPublishedRun':
-    '选择一次发布运行',
+  'pages.runs.memberPublishedRuns.selectPublishedRun': '选择一次发布运行',
   'pages.runs.memberPublishedRuns.timeline': '时间线',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
-    '你可以在这里搭建或粘贴 workflow。保存时会创建可恢复的 workflow 草稿，直到成员关联完成物化。',
+    '你可以在这里搭建或编辑 Workflow YAML。保存时会创建可恢复的 Workflow 草稿，直到成员关联完成物化。',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription':
+    'This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     '这个成员还没有关联 Workflow 草稿。',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.description':
+    'Studio resolved draft workflow {workflowId}, but loading it failed: {reason}',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title':
+    'Workflow draft could not be loaded.',
+  'teamMemberWorkflowStudio.alerts.actionError.title': 'Workflow 修改需要处理',
+  'teamMemberWorkflowStudio.alerts.draftSaveFailed.description':
+    '无法保存 Workflow 草稿。请检查修改后重试。',
+  'teamMemberWorkflowStudio.alerts.memberCreateFailed.description':
+    '无法创建 Workflow 成员。请检查修改后重试。',
+  'teamMemberWorkflowStudio.alerts.memberLinkFailed.description':
+    '暂时无法完成 Workflow 成员关联。草稿仍已保留，请再次保存以重试。',
+  'teamMemberWorkflowStudio.alerts.saveAndPublishFailed.description':
+    '无法验证并发布该 Workflow。请检查 Workflow 后重试。',
   'teamMemberWorkflowStudio.common.close': '关闭',
-  'teamMemberWorkflowStudio.executionPanel.consoleAria':
-    '草稿运行控制台',
+  'teamMemberWorkflowStudio.executionPanel.consoleAria': '草稿运行控制台',
+  'teamMemberWorkflowStudio.explicitRequest.approval': '审批要求',
+  'teamMemberWorkflowStudio.explicitRequest.body': '请求体',
+  'teamMemberWorkflowStudio.explicitRequest.cancel': '取消',
+  'teamMemberWorkflowStudio.explicitRequest.confirm': '确认并发布',
+  'teamMemberWorkflowStudio.explicitRequest.description':
+    '发布此 Workflow 前，请逐项确认外部请求。',
+  'teamMemberWorkflowStudio.explicitRequest.executionModes': '允许的执行模式',
+  'teamMemberWorkflowStudio.explicitRequest.interactiveUnavailable':
+    '有外部请求不能用于交互式发布。',
+  'teamMemberWorkflowStudio.explicitRequest.methodPath': '方法和路径',
+  'teamMemberWorkflowStudio.explicitRequest.notRequired': '不需要',
+  'teamMemberWorkflowStudio.explicitRequest.required': '需要',
+  'teamMemberWorkflowStudio.explicitRequest.response': '响应策略',
+  'teamMemberWorkflowStudio.explicitRequest.risk': '风险',
+  'teamMemberWorkflowStudio.explicitRequest.service': '服务',
+  'teamMemberWorkflowStudio.explicitRequest.title': '确认外部请求',
   'teamMemberWorkflowStudio.executionPanel.duration': '耗时',
   'teamMemberWorkflowStudio.executionPanel.clear': '清空日志',
   'teamMemberWorkflowStudio.executionPanel.copyAll': '复制全部日志',
   'teamMemberWorkflowStudio.executionPanel.copyAllDone': '已复制全部日志。',
+  'teamMemberWorkflowStudio.executionPanel.copyFailed': '无法复制日志。',
   'teamMemberWorkflowStudio.executionPanel.copySelected': '复制选中日志',
   'teamMemberWorkflowStudio.executionPanel.copySelectedDone':
     '已复制选中日志。',
@@ -856,6 +1158,7 @@ const zhCNMessages = {
     '选择一条日志查看它的输入、输出和原始事件数据。',
   'teamMemberWorkflowStudio.executionPanel.steps': '步骤',
   'teamMemberWorkflowStudio.executionPanel.status.error': '错误',
+  'teamMemberWorkflowStudio.executionPanel.status.pending': '待运行',
   'teamMemberWorkflowStudio.executionPanel.status.recorded': '已记录',
   'teamMemberWorkflowStudio.executionPanel.status.running': '运行中',
   'teamMemberWorkflowStudio.executionPanel.status.success': '成功',
@@ -867,15 +1170,15 @@ const zhCNMessages = {
     '这个 tab 只展示能通过稳定 Workflow 或 Service 标识安全归属到当前 Workflow 成员的执行记录。',
   'teamMemberWorkflowStudio.executionsPanel.empty':
     '当前 Workflow 成员还没有可安全归属的执行记录。',
-  'teamMemberWorkflowStudio.executionsPanel.fallbackName':
-    'Workflow 执行',
+  'teamMemberWorkflowStudio.executionsPanel.fallbackName': 'Workflow 执行',
   'teamMemberWorkflowStudio.executionsPanel.inspect': '查看',
-  'teamMemberWorkflowStudio.executionsPanel.sectionAria':
-    'Workflow 执行记录',
-  'teamMemberWorkflowStudio.executionsPanel.serviceMeta':
-    'service {serviceId}',
+  'teamMemberWorkflowStudio.executionsPanel.sectionAria': 'Workflow 执行记录',
+  'teamMemberWorkflowStudio.executionsPanel.serviceMeta': '服务已就绪',
   'teamMemberWorkflowStudio.executionsPanel.title': '执行记录',
   'teamMemberWorkflowStudio.executionsPanel.unknownStatus': '未知',
+  'teamMemberWorkflowStudio.graph.branchCount.one': '1 个分支',
+  'teamMemberWorkflowStudio.graph.branchCount.other': '{count} 个分支',
+  'teamMemberWorkflowStudio.graph.role': '角色',
   'teamMemberWorkflowStudio.header.activateAria': '激活 Workflow 成员',
   'teamMemberWorkflowStudio.header.activation.active': '已激活',
   'teamMemberWorkflowStudio.header.activation.error': '错误',
@@ -895,21 +1198,26 @@ const zhCNMessages = {
     '确定删除当前选中的节点吗？此操作不可撤销。',
   'teamMemberWorkflowStudio.header.deleteConnection': '删除连接',
   'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
-  'teamMemberWorkflowStudio.header.deleteSelectedConnection':
-    '删除选中的连接',
+  'teamMemberWorkflowStudio.header.deleteSelectedConnection': '删除选中的连接',
   'teamMemberWorkflowStudio.header.deleteSelectedNode': '删除选中的节点',
   'teamMemberWorkflowStudio.header.editWorkflowName': '编辑 Workflow 名称',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
   'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
+  'teamMemberWorkflowStudio.header.invoke': '调用',
+  'teamMemberWorkflowStudio.header.invoke.open': '打开已发布成员的调用工作台。',
+  'teamMemberWorkflowStudio.header.invoke.publishFirst':
+    '先发布这个成员，再调用它。',
+  'teamMemberWorkflowStudio.header.invoke.saveFirst':
+    '先保存这个成员，再调用它。',
   'teamMemberWorkflowStudio.header.more': '更多',
   'teamMemberWorkflowStudio.header.moreActions': '更多 Workflow 操作',
-  'teamMemberWorkflowStudio.header.nodeActionsAria':
-    'Workflow 草稿和节点操作',
-  'teamMemberWorkflowStudio.header.openAutomations':
-    '打开这个成员的周期任务',
-  'teamMemberWorkflowStudio.header.pasteYaml': '粘贴 YAML',
-  'teamMemberWorkflowStudio.header.primaryActionsAria':
-    'Workflow 主操作',
+  'teamMemberWorkflowStudio.header.nodeActionsAria': 'Workflow 草稿和节点操作',
+  'teamMemberWorkflowStudio.header.openAutomations': '打开这个成员的周期任务',
+  'teamMemberWorkflowStudio.header.editYaml': '编辑 YAML',
+  'teamMemberWorkflowStudio.header.editYamlTitle': '编辑 Workflow YAML',
+  'teamMemberWorkflowStudio.header.editYamlUnavailable':
+    '加载 Workflow 草稿后才能编辑 YAML。',
+  'teamMemberWorkflowStudio.header.primaryActionsAria': 'Workflow 主操作',
   'teamMemberWorkflowStudio.header.prepareDraftRun': '准备草稿运行',
   'teamMemberWorkflowStudio.header.publishedRuns': '发布运行记录',
   'teamMemberWorkflowStudio.header.publishedRuns.open':
@@ -941,28 +1249,20 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.publishMemberShort': '发布成员',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': '团队',
   'teamMemberWorkflowStudio.header.unsavedChanges': '有未保存更改',
-  'teamMemberWorkflowStudio.header.viewYaml': '查看 YAML',
-  'teamMemberWorkflowStudio.header.viewYamlUnavailable':
-    '加载 Workflow 草稿后才能查看 YAML。',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow 视图',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow 标题',
   'teamMemberWorkflowStudio.header.yaml': 'YAML',
-  'teamMemberWorkflowStudio.header.yamlActions': 'YAML',
-  'teamMemberWorkflowStudio.header.yamlActionsTitle':
-    '查看或导入 Workflow YAML',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
     '高级原始配置',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
     '只有当节点选项还没有引导字段时才使用这里。',
-  'teamMemberWorkflowStudio.nodeDetail.applyRawConfiguration':
-    '应用原始 JSON',
+  'teamMemberWorkflowStudio.nodeDetail.applyRawConfiguration': '应用原始 JSON',
   'teamMemberWorkflowStudio.nodeDetail.configuration': '配置',
   'teamMemberWorkflowStudio.nodeDetail.configurationDescription':
     '编辑这个节点在草稿运行时会使用的字段。',
   'teamMemberWorkflowStudio.nodeDetail.noSemanticFields':
     '这个节点类型暂时没有引导字段。需要时可以使用高级原始配置。',
-  'teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria':
-    '原始节点配置',
+  'teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria': '原始节点配置',
   'teamMemberWorkflowStudio.nodeDetail.rawConfigurationError':
     '原始节点配置必须是 JSON 对象。',
   'teamMemberWorkflowStudio.nodeDetail.sectionAria': '节点详情',
@@ -1003,12 +1303,10 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.draftRunPanel.filesLabel': '文件',
   'teamMemberWorkflowStudio.draftRunPanel.filesLimitHint':
     '支持图片、文档、音频、视频、CSV 和文本文件，单个文件最大 10 MB。',
-  'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
-    '草稿运行输入',
+  'teamMemberWorkflowStudio.draftRunPanel.messageLabel': '草稿运行输入',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     '本次 Workflow 草稿运行的可选输入',
-  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached':
-    '未添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached': '未添加文件',
   'teamMemberWorkflowStudio.draftRunPanel.removeEmptyFile':
     '开始草稿运行前请移除空文件 {name}。',
   'teamMemberWorkflowStudio.draftRunPanel.removeFile': '移除 {name}',
@@ -1028,28 +1326,50 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': '成员运行记录',
   'teamMemberWorkflowStudio.runsPanel.title': '成员运行记录',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': '未知',
-  'teamMemberWorkflowStudio.yamlImportPanel.cancel': '取消',
-  'teamMemberWorkflowStudio.yamlImportPanel.closeAria':
-    '关闭粘贴 YAML 面板',
-  'teamMemberWorkflowStudio.yamlImportPanel.import': '导入',
-  'teamMemberWorkflowStudio.yamlImportPanel.placeholder':
-    'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
-  'teamMemberWorkflowStudio.yamlImportPanel.sectionAria':
-    '粘贴 Workflow YAML 面板',
-  'teamMemberWorkflowStudio.yamlImportPanel.subtitle':
-    '导入到当前草稿',
-  'teamMemberWorkflowStudio.yamlImportPanel.textareaAria': 'Workflow YAML',
-  'teamMemberWorkflowStudio.yamlImportPanel.title': '粘贴 YAML',
-  'teamMemberWorkflowStudio.yamlPanel.closeAria': '关闭 YAML 面板',
+  'teamMemberWorkflowStudio.toast.draftRunCompleted': '草稿运行已完成。',
+  'teamMemberWorkflowStudio.toast.draftRunFailed':
+    '草稿运行失败。请查看结果后重试。',
+  'teamMemberWorkflowStudio.toast.draftSaveFailed':
+    '无法保存 Workflow 草稿。请查看详细信息后重试。',
+  'teamMemberWorkflowStudio.toast.draftSaved': 'Workflow 草稿已保存。',
+  'teamMemberWorkflowStudio.toast.memberCreateFailed':
+    '无法创建 Workflow 成员。请查看详细信息后重试。',
+  'teamMemberWorkflowStudio.toast.memberLinkFailed':
+    '暂时无法完成 Workflow 成员关联。请再次保存以重试。',
+  'teamMemberWorkflowStudio.toast.memberCreated': 'Workflow 成员已创建。',
+  'teamMemberWorkflowStudio.toast.memberPublished': 'Workflow 成员已发布。',
+  'teamMemberWorkflowStudio.toast.publishFailed':
+    '无法发布 Workflow 成员。请查看详细信息后重试。',
+  'teamMemberWorkflowStudio.toast.publishedMemberStatusRefreshed':
+    '已刷新已发布成员的状态。',
+  'teamMemberWorkflowStudio.toast.publishedWorkflowSaved':
+    '已保存发布后的 Workflow。',
+  'teamMemberWorkflowStudio.toast.publishStatusFailed':
+    '无法刷新发布状态。请查看详细信息后重试。',
+  'teamMemberWorkflowStudio.toast.saveAndPublishFailed':
+    '无法保存并发布 Workflow。请查看详细信息后重试。',
+  'teamMemberWorkflowStudio.toast.yamlApplyFailed':
+    '无法应用 YAML 修改。请查看详细信息后重试。',
+  'teamMemberWorkflowStudio.yamlPanel.apply': '应用到草稿',
+  'teamMemberWorkflowStudio.yamlPanel.cancel': '取消',
+  'teamMemberWorkflowStudio.yamlPanel.closeAria': '关闭 YAML 编辑器',
+  'teamMemberWorkflowStudio.yamlPanel.conflictTitle':
+    '请从当前画布重新打开“编辑 YAML”后再应用。',
   'teamMemberWorkflowStudio.yamlPanel.copy': '复制',
   'teamMemberWorkflowStudio.yamlPanel.copyFailed': '复制 YAML 失败。',
   'teamMemberWorkflowStudio.yamlPanel.copySuccess': '已复制 YAML。',
-  'teamMemberWorkflowStudio.yamlPanel.empty': '当前草稿没有可用 YAML。',
-  'teamMemberWorkflowStudio.yamlPanel.retry': '重试',
+  'teamMemberWorkflowStudio.yamlPanel.diagnosticsAria': 'YAML 诊断',
+  'teamMemberWorkflowStudio.yamlPanel.emptyYaml': 'Workflow YAML 为空。',
+  'teamMemberWorkflowStudio.yamlPanel.editorAria': 'Workflow YAML 编辑器',
+  'teamMemberWorkflowStudio.yamlPanel.error': '错误',
+  'teamMemberWorkflowStudio.yamlPanel.fixErrors': '请先解决错误级诊断。',
+  'teamMemberWorkflowStudio.yamlPanel.info': '信息',
+  'teamMemberWorkflowStudio.yamlPanel.line': '第 {line} 行',
   'teamMemberWorkflowStudio.yamlPanel.sectionAria': 'Workflow YAML 面板',
-  'teamMemberWorkflowStudio.yamlPanel.subtitle': '当前草稿源码',
-  'teamMemberWorkflowStudio.yamlPanel.textareaAria': '当前 Workflow YAML',
-  'teamMemberWorkflowStudio.yamlPanel.title': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlPanel.subtitle': '草稿源码缓冲区',
+  'teamMemberWorkflowStudio.yamlPanel.title': '编辑 YAML',
+  'teamMemberWorkflowStudio.yamlPanel.unapplied': '未应用',
+  'teamMemberWorkflowStudio.yamlPanel.warning': '警告',
   'pages.studio.studiomembercurrentrunpanel.details': '详情',
   'pages.studio.studiomemberinvokeinspector.copy':
     '端点详情、类型化载荷和最近运行记录会在这里按需打开，不改变主控制台布局。',
@@ -1061,12 +1381,9 @@ const zhCNMessages = {
   'pages.studio.studiomemberinvokeinspector.history': '历史',
   'pages.studio.studiomemberinvokeinspector.payload': '载荷',
   'pages.studio.studiomemberinvokeinspector.payload.base64': '载荷 base64',
-  'pages.studio.studiomemberinvokeinspector.payload.base64.2':
-    '载荷 base64',
-  'pages.studio.studiomemberinvokeinspector.payload.type.url':
-    '载荷类型 URL',
-  'pages.studio.studiomemberinvokeinspector.payload.type.url.2':
-    '载荷类型 URL',
+  'pages.studio.studiomemberinvokeinspector.payload.base64.2': '载荷 base64',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url': '载荷类型 URL',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url.2': '载荷类型 URL',
   'pages.studio.studiomemberinvokeinspector.paste.encoded.protobuf.payload.when':
     '当文本无法构造该类型时，粘贴编码后的 protobuf 载荷。',
   'pages.studio.studiomemberinvokeinspector.revision': '版本',
@@ -1077,6 +1394,307 @@ const zhCNMessages = {
   'pages.studio.studiomemberinvokeinspector.title': '详情',
   'pages.studio.studiomemberinvokepanel.endpoint': '端点',
   'pages.studio.studiomemberinvokepanel.inspector': '详情',
+  'pages.actors.index.actor': 'Actor',
+  'pages.actors.index.command.recorded': 'Command recorded',
+  'pages.actors.index.snapshot.available': 'Snapshot available',
+  'pages.deployments.index.actor.available': 'Actor available',
+  'pages.deployments.index.artifact.ready': 'Artifact ready',
+  'pages.deployments.index.deployment.attached': 'Deployment attached',
+  'pages.deployments.index.endpoint.ready': 'Endpoint ready',
+  'pages.deployments.index.rollout.active': 'Rollout active',
+  'pages.deployments.index.service': 'Service',
+  'pages.deployments.index.traffic.target.number': 'Target {value1}',
+  'pages.deployments.index.traffic.target.summary': '{value1}% {value2}',
+  'pages.deployments.index.version.ready': 'Version ready',
+  'pages.gagents.index.actor.not.assigned': '· Actor not assigned',
+  'pages.gagents.index.actor.ready': '· Actor ready',
+  'pages.gagents.index.attached': 'Attached',
+  'pages.gagents.index.available': 'Available',
+  'pages.gagents.index.configured': 'Configured',
+  'pages.gagents.index.deployment.ready': 'Deployment ready',
+  'pages.gagents.index.draft.deployment': 'Draft deployment',
+  'pages.gagents.index.latest.run.output': 'Latest Run Output',
+  'pages.gagents.index.service': 'Service',
+  'pages.governance.columns.binding': 'Binding',
+  'pages.governance.columns.binding.count': '{value1} bindings',
+  'pages.governance.columns.caller.count': '{value1} callers',
+  'pages.governance.columns.connector.target': 'Connector target',
+  'pages.governance.columns.endpoint': 'Endpoint',
+  'pages.governance.columns.policy': 'Policy',
+  'pages.governance.columns.policy.count': '{value1} policies',
+  'pages.governance.columns.request.contract.ready': 'Request contract ready',
+  'pages.governance.columns.secret.target': 'Secret target',
+  'pages.governance.columns.service.endpoint.target': 'Service endpoint target',
+  'pages.governance.columns.service.target': 'Service target',
+  'pages.governance.governanceinspectordrawer.version.ready': 'Version ready',
+  'pages.governance.governanceworkbench.binding.accepted.for.creation':
+    'Binding was accepted for governance creation.',
+  'pages.governance.governanceworkbench.binding.accepted.for.retirement':
+    'Binding was accepted for retirement.',
+  'pages.governance.governanceworkbench.binding.accepted.for.update':
+    'Binding was accepted for update.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.creation':
+    'Endpoint was accepted for governance creation.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.exposure':
+    'Endpoint was accepted for {value1} exposure.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.update':
+    'Endpoint was accepted for update.',
+  'pages.governance.governanceworkbench.policy': 'Policy',
+  'pages.governance.governanceworkbench.policy.accepted.for.creation':
+    'Policy was accepted for governance creation.',
+  'pages.governance.governanceworkbench.policy.accepted.for.retirement':
+    'Policy was accepted for retirement.',
+  'pages.governance.governanceworkbench.policy.accepted.for.update':
+    'Policy was accepted for update.',
+  'pages.governance.governanceworkbench.service': 'Service',
+  'pages.governance.governanceworkbench.service.endpoint.target':
+    'Service endpoint target',
+  'pages.governance.governanceworkbench.service.target': 'Service target',
+  'pages.governance.governanceworkbench.version.pending': 'Version pending',
+  'pages.governance.governanceworkbench.version.ready': 'Version ready',
+  'pages.governance.governanceworkbench.revision.was.published.for.governance.evaluation':
+    'Revision was published for governance evaluation.',
+  'pages.governance.governanceworkbench.revision.is.prepared.and.waiting.for':
+    'Revision is prepared and waiting for promotion decisions.',
+  'pages.governance.governanceworkbench.revision.missing.policies':
+    'Revision is missing {value1} required policies.',
+  'pages.runs.memberPublishedRuns.event': 'Event',
+  'pages.runs.memberPublishedRuns.member': 'Team member',
+  'pages.runs.memberPublishedRuns.step': 'Step',
+  'pages.runs.index.invocation.accepted.waiting.for.activity':
+    '调用请求已受理，正在等待活动。',
+  'pages.runs.index.prompt.required.before.sending': '请输入提示后再发送。',
+  'pages.runs.index.resume.request.accepted.waiting.for.run':
+    '恢复请求已受理，正在等待运行继续。',
+  'pages.runs.index.resume.request.not.accepted': '恢复请求未被受理，请重试。',
+  'pages.runs.index.run.request.failed': '无法启动运行。',
+  'pages.runs.index.selected.service.unavailable':
+    '所选服务当前不可用，正在使用工作区默认服务重试。',
+  'pages.runs.index.signal.accepted.waiting.for.run':
+    '信号已受理，正在等待运行继续。',
+  'pages.runs.index.signal.not.accepted': '信号未被受理，请重试。',
+  'pages.runs.index.stop.failed': '无法停止运行。',
+  'pages.runs.runsinspectorpane.actor': 'Actor',
+  'pages.runs.runsinspectorpane.command': 'Command',
+  'pages.runs.runsinspectorpane.command.accepted': 'Command accepted',
+  'pages.runs.runsinspectorpane.command.accepted.2': 'Command accepted',
+  'pages.runs.runsinspectorpane.current.run': 'Current run',
+  'pages.runs.runsinspectorpane.current.run.2': 'Current run',
+  'pages.runs.runsinspectorpane.current.run.ready': 'Current run ready',
+  'pages.runs.runsinspectorpane.event.recorded': 'Event recorded',
+  'pages.runs.runsinspectorpane.no.user.visible.payload':
+    'No user-visible payload fields.',
+  'pages.runs.runsinspectorpane.runtime.actor.ready': 'Runtime actor ready',
+  'pages.runs.runsinspectorpane.runtime.actor.ready.2': 'Runtime actor ready',
+  'pages.runs.runsinspectorpane.runtime.actor.ready.3': 'Runtime actor ready',
+  'pages.runs.runslaunchrail.no.run': 'No run',
+  'pages.runs.runslaunchrail.run.ready': 'Run ready',
+  'pages.runs.runsstatusstrip.current.run.ready': 'Current run ready',
+  'pages.runs.runsstatusstrip.pending': 'Pending',
+  'pages.runs.runsstatusstrip.run': 'Run',
+  'pages.runs.runworkbenchconfig.available': 'Available',
+  'pages.runs.runworkbenchconfig.command.accepted': 'Command accepted',
+  'pages.runs.runworkbenchconfig.current.run': 'Current run',
+  'pages.runs.runworkbenchconfig.current.run.2': 'Current run',
+  'pages.runs.runworkbenchconfig.current.run.ready': 'Current run ready',
+  'pages.runs.runworkbenchconfig.runtime.actor.ready': 'Runtime actor ready',
+  'pages.scopes.assets.actor.available': 'Actor available',
+  'pages.scopes.invoke.endpoint': 'Endpoint',
+  'pages.scopes.invoke.run': 'Run',
+  'pages.scopes.invoke.run.available': 'Run available',
+  'pages.scopes.invoke.runtime': 'Runtime',
+  'pages.scopes.invoke.runtime.ready': 'Runtime ready',
+  'pages.scopes.invoke.selected.service': 'the selected service',
+  'pages.scopes.invoke.service': 'Service',
+  'pages.scopes.invoke.version.ready': 'Version ready',
+  'pages.scopes.scopeserviceruntimeworkbench.actor.available':
+    'Actor available',
+  'pages.scopes.scopeserviceruntimeworkbench.binding': 'Binding',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.accepted.for.retirement':
+    'Binding was accepted for retirement.',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.change.accepted':
+    '绑定变更已受理。请查看列表中的当前状态。',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.created':
+    'Binding was created.',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.id.label': '绑定 ID',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.id.required':
+    '请输入绑定 ID。',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.kind.connector': '连接器',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.kind.label': '绑定类型',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.kind.secret': '密钥',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.kind.service': '服务',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.retirement.failed':
+    '暂时无法提交绑定退役请求，请重试。',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.save.failed':
+    '暂时无法保存此绑定，请重试。',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.updated':
+    'Binding was updated.',
+  'pages.scopes.scopeserviceruntimeworkbench.bindings.preparing.description':
+    '刷新以查看绑定何时可用。',
+  'pages.scopes.scopeserviceruntimeworkbench.bindings.preparing.title':
+    '绑定仍在准备中',
+  'pages.scopes.scopeserviceruntimeworkbench.action.accepted.description':
+    '正在检查最新状态。',
+  'pages.scopes.scopeserviceruntimeworkbench.action.accepted.title':
+    '请求已受理',
+  'pages.scopes.scopeserviceruntimeworkbench.action.delayed.description':
+    '最新列表尚未反映此请求。请刷新后再次检查。',
+  'pages.scopes.scopeserviceruntimeworkbench.action.delayed.title':
+    '更新仍在等待中。',
+  'pages.scopes.scopeserviceruntimeworkbench.action.failed.description':
+    '请先刷新最新状态，再决定是否重试。',
+  'pages.scopes.scopeserviceruntimeworkbench.action.failed.title':
+    '暂时无法确认更新状态',
+  'pages.scopes.scopeserviceruntimeworkbench.action.observed.description':
+    '最新列表已反映此项变更。',
+  'pages.scopes.scopeserviceruntimeworkbench.action.observed.title':
+    '更新已确认。',
+  'pages.scopes.scopeserviceruntimeworkbench.action.observing.description':
+    '正在等待最新列表更新。',
+  'pages.scopes.scopeserviceruntimeworkbench.action.observing.title':
+    '正在检查当前状态',
+  'pages.scopes.scopeserviceruntimeworkbench.action.dismiss': '关闭',
+  'pages.scopes.scopeserviceruntimeworkbench.action.refresh': '刷新',
+  'pages.scopes.scopeserviceruntimeworkbench.action.refreshing.description':
+    '正在检查最新列表。',
+  'pages.scopes.scopeserviceruntimeworkbench.action.refreshing.title':
+    '正在刷新当前状态',
+  'pages.scopes.scopeserviceruntimeworkbench.action.submitting.description':
+    '正在提交更新。',
+  'pages.scopes.scopeserviceruntimeworkbench.action.submitting.title':
+    '正在保存更新',
+  'pages.scopes.scopeserviceruntimeworkbench.connector.id.label': '连接器 ID',
+  'pages.scopes.scopeserviceruntimeworkbench.connector.id.required':
+    '请输入连接器 ID。',
+  'pages.scopes.scopeserviceruntimeworkbench.connector.type.label':
+    '连接器类型',
+  'pages.scopes.scopeserviceruntimeworkbench.connector.type.required':
+    '请输入连接器类型。',
+  'pages.scopes.scopeserviceruntimeworkbench.create.binding': '创建绑定',
+  'pages.scopes.scopeserviceruntimeworkbench.display.name.label': '显示名称',
+  'pages.scopes.scopeserviceruntimeworkbench.endpoint': 'Endpoint',
+  'pages.scopes.scopeserviceruntimeworkbench.endpoints': 'endpoints',
+  'pages.scopes.scopeserviceruntimeworkbench.policy.count': '{value1} policies',
+  'pages.scopes.scopeserviceruntimeworkbench.policy.ids.label': '策略 ID',
+  'pages.scopes.scopeserviceruntimeworkbench.ready': 'Ready',
+  'pages.scopes.scopeserviceruntimeworkbench.revision.accepted.for.retirement':
+    'Revision was accepted for retirement.',
+  'pages.scopes.scopeserviceruntimeworkbench.revision.retirement.failed':
+    '暂时无法提交版本退役请求，请重试。',
+  'pages.scopes.scopeserviceruntimeworkbench.service': 'Service',
+  'pages.scopes.scopeserviceruntimeworkbench.service.target': 'Service target',
+  'pages.scopes.scopeserviceruntimeworkbench.save.binding': '保存绑定',
+  'pages.scopes.scopeserviceruntimeworkbench.secret.name.label': '密钥名称',
+  'pages.scopes.scopeserviceruntimeworkbench.secret.name.required':
+    '请输入密钥名称。',
+  'pages.scopes.scopeserviceruntimeworkbench.serving.version.ready':
+    'serving version ready',
+  'pages.scopes.scopeserviceruntimeworkbench.target.endpoint.optional.label':
+    '目标端点（可选）',
+  'pages.scopes.scopeserviceruntimeworkbench.target.service.label': '目标服务',
+  'pages.scopes.scopeserviceruntimeworkbench.target.service.required':
+    '请选择目标服务。',
+  'pages.scopes.scopeserviceruntimeworkbench.version': 'Version',
+  'pages.services.index.artifact.attached': 'Artifact attached',
+  'pages.services.index.endpoint': 'Endpoint',
+  'pages.services.index.endpoint.ready': 'Endpoint ready',
+  'pages.services.index.request.contract.ready': 'Request contract ready',
+  'pages.services.index.service': 'Service',
+  'pages.services.index.service.identity.ready': 'Service identity ready',
+  'pages.services.index.version.ready': 'Version ready',
+  'pages.studio.bind.studiomemberbindpanel.binding': 'Binding',
+  'pages.studio.bind.studiomemberbindpanel.endpoint': 'Endpoint',
+  'pages.studio.bind.studiomemberbindpanel.endpoint.ready': 'Endpoint ready',
+  'pages.studio.bind.studiomemberbindpanel.member.selected': 'Member selected',
+  'pages.studio.bind.studiomemberbindpanel.policy.count': '{value1} policies',
+  'pages.studio.bind.studiomemberbindpanel.revision.ready': 'Revision ready',
+  'pages.studio.bind.studiomemberbindpanel.run.completed': 'Run completed',
+  'pages.studio.bind.studiomemberbindpanel.service.ready': 'Service ready',
+  'pages.studio.bind.studiomemberbindpanel.smoke.test.request.failed':
+    '无法完成冒烟测试，请重试。',
+  'pages.studio.studiobuildpanels.command.accepted': 'command: accepted',
+  'pages.studio.studiobuildpanels.current.run.ready': 'current run: ready',
+  'pages.studio.studiobuildpanels.events.count': 'events: {count}',
+  'pages.studio.studiobuildpanels.runtime.actor.ready': 'runtime actor: ready',
+  'pages.studio.studiobuildpanels.save.accepted.checking.again':
+    'Save accepted. Waiting for catalog; checking again in {value1}s.',
+  'pages.studio.studiobuildpanels.save.accepted.waiting.for.catalog':
+    'Save accepted. Still waiting for catalog; use Refresh catalog to check again.',
+  'pages.studio.studiobuildpanels.save.applied': 'Save applied.',
+  'pages.studio.studiobuildpanels.save.rejected': 'Save rejected.',
+  'pages.studio.studiobuildpanels.script': 'Script',
+  'pages.studio.studiobuildpanels.script.applied': 'Applied script',
+  'pages.studio.studiobuildpanels.script.draft': 'Script draft',
+  'pages.studio.studiobuildpanels.workflowActionFailed':
+    '无法完成工作流操作。请查看详细信息后重试。',
+  'pages.studio.studiobuildpanels.script.promotion.version.summary':
+    'Script promotion version summary',
+  'pages.studio.studiobuildpanels.version.ready': 'version ready',
+  'pages.studio.studiofilesdetailpane.chat.author.assistant': '助手',
+  'pages.studio.studiofilesdetailpane.chat.author.unknown': '未知作者',
+  'pages.studio.studiofilesdetailpane.chat.author.user': '用户',
+  'pages.studio.studiofilesdetailpane.chat.message.error': '错误',
+  'pages.studio.studiofilesdetailpane.chat.message.thinking': '思考过程',
+  'pages.studio.studiofilesdetailpane.chat.status.complete': '已完成',
+  'pages.studio.studiofilesdetailpane.chat.status.error': '错误',
+  'pages.studio.studiofilesdetailpane.chat.status.unknown': '未知',
+  'pages.studio.studiofilesdetailpane.conversation.turn.count.many':
+    '{count} 轮',
+  'pages.studio.studiofilesdetailpane.conversation.turn.count.one': '1 轮',
+  'pages.studio.studiofilesdetailpane.conversation.turn.meta':
+    '{turnCount} · {serviceKind} · {updatedAt}',
+  'pages.studio.studiofilesdetailpane.delete.conversation.confirmation.description':
+    '“{title}”将从会话历史中删除，且无法从此视图恢复。',
+  'pages.studio.studiofilesdetailpane.delete.conversation.confirmation.title':
+    '删除此会话？',
+  'pages.studio.studiofilesdetailpane.delete.conversation.now': '立即删除',
+  'pages.studio.studiofilesdetailpane.draft': 'Draft',
+  'pages.studio.studiofilesdetailpane.keep.conversation': '保留会话',
+  'pages.studio.studiofilesdetailpane.version.ready': 'Version ready',
+  'pages.studio.studiofilespage.chat.history': 'Chat history',
+  'pages.studio.studiofilespage.chat.history.turn.count.many': '{count} 轮',
+  'pages.studio.studiofilespage.chat.history.turn.count.one': '1 轮',
+  'pages.studio.studiofilespage.draft': 'Draft',
+  'pages.studio.studiofilespage.failed.to.load.conversations': '无法加载会话',
+  'pages.studio.studiofilespage.retry.conversations': '重新加载会话',
+  'pages.studio.studiofilespage.version.ready': 'Version ready',
+  'pages.studio.studioinvokediagnosticsdrawer.endpoint.ready': 'Endpoint ready',
+  'pages.studio.studiomemberinvokeinspector.service.ready': 'Service ready',
+  'pages.studio.studiomemberinvokeinspector.version.ready': 'Version ready',
+  'pages.studio.studioworkbenchsections.runtime.available': 'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.2':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.3':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.4':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.facts.available':
+    'Runtime facts available',
+  'pages.studio.studiomemberinvokepanel.copyFailed': '无法复制该内容。',
+  'pages.workflows.workflowyamlviewer.copy.success': 'YAML 已复制到剪贴板。',
+  'pages.workflows.workflowyamlviewer.failed.to.copy.yaml': '复制 YAML 失败。',
+  'pages.chat.chatadvancedconsole.timelineActionFailed':
+    '无法完成运行操作，请重试。',
+  'pages.deployments.index.actionFailed': '无法完成部署操作，请重试。',
+  'pages.gagents.index.bindingActionFailed': '无法完成绑定操作，请重试。',
+  'pages.gagents.index.registryActionFailed':
+    '无法完成 Actor 注册表操作，请重试。',
+  'pages.governance.governanceworkbench.actionFailed':
+    '无法完成治理操作，请重试。',
+  'pages.studio.bind.studiomemberbindpanel.bindingActionFailed':
+    '无法完成绑定操作，请重试。',
+  'pages.studio.studiobuildpanels.workflowSaveFailed':
+    '无法保存工作流，请重试。',
+  'pages.studio.studiofilesdetailpane.connectorSaveFailed':
+    '无法保存连接器目录，请重试。',
+  'pages.studio.studiofilesdetailpane.conversationDeleteFailed':
+    '无法删除会话，请重试。',
+  'pages.studio.studiofilesdetailpane.roleSaveFailed':
+    '无法保存角色目录，请重试。',
+  'pages.studio.studioinspectorpane.nodeActionFailed':
+    '无法应用节点更改，请重试。',
+  'pages.studio.studioworkbenchsections.executionActionFailed':
+    '无法完成运行操作，请重试。',
 };
 
 export default zhCNMessages;

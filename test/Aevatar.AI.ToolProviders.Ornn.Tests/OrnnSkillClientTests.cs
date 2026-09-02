@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
@@ -128,6 +129,182 @@ public sealed class OrnnSkillClientTests
         request.Authorization!.Parameter.Should().Be("access-token");
         request.RequestUri!.AbsoluteUri.Should().Be(
             "https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/Translate%20Skill/json");
+    }
+
+    [Fact]
+    public async Task GetSkillSetAsync_RoutesThroughNyxIdProxyAndParsesBothMemberShapes()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "guid": "set-guid-1",
+                "name": "aevatar-system",
+                "instructions": "set master prompt",
+                "members": [
+                  { "guid": "m-1", "name": "aevatar-skill-loading", "version": "1.1" },
+                  "aevatar-lark-provisioning@1.0"
+                ]
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var set = await client.GetSkillSetAsync("access-token", "aevatar-system");
+
+        set.Should().NotBeNull();
+        set!.Guid.Should().Be("set-guid-1");
+        set.Members.Should().HaveCount(2);
+        set.Members[0].Reference.Should().Be("m-1");                       // object member → guid preferred
+        set.Members[1].Reference.Should().Be("aevatar-lark-provisioning"); // string member → name without @version
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Get);
+        request.Authorization!.Parameter.Should().Be("access-token");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skillsets/aevatar-system");
+    }
+
+    [Fact]
+    public async Task GetExactSkillJsonAsync_UsesGuidAndLiteralVersionAndParsesToolDeclarations()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "nyxid-service-call",
+                "version": "1.2",
+                "metadata": {
+                  "tools": [
+                    { "tool": "nyxid_service_inventory", "type": "mcp" },
+                    { "tool": "nyxid_service_request", "type": "mcp" }
+                  ]
+                },
+                "files": { "SKILL.md": "reviewed" }
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+        const string guid = "11111111-2222-3333-4444-555555555555";
+
+        var result = await client.GetExactSkillJsonAsync("access-token", guid, "1.2");
+
+        result.ProxyStatus.Should().BeNull();
+        result.Value.Should().NotBeNull();
+        result.Value!.Version.Should().Be("1.2");
+        result.Value.Metadata!.Tools!.Select(static tool => tool.Tool).Should().Equal(
+            "nyxid_service_inventory",
+            "nyxid_service_request");
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Get);
+        request.Authorization!.Parameter.Should().Be("access-token");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            $"https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skills/{guid}/json?version=1.2");
+    }
+
+    [Fact]
+    public async Task GetExactSkillSetAsync_UsesGuidAndLiteralVersion()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "guid": "11111111-2222-3333-4444-555555555555",
+                "name": "nyxid-chat-core",
+                "version": "1.0",
+                "createdBy": "publisher-id",
+                "members": []
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+        const string guid = "11111111-2222-3333-4444-555555555555";
+
+        var skillset = await client.GetExactSkillSetAsync("access-token", guid, "1.0");
+
+        skillset.Should().NotBeNull();
+        skillset!.Guid.Should().Be(guid);
+        skillset.Version.Should().Be("1.0");
+        skillset.CreatedBy.Should().Be("publisher-id");
+        handler.Requests.Should().ContainSingle().Which.RequestUri!.AbsoluteUri.Should().Be(
+            $"https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skillsets/{guid}?version=1.0");
+    }
+
+    [Fact]
+    public async Task GetExactSkillSetClosureAsync_UsesExactClosurePath()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "items": [
+                  {
+                    "guid": "22222222-2222-2222-2222-222222222222",
+                    "name": "nyxid-service-call",
+                    "version": "1.2"
+                  }
+                ]
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+        const string guid = "11111111-2222-3333-4444-555555555555";
+
+        var closure = await client.GetExactSkillSetClosureAsync("access-token", guid, "1.0");
+
+        closure.Should().NotBeNull();
+        closure!.Items.Should().ContainSingle().Which.Version.Should().Be("1.2");
+        handler.Requests.Should().ContainSingle().Which.RequestUri!.AbsoluteUri.Should().Be(
+            $"https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skillsets/{guid}/closure?version=1.0");
+    }
+
+    [Fact]
+    public async Task CreateSkillSetAsync_PostsReviewedExactMembers()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "guid": "11111111-2222-3333-4444-555555555555",
+                "name": "nyxid-chat-core",
+                "version": "1.0",
+                "members": []
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+        var requestModel = new OrnnSkillSetPublishRequest(
+            "nyxid-chat-core",
+            "reviewed",
+            "select one member",
+            "generic",
+            ["aevatar", "reviewed-profile"],
+            ["22222222-2222-2222-2222-222222222222@1.2"],
+            "1.0");
+
+        var result = await client.CreateSkillSetAsync("access-token", requestModel);
+
+        result.Succeeded.Should().BeTrue();
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Post);
+        request.Authorization!.Parameter.Should().Be("access-token");
+        request.ContentType.Should().Be("application/json");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skillsets");
+        using var body = JsonDocument.Parse(request.Body!);
+        body.RootElement.GetProperty("name").GetString().Should().Be("nyxid-chat-core");
+        body.RootElement.GetProperty("version").GetString().Should().Be("1.0");
+        body.RootElement.GetProperty("members").EnumerateArray()
+            .Select(static member => member.GetString())
+            .Should().Equal("22222222-2222-2222-2222-222222222222@1.2");
+    }
+
+    [Fact]
+    public async Task GetSkillSetAsync_OnNyxIdProxy403_ThrowsAccessDenied()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": "denied" }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillSetAsync("token", "aevatar-system");
+
+        await act.Should().ThrowAsync<RemoteSkillFetchException>();
     }
 
     [Fact]
@@ -266,16 +443,35 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
-    public async Task GetSkillJsonAsync_ReturnsNullWhenNyxIdProxyReportsError()
+    public async Task UseSkillTool_WhenNyxIdProxyReportsNotFound_ProducesNotFoundReceipt()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson(
             """{ "error": "missing" }""",
             HttpStatusCode.NotFound);
-        var client = CreateClient(handler);
+        var tool = CreateUseSkillTool(handler);
+        const string arguments = """{"skill":"missing"}""";
 
-        var skill = await client.GetSkillJsonAsync("token", "missing");
+        var result = await tool.ExecuteAsync(arguments);
+        var receipt = tool.CreateResultReceipt("call-missing", tool.Name, arguments, result);
 
-        skill.Should().BeNull();
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be("USE_SKILL_NOT_FOUND");
+    }
+
+    [Fact]
+    public async Task UseSkillTool_WhenNyxIdProxyReportsServerError_ProducesLoadFailedReceipt()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": "upstream failed" }""",
+            HttpStatusCode.InternalServerError);
+        var tool = CreateUseSkillTool(handler);
+        const string arguments = """{"skill":"nyxid-service-connect"}""";
+
+        var result = await tool.ExecuteAsync(arguments);
+        var receipt = tool.CreateResultReceipt("call-server-error", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be("USE_SKILL_LOAD_FAILED");
     }
 
     [Fact]
@@ -328,20 +524,23 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
-    public async Task GetSkillJsonAsync_ReturnsNullWhenPerCallTimeoutFiresOnSlowUpstream()
+    public async Task UseSkillTool_WhenPerCallTimeoutFires_ProducesLoadFailedReceipt()
     {
         // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied call to
         // `/api/v1/skills/project-summary/json` hung for 113 s, holding the Orleans grain turn.
-        // OrnnSkillClient must surface a fast null instead of letting one upstream request
+        // OrnnSkillClient must surface a fast typed failure instead of letting one upstream request
         // stall the whole skill workflow.
         var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
-        var client = CreateClient(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
+        var tool = CreateUseSkillTool(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
+        const string arguments = """{"skill":"project-summary"}""";
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var skill = await client.GetSkillJsonAsync("token", "project-summary");
+        var result = await tool.ExecuteAsync(arguments);
         sw.Stop();
+        var receipt = tool.CreateResultReceipt("call-timeout", tool.Name, arguments, result);
 
-        skill.Should().BeNull();
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be("USE_SKILL_LOAD_FAILED");
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
             "per-call timeout (150ms) must abort the stuck request");
         handler.Requests.Should().ContainSingle();
@@ -411,5 +610,19 @@ public sealed class OrnnSkillClientTests
         return perCallTimeout is { } timeout
             ? new OrnnSkillClient(options, nyxClient, timeout)
             : new OrnnSkillClient(options, nyxClient);
+    }
+
+    private static UseSkillTool CreateUseSkillTool(
+        OrnnTestHttpMessageHandler handler,
+        TimeSpan? perCallTimeout = null) =>
+        new(
+            new LocalSkillCatalog(),
+            new OrnnRemoteSkillFetcher(CreateClient(handler, perCallTimeout: perCallTimeout)),
+            remoteAccessTokenResolver: new StaticRemoteSkillAccessTokenResolver());
+
+    private sealed class StaticRemoteSkillAccessTokenResolver : IRemoteSkillAccessTokenResolver
+    {
+        public Task<string?> ResolveAsync(string skillName, CancellationToken ct = default) =>
+            Task.FromResult<string?>("caller-token");
     }
 }

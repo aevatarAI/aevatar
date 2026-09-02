@@ -555,7 +555,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             new AgentToolRequestIdentity("request-1", "call-1"),
             new AgentToolCredentials("access-token", "org-token", "sender-token"),
             new AgentToolCallerContext("scope-a", "owner-a", "response-1"),
-            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
+            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1", IdentityHints: []),
             new AgentToolSenderBindingContext("binding-1"),
             new LLMRequestRoutingContext("model-1", "route-1", 3, "remember"),
             new AgentToolConnectedServicesContext("connected"),

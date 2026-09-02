@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Queries;
 
@@ -22,7 +21,6 @@ public sealed record LlmSessionRunObservationRequest(
 
 public sealed record LlmSessionRunObservedDelta(
     string? TextDelta,
-    ToolCall? ToolCallDelta,
     TokenUsage? Usage);
 
 public sealed record LlmSessionRunObservedError(

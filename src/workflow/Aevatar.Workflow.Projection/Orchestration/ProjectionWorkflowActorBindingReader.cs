@@ -102,7 +102,12 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             .Where(x => x.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        if (definitionActorIds.Length == 0)
+        var runIds = (query.RunIds ?? [])
+            .Select(x => x?.Trim() ?? string.Empty)
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (definitionActorIds.Length == 0 && runIds.Length == 0)
             return [];
 
         var boundedTake = Math.Clamp(query.Take, 1, 200);
@@ -125,16 +130,29 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             });
         }
 
-        filters.Add(new ProjectionDocumentFilter
+        if (definitionActorIds.Length > 0)
         {
-            FieldPath = nameof(WorkflowActorBindingDocument.DefinitionActorId),
-            Operator = definitionActorIds.Length == 1
-                ? ProjectionDocumentFilterOperator.Eq
-                : ProjectionDocumentFilterOperator.In,
-            Value = definitionActorIds.Length == 1
-                ? ProjectionDocumentValue.FromString(definitionActorIds[0])
-                : ProjectionDocumentValue.FromStrings(definitionActorIds),
-        });
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowActorBindingDocument.DefinitionActorId),
+                Operator = definitionActorIds.Length == 1
+                    ? ProjectionDocumentFilterOperator.Eq
+                    : ProjectionDocumentFilterOperator.In,
+                Value = definitionActorIds.Length == 1
+                    ? ProjectionDocumentValue.FromString(definitionActorIds[0])
+                    : ProjectionDocumentValue.FromStrings(definitionActorIds),
+            });
+        }
+
+        if (runIds.Length > 0)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowActorBindingDocument.RunId),
+                Operator = ProjectionDocumentFilterOperator.In,
+                Value = ProjectionDocumentValue.FromStrings(runIds),
+            });
+        }
 
         var result = await _queryDocumentsAsync(
             new ProjectionDocumentQuery
@@ -197,10 +215,15 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             document.WorkflowName ?? string.Empty,
             document.WorkflowYaml ?? string.Empty,
             new Dictionary<string, string>(document.InlineWorkflowYamls, StringComparer.OrdinalIgnoreCase),
+            document.ExpectedExecutionMode,
             document.ScopeId ?? string.Empty,
             document.StateVersion,
             document.LastEventId ?? string.Empty,
             document.CreatedAt,
-            document.UpdatedAt);
+            document.UpdatedAt,
+            document.SourceKind ?? string.Empty,
+            document.CapabilityAdmissionPlan?.Clone(),
+            document.WorkflowId ?? string.Empty,
+            document.RevisionId ?? string.Empty);
     }
 }

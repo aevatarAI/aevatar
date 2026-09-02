@@ -20,13 +20,22 @@ public static class AgentToolRequestContext
     public static string? NyxIdAccessToken => s_context.Value?.Credentials.NyxIdAccessToken;
     public static string? NyxIdOrgToken => s_context.Value?.Credentials.NyxIdOrgToken;
     public static string? SenderNyxIdAccessToken => s_context.Value?.Credentials.SenderNyxIdAccessToken;
+
+    public static string? SourceReadableNyxIdAccessToken =>
+        s_context.Value?.Credentials.SourceReadableNyxIdAccessToken;
+    public static AgentToolNyxIdCredentialKind NyxIdCredentialKind =>
+        s_context.Value?.Credentials.NyxIdCredentialKind ?? AgentToolNyxIdCredentialKind.Unspecified;
     public static string? ScopeId => s_context.Value?.Caller.ScopeId;
+    public static string? OwnerScopeId => s_context.Value?.Caller.OwnerScopeId;
     public static string? OwnerSubject => s_context.Value?.Caller.OwnerSubject;
+    public static AgentToolNyxIdAuthorityContext NyxIdAuthority =>
+        s_context.Value?.NyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty;
     public static string? ResponseId => s_context.Value?.Caller.ResponseId;
     public static string? RequestId => s_context.Value?.Request.RequestId;
     public static string? CallId => s_context.Value?.Request.CallId;
     public static string? IdempotencyKey => s_context.Value?.Request.IdempotencyKey;
     public static string? SenderBindingId => s_context.Value?.SenderBinding.BindingId;
+    public static string? SenderNyxUserId => s_context.Value?.SenderBinding.NyxUserId;
     public static string? ModelOverride => s_context.Value?.Routing.ModelOverride;
     public static string? NyxIdRoutePreference => s_context.Value?.Routing.NyxIdRoutePreference;
     public static int? MaxToolRoundsOverride => s_context.Value?.Routing.MaxToolRoundsOverride;
@@ -39,6 +48,9 @@ public static class AgentToolRequestContext
     public static string? ChannelDeliveryTargetId => s_context.Value?.Channel.DeliveryTargetId;
     public static AgentToolVisibilityScope ToolVisibility =>
         s_context.Value?.ToolVisibility ?? AgentToolVisibilityScope.Unrestricted;
+
+    public static IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> InputFileRefs =>
+        s_context.Value?.InputFileRefs ?? [];
 
     public static string? TryGetExternalMetadata(string key)
     {

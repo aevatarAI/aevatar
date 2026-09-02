@@ -51,10 +51,9 @@ internal sealed class ChatRuntimeStudioAuthoringLLMStreamPort : IStudioAuthoring
             toolLoop: new ToolCallLoop(
                 new ToolManager(),
                 hooks: null,
-                toolMiddlewares: null,
                 llmMiddlewares: _llmMiddlewares),
             hooks: null,
-            requestBuilder: () => BuildRequest(config),
+            requestBuilder: _ => BuildRequest(config),
             agentMiddlewares: _agentMiddlewares,
             llmMiddlewares: _llmMiddlewares,
             agentId: BuildAgentName(request.Kind),
@@ -66,6 +65,7 @@ internal sealed class ChatRuntimeStudioAuthoringLLMStreamPort : IStudioAuthoring
                            request.RequestId,
                            request.LlmControl,
                            toolContext: null,
+                           turnCatalog: null,
                            request.Metadata,
                            ct))
         {

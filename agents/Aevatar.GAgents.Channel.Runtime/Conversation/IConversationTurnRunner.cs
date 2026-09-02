@@ -46,6 +46,7 @@ public interface IConversationTurnRunner
     Task<ConversationStreamChunkResult> RunStreamChunkAsync(
         LlmReplyStreamChunkEvent chunk,
         string? currentPlatformMessageId,
+        NyxRelayTextOperationKind operation,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct);
 
@@ -298,6 +299,7 @@ public sealed class NullConversationTurnRunner : IConversationTurnRunner
     public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
         LlmReplyStreamChunkEvent chunk,
         string? currentPlatformMessageId,
+        NyxRelayTextOperationKind operation,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct) =>
         Task.FromResult(ConversationStreamChunkResult.Failed("no_runner", "no IConversationTurnRunner registered"));

@@ -1,0 +1,306 @@
+syntax = "proto3";
+
+package aevatar.gagents.work_order;
+option csharp_namespace = "Aevatar.GAgents.WorkOrder";
+
+import "google/protobuf/timestamp.proto";
+
+enum WorkOrderLifecycleStatus {
+  WORK_ORDER_LIFECYCLE_STATUS_UNSPECIFIED = 0;
+  WORK_ORDER_LIFECYCLE_STATUS_ACCEPTED = 1;
+  reserved 2;
+  WORK_ORDER_LIFECYCLE_STATUS_READY = 3;
+  WORK_ORDER_LIFECYCLE_STATUS_DISPATCH_PENDING = 4;
+  WORK_ORDER_LIFECYCLE_STATUS_RUNNING = 5;
+  WORK_ORDER_LIFECYCLE_STATUS_COMPLETED = 6;
+  WORK_ORDER_LIFECYCLE_STATUS_FAILED = 7;
+  WORK_ORDER_LIFECYCLE_STATUS_STOPPED = 8;
+  reserved 9;
+  WORK_ORDER_LIFECYCLE_STATUS_CANCELLED = 10;
+  WORK_ORDER_LIFECYCLE_STATUS_TIMED_OUT = 11;
+}
+
+enum WorkOrderTerminalOutcome {
+  WORK_ORDER_TERMINAL_OUTCOME_UNSPECIFIED = 0;
+  WORK_ORDER_TERMINAL_OUTCOME_SUCCEEDED = 1;
+  WORK_ORDER_TERMINAL_OUTCOME_FAILED = 2;
+  WORK_ORDER_TERMINAL_OUTCOME_STOPPED = 3;
+}
+
+message WorkOrderPrincipal {
+  string principal_id = 1;
+  string principal_kind = 2;
+}
+
+message WorkOrderArtifactReference {
+  string artifact_id = 1;
+  string artifact_kind = 2;
+  string uri = 3;
+  string revision_id = 4;
+}
+
+message WorkOrderChatInput {
+  string prompt = 1;
+}
+
+message WorkOrderServiceInput {
+  WorkOrderChatInput chat = 1;
+  repeated WorkOrderArtifactReference input_artifacts = 2;
+  repeated WorkOrderArtifactReference declared_result_artifacts = 3;
+}
+
+message WorkOrderRunLink {
+  string run_id = 1;
+  string run_actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+  string revision_id = 5;
+  string deployment_id = 6;
+  google.protobuf.Timestamp accepted_at_utc = 7;
+}
+
+message WorkOrderFailureReference {
+  string code = 1;
+  string message = 2;
+  string source = 3;
+  string reference_id = 4;
+}
+
+message WorkOrderRunOutcomeReference {
+  string delivery_id = 1;
+  string run_id = 2;
+  string run_actor_id = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+  WorkOrderTerminalOutcome outcome = 6;
+  google.protobuf.Timestamp terminal_at_utc = 7;
+}
+
+message WorkOrderState {
+  string work_order_id = 1;
+  string dedup_key = 2;
+  string scope_id = 3;
+  string team_id = 4;
+  WorkOrderPrincipal requester = 5;
+  string member_id = 6;
+  string published_service_id = 7;
+  string workflow_id = 8;
+  string service_revision_id = 9;
+  string implementation_kind = 10;
+  string endpoint_id = 11;
+  string intent = 12;
+  WorkOrderServiceInput input = 13;
+  reserved 14, 15;
+  WorkOrderLifecycleStatus lifecycle_status = 16;
+  int64 lifecycle_version = 17;
+  google.protobuf.Timestamp created_at_utc = 18;
+  google.protobuf.Timestamp updated_at_utc = 19;
+  google.protobuf.Timestamp timeout_at_utc = 20;
+  string dispatch_command_id = 21;
+  string requested_run_id = 22;
+  string terminal_delivery_id = 23;
+  WorkOrderRunLink run = 24;
+  WorkOrderRunOutcomeReference run_outcome = 25;
+  WorkOrderRunOutcomeReference late_run_outcome = 26;
+  WorkOrderFailureReference failure = 27;
+  string terminal_reason = 28;
+  CreateWorkOrder creation_request = 29;
+  int32 execution_retry_attempt = 30;
+  string execution_retry_callback_id = 31;
+  google.protobuf.Timestamp execution_retry_at_utc = 32;
+}
+
+message CreateWorkOrder {
+  string work_order_id = 1;
+  string dedup_key = 2;
+  string scope_id = 3;
+  string team_id = 4;
+  WorkOrderPrincipal requester = 5;
+  string member_id = 6;
+  string published_service_id = 7;
+  string workflow_id = 8;
+  string service_revision_id = 9;
+  string implementation_kind = 10;
+  string endpoint_id = 11;
+  string intent = 12;
+  WorkOrderServiceInput input = 13;
+  reserved 14, 15;
+  google.protobuf.Timestamp requested_at_utc = 16;
+  google.protobuf.Timestamp timeout_at_utc = 17;
+  int64 expected_lifecycle_version = 18;
+}
+
+message WorkOrderCreatedEvent {
+  CreateWorkOrder request = 1;
+  google.protobuf.Timestamp created_at_utc = 2;
+}
+
+message WorkOrderReadyEvent {
+  google.protobuf.Timestamp ready_at_utc = 1;
+}
+
+message ReassignWorkOrder {
+  string work_order_id = 1;
+  int64 expected_lifecycle_version = 2;
+  WorkOrderPrincipal requested_by = 3;
+  string member_id = 4;
+  string published_service_id = 5;
+  string workflow_id = 6;
+  string service_revision_id = 7;
+  string implementation_kind = 8;
+  google.protobuf.Timestamp requested_at_utc = 9;
+}
+
+message WorkOrderReassignedEvent {
+  string member_id = 1;
+  string published_service_id = 2;
+  string workflow_id = 3;
+  string service_revision_id = 4;
+  string implementation_kind = 5;
+  WorkOrderPrincipal reassigned_by = 6;
+  google.protobuf.Timestamp reassigned_at_utc = 7;
+}
+
+message DispatchWorkOrder {
+  string work_order_id = 1;
+  int64 expected_lifecycle_version = 2;
+  WorkOrderPrincipal requested_by = 3;
+  string dispatch_command_id = 4;
+  string requested_run_id = 5;
+  string terminal_delivery_id = 6;
+  google.protobuf.Timestamp requested_at_utc = 7;
+}
+
+message WorkOrderDispatchRequestedEvent {
+  string dispatch_command_id = 1;
+  string requested_run_id = 2;
+  string terminal_delivery_id = 3;
+  WorkOrderPrincipal requested_by = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+}
+
+message ExecuteWorkOrder {
+  string work_order_id = 1;
+  string dispatch_command_id = 2;
+}
+
+message WorkOrderExecutionRequest {
+  string work_order_actor_id = 1;
+  string work_order_id = 2;
+  string scope_id = 3;
+  string team_id = 4;
+  string member_id = 5;
+  string published_service_id = 6;
+  string workflow_id = 7;
+  string service_revision_id = 8;
+  string implementation_kind = 9;
+  string endpoint_id = 10;
+  WorkOrderServiceInput input = 11;
+  string dispatch_command_id = 12;
+  string requested_run_id = 13;
+  string terminal_delivery_id = 14;
+  google.protobuf.Timestamp deadline_at_utc = 15;
+}
+
+message WorkOrderExecutionAccepted {
+  string run_id = 1;
+  string run_actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+  string revision_id = 5;
+  string deployment_id = 6;
+  google.protobuf.Timestamp accepted_at_utc = 7;
+}
+
+message WorkOrderExecutionFailed {
+  WorkOrderFailureReference failure = 1;
+  google.protobuf.Timestamp failed_at_utc = 2;
+}
+
+message WorkOrderExecutionResult {
+  oneof result {
+    WorkOrderExecutionAccepted accepted = 1;
+    WorkOrderExecutionFailed failed = 2;
+  }
+}
+
+message WorkOrderExecutionAcceptedContinuation {
+  string work_order_id = 1;
+  string dispatch_command_id = 2;
+  string requested_run_id = 3;
+  WorkOrderExecutionAccepted accepted = 4;
+}
+
+message WorkOrderExecutionFailedContinuation {
+  string work_order_id = 1;
+  string dispatch_command_id = 2;
+  string requested_run_id = 3;
+  WorkOrderExecutionFailed failed = 4;
+}
+
+message WorkOrderExecutionRetryScheduledEvent {
+  string work_order_id = 1;
+  string dispatch_command_id = 2;
+  string requested_run_id = 3;
+  int32 attempt = 4;
+  string callback_id = 5;
+  google.protobuf.Timestamp retry_at_utc = 6;
+}
+
+message WorkOrderExecutionRetryFired {
+  string work_order_id = 1;
+  string dispatch_command_id = 2;
+  string requested_run_id = 3;
+  int32 attempt = 4;
+}
+
+message WorkOrderRunAcceptedEvent {
+  WorkOrderExecutionAccepted accepted = 1;
+}
+
+message WorkOrderRunStartedEvent {
+  string delivery_id = 1;
+  string run_id = 2;
+  string run_actor_id = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+  google.protobuf.Timestamp started_at_utc = 6;
+}
+
+message WorkOrderDispatchFailedEvent {
+  WorkOrderFailureReference failure = 1;
+  google.protobuf.Timestamp failed_at_utc = 2;
+}
+
+message CancelWorkOrder {
+  string work_order_id = 1;
+  int64 expected_lifecycle_version = 2;
+  WorkOrderPrincipal requested_by = 3;
+  string reason = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+}
+
+message WorkOrderCancelledEvent {
+  WorkOrderPrincipal cancelled_by = 1;
+  string reason = 2;
+  google.protobuf.Timestamp cancelled_at_utc = 3;
+}
+
+message WorkOrderTimeoutFired {
+  string work_order_id = 1;
+  google.protobuf.Timestamp timeout_at_utc = 2;
+}
+
+message WorkOrderTimedOutEvent {
+  string reason = 1;
+  google.protobuf.Timestamp timed_out_at_utc = 2;
+}
+
+message WorkOrderRunOutcomeObservedEvent {
+  WorkOrderLifecycleStatus lifecycle_status = 1;
+  WorkOrderRunOutcomeReference outcome = 2;
+}
+
+message WorkOrderLateRunOutcomeObservedEvent {
+  WorkOrderRunOutcomeReference outcome = 1;
+}

@@ -37,6 +37,39 @@ public interface INyxIdUserLlmPreferencesStore
 }
 
 public sealed record NyxIdUserLlmPreferences(
-    string DefaultModel,
-    string PreferredRoute,
-    int MaxToolRounds = 0);
+    LLMSelection Selection,
+    LLMSelectionPersistenceStatus Status,
+    int MaxToolRounds = 0)
+{
+    public static NyxIdUserLlmPreferences Empty { get; } = new(
+        LLMSelectionPolicy.SystemDefaultSelection(),
+        LLMSelectionPersistenceStatus.SystemDefault);
+
+    public LLMControlContext ApplyTo(LLMControlContext current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+
+        var applied = Status switch
+        {
+            LLMSelectionPersistenceStatus.SystemDefault => current,
+            LLMSelectionPersistenceStatus.Ready => LLMSelectionPolicy.ApplyTo(current, Selection),
+            LLMSelectionPersistenceStatus.LegacyRepairRequired => throw new LLMSelectionRepairRequiredException(),
+            _ => throw new InvalidOperationException("User LLM selection persistence status is unspecified."),
+        };
+
+        return applied with
+        {
+            MaxToolRoundsOverride = MaxToolRounds > 0
+                ? MaxToolRounds
+                : applied.MaxToolRoundsOverride,
+        };
+    }
+}
+
+public enum LLMSelectionPersistenceStatus
+{
+    Unspecified = 0,
+    SystemDefault = 1,
+    Ready = 2,
+    LegacyRepairRequired = 3,
+}

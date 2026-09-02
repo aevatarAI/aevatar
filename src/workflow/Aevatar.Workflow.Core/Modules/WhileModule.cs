@@ -63,6 +63,7 @@ public sealed class WhileModule : IEventModule<IWorkflowExecutionContext>
                 Iteration = 0,
                 MaxIterations = maxIterations,
                 ConditionExpression = condition,
+                SubExternalInvocation = request.ExternalInvocation?.Clone(),
             };
             foreach (var (key, value) in subParameters)
                 state.SubParameters[key] = value;
@@ -178,6 +179,7 @@ public sealed class WhileModule : IEventModule<IWorkflowExecutionContext>
             RunId = state.RunId,
             Input = input,
             TargetRole = state.SubTargetRole,
+            ExternalInvocation = state.SubExternalInvocation?.Clone(),
         };
         var vars = BuildIterationVariables(input, state.Iteration, state.MaxIterations);
         foreach (var (key, value) in state.SubParameters)

@@ -118,7 +118,8 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     items[i].Trim(),
                     subTargetRole ?? "",
                     subParams,
-                    useInputFileRefs ? [fileItems[i]] : null);
+                    useInputFileRefs ? [fileItems[i]] : null,
+                    evt.ExternalInvocation);
 
                 if (BackpressureHelper.TryAdmit(state.Backpressure, entry))
                 {

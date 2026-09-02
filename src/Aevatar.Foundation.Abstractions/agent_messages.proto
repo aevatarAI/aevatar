@@ -91,7 +91,7 @@ message EnvelopePropagation {
   map<string, string>      baggage           = 4;
 }
 
-message DeliveryDeduplication {
+message DeliveryIdentity {
   string operation_id = 1;
 }
 
@@ -127,14 +127,14 @@ message EnvelopeDispatchControl {
 }
 
 message EnvelopeRuntime {
-  string                  source_actor_id   = 1;
-  int64                   route_target_count = 2;
-  DeliveryDeduplication   deduplication     = 3;
-  EnvelopeRetryContext    retry             = 4;
-  EnvelopeCallbackContext callback          = 5;
-  EnvelopeForwardingContext forwarding      = 6;
-  EnvelopeDispatchControl dispatch          = 7;
-  repeated string         visited_actor_ids = 8;
+  string                    source_actor_id    = 1;
+  int64                     route_target_count = 2;
+  DeliveryIdentity          delivery_identity  = 3;
+  EnvelopeRetryContext      retry              = 4;
+  EnvelopeCallbackContext   callback           = 5;
+  EnvelopeForwardingContext forwarding         = 6;
+  EnvelopeDispatchControl   dispatch           = 7;
+  repeated string           visited_actor_ids  = 8;
 }
 
 // State events (Event Sourcing).

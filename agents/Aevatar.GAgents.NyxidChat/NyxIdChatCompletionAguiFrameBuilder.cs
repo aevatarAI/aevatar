@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AGUI.Contracts;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Google.Protobuf.WellKnownTypes;
@@ -24,12 +25,120 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
 
         var frames = new List<AGUIEvent>();
         frames.AddRange(BuildToolFrames(completed));
+        AppendRichContentFrames(frames, completed, messageId);
+
+        if (completed.Outcome == RoleChatSessionOutcome.Blocked && completed.AuthorizationRequired != null)
+        {
+            AppendTextAndUsageFrames(frames, messageId, content, completed.Usage, completed.Model);
+            var blocker = completed.AuthorizationRequired.Clone();
+            frames.Add(new AGUIEvent
+            {
+                Custom = new CustomEvent
+                {
+                    Name = "nyxid.authorization.required",
+                    Payload = Any.Pack(blocker),
+                },
+            });
+            frames.Add(new AGUIEvent
+            {
+                RunFinished = new RunFinishedEvent
+                {
+                    ThreadId = context.RootActorId,
+                    RunId = context.SessionId,
+                    Result = Any.Pack(blocker),
+                    Status = RunCompletionStatus.Blocked,
+                },
+            });
+            return frames;
+        }
+
+        if (completed.Outcome is
+            RoleChatSessionOutcome.Failed or
+            RoleChatSessionOutcome.OutcomeUncertain)
+        {
+            AppendTextAndUsageFrames(
+                frames,
+                messageId,
+                ResolveDisplayableContent(content),
+                completed.Usage,
+                completed.Model);
+            frames.Add(BuildRunError(
+                string.IsNullOrWhiteSpace(completed.SafeMessage)
+                    ? "The chat request failed. Please try again."
+                    : completed.SafeMessage,
+                context.SessionId,
+                string.IsNullOrWhiteSpace(completed.FailureCode)
+                    ? "CHAT_REQUEST_FAILED"
+                    : completed.FailureCode));
+            return frames;
+        }
+
         if (TryBuildFailureFrame(content, context.SessionId, out var failureFrame))
         {
+            AppendTextAndUsageFrames(frames, messageId, string.Empty, completed.Usage, completed.Model);
             frames.Add(failureFrame);
             return frames;
         }
 
+        AppendTextAndUsageFrames(frames, messageId, content, completed.Usage, completed.Model);
+        frames.Add(new AGUIEvent
+        {
+            RunFinished = new RunFinishedEvent
+            {
+                ThreadId = context.RootActorId,
+                RunId = context.SessionId,
+                Result = Any.Pack(new StringValue { Value = content }),
+                Status = RunCompletionStatus.Completed,
+            },
+        });
+        return frames;
+    }
+
+    private static void AppendRichContentFrames(
+        ICollection<AGUIEvent> frames,
+        RoleChatSessionCompletedEvent completed,
+        string messageId)
+    {
+        if (!string.IsNullOrEmpty(completed.ReasoningContent))
+        {
+            frames.Add(new AGUIEvent
+            {
+                Custom = new CustomEvent
+                {
+                    Name = "aevatar.llm.reasoning",
+                    Payload = Any.Pack(new RoleChatReasoningDeltaProgress
+                    {
+                        Delta = completed.ReasoningContent,
+                    }),
+                },
+            });
+        }
+
+        foreach (var part in completed.OutputParts)
+        {
+            frames.Add(new AGUIEvent
+            {
+                Custom = new CustomEvent
+                {
+                    Name = "MEDIA_CONTENT",
+                    Payload = Any.Pack(new MediaContentEvent
+                    {
+                        SessionId = messageId,
+                        AgentId = completed.ActorId ?? string.Empty,
+                        Part = part.Clone(),
+                    }),
+                },
+            });
+        }
+    }
+
+    private static void AppendTextAndUsageFrames(
+        ICollection<AGUIEvent> frames,
+        string messageId,
+        string content,
+        TokenUsagePayload? usage,
+        string? model)
+    {
         if (!string.IsNullOrEmpty(content))
         {
             frames.Add(new AGUIEvent
@@ -50,8 +159,8 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
             });
         }
 
-        if (completed.Usage != null)
-            frames.Add(BuildUsageFrame(completed.Usage, completed.Model));
+        if (usage != null)
+            frames.Add(BuildUsageFrame(usage, model));
 
         frames.Add(new AGUIEvent
         {
@@ -60,16 +169,6 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
                 MessageId = messageId,
             },
         });
-        frames.Add(new AGUIEvent
-        {
-            RunFinished = new RunFinishedEvent
-            {
-                ThreadId = context.RootActorId,
-                RunId = context.SessionId,
-                Result = Any.Pack(new StringValue { Value = content }),
-            },
-        });
-        return frames;
     }
 
     public static AGUIEvent? BuildPendingApprovalFrame(PendingToolApprovalState? pending)
@@ -87,7 +186,7 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
                     Fields =
                     {
                         ["requestId"] = Value.ForString(pending.RequestId),
-                        ["sessionId"] = Value.ForString(pending.SessionId ?? string.Empty),
+                        ["turnId"] = Value.ForString(pending.SessionId ?? string.Empty),
                         ["toolName"] = Value.ForString(pending.ToolName ?? string.Empty),
                         ["toolCallId"] = Value.ForString(pending.ToolCallId ?? string.Empty),
                         ["argumentsJson"] = Value.ForString(pending.ArgumentsJson ?? string.Empty),
@@ -118,6 +217,45 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
                 {
                     ToolCallId = callId,
                     ToolName = toolName,
+                    Presentation = ToolPresentationDescriptors.Snapshot(
+                        toolCall.Presentation,
+                        toolName),
+                },
+            };
+        }
+
+        var completedResultCallIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var result in completed.ToolResults)
+        {
+            var callId = result.CallId ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(callId))
+                continue;
+
+            if (!started.Contains(callId))
+            {
+                var toolName = completed.ToolReceipts.FirstOrDefault(receipt =>
+                    string.Equals(receipt.CallId, callId, StringComparison.Ordinal))?.ToolName ?? string.Empty;
+                started.Add(callId);
+                yield return new AGUIEvent
+                {
+                    ToolCallStart = new ToolCallStartEvent
+                    {
+                        ToolCallId = callId,
+                        ToolName = toolName,
+                        Presentation = ToolPresentationDescriptors.Snapshot(
+                            presentation: null,
+                            invocationName: toolName),
+                    },
+                };
+            }
+
+            completedResultCallIds.Add(callId);
+            yield return new AGUIEvent
+            {
+                ToolCallEnd = new ToolCallEndEvent
+                {
+                    ToolCallId = callId,
+                    Result = ResolveToolResult(result),
                 },
             };
         }
@@ -129,6 +267,9 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
             if (string.IsNullOrWhiteSpace(callId) && string.IsNullOrWhiteSpace(toolName))
                 continue;
 
+            if (!string.IsNullOrWhiteSpace(callId) && completedResultCallIds.Contains(callId))
+                continue;
+
             if (!string.IsNullOrWhiteSpace(callId) && !started.Contains(callId))
             {
                 started.Add(callId);
@@ -138,6 +279,9 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
                     {
                         ToolCallId = callId,
                         ToolName = toolName,
+                        Presentation = ToolPresentationDescriptors.Snapshot(
+                            presentation: null,
+                            invocationName: toolName),
                     },
                 };
             }
@@ -171,6 +315,15 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
         };
     }
 
+    private static string ResolveToolResult(ToolResultEvent result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.ResultJson))
+            return result.ResultJson;
+        if (!string.IsNullOrWhiteSpace(result.Error))
+            return result.Error;
+        return result.Success ? "Tool completed." : "Tool failed.";
+    }
+
     private static bool TryBuildFailureFrame(string content, string runId, out AGUIEvent failureFrame)
     {
         failureFrame = null!;
@@ -181,28 +334,38 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
         const string llmFailedPrefix = "LLM request failed";
         if (content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
         {
-            failureFrame = BuildRunError(content[llmErrorPrefix.Length..].Trim(), runId);
+            failureFrame = BuildRunError(content[llmErrorPrefix.Length..].Trim(), runId, "LLM_REQUEST_FAILED");
             return true;
         }
 
         if (content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
         {
-            failureFrame = BuildRunError(ScopeGAgentAguiEventMapper.NormalizeLlmFailureMessage(content), runId);
+            failureFrame = BuildRunError(
+                ScopeGAgentAguiEventMapper.NormalizeLlmFailureMessage(content),
+                runId,
+                "LLM_REQUEST_FAILED");
             return true;
         }
 
         return false;
     }
 
-    private static AGUIEvent BuildRunError(string message, string runId) =>
+    private static AGUIEvent BuildRunError(string message, string runId, string code) =>
         new()
         {
             RunError = new RunErrorEvent
             {
                 Message = string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message,
                 RunId = runId,
+                Code = code,
             },
         };
+
+    private static string ResolveDisplayableContent(string content) =>
+        content.StartsWith("[[AEVATAR_LLM_ERROR]]", StringComparison.Ordinal) ||
+        content.StartsWith("LLM request failed", StringComparison.Ordinal)
+            ? string.Empty
+            : content;
 
     private static AGUIEvent BuildUsageFrame(TokenUsagePayload usage, string? model) =>
         new()

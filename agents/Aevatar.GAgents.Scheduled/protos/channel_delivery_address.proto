@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package aevatar.gagents.scheduled;
+
+option csharp_namespace = "Aevatar.GAgents.Scheduled";
+
+message ChannelDeliveryAddressEndpoint {
+  string address_id = 1;
+  string address_type = 2;
+}
+
+message ChannelDeliveryAddress {
+  string platform = 1;
+  string provider_slug = 2;
+  string conversation_id = 3;
+  ChannelDeliveryAddressEndpoint primary = 4;
+  ChannelDeliveryAddressEndpoint fallback = 5;
+}

@@ -1,0 +1,888 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Skills 调用入口 · aevatar Console</title>
+<style>
+  /* =========================================================================
+     Aevatar Console · /workflow/skills 「Skills 调用入口」
+     与 /workflow/observatory 同源：同一套 design tokens、深色为主 + 完整浅色、
+     响应式、键盘可达、zh-CN。单文件自包含，零外部依赖。
+     JS 仅为结构性占位（渲染函数 + 各态骨架）；真实 OIDC PKCE 鉴权与 fetch 由接线方注入。
+     ========================================================================= */
+  :root{
+    --bg:#0f1115; --bg-grad:radial-gradient(1200px 600px at 78% -10%,#161b26 0%,#0f1115 60%);
+    --panel:#171a21; --panel-2:#1f232c; --panel-3:#252b36;
+    --border:#2a2f3a; --border-soft:#22272f;
+    --fg:#e6e9ef; --fg-strong:#f4f6fb; --muted:#9aa3b2; --muted-2:#6c7585;
+    --accent:#5b8cff; --accent-ink:#0b1020; --accent-soft:rgba(91,140,255,.14); --accent-line:rgba(91,140,255,.40);
+    --ok:#3fb950; --ok-soft:rgba(63,185,80,.14);
+    --warn:#d29922; --warn-soft:rgba(210,153,34,.15);
+    --err:#f85149; --err-soft:rgba(248,81,73,.14);
+    --run:#58a6ff; --run-soft:rgba(88,166,255,.16);
+    --neutral:#9aa3b2; --neutral-soft:rgba(154,163,178,.12);
+    --shadow:0 8px 30px rgba(0,0,0,.40); --shadow-sm:0 1px 2px rgba(0,0,0,.30);
+    --ring:0 0 0 2px var(--bg),0 0 0 4px var(--accent);
+    --r-sm:6px; --r:9px; --r-lg:13px; --r-pill:999px;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+    --list-w:320px; --topbar-h:56px; color-scheme:dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      --bg:#f5f7fa; --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
+      --panel:#ffffff; --panel-2:#f3f5f9; --panel-3:#eaeef4; --border:#dde2ea; --border-soft:#e7ebf1;
+      --fg:#1c2128; --fg-strong:#0b0f14; --muted:#57606b; --muted-2:#828b97;
+      --accent:#2f63e0; --accent-ink:#ffffff; --accent-soft:rgba(47,99,224,.10); --accent-line:rgba(47,99,224,.34);
+      --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12); --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
+      --err:#cf222e; --err-soft:rgba(207,34,46,.10); --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
+      --neutral:#57606b; --neutral-soft:rgba(87,96,107,.10);
+      --shadow:0 10px 30px rgba(16,24,40,.10); --shadow-sm:0 1px 2px rgba(16,24,40,.06); color-scheme:light;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#f5f7fa; --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
+    --panel:#ffffff; --panel-2:#f3f5f9; --panel-3:#eaeef4; --border:#dde2ea; --border-soft:#e7ebf1;
+    --fg:#1c2128; --fg-strong:#0b0f14; --muted:#57606b; --muted-2:#828b97;
+    --accent:#2f63e0; --accent-ink:#ffffff; --accent-soft:rgba(47,99,224,.10); --accent-line:rgba(47,99,224,.34);
+    --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12); --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
+    --err:#cf222e; --err-soft:rgba(207,34,46,.10); --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
+    --neutral:#57606b; --neutral-soft:rgba(87,96,107,.10);
+    --shadow:0 10px 30px rgba(16,24,40,.10); --shadow-sm:0 1px 2px rgba(16,24,40,.06); color-scheme:light;
+  }
+  :root[data-theme="dark"] { color-scheme:dark; }
+
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body { margin:0; background:var(--bg); background-image:var(--bg-grad); background-attachment:fixed; color:var(--fg);
+    font:14px/1.55 var(--sans); -webkit-font-smoothing:antialiased; overflow:hidden; }
+  ::selection { background:var(--accent-soft); }
+  button { font:inherit; color:inherit; cursor:pointer; }
+  a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
+  :focus-visible { outline:none; box-shadow:var(--ring); border-radius:var(--r-sm); }
+  .mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  .scroll::-webkit-scrollbar { width:10px; height:10px; }
+  .scroll::-webkit-scrollbar-thumb { background:var(--panel-3); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
+
+  /* status primitives */
+  .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
+  .dot.s-running,.dot.s-run { background:var(--run); animation:pulse 2.4s ease-out infinite; }
+  .dot.s-completed,.dot.s-ok,.dot.s-enabled { background:var(--ok); }
+  .dot.s-failed,.dot.s-error { background:var(--err); }
+  .dot.s-stopped,.dot.s-disabled,.dot.s-warn { background:var(--warn); }
+  .dot.s-unknown,.dot.s-idle { background:var(--neutral); }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 var(--run-soft);} 70%{box-shadow:0 0 0 7px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
+
+  .badge { display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:var(--r-pill); font-size:12px; font-weight:600; border:1px solid transparent; white-space:nowrap; }
+  .badge .dot { width:7px; height:7px; }
+  .b-running,.b-run { color:var(--run); background:var(--run-soft); border-color:color-mix(in oklab,var(--run) 30%,transparent); }
+  .b-completed,.b-ok,.b-enabled { color:var(--ok); background:var(--ok-soft); border-color:color-mix(in oklab,var(--ok) 30%,transparent); }
+  .b-failed,.b-error { color:var(--err); background:var(--err-soft); border-color:color-mix(in oklab,var(--err) 30%,transparent); }
+  .b-warn,.b-disabled { color:var(--warn); background:var(--warn-soft); border-color:color-mix(in oklab,var(--warn) 30%,transparent); }
+  .b-neutral,.b-muted { color:var(--muted); background:var(--neutral-soft); border-color:var(--border); }
+
+  /* runKind 徽章 */
+  .rk { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:650; padding:2px 9px; border-radius:var(--r-pill); border:1px solid transparent; white-space:nowrap; }
+  .rk.workflow { color:var(--run); background:var(--run-soft); border-color:color-mix(in oklab,var(--run) 30%,transparent); }
+  .rk.direct { color:var(--accent); background:var(--accent-soft); border-color:var(--accent-line); }
+  .rk.unknown { color:var(--muted); background:var(--neutral-soft); border-color:var(--border); }
+
+  .copybtn { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-sm); padding:3px 8px; }
+  .copybtn:hover { color:var(--fg); border-color:var(--muted-2); } .copybtn.done { color:var(--ok); }
+
+  /* ---- topbar ---- */
+  .topbar { position:sticky; top:0; z-index:40; height:var(--topbar-h); display:flex; align-items:center; gap:12px; padding:0 16px;
+    background:color-mix(in oklab,var(--panel) 90%,transparent); backdrop-filter:saturate(140%) blur(12px); -webkit-backdrop-filter:saturate(140%) blur(12px); border-bottom:1px solid var(--border); }
+  .brand { display:flex; align-items:center; gap:10px; }
+  .brand-mark { width:26px; height:26px; border-radius:7px; display:grid; place-items:center; color:#fff; box-shadow:var(--shadow-sm);
+    background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
+  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; }
+  .brand-sub { color:var(--muted-2); font-size:12px; white-space:nowrap; }
+  .nav-pills { display:flex; gap:3px; margin-left:6px; }
+  .nav-pills a { font-size:12.5px; color:var(--muted); padding:5px 11px; border-radius:var(--r-pill); }
+  .nav-pills a:hover { color:var(--fg); background:var(--panel-2); text-decoration:none; }
+  .nav-pills a.active { color:var(--fg-strong); background:var(--accent-soft); border:1px solid var(--accent-line); }
+  .spacer { flex:1 1 auto; }
+  .iconbtn { width:32px; height:32px; display:grid; place-items:center; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); color:var(--muted); }
+  .iconbtn:hover { color:var(--fg); border-color:var(--muted-2); }
+  .account { display:inline-flex; align-items:center; gap:8px; padding:4px 6px 4px 4px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); }
+  .avatar { width:22px; height:22px; border-radius:50%; display:grid; place-items:center; font-size:11px; font-weight:700; color:#fff; background:linear-gradient(140deg,#6f9bff,#9b6bff); }
+  .account .who { font-size:12px; color:var(--fg); max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .signin-pill { font-size:12.5px; font-weight:600; color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent-line); border-radius:var(--r-pill); padding:6px 13px; }
+
+  /* ---- shell ---- */
+  .shell { display:grid; grid-template-columns:var(--list-w) minmax(0,1fr); height:calc(100dvh - var(--topbar-h)); min-height:0; }
+
+  /* ---- A1 list ---- */
+  .list-pane { border-right:1px solid var(--border); display:flex; flex-direction:column; min-height:0; background:color-mix(in oklab,var(--panel) 40%,transparent); }
+  .list-head { padding:12px 14px; border-bottom:1px solid var(--border-soft); }
+  .search { position:relative; }
+  .search svg { position:absolute; left:11px; top:50%; transform:translateY(-50%); color:var(--muted-2); }
+  .search input { width:100%; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); padding:9px 11px 9px 34px; color:var(--fg); font-size:13px; outline:none; }
+  .search input:focus { border-color:var(--accent-line); box-shadow:0 0 0 3px var(--accent-soft); }
+  .list-count { font-size:11.5px; color:var(--muted-2); margin-top:9px; font-family:var(--mono); display:flex; align-items:center; justify-content:space-between; }
+  .list-scroll { overflow-y:auto; flex:1; padding:8px; min-height:0; }
+
+  .skill-row { display:block; width:100%; text-align:left; padding:12px 13px; border-radius:var(--r); border:1px solid transparent; background:transparent; margin-bottom:4px; }
+  .skill-row:hover { background:var(--panel-2); }
+  .skill-row[aria-current="true"] { background:var(--accent-soft); border-color:var(--accent-line); box-shadow:inset 3px 0 0 var(--accent); }
+  .sr-top { display:flex; align-items:flex-start; gap:8px; }
+  .sr-name { font-weight:640; color:var(--fg-strong); font-size:13.5px; letter-spacing:-.005em; display:flex; align-items:center; gap:6px; min-width:0; }
+  .sr-name .txt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sr-lock { color:var(--muted-2); flex:0 0 auto; }
+  .sr-desc { font-size:12px; color:var(--muted); margin-top:4px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; line-clamp:1; }
+  .sr-meta { display:flex; gap:6px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+  .cat { font-size:10.5px; font-weight:600; color:var(--muted); background:var(--panel-3); border:1px solid var(--border-soft); border-radius:5px; padding:1px 7px; }
+  .tag { font-size:10.5px; color:var(--muted-2); background:transparent; border:1px solid var(--border); border-radius:var(--r-pill); padding:1px 8px; }
+  .skill-row .rk { margin-left:auto; flex:0 0 auto; }
+
+  /* skeleton */
+  .sk { background:linear-gradient(100deg,var(--panel-2) 30%,var(--panel-3) 50%,var(--panel-2) 70%); background-size:200% 100%; animation:shimmer 1.3s linear infinite; border-radius:5px; }
+  @keyframes shimmer { to { background-position:-200% 0; } }
+  .sk-row { padding:13px; display:grid; gap:8px; }
+
+  .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:11px; text-align:center; color:var(--muted); padding:46px 22px; }
+  .empty .ic { width:40px; height:40px; color:var(--muted-2); opacity:.8; }
+  .empty .et { font-weight:600; color:var(--fg); font-size:14px; }
+  .empty .es { font-size:12.5px; max-width:240px; line-height:1.55; }
+  .empty .btn { margin-top:4px; }
+  .empty .ic svg, .detail-empty .ic svg { width:100%; height:100%; }
+
+  /* ---- A2 detail ---- */
+  .detail-pane { overflow-y:auto; min-height:0; }
+  .detail-inner { max-width:760px; margin:0 auto; padding:22px 26px 60px; }
+  .backbar { display:none; }
+
+  .d-head { }
+  .d-top { display:flex; align-items:center; gap:11px; flex-wrap:wrap; }
+  .d-name { font-size:20px; font-weight:720; letter-spacing:-.01em; color:var(--fg-strong); margin:0; display:flex; align-items:center; gap:9px; }
+  .d-desc { color:var(--muted); font-size:13.5px; margin:10px 0 0; line-height:1.6; }
+  .d-meta { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+  .whenuse { margin-top:12px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2); overflow:hidden; }
+  .whenuse summary { padding:9px 13px; font-size:12.5px; font-weight:600; color:var(--fg); cursor:pointer; list-style:none; display:flex; align-items:center; gap:8px; }
+  .whenuse summary::-webkit-details-marker { display:none; }
+  .whenuse summary .chev { color:var(--muted-2); transition:transform .18s; margin-left:auto; }
+  .whenuse[open] summary .chev { transform:rotate(90deg); }
+  .whenuse .wu-b { padding:0 13px 12px; font-size:12.5px; color:var(--muted); line-height:1.6; }
+
+  .panel { border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel); margin-top:18px; }
+  .panel-head { display:flex; align-items:center; gap:10px; padding:12px 15px; border-bottom:1px solid var(--border-soft); }
+  .panel-head h2 { font-size:13.5px; font-weight:660; color:var(--fg-strong); margin:0; }
+  .panel-head .ph-r { margin-left:auto; display:flex; gap:8px; align-items:center; }
+  .panel-body { padding:15px; }
+
+  .field { margin-bottom:14px; } .field:last-child { margin-bottom:0; }
+  .field > label { display:block; font-size:12.5px; font-weight:600; color:var(--fg); margin-bottom:6px; }
+  .field .req { color:var(--accent); margin-left:2px; }
+  .field .opt { color:var(--muted-2); font-weight:400; font-size:11px; margin-left:6px; }
+  .input,.textarea,.sel select { width:100%; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); padding:9px 11px; color:var(--fg-strong); font-size:13px; outline:none; transition:border-color .15s,box-shadow .15s; }
+  .input,.sel select { font-family:var(--mono); }
+  .textarea { font-family:var(--sans); line-height:1.6; resize:vertical; min-height:88px; }
+  .input::placeholder,.textarea::placeholder { color:var(--muted-2); }
+  .input:focus,.textarea:focus,.sel select:focus { border-color:var(--accent-line); box-shadow:0 0 0 3px var(--accent-soft); }
+  .input.bad { border-color:color-mix(in oklab,var(--err) 55%,var(--border)); }
+  .field .help { font-size:11.5px; color:var(--muted-2); margin-top:6px; line-height:1.5; }
+  .field .err-msg { font-size:12px; color:var(--err); margin-top:6px; display:inline-flex; gap:5px; align-items:center; }
+  .sel { position:relative; } .sel select { appearance:none; padding-right:34px; }
+  .sel .chev { position:absolute; right:11px; top:50%; transform:translateY(-50%); color:var(--muted-2); pointer-events:none; }
+
+  .adv summary { font-size:12px; color:var(--muted); cursor:pointer; list-style:none; display:inline-flex; align-items:center; gap:6px; }
+  .adv summary::-webkit-details-marker { display:none; }
+
+  .actions { display:flex; gap:10px; align-items:center; margin-top:16px; flex-wrap:wrap; }
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:10px 16px; border-radius:var(--r); font-size:13.5px; font-weight:650; border:1px solid transparent; transition:filter .15s,border-color .15s,background .15s; white-space:nowrap; }
+  .btn-primary { background:var(--accent); color:var(--accent-ink); } .btn-primary:hover { filter:brightness(1.08); }
+  .btn-ghost { background:var(--panel-2); border-color:var(--border); color:var(--fg); } .btn-ghost:hover { border-color:var(--muted-2); }
+  .btn-danger { background:transparent; border-color:color-mix(in oklab,var(--err) 45%,transparent); color:var(--err); } .btn-danger:hover { background:var(--err-soft); }
+  .btn-sm { padding:5px 10px; font-size:12px; }
+  .btn:disabled { opacity:.5; cursor:default; }
+  .spin { width:14px; height:14px; border-radius:50%; border:2px solid color-mix(in oklab,var(--accent-ink) 35%,transparent); border-top-color:var(--accent-ink); animation:spin .7s linear infinite; }
+  .spin.acc { border-color:color-mix(in oklab,var(--accent) 35%,transparent); border-top-color:var(--accent); }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* run result card */
+  .run-card { margin-top:16px; border:1px solid color-mix(in oklab,var(--ok) 28%,var(--border)); border-radius:var(--r-lg); background:var(--panel); overflow:hidden; }
+  .run-card.err { border-color:color-mix(in oklab,var(--err) 40%,var(--border)); }
+  .run-card .rc-h { display:flex; align-items:center; gap:9px; padding:12px 15px; border-bottom:1px solid var(--border-soft); }
+  .run-card .rc-h .rc-t { font-weight:650; color:var(--fg-strong); font-size:13.5px; }
+  .run-card .rc-b { padding:13px 15px; }
+  .kvline { display:flex; align-items:center; gap:10px; padding:7px 0; font-size:12.5px; }
+  .kvline .k { color:var(--muted); min-width:64px; } .kvline .v { font-family:var(--mono); color:var(--fg); }
+  .err-pre { font-family:var(--mono); font-size:12px; color:var(--err); background:var(--err-soft); border:1px solid color-mix(in oklab,var(--err) 30%,transparent); border-radius:var(--r-sm); padding:11px 12px; white-space:pre-wrap; word-break:break-word; line-height:1.55; max-height:200px; overflow:auto; }
+
+  /* schedule drawer */
+  .drawer { margin-top:16px; border:1px solid var(--accent-line); border-radius:var(--r-lg); background:color-mix(in oklab,var(--accent) 5%,var(--panel)); overflow:hidden; }
+  .drawer-head { display:flex; align-items:center; gap:9px; padding:12px 15px; border-bottom:1px solid var(--border-soft); }
+  .drawer-head .dh-t { font-weight:660; color:var(--fg-strong); font-size:13.5px; }
+  .drawer-head .x { margin-left:auto; }
+  .drawer-body { padding:15px; }
+  .preset-row { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
+  .preset { font-size:11.5px; color:var(--muted); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-pill); padding:4px 11px; }
+  .preset:hover { color:var(--fg); border-color:var(--muted-2); }
+  .preset.on { color:var(--accent); background:var(--accent-soft); border-color:var(--accent-line); }
+  .togline { display:flex; align-items:center; gap:12px; }
+  .togline .tl-t { font-size:13px; color:var(--fg); font-weight:550; } .togline .tl-s { font-size:11.5px; color:var(--muted-2); margin-top:1px; }
+  .togline .spacer { flex:1; }
+  .toggle { position:relative; width:38px; height:22px; border-radius:999px; background:var(--panel-3); border:1px solid var(--border); flex:0 0 auto; }
+  .toggle::after { content:""; position:absolute; left:2px; top:1px; width:18px; height:18px; border-radius:50%; background:var(--muted); transition:transform .15s,background .15s; }
+  .toggle[aria-pressed="true"] { background:var(--accent-soft); border-color:var(--accent-line); }
+  .toggle[aria-pressed="true"]::after { transform:translateX(16px); background:var(--accent); }
+
+  .preview { margin-top:6px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2); overflow:hidden; }
+  .preview-h { padding:8px 12px; font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted-2); border-bottom:1px solid var(--border-soft); display:flex; align-items:center; gap:7px; }
+  .preview-row { display:flex; align-items:center; gap:10px; padding:8px 12px; border-bottom:1px solid var(--border-soft); font-size:12.5px; }
+  .preview-row:last-child { border-bottom:0; }
+  .preview-row .n { width:18px; color:var(--muted-2); font-family:var(--mono); font-size:11px; }
+  .preview-row .abs { font-family:var(--mono); color:var(--fg); } .preview-row .rel { margin-left:auto; color:var(--muted); font-size:11.5px; }
+
+  /* my schedules */
+  .sched-card { border:1px solid var(--border); border-radius:var(--r); background:var(--panel); padding:12px 13px; margin-bottom:9px; }
+  .sched-card:last-child { margin-bottom:0; }
+  .sched-top { display:flex; align-items:center; gap:9px; margin-bottom:9px; flex-wrap:wrap; }
+  .sched-top .sn { font-weight:640; color:var(--fg-strong); font-size:13px; }
+  .sched-cron { font-family:var(--mono); font-size:11px; color:var(--muted); background:var(--panel-3); padding:1px 7px; border-radius:5px; }
+  .sched-grid { display:grid; grid-template-columns:1fr 1fr; gap:3px 14px; }
+  .sched-grid .g { display:flex; justify-content:space-between; gap:8px; font-size:11.5px; padding:2px 0; }
+  .sched-grid .g .gk { color:var(--muted-2); } .sched-grid .g .gv { font-family:var(--mono); color:var(--fg); }
+  .sched-grid .g .gv.bad { color:var(--err); }
+  .sched-err { margin-top:8px; font-family:var(--mono); font-size:11px; color:var(--err); background:var(--err-soft); border:1px solid color-mix(in oklab,var(--err) 30%,transparent); border-radius:var(--r-sm); padding:6px 8px; word-break:break-word; }
+  .sched-actions { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+
+  .banner { display:flex; gap:11px; padding:12px 14px; border-radius:var(--r); font-size:13px; line-height:1.6; margin-bottom:14px; }
+  .banner svg { flex:0 0 auto; margin-top:2px; }
+  .banner .bt { font-weight:650; color:var(--fg-strong); } .banner .bb { color:var(--muted); }
+  .banner .ba { margin-left:auto; display:flex; gap:8px; align-items:center; }
+  .banner.info { background:var(--accent-soft); border:1px solid var(--accent-line); } .banner.info svg { color:var(--accent); }
+  .banner.warn { background:var(--warn-soft); border:1px solid color-mix(in oklab,var(--warn) 38%,transparent); } .banner.warn svg { color:var(--warn); }
+  .banner.err { background:var(--err-soft); border:1px solid color-mix(in oklab,var(--err) 38%,transparent); } .banner.err svg { color:var(--err); }
+
+  .detail-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; text-align:center; color:var(--muted); height:100%; padding:40px; }
+  .detail-empty .ic { width:46px; height:46px; color:var(--muted-2); opacity:.7; }
+  .detail-empty .dt { font-size:16px; font-weight:650; color:var(--fg); } .detail-empty .ds { font-size:13px; max-width:320px; line-height:1.55; }
+
+  /* run history */
+  .hist-row { display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--border-soft); font-size:12.5px; }
+  .hist-row:last-child { border-bottom:0; }
+  .hist-row .hid { font-family:var(--mono); color:var(--muted-2); font-size:11.5px; }
+  .hist-row .ht { margin-left:auto; color:var(--muted); font-size:11.5px; }
+  .hist-row a { font-size:12px; font-weight:600; }
+
+  /* responsive */
+  @media (max-width:760px) {
+    .shell { grid-template-columns:1fr; }
+    .list-pane { border-right:0; }
+    body[data-mobile="detail"] .list-pane { display:none; }
+    body[data-mobile="list"] .detail-pane { display:none; }
+    body[data-mobile="detail"] .backbar { display:flex; }
+    .backbar { align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--border); position:sticky; top:0; z-index:5; background:color-mix(in oklab,var(--panel) 92%,transparent); backdrop-filter:blur(8px); }
+    .backbar button { display:inline-flex; align-items:center; gap:6px; background:transparent; border:0; color:var(--accent); font-weight:600; font-size:13px; }
+    .detail-inner { padding:16px 16px 50px; }
+    .nav-pills { display:none; }
+    .sched-grid { grid-template-columns:1fr; }
+  }
+  @media (min-width:761px){ .backbar{ display:none !important; } }
+  @media (max-width:540px){ .brand-sub{ display:none; } .account .who{ max-width:90px; } }
+
+  /* preview dock */
+  .dock { position:fixed; right:14px; bottom:14px; z-index:60; }
+  .dock-toggle { display:inline-flex; align-items:center; gap:8px; padding:7px 12px; border-radius:var(--r-pill); background:var(--panel); border:1px dashed var(--muted-2); color:var(--muted); font-size:12px; font-weight:600; box-shadow:var(--shadow); }
+  .dock-toggle:hover { color:var(--fg); }
+  .dock-panel { position:absolute; right:0; bottom:44px; width:262px; max-height:72vh; overflow-y:auto; background:var(--panel); border:1px dashed var(--muted-2); border-radius:var(--r-lg); box-shadow:var(--shadow); padding:12px; display:none; }
+  .dock.open .dock-panel { display:block; }
+  .dock-h { font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted-2); font-weight:700; margin:2px 0 9px; }
+  .dock-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .dock-grid button { padding:7px 8px; border-radius:var(--r-sm); border:1px solid var(--border); background:var(--panel-2); color:var(--muted); font-size:11px; text-align:left; }
+  .dock-grid button:hover { color:var(--fg); border-color:var(--muted-2); }
+  .dock-grid button[aria-pressed="true"] { color:var(--fg-strong); background:var(--accent-soft); border-color:var(--accent-line); }
+  .dock-note { font-size:10.5px; color:var(--muted-2); margin-top:9px; line-height:1.4; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
+    .dot.s-running,.dot.s-run { animation:none; box-shadow:0 0 0 3px var(--run-soft); }
+  }
+
+  /* 06-27 unify topbar with the console suite (identical brand+nav across pages; fixed brand keeps nav constant) */
+  .brand { flex:0 0 268px; width:268px; min-width:0; overflow:hidden; }
+  .brand > div { min-width:0; overflow:hidden; }
+  .brand-mark { background:linear-gradient(150deg, var(--accent), color-mix(in oklab, var(--accent) 55%, #7c4dff)); }
+  .brand-name { overflow:hidden; text-overflow:ellipsis; }
+  .suite-nav { display:flex; align-items:center; gap:2px; overflow-x:auto; scrollbar-width:none; }
+  .suite-nav::-webkit-scrollbar { display:none; }
+  .suite-nav a { display:inline-flex; align-items:center; gap:6px; padding:6px 11px; border-radius:var(--r-pill); font-size:12.5px; font-weight:600; color:var(--muted); text-decoration:none; border:1px solid transparent; white-space:nowrap; transition:color .15s,background .15s,border-color .15s; }
+  .suite-nav a:hover { color:var(--fg); background:var(--panel-2); }
+  .suite-nav a[aria-current="page"] { color:var(--accent); background:var(--accent-soft); border-color:var(--accent-line); }
+  .suite-nav svg { width:14px; height:14px; flex:0 0 auto; }
+  @media (max-width:760px){ .suite-nav .nav-label { display:none; } .suite-nav a { padding:6px 8px; } }
+</style>
+</head>
+<body data-mobile="list">
+  <div id="app"></div>
+
+<script>
+/* ===========================================================================
+   DataSource —— 唯一数据访问层（mock）。接线方把每个方法体替换为带 OIDC bearer 的 fetch：
+     listSkills()            GET  /api/workflow/skills
+     getSkill(guid)          GET  /api/workflow/skills/{guid}
+     invoke(guid, body)      POST /api/workflow/skills/{guid}/invoke
+     schedule(guid, body)    POST /api/workflow/skills/{guid}/schedule
+     previewCron(cron,tz,n)  POST /api/schedules/preview
+     listSchedules()         GET  /api/schedules
+     createSchedule(body)    POST /api/schedules            -> 202
+     scheduleAction(id,act)  POST /api/schedules/{id}:enable|:disable|:run-now / DELETE
+   渲染函数与契约解耦：render*(data) 形状即「给我数据我能渲染」。鉴权/网络/错误透传由接线方注入。
+   =========================================================================== */
+const OBS = "/workflow/observatory";
+let ACCOUNT = null;
+function nowMs(){ return Date.now(); }
+
+/* OIDC Authorization Code + PKCE against NyxID — shared client + token key with the observatory page,
+   so a login on either page authenticates both. The page itself is the anonymous shell. */
+const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
+const CFG = { authority:BACKEND_CONSOLE_CONFIG.authority||"", clientId:BACKEND_CONSOLE_CONFIG.clientId||"", scope:BACKEND_CONSOLE_CONFIG.scope||"", resources:Array.isArray(BACKEND_CONSOLE_CONFIG.resources)?BACKEND_CONSOLE_CONFIG.resources:[], redirectUri:location.origin+"/auto/callback", storageKey:BACKEND_CONSOLE_CONFIG.storageKey||"" };
+const TOKEN_KEY = CFG.storageKey + ":token";
+const PKCE_KEY  = CFG.storageKey + ":pkce";
+function b64url(buf){ return btoa(String.fromCharCode.apply(null,new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+async function sha256(t){ return b64url(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(t))); }
+function randomString(n){ const a=new Uint8Array(n); crypto.getRandomValues(a); return b64url(a.buffer).slice(0,n); }
+function getToken(){ const r=localStorage.getItem(TOKEN_KEY); if(!r)return null; try{return JSON.parse(r);}catch(e){return null;} }
+function setToken(t){ localStorage.setItem(TOKEN_KEY,JSON.stringify(t)); }
+function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+async function beginLogin(){
+  const v=randomString(64), st=randomString(32), ch=await sha256(v);
+  sessionStorage.setItem(PKCE_KEY,JSON.stringify({verifier:v,state:st,returnTo:location.pathname}));
+  const u=new URL(CFG.authority+"/oauth/authorize");
+  u.searchParams.set("response_type","code"); u.searchParams.set("client_id",CFG.clientId);
+  u.searchParams.set("redirect_uri",CFG.redirectUri); u.searchParams.set("scope",CFG.scope);
+  CFG.resources.forEach(resource => u.searchParams.append("resource",resource));
+  u.searchParams.set("state",st); u.searchParams.set("code_challenge",ch); u.searchParams.set("code_challenge_method","S256");
+  location.assign(u.toString());
+}
+async function completeLoginIfCallback(){
+  const p=new URLSearchParams(location.search), code=p.get("code"); if(!code)return false;
+  const pend=JSON.parse(sessionStorage.getItem(PKCE_KEY)||"null");
+  history.replaceState({},"","/workflow/skills");
+  if(!pend||pend.state!==p.get("state"))return false;
+  const f=new URLSearchParams();
+  f.set("grant_type","authorization_code"); f.set("code",code); f.set("redirect_uri",CFG.redirectUri);
+  f.set("client_id",CFG.clientId); f.set("code_verifier",pend.verifier);
+  CFG.resources.forEach(resource => f.append("resource",resource));
+  const r=await fetch(CFG.authority+"/oauth/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:f.toString()});
+  sessionStorage.removeItem(PKCE_KEY);
+  if(!r.ok)return false;
+  const t=await r.json(); t.obtained_at=Date.now(); setToken(t); return true;
+}
+async function fetchUserInfo(){ const t=getToken(); if(!t)return null; try{ const r=await fetch(CFG.authority+"/oauth/userinfo",{headers:{Authorization:"Bearer "+t.access_token}}); return r.ok?await r.json():null; }catch(e){return null;} }
+function toAccount(info){ return info?{label:info.email||info.preferred_username||info.name||info.sub||"Signed in",scope:info.scopeId||info.scope_id||info["workflow.scope_id"]||info.tenant||""}:null; }
+function mergeAccount(info){ const next=toAccount(info); if(!next)return; ACCOUNT=Object.assign({},ACCOUNT||{},next,{label:next.label||((ACCOUNT&&ACCOUNT.label)||"Signed in"),scope:next.scope||((ACCOUNT&&ACCOUNT.scope)||"")}); }
+function accountScope(){ return (ACCOUNT&&ACCOUNT.scope)?String(ACCOUNT.scope).trim():""; }
+function apiError(status,message,body){ const e=new Error(message); e.status=status; e.body=body; return e; }
+async function api(path,opt){
+  const t=getToken(); if(!t)throw apiError(401,"not-authenticated");
+  const headers=Object.assign({Authorization:"Bearer "+t.access_token},(opt&&opt.headers)||{});
+  const res=await fetch(path,Object.assign({},opt||{},{headers}));
+  if(res.status===401){ clearToken(); state.authed=false; state.listState="signedout"; render(); throw apiError(401,"未登录或登录已过期"); }
+  const txt=await res.text(); let body=null; try{ body=txt?JSON.parse(txt):null; }catch(_){ body=txt; }
+  if(!res.ok) throw apiError(res.status,(body&&(body.message||body.error||body.code))||("HTTP "+res.status),body);
+  return body;
+}
+function apiSend(path,method,payload){ return api(path,{method,headers:payload!=null?{"Content-Type":"application/json"}:{},body:payload!=null?JSON.stringify(payload):undefined}); }
+
+/* cache populated by async loaders; render*() read it synchronously */
+const cache = { skills:null, detail:{}, schedules:null, run:null, preview:null, teams:null };
+const DataSource = {
+  listSkills(){ return cache.skills || { items:[], total:0, page:1, pageSize:0 }; },
+  getSkill(guid){ return cache.detail[guid] || { ...(DataSource.listSkills().items.find(s=>s.guid===guid)||{guid}), runKind:"unknown", inputs:[], whenToUse:"" }; },
+  invoke(){ return cache.run || {}; },
+  previewCron(){ return cache.preview || { nextFireTimes:[] }; },
+  listSchedules(){ return cache.schedules || { items:[] }; },
+  listTeams(){ return cache.teams || { teams:[] }; }
+};
+async function loadSkills(){
+  state.listState="loading"; render();
+  try{ cache.skills=await api("/api/workflow/skills"); state.listState=cache.skills&&cache.skills.error?"error":"ok"; }
+  catch(e){ state.listState=e.status===401?"signedout":"error"; }
+  if(state.authed&&!state.selectedGuid&&cache.skills&&cache.skills.items&&cache.skills.items.length) state.selectedGuid=cache.skills.items[0].guid;
+  render(); if(state.selectedGuid)loadDetail(state.selectedGuid);
+}
+async function loadDetail(guid){
+  if(!guid||cache.detail[guid])return;
+  try{ const d=await api("/api/workflow/skills/"+encodeURIComponent(guid)); if(d){ const li=DataSource.listSkills().items.find(s=>s.guid===guid)||{}; cache.detail[guid]={...li,...d}; render(); } }catch(e){}
+}
+async function loadSchedules(){ try{ cache.schedules=await api("/api/schedules"); render(); }catch(e){} }
+function teamItems(){ const roster=DataSource.listTeams(); return Array.isArray(roster.teams)?roster.teams:[]; }
+function selectedScheduleTeamId(){
+  if(state.scheduleTeamId)return state.scheduleTeamId;
+  const teams=teamItems();
+  return teams.length?teams[0].teamId:"";
+}
+async function loadSkillTeams(){
+  const scope=accountScope();
+  if(!state.authed||!scope||state.teamState==="loading")return;
+  state.teamState="loading"; render();
+  try{
+    cache.teams=await api("/api/scopes/"+encodeURIComponent(scope)+"/teams?pageSize=100");
+    state.teamState="ok";
+    if(!state.scheduleTeamId){
+      const teams=teamItems();
+      if(teams.length)state.scheduleTeamId=teams[0].teamId;
+    }
+  }catch(e){ state.teamState=e.status===401?"signedout":"error"; }
+  render();
+}
+async function loadPreview(){
+  if(!state.cronValid){ cache.preview=null; const pv=$("#cronPv"); if(pv)pv.replaceWith(renderPreview()); return; }
+  try{ cache.preview=await apiSend("/api/schedules/preview","POST",{cronExpression:state.cron,timezone:state.tz,count:5}); }catch(e){ cache.preview=null; }
+  const pv=$("#cronPv"); if(pv)pv.replaceWith(renderPreview());
+}
+
+/* ===========================================================================
+   helpers
+   =========================================================================== */
+const $=(s,r=document)=>r.querySelector(s);
+const el=(t,a={},h)=>{const n=document.createElement(t);for(const k in a){if(k==="class")n.className=a[k];else if(k.startsWith("on")&&typeof a[k]==="function")n.addEventListener(k.slice(2),a[k]);else if(a[k]!=null)n.setAttribute(k,a[k]);}if(h!=null)n.innerHTML=h;return n;};
+const esc=(s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const initials=(s)=>(s||"?").trim().charAt(0).toUpperCase();
+const parseT=(iso)=>Date.parse(iso);
+function relFuture(iso){ let d=Math.round((parseT(iso)-nowMs())/1000); if(d<0)return"已过"; if(d<3600)return"约 "+Math.floor(d/60)+" 分钟后"; if(d<86400)return"约 "+Math.floor(d/3600)+" 小时后"; return"约 "+Math.floor(d/86400)+" 天后"; }
+function relPast(iso){ let d=Math.round((nowMs()-parseT(iso))/1000); if(d<60)return"刚刚"; if(d<3600)return Math.floor(d/60)+" 分钟前"; if(d<86400)return Math.floor(d/3600)+" 小时前"; return Math.floor(d/86400)+" 天前"; }
+function fmtAbs(iso){ const m=/(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(iso); return m? `${m[2]}-${m[3]} ${m[4]}`:iso; }
+function browserTz(){ try{ return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai"; }catch(e){ return "Asia/Shanghai"; } }
+const RK_LABEL = { workflow:"工作流", direct:"直连 LLM", unknown:"点开解析" };
+
+const ICON={
+  sun:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M2 12h2.4M19.6 12H22M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M19.4 4.6l-1.7 1.7M6.3 17.7l-1.7 1.7"/></svg>',
+  moon:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8Z"/></svg>',
+  search:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>',
+  lock:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  check:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.2 4.2L19 7"/></svg>',
+  x:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+  chevR:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
+  chev:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
+  ext:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  back:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg>',
+  play:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5l11 7-11 7V5Z"/></svg>',
+  clock:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
+  info:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.2"/></svg>',
+  warn:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 8.5v4.5M12 16.2v.2"/><path d="M10.3 3.9 2.5 17.5A2 2 0 0 0 4.2 20.5h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
+  copy:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h9"/></svg>',
+  bolt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 13h7l-1 9 9-11h-7l1-9Z"/></svg>',
+  refresh:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>',
+  trash:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>'
+};
+
+/* ===========================================================================
+   state
+   =========================================================================== */
+const state = {
+  authed:false,
+  listState:"ok",        // loading | ok | empty | error | signedout
+  query:"",
+  selectedGuid:null,
+  runState:"idle",       // idle | running | done | error
+  drawerOpen:false,
+  cron:"0 9 * * *", tz:browserTz(), cronValid:true, enabled:true,
+  schedCreated:false, schedAuthErr:false, forceEmpty:false,
+  scheduleTeamId:"", teamState:"idle",
+  scenario:"list-ok"
+};
+function curTheme(){ const r=document.documentElement.getAttribute("data-theme"); return r==="light"||r==="dark"?r:null; }
+function effDark(){ const t=curTheme(); if(t)return t==="dark"; return !window.matchMedia||!window.matchMedia("(prefers-color-scheme: light)").matches; }
+function applyTheme(){ const t=localStorage.getItem("skills-theme"); if(t)document.documentElement.setAttribute("data-theme",t); else document.documentElement.removeAttribute("data-theme"); }
+
+/* ===========================================================================
+   topbar
+   =========================================================================== */
+const SUITE_NAV=[
+  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"skills",href:"/workflow/skills",label:"Skills",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 13h7l-1 9 9-11h-7l1-9Z"/></svg>'},
+  {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
+  {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
+  {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
+  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'},
+  {k:"cqrs",href:"/cqrs",label:"投影",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/></svg>'}
+];
+function suiteNavHtml(active){return '<nav class="suite-nav" aria-label="控制台导航">'+SUITE_NAV.map(function(n){return '<a href="'+n.href+'"'+(n.k===active?' aria-current="page"':'')+' title="'+n.label+'">'+n.svg+'<span class="nav-label">'+n.label+'</span></a>';}).join('')+'</nav>';}
+function renderTopbar(){
+  const bar=el("header",{class:"topbar",role:"banner"});
+  bar.innerHTML=`
+    <div class="brand"><div class="brand-mark" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg></div><div style="min-width:0"><div class="brand-name">Aevatar Backend Console</div></div></div>
+    ${suiteNavHtml("skills")}
+    <div class="spacer"></div>`;
+  const tb=el("button",{class:"iconbtn",id:"themeBtn","aria-label":"切换主题"}); tb.innerHTML=effDark()?ICON.sun:ICON.moon;
+  tb.addEventListener("click",()=>{ localStorage.setItem("skills-theme",effDark()?"light":"dark"); applyTheme(); render(); });
+  bar.appendChild(tb);
+  if(state.authed){
+    const ac=el("div",{class:"account"}); const aLbl=(ACCOUNT&&ACCOUNT.label)?ACCOUNT.label:"已登录"; ac.innerHTML=`<span class="avatar">${initials(aLbl)}</span><span class="who" title="${esc(aLbl)}">${esc(aLbl)}</span>`;
+    bar.appendChild(ac);
+  } else {
+    const b=el("button",{class:"signin-pill"},"登录"); b.addEventListener("click",beginLogin); bar.appendChild(b);
+  }
+  return bar;
+}
+
+/* ===========================================================================
+   A1 — skills list
+   =========================================================================== */
+function filteredSkills(){
+  if(state.forceEmpty) return [];
+  const q=state.query.trim().toLowerCase();
+  let items=DataSource.listSkills().items;
+  if(q) items=items.filter(s=>(s.name+" "+s.description+" "+(s.tags||[]).join(" ")+" "+(s.category||"")).toLowerCase().includes(q));
+  return items;
+}
+function renderList(){
+  const pane=el("aside",{class:"list-pane","aria-label":"Skills 列表"});
+  const head=el("div",{class:"list-head"});
+  const sb=el("div",{class:"search"}); sb.innerHTML=`${ICON.search}<input type="search" placeholder="搜索技能 / 描述 / 标签…" aria-label="搜索技能" value="${esc(state.query)}">`;
+  const inp=sb.querySelector("input");
+  inp.addEventListener("input",e=>{ state.query=e.target.value; const sc=$("#listScroll"); const r=renderListBody(); if(sc&&r){ sc.replaceWith(r); } });
+  head.appendChild(sb);
+  pane.appendChild(head);
+  pane.appendChild(renderListBody());
+  return pane;
+}
+function renderListBody(){
+  const box=el("div",{class:"list-scroll scroll",id:"listScroll",role:"list",tabindex:"-1"});
+  if(!state.authed || state.listState==="signedout"){
+    box.appendChild(el("div",{class:"empty"},`<div class="ic">${ICON.lock.replace('width="12" height="12"','width="40" height="40"')}</div><div class="et">请先登录</div><div class="es">登录后即可查看你账号下可调用的 skills。</div>`));
+    const b=el("button",{class:"btn btn-primary"},"登录"); b.addEventListener("click",beginLogin);
+    box.querySelector(".empty").appendChild(b);
+    return box;
+  }
+  if(state.listState==="loading"){
+    for(let i=0;i<5;i++){ const r=el("div",{class:"sk-row"}); r.innerHTML=`<div class="sk" style="height:13px;width:62%"></div><div class="sk" style="height:10px;width:90%"></div><div class="sk" style="height:18px;width:40%;border-radius:999px"></div>`; box.appendChild(r); }
+    return box;
+  }
+  if(state.listState==="error"){
+    const e=el("div",{class:"empty"}); e.innerHTML=`<div class="ic">${ICON.warn.replace('width="15" height="15"','width="40" height="40"')}</div><div class="et">加载失败</div><div class="es">无法获取 skills 列表。</div>`;
+    const b=el("button",{class:"btn btn-ghost"},`${ICON.refresh}<span>重试</span>`); b.addEventListener("click",loadSkills); e.appendChild(b); box.appendChild(e); return box;
+  }
+  const items=filteredSkills();
+  if(items.length===0){
+    const all=state.forceEmpty || DataSource.listSkills().items.length===0;
+    box.appendChild(el("div",{class:"empty"},`<div class="ic">${ICON.bolt.replace('viewBox','width="40" height="40" viewBox')}</div><div class="et">${all?"该账号暂无可调用 skills":"没有匹配的技能"}</div><div class="es">${all?"当你的账号下有已发布技能后，会出现在这里。":"换个关键词再试试。"}</div>`));
+    return box;
+  }
+  // count
+  box.appendChild(el("div",{class:"list-count"},`<span>${items.length} 个技能</span>${state.query?`<span>筛选自 ${DataSource.listSkills().total}</span>`:""}`));
+  items.forEach(s=>{
+    const row=el("button",{class:"skill-row",role:"listitem","aria-current":String(s.guid===state.selectedGuid),"data-guid":s.guid,tabindex:"0"});
+    const rk=s.runKind||"unknown";
+    row.innerHTML=`
+      <div class="sr-top">
+        <div class="sr-name"><span class="txt">${esc(s.name)}</span>${s.private?`<span class="sr-lock" title="私有技能">${ICON.lock}</span>`:""}</div>
+        <span class="rk ${rk}">${rk==="workflow"?'<span class="dot s-run" style="width:6px;height:6px"></span>':""}${RK_LABEL[rk]}</span>
+      </div>
+      <div class="sr-desc">${esc(s.description)}</div>
+      <div class="sr-meta">${s.category?`<span class="cat">${esc(s.category)}</span>`:""}${(s.tags||[]).slice(0,3).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
+    row.addEventListener("click",()=>selectSkill(s.guid));
+    row.addEventListener("keydown",onListKey);
+    box.appendChild(row);
+  });
+  return box;
+}
+function onListKey(e){
+  const rows=Array.prototype.slice.call(document.querySelectorAll(".skill-row"));
+  const i=rows.indexOf(e.currentTarget);
+  if(e.key==="ArrowDown"){ e.preventDefault(); (rows[i+1]||rows[0]).focus(); }
+  else if(e.key==="ArrowUp"){ e.preventDefault(); (rows[i-1]||rows[rows.length-1]).focus(); }
+  else if(e.key==="Enter"||e.key===" "){ e.preventDefault(); selectSkill(e.currentTarget.getAttribute("data-guid")); }
+}
+function selectSkill(guid){ state.selectedGuid=guid; state.runState="idle"; state.drawerOpen=false; state.schedCreated=false; document.body.setAttribute("data-mobile","detail"); render(); loadDetail(guid); }
+
+/* ===========================================================================
+   A2 — detail / run
+   =========================================================================== */
+function renderDetail(){
+  const pane=el("section",{class:"detail-pane scroll","aria-label":"技能详情"});
+  const back=el("div",{class:"backbar"}); const bb=el("button",{},`${ICON.back}<span>技能列表</span>`); bb.addEventListener("click",()=>document.body.setAttribute("data-mobile","list")); back.appendChild(bb); pane.appendChild(back);
+
+  if(!state.authed){ pane.appendChild(detailEmpty(ICON.lock,"请先登录","登录后选择一个技能即可立即运行或设为定时。")); return pane; }
+  if(!state.selectedGuid){ pane.appendChild(detailEmpty(ICON.bolt,"选择一个技能","从左侧选择技能，填入 Prompt 即可立即运行，或设为定时任务。")); return pane; }
+
+  const skill=DataSource.getSkill(state.selectedGuid);
+  const inner=el("div",{class:"detail-inner"});
+  inner.appendChild(renderDetailHead(skill));
+  inner.appendChild(renderInputPanel(skill));
+  if(state.runState!=="idle") inner.appendChild(renderRunResult(skill));
+  if(state.drawerOpen) inner.appendChild(renderScheduleDrawer(skill));
+  inner.appendChild(renderRunHistory(skill));
+  pane.appendChild(inner);
+  return pane;
+}
+function detailEmpty(icon,t,s){ const e=el("div",{class:"detail-empty"}); e.innerHTML=`<div class="ic">${icon.replace(/width="\d+" height="\d+"/,'width="46" height="46"')}</div><div class="dt">${t}</div><div class="ds">${s}</div>`; return e; }
+
+function renderDetailHead(skill){
+  const rk=skill.runKind||"unknown";
+  const h=el("div",{class:"d-head"});
+  h.innerHTML=`<div class="d-top"><h1 class="d-name">${esc(skill.name)}${skill.private?`<span class="sr-lock" title="私有">${ICON.lock}</span>`:""}</h1><span class="rk ${rk}">${RK_LABEL[rk]}</span></div>
+    <p class="d-desc">${esc(skill.description)}</p>
+    <div class="d-meta">${skill.category?`<span class="cat">${esc(skill.category)}</span>`:""}${(skill.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
+  if(skill.whenToUse){
+    const w=el("details",{class:"whenuse"}); w.innerHTML=`<summary>${ICON.info} 何时使用 whenToUse <span class="chev">${ICON.chevR}</span></summary><div class="wu-b">${esc(skill.whenToUse)}</div>`;
+    h.appendChild(w);
+  }
+  return h;
+}
+function renderInputPanel(skill){
+  const p=el("section",{class:"panel"});
+  p.appendChild(el("div",{class:"panel-head"},`<h2>输入</h2><div class="ph-r"><span class="cat">${(skill.inputs&&skill.inputs.length)?skill.inputs.length+" 个字段":"仅 Prompt"}</span></div>`));
+  const b=el("div",{class:"panel-body"});
+  // 主 Prompt
+  const pf=el("div",{class:"field"});
+  pf.innerHTML=`<label for="prompt">Prompt <span class="req">*</span></label><textarea class="textarea" id="prompt" placeholder="输入要让该 skill 处理的内容…"></textarea><div class="help">这段会作为主输入交给该技能。</div>`;
+  b.appendChild(pf);
+  // 结构化 inputs[] 或 高级 kv
+  if(skill.inputs && skill.inputs.length){
+    skill.inputs.forEach(f=>{
+      const fl=el("div",{class:"field"});
+      fl.innerHTML=`<label for="in_${esc(f.name)}">${esc(f.label||f.name)} ${f.required?'<span class="req">*</span>':'<span class="opt">可选</span>'}</label>
+        <input class="input" id="in_${esc(f.name)}" placeholder="${esc(f.name)}">${f.description?`<div class="help">${esc(f.description)}</div>`:""}`;
+      b.appendChild(fl);
+    });
+  } else {
+    const adv=el("details",{class:"field adv"});
+    adv.innerHTML=`<summary>${ICON.chevR} 附加参数（可选）</summary><div style="margin-top:10px"><textarea class="textarea" placeholder="每行一条 key=value\n例如：\nlocale=CN\nmax=10" aria-label="附加参数"></textarea><div class="help">将解析为 invoke 的 inputs 对象。</div></div>`;
+    b.appendChild(adv);
+  }
+  // 动作
+  const acts=el("div",{class:"actions"});
+  const run=el("button",{class:"btn btn-primary"});
+  run.innerHTML = state.runState==="running" ? `<span class="spin"></span><span>运行中…</span>` : `${ICON.play}<span>立即运行</span>`;
+  if(state.runState==="running") run.disabled=true;
+  run.addEventListener("click",doInvoke);
+  acts.appendChild(run);
+  const sch=el("button",{class:"btn btn-ghost","aria-expanded":String(state.drawerOpen)},`${ICON.clock}<span>设为定时</span>`);
+  sch.addEventListener("click",()=>{ state.drawerOpen=!state.drawerOpen; render(); if(state.drawerOpen){ loadSchedules(); loadSkillTeams(); loadPreview(); } });
+  acts.appendChild(sch);
+  b.appendChild(acts);
+  p.appendChild(b);
+  return p;
+}
+function collectInputs(){
+  const out={}; const pr=$("#prompt"); const prompt=pr?pr.value:"";
+  document.querySelectorAll('[id^="in_"]').forEach(i=>{ const k=i.id.slice(3); if(i.value!=="")out[k]=i.value; });
+  const adv=document.querySelector(".adv textarea"); if(adv&&adv.value.trim()){ adv.value.split("\n").forEach(line=>{ const m=/^([^=]+)=(.*)$/.exec(line.trim()); if(m)out[m[1].trim()]=m[2].trim(); }); }
+  return { prompt, inputs:out };
+}
+async function doInvoke(){
+  const guid=state.selectedGuid; if(!guid)return;
+  const { prompt, inputs }=collectInputs();
+  state.runState="running"; state.runError=null; render();
+  try{ cache.run=await apiSend("/api/workflow/skills/"+encodeURIComponent(guid)+"/invoke","POST",{prompt,inputs}); state.runState="done"; }
+  catch(e){ state.runState="error"; state.runError=e; }
+  render();
+}
+function renderRunResult(skill){
+  if(state.runState==="error"){
+    const e=state.runError||{};
+    const c=el("div",{class:"run-card err"});
+    c.innerHTML=`<div class="rc-h"><span class="badge b-failed"><span class="dot s-failed"></span>运行失败</span><span class="rc-t" style="font-size:12.5px;color:var(--muted);font-weight:500">${esc((e.status?("HTTP "+e.status):"invoke 返回错误"))}</span></div>`;
+    const bb=el("div",{class:"rc-b"});
+    const detail=(e.body&&typeof e.body==="object")?JSON.stringify(e.body,null,2):(e.body||e.message||"invoke failed");
+    bb.appendChild(el("div",{class:"err-pre"},esc(detail)));
+    const retry=el("button",{class:"btn btn-ghost btn-sm",style:"margin-top:11px"},`${ICON.refresh}<span>重试</span>`); retry.addEventListener("click",doInvoke); bb.appendChild(retry);
+    c.appendChild(bb); return c;
+  }
+  const r=DataSource.invoke(); // {runId, observatoryUrl, runKind, ...}
+  const running = state.runState==="running";
+  const c=el("div",{class:"run-card"});
+  c.innerHTML=`<div class="rc-h"><span class="badge b-${running?"running":"completed"}"><span class="dot s-${running?"running":"completed"}"></span>${running?"已提交 · 运行中":"已创建运行"}</span><span style="font-size:12.5px;color:var(--muted);font-weight:500">${RK_LABEL[r.runKind]||""}</span></div>`;
+  const bb=el("div",{class:"rc-b"});
+  const idLine=el("div",{class:"kvline"}); idLine.innerHTML=`<span class="k">runId</span><span class="v">${esc(r.runId)}</span>`;
+  const cp=el("button",{class:"copybtn",style:"margin-left:auto"},`${ICON.copy}<span>复制</span>`); bindCopy(cp,r.runId); idLine.appendChild(cp);
+  bb.appendChild(idLine);
+  bb.appendChild(el("div",{class:"kvline"},`<span class="k">serviceId</span><span class="v">${esc(r.serviceId||"—")}</span>`));
+  const deep=el("a",{class:"btn btn-primary btn-sm",href:r.observatoryUrl,style:"margin-top:11px"},`${ICON.ext}<span>在观测台查看</span>`);
+  bb.appendChild(deep);
+  c.appendChild(bb); return c;
+}
+function bindCopy(b,v){ b.addEventListener("click",async(e)=>{ e.preventDefault(); try{await navigator.clipboard.writeText(v);}catch(_){const t=document.createElement("textarea");t.value=v;document.body.appendChild(t);t.select();try{document.execCommand("copy");}catch(__){}t.remove();} b.classList.add("done");const s=b.querySelector("span");const o=s?s.textContent:"";if(s)s.textContent="已复制";setTimeout(()=>{b.classList.remove("done");if(s)s.textContent=o;},1300); }); }
+
+/* ===========================================================================
+   A3 — schedule drawer
+   =========================================================================== */
+const PRESETS=[["每小时","0 * * * *"],["每天 9:00","0 9 * * *"],["每周一 9:00","0 9 * * 1"],["每 15 分钟","*/15 * * * *"]];
+function renderTeamOwnerField(){
+  const f=el("div",{class:"field"});
+  const scope=accountScope();
+  const teams=teamItems();
+  let body="";
+  if(!scope){
+    body=`<div class="help" data-team-owner-select>Current scope is unavailable. Sign in again before creating a schedule.</div>`;
+  } else if(state.teamState==="loading"){
+    body=`<div class="help" data-team-owner-select>Loading Teams for this scope...</div>`;
+  } else if(state.teamState==="error"){
+    body=`<div class="help" data-team-owner-select>Could not load Teams. Refresh before creating a schedule.</div>`;
+  } else if(!teams.length){
+    body=`<div class="help" data-team-owner-select>No Teams are available in this scope. Create a Team before scheduling this skill.</div>`;
+  } else {
+    const selected=selectedScheduleTeamId();
+    body=`<div class="sel"><select id="scheduleTeam" data-team-owner-select aria-label="Team owner">${teams.map(t=>`<option value="${esc(t.teamId)}"${t.teamId===selected?" selected":""}>${esc(t.displayName||t.teamId)}</option>`).join("")}</select><span class="chev">${ICON.chev}</span></div><div class="help">The scheduled workflow member will be created under this Team.</div>`;
+  }
+  f.innerHTML=`<label for="scheduleTeam">Team owner <span class="req">*</span></label>${body}`;
+  const select=f.querySelector("select");
+  if(select)select.addEventListener("change",e=>{ state.scheduleTeamId=e.target.value; });
+  return f;
+}
+function renderScheduleDrawer(skill){
+  const d=el("section",{class:"drawer"});
+  const head=el("div",{class:"drawer-head"});
+  head.innerHTML=`<span style="color:var(--accent)">${ICON.clock}</span><span class="dh-t">定时配置</span>`;
+  const x=el("button",{class:"copybtn x","aria-label":"收起"},`${ICON.x}`); x.addEventListener("click",()=>{ state.drawerOpen=false; render(); }); head.appendChild(x);
+  d.appendChild(head);
+  const b=el("div",{class:"drawer-body"});
+
+  if(state.schedAuthErr){
+    b.appendChild(banner("err",ICON.warn,"需要重新登录 / NyxID owner 绑定","创建定时需要 scope owner 的 NyxID 绑定，当前登录态无法满足。",[ (()=>{ const a=el("button",{class:"btn btn-primary btn-sm"},"去登录 / 刷新"); a.addEventListener("click",()=>{ state.schedAuthErr=false; render(); }); return a; })() ]));
+  }
+
+  // displayName
+  const nf=el("div",{class:"field"}); nf.innerHTML=`<label>displayName</label><input class="input" value="${esc(skill.name)}" aria-label="定时任务名称" style="font-family:var(--sans)">`; b.appendChild(nf);
+  b.appendChild(renderTeamOwnerField());
+  // cron presets + input
+  const cf=el("div",{class:"field"});
+  cf.innerHTML=`<label>cronExpression <span class="req">*</span></label>`;
+  const pr=el("div",{class:"preset-row"});
+  PRESETS.forEach(([lab,cron])=>{ const pb=el("button",{class:"preset"+(state.cron===cron?" on":"")},lab); pb.addEventListener("click",()=>{ state.cron=cron; state.cronValid=true; render(); loadPreview(); }); pr.appendChild(pb); });
+  cf.appendChild(pr);
+  const ci=el("input",{class:"input"+(state.cronValid?"":" bad"),value:state.cron,"aria-label":"cron 表达式",placeholder:"分 时 日 月 周"});
+  ci.addEventListener("input",e=>{ state.cron=e.target.value; state.cronValid=/^(\S+\s+){4}\S+$/.test(e.target.value.trim()); loadPreview(); });
+  cf.appendChild(ci);
+  if(!state.cronValid) cf.appendChild(el("div",{class:"err-msg"},`${ICON.x} cron 表达式格式不合法（需 5 段：分 时 日 月 周）`));
+  b.appendChild(cf);
+  // preview
+  b.appendChild(renderPreview());
+  // timezone
+  const tf=el("div",{class:"field",style:"margin-top:14px"});
+  tf.innerHTML=`<label>timezone</label><div class="sel"><select aria-label="时区"><option ${state.tz==="Asia/Shanghai"?"selected":""}>Asia/Shanghai</option><option ${state.tz==="UTC"?"selected":""}>UTC</option><option ${state.tz==="America/Los_Angeles"?"selected":""}>America/Los_Angeles</option>${["Asia/Shanghai","UTC","America/Los_Angeles"].includes(state.tz)?"":`<option selected>${esc(state.tz)}</option>`}</select><span class="chev">${ICON.chev}</span></div><div class="help">默认取浏览器时区。</div>`;
+  tf.querySelector("select").addEventListener("change",e=>{ state.tz=e.target.value; });
+  b.appendChild(tf);
+  // enabled
+  const tg=el("div",{class:"togline",style:"margin-top:6px"});
+  tg.innerHTML=`<div><div class="tl-t">创建后立即启用</div><div class="tl-s">enabled</div></div><div class="spacer"></div>`;
+  const tgb=el("button",{class:"toggle","aria-pressed":String(state.enabled),"aria-label":"启用"}); tgb.addEventListener("click",()=>{ state.enabled=!state.enabled; render(); }); tg.appendChild(tgb);
+  b.appendChild(tg);
+  // create
+  const create=el("button",{class:"btn btn-primary",style:"margin-top:16px"},`${ICON.clock}<span>创建定时</span>`);
+  if(!state.cronValid||!selectedScheduleTeamId()) create.disabled=true;
+  create.addEventListener("click",async()=>{
+    const guid=state.selectedGuid; if(!guid||!state.cronValid)return;
+    const teamId=selectedScheduleTeamId();
+    if(!teamId)return;
+    const dn=(nf.querySelector("input").value||skill.name);
+    const { prompt }=collectInputs();
+    create.disabled=true; state.schedAuthErr=false;
+    try{
+      const receipt=await apiSend("/api/workflow/skills/"+encodeURIComponent(guid)+"/schedule","POST",{ prompt, cronExpression:state.cron, timezone:state.tz, displayName:dn, teamId:teamId });
+      state.schedCreated=receipt||true; await loadSchedules();
+    }catch(e){ if(e.status===401||e.status===403){ state.schedAuthErr=true; } else { state.schedCreated=false; alert("创建定时失败："+(e.message||e.status)); } }
+    create.disabled=false; render();
+  });
+  b.appendChild(create);
+
+  if(state.schedCreated){
+    const ok=el("div",{class:"run-card",style:"margin-top:14px"});
+    ok.innerHTML=`<div class="rc-h"><span class="badge b-completed"><span class="dot s-completed"></span>定时已创建</span></div>`;
+    const ob=el("div",{class:"rc-b"});
+    const sid=(state.schedCreated&&state.schedCreated.scheduleId)||"—";
+    ob.appendChild(el("div",{class:"kvline"},`<span class="k">scheduleId</span><span class="v">${esc(sid)}</span>`));
+    ok.appendChild(ob); b.appendChild(ok);
+  }
+
+  // 我的定时任务
+  b.appendChild(el("div",{style:"font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted-2);margin:20px 0 9px"},"我的定时任务"));
+  const list=DataSource.listSchedules();
+  if(!list.items.length){ b.appendChild(el("div",{style:"font-size:12.5px;color:var(--muted-2)"},"暂无定时任务。")); }
+  else list.items.forEach(s=> b.appendChild(renderSchedCard(s)));
+
+  d.appendChild(b);
+  return d;
+}
+function renderPreview(){
+  const wrap=el("div",{id:"cronPv"});
+  if(!state.cronValid){ wrap.appendChild(el("div",{style:"font-size:12px;color:var(--muted-2);margin-top:6px"},"修正 cron 后显示未来 5 次触发预览。")); return wrap; }
+  const pv=DataSource.previewCron(); // POST /api/schedules/preview
+  const box=el("div",{class:"preview"});
+  box.appendChild(el("div",{class:"preview-h"},`${ICON.clock} 未来 5 次触发 · ${esc(state.tz)}`));
+  pv.nextFireTimes.slice(0,5).forEach((t,i)=> box.appendChild(el("div",{class:"preview-row"},`<span class="n">${i+1}</span><span class="abs">${fmtAbs(t)}</span><span class="rel">${relFuture(t)}</span>`)));
+  wrap.appendChild(box);
+  return wrap;
+}
+function renderSchedCard(s){
+  const c=el("div",{class:"sched-card"});
+  const hasFail=s.failureCount>0;
+  c.innerHTML=`<div class="sched-top"><span class="dot s-${s.enabled?(hasFail?"failed":"completed"):"disabled"}"></span><span class="sn">${esc(s.displayName)}</span><span class="sched-cron">${esc(s.cronExpression)}</span>${s.enabled?'<span class="badge b-enabled" style="font-size:11px"><span class="dot s-enabled"></span>启用</span>':'<span class="badge b-disabled" style="font-size:11px">已停用</span>'}</div>
+    <div class="sched-grid">
+      <div class="g"><span class="gk">timezone</span><span class="gv">${esc(s.timezone)}</span></div>
+      <div class="g"><span class="gk">下次触发</span><span class="gv">${s.nextFireAt?relFuture(s.nextFireAt):"—"}</span></div>
+      <div class="g"><span class="gk">上次触发</span><span class="gv">${s.lastFireAt?relPast(s.lastFireAt):"—"}</span></div>
+      <div class="g"><span class="gk">fire / fail</span><span class="gv ${hasFail?"bad":""}">${s.fireCount} / ${s.failureCount}</span></div>
+    </div>
+    ${s.lastError?`<div class="sched-err">lastError: ${esc(s.lastError)}</div>`:""}`;
+  const acts=el("div",{class:"sched-actions"});
+  const tog=actBtn(s.enabled?"停用":"启用","ghost",null); tog.addEventListener("click",()=>schedAction(s.scheduleId,s.enabled?"disable":"enable")); acts.appendChild(tog);
+  const rn=actBtn("立即运行","ghost",ICON.play); rn.addEventListener("click",()=>schedAction(s.scheduleId,"run-now")); acts.appendChild(rn);
+  const ob=el("a",{class:"copybtn",href:OBS+"?schedule="+encodeURIComponent(s.scheduleId),style:"text-decoration:none"},`${ICON.ext}<span>观测台</span>`);
+  acts.appendChild(ob);
+  const del=actBtn("删除","danger",ICON.trash); del.addEventListener("click",()=>{ if(confirm("删除定时任务「"+s.displayName+"」？"))schedAction(s.scheduleId,"delete"); }); acts.appendChild(del);
+  c.appendChild(acts);
+  return c;
+}
+function actBtn(label,kind,icon){ const b=el("button",{class:`btn btn-${kind} btn-sm`},`${icon?icon+" ":""}<span>${label}</span>`); return b; }
+async function schedAction(id,act){
+  try{
+    if(act==="delete") await api("/api/schedules/"+encodeURIComponent(id),{method:"DELETE"});
+    else await apiSend("/api/schedules/"+encodeURIComponent(id)+":"+act,"POST",{});
+    await loadSchedules();
+  }catch(e){ alert("操作失败："+(e.message||e.status)); }
+}
+function banner(kind,icon,title,body,actions){ const b=el("div",{class:`banner ${kind}`}); b.innerHTML=`${icon}<div><div class="bt">${title}</div><div class="bb">${body}</div></div>`; if(actions){ const a=el("div",{class:"ba"}); actions.forEach(n=>a.appendChild(n)); b.appendChild(a); } return b; }
+
+function renderRunHistory(skill){
+  const hist=[];
+  const p=el("section",{class:"panel"});
+  p.appendChild(el("div",{class:"panel-head"},`<h2>最近运行</h2><div class="ph-r"><span class="cat">该技能</span></div>`));
+  const b=el("div",{class:"panel-body"});
+  if(!hist.length){ b.appendChild(el("div",{style:"font-size:12.5px;color:var(--muted-2)"},"暂无运行记录。")); }
+  else hist.forEach(h=>{
+    const stLabel={completed:"已完成",failed:"失败",running:"运行中"}[h.status]||h.status;
+    b.appendChild(el("div",{class:"hist-row"},`<span class="badge b-${h.status}" style="font-size:11px"><span class="dot s-${h.status}"></span>${stLabel}</span><span class="hid">${h.runId}</span><span class="ht">${relPast(h.at)}</span><a href="${OBS}?run=${h.runId}">${ICON.ext} 查看</a>`));
+  });
+  p.appendChild(b);
+  return p;
+}
+
+/* ===========================================================================
+   compose
+   =========================================================================== */
+function render(){
+  const app=$("#app"); app.innerHTML="";
+  app.appendChild(renderTopbar());
+  const shell=el("div",{class:"shell"});
+  shell.appendChild(renderList());
+  shell.appendChild(renderDetail());
+  app.appendChild(shell);
+}
+
+/* init */
+function setAuthedFromToken(){ state.authed=!!getToken(); state.listState=state.authed?"ok":"signedout"; }
+async function boot(){
+  applyTheme();
+  await completeLoginIfCallback();
+  setAuthedFromToken();
+  render();
+  if(state.authed){
+    try{ mergeAccount(await fetchUserInfo()); render(); }catch(e){}
+    try{ mergeAccount(await api("/api/workflow/observatory/me")); render(); }catch(e){}
+    loadSkills();
+    loadSchedules();
+    loadSkillTeams();
+  }
+}
+boot();
+if(window.matchMedia){ const mq=window.matchMedia("(prefers-color-scheme: light)"); if(mq.addEventListener)mq.addEventListener("change",()=>{ if(!curTheme())render(); }); }
+</script>
+</body>
+</html>

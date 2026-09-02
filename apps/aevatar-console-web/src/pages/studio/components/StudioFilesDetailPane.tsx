@@ -6,7 +6,7 @@ import {
   TeamOutlined,
 } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Empty, Tag } from 'antd';
+import { Alert, Button, Empty, Space, Tag } from 'antd';
 import React from 'react';
 import { chatHistoryApi } from '@/pages/chat/chatHistoryApi';
 import type {
@@ -20,12 +20,10 @@ import type {
   StudioConnectorDefinition,
   StudioRoleCatalog,
   StudioRoleDefinition,
-  StudioSettings,
-  StudioWorkflowDirectory,
   StudioWorkflowSummary,
-  StudioWorkspaceSettings,
 } from '@/shared/studio/models';
 import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
 import { describeError } from '@/shared/ui/errorText';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
@@ -42,7 +40,6 @@ type QueryState<T> = {
 };
 
 type StudioFileKey =
-  | 'settings.json'
   | 'role-catalog'
   | 'connector-catalog'
   | `chat-history:${string}`
@@ -99,20 +96,96 @@ type NoticeState = {
   readonly message: string;
 };
 
+type ChatHistoryMessageView = Omit<
+  StoredChatMessage,
+  'error' | 'status' | 'thinking'
+> & {
+  readonly authorName?: string | null;
+  readonly error?: string | null;
+  readonly status?: string | null;
+  readonly thinking?: string | null;
+};
+
+function formatChatTurnCount(count: number): string {
+  const normalizedCount = Number.isFinite(count) ? Math.max(0, count) : 0;
+  return normalizedCount === 1
+    ? t("pages.studio.studiofilesdetailpane.conversation.turn.count.one", "1 turn")
+    : t(
+        "pages.studio.studiofilesdetailpane.conversation.turn.count.many",
+        "{count} turns",
+        { count: normalizedCount },
+      );
+}
+
+function formatChatMessageAuthor(message: ChatHistoryMessageView): string {
+  const authorName = message.authorName?.trim();
+  if (authorName) {
+    return authorName;
+  }
+
+  if (message.role === 'assistant') {
+    return t("pages.studio.studiofilesdetailpane.chat.author.assistant", "Assistant");
+  }
+
+  if (message.role === 'user') {
+    return t("pages.studio.studiofilesdetailpane.chat.author.user", "User");
+  }
+
+  return message.role || t("pages.studio.studiofilesdetailpane.chat.author.unknown", "Unknown author");
+}
+
+function formatChatMessageStatus(status: string | null | undefined): string {
+  const normalizedStatus = status?.trim().toLowerCase();
+  if (normalizedStatus === 'complete') {
+    return t("pages.studio.studiofilesdetailpane.chat.status.complete", "Complete");
+  }
+
+  if (normalizedStatus === 'error') {
+    return t("pages.studio.studiofilesdetailpane.chat.status.error", "Error");
+  }
+
+  return status?.trim() || t("pages.studio.studiofilesdetailpane.chat.status.unknown", "Unknown");
+}
+
+function formatScriptDetailLabel(
+  detail: ScopedScriptDetail | null | undefined,
+): string {
+  const record = detail as
+    | (ScopedScriptDetail & {
+        script?: { displayName?: string | null; name?: string | null } | null;
+        source?: { displayName?: string | null; name?: string | null } | null;
+      })
+    | null
+    | undefined;
+  const candidate =
+    record?.script?.displayName ||
+    record?.script?.name ||
+    record?.source?.displayName ||
+    record?.source?.name ||
+    '';
+  return candidate.trim() || 'Script source';
+}
+
 type Props = {
   readonly selectedFile: StudioFileKey;
   readonly workflows: QueryState<StudioWorkflowSummary[]>;
-  readonly workspaceSettings: QueryState<StudioWorkspaceSettings>;
   readonly roles: QueryState<StudioRoleCatalog>;
   readonly connectors: QueryState<StudioConnectorCatalog>;
-  readonly settings: QueryState<StudioSettings>;
   readonly scripts: QueryState<ScopedScriptDetail[]>;
   readonly chatConversations: QueryState<ConversationMeta[]>;
   readonly scopeId: string;
-  readonly workflowStorageMode: string;
   readonly scriptsEnabled: boolean;
+  readonly onChatConversationDeleted: (
+    scopeId: string,
+    conversationId: string,
+  ) => void;
   readonly onOpenWorkflowInStudio: (workflowId: string) => void;
   readonly onOpenScriptInStudio: (scriptId: string) => void;
+};
+
+type ChatDeleteOperation = {
+  readonly conversationId: string;
+  readonly scopeId: string;
 };
 
 const detailScrollStyle: React.CSSProperties = {
@@ -161,27 +234,6 @@ const editorHeaderDescriptionStyle: React.CSSProperties = {
   marginTop: 4,
 };
 
-const editorSurfaceStyle: React.CSSProperties = {
-  background: 'var(--ant-color-bg-container)',
-  border: '1px solid #EEEAE4',
-  borderRadius: 16,
-  padding: 4,
-};
-
-const editorTextAreaStyle: React.CSSProperties = {
-  background: 'transparent',
-  border: 'none',
-  color: '#374151',
-  fontFamily:
-    'ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, Liberation Mono, monospace',
-  fontSize: 13,
-  lineHeight: 1.7,
-  minHeight: 400,
-  outline: 'none',
-  padding: 16,
-  resize: 'vertical',
-  width: '100%',
-};
 
 const codePreviewStyle: React.CSSProperties = {
   background: '#FAFAF9',
@@ -410,10 +462,6 @@ function trimText(value: unknown): string {
   return String(value ?? '').trim();
 }
 
-function formatJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
-}
-
 function splitCatalogLines(value: string): string[] {
   return String(value || '')
     .split(/\r?\n|,/)
@@ -456,24 +504,6 @@ function parseMapText(value: string): Record<string, string> {
   }
 
   return result;
-}
-
-function buildSettingsDocument(
-  workflowStorageMode: string,
-  workspaceSettings: StudioWorkspaceSettings | undefined,
-  settings: StudioSettings | undefined,
-  scopeId: string,
-): Record<string, unknown> {
-  return {
-    scopeId: scopeId || null,
-    workflowStorageMode,
-    runtimeBaseUrl:
-      settings?.runtimeBaseUrl || workspaceSettings?.runtimeBaseUrl || '',
-    defaultProviderName: settings?.defaultProviderName || '',
-    directories: workspaceSettings?.directories ?? [],
-    providerTypes: settings?.providerTypes ?? [],
-    providers: settings?.providers ?? [],
-  };
 }
 
 function createRoleCatalogItem(role: StudioRoleDefinition): StudioRoleCatalogItem {
@@ -681,189 +711,6 @@ function createUniqueConnectorName(
   return candidate;
 }
 
-function normalizeSettingsProviderInput(value: unknown): {
-  readonly providerName: string;
-  readonly providerType: string;
-  readonly model: string;
-  readonly endpoint?: string | null;
-  readonly apiKey?: string | null;
-  readonly clearApiKey?: boolean | null;
-} {
-  const record =
-    value && typeof value === 'object'
-      ? (value as Record<string, unknown>)
-      : {};
-
-  return {
-    providerName: trimText(record.providerName),
-    providerType: trimText(record.providerType),
-    model: trimText(record.model),
-    endpoint: trimText(record.endpoint) || null,
-    apiKey: trimText(record.apiKey) || null,
-    clearApiKey:
-      record.clearApiKey === true || record.clearApiKeyRequested === true
-        ? true
-        : null,
-  };
-}
-
-function normalizeDirectoryInput(value: unknown): Array<{
-  readonly directoryId: string;
-  readonly label: string;
-  readonly path: string;
-  readonly isBuiltIn: boolean;
-}> {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.map((item) => {
-    const record =
-      item && typeof item === 'object'
-        ? (item as Record<string, unknown>)
-        : {};
-    return {
-      directoryId: trimText(record.directoryId),
-      label: trimText(record.label),
-      path: trimText(record.path),
-      isBuiltIn: record.isBuiltIn === true,
-    };
-  });
-}
-
-function normalizeDirectorySnapshot(
-  directories: readonly StudioWorkflowDirectory[],
-): string {
-  return JSON.stringify(
-    directories.map((directory) => ({
-      directoryId: directory.directoryId,
-      isBuiltIn: directory.isBuiltIn,
-      label: directory.label,
-      path: directory.path,
-    })),
-  );
-}
-
-async function syncWorkspaceDirectories(
-  currentDirectories: readonly StudioWorkflowDirectory[],
-  nextDirectories: Array<{
-    readonly directoryId: string;
-    readonly label: string;
-    readonly path: string;
-    readonly isBuiltIn: boolean;
-  }>,
-  workflowStorageMode: string,
-): Promise<boolean> {
-  if (workflowStorageMode === 'scope') {
-    if (
-      normalizeDirectorySnapshot(currentDirectories) !==
-      JSON.stringify(
-        nextDirectories.map((directory) => ({
-          directoryId: directory.directoryId,
-          isBuiltIn: directory.isBuiltIn,
-          label: directory.label,
-          path: directory.path,
-        })),
-      )
-    ) {
-      throw new Error(
-        'Workflow directories are managed by the current workspace and cannot be edited here.',
-      );
-    }
-
-    return false;
-  }
-
-  let changed = false;
-  const currentById = new Map(
-    currentDirectories.map((directory) => [directory.directoryId, directory]),
-  );
-
-  for (const currentDirectory of currentDirectories) {
-    const matchingNext =
-      nextDirectories.find(
-        (directory) =>
-          directory.directoryId &&
-          directory.directoryId === currentDirectory.directoryId,
-      ) ||
-      nextDirectories.find(
-        (directory) =>
-          !directory.directoryId && directory.path === currentDirectory.path,
-      ) ||
-      null;
-
-    if (currentDirectory.isBuiltIn) {
-      if (
-        !matchingNext ||
-        matchingNext.path !== currentDirectory.path ||
-        matchingNext.label !== currentDirectory.label
-      ) {
-        throw new Error(
-          'Built-in workflow directories cannot be removed or edited here.',
-        );
-      }
-
-      continue;
-    }
-
-    if (!matchingNext) {
-      await studioApi.removeWorkflowDirectory(currentDirectory.directoryId);
-      changed = true;
-      continue;
-    }
-
-    if (
-      matchingNext.path !== currentDirectory.path ||
-      matchingNext.label !== currentDirectory.label
-    ) {
-      await studioApi.removeWorkflowDirectory(currentDirectory.directoryId);
-      await studioApi.addWorkflowDirectory({
-        path: matchingNext.path,
-        label: matchingNext.label || null,
-      });
-      changed = true;
-    }
-  }
-
-  for (const nextDirectory of nextDirectories) {
-    if (nextDirectory.isBuiltIn) {
-      if (
-        !nextDirectory.directoryId ||
-        !currentById.get(nextDirectory.directoryId)?.isBuiltIn
-      ) {
-        throw new Error(
-          'Built-in workflow directories are managed by Studio and cannot be created here.',
-        );
-      }
-
-      continue;
-    }
-
-    const existingCurrent =
-      (nextDirectory.directoryId
-        ? currentById.get(nextDirectory.directoryId)
-        : currentDirectories.find(
-            (directory) => directory.path === nextDirectory.path,
-          )) || null;
-
-    if (existingCurrent) {
-      continue;
-    }
-
-    if (!nextDirectory.path) {
-      continue;
-    }
-
-    await studioApi.addWorkflowDirectory({
-      path: nextDirectory.path,
-      label: nextDirectory.label || null,
-    });
-    changed = true;
-  }
-
-  return changed;
-}
-
 function FilesDrawer(props: {
   readonly open: boolean;
   readonly title: string;
@@ -951,41 +798,21 @@ function FieldTextArea(props: {
 const StudioFilesDetailPane: React.FC<Props> = ({
   selectedFile,
   workflows,
-  workspaceSettings,
   roles,
   connectors,
-  settings,
   scripts,
   chatConversations,
   scopeId,
-  workflowStorageMode,
   scriptsEnabled,
+  onChatConversationDeleted,
   onOpenWorkflowInStudio,
   onOpenScriptInStudio,
 }) => {
   const queryClient = useQueryClient();
-
-  const settingsDocument = React.useMemo(
-    () =>
-      buildSettingsDocument(
-        workflowStorageMode,
-        workspaceSettings.data,
-        settings.data,
-        scopeId,
-      ),
-    [scopeId, settings.data, workflowStorageMode, workspaceSettings.data],
-  );
-  const settingsSnapshot = React.useMemo(
-    () => formatJson(settingsDocument),
-    [settingsDocument],
-  );
-  const [settingsEditorValue, setSettingsEditorValue] = React.useState(
-    settingsSnapshot,
-  );
-  const [settingsPending, setSettingsPending] = React.useState(false);
-  const [settingsNotice, setSettingsNotice] = React.useState<NoticeState | null>(
-    null,
-  );
+  const scopeIdRef = React.useRef(scopeId);
+  scopeIdRef.current = scopeId;
+  const chatDeleteOperationRef = React.useRef<ChatDeleteOperation | null>(null);
+  const selectedConversationIdRef = React.useRef("");
 
   const [roleCatalogDraft, setRoleCatalogDraft] = React.useState<
     StudioRoleCatalogItem[]
@@ -1006,10 +833,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   const [connectorAddMenuOpen, setConnectorAddMenuOpen] =
     React.useState(false);
   const [chatNotice, setChatNotice] = React.useState<NoticeState | null>(null);
-
-  React.useEffect(() => {
-    setSettingsEditorValue(settingsSnapshot);
-  }, [settingsSnapshot]);
+  const [chatDeleteConfirmationOpen, setChatDeleteConfirmationOpen] =
+    React.useState(false);
+  const [chatDeletePending, setChatDeletePending] = React.useState(false);
 
   React.useEffect(() => {
     setRoleCatalogDraft((roles.data?.roles ?? []).map(createRoleCatalogItem));
@@ -1034,8 +860,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       JSON.stringify(connectors.data?.connectors ?? []),
     [connectorCatalogDraft, connectors.data?.connectors],
   );
-
-  const settingsDirty = settingsEditorValue !== settingsSnapshot;
 
   const editingRole =
     roleCatalogDraft.find((role) => role.key === editingRoleKey) ?? null;
@@ -1073,6 +897,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   const selectedConversationId = selectedFile.startsWith('chat-history:')
     ? selectedFile.slice('chat-history:'.length)
     : '';
+  selectedConversationIdRef.current = selectedConversationId;
   const selectedConversationMeta =
     chatConversations.data?.find(
       (conversation) => conversation.id === selectedConversationId,
@@ -1083,98 +908,14 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     queryFn: () => chatHistoryApi.loadConversation(scopeId, selectedConversationId),
   });
 
-  const handleSaveSettings = async () => {
-    setSettingsPending(true);
-    setSettingsNotice(null);
-
-    try {
-      const parsed = JSON.parse(settingsEditorValue) as Record<string, unknown>;
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('settings.json must remain a JSON object.');
-      }
-
-      const nextScopeId =
-        parsed.scopeId === null || parsed.scopeId === undefined
-          ? ''
-          : trimText(parsed.scopeId);
-      if (nextScopeId !== trimText(scopeId)) {
-        throw new Error('scopeId is resolved by the current session and cannot be changed here.');
-      }
-
-      const nextWorkflowStorageMode = trimText(
-        parsed.workflowStorageMode || workflowStorageMode,
-      );
-      if (nextWorkflowStorageMode !== workflowStorageMode) {
-        throw new Error(
-          'workflowStorageMode is managed by the Studio host and cannot be changed here.',
-        );
-      }
-
-      if (
-        JSON.stringify(parsed.providerTypes ?? settings.data?.providerTypes ?? []) !==
-        JSON.stringify(settings.data?.providerTypes ?? [])
-      ) {
-        throw new Error(
-          'providerTypes are provided by the Studio host and cannot be edited here.',
-        );
-      }
-
-      const saveSettingsResult = await studioApi.saveSettings({
-        runtimeBaseUrl: trimText(
-          parsed.runtimeBaseUrl ?? settings.data?.runtimeBaseUrl ?? '',
-        ),
-        defaultProviderName: trimText(
-          parsed.defaultProviderName ?? settings.data?.defaultProviderName ?? '',
-        ),
-        providers: Array.isArray(parsed.providers)
-          ? parsed.providers.map(normalizeSettingsProviderInput)
-          : (settings.data?.providers ?? []).map(normalizeSettingsProviderInput),
-      });
-
-      queryClient.setQueryData(['studio-settings'], saveSettingsResult);
-      queryClient.setQueryData(
-        ['studio-workspace-settings', scopeId || 'workspace'],
-        (current: StudioWorkspaceSettings | undefined) =>
-          current
-            ? {
-                ...current,
-                runtimeBaseUrl: saveSettingsResult.runtimeBaseUrl,
-              }
-            : current,
-      );
-
-      const nextDirectories = normalizeDirectoryInput(parsed.directories);
-      const directoriesChanged = await syncWorkspaceDirectories(
-        workspaceSettings.data?.directories ?? [],
-        nextDirectories,
-        workflowStorageMode,
-      );
-
-      if (directoriesChanged) {
-        await queryClient.invalidateQueries({
-          queryKey: ['studio-workspace-settings'],
-        });
-        await queryClient.invalidateQueries({
-          queryKey: ['studio-workspace-workflows'],
-        });
-      }
-
-      setSettingsNotice({
-        type: 'success',
-        message: t("pages.studio.studiofilesdetailpane.settings.json.saved", "settings.json saved."),
-      });
-    } catch (error) {
-      setSettingsNotice({
-        type: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Failed to save settings.json.',
-      });
-    } finally {
-      setSettingsPending(false);
+  React.useEffect(() => {
+    setChatDeleteConfirmationOpen(false);
+    setChatNotice(null);
+    if (chatDeleteOperationRef.current?.scopeId !== scopeId) {
+      chatDeleteOperationRef.current = null;
+      setChatDeletePending(false);
     }
-  };
+  }, [scopeId, selectedConversationId]);
 
   const handleAddRole = () => {
     const nextRole: StudioRoleCatalogItem = {
@@ -1255,25 +996,54 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   };
 
   const handleDeleteConversation = async () => {
-    if (!scopeId || !selectedConversationId) {
+    if (!scopeId || !selectedConversationId || chatDeleteOperationRef.current) {
       return;
     }
 
     setChatNotice(null);
+    setChatDeletePending(true);
+    const operation: ChatDeleteOperation = {
+      conversationId: selectedConversationId,
+      scopeId,
+    };
+    chatDeleteOperationRef.current = operation;
 
     try {
-      await chatHistoryApi.deleteConversation(scopeId, selectedConversationId);
+      await chatHistoryApi.deleteConversation(
+        operation.scopeId,
+        operation.conversationId,
+      );
+      if (scopeIdRef.current !== operation.scopeId) {
+        return;
+      }
+      await queryClient.cancelQueries({
+        queryKey: ['studio-files-chat-histories', operation.scopeId],
+      });
+      onChatConversationDeleted(operation.scopeId, operation.conversationId);
       await queryClient.invalidateQueries({
-        queryKey: ['studio-files-chat-histories', scopeId],
+        queryKey: ['studio-files-chat-histories', operation.scopeId],
       });
       queryClient.removeQueries({
-        queryKey: ['studio-files-chat-history', scopeId, selectedConversationId],
+        queryKey: [
+          'studio-files-chat-history',
+          operation.scopeId,
+          operation.conversationId,
+        ],
       });
-      setChatNotice({
-        type: 'success',
-        message: t("pages.studio.studiofilesdetailpane.conversation.deleted", "Conversation deleted."),
-      });
+      if (selectedConversationIdRef.current === operation.conversationId) {
+        setChatNotice({
+          type: 'success',
+          message: t("pages.studio.studiofilesdetailpane.conversation.deleted", "Conversation deleted."),
+        });
+        setChatDeleteConfirmationOpen(false);
+      }
     } catch (error) {
+      if (
+        scopeIdRef.current !== operation.scopeId ||
+        selectedConversationIdRef.current !== operation.conversationId
+      ) {
+        return;
+      }
       setChatNotice({
         type: 'error',
         message:
@@ -1281,72 +1051,13 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             ? error.message
             : t("pages.studio.studiofilesdetailpane.failed.to.delete.conversation", "Failed to delete conversation."),
       });
+    } finally {
+      if (chatDeleteOperationRef.current === operation) {
+        chatDeleteOperationRef.current = null;
+        setChatDeletePending(false);
+      }
     }
   };
-
-  const renderSettingsPanel = () => (
-    <div style={detailScrollStyle}>
-      <div style={cliEditorShellStyle}>
-        <div style={editorHeaderRowStyle}>
-          <div>
-            <div style={editorHeaderLabelStyle}>settings.json</div>
-            <div style={editorHeaderTitleStyle}>{t("pages.studio.studiofilesdetailpane.configuration", "Configuration")}</div>
-          </div>
-          <button
-            aria-disabled={!settingsDirty || settingsPending}
-            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-            type="button"
-            disabled={!settingsDirty || settingsPending}
-            onClick={() => void handleSaveSettings()}
-            style={{
-              ...primaryActionStyle,
-              opacity: !settingsDirty || settingsPending ? 0.3 : 1,
-            }}
-          >
-            {settingsPending
-              ? t("pages.studio.studiofilesdetailpane.saving", "Saving...")
-              : t("pages.studio.studiofilesdetailpane.save", "Save")}
-          </button>
-        </div>
-
-        {workspaceSettings.isError ? (
-          <Alert
-            type="error"
-            showIcon
-            message={t("pages.studio.studiofilesdetailpane.failed.to.load.workspace.settings", "Failed to load workspace settings")}
-            description={describeError(workspaceSettings.error)}
-          />
-        ) : null}
-
-        {settings.isError ? (
-          <Alert
-            type="error"
-            showIcon
-            message={t("pages.studio.studiofilesdetailpane.failed.to.load.provider.settings", "Failed to load provider settings")}
-            description={describeError(settings.error)}
-          />
-        ) : null}
-
-        {settingsNotice ? (
-          <Alert
-            type={settingsNotice.type}
-            showIcon
-            message={settingsNotice.message}
-          />
-        ) : null}
-
-        <div style={editorSurfaceStyle}>
-          <textarea
-            aria-label={t("pages.studio.studiofilesdetailpane.settings.json.editor", "settings.json editor")}
-            spellCheck={false}
-            value={settingsEditorValue}
-            onChange={(event) => setSettingsEditorValue(event.target.value)}
-            style={editorTextAreaStyle}
-          />
-        </div>
-      </div>
-    </div>
-  );
 
   const renderRolesPanel = () => (
     <div style={detailScrollStyle}>
@@ -1383,9 +1094,13 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           </div>
         </div>
 
-        {roleNotice ? (
-          <Alert type={roleNotice.type} showIcon message={roleNotice.message} />
-        ) : null}
+        <ConsoleOperationNotice
+          errorMessage={t(
+            'pages.studio.studiofilesdetailpane.roleSaveFailed',
+            'Could not save role catalog. Try again.',
+          )}
+          notice={roleNotice}
+        />
 
         {roles.isError ? (
           <Alert
@@ -1713,13 +1428,13 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           </div>
         </div>
 
-        {connectorNotice ? (
-          <Alert
-            type={connectorNotice.type}
-            showIcon
-            message={connectorNotice.message}
-          />
-        ) : null}
+        <ConsoleOperationNotice
+          errorMessage={t(
+            'pages.studio.studiofilesdetailpane.connectorSaveFailed',
+            'Could not save connector catalog. Try again.',
+          )}
+          notice={connectorNotice}
+        />
 
         {connectors.isError ? (
           <Alert
@@ -2467,8 +2182,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               </div>
               <div style={editorHeaderDescriptionStyle}>
                 {selectedConversationMeta
-                  ? t("pages.studio.studiofilesdetailpane.conversation.meta", "{count} messages · {serviceKind} · {updatedAt}", {
-                      count: selectedConversationMeta.messageCount,
+                  ? t("pages.studio.studiofilesdetailpane.conversation.turn.meta", "{turnCount} · {serviceKind} · {updatedAt}", {
+                      turnCount: formatChatTurnCount(selectedConversationMeta.messageCount),
                       serviceKind: selectedConversationMeta.serviceKind || 'chat',
                       updatedAt: selectedConversationMeta.updatedAt
                         ? formatDateTime(selectedConversationMeta.updatedAt)
@@ -2478,22 +2193,79 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               </div>
             </div>
             <button
+              aria-controls="chat-history-delete-confirmation"
+              aria-expanded={chatDeleteConfirmationOpen}
               className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="button"
-              onClick={() => void handleDeleteConversation()}
+              disabled={chatDeletePending}
+              onClick={() => {
+                setChatNotice(null);
+                setChatDeleteConfirmationOpen(true);
+              }}
               style={{
                 ...secondaryActionStyle,
                 borderColor: '#fecaca',
                 color: '#dc2626',
+                opacity: chatDeletePending ? 0.5 : 1,
               }}
             >
               <DeleteOutlined />
               {t("pages.studio.studiofilesdetailpane.delete", "Delete")}</button>
           </div>
 
-          {chatNotice ? (
-            <Alert type={chatNotice.type} showIcon message={chatNotice.message} />
+          {chatDeleteConfirmationOpen ? (
+            <Alert
+              id="chat-history-delete-confirmation"
+              type="warning"
+              showIcon
+              message={t(
+                "pages.studio.studiofilesdetailpane.delete.conversation.confirmation.title",
+                "Delete this conversation?",
+              )}
+              description={t(
+                "pages.studio.studiofilesdetailpane.delete.conversation.confirmation.description",
+                "{title} will be removed from chat history and cannot be recovered from this view.",
+                {
+                  title:
+                    selectedConversationMeta?.title || selectedConversationId,
+                },
+              )}
+              action={
+                <Space wrap size={[8, 8]}>
+                  <Button
+                    size="small"
+                    disabled={chatDeletePending}
+                    onClick={() => setChatDeleteConfirmationOpen(false)}
+                  >
+                    {t(
+                      "pages.studio.studiofilesdetailpane.keep.conversation",
+                      "Keep conversation",
+                    )}
+                  </Button>
+                  <Button
+                    danger
+                    size="small"
+                    type="primary"
+                    loading={chatDeletePending}
+                    onClick={() => void handleDeleteConversation()}
+                  >
+                    {t(
+                      "pages.studio.studiofilesdetailpane.delete.conversation.now",
+                      "Delete now",
+                    )}
+                  </Button>
+                </Space>
+              }
+            />
           ) : null}
+
+          <ConsoleOperationNotice
+            errorMessage={t(
+              'pages.studio.studiofilesdetailpane.conversationDeleteFailed',
+              'Could not delete conversation. Try again.',
+            )}
+            notice={chatNotice}
+          />
 
           {selectedConversationMessages.isLoading ? (
             <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.loading.conversation", "Loading conversation...")}</div>
@@ -2504,12 +2276,14 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               message={t("pages.studio.studiofilesdetailpane.failed.to.load.conversation", "Failed to load conversation")}
               description={describeError(selectedConversationMessages.error)}
             />
-          ) : (selectedConversationMessages.data?.length ?? 0) === 0 ? (
+          ) : (selectedConversationMessages.data?.messages.length ?? 0) === 0 ? (
             <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.no.messages.in.this.conversation", "No messages in this conversation")}</div>
           ) : (
             <section aria-label={t("pages.studio.studiofilesdetailpane.chat.history.messages", "Chat history messages")} style={chatMessageListStyle}>
-              {(selectedConversationMessages.data ?? []).map(
-                (message: StoredChatMessage) => (
+              {(
+                (selectedConversationMessages.data?.messages ?? []) as ChatHistoryMessageView[]
+              ).map(
+                (message) => (
                   <article
                     key={message.id}
                     style={{
@@ -2523,15 +2297,39 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                     }}
                   >
                     <div style={chatMessageMetaStyle}>
-                      <span
-                        style={{
-                          color: message.role === 'user' ? '#2563eb' : '#6b7280',
-                          fontWeight: 700,
-                          letterSpacing: 0,
-                          textTransform: 'uppercase',
-                        }}
-                      >
-                        {message.role}
+                      <span style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
+                        <span
+                          style={{
+                            color: message.role === 'user' ? '#2563eb' : '#6b7280',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {formatChatMessageAuthor(message)}
+                        </span>
+                        {message.authorName?.trim() ? (
+                          <span
+                            style={{
+                              color: '#9ca3af',
+                              fontSize: 10,
+                              fontWeight: 600,
+                              textTransform: 'uppercase',
+                            }}
+                          >
+                            {message.role}
+                          </span>
+                        ) : null}
+                        <Tag
+                          color={
+                            message.status?.trim().toLowerCase() === 'error'
+                              ? 'error'
+                              : message.status?.trim().toLowerCase() === 'complete'
+                                ? 'success'
+                                : undefined
+                          }
+                          style={{ marginInlineEnd: 0 }}
+                        >
+                          {formatChatMessageStatus(message.status)}
+                        </Tag>
                       </span>
                       <span style={{ color: '#9ca3af' }}>
                         {message.timestamp
@@ -2552,26 +2350,51 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                           whiteSpace: 'pre-wrap',
                         }}
                       >
+                        <div
+                          style={{
+                            fontStyle: 'normal',
+                            fontWeight: 700,
+                            marginBottom: 4,
+                          }}
+                        >
+                          {t(
+                            "pages.studio.studiofilesdetailpane.chat.message.thinking",
+                            "Thinking",
+                          )}
+                        </div>
                         {message.thinking}
                       </div>
                     ) : null}
 
-                    <div
-                      style={{
-                        color: '#374151',
-                        fontSize: 13,
-                        lineHeight: 1.8,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                      }}
-                    >
-                      {message.content ||
-                        t("pages.studio.studiofilesdetailpane.empty.message", "(empty message)")}
-                    </div>
+                    {message.content || !message.error ? (
+                      <div
+                        style={{
+                          color: '#374151',
+                          fontSize: 13,
+                          lineHeight: 1.8,
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {message.content ||
+                          t("pages.studio.studiofilesdetailpane.empty.message", "(empty message)")}
+                      </div>
+                    ) : null}
 
                     {message.error ? (
-                      <div style={{ color: '#dc2626', fontSize: 12, marginTop: 12 }}>
-                        {message.error}
+                      <div
+                        style={{ color: '#dc2626', fontSize: 12, marginTop: 12 }}
+                      >
+                        <strong>
+                          {t(
+                            "pages.studio.studiofilesdetailpane.chat.message.error",
+                            "Error",
+                          )}
+                          :{' '}
+                        </strong>
+                        <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          {message.error}
+                        </span>
                       </div>
                     ) : null}
                   </article>
@@ -2658,10 +2481,12 @@ const StudioFilesDetailPane: React.FC<Props> = ({
         <div style={cliEditorShellStyle}>
           <div style={editorHeaderRowStyle}>
             <div>
-              <div style={editorHeaderTitleStyle}>{scriptId}.cs</div>
+              <div style={editorHeaderTitleStyle}>{formatScriptDetailLabel(selectedScriptDetail)}</div>
               <div style={catalogMetaStyle}>
-                {t("pages.studio.studiofilesdetailpane.revision.label", "Revision:")}{' '}
-                {selectedScriptDetail.script.activeRevision} {t("pages.studio.studiofilesdetailpane.updated", "· Updated:")}{' '}
+                {selectedScriptDetail.script.activeRevision
+                  ? t("pages.studio.studiofilesdetailpane.version.ready", "Version ready")
+                  : t("pages.studio.studiofilesdetailpane.draft", "Draft")}{' '}
+                {t("pages.studio.studiofilesdetailpane.updated", "· Updated:")}{' '}
                 {selectedScriptDetail.script.updatedAt
                   ? formatDateTime(selectedScriptDetail.script.updatedAt)
                   : t("pages.studio.studiofilesdetailpane.unknown", "unknown")}
@@ -2689,10 +2514,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       </div>
     );
   };
-
-  if (selectedFile === 'settings.json') {
-    return renderSettingsPanel();
-  }
 
   if (selectedFile === 'role-catalog') {
     return renderRolesPanel();

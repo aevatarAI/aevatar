@@ -1,0 +1,1218 @@
+syntax = "proto3";
+
+package aevatar.gagents.nyxid_chat;
+
+option csharp_namespace = "Aevatar.GAgents.NyxidChat";
+
+import "ai_messages.proto";
+import "google/protobuf/timestamp.proto";
+
+message NyxIdDirectChatHistoryDispatchedEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  google.protobuf.Timestamp dispatched_at = 4;
+}
+
+message NyxIdDirectChatHistoryDeliveryRequested {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 expected_attempt = 3;
+}
+
+// NyxIdChat owns these closed product states. Transport adapters may map them
+// to JSON, but no actor, projector, or client may replace them with prose.
+enum NyxIdChatTurnStatus {
+  NYX_ID_CHAT_TURN_STATUS_UNSPECIFIED = 0;
+  NYX_ID_CHAT_TURN_STATUS_ACTIVE = 1;
+  NYX_ID_CHAT_TURN_STATUS_SUCCEEDED = 2;
+  NYX_ID_CHAT_TURN_STATUS_FAILED = 3;
+  NYX_ID_CHAT_TURN_STATUS_STOPPED = 4;
+  NYX_ID_CHAT_TURN_STATUS_BLOCKED = 5;
+}
+
+enum NyxIdChatTaskStatus {
+  NYX_ID_CHAT_TASK_STATUS_UNSPECIFIED = 0;
+  NYX_ID_CHAT_TASK_STATUS_ACTIVE = 1;
+  NYX_ID_CHAT_TASK_STATUS_SUCCEEDED = 2;
+  NYX_ID_CHAT_TASK_STATUS_FAILED = 3;
+  NYX_ID_CHAT_TASK_STATUS_STOPPED = 4;
+  NYX_ID_CHAT_TASK_STATUS_BLOCKED = 5;
+}
+
+enum NyxIdChatStepStatus {
+  NYX_ID_CHAT_STEP_STATUS_UNSPECIFIED = 0;
+  NYX_ID_CHAT_STEP_STATUS_PLANNED = 1;
+  NYX_ID_CHAT_STEP_STATUS_WAITING = 2;
+  NYX_ID_CHAT_STEP_STATUS_RUNNING = 3;
+  NYX_ID_CHAT_STEP_STATUS_DONE = 4;
+  NYX_ID_CHAT_STEP_STATUS_FAILED = 5;
+  NYX_ID_CHAT_STEP_STATUS_SKIPPED = 6;
+  NYX_ID_CHAT_STEP_STATUS_CANCELLED = 7;
+  NYX_ID_CHAT_STEP_STATUS_UNCERTAIN = 8;
+}
+
+enum NyxIdChatEffectEvidence {
+  NYX_ID_CHAT_EFFECT_EVIDENCE_UNSPECIFIED = 0;
+  NYX_ID_CHAT_EFFECT_EVIDENCE_NOT_STARTED = 1;
+  NYX_ID_CHAT_EFFECT_EVIDENCE_NOT_APPLIED = 2;
+  NYX_ID_CHAT_EFFECT_EVIDENCE_CONFIRMED = 3;
+  NYX_ID_CHAT_EFFECT_EVIDENCE_MAY_HAVE_CHANGED = 4;
+}
+
+enum NyxIdChatActionDisposition {
+  NYX_ID_CHAT_ACTION_DISPOSITION_UNSPECIFIED = 0;
+  NYX_ID_CHAT_ACTION_DISPOSITION_COMPLETED = 1;
+  NYX_ID_CHAT_ACTION_DISPOSITION_DECLINED = 2;
+  NYX_ID_CHAT_ACTION_DISPOSITION_FAILED = 3;
+  NYX_ID_CHAT_ACTION_DISPOSITION_CANCELLED = 4;
+  NYX_ID_CHAT_ACTION_DISPOSITION_EXPIRED = 5;
+}
+
+enum NyxIdChatStepKind {
+  NYX_ID_CHAT_STEP_KIND_UNSPECIFIED = 0;
+  NYX_ID_CHAT_STEP_KIND_LLM = 1;
+  NYX_ID_CHAT_STEP_KIND_TOOL = 2;
+  NYX_ID_CHAT_STEP_KIND_BROWSER_ACTION = 3;
+  NYX_ID_CHAT_STEP_KIND_POSTCONDITION = 4;
+  NYX_ID_CHAT_STEP_KIND_INPUT = 5;
+}
+
+enum NyxIdChatAttentionKind {
+  NYX_ID_CHAT_ATTENTION_KIND_UNSPECIFIED = 0;
+  NYX_ID_CHAT_ATTENTION_KIND_NONE = 1;
+  NYX_ID_CHAT_ATTENTION_KIND_INPUT = 2;
+  NYX_ID_CHAT_ATTENTION_KIND_APPROVAL = 3;
+}
+
+enum NyxIdChatApprovalReversibility {
+  NYX_ID_CHAT_APPROVAL_REVERSIBILITY_UNSPECIFIED = 0;
+  NYX_ID_CHAT_APPROVAL_REVERSIBILITY_REVERSIBLE = 1;
+  NYX_ID_CHAT_APPROVAL_REVERSIBILITY_IRREVERSIBLE = 2;
+  NYX_ID_CHAT_APPROVAL_REVERSIBILITY_UNKNOWN = 3;
+}
+
+enum NyxIdChatNeedsYouResolutionOutcome {
+  NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_ACCEPTED = 1;
+}
+
+enum NyxIdChatOperationPhase {
+  NYX_ID_CHAT_OPERATION_PHASE_UNSPECIFIED = 0;
+  NYX_ID_CHAT_OPERATION_PHASE_REQUESTED = 1;
+  NYX_ID_CHAT_OPERATION_PHASE_DISPATCHED = 2;
+  NYX_ID_CHAT_OPERATION_PHASE_RUNNING = 3;
+  NYX_ID_CHAT_OPERATION_PHASE_SUCCEEDED = 4;
+  NYX_ID_CHAT_OPERATION_PHASE_FAILED = 5;
+  NYX_ID_CHAT_OPERATION_PHASE_CANCELLED = 6;
+  NYX_ID_CHAT_OPERATION_PHASE_UNCERTAIN = 7;
+}
+
+enum NyxIdChatControlKind {
+  NYX_ID_CHAT_CONTROL_KIND_UNSPECIFIED = 0;
+  NYX_ID_CHAT_CONTROL_KIND_STOP = 1;
+  NYX_ID_CHAT_CONTROL_KIND_STEERING = 2;
+}
+
+enum NyxIdChatControlOutcome {
+  NYX_ID_CHAT_CONTROL_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_CONTROL_OUTCOME_ACCEPTED = 1;
+  NYX_ID_CHAT_CONTROL_OUTCOME_REJECTED = 2;
+  NYX_ID_CHAT_CONTROL_OUTCOME_ALREADY_TERMINAL = 3;
+  NYX_ID_CHAT_CONTROL_OUTCOME_UNCANCELLABLE = 4;
+}
+
+enum NyxIdChatContinuationKind {
+  NYX_ID_CHAT_CONTINUATION_KIND_UNSPECIFIED = 0;
+  NYX_ID_CHAT_CONTINUATION_KIND_STEERING = 1;
+  NYX_ID_CHAT_CONTINUATION_KIND_ACTION = 2;
+}
+
+enum NyxIdChatContinuationAdmissionStatus {
+  NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_UNSPECIFIED = 0;
+  NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_REQUESTED = 1;
+  NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_ACCEPTED = 2;
+  NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_ACCEPTED_FOR_LATER = 3;
+  NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_REJECTED = 4;
+  NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_STARTED = 5;
+}
+
+enum NyxIdChatStepControlKind {
+  NYX_ID_CHAT_STEP_CONTROL_KIND_UNSPECIFIED = 0;
+  NYX_ID_CHAT_STEP_CONTROL_KIND_RETRY = 1;
+  NYX_ID_CHAT_STEP_CONTROL_KIND_SKIP = 2;
+}
+
+enum NyxIdChatTransitionOutcome {
+  NYX_ID_CHAT_TRANSITION_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_TRANSITION_OUTCOME_ACCEPTED = 1;
+  NYX_ID_CHAT_TRANSITION_OUTCOME_REJECTED = 2;
+  NYX_ID_CHAT_TRANSITION_OUTCOME_IDEMPOTENT = 3;
+}
+
+enum NyxIdChatRecoveryKind {
+  NYX_ID_CHAT_RECOVERY_KIND_UNSPECIFIED = 0;
+  NYX_ID_CHAT_RECOVERY_KIND_POSTCONDITION_REDISPATCH = 1;
+  NYX_ID_CHAT_RECOVERY_KIND_INTERRUPTED_OPERATION_RECONCILIATION = 2;
+}
+
+enum NyxIdAssistantActionKind {
+  NYX_ID_ASSISTANT_ACTION_KIND_UNSPECIFIED = 0;
+  NYX_ID_ASSISTANT_ACTION_KIND_SERVICE_CONNECT = 1;
+  NYX_ID_ASSISTANT_ACTION_KIND_SERVICE_REAUTHORIZE = 2;
+  NYX_ID_ASSISTANT_ACTION_KIND_PROVIDER_SET_APP_CREDENTIALS = 3;
+  NYX_ID_ASSISTANT_ACTION_KIND_KEY_CREATE = 4;
+  NYX_ID_ASSISTANT_ACTION_KIND_KEY_ROTATE = 5;
+  NYX_ID_ASSISTANT_ACTION_KIND_NODE_REGISTER_TOKEN = 6;
+  NYX_ID_ASSISTANT_ACTION_KIND_NODE_ROTATE_TOKEN = 7;
+  NYX_ID_ASSISTANT_ACTION_KIND_NODE_INJECT_CREDENTIAL = 8;
+  NYX_ID_ASSISTANT_ACTION_KIND_SERVICE_ACCOUNT_CREATE = 9;
+  NYX_ID_ASSISTANT_ACTION_KIND_SERVICE_ACCOUNT_ROTATE_SECRET = 10;
+  NYX_ID_ASSISTANT_ACTION_KIND_DEVELOPER_APP_CREATE = 11;
+  NYX_ID_ASSISTANT_ACTION_KIND_DEVELOPER_APP_ROTATE_SECRET = 12;
+  NYX_ID_ASSISTANT_ACTION_KIND_ACCOUNT_MFA_SETUP = 13;
+  NYX_ID_ASSISTANT_ACTION_KIND_DEVICE_ONBOARD = 14;
+}
+
+enum NyxIdAssistantActionRisk {
+  NYX_ID_ASSISTANT_ACTION_RISK_UNSPECIFIED = 0;
+  NYX_ID_ASSISTANT_ACTION_RISK_LOW = 1;
+  NYX_ID_ASSISTANT_ACTION_RISK_GRANT = 2;
+  NYX_ID_ASSISTANT_ACTION_RISK_DESTRUCTIVE = 3;
+}
+
+enum NyxIdAssistantActionTier {
+  NYX_ID_ASSISTANT_ACTION_TIER_UNSPECIFIED = 0;
+  NYX_ID_ASSISTANT_ACTION_TIER_V1 = 1;
+  NYX_ID_ASSISTANT_ACTION_TIER_V2 = 2;
+}
+
+// Every child progress/result signal carries this complete reconciliation key.
+message NyxIdChatOperationKey {
+  string conversation_actor_id = 1;
+  string turn_id = 2;
+  string task_id = 3;
+  string step_id = 4;
+  string operation_id = 5;
+  int64 operation_generation = 6;
+}
+
+message NyxIdChatAvailableActions {
+  bool retry = 1;
+  bool skip = 2;
+  bool stop = 3;
+}
+
+message NyxIdChatLLMStepSource {
+  string model = 1;
+}
+
+message NyxIdChatToolStepSource {
+  string tool_name = 1;
+  string service_slug = 2;
+  string service_id = 3;
+}
+
+message NyxIdChatBrowserActionStepSource {
+  NyxIdAssistantActionKind action = 1;
+  string action_request_id = 2;
+}
+
+message NyxIdChatInputStepSource {
+  string request_id = 1;
+}
+
+message NyxIdChatPostconditionStepSource {
+  string action_request_id = 1;
+  string postcondition_kind = 2;
+}
+
+message NyxIdChatStepSource {
+  oneof source {
+    NyxIdChatLLMStepSource llm = 1;
+    NyxIdChatToolStepSource tool = 2;
+    NyxIdChatBrowserActionStepSource browser_action = 3;
+    NyxIdChatPostconditionStepSource postcondition = 4;
+    NyxIdChatInputStepSource input = 5;
+  }
+}
+
+message NyxIdChatOperationState {
+  NyxIdChatOperationKey key = 1;
+  NyxIdChatStepKind kind = 2;
+  NyxIdChatOperationPhase phase = 3;
+  bool may_change_external_state = 4;
+  bool idempotent = 5;
+  string idempotency_key = 6;
+  google.protobuf.Timestamp requested_at = 7;
+  google.protobuf.Timestamp dispatched_at = 8;
+  google.protobuf.Timestamp completed_at = 9;
+  string terminal_code = 10;
+  string safe_message = 11;
+  // Latest child-owned progress sequence reconciled for this exact operation.
+  // This is distinct from the conversation-wide projection sequence.
+  int64 latest_progress_sequence = 12;
+}
+
+message NyxIdChatTaskStepState {
+  string step_id = 1;
+  int32 order = 2;
+  NyxIdChatStepKind kind = 3;
+  NyxIdChatStepStatus status = 4;
+  bool required = 5;
+  string description = 6;
+  NyxIdChatStepSource source = 7;
+  bool may_change_external_state = 8;
+  NyxIdChatEffectEvidence external_effect = 9;
+  NyxIdChatOperationState operation = 10;
+  string approval_request_id = 11;
+  string action_request_id = 12;
+  string failure_code = 13;
+  string safe_message = 14;
+  bool safe_to_skip = 15;
+  NyxIdChatAvailableActions available_actions = 16;
+  google.protobuf.Timestamp updated_at = 17;
+  // True only when this step's execution input can be rebuilt from typed,
+  // credential-free conversation state plus a newly supplied transient
+  // capability. V1 sets this for initial LLM steps, never for tool calls.
+  bool retry_input_rebuildable = 18;
+}
+
+message NyxIdChatTaskState {
+  string task_id = 1;
+  string turn_id = 2;
+  NyxIdChatTaskStatus status = 3;
+  repeated NyxIdChatTaskStepState steps = 4;
+  string active_step_id = 5;
+  string active_operation_id = 6;
+  string failure_code = 7;
+  string safe_message = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message NyxIdChatTurnState {
+  string turn_id = 1;
+  string task_id = 2;
+  string client_request_id = 3;
+  NyxIdChatTurnStatus status = 4;
+  string prompt = 5;
+  repeated aevatar.ai.ChatContentPart input_parts = 6;
+  string failure_code = 7;
+  string safe_message = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp terminal_at = 10;
+  // Request-scoped authority prepared from the conversation's bound profile
+  // before this turn is dispatched. It contains no tool objects, prompt body,
+  // credentials, or other transient runtime capability.
+  aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 11;
+  // Payload-bound request identity used to distinguish exact retries from
+  // conflicting reuse of the same client request id.
+  string command_id = 12;
+}
+
+message NyxIdChatTurnSummary {
+  string turn_id = 1;
+  string task_id = 2;
+  NyxIdChatTurnStatus status = 3;
+  string failure_code = 4;
+  string safe_message = 5;
+  google.protobuf.Timestamp terminal_at = 6;
+}
+
+message NyxIdChatPendingApprovalState {
+  string approval_request_id = 1;
+  string turn_id = 2;
+  string task_id = 3;
+  string step_id = 4;
+  string tool_name = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  google.protobuf.Timestamp asked_at = 7;
+  NyxIdChatApprovalPresentation presentation = 8;
+  string tool_call_id = 9;
+}
+
+message NyxIdChatApprovalPresentation {
+  string action = 1;
+  string target = 2;
+  string actor_label = 3;
+  NyxIdChatApprovalReversibility reversibility = 4;
+  string grant_boundary = 5;
+  string nyxid_request_id = 6;
+}
+
+message NyxIdChatInputOption {
+  string label = 1;
+  string description = 2;
+  string option_id = 3;
+}
+
+message NyxIdChatInputSelectionAnswer {
+  repeated string option_ids = 1;
+}
+
+message NyxIdChatInputAnswer {
+  oneof answer {
+    string free_text = 1;
+    NyxIdChatInputSelectionAnswer selection = 2;
+  }
+}
+
+message NyxIdChatPendingInputState {
+  string request_id = 1;
+  string turn_id = 2;
+  string task_id = 3;
+  string step_id = 4;
+  string prompt = 5;
+  repeated NyxIdChatInputOption options = 6;
+  google.protobuf.Timestamp asked_at = 7;
+  bool allow_free_text = 8;
+  bool multi_select = 9;
+  string tool_call_id = 10;
+}
+
+message NyxIdChatInputResolutionState {
+  string request_id = 1;
+  string client_request_id = 2;
+  NyxIdChatNeedsYouResolutionOutcome outcome = 3;
+  bytes answer_sha256 = 4;
+  google.protobuf.Timestamp committed_at = 5;
+}
+
+message NyxIdChatApprovalResolutionState {
+  string request_id = 1;
+  string client_request_id = 2;
+  NyxIdChatNeedsYouResolutionOutcome outcome = 3;
+  bool approved = 4;
+  bytes decision_sha256 = 5;
+  google.protobuf.Timestamp committed_at = 6;
+}
+
+message NyxIdChatConversationAttentionState {
+  NyxIdChatTaskStatus task_status = 1;
+  NyxIdChatAttentionKind attention_kind = 2;
+  google.protobuf.Timestamp attention_since = 3;
+  string active_step_summary = 4;
+}
+
+message NyxIdChatControlFenceState {
+  NyxIdChatControlKind kind = 1;
+  string request_id = 2;
+  string client_request_id = 3;
+  string turn_id = 4;
+  string task_id = 5;
+  int64 operation_generation = 6;
+  NyxIdChatControlOutcome outcome = 7;
+  string reason_code = 8;
+  string safe_message = 9;
+  google.protobuf.Timestamp committed_at = 10;
+}
+
+message NyxIdChatContinuationAdmissionState {
+  NyxIdChatContinuationKind kind = 1;
+  string request_id = 2;
+  string client_request_id = 3;
+  string origin_turn_id = 4;
+  string continuation_turn_id = 5;
+  NyxIdChatContinuationAdmissionStatus status = 6;
+  string reason_code = 7;
+  string safe_message = 8;
+  google.protobuf.Timestamp committed_at = 9;
+  // Safe, durable steering intent. Runtime credentials remain only on the
+  // transient command and are never copied into state or committed events.
+  string instruction = 10;
+  repeated aevatar.ai.ChatContentPart input_parts = 11;
+  // Action-continuation-only authenticated query identity and exact safe
+  // reports. Steering admissions leave these fields empty.
+  string owner_subject = 12;
+  repeated NyxIdChatActionReport action_reports = 13;
+}
+
+message NyxIdChatStepControlResultState {
+  NyxIdChatStepControlKind kind = 1;
+  string request_id = 2;
+  string client_request_id = 3;
+  string turn_id = 4;
+  string task_id = 5;
+  string step_id = 6;
+  int64 expected_operation_generation = 7;
+  int64 operation_generation = 8;
+  NyxIdChatTransitionOutcome outcome = 9;
+  string reason_code = 10;
+  string safe_message = 11;
+  string command_id = 12;
+  string correlation_id = 13;
+  google.protobuf.Timestamp committed_at = 14;
+  int64 expected_state_version = 15;
+  string scope_id = 16;
+  string conversation_actor_id = 17;
+}
+
+message NyxIdCatalogServiceConnectParams {
+  string service_slug = 1;
+  repeated string requested_scopes = 2;
+  string via_node_id = 3;
+  string target_org_id = 4;
+}
+
+message NyxIdCustomServiceConnectParams {
+  string name = 1;
+  string endpoint_url = 2;
+  string auth_method = 3;
+  string auth_key_name = 4;
+  string via_node_id = 5;
+  string target_org_id = 6;
+}
+
+message NyxIdServiceReauthorizeParams {
+  string key_id = 1;
+  repeated string requested_scopes = 2;
+}
+
+message NyxIdProviderSetAppCredentialsParams {
+  string provider_slug = 1;
+}
+
+message NyxIdKeyCreateParams {
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
+}
+
+message NyxIdKeyRotateParams {
+  string key_id = 1;
+}
+
+message NyxIdNodeRegisterTokenParams {
+  string name = 1;
+}
+
+message NyxIdNodeRotateTokenParams {
+  string node_id = 1;
+}
+
+message NyxIdNodeInjectCredentialParams {
+  string node_id = 1;
+  string service_slug = 2;
+}
+
+message NyxIdServiceAccountCreateParams {
+  string name = 1;
+  repeated string allowed_scopes = 2;
+}
+
+message NyxIdServiceAccountRotateSecretParams {
+  string service_account_id = 1;
+}
+
+message NyxIdDeveloperAppCreateParams {
+  string name = 1;
+  repeated string redirect_uris = 2;
+}
+
+message NyxIdDeveloperAppRotateSecretParams {
+  string client_id = 1;
+}
+
+message NyxIdAccountMfaSetupParams {}
+
+message NyxIdDeviceOnboardParams {
+  string label = 1;
+}
+
+// Catalog and custom connection are distinct variants. No bool changes the
+// meaning of a shared field set, and risk is deliberately absent from params.
+message NyxIdAssistantActionParams {
+  oneof params {
+    NyxIdCatalogServiceConnectParams catalog_service_connect = 1;
+    NyxIdCustomServiceConnectParams custom_service_connect = 2;
+    NyxIdServiceReauthorizeParams service_reauthorize = 3;
+    NyxIdProviderSetAppCredentialsParams provider_set_app_credentials = 4;
+    NyxIdKeyCreateParams key_create = 5;
+    NyxIdKeyRotateParams key_rotate = 6;
+    NyxIdNodeRegisterTokenParams node_register_token = 7;
+    NyxIdNodeRotateTokenParams node_rotate_token = 8;
+    NyxIdNodeInjectCredentialParams node_inject_credential = 9;
+    NyxIdServiceAccountCreateParams service_account_create = 10;
+    NyxIdServiceAccountRotateSecretParams service_account_rotate_secret = 11;
+    NyxIdDeveloperAppCreateParams developer_app_create = 12;
+    NyxIdDeveloperAppRotateSecretParams developer_app_rotate_secret = 13;
+    NyxIdAccountMfaSetupParams account_mfa_setup = 14;
+    NyxIdDeviceOnboardParams device_onboard = 15;
+  }
+}
+
+// AGUI Schema v4 wire contract. This presentation DTO deliberately differs
+// from NyxIdChatActionRequestState: registry policy, timestamps, reports, and
+// postcondition facts remain internal committed state and never leak into the
+// browser-action request frame.
+message NyxIdAssistantActionWireParams {
+  oneof params {
+    NyxIdCatalogServiceConnectParams catalog_service = 1;
+    NyxIdCustomServiceConnectParams custom_service = 2;
+  }
+}
+
+message NyxIdAssistantActionRequestWirePayload {
+  int32 schema_version = 1;
+  string actor_id = 2;
+  string origin_turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string action_request_id = 6;
+  string action = 7;
+  NyxIdAssistantActionWireParams params = 8;
+}
+
+message NyxIdChatUserServiceRef {
+  string user_service_id = 1;
+}
+
+message NyxIdChatKeyRef {
+  string key_id = 1;
+}
+
+message NyxIdChatNodeRef {
+  string node_id = 1;
+}
+
+message NyxIdChatServiceAccountRef {
+  string service_account_id = 1;
+}
+
+message NyxIdChatDeveloperAppRef {
+  string client_id = 1;
+}
+
+message NyxIdChatDeviceRef {
+  string device_id = 1;
+}
+
+message NyxIdChatSafeResourceRef {
+  oneof resource {
+    NyxIdChatUserServiceRef user_service = 1;
+    NyxIdChatKeyRef key = 2;
+    NyxIdChatNodeRef node = 3;
+    NyxIdChatServiceAccountRef service_account = 4;
+    NyxIdChatDeveloperAppRef developer_app = 5;
+    NyxIdChatDeviceRef device = 6;
+  }
+}
+
+message NyxIdChatActionRequestState {
+  int32 schema_version = 1;
+  string registry_revision = 2;
+  string conversation_actor_id = 3;
+  string origin_turn_id = 4;
+  string task_id = 5;
+  string step_id = 6;
+  string action_request_id = 7;
+  NyxIdAssistantActionKind action = 8;
+  NyxIdAssistantActionParams params = 9;
+  NyxIdAssistantActionRisk advisory_risk = 10;
+  bool remember_eligible = 11;
+  google.protobuf.Timestamp requested_at = 12;
+  // Browser reports are safe, typed wake-up facts. Caller prose is stripped
+  // before commit and no report is itself mutation proof.
+  repeated NyxIdChatActionReport reports = 13;
+  // The latest typed read-model proof attempt for this exact action request.
+  NyxIdChatActionPostconditionResult postcondition_result = 14;
+}
+
+message NyxIdChatActionReport {
+  string action_request_id = 1;
+  string origin_turn_id = 2;
+  NyxIdChatActionDisposition disposition = 3;
+  NyxIdChatSafeResourceRef resource = 4;
+  string safe_message = 5;
+  google.protobuf.Timestamp reported_at = 6;
+}
+
+message NyxIdAssistantActionDefinitionSnapshot {
+  int32 schema_version = 1;
+  string registry_revision = 2;
+  NyxIdAssistantActionKind action = 3;
+  string wire_action = 4;
+  string description = 5;
+  NyxIdAssistantActionRisk advisory_risk = 6;
+  NyxIdAssistantActionTier tier = 7;
+  bool remember_eligible = 8;
+}
+
+message NyxIdChatConversationGAgentState {
+  string conversation_actor_id = 1;
+  string scope_id = 2;
+  aevatar.ai.AIAgentConfigOverrides role_configuration = 3;
+  aevatar.ai.AgentProfileSnapshot agent_profile = 4;
+  NyxIdChatTurnState active_turn = 5;
+  NyxIdChatTurnState latest_turn = 6;
+  repeated NyxIdChatTurnSummary recent_terminal_turns = 7;
+  NyxIdChatTaskState active_task = 8;
+  NyxIdChatPendingApprovalState pending_approval = 9;
+  repeated NyxIdChatActionRequestState pending_actions = 10;
+  NyxIdChatControlFenceState control_fence = 11;
+  NyxIdChatContinuationAdmissionState continuation_admission = 12;
+  int64 progress_sequence = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  // Most recently committed control outcome. A rejected replay never replaces
+  // the accepted execution fence that still guards the old plan.
+  NyxIdChatControlFenceState latest_control_result = 15;
+  // Bounded actor-owned replay/conflict facts for retry and skip request
+  // identities. Runtime credentials never enter these results.
+  repeated NyxIdChatStepControlResultState recent_step_control_results = 16;
+  NyxIdChatStepControlResultState latest_step_control_result = 17;
+  // Bounded terminal browser-action summaries. Active/waiting actions remain
+  // in pending_actions; completed/declined/failed/cancelled/expired actions
+  // move here without losing typed correlation and proof evidence.
+  repeated NyxIdChatActionRequestState recent_actions = 18;
+  // Post-registration delivery state for creating the authoritative empty
+  // ChatConversationGAgent transcript. This outbox is transport state only
+  // and is deliberately excluded from public current-state projections.
+  NyxIdChatHistoryInitializationOutbox pending_history_initialization = 19;
+  // Stable identity retained after dispatch so exact registration retries do
+  // not prepare a second initialization operation.
+  string history_initialization_operation_id = 20;
+  // One stable reservation shared by controller recovery and terminal
+  // delivery. The prompt is transcript input, not execution capability;
+  // credentials and raw content parts are deliberately absent.
+  NyxIdChatHistoryDeliveryReservationState history_delivery_reservation = 21;
+  // Bounded at-least-once delivery transport state. Public projections must
+  // not expose this field; ChatConversationGAgent remains transcript owner.
+  NyxIdChatHistoryTerminalOutbox pending_history_terminal = 22;
+  // Actor-owned identity fact. It is deliberately excluded from public
+  // projections, AGUI frames, transcripts, and error text.
+  string owner_subject = 23;
+  NyxIdChatPendingInputState pending_input = 24;
+  repeated NyxIdChatInputResolutionState recent_input_resolutions = 25;
+  repeated NyxIdChatApprovalResolutionState recent_approval_resolutions = 26;
+  NyxIdChatInputResolutionState latest_input_resolution = 27;
+  NyxIdChatApprovalResolutionState latest_approval_resolution = 28;
+  NyxIdChatConversationAttentionState attention = 29;
+  // Durable, secret-free outbox for the self-message that materializes an
+  // ask_user tool call as the exact actor-owned pending input fact.
+  NyxIdChatInputRequestCommand pending_input_request = 30;
+}
+
+message NyxIdChatHistoryInitializationOutbox {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+  int32 attempt = 8;
+}
+
+// Typed self-continuation and durable callback payload. It intentionally
+// carries only the stable operation identity and attempt; the actor rehydrates
+// all delivery data from its committed outbox.
+message NyxIdChatHistoryInitializationDispatchRequested {
+  string operation_id = 1;
+  int32 attempt = 2;
+}
+
+message NyxIdChatHistoryInitializationDispatchedEvent {
+  string operation_id = 1;
+  int32 attempt = 2;
+  google.protobuf.Timestamp dispatched_at = 3;
+}
+
+message NyxIdChatHistoryInitializationRetryScheduledEvent {
+  string operation_id = 1;
+  int32 attempt = 2;
+  string failure_code = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
+}
+
+message NyxIdChatHistoryDeliveryReservationState {
+  string delivery_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string turn_id = 4;
+  string user_text = 5;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
+  string request_fingerprint = 9;
+  bool create_conversation_if_missing = 10;
+  bool expose_create_recovery = 11;
+  bool dispatched = 12;
+  google.protobuf.Timestamp dispatched_at = 13;
+  int32 attempt = 14;
+}
+
+// Actor-owned retry signal; delivery content remains in the committed reservation.
+message NyxIdChatHistoryDeliveryReservationDispatchRequested {
+  string delivery_id = 1;
+  int32 attempt = 2;
+}
+
+message NyxIdChatHistoryDeliveryReservationDispatchedEvent {
+  string delivery_id = 1;
+  string source_command_id = 2;
+  google.protobuf.Timestamp dispatched_at = 3;
+}
+
+message NyxIdChatHistoryDeliveryReservationRetryScheduledEvent {
+  string delivery_id = 1;
+  int32 attempt = 2;
+  string failure_code = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
+}
+
+message NyxIdChatHistoryTerminalOutbox {
+  string delivery_id = 1;
+  string turn_id = 2;
+  string source_actor_id = 3;
+  string source_command_id = 4;
+  NyxIdChatTurnStatus status = 5;
+  string text = 6;
+  string error_code = 7;
+  google.protobuf.Timestamp observed_at = 8;
+  int32 attempt = 9;
+}
+
+// Typed self-continuation and durable retry payload. Full terminal content is
+// rehydrated from actor-owned state and never copied into callback messages.
+message NyxIdChatHistoryTerminalDispatchRequested {
+  string delivery_id = 1;
+  int32 attempt = 2;
+}
+
+message NyxIdChatHistoryTerminalDispatchedEvent {
+  string delivery_id = 1;
+  string source_command_id = 2;
+  int32 attempt = 3;
+  google.protobuf.Timestamp dispatched_at = 4;
+}
+
+message NyxIdChatHistoryTerminalRetryScheduledEvent {
+  string delivery_id = 1;
+  int32 attempt = 2;
+  string failure_code = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
+}
+
+// One atomic controller commit for a newly admitted turn. The snapshot already
+// contains the active turn, task, first step, and requested operation waterline;
+// transient credentials remain exclusively on the later child-actor command.
+message NyxIdChatTurnStartedEvent {
+  NyxIdChatConversationGAgentState state = 1;
+}
+
+// Durable child-actor waterline. It deliberately stores only reconciliation
+// identity and safe terminal evidence; provider credentials, raw responses,
+// tool arguments, and execution capabilities are never persisted here.
+message NyxIdChatTurnGAgentState {
+  NyxIdChatOperationKey admitted_operation = 1;
+  NyxIdChatStepKind operation_kind = 2;
+  NyxIdChatOperationPhase phase = 3;
+  string terminal_code = 4;
+  string safe_message = 5;
+  NyxIdChatEffectEvidence external_effect = 6;
+  bool result_delivered = 7;
+  google.protobuf.Timestamp admitted_at = 8;
+  google.protobuf.Timestamp completed_at = 9;
+  google.protobuf.Timestamp delivered_at = 10;
+  repeated NyxIdChatOperationKey delivered_operations = 11;
+  bool may_change_external_state = 12;
+}
+
+message NyxIdChatTurnOperationAdmittedEvent {
+  NyxIdChatOperationKey key = 1;
+  NyxIdChatStepKind operation_kind = 2;
+  google.protobuf.Timestamp admitted_at = 3;
+  bool may_change_external_state = 4;
+}
+
+message NyxIdChatTurnOperationCompletedEvent {
+  NyxIdChatOperationKey key = 1;
+  NyxIdChatOperationPhase phase = 2;
+  string terminal_code = 3;
+  string safe_message = 4;
+  NyxIdChatEffectEvidence external_effect = 5;
+  google.protobuf.Timestamp completed_at = 6;
+}
+
+message NyxIdChatTurnOperationDeliveredEvent {
+  NyxIdChatOperationKey key = 1;
+  google.protobuf.Timestamp delivered_at = 2;
+}
+
+message NyxIdChatLLMOperationInput {
+  aevatar.ai.ChatRequestEvent request = 1;
+  // Continuations reuse only the turn actor's transient provider session.
+  // No credential or authorized-tool capability is persisted in actor state.
+  bool continue_session = 2;
+  // The immutable conversation binding and this turn's already committed
+  // authority. The child executor materializes only request-local capabilities
+  // from this typed pair; it never side-reads conversation actor state.
+  aevatar.ai.AgentProfileSnapshot agent_profile = 3;
+  aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 4;
+}
+
+message NyxIdChatToolOperationInput {
+  string tool_name = 1;
+  string call_id = 2;
+  string arguments_json = 3;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 4;
+  bool may_change_external_state = 5;
+  bool idempotent = 6;
+  string idempotency_key = 7;
+}
+
+message NyxIdChatActionPostconditionInput {
+  string action_request_id = 1;
+  NyxIdAssistantActionKind action = 2;
+  NyxIdChatSafeResourceRef resource_hint = 3;
+  string scope_id = 4;
+  string owner_subject = 5;
+  string origin_turn_id = 6;
+  NyxIdChatActionDisposition reported_disposition = 7;
+  NyxIdAssistantActionParams params = 8;
+}
+
+// Transient continuation payloads. Raw user input and credentials are carried
+// only to the turn actor inbox and are never copied into committed state.
+message NyxIdChatInputContinuationInput {
+  string request_id = 1;
+  string tool_call_id = 2;
+  NyxIdChatInputAnswer answer = 3;
+  repeated NyxIdChatInputOption selected_options = 4;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 5;
+}
+
+message NyxIdChatToolApprovalContinuationInput {
+  string approval_request_id = 1;
+  bool approved = 2;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 3;
+  bool may_change_external_state = 4;
+}
+
+message NyxIdChatOperationDispatchCommand {
+  NyxIdChatOperationKey key = 1;
+  oneof input {
+    NyxIdChatLLMOperationInput llm = 10;
+    NyxIdChatToolOperationInput tool = 11;
+    NyxIdChatActionPostconditionInput action_postcondition = 12;
+    NyxIdChatInputContinuationInput input_continuation = 13;
+    NyxIdChatToolApprovalContinuationInput tool_approval_continuation = 14;
+  }
+}
+
+message NyxIdChatToolCallSafety {
+  bool is_read_only = 1;
+  bool is_destructive = 2;
+  string side_effect_kind = 3;
+  bool may_change_external_state = 4;
+}
+
+message NyxIdChatToolCall {
+  string call_id = 1;
+  string tool_name = 2;
+  string arguments_json = 3;
+  // Exact invocation safety is snapshotted by the authorized tool provider.
+  // Its absence is fail-closed; consumers never infer safety from strings.
+  NyxIdChatToolCallSafety safety = 4;
+}
+
+message NyxIdChatLLMOperationResult {
+  string content = 1;
+  string reasoning_content = 2;
+  repeated aevatar.ai.ChatContentPart content_parts = 3;
+  repeated NyxIdChatToolCall tool_calls = 4;
+  aevatar.ai.TokenUsagePayload usage = 5;
+  string finish_reason = 6;
+}
+
+message NyxIdChatToolOperationResult {
+  string result_json = 1;
+  aevatar.ai.AgentToolReceipt receipt = 2;
+  NyxIdChatEffectEvidence external_effect = 3;
+}
+
+message NyxIdChatActionPostconditionResult {
+  string action_request_id = 1;
+  NyxIdChatActionDisposition disposition = 2;
+  bool verified = 3;
+  NyxIdChatSafeResourceRef resource = 4;
+  string failure_code = 5;
+  string safe_message = 6;
+}
+
+message NyxIdChatOperationFailure {
+  string failure_code = 1;
+  string safe_message = 2;
+  NyxIdChatEffectEvidence external_effect = 3;
+}
+
+message NyxIdChatOperationResultSignal {
+  NyxIdChatOperationKey key = 1;
+  oneof result {
+    NyxIdChatLLMOperationResult llm = 10;
+    NyxIdChatToolOperationResult tool = 11;
+    NyxIdChatActionPostconditionResult action_postcondition = 12;
+    NyxIdChatOperationFailure failure = 13;
+  }
+}
+
+// Activation never executes a continuation inline. It publishes this typed
+// self signal, and the normal actor handler revalidates both the complete
+// operation identity and the committed version before taking any action.
+message NyxIdChatRecoveryRequestedSignal {
+  NyxIdChatOperationKey key = 1;
+  int64 expected_state_version = 2;
+  NyxIdChatRecoveryKind kind = 3;
+}
+
+message NyxIdChatTextProgress {
+  string delta = 1;
+}
+
+message NyxIdChatReasoningProgress {
+  string delta = 1;
+}
+
+message NyxIdChatToolProgress {
+  string call_id = 1;
+  string tool_name = 2;
+}
+
+message NyxIdChatOperationProgressSignal {
+  NyxIdChatOperationKey key = 1;
+  int64 sequence = 2;
+  oneof progress {
+    NyxIdChatTextProgress text = 10;
+    NyxIdChatReasoningProgress reasoning = 11;
+    NyxIdChatToolProgress tool_started = 12;
+  }
+}
+
+message NyxIdChatStartTurnCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string turn_id = 3;
+  string task_id = 4;
+  string client_request_id = 5;
+  string command_id = 6;
+  string correlation_id = 7;
+  string prompt = 8;
+  repeated aevatar.ai.ChatContentPart input_parts = 9;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
+  aevatar.ai.LLMControlContextPayload llm_control = 11;
+}
+
+message NyxIdChatStopCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string turn_id = 3;
+  string stop_request_id = 4;
+  string client_request_id = 5;
+  string command_id = 6;
+  string correlation_id = 7;
+  int64 expected_state_version = 8;
+}
+
+message NyxIdChatSteeringCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string turn_id = 3;
+  string steering_id = 4;
+  string client_request_id = 5;
+  string command_id = 6;
+  string correlation_id = 7;
+  string instruction = 8;
+  repeated aevatar.ai.ChatContentPart input_parts = 9;
+  int64 expected_state_version = 10;
+  // Transient execution capability for a later continuation. These fields are
+  // deliberately absent from NyxIdChatContinuationAdmissionState.
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 11;
+  aevatar.ai.LLMControlContextPayload llm_control = 12;
+}
+
+message NyxIdChatRetryStepCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string retry_request_id = 6;
+  string client_request_id = 7;
+  string command_id = 8;
+  string correlation_id = 9;
+  int64 expected_operation_generation = 10;
+  int64 expected_state_version = 11;
+  // Transient capability used only if the actor authorizes dispatch. These
+  // values are absent from state and committed step-control events.
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 12;
+  aevatar.ai.LLMControlContextPayload llm_control = 13;
+}
+
+message NyxIdChatSkipStepCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string skip_request_id = 6;
+  string client_request_id = 7;
+  string command_id = 8;
+  string correlation_id = 9;
+  int64 expected_operation_generation = 10;
+  int64 expected_state_version = 11;
+}
+
+message NyxIdChatInputRequestCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string request_id = 6;
+  string prompt = 7;
+  repeated NyxIdChatInputOption options = 8;
+  bool allow_free_text = 9;
+  bool multi_select = 10;
+  string tool_call_id = 11;
+}
+
+message NyxIdChatInputResolveCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string request_id = 3;
+  string client_request_id = 4;
+  NyxIdChatInputAnswer answer = 5;
+  int64 expected_state_version = 6;
+  string command_id = 7;
+  string correlation_id = 8;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 9;
+}
+
+message NyxIdChatApprovalResolveCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string request_id = 3;
+  string client_request_id = 4;
+  bool approved = 5;
+  string reason = 6;
+  int64 expected_state_version = 7;
+  string command_id = 8;
+  string correlation_id = 9;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
+}
+
+message NyxIdChatActionContinueCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string origin_turn_id = 3;
+  string client_request_id = 4;
+  string command_id = 5;
+  string correlation_id = 6;
+  repeated NyxIdChatActionReport actions = 7;
+  // Server-owned identity created by the Host adapter from actorId plus the
+  // authenticated client request id. Callers never choose or reuse old turns.
+  string continuation_turn_id = 8;
+  // Authenticated NyxID subject used only to select the typed read-model
+  // authority. It is an identity, not a credential or bearer token.
+  string owner_subject = 9;
+}
+
+message NyxIdChatOperationRequestedEvent {
+  NyxIdChatOperationState operation = 1;
+}
+
+message NyxIdChatOperationDispatchedEvent {
+  NyxIdChatOperationKey key = 1;
+  google.protobuf.Timestamp dispatched_at = 2;
+}
+
+message NyxIdChatOperationProgressedEvent {
+  NyxIdChatOperationProgressSignal progress = 1;
+  int64 progress_sequence = 2;
+  google.protobuf.Timestamp committed_at = 3;
+}
+
+message NyxIdChatOperationReconciledEvent {
+  NyxIdChatOperationResultSignal result = 1;
+  NyxIdChatTaskState task = 2;
+  NyxIdChatTurnState turn = 3;
+  int64 progress_sequence = 4;
+  // Complete actor-derived state, including successor requested waterlines,
+  // pending approval/action state, and bounded terminal summaries.
+  NyxIdChatConversationGAgentState state = 5;
+}
+
+// A fenced exact tool operation may still report typed terminal evidence. The
+// evidence can refine that operation's effect/phase, but it cannot remove the
+// fence, change the stopped task/turn terminal, or authorize a successor.
+// Raw tool results and invocation arguments are deliberately absent.
+message NyxIdChatLateOperationEvidenceCommittedEvent {
+  NyxIdChatOperationKey key = 1;
+  NyxIdChatOperationPhase operation_phase = 2;
+  NyxIdChatEffectEvidence external_effect = 3;
+  aevatar.ai.AgentToolReceipt tool_receipt = 4;
+  string terminal_code = 5;
+  string safe_message = 6;
+  int64 progress_sequence = 7;
+  google.protobuf.Timestamp committed_at = 8;
+  NyxIdChatConversationGAgentState state = 9;
+}
+
+message NyxIdChatControlFenceCommittedEvent {
+  NyxIdChatControlFenceState fence = 1;
+  NyxIdChatTaskState task = 2;
+  NyxIdChatTurnState turn = 3;
+  NyxIdChatConversationGAgentState state = 4;
+}
+
+message NyxIdChatContinuationAdmissionCommittedEvent {
+  NyxIdChatContinuationAdmissionState admission = 1;
+  NyxIdChatConversationGAgentState state = 2;
+}
+
+message NyxIdChatStepControlCommittedEvent {
+  NyxIdChatStepControlResultState result = 1;
+  NyxIdChatConversationGAgentState state = 2;
+}
+
+// An ordinary start command cannot silently queue behind active work. The
+// actor commits this typed fact for the requested turn so the same Projection
+// Pipeline can return ACTIVE_TURN_REQUIRES_STEERING to its live observer.
+message NyxIdChatTurnAdmissionRejectedEvent {
+  string conversation_actor_id = 1;
+  string requested_turn_id = 2;
+  string active_turn_id = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+  string reason_code = 6;
+  string safe_message = 7;
+}
+
+message NyxIdChatActionRequestedEvent {
+  NyxIdChatActionRequestState request = 1;
+  NyxIdChatTaskState task = 2;
+  NyxIdChatTurnState origin_turn = 3;
+  NyxIdChatConversationGAgentState state = 4;
+}
+
+message NyxIdChatInputRequestedEvent {
+  NyxIdChatPendingInputState pending_input = 1;
+  NyxIdChatConversationGAgentState state = 2;
+}
+
+message NyxIdChatInputResolutionCommittedEvent {
+  NyxIdChatInputResolutionState resolution = 1;
+  NyxIdChatConversationGAgentState state = 2;
+}
+
+message NyxIdChatApprovalResolutionCommittedEvent {
+  NyxIdChatApprovalResolutionState resolution = 1;
+  NyxIdChatConversationGAgentState state = 2;
+}
+
+message NyxIdChatTransitionDecisionFact {
+  NyxIdChatTransitionOutcome outcome = 1;
+  string reason_code = 2;
+  string safe_message = 3;
+}

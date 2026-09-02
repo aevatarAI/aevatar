@@ -65,6 +65,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunGAgent> _logger;
     private readonly IAgentToolReceiptRenderer _toolReceiptRenderer;
+    private AgentRunAuthorizedToolStep? _authorizedToolStep;
 
     public AgentRunGAgent(
         IActorRuntime actorRuntime,
@@ -494,17 +495,64 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task PersistStepStateAsync(AgentRunReplyStepState stepState)
     {
+        // The persisted per-step waterline must never carry bearer tokens (agent_run.proto
+        // contract). Strip runtime credentials at the single commit funnel: the executor
+        // re-supplies them from the transient self-message request at execution time, so a
+        // committed AgentRunReplyStepStateUpdatedEvent — and State.GenerationStep rebuilt from
+        // it — keeps only identity/routing facts.
+        var persisted = StripInlineMediaPayloads(
+            AgentRunReplyStepCredentials.StripRuntimeCredentials(stepState));
         await PersistDomainEventAsync(new AgentRunReplyStepStateUpdatedEvent
         {
-            RunId = stepState.RunId,
-            CorrelationId = stepState.CorrelationId,
-            TargetActorId = stepState.TargetActorId,
-            Attempt = stepState.Attempt,
-            StepState = stepState.Clone(),
+            RunId = persisted.RunId,
+            CorrelationId = persisted.CorrelationId,
+            TargetActorId = persisted.TargetActorId,
+            Attempt = persisted.Attempt,
+            StepState = persisted,
         });
     }
 
-    private Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    internal static AgentRunReplyStepState StripInlineMediaPayloads(AgentRunReplyStepState stepState)
+    {
+        var sanitized = stepState.Clone();
+        StripInlineMediaPayloads(sanitized.Messages);
+        StripInlineMediaPayloads(sanitized.PendingHistoryMessages);
+        StripInlineMediaPayloads(sanitized.AppendedHistory);
+        return sanitized;
+    }
+
+    private static void StripInlineMediaPayloads(IEnumerable<AgentRunChatMessage> messages)
+    {
+        foreach (var message in messages)
+            StripInlineMediaPayloads(message.ContentParts);
+    }
+
+    private static void StripInlineMediaPayloads(IEnumerable<ConversationHistoryEntry> messages)
+    {
+        foreach (var message in messages)
+            StripInlineMediaPayloads(message.ContentParts);
+    }
+
+    private static void StripInlineMediaPayloads(IEnumerable<Aevatar.AI.Abstractions.ChatContentPart> parts)
+    {
+        foreach (var part in parts)
+        {
+            if (part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text)
+            {
+                if (HasFileRefIdentity(part.FileRef))
+                    part.Text = string.Empty;
+                continue;
+            }
+
+            part.DataBase64 = string.Empty;
+        }
+    }
+
+    private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is not null &&
+        (!string.IsNullOrWhiteSpace(fileRef.FileId) || !string.IsNullOrWhiteSpace(fileRef.ArtifactId));
+
+    private async Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
         var executionRequest = new AgentRunReplyStepExecutionRequest(
             stepState.RunId,
@@ -513,14 +561,35 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState.NextStepIndex,
             request.Clone(),
             stepState.Clone());
-        StartDetachedStepExecution(
-            () => _generationExecutor.ExecuteLlmStepAsync(executionRequest, CancellationToken.None),
-            "llm",
-            executionRequest);
-        return Task.CompletedTask;
+        _authorizedToolStep = null;
+        try
+        {
+            var execution = await _generationExecutor.BuildLlmStepExecutionAsync(
+                executionRequest,
+                CancellationToken.None);
+            _authorizedToolStep = execution.AuthorizedToolStep;
+            await PublishAsync(
+                execution.Continuation,
+                TopologyAudience.Self,
+                CancellationToken.None);
+        }
+        catch (Exception ex) when (TryBuildOwnerFallbackCommand(executionRequest, ex) is { } fallback)
+        {
+            _logger.LogWarning(
+                ex,
+                "Agent run LLM step failed before completion; retrying with bot owner LLM config and no tools: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+                executionRequest.RunId,
+                executionRequest.Request.CorrelationId,
+                executionRequest.StepIndex);
+            await PublishAsync(fallback, TopologyAudience.Self, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            await PublishStepFailureAsync(executionRequest, ex);
+        }
     }
 
-    private Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    private async Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
         var executionRequest = new AgentRunReplyStepExecutionRequest(
             stepState.RunId,
@@ -529,62 +598,80 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState.NextStepIndex,
             request.Clone(),
             stepState.Clone());
-        StartDetachedStepExecution(
-            () => _generationExecutor.ExecuteToolStepAsync(executionRequest, CancellationToken.None),
-            "tool",
-            executionRequest);
-        return Task.CompletedTask;
-    }
-
-    private void StartDetachedStepExecution(
-        Func<Task> startExecution,
-        string stepKind,
-        AgentRunReplyStepExecutionRequest request)
-    {
-        Task execution;
+        var authorizedToolStep = _authorizedToolStep;
+        _authorizedToolStep = null;
         try
         {
-            execution = startExecution();
+            var continuation = await _generationExecutor.BuildToolStepContinuationAsync(
+                executionRequest,
+                authorizedToolStep,
+                CancellationToken.None);
+            await PublishAsync(
+                continuation,
+                TopologyAudience.Self,
+                CancellationToken.None);
         }
         catch (Exception ex)
         {
-            _logger.LogError(
-                ex,
-                "Failed to start detached agent run {StepKind} step executor: runId={RunId} correlation={CorrelationId} step={StepIndex}",
-                stepKind,
-                request.RunId,
-                request.Request.CorrelationId,
-                request.StepIndex);
-            return;
+            await PublishStepFailureAsync(executionRequest, ex);
         }
-
-        _ = ObserveDetachedStepExecutionAsync(execution, stepKind, request);
     }
 
-    private async Task ObserveDetachedStepExecutionAsync(
-        Task execution,
-        string stepKind,
-        AgentRunReplyStepExecutionRequest request)
+    private static AgentRunOwnerFallbackStepRequested? TryBuildOwnerFallbackCommand(
+        AgentRunReplyStepExecutionRequest request,
+        Exception ex)
     {
-        try
+        if (request.StepState.FinalNoToolsStep)
+            return null;
+        if (request.StepState.OwnerFallbackLlmControl is null &&
+            request.StepState.OwnerFallbackToolContext is null)
         {
-            await execution.ConfigureAwait(false);
+            return null;
         }
-        catch (Exception ex)
+        if (!string.IsNullOrWhiteSpace(request.StepState.AccumulatedText))
+            return null;
+        if (!LlmOwnerFallbackPolicy.IsRetryable(ex))
+            return null;
+
+        return new AgentRunOwnerFallbackStepRequested
         {
-            _logger.LogError(
-                ex,
-                "Detached agent run {StepKind} step executor failed after handoff: runId={RunId} correlation={CorrelationId} step={StepIndex}",
-                stepKind,
-                request.RunId,
-                request.Request.CorrelationId,
-                request.StepIndex);
-        }
+            RunId = request.RunId,
+            CorrelationId = request.Request.CorrelationId,
+            TargetActorId = request.Request.TargetActorId,
+            Attempt = request.Attempt,
+            StepIndex = request.StepIndex + 1,
+            Reason = ex.Message ?? string.Empty,
+            Request = request.Request.Clone(),
+        };
+    }
+
+    private async Task PublishStepFailureAsync(
+        AgentRunReplyStepExecutionRequest request,
+        Exception ex)
+    {
+        _logger.LogWarning(
+            ex,
+            "Agent run reply step executor failed: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+            request.RunId,
+            request.Request.CorrelationId,
+            request.StepIndex);
+        await PublishAsync(new AgentRunReplyGenerationFailed
+        {
+            RunId = request.RunId,
+            CorrelationId = request.Request.CorrelationId,
+            TargetActorId = request.Request.TargetActorId,
+            ErrorCode = "llm_reply_failed",
+            ErrorSummary = ex.Message,
+            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            Attempt = request.Attempt,
+            Request = request.Request.Clone(),
+        }, TopologyAudience.Self, CancellationToken.None);
     }
 
     private async Task CompletePerStepReplyAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
         var hasReplyText = !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
+        var terminalFailure = !hasReplyText;
         var emptyReplyDiagnostics = hasReplyText ? string.Empty : BuildEmptyReplyDiagnostics(stepState);
         if (!hasReplyText)
         {
@@ -608,7 +695,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 ? stepState.AccumulatedText
                 : "Sorry, I wasn't able to generate a response. Please try again.",
             stepState.OutboundIntent?.Clone(),
-            hasReplyText ? LlmReplyTerminalState.Completed : LlmReplyTerminalState.Failed,
+            terminalFailure ? LlmReplyTerminalState.Failed : LlmReplyTerminalState.Completed,
             hasReplyText ? string.Empty : "empty_reply",
             hasReplyText ? string.Empty : $"Reply generator returned an empty response ({emptyReplyDiagnostics}).",
             stepState.AppendedHistory.ToArray(),
@@ -698,9 +785,10 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     // observed reasoning trace (the 2026-06-12 prod incident: deepseek skill turns
     // completed empty with ReasoningContent never captured, the reasoning-gated retry
     // refused to fire, and every run terminated as the generic apology). Any completed
-    // empty step gets exactly one no-tools retry (FinalNoToolsStep guarantees the
-    // retry itself terminates) before failing as empty_reply.
-    private const int EmptyRetryRecentMessagesFloor = 6;
+    // empty step gets exactly one recovery retry (EmptyReplyRetry gates re-recovery so the retry
+    // itself terminates) before failing as empty_reply. The retry KEEPS tools + the user's routing +
+    // channel-context; it only trims history to this recent floor.
+    private const int RecentHistoryFloor = 10;
 
     private static bool IsSystemRole(string role) =>
         string.Equals(role, "system", StringComparison.OrdinalIgnoreCase);
@@ -710,7 +798,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     // still answer. Keep every system message (anchored instructions) plus the most-recent
     // keepRecent non-system messages, preserving order, dropping the older middle. Returns the number
     // of messages dropped (for logging).
-    private static int TrimMessagesToRecentFloor(
+    internal static int TrimMessagesToRecentFloor(
         Google.Protobuf.Collections.RepeatedField<AgentRunChatMessage> messages,
         int keepRecent)
     {
@@ -737,7 +825,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private static bool ShouldRecoverEmptyLlmStep(AgentRunReplyStepState stepState)
     {
-        if (stepState.FinalNoToolsStep)
+        if (stepState.FinalNoToolsStep || stepState.EmptyReplyRetry)
             return false;
 
         return string.IsNullOrWhiteSpace(stepState.AccumulatedText) &&
@@ -756,30 +844,37 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(
         AgentRunReplyStepState stepState,
-        AgentRunChatMessage? llmVisibleNudge = null,
-        bool useOwnerFallbackRouting = false,
-        bool trimHistoryToRecent = false)
+        AgentRunChatMessage? llmVisibleNudge = null)
     {
         var next = stepState.Clone();
         next.FinalNoToolsStep = true;
         next.NextStepIndex++;
-        if (useOwnerFallbackRouting)
-        {
-            next.LlmControl = ResolveOwnerFallbackControl(stepState).ToPayload();
-            next.ToolContext = ResolveOwnerFallbackToolContext(stepState).ToPayload();
-            StripServerDefaultFallbackMetadata(next.ExternalMetadata);
-        }
-        if (trimHistoryToRecent)
-        {
-            var dropped = TrimMessagesToRecentFloor(next.Messages, EmptyRetryRecentMessagesFloor);
-            if (dropped > 0)
-                _logger.LogWarning(
-                    "Empty reply recovery: trimmed {Dropped} oldest history messages to the recent floor before retry: runId={RunId} correlation={CorrelationId}",
-                    dropped, next.RunId, next.CorrelationId);
-        }
         // The nudge is LLM-visible plumbing for the retry step only: it is deliberately
         // NOT mirrored into AppendedHistory, so it never lands in the durable
         // conversation history.
+        if (llmVisibleNudge is not null)
+            next.Messages.Add(llmVisibleNudge);
+        await PersistStepStateAsync(next);
+        return next;
+    }
+
+    // One-shot empty-reply recovery. A first attempt that produced nothing is usually a
+    // history-too-large problem, so retry on a trimmed history — but KEEP tools + the user's routing
+    // + channel-context (do NOT set FinalNoToolsStep, do NOT switch to server-default routing) so the
+    // retry can still do the task (e.g. actually create the resource) instead of apologizing.
+    // EmptyReplyRetry gates re-recovery so this terminates after one retry.
+    private async Task<AgentRunReplyStepState> AdvanceToEmptyReplyRetryStepAsync(
+        AgentRunReplyStepState stepState,
+        AgentRunChatMessage? llmVisibleNudge = null)
+    {
+        var next = stepState.Clone();
+        next.EmptyReplyRetry = true;
+        next.NextStepIndex++;
+        var dropped = TrimMessagesToRecentFloor(next.Messages, RecentHistoryFloor);
+        if (dropped > 0)
+            _logger.LogWarning(
+                "Empty reply recovery: trimmed {Dropped} oldest history messages to the recent floor; retrying WITH tools: runId={RunId} correlation={CorrelationId}",
+                dropped, next.RunId, next.CorrelationId);
         if (llmVisibleNudge is not null)
             next.Messages.Add(llmVisibleNudge);
         await PersistStepStateAsync(next);
@@ -845,7 +940,10 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (hasResult)
         {
             if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+            {
+                ClearAuthorizedToolStep(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex);
                 return;
+            }
 
             await PersistStepStateAsync(ApplyLlmStepResult(State.GenerationStep!, command.LlmStepResult!, command.StepIndex));
         }
@@ -866,18 +964,13 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             if (hasResult && ShouldRecoverEmptyLlmStep(stepState))
             {
                 _logger.LogWarning(
-                    "Agent run LLM step completed with no reply text, no tool calls and no outbound intent; retrying once with a final no-tools step: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+                    "Agent run LLM step completed with no reply text, no tool calls and no outbound intent; retrying once WITH tools on a trimmed history (keep user routing + channel-context): runId={RunId} correlation={CorrelationId} step={StepIndex}",
                     stepState.RunId,
                     stepState.CorrelationId,
                     command.StepIndex);
-                request.LlmControl = ResolveOwnerFallbackControl(stepState).ToPayload();
-                request.ToolContext = ResolveOwnerFallbackToolContext(stepState).ToPayload();
-                StripServerDefaultFallbackMetadata(request.Metadata);
-                stepState = await AdvanceToFinalNoToolsStepAsync(
+                stepState = await AdvanceToEmptyReplyRetryStepAsync(
                     stepState,
-                    BuildEmptyStepRecoveryNudge(),
-                    useOwnerFallbackRouting: true,
-                    trimHistoryToRecent: true);
+                    BuildEmptyStepRecoveryNudge());
                 await DispatchLlmStepExecutorAsync(request, stepState);
                 return;
             }
@@ -902,7 +995,15 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         if (stepState.PendingToolCalls.Count > 0)
         {
-            await DispatchToolStepExecutorAsync(request, stepState);
+            await PublishAsync(new AgentRunNextToolStepRequestedEvent
+            {
+                RunId = stepState.RunId,
+                CorrelationId = stepState.CorrelationId,
+                TargetActorId = stepState.TargetActorId,
+                Attempt = stepState.Attempt,
+                StepIndex = stepState.NextStepIndex,
+                Request = request.Clone(),
+            }, TopologyAudience.Self, CancellationToken.None);
             return;
         }
 
@@ -925,8 +1026,14 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         var request = command.Request?.Clone() ?? BuildStepRequest(command);
         ApplyTargetRefOverrides(request);
+        // The persisted owner-fallback control is token-less (credentials are stripped before commit).
+        // Capture the bot-owner token from the transient request's inbound LlmControl — it rode the
+        // self-message chain and is never persisted — before overwriting request.LlmControl, and
+        // re-supply it so the executor's uniform per-step credential re-supply uses the bot-owner
+        // token on the owner-fallback step.
+        var inboundControl = request.LlmControl;
         request.Activity = ClearRuntimeUserAccessToken(request.Activity);
-        request.LlmControl = ResolveOwnerFallbackControl(currentStep).ToPayload();
+        request.LlmControl = ReSupplyOwnerFallbackToken(ResolveOwnerFallbackControl(currentStep), inboundControl).ToPayload();
         request.ToolContext = ResolveOwnerFallbackToolContext(currentStep).ToPayload();
         StripServerDefaultFallbackMetadata(request.Metadata);
 
@@ -957,6 +1064,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
         else if (!IsCurrentStepRequest(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
         {
+            ClearAuthorizedToolStep(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex);
             return;
         }
 
@@ -965,6 +1073,12 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var stepState = State.GenerationStep;
         if (stepState is null)
             return;
+
+        if (!hasResult)
+        {
+            await DispatchToolStepExecutorAsync(request, stepState);
+            return;
+        }
 
         if (stepState.Round >= stepState.MaxToolRounds && !stepState.FinalNoToolsStep)
             stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
@@ -1019,6 +1133,21 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return next;
     }
 
+    private void ClearAuthorizedToolStep(string runId, string correlationId, int attempt, int stepIndex)
+    {
+        if (_authorizedToolStep is not { } authorizedToolStep)
+            return;
+        if (!string.Equals(authorizedToolStep.RunId, runId, StringComparison.Ordinal) ||
+            !string.Equals(authorizedToolStep.CorrelationId, correlationId, StringComparison.Ordinal) ||
+            authorizedToolStep.Attempt != attempt ||
+            authorizedToolStep.StepIndex != stepIndex)
+        {
+            return;
+        }
+
+        _authorizedToolStep = null;
+    }
+
     // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
     //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
     //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
@@ -1060,6 +1189,23 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             !string.Equals(message.Role, "assistant", StringComparison.Ordinal) &&
             !string.Equals(message.Role, "tool", StringComparison.Ordinal)));
         return next;
+    }
+
+    // ResolveOwnerFallbackControl now yields only server-default routing (the persisted
+    // OwnerFallbackLlmControl is token-less after the strip). Re-supply the bot-owner token from the
+    // transient request's inbound LlmControl so the owner-fallback step still authenticates as the
+    // bot owner; the executor picks this up through its per-step credential re-supply.
+    private static LLMControlContext ReSupplyOwnerFallbackToken(
+        LLMControlContext fallbackControl,
+        Aevatar.AI.Abstractions.LLMControlContextPayload? inboundControl)
+    {
+        if (inboundControl is null)
+            return fallbackControl;
+        return fallbackControl with
+        {
+            NyxIdAccessToken = NormalizeOptional(inboundControl.NyxIdAccessToken),
+            NyxIdOrgToken = NormalizeOptional(inboundControl.NyxIdOrgToken),
+        };
     }
 
     private static LLMControlContext ResolveOwnerFallbackControl(AgentRunReplyStepState stepState)
@@ -1107,6 +1253,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
         context.Routing.MaxToolRoundsOverride.HasValue ||
         !string.IsNullOrWhiteSpace(context.Routing.UserMemoryPrompt) ||
+        !string.IsNullOrWhiteSpace(context.SenderBinding.NyxUserId) ||
         !string.IsNullOrWhiteSpace(context.ConnectedServices.ContextJson) ||
         context.SkillRecovery != AgentSkillRecoveryContext.Empty ||
         context.ExternalMetadata.Count > 0;
@@ -1391,6 +1538,11 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (outbound is not null)
             produced.Outbound = outbound.Clone();
         produced.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
+        // Card delivery completion re-persists the produced payload after the initial
+        // AgentRunReplyProducedEvent (which carried the typed tool receipts) has already
+        // been committed. ApplyReplyProduced overwrites State.ToolReceipts from the event,
+        // so carry the committed receipts forward or this second event wipes them.
+        produced.ToolReceipts.AddRange(State.ToolReceipts.Select(receipt => receipt.Clone()));
 
         var deliveryProduced = BuildDeliveryProducedEvent(
             DeliveryKind.StreamingCard,
@@ -2247,7 +2399,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             DeliveryKind = kind,
             Target = BuildDeliveryTarget(activity, completion),
             Status = status,
-            LarkMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
+            ProviderMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
             CardId = NormalizeOptional(cardId) ?? string.Empty,
             RequestId = NormalizeOptional(completion.CommandId) ?? string.Empty,
             SourceEventId = NormalizeOptional(completion.CorrelationId) ?? string.Empty,
@@ -2266,16 +2418,16 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             Channel = conversation?.Channel?.Clone() ?? activity?.ChannelId?.Clone() ?? new ChannelId(),
             ConversationKey = conversation?.CanonicalKey ?? string.Empty,
             Platform = NormalizeOptional(extras?.NyxPlatform) ?? conversation?.Channel?.Value ?? activity?.ChannelId?.Value ?? string.Empty,
-            ReceiveId = NormalizeOptional(extras?.NyxLarkChatId) ??
+            AddressId = NormalizeOptional(extras?.NyxLarkChatId) ??
                         NormalizeOptional(extras?.NyxLarkUnionId) ??
                         string.Empty,
-            ReceiveIdType = ResolveReceiveIdType(extras),
+            AddressType = ResolveAddressType(extras),
             ConversationId = NormalizeOptional(extras?.NyxConversationId) ?? conversation?.CanonicalKey ?? string.Empty,
             ReplyMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
         };
     }
 
-    private static string ResolveReceiveIdType(TransportExtras? extras)
+    private static string ResolveAddressType(TransportExtras? extras)
     {
         if (!string.IsNullOrWhiteSpace(extras?.NyxLarkChatId))
             return "chat_id";
@@ -2318,7 +2470,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             DeliveryKind = produced.DeliveryKind,
             Status = produced.Status,
             Target = produced.Target?.Clone() ?? new DeliveryTarget(),
-            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            ProviderMessageId = produced.ProviderMessageId ?? string.Empty,
             CardId = produced.CardId ?? string.Empty,
             RequestId = produced.RequestId ?? string.Empty,
             SourceEventId = produced.SourceEventId ?? string.Empty,

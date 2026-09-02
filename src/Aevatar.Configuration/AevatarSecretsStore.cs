@@ -18,7 +18,7 @@ namespace Aevatar.Configuration;
 
 /// <summary>
 /// Secrets store that reads/writes ~/.aevatar/secrets.json.
-/// Supports both encrypted (AES-256-GCM) and plaintext JSON formats.
+/// Supports encrypted (AES-256-GCM) JSON and explicit local-development plaintext fallback.
 /// </summary>
 public sealed class AevatarSecretsStore : IAevatarSecretsStore
 {
@@ -30,12 +30,14 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
     private const string KeychainAccount = "aevatar-masterkey";
 
     private readonly string _filePath;
+    private readonly LocalSecretProtectionOptions _protectionOptions;
     private Dictionary<string, string> _secrets = new(StringComparer.OrdinalIgnoreCase);
 
-    public AevatarSecretsStore(string? filePath = null)
+    public AevatarSecretsStore(string? filePath = null) : this(filePath, LocalSecretProtectionOptions.FromEnvironment()) { }
+
+    public AevatarSecretsStore(string? filePath, LocalSecretProtectionOptions protectionOptions)
     {
-        _filePath = filePath ?? AevatarPaths.SecretsJson;
-        Load();
+        _filePath = filePath ?? AevatarPaths.SecretsJson; _protectionOptions = protectionOptions; Load();
     }
 
     // ─── Read ───
@@ -107,7 +109,7 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
         if (TryLoadEncrypted(json))
             return;
 
-        // Fallback: plaintext JSON
+        // Fallback: plaintext JSON, only when explicitly enabled for local development.
         TryLoadPlaintext(json);
     }
 
@@ -137,8 +139,7 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
         }
     }
 
-    private void TryLoadPlaintext(string json)
-    {
+    private void TryLoadPlaintext(string json) { _protectionOptions.ThrowIfPlaintextUnavailable();
         try
         {
             _secrets = JsonSerializer.Deserialize<Dictionary<string, string>>(json)
@@ -196,8 +197,7 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
         }
     }
 
-    private void SavePlaintext()
-    {
+    private void SavePlaintext() { _protectionOptions.ThrowIfPlaintextUnavailable();
         AevatarPaths.EnsureDirectories();
         var json = JsonSerializer.Serialize(_secrets, new JsonSerializerOptions { WriteIndented = true });
         WriteAtomically(json);
@@ -214,7 +214,14 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
 
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
         {
-            try { File.SetUnixFileMode(tempFile, UnixFileMode.UserRead | UnixFileMode.UserWrite); } catch { }
+            try
+            {
+                File.SetUnixFileMode(tempFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+            catch (Exception ex)
+            {
+                LogWarning(ex, "Unable to update permissions for the temporary secrets file; continuing.");
+            }
         }
 
         try
@@ -228,7 +235,10 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
                 if (File.Exists(tempFile))
                     File.Delete(tempFile);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LogWarning(ex, "Unable to clean up the temporary secrets file after an atomic write attempt; continuing.");
+            }
         }
     }
 
@@ -250,8 +260,9 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
             gcm.Decrypt(nonce, ciphertext, tag, plaintext, Encoding.UTF8.GetBytes(Aad));
             return plaintext;
         }
-        catch
+        catch (Exception ex)
         {
+            LogWarning(ex, "Unable to decrypt the encrypted secrets payload; returning no plaintext.");
             return null;
         }
     }
@@ -260,6 +271,11 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
 
     private byte[]? TryGetMasterKey()
     {
+        if (!_protectionOptions.UseLocalMasterKeySources)
+        {
+            return null;
+        }
+
         // Priority 1: macOS Keychain
         if (OperatingSystem.IsMacOS())
         {
@@ -297,7 +313,15 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
             p.Start();
             if (!p.WaitForExit(2000))
             {
-                try { p.Kill(entireProcessTree: true); } catch { }
+                try
+                {
+                    p.Kill(entireProcessTree: true);
+                }
+                catch (Exception ex)
+                {
+                    LogWarning(ex, "Unable to stop the timed-out macOS Keychain lookup process; returning no keychain key.");
+                }
+
                 return null;
             }
 
@@ -307,8 +331,9 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
             var bytes = Convert.FromBase64String(b64);
             return bytes.Length == KeyBytes ? bytes : null;
         }
-        catch
+        catch (Exception ex)
         {
+            LogWarning(ex, "Unable to resolve the macOS Keychain master key; returning no keychain key.");
             return null;
         }
     }
@@ -321,10 +346,17 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
             var bytes = File.ReadAllBytes(path);
             return bytes.Length == KeyBytes ? bytes : null;
         }
-        catch
+        catch (Exception ex)
         {
+            LogWarning(ex, "Unable to load the file-based master key; returning no master key.");
             return null;
         }
+    }
+
+    private static void LogWarning(Exception exception, string message)
+    {
+        Console.Error.WriteLine(
+            $"{nameof(AevatarSecretsStore)}: warning: {message} ExceptionType={exception.GetType().FullName}.");
     }
 
     // ─── Envelope model ───

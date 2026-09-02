@@ -18,15 +18,18 @@ public sealed class UnbindChannelSlashCommandHandler : IChannelSlashCommandHandl
     private readonly INyxIdCapabilityBroker _broker;
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly ILogger<UnbindChannelSlashCommandHandler> _logger;
+    private readonly INyxIdCatalogAccessLifecyclePort? _catalogLifecyclePort;
 
     public UnbindChannelSlashCommandHandler(
         INyxIdCapabilityBroker broker,
         IActorDispatchPort actorDispatchPort,
-        ILogger<UnbindChannelSlashCommandHandler> logger)
+        ILogger<UnbindChannelSlashCommandHandler> logger,
+        INyxIdCatalogAccessLifecyclePort? catalogLifecyclePort = null)
     {
         _broker = broker ?? throw new ArgumentNullException(nameof(broker));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _catalogLifecyclePort = catalogLifecyclePort;
     }
 
     public string Name => "unbind";
@@ -57,6 +60,9 @@ public sealed class UnbindChannelSlashCommandHandler : IChannelSlashCommandHandl
                 context.Subject.Platform, context.Subject.Tenant, context.Subject.ExternalUserId);
             return new MessageContent { Text = "解绑 NyxID 账号时遇到内部错误,请稍后重试 /unbind。" };
         }
+
+        if (_catalogLifecyclePort != null)
+            await _catalogLifecyclePort.InvalidateAsync(context.Subject, "user_unbind", ct).ConfigureAwait(false);
 
         // 2) Event-source local revoke so the projection flips to inactive
         //    independently of any subsequent NyxID CAE webhook. Retry once

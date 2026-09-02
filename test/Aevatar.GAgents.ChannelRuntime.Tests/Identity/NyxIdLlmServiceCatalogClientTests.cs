@@ -50,10 +50,13 @@ public sealed class NyxIdLlmServiceCatalogClientTests
         handler.Paths.Count(path => path == NyxIdLlmCatalogRoutes.UserKeysPath)
             .Should()
             .Be(2, "same-token calls should reuse the short-lived user-keys cache");
+        handler.Paths.Count(path => path == "/api/v1/user-services")
+            .Should()
+            .Be(3, "exact identity inventory must be fetched for every catalog read");
     }
 
     [Fact]
-    public async Task GetServicesAsync_ActiveUserKeyMakesUnconnectedProxyServiceSelectable()
+    public async Task GetServicesAsync_MintsIdentityOnlyFromUserServicesInventory()
     {
         var handler = new RecordingHandler();
         var nyxClient = new NyxIdApiClient(
@@ -81,14 +84,49 @@ public sealed class NyxIdLlmServiceCatalogClientTests
             .ContainSingle(service => service.ServiceSlug == "chrono-llm")
             .Subject;
         chrono.Allowed.Should().BeTrue(
-            "an active unified key is authoritative evidence the user can call this route, " +
-            "even when proxy/services still reports the legacy connections store as not connected");
+            "the active personal inventory record is eligible even when proxy/services " +
+            "still reports the legacy connections store as not connected");
         chrono.Status.Should().Be("ready");
         chrono.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
-        chrono.UserServiceId.Should().Be("key-chrono");
+        chrono.CatalogEntryId.Should().NotBe("us-chrono");
+        chrono.Identity.Should().Be(new UserLlmServiceIdentity(
+            UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+            "us-chrono"));
+        chrono.Identity!.NyxIdUserServiceId.Should().NotBe("key-chrono");
+        chrono.Identity.NyxIdUserServiceId.Should().NotBe("svc-chrono");
     }
 
-    private sealed class RecordingHandler : HttpMessageHandler
+    [Fact]
+    public async Task GetServicesAsync_WhenUserServicesResponseIsMalformed_ShouldRejectCatalog()
+    {
+        var handler = new RecordingHandler("""{"services":[{"id":"us-chrono","slug":"chrono-llm"}]}""");
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+        var memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
+        var client = new NyxIdLlmServiceCatalogClient(
+            nyxClient,
+            memoryCache,
+            NullLogger<NyxIdLlmServiceCatalogClient>.Instance);
+
+        var act = () => client.GetServicesAsync(Query(), "token-a", CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        handler.Paths.Should().Contain("/api/v1/user-services");
+    }
+
+    private static UserLlmOptionsQuery Query() => new(
+        new BindingId { Value = "bnd-1" },
+        new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "tenant",
+            ExternalUserId = "user",
+        },
+        RegistrationScopeId: "scope-1");
+
+    private sealed class RecordingHandler(string? userServicesResponse = null) : HttpMessageHandler
     {
         public List<string> Paths { get; } = [];
 
@@ -129,6 +167,22 @@ public sealed class NyxIdLlmServiceCatalogClientTests
                           "catalog_service_name": "Chrono LLM",
                           "service_type": "http",
                           "is_active": true
+                        }
+                      ]
+                    }
+                    """,
+                "/api/v1/user-services" => userServicesResponse ?? """
+                    {
+                      "services": [
+                        {
+                          "id": "us-chrono",
+                          "slug": "chrono-llm",
+                          "label": "Chrono LLM",
+                          "catalog_service_name": "Chrono LLM",
+                          "is_active": true,
+                          "credential_source": {
+                            "type": "personal"
+                          }
                         }
                       ]
                     }

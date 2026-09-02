@@ -149,6 +149,25 @@ public class CommandDispatchPipelineTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldCleanupTarget_WhenAdmissionIsRejected()
+    {
+        var target = new FakeCommandTarget("actor-1");
+        var pipeline = new DefaultCommandDispatchPipeline<string, FakeCommandTarget, string, FakeError>(
+            new RecordingResolver(target),
+            new DefaultCommandContextPolicy(),
+            new RecordingEnvelopeFactory(new EventEnvelope { Id = "evt-rejected" }),
+            new RejectedTargetDispatcher(),
+            new RecordingReceiptFactory("unused"));
+
+        var result = await pipeline.DispatchAsync("hello");
+
+        result.Succeeded.Should().BeTrue();
+        result.Target!.Admission.Should().NotBeNull();
+        result.Target.Admission!.Accepted.Should().BeFalse();
+        target.CleanupCalls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldHonorCommandContextSeed_WhenProvidedByCommand()
     {
         var target = new FakeCommandTarget("actor-1");
@@ -448,6 +467,23 @@ internal sealed class ThrowingTargetDispatcher : ICommandTargetDispatcher<FakeCo
         _ = envelope;
         ct.ThrowIfCancellationRequested();
         throw new InvalidOperationException("dispatch failed");
+    }
+}
+
+internal sealed class RejectedTargetDispatcher : ICommandTargetDispatcher<FakeCommandTarget>
+{
+    public Task<DispatchAdmission> DispatchAsync(
+        FakeCommandTarget target,
+        EventEnvelope envelope,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new DispatchAdmission(
+            false,
+            envelope.Id,
+            DateTimeOffset.UtcNow,
+            target.TargetId,
+            envelope.Propagation?.CorrelationId ?? envelope.Id));
     }
 }
 

@@ -17,7 +17,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
     private const string ModuleStateKey = "wait_signal";
     private const int DefaultSignalBufferRetentionMs = 600_000;
     private const int MaxSignalBufferRetentionMs = 3_600_000;
-    private const int MaxWaitSignalTimeoutMs = 5_400_000;
+    private const int MaxWaitSignalTimeoutMs = 86_400_000;
     private const int MaxWaitSignalTimeoutSeconds = MaxWaitSignalTimeoutMs / 1000;
 
     public string Name => "wait_signal";

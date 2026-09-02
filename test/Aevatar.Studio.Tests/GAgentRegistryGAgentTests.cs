@@ -250,14 +250,23 @@ public sealed class GAgentRegistryGAgentTests
         : IEventSourcingBehavior<GAgentRegistryState>
     {
         private readonly GAgentRegistryStateApplier _applier = new();
+        private readonly List<IMessage> _pending = [];
         public List<IMessage> RaisedEvents { get; } = [];
-        public long CurrentVersion => 0;
+        public long CurrentVersion { get; private set; }
 
-        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage =>
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage
+        {
             RaisedEvents.Add(evt);
+            _pending.Add(evt);
+        }
 
-        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default) =>
-            Task.FromResult(new EventStoreCommitResult());
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            var result = EventSourcingTestCommit.From(_pending, CurrentVersion);
+            CurrentVersion = result.LatestVersion;
+            _pending.Clear();
+            return Task.FromResult(result);
+        }
 
         public Task PersistSnapshotAsync(GAgentRegistryState currentState, CancellationToken ct = default) =>
             Task.CompletedTask;
@@ -265,8 +274,11 @@ public sealed class GAgentRegistryGAgentTests
         public Task<GAgentRegistryState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
             Task.FromResult<GAgentRegistryState?>(initialState.Clone());
 
-        public void DiscardPendingEvents() =>
+        public void DiscardPendingEvents()
+        {
             RaisedEvents.Clear();
+            _pending.Clear();
+        }
 
         public GAgentRegistryState TransitionState(GAgentRegistryState current, IMessage evt) =>
             _applier.Apply(current, evt);

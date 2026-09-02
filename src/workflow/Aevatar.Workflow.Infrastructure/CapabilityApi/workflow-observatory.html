@@ -1,0 +1,3014 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Workflow Run Observatory · 工作流运行观测台</title>
+<style>
+  /* =========================================================================
+     Workflow Run Observatory — 只读运行观测台
+     单文件、零外部依赖。深色为主，浅色全量支持。
+     所有颜色走 CSS 自定义属性（设计令牌），不散落硬编码。
+     ========================================================================= */
+
+  /* ---- Design tokens : 深色（主） --------------------------------------- */
+  :root {
+    --bg:        #0f1115;
+    --bg-grad:   radial-gradient(1200px 600px at 78% -10%, #161b26 0%, #0f1115 60%);
+    --panel:     #171a21;
+    --panel-2:   #1f232c;
+    --panel-3:   #252b36;
+    --border:    #2a2f3a;
+    --border-soft:#22272f;
+    --fg:        #e6e9ef;
+    --fg-strong: #f4f6fb;
+    --muted:     #9aa3b2;
+    --muted-2:   #6c7585;
+    --accent:    #5b8cff;
+    --accent-ink:#0b1020;
+    --accent-soft: rgba(91,140,255,.14);
+    --accent-line: rgba(91,140,255,.40);
+
+    --ok:    #3fb950;  --ok-soft:   rgba(63,185,80,.14);
+    --warn:  #d29922;  --warn-soft: rgba(210,153,34,.15);
+    --err:   #f85149;  --err-soft:  rgba(248,81,73,.14);
+    --run:   #58a6ff;  --run-soft:  rgba(88,166,255,.16);
+    --neutral:#9aa3b2; --neutral-soft: rgba(154,163,178,.12);
+
+    --shadow: 0 8px 30px rgba(0,0,0,.40);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.30);
+    --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+
+    --r-sm: 6px; --r: 9px; --r-lg: 13px; --r-pill: 999px;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC",
+            "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+
+    --list-w: 320px;
+    --topbar-h: 56px;
+    --workspacebar-h: 46px;
+    color-scheme: dark;
+  }
+
+  /* ---- Design tokens : 浅色 --------------------------------------------- */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) { --auto-light: 1; }
+  }
+  :root[data-theme="light"], :root:not([data-theme]):has(#noop) { }
+
+  /* light palette applied either by system pref (no manual theme) or manual toggle */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      --bg:        #f5f7fa;
+      --bg-grad:   radial-gradient(1100px 560px at 80% -12%, #eef2f8 0%, #f5f7fa 58%);
+      --panel:     #ffffff;
+      --panel-2:   #f3f5f9;
+      --panel-3:   #eaeef4;
+      --border:    #dde2ea;
+      --border-soft:#e7ebf1;
+      --fg:        #1c2128;
+      --fg-strong: #0b0f14;
+      --muted:     #57606b;
+      --muted-2:   #828b97;
+      --accent:    #2f63e0;
+      --accent-ink:#ffffff;
+      --accent-soft: rgba(47,99,224,.10);
+      --accent-line: rgba(47,99,224,.34);
+      --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12);
+      --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
+      --err:#cf222e; --err-soft:rgba(207,34,46,.10);
+      --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
+      --neutral:#57606b; --neutral-soft:rgba(87,96,107,.10);
+      --shadow: 0 10px 30px rgba(16,24,40,.10);
+      --shadow-sm: 0 1px 2px rgba(16,24,40,.06);
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:        #f5f7fa;
+    --bg-grad:   radial-gradient(1100px 560px at 80% -12%, #eef2f8 0%, #f5f7fa 58%);
+    --panel:     #ffffff;
+    --panel-2:   #f3f5f9;
+    --panel-3:   #eaeef4;
+    --border:    #dde2ea;
+    --border-soft:#e7ebf1;
+    --fg:        #1c2128;
+    --fg-strong: #0b0f14;
+    --muted:     #57606b;
+    --muted-2:   #828b97;
+    --accent:    #2f63e0;
+    --accent-ink:#ffffff;
+    --accent-soft: rgba(47,99,224,.10);
+    --accent-line: rgba(47,99,224,.34);
+    --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12);
+    --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
+    --err:#cf222e; --err-soft:rgba(207,34,46,.10);
+    --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
+    --neutral:#57606b; --neutral-soft:rgba(87,96,107,.10);
+    --shadow: 0 10px 30px rgba(16,24,40,.10);
+    --shadow-sm: 0 1px 2px rgba(16,24,40,.06);
+    color-scheme: light;
+  }
+
+  /* ---- Reset / base ----------------------------------------------------- */
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    background-image: var(--bg-grad);
+    background-attachment: fixed;
+    color: var(--fg);
+    font: 14px/1.55 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: var(--accent-soft); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--ring);
+    border-radius: var(--r-sm);
+  }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--panel-3); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+  .scroll::-webkit-scrollbar-track { background: transparent; }
+
+  /* ---- Status primitives ------------------------------------------------ */
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 0 3px transparent; }
+  .dot.s-running   { background: var(--run);  box-shadow: 0 0 0 0 var(--run); animation: pulse 2.4s ease-out infinite; }
+  .dot.s-completed { background: var(--ok); }
+  .dot.s-failed, .dot.s-timed_out { background: var(--err); }
+  .dot.s-stopped, .dot.s-disabled { background: var(--warn); }
+  .dot.s-unknown, .dot.s-not_found { background: var(--neutral); }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 var(--run-soft); }
+    70%  { box-shadow: 0 0 0 7px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 9px; border-radius: var(--r-pill);
+    font-size: 12px; font-weight: 600; letter-spacing: .01em;
+    border: 1px solid transparent; white-space: nowrap;
+  }
+  .badge .dot { width: 7px; height: 7px; }
+  .b-running   { color: var(--run);  background: var(--run-soft);  border-color: color-mix(in oklab, var(--run) 30%, transparent); }
+  .b-completed { color: var(--ok);   background: var(--ok-soft);   border-color: color-mix(in oklab, var(--ok) 30%, transparent); }
+  .b-failed, .b-timed_out { color: var(--err); background: var(--err-soft); border-color: color-mix(in oklab, var(--err) 30%, transparent); }
+  .b-stopped, .b-disabled { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in oklab, var(--warn) 30%, transparent); }
+  .b-unknown, .b-not_found { color: var(--muted); background: var(--neutral-soft); border-color: var(--border); }
+
+  /* =========================================================================
+     Top bar
+     ========================================================================= */
+  .topbar {
+    position: sticky; top: 0; z-index: 40;
+    height: var(--topbar-h);
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 16px;
+    background: color-mix(in oklab, var(--panel) 88%, transparent);
+    backdrop-filter: saturate(140%) blur(12px);
+    -webkit-backdrop-filter: saturate(140%) blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  /* Fixed-width brand region keeps the shared suite-nav's start position independent of the
+     active page title length, so the five entries don't shift when switching console pages.
+     The title text ellipsizes; the brand-mark and read-only pill stay pinned (flex:0 0 auto). */
+  .brand { display: flex; align-items: center; gap: 10px; flex: 0 0 268px; width: 268px; min-width: 0; overflow: hidden; }
+  .brand > div { min-width: 0; overflow: hidden; }
+  .brand-mark {
+    width: 26px; height: 26px; border-radius: 7px; flex: 0 0 auto;
+    background: linear-gradient(150deg, var(--accent), color-mix(in oklab, var(--accent) 55%, #7c4dff));
+    display: grid; place-items: center; color: #fff; box-shadow: var(--shadow-sm);
+  }
+  .brand-name { font-weight: 650; letter-spacing: -.01em; color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .brand-sub { color: var(--muted-2); font-size: 12px; white-space: nowrap; }
+  .pill-ro {
+    font-size: 11px; font-weight: 650; letter-spacing: .04em; flex: 0 0 auto;
+    padding: 2px 8px; border-radius: var(--r-pill);
+    color: var(--muted); background: var(--neutral-soft); border: 1px solid var(--border);
+    text-transform: uppercase;
+  }
+  .spacer { flex: 1 1 auto; }
+
+  /* ---- shared suite navigation (identical across the five console pages) -- */
+  .suite-nav { display:flex; align-items:center; gap:2px; overflow-x:auto; scrollbar-width:none; }
+  .suite-nav::-webkit-scrollbar { display:none; }
+  .suite-nav a { display:inline-flex; align-items:center; gap:6px; padding:6px 11px; border-radius:var(--r-pill); font-size:12.5px; font-weight:600; color:var(--muted); text-decoration:none; border:1px solid transparent; white-space:nowrap; transition:color .15s,background .15s,border-color .15s; }
+  .suite-nav a:hover { color:var(--fg); background:var(--panel-2); }
+  .suite-nav a[aria-current="page"] { color:var(--accent); background:var(--accent-soft); border-color:var(--accent-line); }
+  .suite-nav svg { width:14px; height:14px; flex:0 0 auto; }
+  @media (max-width:760px) { .suite-nav .nav-label { display:none; } .suite-nav a { padding:6px 8px; } }
+
+  .live {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 11px 5px 9px; border-radius: var(--r-pill);
+    background: var(--panel-2); border: 1px solid var(--border);
+    font-size: 12px; color: var(--muted);
+  }
+  .live .dot { width: 7px; height: 7px; background: var(--ok); }
+  .live.is-live .dot { background: var(--run); animation: pulse 2.4s ease-out infinite; }
+  .live .freshness { font-family: var(--mono); font-size: 11.5px; color: var(--fg); }
+  .live.is-polling { border-color: var(--accent-line); }
+
+  .iconbtn {
+    width: 34px; height: 34px; display: grid; place-items: center;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r);
+    color: var(--muted); transition: color .15s, border-color .15s, background .15s;
+  }
+  .iconbtn:hover { color: var(--fg); border-color: var(--muted-2); }
+
+  .account {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 4px 6px 4px 4px; border-radius: var(--r-pill);
+    background: var(--panel-2); border: 1px solid var(--border);
+  }
+  .avatar {
+    width: 24px; height: 24px; border-radius: 50%; flex: 0 0 auto;
+    background: linear-gradient(140deg, #6f9bff, #9b6bff); color: #fff;
+    display: grid; place-items: center; font-size: 12px; font-weight: 700;
+  }
+  .account .who { font-size: 12.5px; color: var(--fg); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .linkbtn {
+    background: transparent; border: 0; color: var(--accent); font-size: 12.5px; font-weight: 600;
+    padding: 4px 6px; border-radius: var(--r-sm);
+  }
+  .linkbtn:hover { text-decoration: underline; }
+  .workspacebar {
+    display:flex; align-items:center; gap:10px; height:var(--workspacebar-h); padding:7px 16px;
+    border-bottom:1px solid var(--border); background:var(--panel);
+  }
+  .workspace-context { min-width:0; display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12.5px; }
+  .workspace-context b { max-width:min(48vw,620px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-strong); font-weight:650; }
+  .workspace-actions { margin-left:auto; display:flex; align-items:center; gap:7px; }
+  .workspace-action {
+    min-height:32px; display:inline-flex; align-items:center; gap:6px; padding:0 10px;
+    border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2); color:var(--fg);
+    font-size:12px; font-weight:600;
+  }
+  .workspace-action:hover { border-color:var(--muted-2); background:var(--panel-3); }
+  .workspace-action:disabled { opacity:.55; cursor:not-allowed; }
+  .admin-tools { position:relative; }
+  .admin-tools > summary { list-style:none; }
+  .admin-tools > summary::-webkit-details-marker { display:none; }
+  .admin-tools[open] > summary { border-color:var(--accent-line); color:var(--accent); }
+  .admin-tools-panel {
+    position:absolute; z-index:20; top:38px; right:0; width:min(680px,calc(100vw - 24px));
+    border:1px solid var(--border); border-radius:var(--r); background:var(--panel); box-shadow:var(--shadow);
+  }
+  .admin-tools-panel .adminbar { border:0; border-radius:inherit; }
+
+  /* =========================================================================
+     Admin cross-scope bar (06-20-observatory-admin-cross-scope)
+     ========================================================================= */
+  .adminbar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  .adminbar .ab-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: var(--r-pill);
+    /* high-contrast solid accent chip with white ink — must read clearly at a glance */
+    color: #fff; background: var(--accent);
+    border: 1px solid color-mix(in oklab, var(--accent) 60%, #000);
+    box-shadow: 0 1px 0 rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.18);
+  }
+  .adminbar .ab-badge svg { width: 12px; height: 12px; }
+  .adminbar .ab-view { font-size: 12.5px; color: var(--muted); }
+  .adminbar .ab-view b { color: var(--fg-strong); font-family: var(--mono); font-weight: 600; }
+  .adminbar input.ab-input {
+    font: inherit; font-size: 12.5px; padding: 5px 9px; min-width: 180px; flex: 0 1 280px;
+    border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--panel-2); color: var(--fg);
+  }
+  .adminbar input.ab-input:focus { outline: none; border-color: var(--accent); }
+  .adminbar .ab-msg { font-size: 12px; color: var(--err); }
+  .adminbar .ab-cands { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+  .adminbar .ab-hint { flex-basis: 100%; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+  body.observatory-immersive { --topbar-h:0px; }
+  body.observatory-immersive .topbar,
+  body.observatory-immersive .list-pane,
+  body.observatory-immersive .admin-tools { display:none !important; }
+  body.observatory-immersive .shell { grid-template-columns:1fr; }
+  body.observatory-immersive .detail-inner { max-width:1400px; }
+
+  /* =========================================================================
+     Run-list filter bar (06-23-observatory-run-coverage-filter)
+     状态 / 来源 / 更新时间窗，下推到 list 查询；与 scope 维度可组合。
+     Collapsible: a compact toggle header is always visible; the controls expand
+     below it. Collapsed by default so the run list isn't pushed down.
+     ========================================================================= */
+  .filterwrap { border-bottom: 1px solid var(--border-soft); background: var(--panel); }
+
+  /* toggle header — keyboard-accessible button, aria-expanded */
+  .fb-toggle {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    padding: 9px 16px; background: transparent; border: 0; color: var(--muted);
+    font-size: 12px; font-weight: 650; letter-spacing: .03em;
+    transition: color .12s, background .12s;
+  }
+  .fb-toggle:hover { color: var(--fg); background: var(--panel-2); }
+  .fb-toggle .fb-tchevron { color: var(--muted-2); transition: transform .18s ease; flex: 0 0 auto; display: inline-grid; place-items: center; }
+  .fb-toggle[aria-expanded="true"] .fb-tchevron { transform: rotate(90deg); }
+  .fb-toggle .fb-ticon { color: var(--muted-2); display: inline-grid; place-items: center; flex: 0 0 auto; }
+  .fb-toggle .fb-tlabel { color: var(--fg); }
+  .fb-toggle .fb-tspacer { flex: 1 1 auto; }
+  /* active-filter count badge shown on the header while collapsed */
+  .fb-tcount {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px;
+    padding: 0 5px; border-radius: var(--r-pill); font-size: 11px; font-weight: 700;
+    color: #fff; background: var(--accent); border: 1px solid color-mix(in oklab, var(--accent) 60%, #000);
+  }
+  .fb-tclear {
+    display: inline-flex; align-items: center; background: transparent; border: 0;
+    color: var(--accent); font-size: 12px; font-weight: 600; padding: 2px 4px; border-radius: var(--r-sm);
+  }
+  .fb-tclear:hover { text-decoration: underline; }
+
+  /* active schedule deep-link filter chip (06-24): arrives via the /schedules deep-link, no select */
+  .sched-filter {
+    display: inline-flex; align-items: center; gap: 7px; margin: 0 16px 10px;
+    max-width: calc(100% - 32px);
+    padding: 5px 7px 5px 10px; border-radius: var(--r-pill); font-size: 12px;
+    color: var(--run); background: var(--run-soft);
+    border: 1px solid color-mix(in oklab, var(--run) 32%, transparent);
+  }
+  .sched-filter .sf-ic { display: inline-flex; flex: 0 0 auto; opacity: .85; }
+  .sched-filter .sf-lab { flex: 0 0 auto; font-weight: 650; white-space: nowrap; }
+  .sched-filter .sf-id { flex: 0 1 auto; min-width: 0; font-family: var(--mono); color: var(--fg); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sched-filter .sf-x {
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 18px; height: 18px;
+    padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; opacity: .7;
+  }
+  .sched-filter .sf-x:hover { opacity: 1; background: color-mix(in oklab, var(--run) 18%, transparent); }
+
+  /* the controls panel — compact horizontal flex-wrap; hidden when collapsed */
+  .filterbar {
+    display: flex; align-items: flex-end; gap: 8px 10px; flex-wrap: wrap;
+    padding: 4px 16px 12px;
+  }
+  .filterbar[hidden] { display: none; }
+  .filterbar .fb-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .filterbar .fb-label {
+    font-size: 10px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--muted-2);
+  }
+  .filterbar .fb-select, .filterbar .fb-date {
+    font: inherit; font-size: 12px; padding: 5px 8px; color: var(--fg);
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  }
+  .filterbar .fb-select { min-width: 104px; }
+  /* compact date inputs so they don't dominate the narrow pane */
+  .filterbar .fb-date { width: 138px; min-width: 0; font-variant-numeric: tabular-nums; }
+  .filterbar .fb-select:focus, .filterbar .fb-date:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .filterbar .fb-reset {
+    background: transparent; border: 0; color: var(--accent); font-size: 12px; font-weight: 600;
+    padding: 6px 6px; border-radius: var(--r-sm); align-self: flex-end;
+  }
+  .filterbar .fb-reset:hover { text-decoration: underline; }
+  .filterbar .fb-spacer { flex: 1 1 auto; }
+
+  /* run-origin pill on each list row (legacy/empty origin renders no pill) */
+  .run-row .rm .rm-origin {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .02em; line-height: 1;
+    padding: 2px 7px; border-radius: var(--r-pill);
+    color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
+  }
+
+  /* =========================================================================
+     Error banner (role=alert)
+     ========================================================================= */
+  .banner {
+    display: flex; align-items: center; gap: 10px;
+    margin: 10px 16px 0; padding: 10px 12px;
+    background: var(--err-soft); border: 1px solid color-mix(in oklab, var(--err) 36%, transparent);
+    border-radius: var(--r); color: var(--fg);
+    font-size: 13px;
+  }
+  .banner svg { color: var(--err); flex: 0 0 auto; }
+  .banner .b-title { font-weight: 650; color: var(--err); }
+  .banner .b-msg { color: var(--muted); }
+
+  /* =========================================================================
+     Workspace shell (master / detail)
+     ========================================================================= */
+  .shell {
+    display: grid;
+    grid-template-columns: var(--list-w) 1fr;
+    height: calc(100dvh - var(--topbar-h) - var(--workspacebar-h));
+    min-height: 0;
+  }
+  .shell.has-banner { height: auto; min-height: calc(100dvh - var(--topbar-h) - var(--workspacebar-h)); }
+
+  /* ---- Runs list -------------------------------------------------------- */
+  .list-pane {
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0;
+    background: color-mix(in oklab, var(--panel) 40%, transparent);
+  }
+  .list-head { padding: 14px 16px 11px; border-bottom: 1px solid var(--border-soft); }
+  .list-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .list-title { font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+  .list-title .lt-ic { color: var(--muted-2); display: inline-grid; place-items: center; }
+  /* count rendered as a small pill so the header reads as an intentional unit */
+  .list-count {
+    font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--muted);
+    padding: 2px 9px; border-radius: var(--r-pill); background: var(--panel-2); border: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  .filters { display: flex; gap: 6px; margin-top: 11px; flex-wrap: wrap; }
+  .chip {
+    padding: 4px 10px; border-radius: var(--r-pill); font-size: 12px; font-weight: 550;
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    transition: color .12s, background .12s, border-color .12s;
+  }
+  .chip:hover { color: var(--fg); border-color: var(--muted-2); }
+  .chip[aria-pressed="true"] { color: var(--fg-strong); background: var(--panel-3); border-color: var(--muted-2); }
+
+  .runlist { overflow-y: auto; flex: 1 1 auto; padding: 8px; min-height: 0; }
+  .run-row {
+    display: grid; grid-template-columns: auto 1fr; gap: 2px 11px;
+    align-items: start; width: 100%; text-align: left;
+    padding: 11px 12px; border-radius: var(--r); border: 1px solid transparent;
+    background: transparent; color: inherit; margin-bottom: 2px;
+    transition: background .12s, border-color .12s;
+  }
+  .run-row:hover { background: var(--panel-2); }
+  .run-row .dot { margin-top: 5px; grid-row: span 2; }
+  .run-row .rn { font-weight: 640; color: var(--fg-strong); letter-spacing: -.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-row .rm { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .run-row .rm .id { font-family: var(--mono); font-size: 11.5px; color: var(--muted-2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-row .rm .sep { color: var(--border); }
+  .run-row .rm .rm-status { font-weight: 600; color: var(--muted); }
+  .run-row .rm .rm-status.s-running { color: var(--run); }
+  .run-row .rm .rm-status.s-completed { color: var(--ok); }
+  .run-row .rm .rm-status.s-failed, .run-row .rm .rm-status.s-timed_out { color: var(--err); }
+  .run-row .rm .rm-status.s-stopped, .run-row .rm .rm-status.s-disabled { color: var(--warn); }
+  .run-row[aria-current="true"] {
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .run-row[aria-current="true"] .rn { color: var(--fg-strong); }
+
+  /* skeleton */
+  .sk { background: linear-gradient(100deg, var(--panel-2) 30%, var(--panel-3) 50%, var(--panel-2) 70%); background-size: 200% 100%; animation: shimmer 1.3s linear infinite; border-radius: 5px; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  .sk-row { padding: 13px 12px; display: grid; grid-template-columns: auto 1fr; gap: 8px 11px; }
+  .sk-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; }
+  .sk-line { height: 10px; }
+
+  .empty {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; text-align: center; color: var(--muted); padding: 48px 24px; height: 100%;
+  }
+  .empty .ic { width: 40px; height: 40px; color: var(--muted-2); opacity: .8; }
+  .empty .et { font-weight: 600; color: var(--fg); }
+  .empty .es { font-size: 12.5px; max-width: 220px; }
+
+  /* =========================================================================
+     Run detail
+     ========================================================================= */
+  .detail-pane { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; }
+  .detail-inner { max-width: 980px; width: 100%; margin: 0 auto; padding: 22px 26px 64px; flex: 1 1 auto; }
+
+  .backbar { display: none; }
+
+  .run-header { display: flex; flex-direction: column; gap: 13px; }
+  .rh-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .rh-title { font-size: 21px; font-weight: 700; letter-spacing: -.02em; color: var(--fg-strong); display: flex; align-items: center; gap: 10px; margin: 0; }
+  .rh-title .dot { width: 11px; height: 11px; }
+  .rh-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; }
+  .rh-meta .k { color: var(--muted-2); }
+  .rh-meta .v { font-family: var(--mono); color: var(--fg); }
+  .rh-meta .grp { display: inline-flex; gap: 6px; align-items: baseline; }
+  .rh-meta .rid-grp { align-items: center; }
+
+  /* run id, broken into color-coded semantic chips (scope / 定义 / 运行) for legibility */
+  .rid { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .rid-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 2px 9px; border-radius: var(--r-pill); border: 1px solid transparent; font-size: 11.5px;
+  }
+  .rid-chip .rid-lab { font-weight: 650; letter-spacing: .02em; }
+  .rid-chip .rid-val { font-family: var(--mono); color: var(--fg); font-variant-numeric: tabular-nums; }
+  /* dimmed short scope id shown beside a resolved nyxid display name (admin scope-name resolution) */
+  .muted-id { color: var(--muted-2); font-family: var(--mono); font-size: .92em; font-variant-numeric: tabular-nums; }
+  .rid-chip.def   { color: #a78bfa;    background: rgba(167,139,250,.13); border-color: color-mix(in oklab, #a78bfa 32%, transparent); }
+  .rid-chip.run   { color: var(--run); background: var(--run-soft);       border-color: color-mix(in oklab, var(--run) 32%, transparent); }
+  .rid-chip.scope { color: var(--muted); background: var(--neutral-soft); border-color: var(--border); }
+  .rid-chip.plain { color: var(--muted-2); background: var(--panel-2); border-color: var(--border); }
+  .rid-copy {
+    display: inline-grid; place-items: center; width: 24px; height: 22px; flex: 0 0 auto;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--muted);
+  }
+  .rid-copy:hover { color: var(--fg); border-color: var(--muted-2); }
+  .rid-copy.done { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 40%, transparent); }
+
+  .usage-strip {
+    display: flex; gap: 0; flex-wrap: wrap;
+    border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden;
+    background: var(--panel);
+  }
+  .usage-cell { flex: 1 1 auto; min-width: 110px; padding: 12px 16px; border-right: 1px solid var(--border-soft); }
+  .usage-cell:last-child { border-right: 0; }
+  .usage-cell .ul { font-size: 11px; color: var(--muted-2); letter-spacing: .04em; text-transform: uppercase; }
+  .usage-cell .uv { font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--fg-strong); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .usage-cell .uv .unit { font-size: 11px; color: var(--muted); font-weight: 500; margin-left: 2px; }
+  .usage-cell.accent .uv { color: var(--accent); }
+
+  .diagnostic-strip {
+    margin-top: 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel);
+    overflow: hidden;
+  }
+  .diagnostic-strip.has-error { border-color: color-mix(in oklab, var(--err) 42%, var(--border)); background: var(--err-soft); }
+  .diag-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 11px 14px; border-bottom: 1px solid var(--border-soft); }
+  .diag-title { font-weight: 700; color: var(--fg-strong); }
+  .diag-sub { font-size: 12px; color: var(--muted); }
+  .diag-body { padding: 11px 14px; display: grid; gap: 9px; }
+  .diag-item { display: grid; gap: 5px; padding: 10px 11px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: color-mix(in oklab, var(--panel) 86%, transparent); }
+  .diag-item.error { border-color: color-mix(in oklab, var(--err) 34%, var(--border)); }
+  .diag-item.warning { border-color: color-mix(in oklab, var(--warn) 34%, var(--border)); }
+  .diag-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted-2); font-family: var(--mono); }
+  .diag-code { font-weight: 700; color: var(--fg); }
+  .diag-msg { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+  .diag-hint { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+  .diag-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+  .issue-pre {
+    margin: 0; padding: 12px 13px; max-height: 300px; overflow: auto;
+    background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+    font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--fg);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .narrative { display:grid; gap:9px; margin-top:12px; }
+  .narrative details { border:1px solid var(--border); border-radius:var(--r); background:var(--panel); overflow:hidden; }
+  .narrative summary { cursor:pointer; padding:10px 13px; color:var(--fg); font-weight:650; }
+  .narrative .issue-pre { margin:0; border-width:1px 0 0; border-radius:0; }
+  .cross-links { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .step-list { display:grid; gap:9px; }
+  .step-card { display:grid; gap:7px; padding:12px 14px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel); }
+  .step-card > .mono, .step-card small { color:var(--muted); font-size:11.5px; }
+  .approval-panel { margin-top:14px; padding:14px; border:1px solid color-mix(in oklab,var(--warn) 45%,var(--border)); border-radius:var(--r); background:var(--warn-soft); }
+  .approval-head, .approval-actions { display:flex; align-items:center; flex-wrap:wrap; gap:9px; }
+  .approval-head span { margin-left:auto; color:var(--muted); font-size:12px; }
+  .approval-content { max-height:260px; margin:10px 0; padding:10px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg); white-space:pre-wrap; word-break:break-word; }
+  .approval-feedback { width:100%; margin:10px 0; padding:9px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--panel); color:var(--fg); }
+  .approval-error { margin-top:8px; color:var(--err); }
+  .approval-actions .btn-primary { width:auto; padding:7px 12px; }
+
+  /* ---- Tabs ------------------------------------------------------------- */
+  .tabs { display: inline-flex; gap: 3px; padding: 3px; margin: 20px 0 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill); }
+  .tab {
+    padding: 6px 16px; border-radius: var(--r-pill); border: 0; background: transparent;
+    color: var(--muted); font-size: 13px; font-weight: 600; transition: color .15s, background .15s;
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .tab:hover { color: var(--fg); }
+  .tab[aria-selected="true"] { background: var(--panel); color: var(--fg-strong); box-shadow: var(--shadow-sm); }
+  .tabpanel { margin-top: 18px; }
+  .tabpanel[hidden] { display: none; }
+
+  /* =========================================================================
+     Timeline — the centerpiece
+     ========================================================================= */
+  .timeline { position: relative; padding-left: 0; }
+  .tl-rail-note { font-size: 11.5px; color: var(--muted-2); margin: 0 0 12px 2px; }
+
+  .ev {
+    position: relative;
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 14px;
+    padding: 0 0 4px;
+  }
+  .ev .gutter { position: relative; display: flex; justify-content: flex-end; padding-top: 2px; }
+  .ev .ts { font-family: var(--mono); font-size: 11.5px; color: var(--muted-2); white-space: nowrap; }
+  .ev .node-rail { position: relative; padding-left: 22px; padding-bottom: 16px; }
+  /* connecting line */
+  .ev .node-rail::before {
+    content: ""; position: absolute; left: 5px; top: 2px; bottom: -2px; width: 2px;
+    background: var(--border);
+  }
+  .ev:last-child .node-rail::before { bottom: auto; height: 18px; }
+  .ev .marker {
+    position: absolute; left: 0; top: 2px; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--panel); border: 2px solid var(--neutral); z-index: 1;
+  }
+  .ev.k-RunStarted .marker, .ev.k-RunFinished .marker { border-color: var(--ok); background: var(--ok-soft); }
+  .ev.k-RunError .marker, .ev.k-RunStopped .marker { border-color: var(--err); background: var(--err-soft); }
+  .ev.k-RunStopped .marker { border-color: var(--warn); background: var(--warn-soft); }
+  .ev.k-ToolCall .marker { border-color: var(--accent); background: var(--accent-soft); }
+  .ev.k-HumanInputRequest .marker { border-color: var(--warn); background: var(--warn-soft); }
+  .ev.k-TextMessage .marker, .ev.k-Message .marker { border-color: var(--run); background: var(--run-soft); }
+  .ev.k-StepStarted .marker, .ev.k-StepFinished .marker { border-color: var(--muted-2); }
+
+  .ev-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-height: 18px; }
+  .kind {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 650; padding: 2px 9px; border-radius: var(--r-pill);
+    border: 1px solid transparent; letter-spacing: .005em;
+  }
+  .kind svg { width: 13px; height: 13px; }
+  .k-RunStarted .kind, .k-RunFinished .kind { color: var(--ok); background: var(--ok-soft); border-color: color-mix(in oklab, var(--ok) 28%, transparent); }
+  .k-RunError .kind { color: var(--err); background: var(--err-soft); border-color: color-mix(in oklab, var(--err) 38%, transparent); }
+  .k-RunStopped .kind { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in oklab, var(--warn) 32%, transparent); }
+  .k-StepStarted .kind, .k-StepFinished .kind { color: var(--muted); background: var(--neutral-soft); border-color: var(--border); }
+  .k-TextMessage .kind, .k-Message .kind { color: var(--run); background: var(--run-soft); border-color: color-mix(in oklab, var(--run) 28%, transparent); }
+  .k-ToolCall .kind { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+  .k-HumanInputRequest .kind { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in oklab, var(--warn) 38%, transparent); }
+
+  .stepbadge {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    padding: 1px 7px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--border);
+  }
+  .stepbadge .st { color: var(--muted-2); }
+  .agentbadge {
+    font-size: 11px; color: var(--muted); padding: 1px 7px; border-radius: 5px;
+    background: var(--neutral-soft); border: 1px solid var(--border-soft);
+  }
+  .ev-msg { color: var(--fg); font-size: 13.5px; margin-top: 5px; }
+  .ev-cost { margin-top: 5px; }
+  .costchip { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .costchip b { color: var(--fg); font-weight: 600; }
+
+  /* TextMessage bubble */
+  .bubble {
+    margin-top: 7px; padding: 11px 14px; border-radius: 4px 12px 12px 12px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-left: 2px solid var(--run);
+    color: var(--fg); font-size: 13.5px; line-height: 1.6; max-width: 62ch;
+  }
+
+  /* ---- Assistant / role reply — the real LLM response, beautified ---- */
+  .reply {
+    margin-top: 8px; max-width: 74ch;
+    border: 1px solid var(--border); border-radius: 4px 12px 12px 12px;
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--run) 5%, var(--panel)) 0%, var(--panel) 40%);
+    border-left: 2px solid var(--run);
+    overflow: hidden;
+  }
+  .reply-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-bottom: 1px solid var(--border-soft);
+  }
+  .reply-avatar {
+    width: 22px; height: 22px; border-radius: 50%; flex: 0 0 auto;
+    display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff;
+    background: linear-gradient(140deg, var(--run), color-mix(in oklab, var(--run) 55%, #a78bfa));
+  }
+  .reply-role { font-size: 12.5px; font-weight: 650; color: var(--fg-strong); letter-spacing: -.005em; }
+  .reply-tag { font-size: 11px; color: var(--muted-2); font-weight: 600; letter-spacing: .03em; }
+  .reply-head .reply-spacer { flex: 1 1 auto; }
+  .reply-body {
+    padding: 11px 14px; color: var(--fg); font-size: 13.5px; line-height: 1.62;
+    white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+  }
+  /* clamp long responses; the toggle removes the clamp */
+  .reply-body.clamp {
+    display: -webkit-box; -webkit-line-clamp: 10; line-clamp: 10; -webkit-box-orient: vertical;
+    overflow: hidden; position: relative;
+  }
+  .reply-body.clamp::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 38px;
+    background: linear-gradient(180deg, transparent, var(--panel));
+  }
+  .reply-more {
+    display: inline-flex; align-items: center; gap: 5px; margin: 0 14px 11px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill);
+    color: var(--muted); font-size: 11.5px; font-weight: 600; padding: 3px 11px;
+  }
+  .reply-more:hover { color: var(--fg); border-color: var(--muted-2); }
+  .reply-empty { padding: 9px 14px; color: var(--muted-2); font-size: 12.5px; font-style: italic; }
+
+  /* ---- Data detail chips (model / token usage) + collapsible raw bag ---- */
+  .datachips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; align-items: center; }
+  .dchip {
+    display: inline-flex; align-items: center; gap: 5px; line-height: 1;
+    font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: var(--r-pill);
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+    white-space: nowrap;
+  }
+  .dchip .dk { color: var(--muted-2); font-weight: 600; }
+  .dchip .dv { color: var(--fg); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .dchip.model { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+  .dchip.model .dv { color: var(--accent); }
+  .dchip.tok-total .dv { color: var(--fg-strong); }
+  /* collapsible "详情" for the non-whitelisted keys */
+  .datamore { margin-top: 7px; }
+  .datamore > summary {
+    list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 600; color: var(--muted);
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 3px 11px;
+  }
+  .datamore > summary::-webkit-details-marker { display: none; }
+  .datamore > summary:hover { color: var(--fg); border-color: var(--muted-2); }
+  .datamore[open] > summary { border-color: var(--muted-2); color: var(--fg); }
+  .datamore .dm-chevron { transition: transform .18s ease; display: inline-grid; place-items: center; }
+  .datamore[open] .dm-chevron { transform: rotate(90deg); }
+  .datatable {
+    margin-top: 8px; display: grid; grid-template-columns: auto 1fr; gap: 4px 14px;
+    padding: 10px 12px; background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+    font-size: 12px; max-height: 240px; overflow: auto;
+  }
+  .datatable .dt-k { color: var(--muted-2); font-family: var(--mono); word-break: break-word; }
+  .datatable .dt-v { color: var(--fg); font-family: var(--mono); word-break: break-word; white-space: pre-wrap; }
+
+  /* HumanInputRequest highlight */
+  .needs-attn {
+    margin-top: 7px; padding: 12px 14px; border-radius: var(--r);
+    background: var(--warn-soft); border: 1px solid color-mix(in oklab, var(--warn) 40%, transparent);
+    display: flex; gap: 11px; align-items: flex-start;
+  }
+  .needs-attn svg { color: var(--warn); flex: 0 0 auto; margin-top: 1px; }
+  .needs-attn .na-l { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--warn); }
+  .needs-attn .na-m { color: var(--fg); font-size: 13.5px; margin-top: 2px; }
+  .needs-attn .na-ro { font-size: 11.5px; color: var(--muted); margin-top: 6px; display: inline-flex; align-items: center; gap: 5px; }
+
+  /* ToolCall block */
+  .toolcall { margin-top: 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--panel); overflow: hidden; max-width: 100%; }
+  .tc-head {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    padding: 10px 12px; background: var(--panel); border: 0; color: inherit;
+  }
+  .tc-head:hover { background: var(--panel-2); }
+  .tc-chevron { color: var(--muted); transition: transform .18s ease; flex: 0 0 auto; }
+  .toolcall[data-open="true"] .tc-chevron { transform: rotate(90deg); }
+  .tc-name { font-family: var(--mono); font-size: 13px; color: var(--fg-strong); font-weight: 600; }
+  .tc-callid { font-family: var(--mono); font-size: 11px; color: var(--muted-2); }
+  .tc-status { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; }
+  .tc-status.ok { color: var(--ok); }
+  .tc-status.bad { color: var(--err); }
+  .tc-body { display: grid; gap: 12px; padding: 0 12px 12px; }
+  .toolcall[data-open="false"] .tc-body { display: none; }
+  .tc-field { }
+  .tc-field-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+  .tc-field-label { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted-2); font-weight: 600; }
+  .copybtn {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted);
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 2px 8px;
+  }
+  .copybtn:hover { color: var(--fg); border-color: var(--muted-2); }
+  .copybtn.done { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 40%, transparent); }
+  pre.json {
+    margin: 0; padding: 11px 12px; max-height: 220px; overflow: auto;
+    background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+    font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--fg);
+    white-space: pre; tab-size: 2;
+  }
+  .tc-error { color: var(--err); font-family: var(--mono); font-size: 12px; }
+  /* json syntax tint */
+  .j-key { color: var(--accent); } .j-str { color: var(--ok); } .j-num { color: var(--warn); } .j-bool { color: var(--run); } .j-null { color: var(--muted); }
+  :root[data-theme="light"] .j-str { color:#0a7b34; } :root[data-theme="light"] .j-key { color:#2f63e0; }
+
+  /* newly arrived event highlight */
+  @keyframes arrive { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
+  .ev.is-new .node-rail > .ev-body { animation: arrive 2.2s ease-out 1; border-radius: var(--r); }
+
+  /* tail (running) live cue */
+  .tl-tail { display: flex; align-items: center; gap: 9px; margin: 4px 0 0 154px; color: var(--muted); font-size: 12px; }
+  .tl-tail .dot { width: 7px; height: 7px; background: var(--run); animation: pulse 2.4s ease-out infinite; }
+
+  /* =========================================================================
+     Graph (DAG)
+     ========================================================================= */
+  .graph-wrap {
+    border: 1px solid var(--border); border-radius: var(--r-lg);
+    background:
+      linear-gradient(0deg, transparent 0, transparent 23px, var(--border-soft) 23px, var(--border-soft) 24px),
+      linear-gradient(90deg, transparent 0, transparent 23px, var(--border-soft) 23px, var(--border-soft) 24px);
+    background-size: 24px 24px; background-color: var(--panel);
+    overflow: hidden; position: relative; height: 480px; max-height: 70dvh;
+    touch-action: none; user-select: none; cursor: grab;
+  }
+  .graph-wrap.is-panning { cursor: grabbing; }
+  .graph-viewport { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
+  .graph-canvas { position: relative; }
+  .graph-canvas svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+
+  /* zoom / fit controls (overlay) */
+  .graph-controls {
+    position: absolute; top: 10px; right: 10px; z-index: 7;
+    display: flex; flex-direction: column; gap: 4px; padding: 4px;
+    background: color-mix(in oklab, var(--panel) 86%, transparent);
+    border: 1px solid var(--border); border-radius: var(--r);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  .graph-controls button {
+    width: 30px; height: 30px; display: grid; place-items: center;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--muted);
+  }
+  .graph-controls button:hover { color: var(--fg); border-color: var(--muted-2); }
+  .graph-zoom-label { text-align: center; font-family: var(--mono); font-size: 10px; color: var(--muted-2); }
+
+  .gnode {
+    position: absolute; width: 244px; box-sizing: border-box; text-align: left;
+    background: var(--panel-2); border: 1.5px solid var(--border); border-radius: var(--r);
+    padding: 12px 14px; box-shadow: var(--shadow-sm); cursor: pointer; color: inherit; font: inherit;
+    transition: border-color .12s, box-shadow .12s, transform .12s;
+  }
+  .gnode:hover { border-color: var(--muted-2); transform: translateY(-1px); }
+  .gnode .gn-top { display: flex; align-items: center; gap: 10px; }
+  .gnode .gn-ic { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--panel-3); color: var(--muted); flex: 0 0 auto; }
+  .gnode .gn-main { min-width: 0; flex: 1 1 auto; }
+  .gnode .gn-id { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gnode .gn-type { font-family: var(--mono); font-size: 11px; color: var(--muted-2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gnode .gn-foot { margin-top: 11px; display: flex; align-items: center; gap: 6px; font-size: 11px; }
+  /* category tint on the icon chip only — status border/color stays authoritative */
+  .gnode[data-cat="data"]        .gn-ic { color: var(--run);  background: var(--run-soft); }
+  .gnode[data-cat="control"]     .gn-ic { color: #a78bfa; background: rgba(167,139,250,.16); }
+  .gnode[data-cat="ai"]          .gn-ic { color: #f472b6; background: rgba(244,114,182,.16); }
+  .gnode[data-cat="composition"] .gn-ic { color: var(--warn); background: var(--warn-soft); }
+  .gnode[data-cat="integration"] .gn-ic { color: var(--ok);  background: var(--ok-soft); }
+  .gnode[data-cat="human"]       .gn-ic { color: #22d3ee; background: rgba(34,211,238,.16); }
+  .gnode.st-done   { border-color: color-mix(in oklab, var(--ok) 45%, var(--border)); }
+  .gnode.st-done .gn-ic { color: var(--ok); background: var(--ok-soft); }
+  .gnode.st-current{ border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .gnode.st-current .gn-ic { color: var(--accent); background: var(--accent-soft); }
+  .gnode.st-failed { border-color: color-mix(in oklab, var(--err) 50%, var(--border)); }
+  .gnode.st-failed .gn-ic { color: var(--err); background: var(--err-soft); }
+  .gnode.st-stopped{ border-color: color-mix(in oklab, var(--warn) 50%, var(--border)); }
+  .gnode.st-stopped .gn-ic { color: var(--warn); background: var(--warn-soft); }
+  .gnode.st-pending{ opacity: .72; border-style: dashed; }
+  .gnode.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow); }
+  .gn-state { font-size: 11px; font-weight: 600; }
+  .gnode.st-done .gn-state { color: var(--ok); } .gnode.st-current .gn-state { color: var(--accent); }
+  .gnode.st-failed .gn-state { color: var(--err); } .gnode.st-stopped .gn-state { color: var(--warn); }
+  .gnode.st-pending .gn-state { color: var(--muted-2); }
+  .edge-label {
+    position: absolute; transform: translate(-50%,-50%);
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-pill);
+    padding: 1px 7px; white-space: nowrap;
+  }
+  .edge-label.flow { color: var(--accent); border-color: var(--accent-line); font-weight: 600; }
+
+  /* node detail drawer (right on desktop, bottom sheet on mobile) */
+  .gnode-detail {
+    position: absolute; top: 8px; right: 8px; bottom: 8px; width: 324px; max-width: calc(100% - 16px);
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--r);
+    box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; z-index: 8;
+  }
+  .gnode-detail .nd-head { display: flex; align-items: center; gap: 9px; padding: 12px; border-bottom: 1px solid var(--border-soft); }
+  .gnode-detail .nd-ic { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; background: var(--panel-3); color: var(--muted); flex: 0 0 auto; }
+  .gnode-detail .nd-id { font-family: var(--mono); font-size: 13px; font-weight: 650; color: var(--fg-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+  .gnode-detail .nd-close { width: 26px; height: 26px; flex: 0 0 auto; display: grid; place-items: center; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--muted); }
+  .gnode-detail .nd-close:hover { color: var(--fg); border-color: var(--muted-2); }
+  .gnode-detail .nd-body { overflow-y: auto; padding: 12px; display: grid; gap: 13px; }
+  .nd-meta { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; font-size: 12.5px; align-items: baseline; }
+  .nd-meta .k { color: var(--muted-2); }
+  .nd-meta .v { color: var(--fg); font-family: var(--mono); word-break: break-word; }
+  .nd-sec-title { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted-2); font-weight: 600; margin-bottom: 6px; }
+  .nd-ev { padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--panel-2); margin-bottom: 6px; }
+  .nd-ev-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .nd-ev-ts { font-family: var(--mono); font-size: 11px; color: var(--muted-2); margin-left: auto; }
+  .nd-ev-msg { font-size: 12.5px; color: var(--fg); margin-top: 5px; line-height: 1.5; }
+  .nd-ev-msg.err { color: var(--err); font-weight: 600; }
+  .nd-empty { color: var(--muted); font-size: 12.5px; text-align: center; padding: 18px 8px; }
+  .graph-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; font-size: 12px; color: var(--muted); }
+  .graph-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+  .graph-legend .sw { width: 11px; height: 11px; border-radius: 3px; border: 1.5px solid var(--border); }
+  .graph-legend .sw.done { border-color: var(--ok); background: var(--ok-soft); }
+  .graph-legend .sw.current { border-color: var(--accent); background: var(--accent-soft); }
+  .graph-legend .sw.failed { border-color: var(--err); background: var(--err-soft); }
+  .graph-legend .sw.stopped { border-color: var(--warn); background: var(--warn-soft); }
+  .graph-legend .sw.pending { border-style: dashed; }
+
+  /* detail placeholder / not-found */
+  .detail-empty {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 12px; text-align: center; color: var(--muted); flex: 1 1 auto; padding: 40px;
+  }
+  .detail-empty .ic { width: 46px; height: 46px; color: var(--muted-2); opacity: .7; }
+  .detail-empty .dt { font-size: 16px; font-weight: 650; color: var(--fg); }
+  .detail-empty .ds { font-size: 13px; max-width: 320px; }
+  .detail-empty.nf .ic { color: var(--err); opacity: .9; }
+
+  .detail-sk { padding: 24px 26px; max-width: 980px; margin: 0 auto; width: 100%; display: grid; gap: 18px; }
+
+  /* =========================================================================
+     Login screen
+     ========================================================================= */
+  .login {
+    min-height: calc(100dvh - var(--topbar-h));
+    display: grid; place-items: center; padding: 24px;
+  }
+  .login-card {
+    width: min(420px, 100%); background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--r-lg); padding: 32px 30px; box-shadow: var(--shadow); text-align: center;
+  }
+  .login-mark {
+    width: 52px; height: 52px; border-radius: 14px; margin: 0 auto 18px;
+    background: linear-gradient(150deg, var(--accent), color-mix(in oklab, var(--accent) 55%, #7c4dff));
+    display: grid; place-items: center; color: #fff; box-shadow: var(--shadow);
+  }
+  .login h1 { font-size: 19px; font-weight: 700; letter-spacing: -.01em; color: var(--fg-strong); margin: 0 0 8px; }
+  .login p { color: var(--muted); font-size: 13.5px; margin: 0 auto 22px; max-width: 30ch; }
+  .btn-primary {
+    width: 100%; padding: 11px 16px; border-radius: var(--r); border: 1px solid transparent;
+    background: var(--accent); color: var(--accent-ink); font-weight: 650; font-size: 14px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    transition: filter .15s;
+  }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .login-foot { margin-top: 16px; font-size: 11.5px; color: var(--muted-2); display: inline-flex; align-items: center; gap: 6px; }
+
+
+  /* =========================================================================
+     Responsive — collapse to single column ≤ 760px
+     ========================================================================= */
+  @media (max-width: 760px) {
+    .shell { grid-template-columns: 1fr; }
+    .list-pane { border-right: 0; }
+    .brand-sub { display: none; }
+    .account .who { max-width: 92px; }
+    /* topbar: stop secondary pills from being squeezed into ugly vertical char-wrap
+       (e.g. "已暂停"/"切换账户" stacking one glyph per line); let the brand truncate instead. */
+    .topbar { gap: 8px; }
+    .brand-name { overflow: hidden; text-overflow: ellipsis; }
+    .workspacebar { padding:7px 10px; }
+    .workspace-context span { display:none; }
+    .workspace-action span { display:none; }
+    .workspace-action { width:34px; padding:0; justify-content:center; }
+    /* release the fixed brand width on narrow screens so the nav reclaims the space */
+    .brand { flex: 1 1 auto; width: auto; } .brand, .brand > div { min-width: 0; }
+    .pill-ro, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
+    .live, .linkbtn, .pill-ro { white-space: nowrap; }
+    .live .freshness { display: none; }
+    /* mobile master-detail: one region visible at a time */
+    body[data-mobile-view="list"] .detail-pane { display: none; }
+    body[data-mobile-view="detail"] .list-pane { display: none; }
+    body[data-mobile-view="detail"] .backbar { display: flex; }
+    .backbar {
+      align-items: center; gap: 8px; padding: 10px 14px;
+      border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5;
+      background: color-mix(in oklab, var(--panel) 92%, transparent); backdrop-filter: blur(8px);
+    }
+    .backbar button { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0; color: var(--accent); font-weight: 600; font-size: 13px; }
+    .detail-inner { padding: 16px 16px 56px; }
+    .ev { grid-template-columns: 1fr; gap: 0; }
+    .ev .gutter { justify-content: flex-start; padding: 0 0 4px 22px; }
+    .tl-tail { margin-left: 22px; }
+    .usage-strip { flex-direction: column; }
+    .usage-cell { border-right: 0; border-bottom: 1px solid var(--border-soft); }
+    .usage-cell:last-child { border-bottom: 0; }
+    .graph-wrap { height: 62dvh; }
+    /* node detail becomes a bottom sheet */
+    .gnode-detail { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none; max-height: 64%; }
+  }
+  @media (min-width: 761px) { .backbar { display: none !important; } }
+
+  /* phone: drop the most secondary topbar chrome (read-only pill, live indicator, account email)
+     so brand + theme + account/sign-out fit on one clean row without squeezing. */
+  @media (max-width: 520px) {
+    .topbar { gap: 6px; padding: 0 12px; }
+    .pill-ro, .live { display: none; }
+    .account .who { display: none; }
+  }
+
+  /* reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    .dot.s-running, .live.is-live .dot, .tl-tail .dot { animation: none; box-shadow: 0 0 0 3px var(--run-soft); }
+  }
+</style>
+</head>
+<body data-mobile-view="list">
+
+  <!-- ===================== App root ===================== -->
+  <div id="app" aria-busy="false"></div>
+
+
+<script>
+/* ===========================================================================
+   Data + auth layer (production wiring).
+   Browser OIDC Authorization Code + PKCE against nyxid (reuse of the console-web
+   client; no server-side cookie/session, no NyxID change). All data flows through
+   scope-gated bearer APIs; the page itself is the anonymous static shell.
+   A small client cache backs the synchronous render contract (DataSource.*):
+     listRuns(status) <- GET /api/workflow/observatory/runs
+     getRun(runId)    <- GET /api/workflow/observatory/runs/{runId}; admin drilldown uses /admin/runs/{runId}
+     getGraph(runId)  <- GET /api/workflow/observatory/runs/{runId}/graph; admin drilldown uses /admin/runs/{runId}/graph
+   Read-only: there are no edit/run/stop calls anywhere.
+   =========================================================================== */
+const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
+const CFG = {
+  authority: BACKEND_CONSOLE_CONFIG.authority || "",
+  // nyxid REST API (different origin than this app; CORS-enabled, allows the Authorization header).
+  // Used admin-only to resolve a run's scopeId (≈ nyxid user id) to that user's display name.
+  nyxidApi: BACKEND_CONSOLE_CONFIG.nyxidApi || "",
+  clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
+  scope: BACKEND_CONSOLE_CONFIG.scope || "",
+  resources: Array.isArray(BACKEND_CONSOLE_CONFIG.resources) ? BACKEND_CONSOLE_CONFIG.resources : [],
+  redirectUri: location.origin + "/auto/callback",
+  storageKey: BACKEND_CONSOLE_CONFIG.storageKey || "",
+  pollMs: 3000
+};
+const TOKEN_KEY = CFG.storageKey + ":token";
+const PKCE_KEY  = CFG.storageKey + ":pkce";
+const OBSERVATORY_VIEW_KEY = CFG.storageKey + ":observatory:view";
+const OBSERVATORY_IMMERSIVE_KEY = CFG.storageKey + ":observatory:immersive";
+
+function b64url(buf){ return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+async function sha256(text){ return b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))); }
+function randomString(len){ const a=new Uint8Array(len); crypto.getRandomValues(a); return b64url(a.buffer).slice(0, len); }
+
+function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return null; try { return JSON.parse(raw); } catch(e){ console.warn("observatory: token parse failed", e); } return null; }
+function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
+function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
+function notifyAdminShellAuth(type, reason){
+  if(!isEmbeddedInAdmin()) return false;
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  return true;
+}
+function navigateAdminShell(module, query){
+  const message={source:"aevatar-backend-console-suite",type:"navigate",module,query:query||{}};
+  if(isEmbeddedInAdmin()){ window.parent.postMessage(message,location.origin); return; }
+  const p=new URLSearchParams(); Object.entries(query||{}).forEach(([key,value])=>{if(value)p.set(key,value);});
+  location.assign("/admin#/"+module+(p.toString()?"?"+p:""));
+}
+
+async function beginLogin(){
+  if(notifyAdminShellAuth("login-request")) return;
+  const verifier = randomString(64);
+  const st = randomString(32);
+  const challenge = await sha256(verifier);
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st, returnTo: location.pathname + location.search }));
+  const u = new URL(CFG.authority + "/oauth/authorize");
+  u.searchParams.set("response_type", "code");
+  u.searchParams.set("client_id", CFG.clientId);
+  u.searchParams.set("redirect_uri", CFG.redirectUri);
+  u.searchParams.set("scope", CFG.scope);
+  CFG.resources.forEach(resource => u.searchParams.append("resource", resource));
+  u.searchParams.set("state", st);
+  u.searchParams.set("code_challenge", challenge);
+  u.searchParams.set("code_challenge_method", "S256");
+  location.assign(u.toString());
+}
+
+async function completeLoginIfCallback(){
+  const params = new URLSearchParams(location.search);
+  const code = params.get("code");
+  if(!code) return false;
+  const returnedState = params.get("state");
+  const pending = JSON.parse(sessionStorage.getItem(PKCE_KEY) || "null");
+  history.replaceState({}, "", (pending && pending.returnTo) || "/workflow/observatory");
+  if(!pending || pending.state !== returnedState){ console.warn("observatory: login state mismatch"); return false; }
+  const form = new URLSearchParams();
+  form.set("grant_type", "authorization_code");
+  form.set("code", code);
+  form.set("redirect_uri", CFG.redirectUri);
+  form.set("client_id", CFG.clientId);
+  form.set("code_verifier", pending.verifier);
+  CFG.resources.forEach(resource => form.append("resource", resource));
+  const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
+  sessionStorage.removeItem(PKCE_KEY);
+  if(!res.ok){ console.warn("observatory: token exchange failed", res.status); return false; }
+  const token = await res.json();
+  token.obtained_at = Date.now();
+  setToken(token);
+  return true;
+}
+
+async function fetchUserInfo(){
+  const token = getToken(); if(!token) return null;
+  try { const res = await fetch(CFG.authority + "/oauth/userinfo", { headers:{ Authorization:"Bearer " + token.access_token } }); return res.ok ? await res.json() : null; }
+  catch(e){ console.warn("observatory: userinfo fetch failed", e); }
+  return null;
+}
+function toAccount(info){ return info ? { label: info.email || info.preferred_username || info.sub || "已登录" } : null; }
+
+async function apiRequest(path, options){
+  const token = getToken(); if(!token) throw new Error("not-authenticated");
+  options = options || {};
+  const headers = Object.assign({}, options.headers || {}, { Authorization:"Bearer " + token.access_token });
+  const res = await fetch(path, Object.assign({}, options, { headers }));
+  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
+  if(res.status === 404) return null;
+  if(!res.ok){
+    let reason = "api-error-" + res.status;
+    try { const body = await res.json(); reason = body.message || body.error || body.code || reason; } catch(e){}
+    throw new Error(reason);
+  }
+  if(res.status === 204) return null;
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+async function api(path){ return apiRequest(path); }
+
+/* client cache backing the synchronous render contract */
+const cache = { account:null, runs:[], details:{}, graphs:{} };
+const DataSource = {
+  now: () => new Date().toISOString(),
+  getAccount: () => cache.account || { label:"已登录" },
+  // Filtering (status/origin/time) is pushed to the server query via listQueryParams; the cache already
+  // holds the filtered set, so the list reads it as-is (no second client-side status pass).
+  listRuns: () => cache.runs.slice(),
+  getRun: (runId) => cache.details[runId] || null,
+  getGraph: (runId) => cache.graphs[runId] || null
+};
+
+/* 06-20-observatory-admin-cross-scope: cross-scope admin view state (drives the admin bar + API scope params). */
+const ALL_SCOPES = "__all__";
+const adminState = { isAdmin:false, role:"", email:"", ownScope:"", currentScope:null, inputDraft:"", runIdDraft:"", candidates:null, message:"" };
+function runScopeParam(runId){
+  if(!adminState.isAdmin) return "";
+  const run = cache.runs.find(r => r.runId === runId);
+  const scope = run ? run.scopeId : ((adminState.currentScope && adminState.currentScope !== ALL_SCOPES) ? adminState.currentScope : "");
+  return (scope && scope !== adminState.ownScope) ? "?scope=" + encodeURIComponent(scope) : "";
+}
+function runDetailRequestPath(runId, admin, runs, graph){
+  const run=(runs||[]).find(item=>item.runId===runId);
+  const suffix=graph?"/graph":"";
+  if(admin.isAdmin&&(admin.currentScope==="__all__"||(!admin.currentScope&&!run))) return "/api/workflow/observatory/admin/runs/"+encodeURIComponent(runId)+suffix;
+  const scope=run?run.scopeId:((admin.currentScope&&admin.currentScope!=="__all__")?admin.currentScope:"");
+  const query=(scope&&scope!==admin.ownScope)?"?scope="+encodeURIComponent(scope):"";
+  return "/api/workflow/observatory/runs/"+encodeURIComponent(runId)+suffix+query;
+}
+function runGraphRequestPath(runId, admin, runs){ return runDetailRequestPath(runId,admin,runs,true); }
+
+/* ---------------------------------------------------------------------------
+   nyxid user directory (admin-only): resolve a run's scopeId (≈ nyxid user id)
+   to that user's display name. The directory endpoint is admin-gated, so we only
+   ever fetch it when /me reported isAdmin; non-admins see no names (just their own
+   scope). Searching by a UUID does NOT match server-side, so we page through the
+   full user list once and build an id -> display_name map, cached for the session
+   (refreshable on re-init). Plain fetch — different origin than this app, so the
+   same-origin api() helper (and its bearer/redirect handling) doesn't apply. */
+const nyxidDirectory = { byId: new Map(), loaded: false, loading: false };
+async function loadNyxidDirectory(force){
+  if(!adminState.isAdmin) return;
+  if(nyxidDirectory.loading) return;
+  if(nyxidDirectory.loaded && !force) return;
+  const token = getToken(); if(!token) return;
+  nyxidDirectory.loading = true;
+  try {
+    const map = new Map();
+    const perPage = 50;
+    // cap the page walk so a directory-size change can't loop unbounded; ~123 users today.
+    for(let page = 1; page <= 50; page++){
+      const url = CFG.nyxidApi + "/api/v1/admin/users?search=&per_page=" + perPage + "&page=" + page;
+      const res = await fetch(url, { headers:{ Authorization:"Bearer " + token.access_token } });
+      if(!res.ok) break; // 401/403 (not admin / token expired) or transient — keep whatever we have
+      const body = await res.json();
+      const users = (body && body.users) || [];
+      for(const u of users){ if(u && u.id) map.set(String(u.id), u.display_name || ""); }
+      const total = body && typeof body.total === "number" ? body.total : null;
+      if(users.length < perPage) break;                 // last (short) page
+      if(total != null && page * perPage >= total) break; // reached the reported total
+    }
+    nyxidDirectory.byId = map;
+    nyxidDirectory.loaded = true;
+  } catch(e){ console.warn("observatory: nyxid directory fetch failed", e); }
+  finally { nyxidDirectory.loading = false; }
+}
+/* display name for a scopeId, or "" when admin gating is off / id unknown / name blank.
+   Never fabricates — falls back to "" so callers keep showing the short id. */
+function scopeDisplayName(scopeId){
+  if(!adminState.isAdmin || !scopeId) return "";
+  const name = nyxidDirectory.byId.get(String(scopeId));
+  return name || "";
+}
+
+/* 06-23-observatory-run-coverage-filter: list-only filter dimensions pushed to the runs query
+   (status / run-origin / updated-at window). scope stays the admin cross-scope axis above.
+   Canonical strong sets so the UI never invents a status/origin the backend doesn't honor. */
+const STATUS_OPTIONS = [
+  ["", "全部状态"], ["running","运行中"], ["completed","已完成"],
+  ["failed","失败"], ["timed_out","已超时"], ["stopped","已停止"]
+];
+const ORIGIN_OPTIONS = [
+  ["", "全部来源"],
+  ["draft","草稿运行"], ["member-invoke","成员调用"], ["default-invoke","默认调用"],
+  ["team-invoke","团队调用"], ["service-invoke","服务调用"], ["ad-hoc-chat","即席对话"], ["provisioned","计划调度"]
+];
+const ORIGIN_LABEL = Object.fromEntries(ORIGIN_OPTIONS.map(([v,l]) => [v,l]));
+const STATUS_VALUES = new Set(STATUS_OPTIONS.map(o => o[0]));
+const ORIGIN_VALUES = new Set(ORIGIN_OPTIONS.map(o => o[0]));
+function readObservatoryRoute(search, hash){
+  const query = new URLSearchParams(String(search || "").replace(/^\?/, ""));
+  const legacyScope = /(?:^#|&)scope=([^&]+)/.exec(hash || "");
+  const statusValues = new Set(["running","completed","failed","timed_out","stopped"]);
+  const tabValues = new Set(["timeline","steps","diagnostics","logs","artifacts","graph"]);
+  const status = (query.get("status") || "").trim();
+  const tab = (query.get("tab") || "").trim();
+  return {
+    scope: (query.get("scope") || (legacyScope ? decodeURIComponent(legacyScope[1]) : "mine")).trim() || "mine",
+    status: statusValues.has(status) ? status : "",
+    origin: (query.get("origin") || "").trim(),
+    definition: (query.get("definition") || "").trim(),
+    schedule: (query.get("schedule") || "").trim(),
+    from: (query.get("from") || "").trim(),
+    to: (query.get("to") || "").trim(),
+    run: (query.get("run") || "").trim(),
+    tab: tabValues.has(tab) ? tab : "timeline"
+  };
+}
+function writeObservatoryRoute(patch){
+  const previous=readObservatoryRoute(location.search,location.hash);
+  const route = Object.assign(readObservatoryRoute(location.search, location.hash), patch || {});
+  if(previous.tab!==route.tab) pendingDetailScrollReset=true;
+  const query = new URLSearchParams();
+  ["scope","status","origin","definition","schedule","from","to","run","tab"].forEach(key => {
+    const value = route[key];
+    if(value && !(key === "scope" && value === "mine") && !(key === "tab" && value === "timeline")) query.set(key, value);
+  });
+  history.replaceState(null, "", location.pathname + (query.toString() ? "?" + query : ""));
+  if(isEmbeddedInAdmin()) window.parent.postMessage({source:"aevatar-backend-console-suite",type:"observatory-route",query:route},location.origin);
+  return route;
+}
+function observatoryRouteKey(route){
+  const r=route||{};
+  return ["scope","status","origin","definition","schedule","from","to","run","tab"]
+    .map(key=>key+"="+encodeURIComponent(r[key]||"")).join("&");
+}
+function readObservatoryViewState(storage,key,route){
+  try {
+    const all=JSON.parse(storage.getItem(key)||"{}");
+    const value=all[observatoryRouteKey(route)]||{};
+    return {list:Math.max(0,Number(value.list)||0),detail:Math.max(0,Number(value.detail)||0)};
+  } catch(e){ return {list:0,detail:0}; }
+}
+function writeObservatoryViewState(storage,key,route,position){
+  try {
+    let all={};
+    try { all=JSON.parse(storage.getItem(key)||"{}")||{}; } catch(e){}
+    const keys=Object.keys(all);
+    if(keys.length>40) keys.slice(0,keys.length-40).forEach(existing=>delete all[existing]);
+    all[observatoryRouteKey(route)]={list:Math.max(0,Number(position&&position.list)||0),detail:Math.max(0,Number(position&&position.detail)||0)};
+    storage.setItem(key,JSON.stringify(all));
+  } catch(e){}
+}
+function paneScrollPosition(pane,saved){
+  const fallback=Math.max(0,Number(saved)||0);
+  if(!pane) return fallback;
+  const live=Math.max(0,Number(pane.scrollTop)||0);
+  return live===0&&Number(pane.scrollHeight)<=Number(pane.clientHeight)?fallback:live;
+}
+function applyPaneScrollState(list,detail,position){
+  if(list) list.scrollTop=Math.max(0,Number(position&&position.list)||0);
+  if(detail) detail.scrollTop=Math.max(0,Number(position&&position.detail)||0);
+}
+const initialRoute = readObservatoryRoute(location.search, location.hash);
+/* list filters seeded from the URL query so a shared/bookmarked link reopens the same view; only
+   canonical status/origin values are accepted (anything else falls back to "all") so the select and
+   the outgoing query never disagree. */
+const filterState = (function(){
+  const pick = (value, allowed) => allowed.has(value) ? value : "";
+  const timestamp = value => value && !isNaN(Date.parse(value)) ? value : "";
+  // panel open/closed survives re-renders (and bookmarks via ?filters=1); collapsed by default.
+  const open = new URLSearchParams(location.search).get("filters") === "1";
+  // schedule is a deep-link-only filter (opaque scheduleId, no <select>); empty = not filtered.
+  return { status: pick(initialRoute.status, STATUS_VALUES), origin: initialRoute.origin, definition: initialRoute.definition, schedule: initialRoute.schedule, from: timestamp(initialRoute.from), to: timestamp(initialRoute.to), open };
+})();
+function originLabel(o){ return o ? (ORIGIN_LABEL[o] || o) : ""; }
+/* compose the runs LIST query: exact deep-link instants remain exact; native date input changes are
+   normalized before reaching this function. */
+function listQueryParams(){
+  const p = new URLSearchParams();
+  if(adminState.isAdmin && adminState.currentScope) p.set("scope", adminState.currentScope);
+  if(filterState.status) p.set("status", filterState.status);
+  if(filterState.origin) p.set("origin", filterState.origin);
+  if(filterState.definition) p.set("definition", filterState.definition);
+  if(filterState.schedule) p.set("schedule", filterState.schedule);
+  if(filterState.from) p.set("from", filterState.from);
+  if(filterState.to) p.set("to", filterState.to);
+  const s = p.toString();
+  return s ? "?" + s : "";
+}
+function hasActiveFilters(){ return !!(filterState.status || filterState.origin || filterState.definition || filterState.schedule || filterState.from || filterState.to); }
+/* count of active filter dimensions — drives the collapsed-header badge. */
+function activeFilterCount(){ return (filterState.status?1:0) + (filterState.origin?1:0) + (filterState.definition?1:0) + (filterState.schedule?1:0) + (filterState.from?1:0) + (filterState.to?1:0); }
+/* persist the filter-panel open state into the URL (best-effort) so it survives reload/bookmarks
+   without disturbing the existing scope hash or other query params. */
+function persistFilterOpen(){
+  try {
+    const u = new URL(location.href);
+    if(filterState.open) u.searchParams.set("filters", "1"); else u.searchParams.delete("filters");
+    history.replaceState(null, "", u.pathname + (u.search || "") + (location.hash || ""));
+  } catch(e){ /* URL persistence is best-effort */ }
+}
+/* toggle the panel in place: flip aria-expanded + show/hide the controls without a full re-render,
+   so focus stays on the toggle and the run list doesn't reflow. */
+function toggleFilterPanel(){
+  filterState.open = !filterState.open;
+  persistFilterOpen();
+  const tgl = document.getElementById("fbToggle");
+  const panel = document.getElementById("filterPanel");
+  const badge = document.getElementById("fbToggleCount");
+  if(tgl) tgl.setAttribute("aria-expanded", String(filterState.open));
+  if(panel) panel.hidden = !filterState.open;
+  if(badge) badge.hidden = filterState.open || !hasActiveFilters();
+}
+/* apply a single filter change: reset list scroll (existing convention), drop the stale run cache so
+   the server-filtered set replaces it cleanly, and re-fetch + re-render. */
+function applyFilterChange(){
+  pendingListScrollReset = true;
+  state.selectedRunId = null;
+  cache.runs = []; cache.details = {}; cache.graphs = {};
+  lastRunsSig = "";
+  state.scenario = "listLoading";
+  writeObservatoryRoute({ status:filterState.status, origin:filterState.origin, definition:filterState.definition, schedule:filterState.schedule, from:filterState.from, to:filterState.to, run:"" });
+  render();
+  (async () => { await refreshRuns(); lastRunsSig = runsSig(cache.runs); render(); })();
+}
+function clearSession(){
+  cache.account=null; cache.runs=[]; cache.details={}; cache.graphs={};
+  adminState.isAdmin=false; adminState.role=""; adminState.email=""; adminState.ownScope="";
+  adminState.currentScope=null; adminState.inputDraft=""; adminState.runIdDraft=""; adminState.candidates=null; adminState.message="";
+}
+function signOut(){ clearToken(); clearSession(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
+function signOutSilent(){ clearToken(); clearSession(); state.signedIn=false; state.scenario="login"; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
+
+/* The API graph carries only nodes/edges; per-node status is reconstructed from the
+   committed timeline (never invented) so the DAG can show real progress honestly. */
+function deriveNodeStatus(graph, detail){
+  const status = {};
+  if(!graph || !graph.nodes) return status;
+  const events = (detail && detail.timeline) || [];
+  const started=new Set(), finished=new Set(), failedStep=new Set(), stoppedStep=new Set();
+  for(const e of events){
+    if(!e.stepId) continue;
+    if(e.kind === "StepStarted" || e.kind === "HumanInputRequest") started.add(e.stepId);
+    else if(e.kind === "StepFinished") finished.add(e.stepId);
+    else if(e.kind === "RunError") failedStep.add(e.stepId);
+    else if(e.kind === "RunStopped") stoppedStep.add(e.stepId);
+  }
+  const runStatus = (detail && detail.summary && detail.summary.status) || "";
+  const running = runStatus === "running";
+  const runFailed = runStatus === "failed" || runStatus === "timed_out";
+  const runStopped = runStatus === "stopped";
+  // run / actor topology nodes carry no stepId — they reflect the overall run state.
+  const topologyStatus = running ? "current"
+    : runStatus === "completed" ? "done"
+    : runFailed ? "failed"
+    : runStopped ? "stopped" : "pending";
+  for(const nd of graph.nodes){
+    // Graph node ids are composite (step:{actor}:{cmd}:{stepId}); match WorkflowStep nodes by the bare
+    // stepId the API now surfaces — NOT the node id, which never equals the timeline's bare stepId.
+    const sid = nd.stepId;
+    if(!sid){ status[nd.nodeId] = topologyStatus; continue; }
+    if(failedStep.has(sid)) status[nd.nodeId] = "failed";
+    else if(stoppedStep.has(sid)) status[nd.nodeId] = "stopped";
+    else if(finished.has(sid)) status[nd.nodeId] = "done";
+    else if(started.has(sid)) status[nd.nodeId] = running ? "current" : (runFailed ? "failed" : runStopped ? "stopped" : "done");
+    else status[nd.nodeId] = "pending";
+  }
+  return status;
+}
+
+/* ===========================================================================
+   工具函数
+   =========================================================================== */
+const $ = (sel, root=document) => root.querySelector(sel);
+const el = (tag, attrs={}, html) => { const n=document.createElement(tag); for(const k in attrs){ if(k==="class")n.className=attrs[k]; else if(k.startsWith("on")&&typeof attrs[k]==="function")n.addEventListener(k.slice(2),attrs[k]); else if(attrs[k]!=null)n.setAttribute(k,attrs[k]); } if(html!=null)n.innerHTML=html; return n; };
+const esc = (s) => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function copyText(value){
+  try { await navigator.clipboard.writeText(value || ""); }
+  catch(e){
+    const ta=document.createElement("textarea"); ta.value=value||""; document.body.appendChild(ta); ta.select();
+    try{document.execCommand("copy");}catch(_){ }
+    ta.remove();
+  }
+}
+
+const STATUS_LABEL = { running:"运行中", completed:"已完成", failed:"失败", timed_out:"已超时", stopped:"已停止", disabled:"已禁用", unknown:"未知", not_found:"未找到" };
+const KIND = {
+  RunStarted:        { label:"运行开始" },
+  RunFinished:       { label:"运行完成" },
+  RunError:          { label:"运行错误" },
+  RunStopped:        { label:"运行停止" },
+  StepStarted:       { label:"步骤开始" },
+  StepFinished:      { label:"步骤完成" },
+  // role.reply arrives from the API as kind "Message"; keep TextMessage too for older payloads.
+  Message:           { label:"模型回复" },
+  TextMessage:       { label:"模型回复" },
+  ToolCall:          { label:"工具调用" },
+  HumanInputRequest: { label:"待人工确认" }
+};
+// kinds that carry an assistant/role reply (real LLM response text in ev.content).
+const REPLY_KINDS = new Set(["Message", "TextMessage"]);
+const STEPTYPE_LABEL = { llm:"模型", tool:"工具", human:"人工" };
+
+/* 06-23 detail enrichment: the AGUI event data bag (ev.data) is an open string->string map. We surface
+   a tasteful whitelist of the high-value keys as chips (model + token usage) and tuck everything else
+   under a collapsible 详情, instead of dumping the raw bag. Keys are matched case-insensitively across a
+   few common spellings so we don't miss model/token fields named slightly differently upstream. */
+const DATA_MODEL_KEYS = ["model", "model_id", "modelId", "model_name", "modelName", "deployment", "provider"];
+const DATA_TOKEN_KEYS = [
+  ["prompt", ["prompt_tokens","promptTokens","input_tokens","inputTokens","prompt"]],
+  ["completion", ["completion_tokens","completionTokens","output_tokens","outputTokens","completion"]],
+  ["total", ["total_tokens","totalTokens","total"]]
+];
+const TOKEN_CHIP_LABEL = { prompt:"输入", completion:"输出", total:"合计" };
+/* keys already represented by chips (or pure tool-call plumbing) — excluded from the "详情" table so it
+   only shows the genuinely-extra fields. */
+const DATA_CHIP_KEYS = new Set(
+  [...DATA_MODEL_KEYS, ...DATA_TOKEN_KEYS.flatMap(([,ks]) => ks),
+   "call_id","arguments_json","result_json","success","error"].map(k => k.toLowerCase()));
+function dataLookup(data, keys){
+  if(!data) return "";
+  for(const k of keys){ const v = data[k]; if(v != null && String(v).trim() !== "") return String(v); }
+  // case-insensitive fallback so upstream spelling variants still match
+  const lower = {}; for(const dk in data) lower[dk.toLowerCase()] = data[dk];
+  for(const k of keys){ const v = lower[k.toLowerCase()]; if(v != null && String(v).trim() !== "") return String(v); }
+  return "";
+}
+
+function parseT(iso){ return Date.parse(iso); }
+function clockUTC(iso){ // 取 ISO 中的 HH:MM:SS（UTC），保持确定性
+  const m = /T(\d{2}:\d{2}:\d{2})/.exec(iso); return m ? m[1] : iso;
+}
+function relTime(iso, nowMs){
+  let d = Math.max(0, Math.round((nowMs - parseT(iso))/1000));
+  if (d <= 1)   return "刚刚";
+  if (d < 60)   return d + " 秒前";
+  if (d < 3600) return Math.floor(d/60) + " 分钟前";
+  if (d < 86400)return Math.floor(d/3600) + " 小时前";
+  return Math.floor(d/86400) + " 天前";
+}
+function fmtDur(ms){
+  let s = Math.max(0, Math.round(ms/1000));
+  const m = Math.floor(s/60); s = s%60;
+  return m > 0 ? `${m}分${String(s).padStart(2,"0")}秒` : `${s}秒`;
+}
+function fmtNum(n){ return n==null ? "—" : n.toLocaleString("en-US"); }
+function fmtCost(c){ return c==null ? "—" : "$"+Number(c).toFixed(3); }
+function initials(label){ return (label||"?").trim().charAt(0).toUpperCase(); }
+/* compact id for list rows: keep the unique tail (the run/scope hash); full id stays in the title */
+function tailId(s, keep){ s = String(s==null?"":s); return s.length > keep+2 ? "…" + s.slice(-keep) : s; }
+function midTrunc(s, max){ s = String(s==null?"":s); if(s.length <= max) return s; const h = Math.ceil((max-1)*0.62), t = (max-1) - h; return s.slice(0, h) + "…" + s.slice(s.length - t); }
+
+/* JSON 着色（仅用于显示）。注意：先 esc() 转义，引号已变成 &quot;，
+   因此高亮要匹配 &quot; 而非字面引号。本数据中字符串均为单行且不含 & 实体。 */
+function colorJSON(str){
+  if(!str) return "";
+  let s = esc(str);
+  // 字符串 / 键（键后跟冒号）
+  s = s.replace(/(&quot;.*?&quot;)(\s*:)?/g, (m, tok, colon) =>
+    colon ? `<span class="j-key">${tok}</span>${colon}` : `<span class="j-str">${tok}</span>`);
+  // 数字（前面是空白/冒号/括号/逗号，后面是分隔符或行尾）
+  s = s.replace(/(^|[\s:\[,])(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?=[\s,\]\}]|$)/g,
+    (m, pre, num) => `${pre}<span class="j-num">${num}</span>`);
+  // 布尔 / null
+  s = s.replace(/\b(true|false)\b/g, '<span class="j-bool">$1</span>');
+  s = s.replace(/\bnull\b/g, '<span class="j-null">null</span>');
+  return s;
+}
+
+/* SVG icon set (inline, currentColor) */
+const ICON = {
+  sun:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M2 12h2.4M19.6 12H22M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M19.4 4.6l-1.7 1.7M6.3 17.7l-1.7 1.7"/></svg>',
+  moon:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8Z"/></svg>',
+  alert:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 8.5v4.5M12 16.2v.2"/><path d="M10.3 3.9 2.5 17.5A2 2 0 0 0 4.2 20.5h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
+  play:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M10 8.5 16 12l-6 3.5Z" fill="currentColor" stroke="none"/></svg>',
+  flag:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4M5 5h11l-1.5 3L16 11H5"/></svg>',
+  x:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+  stop:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  step:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 6h9M5 12h14M5 18h9"/></svg>',
+  chat:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 5h16v11H9l-4 3.5V16H4Z"/></svg>',
+  tool:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6a3.5 3.5 0 0 0-4.6 4.4L4 16.3 6.7 19l5.9-5.9A3.5 3.5 0 1 0 14.5 6Z"/></svg>',
+  human:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="3.4"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/></svg>',
+  check:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.2 4.2L19 7"/></svg>',
+  chevron:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
+  copy:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h9"/></svg>',
+  inbox:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3 13.5 5.5 5h13L21 13.5V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/><path d="M3 13.5h5l1 2.5h6l1-2.5h5"/></svg>',
+  cursor:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M5 3l5.5 16 2.2-6.3L19 10.5 5 3Z"/></svg>',
+  ghost:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V11a7 7 0 0 1 14 0v9l-2.3-1.6L14.4 20l-2.4-1.6L9.6 20 7.3 18.4 5 20Z"/><path d="M9.5 10h.01M14.5 10h.01"/></svg>',
+  lock:'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  back:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg>',
+  filter:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5Z"/></svg>',
+  shield:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.2 2.9 7.8 7 9 4.1-1.2 7-4.8 7-9V6l-7-3Z"/></svg>',
+  list:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>'
+};
+function kindIcon(kind){
+  switch(kind){
+    case "RunStarted": return ICON.play;
+    case "RunFinished": return ICON.flag;
+    case "RunError": return ICON.x;
+    case "RunStopped": return ICON.stop;
+    case "StepStarted": case "StepFinished": return ICON.step;
+    case "Message": case "TextMessage": return ICON.chat;
+    case "ToolCall": return ICON.tool;
+    case "HumanInputRequest": return ICON.human;
+    default: return ICON.step;
+  }
+}
+function stepTypeIcon(t){ return t==="llm"?ICON.chat : t==="tool"?ICON.tool : t==="human"?ICON.human : ICON.step; }
+
+/* ===========================================================================
+   App state
+   =========================================================================== */
+const state = {
+  signedIn: false,
+  scenario: "login",   // login | listLoading | empty | globalError | detailLoading | notFound | normal
+  selectedRunId: initialRoute.run || null,
+  activeTab: initialRoute.tab,
+  expanded: new Set(),  // tool-call ids expanded by default for the running run
+  theme: localStorage.getItem("wro-theme") || null, // null = follow system
+  selectedNodeId: null, // graph node whose detail drawer is open
+  graphView: { zoom: 1, panX: 0, panY: 0, fitted: false }, // pan/zoom transform, survives polling re-renders
+  immersive: sessionStorage.getItem(OBSERVATORY_IMMERSIVE_KEY) === "1",
+  refreshing: false,
+};
+function nowMs(){ return Date.now(); }
+
+/* apply theme attr */
+function applyTheme(){
+  if(state.theme === "light" || state.theme === "dark") document.documentElement.setAttribute("data-theme", state.theme);
+  else document.documentElement.removeAttribute("data-theme");
+}
+function effectiveDark(){
+  if(state.theme) return state.theme === "dark";
+  return !window.matchMedia || !window.matchMedia("(prefers-color-scheme: light)").matches;
+}
+function setImmersive(enabled){
+  state.immersive=!!enabled;
+  sessionStorage.setItem(OBSERVATORY_IMMERSIVE_KEY,state.immersive?"1":"0");
+  document.body.classList.toggle("observatory-immersive",state.immersive);
+  if(isEmbeddedInAdmin()) window.parent.postMessage({source:"aevatar-backend-console-suite",type:"observatory-immersive",enabled:state.immersive},location.origin);
+}
+function toggleImmersive(){ setImmersive(!state.immersive); render(); }
+async function refreshObservatory(){
+  if(state.refreshing) return;
+  state.refreshing=true;
+  try {
+    await refreshRuns();
+    lastRunsSig=runsSig(cache.runs);
+    if(state.selectedRunId){ await refreshDetail(state.selectedRunId); lastDetailSig=detailSig(cache.details[state.selectedRunId]); }
+  } finally { state.refreshing=false; render(); }
+}
+function renderWorkspaceBar(){
+  const bar=el("div",{class:"workspacebar",role:"region","aria-label":"观测工作区"});
+  const detail=currentDetail(),summary=detail&&detail.summary;
+  const scope=adminState.currentScope===ALL_SCOPES?"全部 scope":(adminState.currentScope||adminState.ownScope||"我的 scope");
+  bar.appendChild(el("div",{class:"workspace-context"},`<span>${esc(scope)}</span><b title="${esc(summary&&summary.runId||"")}">${esc(summary&&summary.workflowName||summary&&summary.runId||"选择运行查看详情")}</b>`));
+  const actions=el("div",{class:"workspace-actions"});
+  const refresh=el("button",{class:"workspace-action",type:"button","aria-label":"刷新数据",title:"刷新数据"},`↻ <span>${state.refreshing?"刷新中…":"刷新数据"}</span>`);
+  refresh.disabled=state.refreshing; refresh.addEventListener("click",refreshObservatory); actions.appendChild(refresh);
+  if(adminState.isAdmin){
+    const tools=el("details",{class:"admin-tools"});
+    tools.appendChild(el("summary",{class:"workspace-action",role:"button"},`${ICON.shield}<span>管理员工具</span>`));
+    const panel=el("div",{class:"admin-tools-panel"}); panel.appendChild(renderAdminBar()); tools.appendChild(panel); actions.appendChild(tools);
+  }
+  const immersive=el("button",{class:"workspace-action",type:"button","aria-label":state.immersive?"退出沉浸观测":"进入沉浸观测",title:state.immersive?"退出沉浸观测（Esc）":"沉浸观测"},`${state.immersive?"×":"⛶"} <span>${state.immersive?"退出沉浸":"沉浸观测"}</span>`);
+  immersive.addEventListener("click",toggleImmersive); actions.appendChild(immersive);
+  bar.appendChild(actions); return bar;
+}
+
+/* ===========================================================================
+   Render — top bar
+   =========================================================================== */
+/* shared suite navigation — identical markup/behaviour across the five console pages */
+const SUITE_NAV=[
+  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"skills",href:"/workflow/skills",label:"Skills",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 13h7l-1 9 9-11h-7l1-9Z"/></svg>'},
+  {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
+  {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
+  {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
+  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'},
+  {k:"cqrs",href:"/cqrs",label:"投影",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/></svg>'}
+];
+function suiteNavHtml(active){return '<nav class="suite-nav" aria-label="控制台导航">'+SUITE_NAV.map(function(n){return '<a href="'+n.href+'"'+(n.k===active?' aria-current="page"':'')+' title="'+n.label+'">'+n.svg+'<span class="nav-label">'+n.label+'</span></a>';}).join('')+'</nav>';}
+
+function renderTopbar(){
+  const acct = DataSource.getAccount();
+  const bar = el("header", { class:"topbar", role:"banner" });
+  bar.innerHTML = `
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>
+      </div>
+      <div style="min-width:0">
+        <div class="brand-name">Aevatar Backend Console</div>
+      </div>
+      <span class="pill-ro" title="只读视图，不可修改任何运行">只读</span>
+    </div>
+    ${suiteNavHtml("observatory")}
+    <div class="spacer"></div>`;
+
+  // live indicator (hidden on login)
+  if(state.signedIn){
+    const sel = currentDetail();
+    const isRunning = sel && sel.summary.status === "running";
+    const live = el("div", { class:"live"+(isRunning?" is-live":""), role:"status", "aria-live":"polite", id:"liveChip", title:"页面每约 3 秒轮询一次" });
+    live.innerHTML = `<span class="dot" aria-hidden="true"></span>
+      <span>${isRunning?"实时":"已暂停"}</span>
+      <span class="freshness" data-since="${sel?sel.summary.updatedAtUtc:DataSource.now()}">${sel?relTime(sel.summary.updatedAtUtc, nowMs()):""} 更新</span>`;
+    bar.appendChild(live);
+  }
+
+  // theme toggle
+  const tbtn = el("button", { class:"iconbtn", id:"themeBtn", "aria-label":"切换主题（深色 / 浅色）", title:"切换主题" });
+  tbtn.innerHTML = effectiveDark() ? ICON.sun : ICON.moon;
+  tbtn.addEventListener("click", () => {
+    state.theme = effectiveDark() ? "light" : "dark";
+    localStorage.setItem("wro-theme", state.theme);
+    applyTheme(); render();
+  });
+  bar.appendChild(tbtn);
+
+  if(state.signedIn){
+    const chip = el("div", { class:"account" });
+    chip.innerHTML = `<span class="avatar" aria-hidden="true">${initials(acct.label)}</span><span class="who" title="${esc(acct.label)}">${esc(acct.label)}</span>`;
+    bar.appendChild(chip);
+    const sw = el("button", { class:"linkbtn", "aria-label":"切换账户" }, "切换账户");
+    sw.addEventListener("click", () => { signOut(); });
+    bar.appendChild(sw);
+  }
+  return bar;
+}
+
+/* ===========================================================================
+   Render — error banner
+   =========================================================================== */
+function renderBanner(){
+  const b = el("div", { class:"banner", role:"alert" });
+  b.innerHTML = `${ICON.alert}<span class="b-title">加载运行失败</span>
+     <span class="b-msg">无法连接到观测服务（HTTP 503）。已显示上次成功获取的快照；将在下次轮询时自动重试。</span>`;
+  return b;
+}
+
+/* ===========================================================================
+   Render — login screen
+   =========================================================================== */
+function renderLogin(){
+  const wrap = el("main", { class:"login" });
+  const card = el("section", { class:"login-card", role:"region", "aria-label":"登录" });
+  card.innerHTML = `
+    <div class="login-mark" aria-hidden="true">${ICON.lock}</div>
+    <h1>登录以查看你的工作流运行</h1>
+    <p>只读访问你账户下的运行 —— 观察执行过程，不可修改任何内容。</p>`;
+  const btn = el("button", { class:"btn-primary", id:"signinBtn" }, "使用 nyxid 登录");
+  btn.addEventListener("click", () => { beginLogin(); });
+  card.appendChild(btn);
+  card.appendChild(el("div", { class:"login-foot" }, `${ICON.lock.replace('width="24" height="24"','width="12" height="12"')}<span>采用 OIDC bearer-token 鉴权 · 通过 nyxid 账户登录</span>`));
+  wrap.appendChild(card);
+  return wrap;
+}
+
+/* ===========================================================================
+   Render — run-list filter bar (status / origin / updated-at window)
+   =========================================================================== */
+function renderSelect(id, label, options, value, onPick){
+  const field = el("div", { class:"fb-field" });
+  field.appendChild(el("label", { class:"fb-label", for: id }, label));
+  const sel = el("select", { class:"fb-select", id, "aria-label": label });
+  options.forEach(([v,l]) => {
+    const opt = el("option", { value: v }, l);
+    if(v === value) opt.setAttribute("selected", "selected");
+    sel.appendChild(opt);
+  });
+  sel.value = value;
+  sel.addEventListener("change", e => onPick(e.target.value));
+  field.appendChild(sel);
+  return field;
+}
+function renderDate(id, label, value, onPick){
+  const field = el("div", { class:"fb-field" });
+  field.appendChild(el("label", { class:"fb-label", for: id }, label));
+  const inp = el("input", { class:"fb-date", id, type:"date", "aria-label": label, value: value ? value.slice(0,10) : "" });
+  inp.addEventListener("change", e => onPick(e.target.value));
+  field.appendChild(inp);
+  return field;
+}
+function renderFilterBar(){
+  const wrap = el("div", { class:"filterwrap" });
+  const count = activeFilterCount();
+
+  // --- collapsible toggle header (always visible) ---
+  const toggle = el("button", {
+    class:"fb-toggle", id:"fbToggle", type:"button",
+    "aria-expanded": String(filterState.open), "aria-controls":"filterPanel"
+  });
+  toggle.innerHTML = `
+    <span class="fb-tchevron" aria-hidden="true">${ICON.chevron}</span>
+    <span class="fb-ticon" aria-hidden="true">${ICON.filter}</span>
+    <span class="fb-tlabel">筛选</span>
+    <span class="fb-tcount" id="fbToggleCount" title="${count} 个生效筛选" ${(filterState.open || !hasActiveFilters()) ? "hidden" : ""}>${count}</span>
+    <span class="fb-tspacer"></span>`;
+  toggle.addEventListener("click", toggleFilterPanel);
+  // a quick "清除" affordance on the header itself when collapsed + filters active
+  if(hasActiveFilters()){
+    const clr = el("button", { class:"fb-tclear", type:"button", "aria-label":"清除全部筛选" }, "清除");
+    clr.addEventListener("click", (e) => {
+      e.stopPropagation();
+      filterState.status=""; filterState.origin=""; filterState.definition=""; filterState.schedule=""; filterState.from=""; filterState.to="";
+      applyFilterChange();
+    });
+    toggle.appendChild(clr);
+  }
+  wrap.appendChild(toggle);
+
+  // active schedule deep-link filter — dismissible chip (the scheduleId has no <select>; it arrives
+  // via the /schedules deep-link), so it gets its own always-visible affordance below the toggle.
+  if(filterState.schedule){
+    const chip = el("div", { class:"sched-filter", title:"仅显示该定时任务触发的运行" });
+    chip.innerHTML = `<span class="sf-ic" aria-hidden="true">${ICON.filter}</span><span class="sf-lab">定时任务</span><span class="sf-id">${esc(filterState.schedule)}</span>`;
+    const x = el("button", { class:"sf-x", type:"button", "aria-label":"清除定时任务筛选" }, ICON.x);
+    x.addEventListener("click", () => { filterState.schedule=""; applyFilterChange(); });
+    chip.appendChild(x);
+    wrap.appendChild(chip);
+  }
+
+  // --- the controls panel (hidden when collapsed) ---
+  const bar = el("div", { class:"filterbar", id:"filterPanel", role:"group", "aria-label":"按状态、来源、更新时间筛选运行" });
+  if(!filterState.open) bar.hidden = true;
+  bar.appendChild(renderSelect("flt-status", "状态", STATUS_OPTIONS, filterState.status,
+    v => { filterState.status = v; applyFilterChange(); }));
+  bar.appendChild(renderSelect("flt-origin", "来源", ORIGIN_OPTIONS, filterState.origin,
+    v => { filterState.origin = v; applyFilterChange(); }));
+  const definition = el("div", { class:"fb-field" });
+  definition.appendChild(el("label", { class:"fb-label", for:"flt-definition" }, "定义"));
+  const definitionInput = el("input", { class:"fb-date", id:"flt-definition", type:"search", "aria-label":"工作流定义", value:filterState.definition, placeholder:"definition id" });
+  definitionInput.addEventListener("change", e => { filterState.definition = e.target.value.trim(); applyFilterChange(); });
+  definition.appendChild(definitionInput); bar.appendChild(definition);
+  bar.appendChild(renderDate("flt-from", "起始（更新于）", filterState.from,
+    v => { filterState.from = v ? new Date(v + "T00:00:00Z").toISOString() : ""; applyFilterChange(); }));
+  bar.appendChild(renderDate("flt-to", "截止（更新于）", filterState.to,
+    v => { filterState.to = v ? new Date(v + "T23:59:59.999Z").toISOString() : ""; applyFilterChange(); }));
+  bar.appendChild(el("div", { class:"fb-spacer" }));
+  if(hasActiveFilters()){
+    const reset = el("button", { class:"fb-reset", type:"button" }, "清除筛选");
+    reset.addEventListener("click", () => { filterState.status=""; filterState.origin=""; filterState.definition=""; filterState.schedule=""; filterState.from=""; filterState.to=""; applyFilterChange(); });
+    bar.appendChild(reset);
+  }
+  wrap.appendChild(bar);
+  return wrap;
+}
+
+/* ===========================================================================
+   Render — runs list
+   =========================================================================== */
+function renderList(){
+  const pane = el("aside", { class:"list-pane", "aria-label":"运行列表" });
+  const head = el("div", { class:"list-head" });
+  const shown = state.scenario==="empty" ? 0 : DataSource.listRuns().length;
+  head.innerHTML = `<div class="list-title-row"><span class="list-title"><span class="lt-ic" aria-hidden="true">${ICON.list}</span>运行</span><span class="list-count" title="当前筛选下返回的运行数（最近 N）">${shown}</span></div>`;
+  pane.appendChild(head);
+  pane.appendChild(renderFilterBar());
+
+  const listbox = el("div", { class:"runlist scroll", role:"list", "aria-label":"运行", tabindex:"-1" });
+
+  if(state.scenario === "listLoading"){
+    for(let i=0;i<5;i++){
+      const r = el("div", { class:"sk-row" });
+      r.innerHTML = `<div class="sk sk-dot"></div><div><div class="sk sk-line" style="width:62%"></div><div class="sk sk-line" style="width:42%;margin-top:8px;height:8px"></div></div>`;
+      listbox.appendChild(r);
+    }
+    pane.appendChild(listbox);
+    return pane;
+  }
+
+  const runs = state.scenario === "empty" ? [] : DataSource.listRuns();
+
+  if(runs.length === 0){
+    const isFiltered = state.scenario !== "empty" && hasActiveFilters();
+    listbox.appendChild(el("div", { class:"empty" }, `
+      <div class="ic" aria-hidden="true">${ICON.inbox}</div>
+      <div class="et">${isFiltered ? "没有匹配的运行" : "暂无运行"}</div>
+      <div class="es">${isFiltered ? "当前筛选条件下没有运行，放宽状态、来源或时间范围再看看。" : "你的账户下还没有任何工作流运行。一旦有运行启动，就会出现在这里。"}</div>`));
+    pane.appendChild(listbox);
+    return pane;
+  }
+
+  runs.forEach(r => {
+    const sel = state.selectedRunId === r.runId && state.scenario==="normal";
+    const row = el("button", { class:"run-row", role:"listitem", "aria-current": String(sel) });
+    // scope id per row is only meaningful in the cross-scope (全部 scope) view, where rows differ in
+    // scope. When a single concrete scope is selected it's the same id on every row (already shown in
+    // the admin bar) — pure noise — so it's hidden there.
+    // In cross-scope (全部 scope) view rows differ by scope owner. For admins we resolve the scopeId
+    // (≈ nyxid user id) to that user's display name and lead with it; the short id stays as the
+    // secondary cue and the full id in the tooltip. Falls back to the short id when unresolved.
+    const scopeName = scopeDisplayName(r.scopeId);
+    const scopeCol = (adminState.isAdmin && adminState.currentScope === ALL_SCOPES)
+      ? (scopeName
+          ? `<span class="sep">·</span><span class="id" title="${esc(scopeName)} · scope id: ${esc(r.scopeId||"")}">${esc(scopeName)} <span class="muted-id">${esc(tailId(r.scopeId, 6))}</span></span>`
+          : `<span class="sep">·</span><span class="id" title="scope id: ${esc(r.scopeId||"")}">${esc(tailId(r.scopeId, 14))}</span>`)
+      : "";
+    // run-origin badge: legacy/empty origin renders nothing (keeps the row readable at density).
+    const olabel = originLabel(r.runOrigin);
+    const originCol = olabel
+      ? `<span class="sep">·</span><span class="rm-origin" title="运行来源：${esc(olabel)}">${esc(olabel)}</span>`
+      : "";
+    row.innerHTML = `
+      <span class="dot s-${r.status}" aria-hidden="true"></span>
+      <span class="rn" title="${esc(r.workflowName)}">${esc(r.workflowName)}</span>
+      <span class="rm">
+        <span class="rm-status s-${r.status}">${STATUS_LABEL[r.status]||r.status}</span>${originCol}
+        <span class="sep">·</span>
+        <span data-since="${r.updatedAtUtc}">${relTime(r.updatedAtUtc, nowMs())}</span>
+        <span class="sep">·</span>
+        <span class="id" title="run id: ${esc(r.runId)}">${esc(midTrunc(parseRunId(r.runId).run, 16) || tailId(r.runId, 12))}</span>${scopeCol}
+      </span>`;
+    row.addEventListener("click", () => selectRun(r.runId));
+    listbox.appendChild(row);
+  });
+  pane.appendChild(listbox);
+  return pane;
+}
+
+/* ===========================================================================
+   Render — detail
+   =========================================================================== */
+function currentDetail(){
+  if(state.scenario === "notFound") return null;
+  return DataSource.getRun(state.selectedRunId);
+}
+
+function renderDetail(){
+  const pane = el("section", { class:"detail-pane scroll", "aria-label":"运行详情" });
+
+  // mobile back bar
+  const back = el("div", { class:"backbar" });
+  const backBtn = el("button", {}, `${ICON.back}<span>运行</span>`);
+  backBtn.addEventListener("click", () => { document.body.setAttribute("data-mobile-view","list"); });
+  back.appendChild(backBtn);
+  pane.appendChild(back);
+
+  if(state.scenario === "detailLoading"){
+    const sk = el("div", { class:"detail-sk" });
+    sk.innerHTML = `
+      <div class="sk sk-line" style="width:240px;height:22px"></div>
+      <div class="sk sk-line" style="width:70%;height:12px"></div>
+      <div class="sk" style="height:60px;border-radius:13px"></div>
+      <div class="sk sk-line" style="width:160px;height:30px;border-radius:999px"></div>
+      <div class="sk" style="height:120px;border-radius:9px;margin-top:6px"></div>
+      <div class="sk" style="height:90px;border-radius:9px"></div>`;
+    pane.appendChild(sk);
+    return pane;
+  }
+
+  if(state.scenario === "notFound"){
+    pane.appendChild(el("div", { class:"detail-empty nf" }, `
+      <div class="ic" aria-hidden="true">${ICON.ghost}</div>
+      <div class="dt">运行未找到</div>
+      <div class="ds">运行 <span class="mono">${esc(state.selectedRunId||"run_unknown")}</span> 不存在，或已超出你账户的可见范围。可能已被清理，或属于其他账户。</div>`));
+    return pane;
+  }
+
+  const detail = currentDetail();
+  if(!detail){
+    pane.appendChild(el("div", { class:"detail-empty" }, `
+      <div class="ic" aria-hidden="true">${ICON.cursor}</div>
+      <div class="dt">选择一个运行以查看执行过程</div>
+      <div class="ds">从左侧列表选择任意运行，自上而下阅读它的执行故事 —— 每一步做了什么、模型说了什么、调用了哪些工具。</div>`));
+    return pane;
+  }
+
+  const inner = el("div", { class:"detail-inner" });
+  inner.appendChild(renderRunHeader(detail));
+  inner.appendChild(renderApprovalPanel(detail));
+  inner.appendChild(renderDiagnosticStrip(detail));
+  inner.appendChild(renderNarrative(detail));
+  if(adminState.isAdmin) inner.appendChild(renderCrossLinks(detail));
+  inner.appendChild(renderTabs());
+
+  const tp = el("div", {});
+  const timelinePanel = el("div", { class:"tabpanel", id:"panel-timeline", role:"tabpanel", "aria-labelledby":"tab-timeline", tabindex:"0" });
+  timelinePanel.appendChild(renderTimeline(detail));
+  if(state.activeTab !== "timeline") timelinePanel.hidden = true;
+
+  const stepsPanel = el("div", { class:"tabpanel", id:"panel-steps", role:"tabpanel", "aria-labelledby":"tab-steps", tabindex:"0" });
+  stepsPanel.appendChild(renderSteps(detail));
+  if(state.activeTab !== "steps") stepsPanel.hidden = true;
+
+  const diagnosticsPanel = el("div", { class:"tabpanel", id:"panel-diagnostics", role:"tabpanel", "aria-labelledby":"tab-diagnostics", tabindex:"0" });
+  diagnosticsPanel.appendChild(renderDiagnostics(detail));
+  if(state.activeTab !== "diagnostics") diagnosticsPanel.hidden = true;
+
+  const logsPanel = el("div", { class:"tabpanel", id:"panel-logs", role:"tabpanel", "aria-labelledby":"tab-logs", tabindex:"0" });
+  logsPanel.appendChild(renderLogs(detail));
+  if(state.activeTab !== "logs") logsPanel.hidden = true;
+
+  const artifactsPanel = el("div", { class:"tabpanel", id:"panel-artifacts", role:"tabpanel", "aria-labelledby":"tab-artifacts", tabindex:"0" });
+  artifactsPanel.appendChild(renderArtifacts(detail));
+  if(state.activeTab !== "artifacts") artifactsPanel.hidden = true;
+
+  const graphPanel = el("div", { class:"tabpanel", id:"panel-graph", role:"tabpanel", "aria-labelledby":"tab-graph", tabindex:"0" });
+  graphPanel.appendChild(renderGraph(detail));
+  if(state.activeTab !== "graph") graphPanel.hidden = true;
+
+  tp.appendChild(timelinePanel);
+  tp.appendChild(stepsPanel);
+  tp.appendChild(diagnosticsPanel);
+  tp.appendChild(logsPanel);
+  tp.appendChild(artifactsPanel);
+  tp.appendChild(graphPanel);
+  inner.appendChild(tp);
+
+  pane.appendChild(inner);
+  return pane;
+}
+
+/* Run ids are composite (e.g. [scope:]workflow.definition:{defHash}:run:{runHash}). Break them into
+   labelled, color-coded chips so the id reads clearly instead of as one wall of hex; fall back to a
+   single truncated chip when the shape is unfamiliar. */
+function parseRunId(runId){
+  const id = String(runId || "");
+  const out = { full: id, scope: "", def: "", run: "" };
+  const runM = /:run:([^:]+)\s*$/i.exec(id);
+  if(runM) out.run = runM[1];
+  const defM = /workflow\.definition:([^:]+)/i.exec(id);
+  if(defM) out.def = defM[1];
+  const dIdx = id.indexOf("workflow.definition:");
+  if(dIdx > 0) out.scope = id.slice(0, dIdx).replace(/:+$/, "");
+  return out;
+}
+function renderRunIdChips(rid){
+  const chips = [];
+  if(rid.scope){
+    // scope segment of the run id is the scopeId (≈ nyxid user id). Admins see the owner's display
+    // name in the chip (short id kept as secondary, full id in the tooltip); otherwise the raw id.
+    const scopeName = scopeDisplayName(rid.scope);
+    chips.push(scopeName
+      ? `<span class="rid-chip scope" title="${esc(scopeName)} · scope: ${esc(rid.scope)}"><span class="rid-lab">scope</span><span class="rid-val">${esc(scopeName)} <span class="muted-id">${esc(tailId(rid.scope, 6))}</span></span></span>`
+      : `<span class="rid-chip scope" title="scope: ${esc(rid.scope)}"><span class="rid-lab">scope</span><span class="rid-val">${esc(midTrunc(rid.scope, 14))}</span></span>`);
+  }
+  if(rid.def)   chips.push(`<span class="rid-chip def" title="workflow.definition: ${esc(rid.def)}"><span class="rid-lab">定义</span><span class="rid-val">${esc(midTrunc(rid.def, 16))}</span></span>`);
+  if(rid.run)   chips.push(`<span class="rid-chip run" title="run: ${esc(rid.run)}"><span class="rid-lab">运行</span><span class="rid-val">${esc(midTrunc(rid.run, 16))}</span></span>`);
+  if(chips.length === 0) chips.push(`<span class="rid-chip plain" title="${esc(rid.full)}"><span class="rid-val">${esc(midTrunc(rid.full, 30))}</span></span>`);
+  chips.push(`<button class="rid-copy" type="button" aria-label="复制完整运行 ID" title="复制完整运行 ID">${ICON.copy}</button>`);
+  return chips.join("");
+}
+
+function renderRunHeader(detail){
+  const s = detail.summary;
+  const started = parseT(s.startedAtUtc);
+  const hasStart = !isNaN(started);
+  const isRunning = s.status === "running";
+  const endMs = isRunning ? nowMs() : parseT(s.updatedAtUtc);
+  // startedAtUtc can be null (old runs / terminal-adopted failures that never recorded a start) — degrade
+  // to — instead of "NaN秒" / "null UTC".
+  const durStr = (hasStart && !isNaN(endMs)) ? fmtDur(endMs - started) : "—";
+  const startStr = hasStart ? (clockUTC(s.startedAtUtc) + " UTC") : "—";
+  const u = detail.usageTotals;
+
+  const head = el("header", { class:"run-header" });
+  head.innerHTML = `
+    <div class="rh-top">
+      <h1 class="rh-title"><span class="dot s-${s.status}" aria-hidden="true"></span>${esc(s.workflowName)}</h1>
+      <span class="badge b-${s.status}"><span class="dot s-${s.status}" aria-hidden="true"></span>${STATUS_LABEL[s.status]||s.status}</span>
+    </div>
+    <div class="rh-meta">
+      <span class="grp rid-grp"><span class="k">运行 ID</span><span class="rid">${renderRunIdChips(parseRunId(s.runId))}</span></span>
+      <span class="grp"><span class="k">用时</span><span class="v" ${(hasStart&&isRunning)?`data-duration="${s.startedAtUtc}"`:""}>${durStr}</span></span>
+      <span class="grp"><span class="k">开始</span><span class="v">${startStr}</span></span>
+    </div>`;
+
+  const copyBtn = head.querySelector(".rid-copy");
+  if(copyBtn) copyBtn.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(s.runId || ""); }
+    catch(e){ const ta=document.createElement("textarea"); ta.value=s.runId||""; document.body.appendChild(ta); ta.select(); try{document.execCommand("copy");}catch(_){ } ta.remove(); }
+    copyBtn.classList.add("done"); setTimeout(() => copyBtn.classList.remove("done"), 1300);
+  });
+
+  // usage strip (compact summary cards)
+  const strip = el("div", { class:"usage-strip", "aria-label":"用量汇总" });
+  strip.innerHTML = `
+    <div class="usage-cell"><div class="ul">输入 Token</div><div class="uv">${fmtNum(u.promptTokens)}</div></div>
+    <div class="usage-cell"><div class="ul">输出 Token</div><div class="uv">${fmtNum(u.completionTokens)}</div></div>
+    <div class="usage-cell"><div class="ul">合计 Token</div><div class="uv">${fmtNum(u.totalTokens)}</div></div>
+    <div class="usage-cell accent"><div class="ul">花费</div><div class="uv">${fmtCost(u.cost)}</div></div>
+    <div class="usage-cell"><div class="ul">状态版本</div><div class="uv">v${s.stateVersion}</div></div>`;
+  head.appendChild(strip);
+  return head;
+}
+
+function issuePayload(detail){
+  const steps = detail.steps || [];
+  const diagnostics = detail.diagnostics || [];
+  return JSON.stringify({
+    runId: detail.summary.runId,
+    scopeId: detail.summary.scopeId,
+    workflow: detail.summary.workflowName,
+    status: detail.summary.status,
+    stateVersion: detail.summary.stateVersion,
+    finalError: detail.finalError || "",
+    diagnostics: diagnostics.map(t => ({
+      severity: t.severity,
+      code: t.code,
+      source: t.source,
+      stepId: t.stepId,
+      stepType: t.stepType,
+      targetRole: t.targetRole,
+      message: t.message,
+      hint: t.hint,
+      timestampUtc: t.timestampUtc
+    })),
+    failedSteps: steps.filter(s => s.success === false || s.error).map(s => ({
+      stepId: s.stepId,
+      stepType: s.stepType,
+      targetRole: s.targetRole,
+      error: s.error,
+      requestedAtUtc: s.requestedAtUtc,
+      completedAtUtc: s.completedAtUtc,
+      nextStepId: s.nextStepId,
+      branchKey: s.branchKey
+    })),
+    lastKnownStep: steps.slice().reverse().find(s => s.stepId || s.stepType || s.targetRole) || null
+  }, null, 2);
+}
+
+function renderDiagnosticStrip(detail){
+  const diagnostics = detail.diagnostics || [];
+  if(!diagnostics.length && !["failed","timed_out","stopped"].includes(detail.summary.status)) return document.createDocumentFragment();
+  const hasProblem = diagnostics.some(t => t.severity === "error" || t.severity === "warning") || ["failed","timed_out","stopped"].includes(detail.summary.status);
+  const box = el("section", { class:"diagnostic-strip"+(hasProblem?" has-error":""), "aria-label":"失败诊断" });
+  const head = el("div", { class:"diag-head" });
+  head.innerHTML = `<span class="diag-title">${hasProblem ? "失败诊断" : "当前位置"}</span><span class="diag-sub">${diagnostics.length ? `${diagnostics.length} 条诊断信息` : "暂未收集到更多诊断信息"}</span>`;
+  box.appendChild(head);
+  if(diagnostics.length){
+    const body = el("div", { class:"diag-body" });
+    diagnostics.slice(0, 3).forEach(t => body.appendChild(renderDiagnosticItem(t)));
+    if(diagnostics.length > 3) body.appendChild(el("div", { class:"diag-hint" }, `另有 ${diagnostics.length - 3} 条，打开“诊断”页签查看完整 payload。`));
+    box.appendChild(body);
+  } else {
+    box.appendChild(el("div", { class:"diag-body" }, `<div class="diag-hint">运行已进入 ${esc(STATUS_LABEL[detail.summary.status] || detail.summary.status)}，但 final error 或失败 step 尚未物化。提交 issue 时请附上 run id 与 state version。</div>`));
+  }
+  return box;
+}
+
+function renderDiagnosticItem(t){
+  const item = el("div", { class:"diag-item "+(t.severity||"info") });
+  item.innerHTML = `
+    <div class="diag-meta">
+      <span class="diag-code">${esc((t.severity||"info").toUpperCase())} · ${esc(t.code||"diagnostic")}</span>
+      <span>${esc(clockUTC(t.timestampUtc))}</span>
+      <span>${esc(t.source||"observatory")}</span>
+      ${t.stepId ? `<span>step ${esc(t.stepId)}</span>` : ""}
+      ${t.stepType ? `<span>${esc(t.stepType)}</span>` : ""}
+      ${t.targetRole ? `<span>@${esc(t.targetRole)}</span>` : ""}
+    </div>
+    <div class="diag-msg">${esc(t.message||"—")}</div>
+    ${t.hint ? `<div class="diag-hint">${esc(t.hint)}</div>` : ""}`;
+  return item;
+}
+
+function renderDiagnostics(detail){
+  const wrap = el("div", {});
+  const diagnostics = detail.diagnostics || [];
+  const actions = el("div", { class:"diag-actions" });
+  const copy = el("button", { class:"copybtn", type:"button", "aria-label":"复制 issue payload" }, `${ICON.copy}<span>复制 issue payload</span>`);
+  copy.addEventListener("click", async () => {
+    await copyText(issuePayload(detail));
+    copy.classList.add("done"); copy.querySelector("span").textContent = "已复制";
+    setTimeout(() => { copy.classList.remove("done"); copy.querySelector("span").textContent = "复制 issue payload"; }, 1400);
+  });
+  actions.appendChild(copy);
+  wrap.appendChild(actions);
+  if(diagnostics.length){
+    const body = el("div", { class:"diag-body" });
+    diagnostics.forEach(t => body.appendChild(renderDiagnosticItem(t)));
+    wrap.appendChild(body);
+  } else {
+    wrap.appendChild(el("div", { class:"diag-body" }, `<div class="diag-hint">本次运行暂无诊断信息。若运行状态异常，请复制下面 payload 一并提交。</div>`));
+  }
+  wrap.appendChild(el("pre", { class:"issue-pre scroll" }, esc(issuePayload(detail))));
+  return wrap;
+}
+function renderNarrative(detail){
+  const wrap=el("div",{class:"narrative"});
+  const input=el("details",{},`<summary>输入 · input</summary><pre class="issue-pre scroll">${esc(detail.input||"无输入")}</pre>`); input.open=true; wrap.appendChild(input);
+  const output=detail.finalOutput||(detail.summary.status==="running"?"运行尚未完成，最终输出尚未物化":"无最终输出");
+  const final=el("details",{},`<summary>最终输出 · finalOutput</summary><pre class="issue-pre scroll">${esc(output)}</pre>`); final.open=true; wrap.appendChild(final);
+  if(detail.finalError) wrap.appendChild(el("pre",{class:"issue-pre scroll"},esc(detail.finalError)));
+  return wrap;
+}
+function renderCrossLinks(detail){
+  const links=el("div",{class:"cross-links"});
+  const cqrs=el("button",{class:"chip",type:"button"},"投影健康 · scope"); cqrs.addEventListener("click",()=>navigateAdminShell("cqrs",{owner:detail.summary.scopeId})); links.appendChild(cqrs);
+  const audit=el("button",{class:"chip",type:"button"},"审计 · run"); audit.addEventListener("click",()=>navigateAdminShell("audit",{run:detail.summary.runId})); links.appendChild(audit);
+  return links;
+}
+function renderSteps(detail){
+  const wrap=el("div",{class:"step-list"}), events=detail.timeline||[];
+  if(!(detail.steps||[]).length) return el("div",{class:"detail-empty"},'<div class="dt">暂无步骤</div>');
+  detail.steps.forEach((step,index)=>{
+    const related=events.filter(event=>event.stepId===step.stepId);
+    const card=el("article",{class:"step-card"});
+    card.innerHTML=`<b>${esc(step.stepId||"step "+(index+1))}</b><span class="mono">${esc(step.stepType||"unknown")}${step.targetRole?" · @"+esc(step.targetRole):""}</span>
+      <div>${esc(step.requestedAtUtc||"—")} → ${esc(step.completedAtUtc||"进行中")}</div>
+      ${step.error?`<div class="diag-msg">${esc(step.error)}</div>`:""}${step.outputPreview?`<div>${esc(step.outputPreview)}</div><small>outputPreview 为 240 字预览；完整 role/tool 输出见 Timeline</small>`:""}
+      <small>关联 timeline 事件 ${related.length}</small>`;
+    wrap.appendChild(card);
+  });
+  return wrap;
+}
+function renderLogs(detail){
+  const lines=[];
+  (detail.diagnostics||[]).forEach(d=>lines.push(`${d.timestampUtc||"—"} DIAGNOSTIC ${(d.severity||"info").toUpperCase()} [${d.code||"diagnostic"}] ${d.message||""}`));
+  (detail.timeline||[]).forEach(event=>{const message=event.content||event.message||(event.toolCall&&(event.toolCall.error||event.toolCall.toolName));if(message)lines.push(`${event.timestampUtc||"—"} ${event.stage?"["+event.stage+"] ":""}${message}`);});
+  if(detail.finalError) lines.push("FINAL ERROR "+detail.finalError);
+  const wrap=el("div",{}); wrap.appendChild(el("p",{class:"diag-hint"},"派生视图：由 diagnostics + committed timeline 组装；不是独立日志事实源。"));
+  wrap.appendChild(el("pre",{class:"issue-pre scroll"},esc(lines.join("\n")||"暂无可派生日志"))); return wrap;
+}
+function renderArtifacts(detail){
+  const wrap=el("div",{});
+  if(!detail.finalOutput){ wrap.appendChild(el("div",{class:"detail-empty"},'<div class="dt">暂无产出</div><div class="ds">当前详情契约没有正式 artifact 集合。</div>')); return wrap; }
+  wrap.appendChild(el("p",{class:"diag-hint"},"派生下载：内容来自 finalOutput；不是正式 artifact read model。"));
+  const button=el("button",{class:"chip",type:"button"},"下载 finalOutput"); button.addEventListener("click",()=>{const url=URL.createObjectURL(new Blob([detail.finalOutput],{type:"text/plain;charset=utf-8"}));const a=document.createElement("a");a.href=url;a.download="finalOutput.txt";a.click();URL.revokeObjectURL(url);}); wrap.appendChild(button); return wrap;
+}
+
+function findActiveApproval(detail){
+  return ((detail && detail.steps) || []).filter(step =>
+    !step.completedAtUtc && String(step.suspensionType || "").toLowerCase() === "human_approval").slice(-1)[0] || null;
+}
+function canApproveRun(detail, ownerScope){
+  return !!(detail && detail.summary && ownerScope && detail.summary.scopeId === ownerScope);
+}
+function buildApprovalRequest(detail, approval, approved, feedback){
+  const body = { stepId:approval.stepId, approved:!!approved };
+  if(!approved) body.userInput = String(feedback || "").trim();
+  return {
+    path:"/api/scopes/" + encodeURIComponent(detail.summary.scopeId) + "/runs/" + encodeURIComponent(detail.summary.runId) + ":resume",
+    body
+  };
+}
+const approvalState = { key:"", rejecting:false, feedback:"", submitting:false, accepted:false, error:"" };
+function renderApprovalPanel(detail){
+  const approval = findActiveApproval(detail);
+  if(!approval) return document.createDocumentFragment();
+  const key = [detail.summary.runId, approval.stepId, approval.requestedAtUtc || "", detail.summary.stateVersion].join("\n");
+  if(approvalState.key !== key) Object.assign(approvalState, { key, rejecting:false, feedback:"", submitting:false, accepted:false, error:"" });
+  const owner = canApproveRun(detail, adminState.ownScope);
+  const box = el("section", { class:"approval-panel", "aria-label":"需要审批" });
+  box.innerHTML = `<div class="approval-head"><b>需要审批</b>${approval.suspensionTimeoutSeconds!=null?`<span>审批时限 ${esc(approval.suspensionTimeoutSeconds)} 秒</span>`:""}</div>
+    ${approval.suspensionPrompt?`<p>${esc(approval.suspensionPrompt)}</p>`:""}
+    <pre class="approval-content scroll" tabindex="0">${esc(approval.suspensionContent || "（无待审内容）")}</pre>`;
+  const actions = el("div", { class:"approval-actions" });
+  if(!owner) actions.appendChild(el("span", {}, "该 Run 属于其他 scope；管理员观测为只读"));
+  else if(approvalState.accepted) actions.appendChild(el("span", {}, "决定已接受（202），等待 committed 状态更新"));
+  else {
+    const submit = async approved => {
+      const feedback = approvalState.feedback.trim();
+      if(!approved && !feedback){ approvalState.error="请填写驳回反馈"; render(); return; }
+      if(approvalState.submitting) return;
+      approvalState.submitting=true; approvalState.error=""; render();
+      const request=buildApprovalRequest(detail,approval,approved,feedback);
+      try { await apiRequest(request.path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request.body)}); approvalState.accepted=true; approvalState.rejecting=false; }
+      catch(e){ approvalState.error=e.message||"审批提交失败"; }
+      finally { approvalState.submitting=false; render(); }
+    };
+    const approve=el("button",{class:"btn-primary",type:"button",disabled:approvalState.submitting?"disabled":null},"批准并继续");
+    approve.addEventListener("click",()=>submit(true)); actions.appendChild(approve);
+    const reject=el("button",{class:"chip",type:"button",disabled:approvalState.submitting?"disabled":null},"驳回");
+    reject.addEventListener("click",()=>{approvalState.rejecting=true;render();}); actions.appendChild(reject);
+    if(approvalState.rejecting){
+      const feedback=el("textarea",{class:"approval-feedback",rows:"3",placeholder:"驳回反馈（必填）"},esc(approvalState.feedback));
+      feedback.addEventListener("input",e=>{approvalState.feedback=e.target.value;}); box.appendChild(feedback);
+      const rejectSubmit=el("button",{class:"btn-primary",type:"button"},"提交驳回"); rejectSubmit.addEventListener("click",()=>submit(false)); actions.appendChild(rejectSubmit);
+    }
+    if(approvalState.error) box.appendChild(el("div",{class:"approval-error",role:"alert"},esc(approvalState.error)));
+  }
+  box.appendChild(actions); return box;
+}
+
+function detailTabIds(){ return ["timeline","steps","diagnostics","logs","artifacts","graph"]; }
+function renderTabs(){
+  const tablist = el("div", { class:"tabs", role:"tablist", "aria-label":"详情视图" });
+  const labels={timeline:["时间线",ICON.step],steps:["Steps",ICON.list],diagnostics:["诊断",ICON.alert],logs:["Logs",ICON.inbox],artifacts:["产出",ICON.flag],graph:["拓扑图",'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>']};
+  detailTabIds().forEach(id => {
+    const [lab,ic]=labels[id];
+    const t = el("button", { class:"tab", id:"tab-"+id, role:"tab", "aria-selected": String(state.activeTab===id), "aria-controls":"panel-"+id, tabindex: state.activeTab===id?"0":"-1" }, `${ic}<span>${lab}</span>`);
+    t.addEventListener("click", () => { state.activeTab = id; writeObservatoryRoute({tab:id}); if(id === "graph") loadGraph(state.selectedRunId); render(); });
+    t.addEventListener("keydown", (e) => {
+      if(e.key==="ArrowRight"||e.key==="ArrowLeft"){
+        e.preventDefault();
+        const order=detailTabIds();
+        const delta=e.key==="ArrowRight"?1:-1;
+        state.activeTab = order[(order.indexOf(state.activeTab)+delta+order.length)%order.length];
+        writeObservatoryRoute({tab:state.activeTab});
+        if(state.activeTab === "graph") loadGraph(state.selectedRunId);
+        render(); $("#tab-"+state.activeTab)?.focus();
+      }
+    });
+    tablist.appendChild(t);
+  });
+  return tablist;
+}
+
+/* role.reply / Message events now carry the real LLM response in ev.content (was: only the role id).
+   Render it as a beautified assistant bubble — role avatar + label, line breaks preserved, long replies
+   clamped behind a 展开/收起 toggle. Empty content degrades to a small note (no empty bubble). */
+function renderReplyBubble(ev){
+  const role = ev.agentId || ev.stepId || "assistant";
+  const reply = el("div", { class:"reply", role:"group", "aria-label":`模型回复 ${role}` });
+  const head = el("div", { class:"reply-head" });
+  head.innerHTML = `
+    <span class="reply-avatar" aria-hidden="true">${esc(initials(role))}</span>
+    <span class="reply-role" title="${esc(role)}">${esc(role)}</span>
+    <span class="reply-tag">回复</span>
+    <span class="reply-spacer"></span>`;
+  reply.appendChild(head);
+
+  const content = String(ev.content == null ? "" : ev.content);
+  if(content.trim() === ""){
+    reply.appendChild(el("div", { class:"reply-empty" }, "（无文本内容 —— 该回合可能仅触发工具调用）"));
+    return reply;
+  }
+  // clamp long responses; offer expand/collapse. Threshold by length OR line count.
+  const isLong = content.length > 360 || (content.match(/\n/g) || []).length > 8;
+  const bodyEl = el("div", { class:"reply-body"+(isLong?" clamp":"") }, esc(content));
+  reply.appendChild(bodyEl);
+  if(isLong){
+    const more = el("button", { class:"reply-more", type:"button", "aria-expanded":"false" }, `${ICON.chevron}<span>展开</span>`);
+    more.addEventListener("click", () => {
+      const clamped = bodyEl.classList.toggle("clamp");
+      more.setAttribute("aria-expanded", String(!clamped));
+      more.querySelector("span").textContent = clamped ? "展开" : "收起";
+    });
+    reply.appendChild(more);
+  }
+  return reply;
+}
+
+/* Surface the high-value AGUI data (model + token usage) as compact chips; tuck the rest under a
+   collapsible 详情. Returns null when there's nothing worth showing so callers can skip it cleanly. */
+function renderDataDetails(data){
+  if(!data || typeof data !== "object") return null;
+  const model = dataLookup(data, DATA_MODEL_KEYS);
+  const tokens = DATA_TOKEN_KEYS.map(([id, keys]) => [id, dataLookup(data, keys)]).filter(([,v]) => v !== "");
+  const extraKeys = Object.keys(data).filter(k => !DATA_CHIP_KEYS.has(k.toLowerCase()) && String(data[k]).trim() !== "");
+  if(!model && tokens.length === 0 && extraKeys.length === 0) return null;
+
+  const wrap = el("div", {});
+  if(model || tokens.length){
+    const chips = el("div", { class:"datachips" });
+    if(model) chips.appendChild(el("span", { class:"dchip model", title:"模型" }, `<span class="dk">模型</span><span class="dv">${esc(model)}</span>`));
+    tokens.forEach(([id, v]) => {
+      const n = Number(v); const disp = isNaN(n) ? esc(v) : fmtNum(n);
+      chips.appendChild(el("span", { class:"dchip tok-"+id, title:(TOKEN_CHIP_LABEL[id]||id)+" tokens" },
+        `<span class="dk">${TOKEN_CHIP_LABEL[id]||id}</span><span class="dv">${disp}</span>`));
+    });
+    wrap.appendChild(chips);
+  }
+  if(extraKeys.length){
+    const det = el("details", { class:"datamore" });
+    det.appendChild(el("summary", {}, `<span class="dm-chevron" aria-hidden="true">${ICON.chevron}</span><span>详情 · ${extraKeys.length}</span>`));
+    const table = el("div", { class:"datatable scroll" });
+    extraKeys.sort().forEach(k => {
+      table.appendChild(el("span", { class:"dt-k" }, esc(k)));
+      table.appendChild(el("span", { class:"dt-v" }, esc(String(data[k]))));
+    });
+    det.appendChild(table);
+    wrap.appendChild(det);
+  }
+  return wrap;
+}
+
+/* ---- Timeline ---- */
+function renderTimeline(detail){
+  const wrap = el("div", {});
+  wrap.appendChild(el("p", { class:"tl-rail-note" }, "按时间自上而下 · 时间戳为 UTC"));
+  const tl = el("ol", { class:"timeline", "aria-label":"事件时间线", style:"list-style:none;margin:0;padding:0" });
+  const isRunning = detail.summary.status === "running";
+  const lastIdx = detail.timeline.length - 1;
+
+  detail.timeline.forEach((ev, i) => {
+    const isLast = i === lastIdx;
+    const li = el("li", { class:`ev k-${ev.kind}${(isRunning && isLast)?" is-new":""}` });
+
+    // gutter timestamp
+    const gutter = el("div", { class:"gutter" }, `<span class="ts">${clockUTC(ev.timestampUtc)}</span>`);
+
+    // rail + body
+    const rail = el("div", { class:"node-rail" });
+    rail.appendChild(el("span", { class:"marker", "aria-hidden":"true" }));
+    const body = el("div", { class:"ev-body" });
+
+    const headRow = el("div", { class:"ev-head" });
+    headRow.innerHTML = `<span class="kind">${kindIcon(ev.kind)}<span>${KIND[ev.kind]?.label||ev.kind}</span></span>`;
+    if(ev.stepId){
+      const stType = ev.stepType ? ` <span class="st">${STEPTYPE_LABEL[ev.stepType]||ev.stepType}</span>` : "";
+      headRow.insertAdjacentHTML("beforeend", `<span class="stepbadge">${esc(ev.stepId)}${stType}</span>`);
+    }
+    if(ev.agentId) headRow.insertAdjacentHTML("beforeend", `<span class="agentbadge">@${esc(ev.agentId)}</span>`);
+    body.appendChild(headRow);
+
+    // content by kind
+    if(REPLY_KINDS.has(ev.kind)){
+      // the real assistant/role response text (ev.content), beautified — NOT just the role id
+      body.appendChild(renderReplyBubble(ev));
+    } else if(ev.kind === "ToolCall"){
+      body.appendChild(renderToolCall(ev.toolCall));
+    } else if(ev.kind === "HumanInputRequest"){
+      const na = el("div", { class:"needs-attn", role:"note" });
+      na.innerHTML = `${ICON.human}<div><div class="na-l">需要关注 · 等待人工确认</div><div class="na-m">${esc(ev.message)}</div><div class="na-ro">${ICON.lock.replace('width="24" height="24"','width="11" height="11"')} 只读视图 —— 请到审批系统中处理</div></div>`;
+      body.appendChild(na);
+    } else if(ev.kind === "StepFinished" && ev.message){
+      const parts = String(ev.message).split("·").map(x=>x.trim());
+      body.appendChild(el("div", { class:"ev-cost" }, `<span class="costchip">${parts.map(p=>`<b>${esc(p)}</b>`).join(' <span style="color:var(--border)">·</span> ')}</span>`));
+    } else if(ev.message){
+      const cls = (ev.kind==="RunError") ? "ev-msg" : "ev-msg";
+      const node = el("div", { class:cls }, esc(ev.message));
+      if(ev.kind==="RunError") node.style.color = "var(--err)", node.style.fontWeight = "600";
+      body.appendChild(node);
+    }
+
+    // model + token-usage chips (and a collapsible 详情 for the rest) wherever the committed data bag
+    // carries them — typically llm_call StepFinished / Message events. Skipped for tool-call rows whose
+    // detail already lives in the tool-call panel.
+    if(ev.kind !== "ToolCall"){
+      const details = renderDataDetails(ev.data);
+      if(details) body.appendChild(details);
+    }
+
+    rail.appendChild(body);
+    li.appendChild(gutter);
+    li.appendChild(rail);
+    tl.appendChild(li);
+  });
+
+  wrap.appendChild(tl);
+
+  if(isRunning){
+    const tail = el("div", { class:"tl-tail", role:"status", "aria-live":"polite" });
+    tail.innerHTML = `<span class="dot" aria-hidden="true"></span><span>运行进行中 —— 新事件将自动追加在此</span>`;
+    wrap.appendChild(tail);
+  }
+  return wrap;
+}
+
+function renderToolCall(tc){
+  const open = state.expanded.has(tc.callId);
+  const box = el("div", { class:"toolcall", "data-open": String(open), "data-callid": tc.callId });
+  const headBtn = el("button", { class:"tc-head", "aria-expanded": String(open), "aria-controls":"tcbody-"+tc.callId });
+  headBtn.innerHTML = `
+    <span class="tc-chevron" aria-hidden="true">${ICON.chevron}</span>
+    <span class="tc-name">${esc(tc.toolName)}</span>
+    <span class="tc-callid">${esc(tc.callId)}</span>
+    <span class="tc-status ${tc.success?"ok":"bad"}">${tc.success?ICON.check:ICON.x}${tc.success?"成功":"失败"}</span>`;
+  headBtn.addEventListener("click", () => {
+    if(state.expanded.has(tc.callId)) state.expanded.delete(tc.callId); else state.expanded.add(tc.callId);
+    const o = state.expanded.has(tc.callId);
+    box.setAttribute("data-open", String(o));
+    headBtn.setAttribute("aria-expanded", String(o));
+  });
+  box.appendChild(headBtn);
+
+  const bodyEl = el("div", { class:"tc-body", id:"tcbody-"+tc.callId });
+  bodyEl.appendChild(jsonField("参数 · arguments", tc.argumentsJson));
+  if(tc.success){
+    bodyEl.appendChild(jsonField("结果 · result", tc.resultJson));
+  } else {
+    const f = el("div", { class:"tc-field" });
+    f.innerHTML = `<div class="tc-field-head"><span class="tc-field-label">错误 · error</span></div>`;
+    f.appendChild(el("pre", { class:"json scroll" }, `<span class="tc-error">${esc(tc.error||"unknown error")}</span>`));
+    bodyEl.appendChild(f);
+  }
+  box.appendChild(bodyEl);
+  return box;
+}
+
+function jsonField(label, raw){
+  const f = el("div", { class:"tc-field" });
+  const head = el("div", { class:"tc-field-head" });
+  head.innerHTML = `<span class="tc-field-label">${esc(label)}</span>`;
+  const copy = el("button", { class:"copybtn", "aria-label":"复制 "+label }, `${ICON.copy}<span>复制</span>`);
+  copy.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(raw||""); } catch(e){
+      const ta=document.createElement("textarea"); ta.value=raw||""; document.body.appendChild(ta); ta.select(); try{document.execCommand("copy");}catch(_){ } ta.remove();
+    }
+    copy.classList.add("done"); copy.querySelector("span").textContent="已复制";
+    setTimeout(()=>{ copy.classList.remove("done"); copy.querySelector("span").textContent="复制"; }, 1400);
+  });
+  head.appendChild(copy);
+  f.appendChild(head);
+  const pre = el("pre", { class:"json scroll", tabindex:"0" });
+  pre.innerHTML = (raw && raw.trim()) ? colorJSON(raw) : '<span class="j-null">—</span>';
+  f.appendChild(pre);
+  return f;
+}
+
+/* ---- Graph (DAG) — interactive: zoom / pan / fit-to-view + click-a-node detail ----
+   Vanilla-JS reimagining of the console-web Studio graph (no React / no @xyflow). The API graph
+   carries only nodes/edges; per-node status comes from deriveNodeStatus (committed timeline, never
+   invented). Node detail is a pure client-side join of the node against the run timeline events for
+   the same stepId — no extra backend call. */
+const GRAPH_CATEGORY = {
+  transform:"data", assign:"data", retrieve_facts:"data", cache:"data",
+  guard:"control", conditional:"control", switch:"control", while:"control", delay:"control", wait_signal:"control", checkpoint:"control",
+  llm:"ai", llm_call:"ai", tool:"ai", tool_call:"ai", evaluate:"ai", reflect:"ai",
+  foreach:"composition", parallel:"composition", race:"composition", map_reduce:"composition", workflow_call:"composition", dynamic_workflow:"composition", vote:"composition",
+  connector_call:"integration", emit:"integration",
+  human:"human", human_input:"human", human_approval:"human"
+};
+function nodeCategory(t){ return GRAPH_CATEGORY[String(t||"").toLowerCase()] || ""; }
+const GRAPH_ZOOM_MIN = 0.3, GRAPH_ZOOM_MAX = 2.0;
+const clampZoom = z => Math.max(GRAPH_ZOOM_MIN, Math.min(GRAPH_ZOOM_MAX, z));
+const ST_LABEL = { done:"已完成", current:"进行中", failed:"失败", stopped:"已停止", pending:"待执行" };
+const ST_BADGE = { done:"completed", current:"running", failed:"failed", stopped:"stopped", pending:"unknown" };
+
+function applyGraphTransform(viewport){
+  const v = state.graphView;
+  viewport.style.transform = `translate(${v.panX}px,${v.panY}px) scale(${v.zoom})`;
+  const lab = document.getElementById("graphZoomLabel");
+  if(lab) lab.textContent = Math.round(v.zoom*100) + "%";
+}
+/* Fit the whole graph into the viewport. readableFloor (optional) keeps the FIRST view legible: a wide
+   horizontal flow in a narrow pane would otherwise fit at ~30% (unreadable), so when the true-fit zoom
+   falls below the floor we open at the floor zoom anchored to the flow start and let the user pan. The
+   explicit Fit control passes no floor → true fit-everything overview. */
+function fitGraphView(wrap, viewport, W, H, readableFloor){
+  const vw = wrap.clientWidth, vh = wrap.clientHeight;
+  if(!vw || !vh) return;
+  const pad = 28;
+  const fit = clampZoom(Math.min((vw-pad*2)/W, (vh-pad*2)/H, 1));
+  if(readableFloor && fit < readableFloor){
+    const zoom = readableFloor;
+    state.graphView = { zoom, panX: pad, panY: Math.max(pad, (vh - H*zoom)/2), fitted:true };
+  } else {
+    state.graphView = { zoom: fit, panX:(vw - W*fit)/2, panY:(vh - H*fit)/2, fitted:true };
+  }
+  applyGraphTransform(viewport);
+}
+/* Auto-fit once the graph first becomes visible. Deferred via setTimeout (not rAF — rAF is paused on
+   hidden/background tabs, which would leave the graph unfitted); the node is attached after the
+   synchronous render so reading clientWidth forces layout. Retry until the viewport is measurable. */
+function scheduleAutoFit(host, viewport, W, H){
+  let tries = 0;
+  const tick = () => {
+    if(state.graphView.fitted || state.activeTab !== "graph") return;
+    if(host.clientWidth > 0 && host.clientHeight > 0){ fitGraphView(host, viewport, W, H, 0.55); return; }
+    if(++tries < 12) setTimeout(tick, 30);
+  };
+  setTimeout(tick, 0);
+}
+function zoomGraphAt(viewport, factor, cx, cy){
+  const v = state.graphView;
+  const nz = clampZoom(v.zoom * factor);
+  const k = nz / v.zoom;
+  v.panX = cx - (cx - v.panX) * k;
+  v.panY = cy - (cy - v.panY) * k;
+  v.zoom = nz; v.fitted = true;
+  applyGraphTransform(viewport);
+}
+function attachGraphInteractions(wrap, viewport){
+  wrap.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    zoomGraphAt(viewport, e.deltaY < 0 ? 1.1 : 1/1.1, e.clientX - rect.left, e.clientY - rect.top);
+  }, { passive:false });
+
+  let dragging=false, pid=null, sx=0, sy=0, ox=0, oy=0;
+  wrap.addEventListener("pointerdown", (e) => {
+    if(e.button!==0 || e.target.closest(".gnode, .graph-controls, .gnode-detail")) return;
+    dragging=true; pid=e.pointerId; sx=e.clientX; sy=e.clientY; ox=state.graphView.panX; oy=state.graphView.panY;
+    wrap.classList.add("is-panning");
+    try { wrap.setPointerCapture(e.pointerId); } catch(_){}
+  });
+  wrap.addEventListener("pointermove", (e) => {
+    if(!dragging || e.pointerId!==pid) return;
+    state.graphView.panX = ox + (e.clientX - sx);
+    state.graphView.panY = oy + (e.clientY - sy);
+    state.graphView.fitted = true;
+    applyGraphTransform(viewport);
+  });
+  const end = () => { if(!dragging) return; dragging=false; wrap.classList.remove("is-panning"); try { wrap.releasePointerCapture(pid); } catch(_){} };
+  wrap.addEventListener("pointerup", end);
+  wrap.addEventListener("pointercancel", end);
+}
+
+function openNodeDetail(nodeId){ state.selectedNodeId = nodeId; syncNodeDetail(); }
+function closeNodeDetail(){ state.selectedNodeId = null; syncNodeDetail(); }
+/* Toggle the drawer + node halo in place so an open panel and the zoom/pan transform survive without a
+   full page re-render. */
+function syncNodeDetail(){
+  const host = document.querySelector(".graph-wrap");
+  if(!host) return;
+  host.querySelectorAll(".gnode").forEach(nd => nd.classList.toggle("selected", nd.getAttribute("data-node")===state.selectedNodeId));
+  const existing = host.querySelector(".gnode-detail");
+  if(existing) existing.remove();
+  const detail = currentDetail();
+  const g = detail && DataSource.getGraph(detail.summary.runId);
+  if(state.selectedNodeId && detail && g && g.nodes.some(nd => nd.nodeId === state.selectedNodeId))
+    host.appendChild(renderNodeDetailPanel(detail, g, state.selectedNodeId));
+}
+
+function renderNodeDetailPanel(detail, g, nodeId){
+  const node = g.nodes.find(nd => nd.nodeId === nodeId);
+  const sid = (node && node.stepId) || "";
+  const st = (g.nodeStatus && g.nodeStatus[nodeId]) || "pending";
+  // Join by the bare stepId (WorkflowStep nodes); topology nodes (run/actor) have none → no step events.
+  const events = sid
+    ? (detail.timeline || []).filter(e => e.stepId === sid).slice().sort((a,b) => parseT(a.timestampUtc) - parseT(b.timestampUtc))
+    : [];
+  const tsList = events.map(e => parseT(e.timestampUtc)).filter(x => !isNaN(x));
+  const startTs = tsList.length ? Math.min.apply(null, tsList) : null;
+  const endTs = tsList.length ? Math.max.apply(null, tsList) : null;
+  const cat = nodeCategory(node && node.nodeType);
+
+  const panel = el("aside", { class:"gnode-detail", role:"region", "aria-label":`节点详情 ${nodeId}`, tabindex:"-1" });
+  panel.addEventListener("keydown", (e) => { if(e.key === "Escape"){ e.stopPropagation(); closeNodeDetail(); } });
+
+  const head = el("div", { class:"nd-head" });
+  head.innerHTML = `<span class="nd-ic" data-cat="${cat}" aria-hidden="true">${stepTypeIcon(node && node.nodeType)}</span>
+    <span class="nd-id" title="${esc(nodeId)}">${esc(sid || nodeId)}</span>`;
+  const close = el("button", { class:"nd-close", type:"button", "aria-label":"关闭节点详情" }, ICON.x);
+  close.addEventListener("click", (ev) => { ev.stopPropagation(); closeNodeDetail(); });
+  head.appendChild(close);
+  panel.appendChild(head);
+
+  const body = el("div", { class:"nd-body scroll" });
+  const meta = el("div", { class:"nd-meta" });
+  meta.innerHTML = `
+    <span class="k">状态</span><span class="v"><span class="badge b-${ST_BADGE[st]}">${ST_LABEL[st]}</span></span>
+    <span class="k">类型</span><span class="v">${esc((node && node.nodeType) || "—")}</span>
+    ${startTs!=null ? `<span class="k">开始</span><span class="v">${clockUTC(new Date(startTs).toISOString())} UTC</span>` : ""}
+    ${(startTs!=null && endTs!=null && endTs>startTs) ? `<span class="k">用时</span><span class="v">${fmtDur(endTs-startTs)}</span>` : ""}`;
+  body.appendChild(meta);
+
+  const sec = el("div", {});
+  sec.appendChild(el("div", { class:"nd-sec-title" }, `执行事件 · ${events.length}`));
+  if(events.length === 0){
+    sec.appendChild(el("div", { class:"nd-empty" }, sid
+      ? "该步骤尚无执行事件（待执行，或本次运行未经过此步骤）。"
+      : "拓扑节点（运行 / Actor）· 无独立步骤事件，状态反映整体运行。"));
+  } else {
+    events.forEach(ev => {
+      const row = el("div", { class:"nd-ev" });
+      const evHead = el("div", { class:"nd-ev-head" });
+      evHead.innerHTML = `<span class="kind k-${ev.kind}">${kindIcon(ev.kind)}<span>${KIND[ev.kind]?.label||ev.kind}</span></span><span class="nd-ev-ts">${clockUTC(ev.timestampUtc)}</span>`;
+      row.appendChild(evHead);
+      if(ev.kind === "ToolCall" && ev.toolCall){
+        row.appendChild(renderToolCall(ev.toolCall));
+      } else if(REPLY_KINDS.has(ev.kind)){
+        // surface the real LLM response so a selected node is explorable, not just a status dot
+        row.appendChild(renderReplyBubble(ev));
+      } else if(ev.message){
+        row.appendChild(el("div", { class:"nd-ev-msg"+(ev.kind==="RunError"?" err":"") }, esc(ev.message)));
+      }
+      // model + token usage from this step's committed data bag
+      if(ev.kind !== "ToolCall"){
+        const details = renderDataDetails(ev.data);
+        if(details) row.appendChild(details);
+      }
+      sec.appendChild(row);
+    });
+  }
+  body.appendChild(sec);
+  panel.appendChild(body);
+  requestAnimationFrame(() => { try { panel.focus(); } catch(_){} });
+  return panel;
+}
+
+function renderGraph(detail){
+  const g = DataSource.getGraph(detail.summary.runId);
+  const wrap = el("div", {});
+  if(!g){ wrap.appendChild(el("div", { class:"detail-empty" }, `<div class="dt">暂无拓扑数据</div>`)); return wrap; }
+
+  const host = el("div", { class:"graph-wrap", role:"application", "aria-label":"工作流拓扑图：滚轮缩放、拖拽平移、点击节点查看详情" });
+  const viewport = el("div", { class:"graph-viewport" });
+  const canvas = el("div", { class:"graph-canvas" });
+
+  const horizontal = window.innerWidth > 720;
+  const NW = 244, NH = 96, GX = 150, GY = 84, PAD = 28;
+  const pos = {};
+
+  // Layered layout from the edges (OWNS / CONTAINS_STEP / CHILD_OF). Depth = longest path from the roots,
+  // so the run's steps fan out as CHILD nodes one column over instead of forming a fake left-to-right
+  // sequence. This is what makes "running run containing an already-done step" read as containment, not
+  // a contradictory timeline. depth = primary axis; siblings stack on the secondary axis.
+  const ids = g.nodes.map(nd => nd.nodeId);
+  const idSet = new Set(ids);
+  const outAdj = {}; const indeg = {};
+  ids.forEach(id => { outAdj[id] = []; indeg[id] = 0; });
+  g.edges.forEach(e => {
+    if(idSet.has(e.fromNodeId) && idSet.has(e.toNodeId) && e.fromNodeId !== e.toNodeId){
+      outAdj[e.fromNodeId].push(e.toNodeId);
+      indeg[e.toNodeId] += 1;
+    }
+  });
+  let roots = ids.filter(id => indeg[id] === 0);
+  if(roots.length === 0) roots = [(g.rootNodeId && idSet.has(g.rootNodeId)) ? g.rootNodeId : ids[0]];
+  const depth = {}; ids.forEach(id => depth[id] = 0);
+  const queue = roots.slice();
+  let guard = 0; const cap = ids.length * ids.length + 16; // cycle defense
+  while(queue.length && guard++ < cap){
+    const id = queue.shift();
+    for(const c of outAdj[id]){
+      if(depth[c] < depth[id] + 1){ depth[c] = depth[id] + 1; queue.push(c); }
+    }
+  }
+  const rowByDepth = {};
+  g.nodes.forEach(nd => {
+    const d = depth[nd.nodeId] || 0;
+    const r = rowByDepth[d] === undefined ? 0 : rowByDepth[d] + 1;
+    rowByDepth[d] = r;
+    pos[nd.nodeId] = horizontal
+      ? { x: PAD + d*(NW+GX), y: PAD + r*(NH+GY) }
+      : { x: PAD + r*(NW+GX), y: PAD + d*(NH+GY) };
+  });
+  const maxDepth = ids.reduce((m,id) => Math.max(m, depth[id] || 0), 0);
+  const maxRow = Object.values(rowByDepth).reduce((m,r) => Math.max(m, r), 0);
+  const cols = horizontal ? maxDepth : maxRow;     // along X
+  const rows = horizontal ? maxRow : maxDepth;     // along Y
+  const W = PAD*2 + (cols+1)*NW + cols*GX;
+  const H = PAD*2 + (rows+1)*NH + rows*GY;
+  canvas.style.width = W+"px"; canvas.style.height = H+"px";
+
+  // SVG edges
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS,"svg");
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+  const defs = document.createElementNS(svgNS,"defs");
+  defs.innerHTML = `<marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="var(--muted-2)"/></marker>
+    <marker id="arrowFlow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>`;
+  svg.appendChild(defs);
+
+  // Step flow (NEXT, from each step's NextStepId) is the meaningful relationship — render it prominently;
+  // the run -> step CONTAINS_STEP edges are membership scaffolding, so fade them and hide the ones the flow
+  // already reaches (leaving just run -> entry-step). With no NEXT edges (older graph data) nothing is
+  // hidden and the prior look is preserved.
+  const nextTargets = new Set();
+  g.edges.forEach(e => { if(e.edgeType === "NEXT") nextTargets.add(e.toNodeId); });
+
+  const edgeLabels = [];
+  g.edges.forEach(e => {
+    if(e.edgeType === "CONTAINS_STEP" && nextTargets.has(e.toNodeId)) return; // redundant with the flow edge
+    const a = pos[e.fromNodeId], b = pos[e.toNodeId];
+    if(!a||!b) return;
+    let x1,y1,x2,y2,mx,my;
+    if(horizontal){ x1=a.x+NW; y1=a.y+NH/2; x2=b.x; y2=b.y+NH/2; mx=(x1+x2)/2; my=y1; }
+    else { x1=a.x+NW/2; y1=a.y+NH; x2=b.x+NW/2; y2=b.y; mx=x1; my=(y1+y2)/2; }
+    const isFlow = e.edgeType === "NEXT";
+    const isContains = e.edgeType === "CONTAINS_STEP";
+    const path = document.createElementNS(svgNS,"path");
+    let d;
+    if(horizontal){ const cx=(x1+x2)/2; d=`M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`; }
+    else { const cy=(y1+y2)/2; d=`M${x1},${y1} C${x1},${cy} ${x2},${cy} ${x2},${y2}`; }
+    path.setAttribute("d", d);
+    path.setAttribute("fill","none");
+    path.setAttribute("stroke", isFlow ? "var(--accent)" : "var(--muted-2)");
+    path.setAttribute("stroke-width", isFlow ? "2" : "1.6");
+    path.setAttribute("marker-end", isFlow ? "url(#arrowFlow)" : "url(#arrow)");
+    if(isContains){ path.setAttribute("stroke-dasharray","3 4"); path.setAttribute("opacity",".32"); }
+    else if(g.nodeStatus && g.nodeStatus[e.toNodeId]==="pending"){ path.setAttribute("stroke-dasharray","4 4"); path.setAttribute("opacity",".6"); }
+    svg.appendChild(path);
+    // label: branch key on conditional flow edges; type for OWNS/CHILD_OF; none for the faded containment
+    const label = isFlow ? (e.branchKey || "") : (isContains ? "" : e.edgeType);
+    if(label) edgeLabels.push({ mx, my, type: label, flow: isFlow });
+  });
+  canvas.appendChild(svg);
+
+  // nodes (clickable buttons → detail drawer)
+  g.nodes.forEach(nd => {
+    const st = (g.nodeStatus && g.nodeStatus[nd.nodeId]) || "pending";
+    const cat = nodeCategory(nd.nodeType);
+    const node = el("button", {
+      type:"button",
+      class:`gnode st-${st}${state.selectedNodeId===nd.nodeId?" selected":""}`,
+      "data-cat": cat || null,
+      "data-node": nd.nodeId,
+      "aria-label":`节点 ${nd.stepId || nd.nodeId}，${ST_LABEL[st]}，点击查看详情`,
+      style:`left:${pos[nd.nodeId].x}px;top:${pos[nd.nodeId].y}px`
+    });
+    node.innerHTML = `
+      <div class="gn-top">
+        <span class="gn-ic" aria-hidden="true">${stepTypeIcon(nd.nodeType)}</span>
+        <div class="gn-main"><div class="gn-id" title="${esc(nd.nodeId)}">${esc(nd.stepId || midTrunc(nd.nodeId, 26))}</div><div class="gn-type">${esc(midTrunc(nd.nodeType, 28) || "—")}</div></div>
+      </div>
+      <div class="gn-foot"><span class="gn-state">${ST_LABEL[st]}</span></div>`;
+    node.addEventListener("click", (ev) => { ev.stopPropagation(); openNodeDetail(nd.nodeId); });
+    canvas.appendChild(node);
+  });
+
+  // edge labels
+  edgeLabels.forEach(L => {
+    canvas.appendChild(el("span", { class:"edge-label"+(L.flow?" flow":""), style:`left:${L.mx}px;top:${L.my}px` }, esc(L.type)));
+  });
+
+  viewport.appendChild(canvas);
+  host.appendChild(viewport);
+
+  // zoom / fit controls
+  const controls = el("div", { class:"graph-controls", role:"group", "aria-label":"缩放控制" });
+  const fitIcon = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 0-1 1h-4"/></svg>';
+  const mkBtn = (label, title, fn) => { const b = el("button", { type:"button", "aria-label":title, title }, label); b.addEventListener("click", (ev) => { ev.stopPropagation(); fn(); }); return b; };
+  controls.appendChild(mkBtn("+", "放大", () => zoomGraphAt(viewport, 1.2, host.clientWidth/2, host.clientHeight/2)));
+  controls.appendChild(el("div", { class:"graph-zoom-label", id:"graphZoomLabel" }, Math.round(state.graphView.zoom*100)+"%"));
+  controls.appendChild(mkBtn("−", "缩小", () => zoomGraphAt(viewport, 1/1.2, host.clientWidth/2, host.clientHeight/2)));
+  controls.appendChild(mkBtn(fitIcon, "适应窗口", () => fitGraphView(host, viewport, W, H)));
+  controls.appendChild(mkBtn("1:1", "实际大小", () => { state.graphView.zoom = 1; state.graphView.fitted = true; applyGraphTransform(viewport); }));
+  host.appendChild(controls);
+
+  // node detail drawer (re-opened after a polling re-render when a node stays selected)
+  if(state.selectedNodeId && g.nodes.some(nd => nd.nodeId === state.selectedNodeId))
+    host.appendChild(renderNodeDetailPanel(detail, g, state.selectedNodeId));
+
+  attachGraphInteractions(host, viewport);
+  applyGraphTransform(viewport);
+  // auto-fit once when the graph first becomes visible; keep the first view legible on narrow panes.
+  if(!state.graphView.fitted) scheduleAutoFit(host, viewport, W, H);
+
+  wrap.appendChild(host);
+
+  const legend = el("div", { class:"graph-legend", "aria-hidden":"false" });
+  legend.innerHTML = `
+    <span class="lg"><span class="sw done"></span>已完成</span>
+    <span class="lg"><span class="sw current"></span>进行中</span>
+    <span class="lg"><span class="sw failed"></span>失败</span>
+    <span class="lg"><span class="sw stopped"></span>已停止</span>
+    <span class="lg"><span class="sw pending"></span>待执行</span>`;
+  wrap.appendChild(legend);
+  return wrap;
+}
+
+/* ===========================================================================
+   Compose
+   =========================================================================== */
+// Filter / scope changes opt into a run-list scroll reset; selection and polling preserve the position.
+let pendingListScrollReset = false;
+let pendingDetailScrollReset = false;
+let renderedObservatoryRoute = null;
+
+function render(){
+  const app = $("#app");
+  const oldList=app.querySelector(".runlist"),oldDetail=app.querySelector(".detail-pane");
+  const previousRoute=renderedObservatoryRoute;
+  if((oldList||oldDetail)&&previousRoute){
+    const previousSaved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute);
+    writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,{list:paneScrollPosition(oldList,previousSaved.list),detail:paneScrollPosition(oldDetail,previousSaved.detail)});
+  }
+  const route=readObservatoryRoute(location.search,location.hash);
+  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
+  const sameRoute=previousRoute&&observatoryRouteKey(previousRoute)===observatoryRouteKey(route);
+  const prevListScroll=pendingListScrollReset?0:(sameRoute?paneScrollPosition(oldList,saved.list):saved.list);
+  const prevDetailScroll=pendingDetailScrollReset?0:(sameRoute?paneScrollPosition(oldDetail,saved.detail):saved.detail);
+  pendingListScrollReset = false;
+  pendingDetailScrollReset = false;
+  renderedObservatoryRoute=route;
+  app.innerHTML = "";
+  app.appendChild(renderTopbar());
+
+  const showBanner = state.signedIn && state.scenario === "globalError";
+  if(showBanner) app.appendChild(renderBanner());
+
+  if(!state.signedIn){
+    app.appendChild(renderLogin());
+    return;
+  }
+
+  app.appendChild(renderWorkspaceBar());
+
+  const shell = el("div", { class:"shell"+(showBanner?" has-banner":"") });
+  shell.appendChild(renderList());
+  shell.appendChild(renderDetail());
+  app.appendChild(shell);
+
+  applyPaneScrollState(app.querySelector(".runlist"),app.querySelector(".detail-pane"),{list:prevListScroll,detail:prevDetailScroll});
+  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:prevListScroll,detail:prevDetailScroll});
+}
+
+/* ===========================================================================
+   Selection + data loading (real fetch; near-live via polling)
+   =========================================================================== */
+function selectRun(runId){
+  pendingDetailScrollReset = true;
+  state.selectedRunId = runId;
+  state.scenario = "detailLoading";
+  state.activeTab = "timeline";
+  writeObservatoryRoute({ run:runId, tab:"timeline" });
+  state.selectedNodeId = null;
+  state.graphView = { zoom: 1, panX: 0, panY: 0, fitted: false };
+  document.body.setAttribute("data-mobile-view","detail");
+  render();
+  loadDetail(runId);
+}
+
+/* ---- 06-20-observatory-admin-cross-scope: admin cross-scope controls ---- */
+async function fetchMe(){
+  try {
+    const me = await api("/api/workflow/observatory/me");
+    if(me){ adminState.isAdmin = !!me.isAdmin; adminState.role = me.role || ""; adminState.email = me.email || ""; adminState.ownScope = me.scopeId || ""; }
+  } catch(e){ /* admin UI stays hidden if /me is unavailable */ }
+}
+
+function setScope(scope){
+  adminState.currentScope = scope;       // null = my runs · ALL_SCOPES · or a concrete scope id
+  adminState.candidates = null; adminState.message = ""; adminState.inputDraft = "";
+  pendingListScrollReset = true;         // new scope → fresh list, start at the top
+  pendingDetailScrollReset = true;
+  state.selectedRunId = null;
+  cache.runs = []; cache.details = {}; cache.graphs = {};
+  lastRunsSig = ""; lastDetailSig = "";
+  state.scenario = "listLoading";
+  writeObservatoryRoute({ scope:scope===ALL_SCOPES?"all":(scope||"mine"), run:"" });
+  render();
+  (async () => { await refreshRuns(); lastRunsSig = runsSig(cache.runs); render(); })();
+}
+
+function goToInput(){
+  const raw = (adminState.inputDraft || "").trim();
+  adminState.message = ""; adminState.candidates = null;
+  if(!raw) return;
+  if(raw.indexOf("@") >= 0) resolveEmail(raw); else setScope(raw);
+}
+
+function openRunInput(){
+  const runId = (adminState.runIdDraft || "").trim();
+  if(runId) selectRun(runId);
+}
+
+async function resolveEmail(email){
+  adminState.message = "解析中…"; render();
+  try {
+    const res = await api("/api/workflow/observatory/resolve-scope?email=" + encodeURIComponent(email));
+    const cands = (res && res.candidates) || [];
+    if(cands.length === 0){ adminState.message = "未找到匹配的用户。"; adminState.candidates = null; render(); }
+    else if(cands.length === 1){ setScope(cands[0].scopeId); }
+    else { adminState.message = ""; adminState.candidates = cands; render(); }
+  } catch(e){ adminState.message = "解析失败，请重试。"; render(); }
+}
+
+function renderAdminBar(){
+  const bar = el("div", { class:"adminbar", role:"region", "aria-label":"管理员跨 scope 查看" });
+  bar.appendChild(el("span", { class:"ab-badge", title:"NyxID 平台角色：" + esc(adminState.role) }, `${ICON.shield}<span>ADMIN</span>`));
+
+  const view = el("span", { class:"ab-view" });
+  view.innerHTML = adminState.currentScope === ALL_SCOPES
+    ? "正在查看 <b>全部 scope</b>"
+    : (adminState.currentScope ? "正在查看 scope <b>" + esc(adminState.currentScope) + "</b>" : "正在查看 <b>我的运行</b>");
+  bar.appendChild(view);
+
+  const input = el("input", { class:"ab-input", type:"text", placeholder:"输入邮箱或 scope id…", "aria-label":"邮箱或 scope id", value: adminState.inputDraft || "" });
+  input.addEventListener("input", e => { adminState.inputDraft = e.target.value; });
+  input.addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); goToInput(); } });
+  bar.appendChild(input);
+
+  const go = el("button", { class:"chip" }, "前往"); go.addEventListener("click", goToInput); bar.appendChild(go);
+  const runInput = el("input", { class:"ab-input", type:"text", placeholder:"输入完整 run id…", "aria-label":"完整 run id", value: adminState.runIdDraft || "" });
+  runInput.addEventListener("input", e => { adminState.runIdDraft = e.target.value; });
+  runInput.addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); openRunInput(); } });
+  bar.appendChild(runInput);
+  const openRun = el("button", { class:"chip" }, "打开运行"); openRun.addEventListener("click", openRunInput); bar.appendChild(openRun);
+  const all = el("button", { class:"chip", "aria-pressed": String(adminState.currentScope === ALL_SCOPES) }, "全部 scope");
+  all.addEventListener("click", () => setScope(ALL_SCOPES)); bar.appendChild(all);
+  if(adminState.currentScope){
+    const back = el("button", { class:"linkbtn" }, "返回我的运行");
+    back.addEventListener("click", () => setScope(null)); bar.appendChild(back);
+  }
+  if(adminState.message) bar.appendChild(el("span", { class:"ab-msg", role:"status" }, esc(adminState.message)));
+  if(adminState.candidates && adminState.candidates.length){
+    const cands = el("div", { class:"ab-cands", "aria-label":"候选 scope" });
+    adminState.candidates.forEach(c => {
+      const b = el("button", { class:"chip", title:"角色：" + esc(c.role || "") }, esc((c.email || c.scopeId) + " · " + c.scopeId));
+      b.addEventListener("click", () => setScope(c.scopeId));
+      cands.appendChild(b);
+    });
+    bar.appendChild(cands);
+  }
+  bar.appendChild(el("div", { class:"ab-hint" }, "邮箱解析为该 NyxID 用户的 scope id（≈用户 id）；全部 scope 为最近若干条视图。"));
+  return bar;
+}
+
+async function refreshRuns(){
+  try {
+    const runs = await api("/api/workflow/observatory/runs" + listQueryParams());
+    cache.runs = runs || [];
+    if(state.scenario === "listLoading" || state.scenario === "empty" || state.scenario === "globalError"){
+      state.scenario = (cache.runs.length === 0) ? "empty" : "normal";
+    }
+    return true;
+  } catch(e){
+    if(e.message !== "unauthorized") state.scenario = "globalError";
+    return false;
+  }
+}
+
+async function refreshDetail(runId){
+  try {
+    const detailUrl = runDetailRequestPath(runId,adminState,cache.runs,false);
+    const detail = await api(detailUrl);
+    if(detail === null){
+      delete cache.details[runId];
+      if(state.selectedRunId === runId) state.scenario = "notFound";
+      return false;
+    }
+    cache.details[runId] = detail;
+    if(cache.graphs[runId]) cache.graphs[runId].nodeStatus = deriveNodeStatus(cache.graphs[runId], detail);
+    if(state.selectedRunId === runId && (state.scenario === "detailLoading" || state.scenario === "notFound")) state.scenario = "normal";
+    return true;
+  } catch(e){
+    if(e.message !== "unauthorized" && state.scenario === "detailLoading") state.scenario = "globalError";
+    return false;
+  }
+}
+
+async function loadDetail(runId){
+  await refreshDetail(runId);
+  lastDetailSig = detailSig(cache.details[runId]);
+  render();
+}
+
+async function loadGraph(runId){
+  if(!runId || cache.graphs[runId]) return;
+  try {
+    const graphUrl = runGraphRequestPath(runId,adminState,cache.runs);
+    const g = await api(graphUrl);
+    if(g){
+      g.nodeStatus = deriveNodeStatus(g, cache.details[runId]);
+      cache.graphs[runId] = g;
+      if(state.activeTab === "graph" && state.selectedRunId === runId) render();
+    }
+  } catch(e){ /* graph view is optional; ignore fetch errors */ }
+}
+
+/* ---- near-live polling (~3s, paused when tab hidden); history & live share it ---- */
+function runsSig(runs){ return runs.map(r => r.runId + ":" + r.status + ":" + r.updatedAtUtc + ":" + r.stateVersion).join("|"); }
+function detailSig(d){ return d ? (d.summary.status + ":" + d.summary.stateVersion + ":" + ((d.timeline && d.timeline.length) || 0) + ":" + ((d.diagnostics && d.diagnostics.length) || 0)) : "none"; }
+let lastRunsSig = "", lastDetailSig = "";
+
+async function poll(){
+  if(document.hidden || !state.signedIn) return;
+  let changed = false;
+  const before = state.scenario;
+  await refreshRuns();
+  const rs = runsSig(cache.runs);
+  if(rs !== lastRunsSig){ lastRunsSig = rs; changed = true; }
+  if(state.selectedRunId && state.scenario !== "notFound"){
+    await refreshDetail(state.selectedRunId);
+    const ds = detailSig(cache.details[state.selectedRunId]);
+    if(ds !== lastDetailSig){ lastDetailSig = ds; changed = true; }
+  }
+  if(state.scenario !== before) changed = true;
+  if(changed){ render(); return; }
+  const chip = document.getElementById("liveChip");
+  if(chip && chip.classList.contains("is-live")){ chip.classList.add("is-polling"); setTimeout(() => chip.classList.remove("is-polling"), 600); }
+}
+let pollTimer = null;
+function startPolling(){ stopPolling(); pollTimer = setInterval(poll, CFG.pollMs); }
+function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
+
+/* lightweight 1s ticker: refresh relative-time / duration labels in place without
+   reflowing the timeline (preserves tool-call expand state + focus). */
+function updateRelTimes(){
+  const now = nowMs();
+  document.querySelectorAll("[data-since]").forEach(node => {
+    const iso = node.getAttribute("data-since");
+    const base = relTime(iso, now);
+    node.textContent = node.classList.contains("freshness") ? base + " 更新" : base;
+  });
+  document.querySelectorAll("[data-duration]").forEach(node => {
+    node.textContent = fmtDur(now - parseT(node.getAttribute("data-duration")));
+  });
+}
+setInterval(() => { if(state.signedIn && !document.hidden) updateRelTimes(); }, 1000);
+
+document.addEventListener("visibilitychange", () => { if(!document.hidden) poll(); });
+
+/* ===========================================================================
+   Init
+   =========================================================================== */
+applyTheme();
+setImmersive(state.immersive);
+document.addEventListener("keydown", event => {
+  if(event.key !== "Escape") return;
+  if(state.selectedNodeId){ closeNodeDetail(); return; }
+  const tools=document.querySelector(".admin-tools[open]");
+  if(tools){ tools.removeAttribute("open"); return; }
+  if(state.immersive){ setImmersive(false); render(); }
+});
+window.addEventListener("pagehide", () => {
+  const list=document.querySelector(".runlist"),detail=document.querySelector(".detail-pane");
+  const route=readObservatoryRoute(location.search,location.hash);
+  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
+  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:paneScrollPosition(list,saved.list),detail:paneScrollPosition(detail,saved.detail)});
+});
+(async function init(){
+  try { await completeLoginIfCallback(); }
+  catch(e){ console.warn("observatory: login callback failed", e); }
+  if(!getToken()){ state.signedIn = false; state.scenario = "login"; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); return; }
+  state.signedIn = true;
+  state.scenario = "listLoading";
+  render();
+  cache.account = toAccount(await fetchUserInfo()) || cache.account;
+  await fetchMe();
+  if(adminState.isAdmin) adminState.currentScope = initialRoute.scope === "all" ? ALL_SCOPES : (initialRoute.scope === "mine" ? null : initialRoute.scope);
+  await refreshRuns();
+  lastRunsSig = runsSig(cache.runs);
+  if(state.selectedRunId) await loadDetail(state.selectedRunId);
+  render();
+  // Admin-only: resolve scopeIds to nyxid display names in the background, then re-render so the
+  // names appear in cross-scope rows and the run-detail scope chip without delaying the runs list.
+  if(adminState.isAdmin){ loadNyxidDirectory().then(() => { if(nyxidDirectory.loaded) render(); }); }
+  startPolling();
+})();
+
+/* follow system theme changes only when the user hasn't manually chosen a theme */
+if(window.matchMedia){
+  const mq = window.matchMedia("(prefers-color-scheme: light)");
+  if(mq.addEventListener) mq.addEventListener("change", () => { if(!state.theme) render(); });
+}
+/* re-render on breakpoint cross so the graph relayouts for the new orientation */
+let _rw; window.addEventListener("resize", () => { clearTimeout(_rw); _rw = setTimeout(() => { if(state.signedIn && state.scenario === "normal") render(); }, 160); });
+</script>
+</body>
+</html>

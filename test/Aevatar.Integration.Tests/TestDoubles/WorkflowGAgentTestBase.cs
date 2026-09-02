@@ -2,7 +2,17 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core;
+using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.Tools;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -13,6 +23,7 @@ using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
@@ -23,6 +34,7 @@ using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 using System.Reflection;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
@@ -45,6 +57,54 @@ public abstract class WorkflowGAgentTestBase
             return agent;
         }
 
+        internal static Task BindInteractiveWorkflowDefinitionAsync(
+            WorkflowGAgent agent,
+            string workflowYaml,
+            string? workflowName = null,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? scopeId = null,
+            string? sourceKind = null,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+            string? workflowId = null,
+            string? revisionId = null,
+            CancellationToken ct = default) =>
+            agent.BindWorkflowDefinitionAsync(
+                workflowYaml,
+                workflowName,
+                inlineWorkflowYamls,
+                scopeId,
+                sourceKind,
+                capabilityAdmissionPlan,
+                workflowId,
+                revisionId,
+                ExternalCapabilityExecutionMode.Interactive,
+                ct);
+
+        internal static Task BindInteractiveWorkflowRunDefinitionAsync(
+            WorkflowRunGAgent agent,
+            string definitionActorId,
+            string workflowYaml,
+            string? workflowName = null,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? runId = null,
+            string? scopeId = null,
+            string? runOrigin = null,
+            string? scheduleId = null,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+            CancellationToken ct = default) =>
+            agent.BindWorkflowRunDefinitionAsync(
+                definitionActorId,
+                workflowYaml,
+                workflowName,
+                inlineWorkflowYamls,
+                runId,
+                scopeId,
+                runOrigin,
+                scheduleId,
+                capabilityAdmissionPlan,
+                ExternalCapabilityExecutionMode.Interactive,
+                ct);
+
         internal static async Task<WorkflowGAgent> CreateRegisteredDefinitionAgentAsync(
             RecordingActorRuntime runtime,
             RecordingEventPublisher publisher,
@@ -55,29 +115,55 @@ public abstract class WorkflowGAgentTestBase
             var agent = CreateDefinitionAgent();
             SetAgentId(agent, actorId);
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowDefinitionAsync(workflowYaml, workflowName);
+            await BindInteractiveWorkflowDefinitionAsync(agent, workflowYaml, workflowName);
             runtime.RegisterAgent(actorId, agent);
             return agent;
         }
 
-        internal static async Task<(WorkflowRoleGAgent Agent, RecordingEventPublisher Publisher)> CreateActivatedWorkflowRoleAgentAsync(
+        internal static async Task<(TestWorkflowRoleGAgent Agent, RecordingEventPublisher Publisher)> CreateActivatedWorkflowRoleAgentAsync(
             IEventStore eventStore,
             ILLMProviderFactory llmProviderFactory,
-            string agentId)
+            string agentId,
+            IEnumerable<IAgentTool>? tools = null,
+            IToolSetRegistry? toolSetRegistry = null,
+            IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null,
+            TimeProvider? timeProvider = null,
+            RoleChatExecutionOptions? chatExecutionOptions = null,
+            IActorRuntimeCallbackScheduler? callbackScheduler = null,
+            ISecretVault? chatToolRecoverySecretVault = null)
         {
-            await using var services = new ServiceCollection()
+            if (timeProvider is FakeTimeProvider fakeTimeProvider)
+                fakeTimeProvider.SetUtcNow(DateTimeOffset.UtcNow);
+            chatToolRecoverySecretVault ??= new InMemorySecretVault();
+            var serviceCollection = new ServiceCollection()
                 .AddSingleton<IEventStore>(eventStore)
                 .AddSingleton(eventStore)
+                .AddSingleton<ISecretVault>(chatToolRecoverySecretVault)
                 .AddSingleton<EventSourcingRuntimeOptions>()
-                .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
-                .BuildServiceProvider();
+                .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
+                .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+                .AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance)
+                .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
+                .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+            if (callbackScheduler is not null)
+                serviceCollection.AddSingleton<IActorRuntimeCallbackScheduler>(callbackScheduler);
+            var services = serviceCollection.BuildServiceProvider();
             var publisher = new RecordingEventPublisher();
-            var agent = new WorkflowRoleGAgent(llmProviderFactory)
+            var agent = new TestWorkflowRoleGAgent(
+                services.GetRequiredService<IAgentToolExecutionPort>(),
+                llmProviderFactory,
+                toolSetRegistry,
+                callerAccessTokenProvider,
+                timeProvider,
+                chatExecutionOptions,
+                chatToolRecoverySecretVault)
             {
                 Services = services,
                 EventPublisher = publisher,
                 EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
             };
+            foreach (var tool in tools ?? [])
+                agent.RegisterToolForTest(tool);
             SetAgentId(agent, agentId);
             await agent.ActivateAsync();
             await agent.HandleWorkflowRoleInitialize(new WorkflowRoleInitializeEvent
@@ -90,19 +176,115 @@ public abstract class WorkflowGAgentTestBase
             return (agent, publisher);
         }
 
+        private sealed class AppendedAuditTrail : IAuditTrailAppender
+        {
+            public Task<AuditTrailAppendResult> AppendAsync(
+                AuditRecord record,
+                CancellationToken cancellationToken = default) =>
+                Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+        }
+
+        private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+        {
+            public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+            public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
+        }
+
+        internal sealed class SuccessfulWorkflowTool(string name) : IAgentTool
+        {
+            private int _executeCount;
+
+            public string Name => name;
+            public string Description => "Workflow integration test tool";
+            public string ParametersSchema => "{}";
+            public int ExecuteCount => Volatile.Read(ref _executeCount);
+
+            public AgentToolReceipt CreateSuccessReceipt(
+                string callId,
+                string toolName,
+                string resultJson) => new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
+
+            public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+            {
+                Interlocked.Increment(ref _executeCount);
+                return Task.FromResult("{}");
+            }
+        }
+
+        internal sealed class TestWorkflowRoleGAgent(
+            IAgentToolExecutionPort toolExecutionPort,
+            ILLMProviderFactory llmProviderFactory,
+            IToolSetRegistry? toolSetRegistry,
+            IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider,
+            TimeProvider? timeProvider,
+            RoleChatExecutionOptions? chatExecutionOptions,
+            ISecretVault chatToolRecoverySecretVault)
+            : WorkflowRoleGAgent(
+                toolExecutionPort,
+                llmProviderFactory,
+                toolSetRegistry: toolSetRegistry,
+                callerAccessTokenProvider: callerAccessTokenProvider,
+                chatExecutionOptions: chatExecutionOptions,
+                timeProvider: timeProvider,
+                chatToolRecoverySecretVault: chatToolRecoverySecretVault)
+        {
+            public void RegisterToolForTest(IAgentTool tool) => RegisterTool(tool);
+
+            public async Task StartRecoverySessionForTestAsync(
+                ChatRequestEvent request,
+                AgentToolExecutionContext toolContext,
+                CancellationToken ct = default)
+            {
+                await EstablishTurnAuthorityAsync(request, trackedSession: null, toolContext, ct);
+            }
+        }
+
+        internal sealed class AlwaysStartingAgentToolAdmissionLedger : IAgentToolAdmissionLedger
+        {
+            public static AlwaysStartingAgentToolAdmissionLedger Instance { get; } = new();
+
+            public Task<AgentToolAdmissionResult> TryStartAsync(
+                AgentToolAdmissionFact fact,
+                CancellationToken ct = default)
+            {
+                ArgumentNullException.ThrowIfNull(fact);
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
+            }
+        }
+
+        internal sealed class UnexpectedAgentToolExecutionPort : IAgentToolExecutionPort
+        {
+            public static UnexpectedAgentToolExecutionPort Instance { get; } = new();
+
+            public Task<AgentToolExecutionOutcome> ExecuteAsync(
+                AgentToolExecutionRequest request,
+                CancellationToken ct = default) =>
+                throw new InvalidOperationException(
+                    $"Tool '{request.Tool.Name}' must not execute in workflow mapping tests.");
+        }
+
         internal static WorkflowRunGAgent CreateRunAgent(
             RecordingActorRuntime? runtime = null,
             IEventModuleFactory<IWorkflowExecutionContext>? eventModuleFactory = null,
             IEnumerable<IWorkflowModulePack>? packs = null,
             IEventStore? eventStore = null,
-            IWorkflowDefinitionResolver? workflowResolver = null)
+            IWorkflowDefinitionResolver? workflowResolver = null,
+            IRuntimeSecretStore? runtimeSecretStore = null)
         {
             runtime ??= new RecordingActorRuntime();
             eventModuleFactory ??= new RecordingEventModuleFactory();
             packs ??= [];
             eventStore ??= new InMemoryEventStore();
 
-            var services = BuildServices(eventStore, workflowResolver);
+            var services = BuildServices(eventStore, workflowResolver, runtimeSecretStore);
             var agent = new WorkflowRunGAgent(runtime, runtime, eventModuleFactory, packs, workflowResolver)
             {
                 Services = services,
@@ -114,16 +296,20 @@ public abstract class WorkflowGAgentTestBase
 
         internal static ServiceProvider BuildServices(
             IEventStore eventStore,
-            IWorkflowDefinitionResolver? workflowResolver)
+            IWorkflowDefinitionResolver? workflowResolver,
+            IRuntimeSecretStore? runtimeSecretStore = null)
         {
+            runtimeSecretStore ??= new InMemoryRuntimeSecretStore();
             var services = new ServiceCollection()
                 .AddSingleton(eventStore)
                 .AddSingleton<IEventStore>(eventStore)
                 .AddSingleton<IStreamProvider, InMemoryStreamProvider>()
+                .AddSingleton(runtimeSecretStore)
                 .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
                 .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
                     sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
                 .AddSingleton<EventSourcingRuntimeOptions>()
+                .AddSingleton<IAgentToolExecutionPort>(UnexpectedAgentToolExecutionPort.Instance)
                 .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .AddAevatarWorkflow();
 
@@ -281,9 +467,13 @@ public abstract class WorkflowGAgentTestBase
         internal sealed class RecordingEventPublisher : IEventPublisher, ICommittedStateEventPublisher
         {
             public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
+            public List<(IMessage Event, TopologyAudience Direction, EventEnvelopePublishOptions? Options)>
+                PublicationsWithOptions { get; } = [];
             public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
+            public Func<IMessage, CancellationToken, Task>? BeforePublishAsync { get; set; }
+            public Func<IMessage, CancellationToken, Task>? BeforeSendAsync { get; set; }
 
-            public Task PublishAsync<TEvent>(
+            public async Task PublishAsync<TEvent>(
                 TEvent evt,
                 TopologyAudience direction = TopologyAudience.Children,
                 CancellationToken ct = default,
@@ -293,11 +483,14 @@ public abstract class WorkflowGAgentTestBase
             {
                 _ = sourceEnvelope;
                 _ = options;
+                if (BeforePublishAsync is not null)
+                    await BeforePublishAsync(evt, ct);
+                ct.ThrowIfCancellationRequested();
                 Published.Add((evt, direction));
-                return Task.CompletedTask;
+                PublicationsWithOptions.Add((evt, direction, options));
             }
 
-            public Task SendToAsync<TEvent>(
+            public async Task SendToAsync<TEvent>(
                 string targetActorId,
                 TEvent evt,
                 CancellationToken ct = default,
@@ -308,8 +501,10 @@ public abstract class WorkflowGAgentTestBase
                 Sent.Add((targetActorId, evt));
                 _ = sourceEnvelope;
                 _ = options;
+                if (BeforeSendAsync is not null)
+                    await BeforeSendAsync(evt, ct);
+                ct.ThrowIfCancellationRequested();
                 Published.Add((evt, TopologyAudience.Self));
-                return Task.CompletedTask;
             }
 
             public Task PublishCommittedStateEventAsync(
@@ -379,12 +574,17 @@ public abstract class WorkflowGAgentTestBase
 
         internal sealed class ThrowingWorkflowIntentLlmProvider(Exception exception) : WorkflowIntentLlmProviderBase
         {
+            private int _callCount;
+
+            public int CallCount => Volatile.Read(ref _callCount);
+
             public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
                 LLMRequest request,
                 [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
             {
                 _ = request;
                 ct.ThrowIfCancellationRequested();
+                Interlocked.Increment(ref _callCount);
                 await Task.CompletedTask;
                 if (exception is not null)
                     throw exception;
@@ -430,12 +630,15 @@ public abstract class WorkflowGAgentTestBase
         {
             private int _calls;
 
+            public List<LLMRequest> Requests { get; } = [];
+            public int CallCount => Volatile.Read(ref _calls);
+
             public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
                 LLMRequest request,
                 [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
             {
-                _ = request;
                 ct.ThrowIfCancellationRequested();
+                Requests.Add(request);
                 if (Interlocked.Increment(ref _calls) > 1)
                 {
                     yield return new LLMStreamChunk { DeltaContent = "done" };

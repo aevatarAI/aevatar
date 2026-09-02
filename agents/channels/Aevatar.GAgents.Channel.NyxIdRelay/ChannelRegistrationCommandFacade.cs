@@ -143,7 +143,8 @@ public sealed record ChannelRelayRegistrationRequest(
     string Label,
     string NyxProviderSlug,
     NyxChannelLarkCredentials? Lark = null,
-    IReadOnlyDictionary<string, string>? Credentials = null)
+    IReadOnlyDictionary<string, string>? Credentials = null,
+    string DefaultSkillName = "")
 {
     public NyxChannelBotProvisioningRequest ToProvisioningRequest(string platform)
     {
@@ -158,7 +159,8 @@ public sealed record ChannelRelayRegistrationRequest(
             Label: Label,
             NyxProviderSlug: NyxProviderSlug,
             Lark: Lark,
-            Credentials: Credentials);
+            Credentials: Credentials,
+            DefaultSkillName: DefaultSkillName);
     }
 }
 
@@ -197,7 +199,11 @@ internal sealed class ChannelBotRegistrationCommandTargetResolver<TCommand>
 
 internal sealed class ChannelBotRegistrationCommandEnvelopeFactory :
     ICommandEnvelopeFactory<ChannelBotRegisterCommand>,
-    ICommandEnvelopeFactory<ChannelBotUnregisterCommand>
+    ICommandEnvelopeFactory<ChannelBotUnregisterCommand>,
+    ICommandEnvelopeFactory<ChannelBotWorkflowResultDeliveryRepairRequestCommand>,
+    ICommandEnvelopeFactory<ChannelBotWorkflowResultDeliveryRepairPrepareCommand>,
+    ICommandEnvelopeFactory<ChannelBotWorkflowResultDeliveryRepairCompleteCommand>,
+    ICommandEnvelopeFactory<ChannelBotWorkflowResultDeliveryRepairFailCommand>
 {
     private const string PublisherActorId = "channel-runtime.registration-store";
 
@@ -205,6 +211,26 @@ internal sealed class ChannelBotRegistrationCommandEnvelopeFactory :
         CreateEnvelopeCore(command, context);
 
     public EventEnvelope CreateEnvelope(ChannelBotUnregisterCommand command, CommandContext context) =>
+        CreateEnvelopeCore(command, context);
+
+    public EventEnvelope CreateEnvelope(
+        ChannelBotWorkflowResultDeliveryRepairRequestCommand command,
+        CommandContext context) =>
+        CreateEnvelopeCore(command, context);
+
+    public EventEnvelope CreateEnvelope(
+        ChannelBotWorkflowResultDeliveryRepairPrepareCommand command,
+        CommandContext context) =>
+        CreateEnvelopeCore(command, context);
+
+    public EventEnvelope CreateEnvelope(
+        ChannelBotWorkflowResultDeliveryRepairCompleteCommand command,
+        CommandContext context) =>
+        CreateEnvelopeCore(command, context);
+
+    public EventEnvelope CreateEnvelope(
+        ChannelBotWorkflowResultDeliveryRepairFailCommand command,
+        CommandContext context) =>
         CreateEnvelopeCore(command, context);
 
     private static EventEnvelope CreateEnvelopeCore(IMessage command, CommandContext context)

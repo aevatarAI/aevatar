@@ -3,10 +3,12 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Tests.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -185,19 +187,22 @@ public sealed class WorkflowRuntimeModuleBranchTests
         var module = new WorkflowCallModule();
         var ctx = new RecordingWorkflowContext();
 
-        await module.HandleAsync(
-            Wrap(new StepRequestEvent
+        var request = new StepRequestEvent
+        {
+            StepId = "step-b",
+            StepType = "workflow_call",
+            RunId = "parent-run",
+            Input = "payload",
+            Parameters =
             {
-                StepId = "step-b",
-                StepType = "workflow_call",
-                RunId = "parent-run",
-                Input = "payload",
-                Parameters =
-                {
-                    ["workflow"] = "child_flow",
-                    ["lifecycle"] = "scope",
-                },
-            }),
+                ["workflow"] = "child_flow",
+                ["lifecycle"] = "scope",
+            },
+        };
+        request.InputFileRefs.Add(BuildWorkflowFileRef("file-workflow-call"));
+
+        await module.HandleAsync(
+            Wrap(request),
             ctx,
             CancellationToken.None);
 
@@ -208,6 +213,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
         invocation.Input.Should().Be("payload");
         invocation.Lifecycle.Should().Be(WorkflowCallLifecycle.Scope);
         invocation.InvocationId.Should().StartWith("parent-run:workflow_call:step-b:");
+        invocation.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-workflow-call");
     }
 
     [Fact]
@@ -273,6 +279,62 @@ public sealed class WorkflowRuntimeModuleBranchTests
         intent.RoutePreference.Should().Be("route-a");
         intent.Headers.Should().Contain("trace-id", "trace-1");
         intent.Headers.Should().NotContainKey("connector.http.authorization");
+    }
+
+    [Fact]
+    public async Task LlmCallModule_ShouldIssueFreshCallerTokenForEveryDispatch()
+    {
+        var tokenProvider = new RotatingCallerAccessTokenProvider();
+        var module = new LLMCallModule(callerAccessTokenProvider: tokenProvider);
+        var ctx = new RecordingWorkflowContext();
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            NyxIdAuthority = CreateCallerAuthority(),
+        };
+
+        await module.HandleAsync(Wrap(new StepRequestEvent
+        {
+            StepId = "reply-1",
+            StepType = "llm_call",
+            RunId = "run-llm-auth",
+            Input = "first",
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(Wrap(new StepRequestEvent
+        {
+            StepId = "reply-2",
+            StepType = "llm_call",
+            RunId = "run-llm-auth",
+            Input = "second",
+        }), ctx, CancellationToken.None);
+
+        ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>()
+            .Select(intent => intent.CallerCredential.BearerToken)
+            .Should().Equal("token-1", "token-2");
+        tokenProvider.Authorities.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task LlmCallModule_WithAuthorityAndNoProvider_ShouldFailClosed()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            NyxIdAuthority = CreateCallerAuthority(),
+        };
+
+        await module.HandleAsync(Wrap(new StepRequestEvent
+        {
+            StepId = "reply",
+            StepType = "llm_call",
+            RunId = "run-llm-auth",
+            Input = "prompt",
+        }), ctx, CancellationToken.None);
+
+        ctx.Sent.Should().BeEmpty();
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("access token provider is unavailable");
     }
 
     [Fact]
@@ -403,6 +465,29 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldDispatchScheduleIdFromWorkflowContext()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext
+        {
+            ScheduleId = " schedule-llm ",
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "llm-schedule",
+                StepType = "llm_call",
+                RunId = "run-llm-schedule",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        DispatchedLlmIntent(ctx).ScheduleId.Should().Be("schedule-llm");
+    }
+
+    [Fact]
     public async Task EvaluateModule_ShouldPublishDeterministicFailure_WhenStepIdMissing()
     {
         var module = new EvaluateModule();
@@ -498,6 +583,29 @@ public sealed class WorkflowRuntimeModuleBranchTests
         failure.RunId.Should().Be("run-evaluate-failure");
         failure.Success.Should().BeFalse();
         failure.Error.Should().Be("evaluate LLM call failed.");
+    }
+
+    [Fact]
+    public async Task EvaluateModule_ShouldDispatchScheduleIdFromWorkflowContext()
+    {
+        var module = new EvaluateModule();
+        var ctx = new RecordingWorkflowContext
+        {
+            ScheduleId = " schedule-evaluate ",
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "evaluate-schedule",
+                StepType = "evaluate",
+                RunId = "run-evaluate-schedule",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        DispatchedLlmIntent(ctx).ScheduleId.Should().Be("schedule-evaluate");
     }
 
     [Fact]
@@ -632,7 +740,10 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 {
                     AgentToolScope = new WorkflowAgentToolScope
                     {
+                        RestrictAllowedToolNames = true,
+                        RestrictToolSets = true,
                         AllowedToolNames = { "search" },
+                        ToolSetRefs = { "nyxid.connected_services" },
                     },
                 },
             }),
@@ -642,6 +753,9 @@ public sealed class WorkflowRuntimeModuleBranchTests
         var intent = DispatchedLlmIntent(ctx);
         intent.AgentToolScope.Should().NotBeNull();
         intent.AgentToolScope.AllowedToolNames.Should().Equal("search");
+        intent.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
+        intent.AgentToolScope.RestrictAllowedToolNames.Should().BeTrue();
+        intent.AgentToolScope.RestrictToolSets.Should().BeTrue();
         intent.Annotations.Should().NotContainKey("allowed_tools");
     }
 
@@ -797,6 +911,44 @@ public sealed class WorkflowRuntimeModuleBranchTests
         failure.RunId.Should().Be("run-reflect-failure");
         failure.Success.Should().BeFalse();
         failure.Error.Should().Be("reflect LLM call failed.");
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldPreserveScheduleIdOnCritiqueAndImproveIntents()
+    {
+        var module = new ReflectModule();
+        var ctx = new RecordingWorkflowContext
+        {
+            ScheduleId = " schedule-reflect ",
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reflect-schedule",
+                StepType = "reflect",
+                RunId = "run-reflect-schedule",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var critique = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+        critique.ScheduleId.Should().Be("schedule-reflect");
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = critique.SessionId,
+                Success = true,
+                Content = "needs work",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var improve = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Last();
+        improve.SessionId.Should().Contain("_improve");
+        improve.ScheduleId.Should().Be("schedule-reflect");
     }
 
     [Fact]
@@ -1076,6 +1228,37 @@ public sealed class WorkflowRuntimeModuleBranchTests
         errors.Should().BeEmpty();
     }
 
+    [Fact]
+    public void DynamicWorkflowModule_ValidateWorkflowYaml_ShouldRejectExcessiveNesting()
+    {
+        var ctx = new RecordingWorkflowContext();
+        var yaml = WorkflowYamlResourceGuardTests.BuildNestedWorkflow(childLinks: 31);
+
+        var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
+
+        errors.Should().ContainSingle()
+            .Which.Should().ContainAll("YAML parse failed", "nesting depth");
+    }
+
+    [Fact]
+    public void DynamicWorkflowModule_ValidateWorkflowYaml_ShouldRejectCollectionAliasCycle()
+    {
+        var ctx = new RecordingWorkflowContext();
+        const string yaml = """
+                            name: cyclic
+                            roles: []
+                            steps: &steps
+                              - id: loop
+                                type: assign
+                                children: *steps
+                            """;
+
+        var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
+
+        errors.Should().ContainSingle()
+            .Which.Should().ContainAll("YAML parse failed", "nesting depth");
+    }
+
     private static EventEnvelope Wrap(IMessage evt, EnvelopeCallbackContext? callback = null)
     {
         return new EventEnvelope
@@ -1115,6 +1298,15 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ExpiresAtUnixMs = 1710003600000,
         };
 
+    private static WorkflowCallerNyxIdAuthority CreateCallerAuthority() =>
+        new()
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-1",
+            ExternalUserId = "m-alpha",
+            Scope = "invoke",
+        };
+
     private static EnvelopeCallbackContext MetadataFor(
         RecordedCallback callback,
         long? generation = null) =>
@@ -1147,6 +1339,8 @@ public sealed class WorkflowRuntimeModuleBranchTests
         public string AgentId => "agent-1";
 
         public string RunId => "run-1";
+
+        public string ScheduleId { get; init; } = string.Empty;
 
         public IServiceProvider Services => _services;
 
@@ -1387,6 +1581,18 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 return _moduleFactory;
 
             return null;
+        }
+    }
+
+    private sealed class RotatingCallerAccessTokenProvider : IWorkflowCallerAccessTokenProvider
+    {
+        public List<WorkflowCallerNyxIdAuthority> Authorities { get; } = [];
+
+        public Task<string> IssueAsync(WorkflowCallerNyxIdAuthority authority, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Authorities.Add(authority.Clone());
+            return Task.FromResult($"token-{Authorities.Count}");
         }
     }
 

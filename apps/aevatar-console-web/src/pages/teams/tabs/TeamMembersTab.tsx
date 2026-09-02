@@ -1,15 +1,17 @@
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
+  DeleteOutlined,
   HistoryOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   StopOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
-import { Button, Skeleton, Tooltip, Typography, theme } from "antd";
+import { Button, Skeleton, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import {
   AevatarInspectorEmpty,
   AevatarPanel,
@@ -18,6 +20,7 @@ import {
   DetailPill,
   FactLine,
 } from "../components/TeamDetailPrimitives";
+import "./TeamMembersTab.css";
 
 type TeamRosterMemberRow = {
   readonly automationDisabledReason: string;
@@ -47,14 +50,21 @@ type TeamRosterMemberRow = {
   readonly workflowSupported: boolean;
 };
 
+export type TeamMembersDeleteTarget = Pick<
+  TeamRosterMemberRow,
+  "isEntryMember" | "memberId" | "name"
+>;
+
 type TeamMembersTabProps = {
   readonly rosterError?: boolean;
   readonly rosterLoading?: boolean;
   readonly rosterRows?: readonly TeamRosterMemberRow[];
   readonly rosterSyncing?: boolean;
   readonly createMemberHref?: string;
+  readonly deletingMemberId?: string;
   readonly entryActionBusyMemberId?: string;
   readonly onClearEntry?: () => void;
+  readonly onDeleteMember?: (target: TeamMembersDeleteTarget) => void;
   readonly onNavigate?: (href: string) => void;
   readonly onSetEntry?: (memberId: string) => void;
 };
@@ -68,8 +78,20 @@ const ellipsisTextStyle: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+const tableGridMetrics = {
+  actionsMinWidth: 252,
+  columnGap: 20,
+  implementationMinWidth: 140,
+  memberMinWidth: 260,
+  rowPaddingInline: 18,
+  serviceMinWidth: 180,
+} as const;
+
 const tableGridTemplateColumns =
-  "minmax(260px, 1.4fr) minmax(140px, 0.45fr) minmax(180px, 0.7fr) 220px";
+  `minmax(${tableGridMetrics.memberMinWidth}px, 1.4fr) ` +
+  `minmax(${tableGridMetrics.implementationMinWidth}px, 0.45fr) ` +
+  `minmax(${tableGridMetrics.serviceMinWidth}px, 0.7fr) ` +
+  `${tableGridMetrics.actionsMinWidth}px`;
 
 const tableShellStyle: React.CSSProperties = {
   borderRadius: 8,
@@ -86,64 +108,14 @@ const tableInnerStyle: React.CSSProperties = {
   "--team-members-grid-template": tableGridTemplateColumns,
 } as React.CSSProperties;
 
-const responsiveTableStyle = `
-@media (max-width: 760px) {
-  .team-members-table-header {
-    display: none !important;
-  }
-
-  .team-members-table-row {
-    align-items: flex-start !important;
-    gap: 12px !important;
-    grid-template-columns: minmax(0, 1fr) !important;
-    min-height: 0 !important;
-    padding: 16px 18px !important;
-  }
-
-  .team-members-table-actions {
-    justify-content: flex-start !important;
-    width: 100% !important;
-  }
-
-  .team-members-table-primary-actions {
-    justify-content: flex-start !important;
-    width: 100% !important;
-  }
-
-  .team-members-table-invoke-action,
-  .team-members-table-published-runs-action,
-  .team-members-table-automate-action,
-  .team-members-table-studio-action,
-  .team-members-table-entry-action {
-    min-width: 0 !important;
-  }
-}
-
-@media (max-width: 420px) {
-  .team-members-table-primary-actions {
-    justify-content: flex-start !important;
-  }
-}
-
-.team-members-table-action-button {
-  transition: background-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
-}
-
-.team-members-table-action-button:hover,
-.team-members-table-action-button:focus-visible {
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08) !important;
-  transform: translateY(-1px);
-}
-`;
-
 const tableHeaderStyle: React.CSSProperties = {
   alignItems: "center",
   display: "grid",
   fontSize: 12,
   fontWeight: 700,
-  gap: 20,
+  gap: tableGridMetrics.columnGap,
   gridTemplateColumns: tableGridTemplateColumns,
-  padding: "10px 18px",
+  padding: `10px ${tableGridMetrics.rowPaddingInline}px`,
 };
 
 const tableHeaderActionStyle: React.CSSProperties = {
@@ -154,10 +126,10 @@ const tableHeaderActionStyle: React.CSSProperties = {
 const rosterRowBaseStyle: React.CSSProperties = {
   alignItems: "center",
   display: "grid",
-  gap: 20,
+  gap: tableGridMetrics.columnGap,
   gridTemplateColumns: tableGridTemplateColumns,
   minHeight: 82,
-  padding: "14px 18px",
+  padding: `14px ${tableGridMetrics.rowPaddingInline}px`,
 };
 
 const memberNameRowStyle: React.CSSProperties = {
@@ -276,7 +248,7 @@ const EllipsisText: React.FC<{
   readonly style?: React.CSSProperties;
   readonly type?: "secondary";
 }> = ({ children, strong = false, style, type }) => (
-  <Tooltip placement="topLeft" title={children}>
+  <AevatarTooltip placement="topLeft" title={children}>
     <Typography.Text
       strong={strong}
       style={{
@@ -287,13 +259,15 @@ const EllipsisText: React.FC<{
     >
       {children}
     </Typography.Text>
-  </Tooltip>
+  </AevatarTooltip>
 );
 
 const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   createMemberHref = "",
+  deletingMemberId = "",
   entryActionBusyMemberId = "",
   onClearEntry,
+  onDeleteMember,
   onNavigate,
   onSetEntry,
   rosterError = false,
@@ -304,6 +278,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   const intl = useIntl();
   const { token } = theme.useToken();
   const isEntryActionBusy = entryActionBusyMemberId.trim().length > 0;
+  const isDeleteActionBusy = deletingMemberId.trim().length > 0;
   const tableFrameStyle: React.CSSProperties = {
     ...tableShellStyle,
     border: `1px solid ${token.colorBorderSecondary}`,
@@ -354,10 +329,14 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             {statusDescription}
           </Typography.Text>
         </div>
-        <div style={tableFrameStyle}>
+        <div
+          className="team-members-table-container"
+          data-responsive-layout="container"
+          data-testid="team-members-table"
+          style={tableFrameStyle}
+        >
           <div style={tableScrollStyle}>
             <div style={tableInnerStyle}>
-              <style>{responsiveTableStyle}</style>
               {renderTableHeader()}
               {memberRosterSkeletonRowKeys.map((key, index) => (
                 <div
@@ -417,6 +396,12 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       <Skeleton.Button
                         active
                         className="team-members-table-entry-action"
+                        size="small"
+                        style={memberActionButtonBaseStyle}
+                      />
+                      <Skeleton.Button
+                        active
+                        className="team-members-table-delete-action"
                         size="small"
                         style={memberActionButtonBaseStyle}
                       />
@@ -496,10 +481,14 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             })}
           />
         ) : rosterRows.length > 0 ? (
-          <div style={tableFrameStyle}>
+          <div
+            className="team-members-table-container"
+            data-responsive-layout="container"
+            data-testid="team-members-table"
+            style={tableFrameStyle}
+          >
             <div style={tableScrollStyle}>
               <div style={tableInnerStyle}>
-                <style>{responsiveTableStyle}</style>
                 {renderTableHeader()}
                 {rosterRows.map((row, index) => {
                   const invokeDisabledReason = row.workflowSupported
@@ -510,6 +499,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         id: "teams.members.actions.workflowOnlyTitle",
                       });
                   const rowBusy = entryActionBusyMemberId === row.memberId;
+                  const rowDeleting = deletingMemberId === row.memberId;
                   const invokeActionLabel = intl.formatMessage({
                     id: "teams.members.actions.invokeWorkflow",
                   });
@@ -531,9 +521,21 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                   ) : (
                     <CheckCircleOutlined />
                   );
+                  const deleteActionLabel = intl.formatMessage({
+                    defaultMessage: "Delete member",
+                    id: "teams.members.actions.delete",
+                  });
                   const buildMemberActionButtonStyle = (
-                    tone: "default" | "primary" | "success" = "default",
+                    tone: "danger" | "default" | "primary" | "success" = "default",
                   ): React.CSSProperties => {
+                    if (tone === "danger") {
+                      return {
+                        ...memberActionButtonBaseStyle,
+                        background: token.colorErrorBg,
+                        color: token.colorError,
+                      };
+                    }
+
                     if (tone === "success") {
                       return {
                         ...memberActionButtonBaseStyle,
@@ -652,7 +654,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                             border: `1px solid ${token.colorBorderSecondary}`,
                           }}
                         >
-                          <Tooltip
+                          <AevatarTooltip
                             title={
                               row.canInvokeMember
                                 ? invokeActionLabel
@@ -676,8 +678,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               )}
                               type="default"
                             />
-                          </Tooltip>
-                          <Tooltip
+                          </AevatarTooltip>
+                          <AevatarTooltip
                             title={
                               row.canOpenPublishedRuns
                                 ? publishedRunsActionLabel
@@ -703,8 +705,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               style={buildMemberActionButtonStyle()}
                               type="default"
                             />
-                          </Tooltip>
-                          <Tooltip
+                          </AevatarTooltip>
+                          <AevatarTooltip
                             title={
                               row.canAutomateMember
                                 ? automateActionLabel
@@ -730,8 +732,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               style={buildMemberActionButtonStyle()}
                               type="default"
                             />
-                          </Tooltip>
-                          <Tooltip
+                          </AevatarTooltip>
+                          <AevatarTooltip
                             title={
                               row.workflowSupported
                                 ? studioActionLabel
@@ -755,9 +757,9 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               style={buildMemberActionButtonStyle()}
                               type="default"
                             />
-                          </Tooltip>
+                          </AevatarTooltip>
                           {row.isEntryMember ? (
-                            <Tooltip title={entryActionLabel}>
+                            <AevatarTooltip title={entryActionLabel}>
                               <Button
                                 aria-label={entryActionLabel}
                                 icon={entryActionIcon}
@@ -765,7 +767,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                                 disabled={
                                   rowBusy ||
                                   (isEntryActionBusy &&
-                                    entryActionBusyMemberId !== row.memberId)
+                                    entryActionBusyMemberId !== row.memberId) ||
+                                  isDeleteActionBusy
                                 }
                                 loading={entryActionBusyMemberId === row.memberId}
                                 onClick={onClearEntry}
@@ -773,16 +776,17 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                                 style={buildMemberActionButtonStyle("primary")}
                                 type="default"
                               />
-                            </Tooltip>
+                            </AevatarTooltip>
                           ) : row.canSetAsEntry && onSetEntry ? (
-                            <Tooltip title={entryActionLabel}>
+                            <AevatarTooltip title={entryActionLabel}>
                               <Button
                                 aria-label={entryActionLabel}
                                 className="team-members-table-action-button team-members-table-entry-action"
                                 disabled={
                                   rowBusy ||
                                   (isEntryActionBusy &&
-                                    entryActionBusyMemberId !== row.memberId)
+                                    entryActionBusyMemberId !== row.memberId) ||
+                                  isDeleteActionBusy
                                 }
                                 icon={entryActionIcon}
                                 loading={entryActionBusyMemberId === row.memberId}
@@ -791,7 +795,33 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                                 style={buildMemberActionButtonStyle()}
                                 type="default"
                               />
-                            </Tooltip>
+                            </AevatarTooltip>
+                          ) : null}
+                          {onDeleteMember ? (
+                            <AevatarTooltip title={deleteActionLabel}>
+                              <Button
+                                aria-label={deleteActionLabel}
+                                className="team-members-table-action-button team-members-table-delete-action"
+                                disabled={
+                                  rowDeleting ||
+                                  (isDeleteActionBusy &&
+                                    deletingMemberId !== row.memberId) ||
+                                  isEntryActionBusy
+                                }
+                                icon={<DeleteOutlined />}
+                                loading={rowDeleting}
+                                onClick={() =>
+                                  onDeleteMember({
+                                    isEntryMember: row.isEntryMember,
+                                    memberId: row.memberId,
+                                    name: row.name,
+                                  })
+                                }
+                                size="small"
+                                style={buildMemberActionButtonStyle("danger")}
+                                type="default"
+                              />
+                            </AevatarTooltip>
                           ) : null}
                         </div>
                       </div>

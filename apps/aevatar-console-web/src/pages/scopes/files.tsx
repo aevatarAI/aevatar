@@ -125,10 +125,6 @@ const ProjectFilesPage: React.FC = () => {
     );
   }, [resolvedScope?.scopeId]);
 
-  const workspaceSettingsQuery = useQuery({
-    queryKey: ['studio-workspace-settings'],
-    queryFn: () => studioApi.getWorkspaceSettings(),
-  });
   const workflowsQuery = useQuery({
     queryKey: ['studio-workspace-workflows'],
     queryFn: () => studioApi.listWorkflows(),
@@ -140,10 +136,6 @@ const ProjectFilesPage: React.FC = () => {
   const rolesQuery = useQuery({
     queryKey: ['studio-roles'],
     queryFn: () => studioApi.getRoleCatalog(),
-  });
-  const settingsQuery = useQuery({
-    queryKey: ['studio-settings'],
-    queryFn: () => studioApi.getSettings(),
   });
 
   return (
@@ -181,14 +173,9 @@ const ProjectFilesPage: React.FC = () => {
           <div style={filesViewportStyle}>
             <StudioFilesPage
               workflows={workflowsQuery}
-              workspaceSettings={workspaceSettingsQuery}
               roles={rolesQuery}
               connectors={connectorsQuery}
-              settings={settingsQuery}
               scopeId={activeDraft.scopeId}
-              workflowStorageMode={
-                appContextQuery.data?.workflowStorageMode || 'workspace'
-              }
               scriptsEnabled={Boolean(appContextQuery.data?.features.scripts)}
               onOpenWorkflowInStudio={(workflowId) =>
                 history.push(buildStudioWorkflowEditorRoute({ workflowId }))

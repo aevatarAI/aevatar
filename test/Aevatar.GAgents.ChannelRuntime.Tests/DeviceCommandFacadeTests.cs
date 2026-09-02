@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Household;
 using FluentAssertions;
@@ -81,7 +82,7 @@ public sealed class DeviceCommandFacadeTests
                 Arg.Any<CancellationToken>())
             .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         var facade = DeviceCommandFacadeTestSupport.CreateCallbackFacade(queryPort, actorRuntime, dispatchPort);
-        var admission = CreateAdmission("reg-1", "nxmsg-1", eventId: "evt-3", correlationKey: "ha-corr-1");
+        var admission = await CreateAdmission("reg-1", "nxmsg-1", eventId: "evt-3", correlationKey: "ha-corr-1");
 
         var result = await facade.DispatchCallbackAsync(new DeviceCallbackDispatchCommand(
             "reg-1",
@@ -97,7 +98,7 @@ public sealed class DeviceCommandFacadeTests
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Id.Should().Be("nxmsg-1");
         capturedEnvelope.Timestamp.ToDateTimeOffset().Should().Be(admission.OccurredAt);
-        capturedEnvelope.Runtime.Deduplication.OperationId.Should().Be("device-event:reg-1:evt-3");
+        capturedEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be("device-event:reg-1:evt-3");
     }
 
     [Fact]
@@ -125,7 +126,7 @@ public sealed class DeviceCommandFacadeTests
                 Arg.Any<CancellationToken>())
             .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         var facade = DeviceCommandFacadeTestSupport.CreateCallbackFacade(queryPort, actorRuntime, dispatchPort);
-        var admission = CreateAdmission("reg-1", "nxmsg-2", eventId: "", correlationKey: "ha-corr-2");
+        var admission = await CreateAdmission("reg-1", "nxmsg-2", eventId: "", correlationKey: "ha-corr-2");
 
         var result = await facade.DispatchCallbackAsync(new DeviceCallbackDispatchCommand(
             "reg-1",
@@ -142,7 +143,7 @@ public sealed class DeviceCommandFacadeTests
         result.Succeeded.Should().BeTrue();
         admission.DeliveryId.Should().Be("ha-corr-2");
         capturedEnvelope.Should().NotBeNull();
-        capturedEnvelope!.Runtime.Deduplication.OperationId.Should().Be("device-event:reg-1:ha-corr-2");
+        capturedEnvelope!.Runtime.DeliveryIdentity.OperationId.Should().Be("device-event:reg-1:ha-corr-2");
     }
 
     [Fact]
@@ -245,7 +246,7 @@ public sealed class DeviceCommandFacadeTests
             Arg.Any<CancellationToken>());
     }
 
-    private static DeviceCallbackAdmission CreateAdmission(
+    private static async Task<DeviceCallbackAdmission> CreateAdmission(
         string registrationId,
         string messageId,
         string eventId,
@@ -273,7 +274,7 @@ public sealed class DeviceCommandFacadeTests
         context.Request.Headers["X-NyxID-Signature"] = Convert.ToHexStringLower(
             hmac.ComputeHash(DeviceEventEndpoints.BuildSignaturePayload(bodyBytes)));
 
-        var result = DeviceEventEndpoints.AdmitCallback(
+        var result = await DeviceEventEndpoints.AdmitCallback(
             context,
             bodyBytes,
             new DeviceRegistrationEntry
@@ -282,7 +283,9 @@ public sealed class DeviceCommandFacadeTests
                 HmacKey = hmacKey,
             },
             new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) },
-            DateTimeOffset.Parse(timestampValue).AddSeconds(1));
+            DateTimeOffset.Parse(timestampValue).AddSeconds(1),
+            new InMemorySecretVault(),
+            CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         return result.Admission!;

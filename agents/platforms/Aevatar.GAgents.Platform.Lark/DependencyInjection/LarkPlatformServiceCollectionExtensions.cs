@@ -1,4 +1,6 @@
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -31,11 +33,27 @@ public static class LarkPlatformServiceCollectionExtensions
         });
         services.TryAddSingleton<LarkMessageComposer>();
         services.TryAddSingleton<LarkChannelNativeMessageProducer>();
+        services.TryAddSingleton<NyxIdToolOptions>();
+        services.TryAddSingleton<NyxIdApiClient>();
+        services.TryAddSingleton<ILarkOutboundDispatcher, LarkOutboundDispatcher>();
+        services.TryAddSingleton<LarkChannelNativeDeliveryTargetAdapter>();
+        services.TryAddSingleton<LarkChannelNativeMessageSender>();
+        services.TryAddSingleton<LarkChannelRelayTailTextSender>();
+        services.TryAddSingleton<LarkRelayProxyResponseClassifier>();
+        services.Replace(ServiceDescriptor.Singleton<IChannelRelayTailTextSender>(
+            sp => sp.GetRequiredService<LarkChannelRelayTailTextSender>()));
+        services.Replace(ServiceDescriptor.Singleton<IChannelRelayProxyResponseClassifier>(
+            sp => sp.GetRequiredService<LarkRelayProxyResponseClassifier>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>(
             sp => sp.GetRequiredService<LarkMessageComposer>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, LarkChannelNativeMessageProducer>(
             sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageSender, LarkChannelNativeMessageSender>(
+            sp => sp.GetRequiredService<LarkChannelNativeMessageSender>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeDeliveryTargetAdapter, LarkChannelNativeDeliveryTargetAdapter>(
+            sp => sp.GetRequiredService<LarkChannelNativeDeliveryTargetAdapter>()));
         services.TryAddSingleton<LarkPayloadRedactor>();
+        services.TryAddSingleton<ILarkOutboundDispatcher, LarkOutboundDispatcher>();
 
         return services;
     }

@@ -106,23 +106,42 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         Func<string, string> fieldPathResolver,
         Func<ProjectionDocumentFilter, string, string> exactMatchFieldPathResolver)
     {
-        if (query.Filters.Count == 0)
+        var tombstoneExclusion = new Dictionary<string, object?>
+        {
+            ["term"] = new Dictionary<string, object?>
+            {
+                [ElasticsearchProjectionDeleteMarkerPayload.TombstoneField] = true,
+            },
+        };
+
+        if (query.Filters.Count == 0 && query.AnyOfFilters.Count == 0)
         {
             return new Dictionary<string, object?>
             {
-                ["match_all"] = new Dictionary<string, object?>(),
+                ["bool"] = new Dictionary<string, object?>
+                {
+                    ["must_not"] = new object[] { tombstoneExclusion },
+                },
             };
         }
 
-        return new Dictionary<string, object?>
+        var booleanQuery = new Dictionary<string, object?>();
+        booleanQuery["must_not"] = new object[] { tombstoneExclusion };
+        if (query.Filters.Count > 0)
         {
-            ["bool"] = new Dictionary<string, object?>
-            {
-                ["filter"] = query.Filters
-                    .Select(filter => BuildSingleFilterSpec(filter, fieldPathResolver, exactMatchFieldPathResolver))
-                    .ToArray(),
-            },
-        };
+            booleanQuery["filter"] = query.Filters
+                .Select(filter => BuildSingleFilterSpec(filter, fieldPathResolver, exactMatchFieldPathResolver))
+                .ToArray();
+        }
+        if (query.AnyOfFilters.Count > 0)
+        {
+            booleanQuery["should"] = query.AnyOfFilters
+                .Select(filter => BuildSingleFilterSpec(filter, fieldPathResolver, exactMatchFieldPathResolver))
+                .ToArray();
+            booleanQuery["minimum_should_match"] = 1;
+        }
+
+        return new Dictionary<string, object?> { ["bool"] = booleanQuery };
     }
 
     private static object BuildSingleFilterSpec(

@@ -88,12 +88,125 @@ public sealed class WorkflowExecutionContextAdapterTests
             definitionActorId: "definition-1",
             workflowYaml: "",
             workflowName: "wf_scope",
+            inlineWorkflowYamls: null,
             runId: "run-1",
-            scopeId: " scope-1 ");
+            scopeId: " scope-1 ",
+            runOrigin: null,
+            scheduleId: null,
+            capabilityAdmissionPlan: null,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
         var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), stateHost);
 
         stateHost.ScopeId.Should().Be("scope-1");
         adapter.ScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
+    public async Task EnsureWorkflowRunDefinition_ShouldBeIdempotentWithoutResettingState()
+    {
+        var (agent, runtime) = CreateBareWorkflowRunAgent("work-order-run-1");
+        var command = BuildEnsureWorkflowRunDefinition();
+
+        await agent.HandleEnsureWorkflowRunDefinitionAsync(command);
+        var boundState = agent.State.Clone();
+        await agent.HandleEnsureWorkflowRunDefinitionAsync(command.Clone());
+
+        agent.State.Equals(boundState).Should().BeTrue();
+        agent.State.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        runtime.Links.Should().OnlyContain(link =>
+            link.ParentId == "definition-1" &&
+            link.ChildId == "work-order-run-1");
+    }
+
+    [Fact]
+    public async Task EnsureWorkflowRunDefinition_ShouldRejectConflictingBinding()
+    {
+        var (agent, runtime) = CreateBareWorkflowRunAgent("work-order-run-1");
+        await agent.HandleEnsureWorkflowRunDefinitionAsync(BuildEnsureWorkflowRunDefinition());
+        var linksBeforeConflict = runtime.Links.Count;
+        var conflicting = BuildEnsureWorkflowRunDefinition();
+        conflicting.Binding.WorkflowYaml = "name: changed\nroles: []\nsteps: []\n";
+        conflicting.ExecutionRequest = new WorkflowChatRequestEvent
+        {
+            Prompt = "must not execute against the existing definition",
+        };
+
+        var act = () => agent.HandleEnsureWorkflowRunDefinitionAsync(conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already bound to a different definition or identity*");
+        runtime.Links.Should().HaveCount(linksBeforeConflict);
+        agent.State.LastCommandId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EnsureWorkflowRunDefinition_WhenModeChanges_ShouldRejectAndPreserveFirstMode()
+    {
+        var (agent, runtime) = CreateBareWorkflowRunAgent("work-order-run-1");
+        await agent.HandleEnsureWorkflowRunDefinitionAsync(BuildEnsureWorkflowRunDefinition());
+        var linksBeforeConflict = runtime.Links.Count;
+        var conflicting = BuildEnsureWorkflowRunDefinition();
+        conflicting.Binding.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable;
+
+        var act = () => agent.HandleEnsureWorkflowRunDefinitionAsync(conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*different definition or identity*");
+        agent.State.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        runtime.Links.Should().HaveCount(linksBeforeConflict);
+    }
+
+    [Fact]
+    public void WorkflowRunStateContract_ShouldCarryExpectedExecutionMode()
+    {
+        WorkflowRunState.Descriptor.FindFieldByName("expected_execution_mode")!.FieldNumber.Should().Be(44);
+    }
+
+    [Fact]
+    public void CallerNyxIdAuthority_ShouldExposeNormalizedSnapshotWithoutLeakingMutableState()
+    {
+        var host = new RecordingStateHost();
+        host.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+            {
+                Platform = " nyxid ",
+                Tenant = " tenant-a ",
+                ExternalUserId = " user-42 ",
+                Scope = " proxy ",
+            },
+        };
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
+
+        var authority = adapter.CallerNyxIdAuthority;
+
+        authority.Should().BeEquivalentTo(new WorkflowCallerNyxIdAuthority
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-a",
+            ExternalUserId = "user-42",
+            Scope = "proxy",
+        });
+        authority!.ExternalUserId = "mutated";
+        adapter.CallerNyxIdAuthority!.ExternalUserId.Should().Be("user-42");
+        host.ExecutionContextState.CallerCredential.NyxIdAuthority.ExternalUserId.Should().Be(" user-42 ");
+    }
+
+    [Fact]
+    public void CallerNyxIdAuthority_ShouldFailClosedForIncompleteState()
+    {
+        var host = new RecordingStateHost();
+        host.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+            {
+                Platform = "nyxid",
+                ExternalUserId = "user-42",
+            },
+        };
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
+
+        adapter.CallerNyxIdAuthority.Should().BeNull();
     }
 
     [Fact]
@@ -593,6 +706,37 @@ public sealed class WorkflowExecutionContextAdapterTests
         setIdMethod!.Invoke(agent, [agentId]);
     }
 
+    private static (WorkflowRunGAgent Agent, UnsupportedActorRuntime Runtime) CreateBareWorkflowRunAgent(
+        string actorId)
+    {
+        var runtime = new UnsupportedActorRuntime();
+        var agent = new WorkflowRunGAgent(
+            runtime,
+            runtime,
+            new EmptyEventModuleFactory(),
+            [])
+        {
+            EventSourcingBehaviorFactory = new InMemoryEventSourcingBehaviorFactory<WorkflowRunState>(),
+        };
+        SetAgentId(agent, actorId);
+        return (agent, runtime);
+    }
+
+    private static EnsureWorkflowRunDefinitionEvent BuildEnsureWorkflowRunDefinition() =>
+        new()
+        {
+            Binding = new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = "definition-1",
+                WorkflowYaml = "name: direct\nroles: []\nsteps: []\n",
+                WorkflowName = "direct",
+                RunId = "work-order-run-1",
+                ScopeId = "scope-1",
+                RunOrigin = WorkflowRunOrigins.WorkOrder,
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            },
+        };
+
     private sealed class InMemoryEventSourcingBehaviorFactory<TState>
         : IEventSourcingBehaviorFactory<TState>
         where TState : class, IMessage<TState>, new()
@@ -625,17 +769,26 @@ public sealed class WorkflowExecutionContextAdapterTests
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            var result = new EventStoreCommitResult
+            {
+                AgentId = agentId,
+            };
             foreach (var evt in _pending)
             {
                 _state = transitionState(_state, evt);
                 CurrentVersion++;
+                result.CommittedEvents.Add(new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = CurrentVersion,
+                    EventType = evt.Descriptor.FullName,
+                    EventData = Google.Protobuf.WellKnownTypes.Any.Pack(evt),
+                    AgentId = agentId,
+                });
             }
 
-            var result = new EventStoreCommitResult
-            {
-                AgentId = agentId,
-                LatestVersion = CurrentVersion,
-            };
+            result.LatestVersion = CurrentVersion;
             _pending.Clear();
             return Task.FromResult(result);
         }
@@ -670,6 +823,8 @@ public sealed class WorkflowExecutionContextAdapterTests
 
     private sealed class UnsupportedActorRuntime : IActorRuntime, IActorDispatchPort
     {
+        public List<(string ParentId, string ChildId)> Links { get; } = [];
+
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
             throw new NotSupportedException();
@@ -686,8 +841,12 @@ public sealed class WorkflowExecutionContextAdapterTests
         public Task<bool> ExistsAsync(string id) =>
             throw new NotSupportedException();
 
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Links.Add((parentId, childId));
+            return Task.CompletedTask;
+        }
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
             throw new NotSupportedException();

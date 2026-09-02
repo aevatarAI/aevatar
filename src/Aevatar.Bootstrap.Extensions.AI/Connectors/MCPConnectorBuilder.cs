@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Configuration;
@@ -9,14 +10,18 @@ namespace Aevatar.Bootstrap.Extensions.AI.Connectors;
 public sealed class MCPConnectorBuilder : IConnectorBuilder
 {
     private readonly IHttpClientFactory? _httpClientFactory;
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
 
     public MCPConnectorBuilder()
     {
     }
 
-    public MCPConnectorBuilder(IHttpClientFactory httpClientFactory)
+    public MCPConnectorBuilder(
+        IHttpClientFactory httpClientFactory,
+        IAgentToolExecutionPort toolExecutionPort)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
     }
 
     public string Type => "mcp";
@@ -72,6 +77,8 @@ public sealed class MCPConnectorBuilder : IConnectorBuilder
             entry.MCP.DefaultTool,
             entry.MCP.AllowedTools,
             entry.MCP.AllowedInputKeys,
+            toolExecutionPort: _toolExecutionPort
+                ?? throw new InvalidOperationException("IAgentToolExecutionPort is required to build MCP connectors."),
             logger: logger);
         return true;
     }

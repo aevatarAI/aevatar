@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -31,7 +32,13 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             .On<ChannelBotRegistrationRejectedEvent>(static (state, _) => state)
             .On<ChannelBotScopeIdRepairedEvent>(ApplyScopeIdRepaired)
             .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
+            .On<ChannelBotInboundObservedEvent>(ApplyInboundObserved)
             .On<ChannelBotTombstonesCompactedEvent>(ApplyTombstonesCompacted)
+            .On<ChannelBotWorkflowResultDeliveryRepairRequestedEvent>(ApplyWorkflowResultDeliveryRepairRequested)
+            .On<ChannelBotWorkflowResultDeliveryRepairPreparedEvent>(ApplyWorkflowResultDeliveryRepairPrepared)
+            .On<ChannelBotWorkflowResultDeliveryRepairCompletedEvent>(ApplyWorkflowResultDeliveryRepairCompleted)
+            .On<ChannelBotWorkflowResultDeliveryRepairFailedEvent>(ApplyWorkflowResultDeliveryRepairFailed)
+            .On<ChannelBotWorkflowResultDeliveryRepairRejectedEvent>(static (state, _) => state)
             .OrCurrent();
 
     // ─── Commands ───
@@ -92,7 +99,10 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             NyxChannelBotId = cmd.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = cmd.NyxConversationRouteId ?? string.Empty,
-            NyxReplyCredentialRef = cmd.NyxReplyCredentialRef?.Trim() ?? string.Empty,
+            WorkflowResultDeliveryCredential = cmd.WorkflowResultDeliveryCredential?.Clone(),
+            // Canonical skill-name form matches SkillInvocationTriggerParser output
+            // (lowercase, no leading trigger token) so inbound routing compares 1:1.
+            DefaultSkillName = (cmd.DefaultSkillName ?? string.Empty).Trim().TrimStart('/').ToLowerInvariant(),
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
@@ -120,6 +130,30 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     }
 
     [EventHandler]
+    public async Task HandleRecordInbound(ChannelBotRecordInboundCommand cmd)
+    {
+        if (string.IsNullOrWhiteSpace(cmd.RegistrationId))
+            return;
+
+        var entry = State.Registrations.FirstOrDefault(r => r.Id == cmd.RegistrationId);
+        if (entry is null || entry.Tombstoned)
+            return;
+
+        // Activation marker: set once on the first verified inbound. Deliberately NOT
+        // refreshed on every message — this is a single store actor, so a per-message
+        // event would grow its log unboundedly (CLAUDE.md: no needless EventStore growth).
+        if (entry.LastInboundAtUtc is not null)
+            return;
+
+        await PersistDomainEventAsync(new ChannelBotInboundObservedEvent
+        {
+            RegistrationId = cmd.RegistrationId,
+            ObservedAtUtc = cmd.ObservedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        Logger.LogInformation("Channel bot activated by first verified inbound: id={Id}", cmd.RegistrationId);
+    }
+
+    [EventHandler]
     public async Task HandleCompactTombstones(ChannelBotCompactTombstonesCommand cmd)
     {
         if (cmd.SafeStateVersion <= 0)
@@ -140,6 +174,256 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         {
             RegistrationIds = { registrationIds },
             SafeStateVersion = cmd.SafeStateVersion,
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowResultDeliveryRepairRequest(
+        ChannelBotWorkflowResultDeliveryRepairRequestCommand cmd)
+    {
+        var registrationId = Normalize(cmd.RegistrationId);
+        var requestId = Normalize(cmd.RequestId);
+        var entry = FindActiveRegistration(registrationId);
+        var invalidReason = ValidateRequest(entry, cmd);
+        if (invalidReason != ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
+        {
+            await PersistRepairRejectedAsync(
+                registrationId,
+                requestId,
+                ChannelWorkflowResultDeliveryRepairPhase.RequestAdmission,
+                invalidReason,
+                cmd.RequestedAtUnixMs);
+            return;
+        }
+
+        if (entry!.WorkflowResultDeliveryRepair is { } existing)
+        {
+            if (!string.Equals(existing.RequestId, requestId, StringComparison.Ordinal) ||
+                !SameRequestFacts(existing, cmd))
+            {
+                await PersistRepairRejectedAsync(
+                    registrationId,
+                    requestId,
+                    ChannelWorkflowResultDeliveryRepairPhase.RequestAdmission,
+                    ChannelWorkflowResultDeliveryRepairFailureReason.RequestConflict,
+                    cmd.RequestedAtUnixMs);
+                return;
+            }
+
+            await PersistDomainEventAsync(new ChannelBotWorkflowResultDeliveryRepairRequestedEvent
+            {
+                RegistrationId = registrationId,
+                Repair = existing.Clone(),
+            });
+            return;
+        }
+
+        await PersistDomainEventAsync(new ChannelBotWorkflowResultDeliveryRepairRequestedEvent
+        {
+            RegistrationId = registrationId,
+            Repair = new ChannelWorkflowResultDeliveryRepairState
+            {
+                RequestId = requestId,
+                Status = ChannelWorkflowResultDeliveryRepairStatus.Requested,
+                ExpectedApiKeyId = Normalize(cmd.ExpectedApiKeyId),
+                ExpectedConversationRouteId = Normalize(cmd.ExpectedConversationRouteId),
+                RequestedBySubjectId = Normalize(cmd.RequestedBySubjectId),
+                RequestedAtUnixMs = cmd.RequestedAtUnixMs,
+                UpdatedAtUnixMs = cmd.RequestedAtUnixMs,
+            },
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowResultDeliveryRepairPrepare(
+        ChannelBotWorkflowResultDeliveryRepairPrepareCommand cmd)
+    {
+        var registrationId = Normalize(cmd.RegistrationId);
+        var requestId = Normalize(cmd.RequestId);
+        var entry = FindActiveRegistration(registrationId);
+        var invalidReason = ValidatePhaseCommand(
+            entry,
+            requestId,
+            cmd.ExpectedApiKeyId,
+            cmd.UpdatedAtUnixMs);
+        if (invalidReason == ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified &&
+            (string.IsNullOrWhiteSpace(cmd.RotatedApiKeyId) ||
+             string.Equals(cmd.RotatedApiKeyId.Trim(), cmd.ExpectedApiKeyId.Trim(), StringComparison.Ordinal) ||
+             !IsPreparedReferenceUsable(entry!, cmd.PreparedSecretReference)))
+        {
+            invalidReason = ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest;
+        }
+
+        var repair = entry?.WorkflowResultDeliveryRepair;
+        if (invalidReason == ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified &&
+            repair is not null &&
+            repair.Status == ChannelWorkflowResultDeliveryRepairStatus.CredentialPrepared)
+        {
+            if (SamePreparedFacts(repair, cmd.RotatedApiKeyId, cmd.PreparedSecretReference))
+            {
+                await PersistDomainEventAsync(new ChannelBotWorkflowResultDeliveryRepairPreparedEvent
+                {
+                    RegistrationId = registrationId,
+                    Repair = repair.Clone(),
+                });
+                return;
+            }
+
+            invalidReason = ChannelWorkflowResultDeliveryRepairFailureReason.RequestConflict;
+        }
+
+        if (invalidReason == ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified &&
+            repair is not null &&
+            repair.Status == ChannelWorkflowResultDeliveryRepairStatus.Failed &&
+            repair.PreparedSecretReference is not null)
+        {
+            invalidReason = ChannelWorkflowResultDeliveryRepairFailureReason.RequestConflict;
+        }
+
+        if (invalidReason != ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
+        {
+            await PersistRepairRejectedAsync(
+                registrationId,
+                requestId,
+                ChannelWorkflowResultDeliveryRepairPhase.CredentialPreparation,
+                invalidReason,
+                cmd.UpdatedAtUnixMs);
+            return;
+        }
+
+        var prepared = repair!.Clone();
+        prepared.Status = ChannelWorkflowResultDeliveryRepairStatus.CredentialPrepared;
+        prepared.RotatedApiKeyId = Normalize(cmd.RotatedApiKeyId);
+        prepared.PreparedSecretReference = cmd.PreparedSecretReference.Clone();
+        prepared.FailurePhase = ChannelWorkflowResultDeliveryRepairPhase.Unspecified;
+        prepared.FailureReason = ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified;
+        prepared.UpdatedAtUnixMs = cmd.UpdatedAtUnixMs;
+        await PersistDomainEventAsync(new ChannelBotWorkflowResultDeliveryRepairPreparedEvent
+        {
+            RegistrationId = registrationId,
+            Repair = prepared,
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowResultDeliveryRepairComplete(
+        ChannelBotWorkflowResultDeliveryRepairCompleteCommand cmd)
+    {
+        var registrationId = Normalize(cmd.RegistrationId);
+        var requestId = Normalize(cmd.RequestId);
+        var entry = FindActiveRegistration(registrationId);
+
+        if (entry is not null &&
+            entry.WorkflowResultDeliveryRepair is null &&
+            string.Equals(entry.NyxAgentApiKeyId, Normalize(cmd.RotatedApiKeyId), StringComparison.Ordinal) &&
+            Equals(entry.WorkflowResultDeliveryCredential, cmd.PreparedSecretReference) &&
+            IsPreparedReferenceUsable(entry, cmd.PreparedSecretReference))
+        {
+            await PersistDomainEventAsync(CreateCompletedEvent(registrationId, requestId, cmd));
+            return;
+        }
+
+        var invalidReason = ValidatePhaseCommand(
+            entry,
+            requestId,
+            cmd.ExpectedApiKeyId,
+            cmd.UpdatedAtUnixMs);
+        var repair = entry?.WorkflowResultDeliveryRepair;
+        if (invalidReason == ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified &&
+            (repair is null ||
+             repair.Status is not (ChannelWorkflowResultDeliveryRepairStatus.CredentialPrepared or
+                 ChannelWorkflowResultDeliveryRepairStatus.Failed) ||
+             !SamePreparedFacts(repair, cmd.RotatedApiKeyId, cmd.PreparedSecretReference) ||
+             !IsPreparedReferenceUsable(entry!, cmd.PreparedSecretReference)))
+        {
+            invalidReason = ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest;
+        }
+
+        if (invalidReason != ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
+        {
+            await PersistRepairRejectedAsync(
+                registrationId,
+                requestId,
+                ChannelWorkflowResultDeliveryRepairPhase.ActorCompletion,
+                invalidReason,
+                cmd.UpdatedAtUnixMs);
+            return;
+        }
+
+        await PersistDomainEventAsync(CreateCompletedEvent(registrationId, requestId, cmd));
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowResultDeliveryRepairFail(
+        ChannelBotWorkflowResultDeliveryRepairFailCommand cmd)
+    {
+        var registrationId = Normalize(cmd.RegistrationId);
+        var requestId = Normalize(cmd.RequestId);
+        var entry = FindActiveRegistration(registrationId);
+        var invalidReason = ValidatePhaseCommand(
+            entry,
+            requestId,
+            cmd.ExpectedApiKeyId,
+            cmd.UpdatedAtUnixMs);
+        var repair = entry?.WorkflowResultDeliveryRepair;
+        if (invalidReason == ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified &&
+            (cmd.FailurePhase == ChannelWorkflowResultDeliveryRepairPhase.Unspecified ||
+             cmd.FailureReason == ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified))
+        {
+            invalidReason = ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest;
+        }
+
+        if (invalidReason == ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified &&
+            repair is not null &&
+            repair.Status == ChannelWorkflowResultDeliveryRepairStatus.Failed &&
+            SameFailureFacts(repair, cmd))
+        {
+            await PersistDomainEventAsync(new ChannelBotWorkflowResultDeliveryRepairFailedEvent
+            {
+                RegistrationId = registrationId,
+                Repair = repair.Clone(),
+            });
+            return;
+        }
+
+        if (invalidReason == ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified &&
+            repair?.PreparedSecretReference is not null &&
+            !SamePreparedFacts(repair, cmd.RotatedApiKeyId, cmd.PreparedSecretReference))
+        {
+            invalidReason = ChannelWorkflowResultDeliveryRepairFailureReason.RequestConflict;
+        }
+
+        if (invalidReason == ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified &&
+            cmd.PreparedSecretReference is not null &&
+            !IsPreparedReferenceUsable(entry!, cmd.PreparedSecretReference))
+        {
+            invalidReason = ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest;
+        }
+
+        if (invalidReason != ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
+        {
+            await PersistRepairRejectedAsync(
+                registrationId,
+                requestId,
+                cmd.FailurePhase,
+                invalidReason,
+                cmd.UpdatedAtUnixMs);
+            return;
+        }
+
+        var failed = repair!.Clone();
+        failed.Status = ChannelWorkflowResultDeliveryRepairStatus.Failed;
+        if (!string.IsNullOrWhiteSpace(cmd.RotatedApiKeyId))
+            failed.RotatedApiKeyId = cmd.RotatedApiKeyId.Trim();
+        if (cmd.PreparedSecretReference is not null)
+            failed.PreparedSecretReference = cmd.PreparedSecretReference.Clone();
+        failed.FailurePhase = cmd.FailurePhase;
+        failed.FailureReason = cmd.FailureReason;
+        failed.UpdatedAtUnixMs = cmd.UpdatedAtUnixMs;
+        await PersistDomainEventAsync(new ChannelBotWorkflowResultDeliveryRepairFailedEvent
+        {
+            RegistrationId = registrationId,
+            Repair = failed,
         });
     }
 
@@ -187,6 +471,19 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         return next;
     }
 
+    private static ChannelBotRegistrationStoreState ApplyInboundObserved(
+        ChannelBotRegistrationStoreState current,
+        ChannelBotInboundObservedEvent evt)
+    {
+        var next = current.Clone();
+        var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
+        if (entry is null || entry.Tombstoned)
+            return current;
+
+        entry.LastInboundAtUtc = evt.ObservedAtUtc;
+        return next;
+    }
+
     private static ChannelBotRegistrationStoreState ApplyTombstonesCompacted(
         ChannelBotRegistrationStoreState current,
         ChannelBotTombstonesCompactedEvent evt)
@@ -205,6 +502,187 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             next.Registrations.Remove(entry);
         return next;
     }
+
+    private static ChannelBotRegistrationStoreState ApplyWorkflowResultDeliveryRepairRequested(
+        ChannelBotRegistrationStoreState current,
+        ChannelBotWorkflowResultDeliveryRepairRequestedEvent evt) =>
+        ApplyRepairState(current, evt.RegistrationId, evt.Repair);
+
+    private static ChannelBotRegistrationStoreState ApplyWorkflowResultDeliveryRepairPrepared(
+        ChannelBotRegistrationStoreState current,
+        ChannelBotWorkflowResultDeliveryRepairPreparedEvent evt) =>
+        ApplyRepairState(current, evt.RegistrationId, evt.Repair);
+
+    private static ChannelBotRegistrationStoreState ApplyWorkflowResultDeliveryRepairFailed(
+        ChannelBotRegistrationStoreState current,
+        ChannelBotWorkflowResultDeliveryRepairFailedEvent evt) =>
+        ApplyRepairState(current, evt.RegistrationId, evt.Repair);
+
+    private static ChannelBotRegistrationStoreState ApplyRepairState(
+        ChannelBotRegistrationStoreState current,
+        string registrationId,
+        ChannelWorkflowResultDeliveryRepairState? repair)
+    {
+        var next = current.Clone();
+        var entry = next.Registrations.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, registrationId, StringComparison.Ordinal));
+        if (entry is null || entry.Tombstoned || repair is null)
+            return current;
+
+        entry.WorkflowResultDeliveryRepair = repair.Clone();
+        return next;
+    }
+
+    private static ChannelBotRegistrationStoreState ApplyWorkflowResultDeliveryRepairCompleted(
+        ChannelBotRegistrationStoreState current,
+        ChannelBotWorkflowResultDeliveryRepairCompletedEvent evt)
+    {
+        var next = current.Clone();
+        var entry = next.Registrations.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, evt.RegistrationId, StringComparison.Ordinal));
+        if (entry is null || entry.Tombstoned || evt.PreparedSecretReference is null)
+            return current;
+
+        entry.NyxAgentApiKeyId = evt.RotatedApiKeyId;
+        entry.WorkflowResultDeliveryCredential = evt.PreparedSecretReference.Clone();
+        entry.WorkflowResultDeliveryRepair = null;
+        return next;
+    }
+
+    private ChannelBotRegistrationEntry? FindActiveRegistration(string registrationId) =>
+        State.Registrations.FirstOrDefault(entry =>
+            !entry.Tombstoned && string.Equals(entry.Id, registrationId, StringComparison.Ordinal));
+
+    private static ChannelWorkflowResultDeliveryRepairFailureReason ValidateRequest(
+        ChannelBotRegistrationEntry? entry,
+        ChannelBotWorkflowResultDeliveryRepairRequestCommand cmd)
+    {
+        if (string.IsNullOrWhiteSpace(cmd.RegistrationId) ||
+            string.IsNullOrWhiteSpace(cmd.RequestId) ||
+            string.IsNullOrWhiteSpace(cmd.ExpectedApiKeyId) ||
+            string.IsNullOrWhiteSpace(cmd.ExpectedConversationRouteId) ||
+            string.IsNullOrWhiteSpace(cmd.RequestedBySubjectId) ||
+            cmd.RequestedAtUnixMs <= 0)
+        {
+            return ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest;
+        }
+
+        if (entry is null)
+            return ChannelWorkflowResultDeliveryRepairFailureReason.RegistrationNotFound;
+        if (!IsLark(entry))
+            return ChannelWorkflowResultDeliveryRepairFailureReason.UnsupportedPlatform;
+        if (IsPreparedReferenceUsable(entry, entry.WorkflowResultDeliveryCredential))
+            return ChannelWorkflowResultDeliveryRepairFailureReason.AlreadyEnabled;
+        if (!string.Equals(entry.NyxAgentApiKeyId, Normalize(cmd.ExpectedApiKeyId), StringComparison.Ordinal) ||
+            !string.Equals(entry.NyxConversationRouteId, Normalize(cmd.ExpectedConversationRouteId), StringComparison.Ordinal))
+        {
+            return ChannelWorkflowResultDeliveryRepairFailureReason.StaleActiveKey;
+        }
+
+        return ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified;
+    }
+
+    private static ChannelWorkflowResultDeliveryRepairFailureReason ValidatePhaseCommand(
+        ChannelBotRegistrationEntry? entry,
+        string requestId,
+        string expectedApiKeyId,
+        long updatedAtUnixMs)
+    {
+        if (string.IsNullOrWhiteSpace(requestId) ||
+            string.IsNullOrWhiteSpace(expectedApiKeyId) ||
+            updatedAtUnixMs <= 0)
+        {
+            return ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest;
+        }
+
+        if (entry is null)
+            return ChannelWorkflowResultDeliveryRepairFailureReason.RegistrationNotFound;
+        if (!IsLark(entry))
+            return ChannelWorkflowResultDeliveryRepairFailureReason.UnsupportedPlatform;
+        if (entry.WorkflowResultDeliveryRepair is null)
+            return ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest;
+        if (!string.Equals(entry.WorkflowResultDeliveryRepair.RequestId, requestId, StringComparison.Ordinal))
+            return ChannelWorkflowResultDeliveryRepairFailureReason.RequestConflict;
+        if (!string.Equals(entry.NyxAgentApiKeyId, Normalize(expectedApiKeyId), StringComparison.Ordinal) ||
+            !string.Equals(entry.WorkflowResultDeliveryRepair.ExpectedApiKeyId, Normalize(expectedApiKeyId), StringComparison.Ordinal))
+        {
+            return ChannelWorkflowResultDeliveryRepairFailureReason.StaleActiveKey;
+        }
+
+        return ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified;
+    }
+
+    private static bool IsLark(ChannelBotRegistrationEntry entry) =>
+        string.Equals(entry.Platform, "lark", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPreparedReferenceUsable(
+        ChannelBotRegistrationEntry entry,
+        SecretReference? reference) =>
+        reference is not null &&
+        !string.IsNullOrWhiteSpace(reference.Ref) &&
+        string.Equals(
+            reference.Purpose,
+            CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            StringComparison.Ordinal) &&
+        string.Equals(reference.OwnerScopeKey, entry.ScopeId, StringComparison.Ordinal);
+
+    private static bool SameRequestFacts(
+        ChannelWorkflowResultDeliveryRepairState repair,
+        ChannelBotWorkflowResultDeliveryRepairRequestCommand cmd) =>
+        string.Equals(repair.ExpectedApiKeyId, Normalize(cmd.ExpectedApiKeyId), StringComparison.Ordinal) &&
+        string.Equals(repair.ExpectedConversationRouteId, Normalize(cmd.ExpectedConversationRouteId), StringComparison.Ordinal) &&
+        string.Equals(repair.RequestedBySubjectId, Normalize(cmd.RequestedBySubjectId), StringComparison.Ordinal) &&
+        repair.RequestedAtUnixMs == cmd.RequestedAtUnixMs;
+
+    private static bool SamePreparedFacts(
+        ChannelWorkflowResultDeliveryRepairState repair,
+        string rotatedApiKeyId,
+        SecretReference? reference) =>
+        string.Equals(repair.RotatedApiKeyId, Normalize(rotatedApiKeyId), StringComparison.Ordinal) &&
+        Equals(repair.PreparedSecretReference, reference);
+
+    private static bool SameFailureFacts(
+        ChannelWorkflowResultDeliveryRepairState repair,
+        ChannelBotWorkflowResultDeliveryRepairFailCommand cmd) =>
+        SamePreparedFacts(repair, cmd.RotatedApiKeyId, cmd.PreparedSecretReference) &&
+        repair.FailurePhase == cmd.FailurePhase &&
+        repair.FailureReason == cmd.FailureReason &&
+        repair.UpdatedAtUnixMs == cmd.UpdatedAtUnixMs;
+
+    private static ChannelBotWorkflowResultDeliveryRepairCompletedEvent CreateCompletedEvent(
+        string registrationId,
+        string requestId,
+        ChannelBotWorkflowResultDeliveryRepairCompleteCommand cmd) =>
+        new()
+        {
+            RegistrationId = registrationId,
+            RequestId = requestId,
+            ExpectedApiKeyId = Normalize(cmd.ExpectedApiKeyId),
+            RotatedApiKeyId = Normalize(cmd.RotatedApiKeyId),
+            PreparedSecretReference = cmd.PreparedSecretReference?.Clone(),
+            CompletedAtUnixMs = cmd.UpdatedAtUnixMs,
+        };
+
+    private async Task PersistRepairRejectedAsync(
+        string registrationId,
+        string requestId,
+        ChannelWorkflowResultDeliveryRepairPhase phase,
+        ChannelWorkflowResultDeliveryRepairFailureReason reason,
+        long rejectedAtUnixMs)
+    {
+        await PersistDomainEventAsync(new ChannelBotWorkflowResultDeliveryRepairRejectedEvent
+        {
+            RegistrationId = registrationId,
+            RequestId = requestId,
+            Phase = phase,
+            Reason = reason,
+            RejectedAtUnixMs = rejectedAtUnixMs > 0
+                ? rejectedAtUnixMs
+                : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+    }
+
+    private static string Normalize(string? value) => value?.Trim() ?? string.Empty;
 
     private long NextCommittedVersion() =>
         (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))

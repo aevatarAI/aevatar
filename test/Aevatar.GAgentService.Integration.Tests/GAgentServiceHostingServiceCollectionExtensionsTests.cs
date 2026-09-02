@@ -1,10 +1,16 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Core.Ports;
@@ -13,8 +19,10 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
+using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Capabilities;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
@@ -28,12 +36,17 @@ using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.Workflow.Infrastructure.Workflows;
+using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgentService.Core.Models;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Aevatar.GAgentService.Hosting.Responses;
 
 namespace Aevatar.GAgentService.Integration.Tests;
 
@@ -75,18 +88,101 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType != null &&
             x.ImplementationType.FullName == "Aevatar.GAgentService.Hosting.Demo.GAgentServiceDemoBootstrapHostedService");
-        services.Count(x => x.ServiceType == typeof(IServiceImplementationAdapter)).Should().Be(3);
+        // Scripting was not composed first, so the scripting bridge (adapter/hook) is absent.
+        services.Count(x => x.ServiceType == typeof(IServiceImplementationAdapter)).Should().Be(2);
         services.Should().Contain(x => x.ImplementationType == typeof(StaticServiceImplementationAdapter));
-        services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
+        services.Should().NotContain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(WorkflowServiceImplementationAdapter));
-        services.Should().Contain(x =>
+        services.Should().NotContain(x =>
             x.ServiceType == typeof(ICommittedStatePublicationHook) &&
             x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType == typeof(LlmRunExecutionScheduler));
+        services.Should().Contain(x => x.ServiceType == typeof(LlmRunExecutionScheduler));
+        services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionScheduler));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ILlmRunExecutionQueue) &&
+            x.ImplementationType == typeof(LlmRunExecutionQueue));
+        services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType == typeof(LlmRunExecutionWorker));
 
         using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<ILlmRunCore>().Should().BeOfType<MissingLlmProviderRunCore>();
+        provider.GetRequiredService<ILlmRunExecutionScheduler>()
+            .Should()
+            .BeSameAs(provider.GetRequiredService<LlmRunExecutionScheduler>());
+        provider.GetRequiredService<ILlmRunExecutionQueue>().Should().BeOfType<LlmRunExecutionQueue>();
         provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();
         provider.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         provider.GetRequiredService<IGAgentRunTerminalQueryPort>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_AfterSkills_ShouldReplaceNoOpWorkflowMountPort()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+        services.AddSkills(_ => { });
+
+        services.AddGAgentServiceCapability(configuration);
+
+        services.Where(descriptor => descriptor.ServiceType == typeof(ISkillWorkflowMountPort))
+            .Should().ContainSingle()
+            .Which.ImplementationType.Should().Be(typeof(SkillWorkflowMountAdapter));
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WhenLlmProviderFactoryExists_ShouldRegisterProviderBackedRunCore()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+        services.AddSingleton<ILLMProviderFactory>(new ThrowingLlmProviderFactory());
+        services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<ILlmRunCore>().Should().BeOfType<LlmRunCore>();
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithoutBindingQueryPort_ShouldResolveNoopScheduledCredentialAdmissionPort()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScheduledDispatchCredentialAdmissionPort>()
+            .Should()
+            .BeOfType<NoopScheduledDispatchCredentialAdmissionPort>();
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithBindingQueryPort_ShouldResolveNyxIdScheduledCredentialAdmissionPort()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+        services.AddSingleton<IExternalIdentityBindingQueryPort>(new UnusedExternalIdentityBindingQueryPort());
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScheduledDispatchCredentialAdmissionPort>()
+            .Should()
+            .BeOfType<NyxIdScheduledDispatchCredentialAdmissionPort>();
     }
 
     [Fact]
@@ -111,6 +207,100 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Count(x => x.ServiceType == typeof(IWorkflowCatalogPort))
             .Should()
             .Be(workflowRegistrationsBefore);
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithoutScriptingCapability_ShouldNotRegisterScriptingBridge()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddAevatarRuntime();
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+        services.AddGAgentServiceCapability(configuration);
+
+        // No pull-back: the bundle must not compose the scripting capability on its own.
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(Aevatar.Scripting.Hosting.DependencyInjection.ServiceCollectionExtensions.ScriptCapabilityRegistrationsMarker));
+        services.Should().NotContain(x => x.ServiceType == typeof(IScopeScriptQueryPort));
+        services.Should().NotContain(x => x.ServiceType == typeof(IScopeScriptCommandPort));
+        services.Should().NotContain(x => x.ServiceType == typeof(IScopeScriptSaveObservationPort));
+        services.Should().NotContain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
+        services.Should().NotContain(service =>
+            ServiceTypeContains(service.ServiceType, "ScriptServiceRun"));
+
+        // Services with optional scripting dependencies still compose without it.
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScopeBindingCommandPort>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithScriptingCapability_ShouldRegisterScriptingBridge()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddScriptCapability(configuration);
+        services.AddGAgentServiceCapability(configuration);
+
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeScriptQueryPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeScriptCommandPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeScriptSaveObservationPort));
+        services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
+        services.Should().Contain(service =>
+            ServiceTypeContains(service.ServiceType, "ScriptServiceRun"));
+        services.Count(x => x.ServiceType == typeof(IServiceImplementationAdapter)).Should().Be(3);
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_ShouldRegisterConfiguredExternalExposureRetrySettings()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["GAgentService:ExternalExposure:RetryMaxAttempts"] = "7",
+                ["GAgentService:ExternalExposure:RetryBaseDelaySeconds"] = "3",
+                ["GAgentService:ExternalExposure:RetryMaxDelaySeconds"] = "30",
+            })
+            .Build();
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var settings = provider.GetRequiredService<ServiceExternalExposureRetrySettings>();
+        settings.MaxAttempts.Should().Be(7);
+        settings.BaseDelay.Should().Be(TimeSpan.FromSeconds(3));
+        settings.MaxDelay.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_ShouldRejectInvalidExternalExposureRetrySettings()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["GAgentService:ExternalExposure:RetryMaxAttempts"] = "0",
+            })
+            .Build();
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var act = () => provider.GetRequiredService<ServiceExternalExposureRetrySettings>();
+        act.Should().Throw<ArgumentOutOfRangeException>()
+            .WithParameterName("maxAttempts");
     }
 
     [Fact]
@@ -199,6 +389,8 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/services/{serviceId}/endpoint-catalog");
         endpoints.Should().Contain("/api/services/{serviceId}/policies");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/workflows:save-and-bind");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/workflows:explicit-request-preview");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding/revisions/{revisionId}:activate");
         endpoints.Should().Contain("/api/scopes/{scopeId}/revisions");
         endpoints.Should().Contain("/api/scopes/{scopeId}/revisions/{revisionId}");
@@ -248,6 +440,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         builder.AddAevatarDefaultHost(options =>
         {
+            options.AllowLocalFileSecretsStore = false;
             options.ServiceName = "Aevatar.GAgentService.StandaloneStartup.Tests";
             options.EnableConnectorBootstrap = false;
             options.EnableHealthEndpoints = false;
@@ -255,7 +448,10 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableOpenApiDocument = false;
             options.AutoMapCapabilities = false;
         });
+        builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
+        builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
+        UseRepositoryWorkflowDefinitions(builder.Services);
 
         await using var app = builder.Build();
         app.MapAevatarCapabilities();
@@ -293,6 +489,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         builder.AddAevatarDefaultHost(options =>
         {
+            options.AllowLocalFileSecretsStore = false;
             options.ServiceName = "Aevatar.GAgentService.WorkflowProjectionStartup.Tests";
             options.EnableConnectorBootstrap = false;
             options.EnableHealthEndpoints = false;
@@ -305,7 +502,10 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableAIFeatures = false;
             options.EnableScriptingCapability = false;
         });
+        builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
+        builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
+        UseRepositoryWorkflowDefinitions(builder.Services);
 
         await using var app = builder.Build();
         app.MapAevatarCapabilities();
@@ -588,6 +788,15 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
                    argument.Name.Contains(typeName, StringComparison.Ordinal));
     }
 
+    private static void UseRepositoryWorkflowDefinitions(IServiceCollection services)
+    {
+        services.Configure<WorkflowDefinitionFileSourceOptions>(options =>
+        {
+            options.WorkflowDirectories.Clear();
+            options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
+        });
+    }
+
     private static void AssertNoWorkflowCapabilitiesStartupArtifactServices(IServiceCollection services)
     {
         // Refactor (iter161-cluster-001 #1257-first):
@@ -595,5 +804,41 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         //   New principle: tests protect against service registration by symbol name without keeping the deleted type alive.
         services.Should().NotContain(service =>
             ServiceTypeContains(service.ServiceType, "WorkflowCapabilitiesStartupArtifact"));
+    }
+
+    private sealed class ThrowingLlmProviderFactory : ILLMProviderFactory
+    {
+        public ILLMProvider GetProvider(string name) =>
+            throw new NotSupportedException("The DI test only asserts provider-backed ILlmRunCore composition.");
+
+        public ILLMProvider GetDefault() =>
+            throw new NotSupportedException("The DI test only asserts provider-backed ILlmRunCore composition.");
+
+        public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class UnusedLlmProviderFactory : ILLMProviderFactory
+    {
+        public ILLMProvider GetProvider(string name) =>
+            throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
+
+        public ILLMProvider GetDefault() =>
+            throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
+
+        public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class UnusedAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("The hosting composition test must not execute agent tools.");
+    }
+
+    private sealed class UnusedExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort
+    {
+        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default) =>
+            throw new NotSupportedException("The DI test only resolves the scheduled credential-admission adapter.");
     }
 }

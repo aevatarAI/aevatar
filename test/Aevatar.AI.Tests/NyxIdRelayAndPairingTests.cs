@@ -79,6 +79,16 @@ public class ToolArgsTests
         args.Bool("missing").Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("""{"timeout":30}""", 30)]
+    [InlineData("""{"timeout":"45"}""", 45)]
+    [InlineData("""{"timeout":"invalid"}""", null)]
+    [InlineData("{}", null)]
+    public void Int_ParsesNumbersAndNumericStrings(string json, int? expected)
+    {
+        ToolArgs.Parse(json).Int("timeout").Should().Be(expected);
+    }
+
     [Fact]
     public void RawOrStr_HandlesStringAndObject()
     {

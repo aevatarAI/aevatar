@@ -1,7 +1,6 @@
 import {
   AppstoreOutlined,
   BarsOutlined,
-  EditOutlined,
   PlusOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
@@ -12,11 +11,11 @@ import {
   Empty,
   Skeleton,
   Space,
-  Tooltip,
   Typography,
   theme,
 } from "antd";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
@@ -30,6 +29,7 @@ import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServic
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import {
   formatStudioMemberLifecycleStage,
+  normalizeStudioTeamLifecycleStage,
   type StudioMemberSummary,
   type StudioTeamSummary,
 } from "@/shared/studio/models";
@@ -74,7 +74,7 @@ type TeamRosterPreview = {
   readonly detailHref: string;
   readonly latestRun: ScopeServiceRunSummary | null;
   readonly membersHref: string;
-  readonly memberQuickAction: TeamMemberQuickAction;
+  readonly memberQuickAction: TeamMemberQuickAction | null;
   readonly memberPreviewLabel: string;
   readonly memberPreviewTooltip?: string;
   readonly serviceLabel: string;
@@ -87,8 +87,6 @@ type TeamRosterPreview = {
 
 type TeamMemberQuickActionKind =
   | "create-member"
-  | "edit-entry-member"
-  | "edit-member"
   | "manage-members";
 
 type TeamMemberQuickAction = {
@@ -443,7 +441,7 @@ const TeamFact: React.FC<{
       }}
     >
       {typeof value === "string" && (tooltip || value) ? (
-        <Tooltip title={tooltip || value}>{renderedValue}</Tooltip>
+        <AevatarTooltip title={tooltip || value}>{renderedValue}</AevatarTooltip>
       ) : (
         renderedValue
       )}
@@ -770,34 +768,11 @@ function buildTeamRosterPreview(input: {
         parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt) ||
         right.memberId.localeCompare(left.memberId),
     )[0];
-  const entryMember = entryMemberId
-    ? input.members.find((member) => trimOptional(member.memberId) === entryMemberId)
-    : undefined;
   const runtimeSignalPreview = entryMemberPreview ?? mostImportantMemberPreview;
   const latestRun = runtimeSignalPreview?.latestRun ?? null;
-  // Deferred P2: keep the current workflow-member fallback when the entry is non-workflow.
-  // A later pass should surface an explicit entry-unsupported/manage-members state.
-  const preferredWorkflowMember =
-    (entryMember && isWorkflowMember(entryMember) ? entryMember : undefined) ??
-    sortedMembers.find(isWorkflowMember);
-  const preferredWorkflowMemberId = trimOptional(preferredWorkflowMember?.memberId);
-  const memberQuickAction: TeamMemberQuickAction = preferredWorkflowMemberId
-    ? {
-        href: buildTeamMemberWorkflowStudioHref({
-          memberId: preferredWorkflowMemberId,
-          mode: "edit-member",
-          scopeId: input.scopeId,
-          teamId: input.team.teamId,
-        }),
-        kind:
-          preferredWorkflowMemberId === entryMemberId
-            ? "edit-entry-member"
-            : "edit-member",
-        label:
-          preferredWorkflowMemberId === entryMemberId
-            ? t("teams.home.actions.debugEntryWorkflow", "Debug entry workflow")
-            : t("teams.home.actions.debugWorkflow", "Debug workflow"),
-      }
+  const hasWorkflowMember = sortedMembers.some(isWorkflowMember);
+  const memberQuickAction: TeamMemberQuickAction | null = hasWorkflowMember
+    ? null
     : memberCount === 0
       ? {
           href: buildTeamMemberWorkflowStudioHref({
@@ -861,15 +836,11 @@ function buildTeamRosterPreview(input: {
     teamId: input.team.teamId,
   });
 
-  let attention: TeamOperationalAttention =
+  const attention: TeamOperationalAttention =
     runtimeSignalPreview?.attention ?? "draft";
-  let attentionDetail = t("pages.teams.home.team", "This team has no members yet. Next: add an entry member, then test the team.");
-  if (input.team.lifecycleStage === "archived") {
-    attention = "draft";
-    attentionDetail = t("pages.teams.home.team.roster", "This team has been archived; the list keeps only its backend roster fact.");
-  } else if (runtimeSignalPreview) {
-    attentionDetail = runtimeSignalPreview.attentionDetail;
-  }
+  const attentionDetail =
+    runtimeSignalPreview?.attentionDetail ??
+    t("pages.teams.home.team", "This team has no members yet. Next: add an entry member, then test the team.");
 
   return {
     attention,
@@ -904,9 +875,6 @@ function renderMemberQuickActionIcon(
       return <PlusOutlined />;
     case "manage-members":
       return <BarsOutlined />;
-    case "edit-entry-member":
-    case "edit-member":
-      return <EditOutlined />;
   }
 }
 
@@ -915,9 +883,10 @@ const TeamRosterActionGroup: React.FC<{
   readonly preview: TeamRosterPreview;
 }> = ({ large = false, preview }) => {
   const buttonSize = "middle";
+  const memberQuickAction = preview.memberQuickAction;
   const { token } = theme.useToken();
   const showViewMembersAction =
-    preview.memberQuickAction.href !== preview.membersHref;
+    !memberQuickAction || memberQuickAction.href !== preview.membersHref;
   const buttonStyle: React.CSSProperties = {
     borderRadius: 999,
     fontSize: large ? 13 : 12,
@@ -952,15 +921,17 @@ const TeamRosterActionGroup: React.FC<{
       }}
       wrap
     >
-      <Button
-        icon={renderMemberQuickActionIcon(preview.memberQuickAction.kind)}
-        onClick={() => history.push(preview.memberQuickAction.href)}
-        size={buttonSize}
-        style={buttonStyle}
-        type="text"
-      >
-        {preview.memberQuickAction.label}
-      </Button>
+      {memberQuickAction ? (
+        <Button
+          icon={renderMemberQuickActionIcon(memberQuickAction.kind)}
+          onClick={() => history.push(memberQuickAction.href)}
+          size={buttonSize}
+          style={buttonStyle}
+          type="text"
+        >
+          {memberQuickAction.label}
+        </Button>
+      ) : null}
       <Button
         icon={<TeamOutlined />}
         onClick={() => history.push(preview.detailHref)}
@@ -1016,17 +987,19 @@ const TeamRosterCard: React.FC<{
           <div style={{ fontSize: 22 }}>
             <TeamTitle level={3} title={preview.title} />
           </div>
-          <Typography.Paragraph
-            ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
-            style={{
-              color: token.colorTextSecondary,
-              fontSize: 14,
-              marginBottom: 0,
-              marginTop: 6,
-            }}
-          >
-            {preview.attentionDetail}
-          </Typography.Paragraph>
+          <AevatarTooltip title={preview.attentionDetail}>
+            <Typography.Paragraph
+              ellipsis={{ rows: 1 }}
+              style={{
+                color: token.colorTextSecondary,
+                fontSize: 14,
+                marginBottom: 0,
+                marginTop: 6,
+              }}
+            >
+              {preview.attentionDetail}
+            </Typography.Paragraph>
+          </AevatarTooltip>
         </div>
         <span
           style={{
@@ -1141,17 +1114,19 @@ const TeamRosterRow: React.FC<{
               {formatAttentionLabel(preview.attention)}
             </span>
           </Space>
-          <Typography.Paragraph
-            ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
-            style={{
-              color: token.colorTextSecondary,
-              fontSize: 13,
-              marginBottom: 0,
-              marginTop: 0,
-            }}
-          >
-            {preview.attentionDetail}
-          </Typography.Paragraph>
+          <AevatarTooltip title={preview.attentionDetail}>
+            <Typography.Paragraph
+              ellipsis={{ rows: 1 }}
+              style={{
+                color: token.colorTextSecondary,
+                fontSize: 13,
+                marginBottom: 0,
+                marginTop: 0,
+              }}
+            >
+              {preview.attentionDetail}
+            </Typography.Paragraph>
+          </AevatarTooltip>
         </div>
 
         <div className="teams-home-roster-row-actions">
@@ -1311,6 +1286,14 @@ const TeamsHomePage: React.FC = () => {
       ].sort(compareTeams),
     [scopeId, teamsQuery.data?.teams],
   );
+  const visibleStudioTeams = React.useMemo(
+    () =>
+      studioTeams.filter(
+        (team) =>
+          normalizeStudioTeamLifecycleStage(team.lifecycleStage) !== "archived",
+      ),
+    [studioTeams],
+  );
   const membersByTeamId = React.useMemo(
     () => groupMembersByTeamId(studioMembers),
     [studioMembers],
@@ -1326,7 +1309,7 @@ const TeamsHomePage: React.FC = () => {
       readonly serviceId: string;
     }> = [];
 
-    studioTeams.forEach((team) => {
+    visibleStudioTeams.forEach((team) => {
       const entryMemberId = trimOptional(team.entryMemberId);
       if (!entryMemberId) {
         return;
@@ -1345,7 +1328,7 @@ const TeamsHomePage: React.FC = () => {
     });
 
     return result;
-  }, [studioMembers, studioTeams]);
+  }, [studioMembers, visibleStudioTeams]);
   const runtimeTrackableServiceIds = React.useMemo(
     () =>
       Array.from(
@@ -1390,7 +1373,7 @@ const TeamsHomePage: React.FC = () => {
   );
   const teamPreviews = React.useMemo(
     () =>
-      studioTeams.map((team) =>
+      visibleStudioTeams.map((team) =>
         buildTeamRosterPreview({
           members: membersByTeamId.get(team.teamId) ?? [],
           runsByMemberId,
@@ -1405,7 +1388,7 @@ const TeamsHomePage: React.FC = () => {
       queryScopeId,
       scopeId,
       servicesQuery.data,
-      studioTeams,
+      visibleStudioTeams,
     ],
   );
   const visibleTeamCount = teamPreviews.length;
@@ -1561,7 +1544,7 @@ const TeamsHomePage: React.FC = () => {
                   </div>
                   {visibleTeamCount > 1 ? (
                     <Space.Compact>
-                      <Tooltip title={t("pages.teams.home.copy.56", "Card view")}>
+                      <AevatarTooltip title={t("pages.teams.home.copy.56", "Card view")}>
                         <Button
                           aria-label={t("pages.teams.home.copy.57", "Switch to card view")}
                           icon={<AppstoreOutlined />}
@@ -1569,8 +1552,8 @@ const TeamsHomePage: React.FC = () => {
                           style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "cards" ? "primary" : "default"}
                         />
-                      </Tooltip>
-                      <Tooltip title={t("pages.teams.home.copy.58", "List view")}>
+                      </AevatarTooltip>
+                      <AevatarTooltip title={t("pages.teams.home.copy.58", "List view")}>
                         <Button
                           aria-label={t("pages.teams.home.copy.59", "Switch to list view")}
                           icon={<BarsOutlined />}
@@ -1578,7 +1561,7 @@ const TeamsHomePage: React.FC = () => {
                           style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "list" ? "primary" : "default"}
                         />
-                      </Tooltip>
+                      </AevatarTooltip>
                     </Space.Compact>
                   ) : null}
                 </div>

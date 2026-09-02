@@ -12,6 +12,14 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelBotRegistrationProjectorTests
 {
+    private static Aevatar.Foundation.Abstractions.Credentials.SecretReference TestDeliverySecretReference(string registrationId) =>
+        new()
+        {
+            Ref = $"sec_delivery_{registrationId}",
+            Purpose = Aevatar.Foundation.Abstractions.Credentials.CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            OwnerScopeKey = "scope-x",
+        };
+
     private readonly FixedProjectionClock _clock = new(new DateTimeOffset(2026, 4, 10, 12, 0, 0, TimeSpan.Zero));
     private readonly ChannelBotRegistrationMaterializationContext _context = new()
     {
@@ -38,7 +46,10 @@ public sealed class ChannelBotRegistrationProjectorTests
                     NyxChannelBotId = "nyx-bot-1",
                     NyxAgentApiKeyId = "api-key-1",
                     NyxConversationRouteId = "route-1",
-                    NyxReplyCredentialRef = "secrets://channel/nyxid/lark/bot-reg-1/reply-api-key",
+                    WorkflowResultDeliveryCredential = TestDeliverySecretReference("bot-reg-1"),
+                    LastInboundAtUtc = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 10, 11, 0, 0, TimeSpan.Zero)),
+                    DefaultSkillName = "whatsapp-reply-draft",
+                    WorkflowResultDeliveryRepair = FailedRepair(),
                 },
             },
         };
@@ -55,10 +66,15 @@ public sealed class ChannelBotRegistrationProjectorTests
         doc.NyxChannelBotId.Should().Be("nyx-bot-1");
         doc.NyxAgentApiKeyId.Should().Be("api-key-1");
         doc.NyxConversationRouteId.Should().Be("route-1");
-        doc.NyxReplyCredentialRef.Should().Be("secrets://channel/nyxid/lark/bot-reg-1/reply-api-key");
+        doc.WorkflowResultDeliveryCredential.Should().Be(TestDeliverySecretReference("bot-reg-1"));
         doc.StateVersion.Should().Be(2);
         doc.LastEventId.Should().Be("evt-bot-1");
         doc.ActorId.Should().Be("bot-reg-actor-1");
+        doc.LastInboundAtUtc.Should().Be(Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 10, 11, 0, 0, TimeSpan.Zero)));
+        doc.DefaultSkillName.Should().Be("whatsapp-reply-draft");
+        doc.WorkflowResultDeliveryRepair.Should().Be(FailedRepair());
+        doc.WorkflowResultDeliveryRepair.Should().NotBeSameAs(
+            state.Registrations[0].WorkflowResultDeliveryRepair);
     }
 
     [Fact]
@@ -128,6 +144,22 @@ public sealed class ChannelBotRegistrationProjectorTests
             }),
         };
     }
+
+    private static ChannelWorkflowResultDeliveryRepairState FailedRepair() =>
+        new()
+        {
+            RequestId = "repair-1",
+            Status = ChannelWorkflowResultDeliveryRepairStatus.Failed,
+            ExpectedApiKeyId = "api-key-1",
+            ExpectedConversationRouteId = "route-1",
+            RotatedApiKeyId = "api-key-2",
+            PreparedSecretReference = TestDeliverySecretReference("bot-reg-1"),
+            FailurePhase = ChannelWorkflowResultDeliveryRepairPhase.RouteRebinding,
+            FailureReason = ChannelWorkflowResultDeliveryRepairFailureReason.RouteUpdateFailed,
+            RequestedBySubjectId = "user-1",
+            RequestedAtUnixMs = 1784563200000,
+            UpdatedAtUnixMs = 1784563201000,
+        };
 
     private sealed class RecordingRegistrationWriteDispatcher : IProjectionWriteDispatcher<ChannelBotRegistrationDocument>
     {

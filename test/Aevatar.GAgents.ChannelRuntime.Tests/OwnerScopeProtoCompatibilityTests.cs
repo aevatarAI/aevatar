@@ -21,7 +21,6 @@ public sealed class OwnerScopeProtoCompatibilityTests
         UserAgentCatalogEntry.Descriptor.FindFieldByName("owner_scope")!.FieldNumber.Should().Be(26);
         UserAgentCatalogUpsertCommand.Descriptor.FindFieldByName("owner_scope")!.FieldNumber.Should().Be(18);
         UserAgentCatalogDocument.Descriptor.FindFieldByName("owner_scope")!.FieldNumber.Should().Be(28);
-        SkillRunnerOutboundConfig.Descriptor.FindFieldByName("owner_scope")!.FieldNumber.Should().Be(11);
         ChatRouteInput.Descriptor.FindFieldByName("caller_scope")!.FieldNumber.Should().Be(2);
         ChatRoutePolicyState.Descriptor.FindFieldByName("owner_scope")!.FieldNumber.Should().Be(2);
         UpsertChatRoutePolicyRequested.Descriptor.FindFieldByName("owner_scope")!.FieldNumber.Should().Be(1);
@@ -36,7 +35,6 @@ public sealed class OwnerScopeProtoCompatibilityTests
         FieldMessageFullName(UserAgentCatalogEntry.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
         FieldMessageFullName(UserAgentCatalogUpsertCommand.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
         FieldMessageFullName(UserAgentCatalogDocument.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
-        FieldMessageFullName(SkillRunnerOutboundConfig.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
         FieldMessageFullName(ChatRouteInput.Descriptor, "caller_scope").Should().Be(OwnerScope.Descriptor.FullName);
         FieldMessageFullName(ChatRoutePolicyState.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
         FieldMessageFullName(UpsertChatRoutePolicyRequested.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
@@ -57,7 +55,6 @@ public sealed class OwnerScopeProtoCompatibilityTests
     {
         var files = CollectFiles(
             UserAgentCatalogEntry.Descriptor.File,
-            SkillRunnerOutboundConfig.Descriptor.File,
             ChatRouteInput.Descriptor.File,
             ChatRoutePolicyCurrentStateDocument.Descriptor.File,
             OwnerScope.Descriptor.File);

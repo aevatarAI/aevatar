@@ -99,7 +99,6 @@ public sealed class ChatRouteResolverTests
         var decision = resolver.Resolve(snapshot, new ChatRouteInput());
 
         decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
-        decision.OriginalAction.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
     }
 
     [Fact]
@@ -116,7 +115,6 @@ public sealed class ChatRouteResolverTests
 
         decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
         decision.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("notify_self");
-        decision.OriginalAction.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
     }
 
     [Fact]
@@ -180,7 +178,6 @@ public sealed class ChatRouteResolverTests
 
         decision.MatchedRuleId.Should().Be("model-route");
         decision.Action.Should().Be(action);
-        decision.Deprecations.Should().BeEmpty();
     }
 
     [Theory]
@@ -236,7 +233,6 @@ public sealed class ChatRouteResolverTests
         });
 
         decision.MatchedRuleId.Should().Be("voice-openai");
-        decision.Deprecations.Should().BeEmpty();
         decision.Action.Should().Be(action);
         AssertForwardToModelTool(
             decision.Action,
@@ -275,7 +271,6 @@ public sealed class ChatRouteResolverTests
         var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/triage" });
 
         decision.MatchedRuleId.Should().Be("team-route");
-        decision.Deprecations.Should().BeEmpty();
         decision.Action.Should().Be(action);
         AssertForwardToModelTool(
             decision.Action,

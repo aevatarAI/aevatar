@@ -106,6 +106,8 @@ public sealed class MainnetResponsesEndpointsTests
             "user-1",
             responseId,
             new LLMRequestCallerCredentials("secret-token")));
+        provider.LastRequest.ToolContext.Should().NotBeNull();
+        provider.LastRequest.ToolContext!.Caller.OwnerScopeId.Should().Be("user-1");
         // The NyxID bearer is carried on the typed CallerContext.Credentials channel,
         // NOT through LLMRequest.Metadata. Metadata is the log-shaped string-keyed bag
         // that telemetry sinks may serialize; secret material belongs out-of-band.
@@ -242,7 +244,7 @@ public sealed class MainnetResponsesEndpointsTests
         GetErrorCode(body).Should().Be("response_timeout");
         body.Should().NotContain("\"status\":\"in_progress\"");
         body.Should().NotContain("\"object\":\"response\"");
-        sessions.StatusUpdates.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        sessions.StatusUpdates.Should().BeEmpty();
     }
 
     [Fact]
@@ -385,7 +387,9 @@ public sealed class MainnetResponsesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("status").GetString().Should().Be("completed");
         AssertCompletedMessage(doc.RootElement, string.Empty);
-        doc.RootElement.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_task_1");
+        doc.RootElement.GetProperty("output").GetArrayLength().Should().Be(1);
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_task_1");
     }
 
     [Fact]
@@ -1341,7 +1345,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponsesCancel_ShouldMarkResponseAndPendingToolCallsCancelled()
+    public async Task PostResponsesCancel_ShouldCancelRunThroughSessionActor()
     {
         var provider = new RecordingLLMProvider();
         var sessions = new RecordingResponseSessionStore();
@@ -1351,7 +1355,7 @@ public sealed class MainnetResponsesEndpointsTests
             "user-1",
             LlmSessionOriginKind.ApiKey,
             null,
-            LlmSessionStatus.Completed,
+            LlmSessionStatus.Accepted,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -1386,7 +1390,8 @@ public sealed class MainnetResponsesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("id").GetString().Should().Be("resp_previous");
         doc.RootElement.GetProperty("status").GetString().Should().Be("cancelled");
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Cancelled);
+        sessions.CancelledRuns.Should().ContainSingle()
+            .Which.Should().Be(("response-session:resp_previous", "resp_previous", "resp_previous:llm-run"));
         var snapshot = await sessions.GetByResponseIdAsync("resp_previous");
         snapshot!.Status.Should().Be(LlmSessionStatus.Cancelled);
         snapshot.ForwardedToolCalls.Should().ContainSingle()
@@ -1478,6 +1483,7 @@ public sealed class MainnetResponsesEndpointsTests
         // and JwtBearer scheme to be registered so an un-annotated endpoint would
         // be rejected. .AllowAnonymous() must short-circuit that.
         builder.Configuration["Aevatar:Authentication:Authority"] = "https://invalid.example";
+        builder.Configuration["Aevatar:Authentication:Audience"] = "aevatar-api";
         builder.AddAevatarAuthentication();
 
         builder.Services.AddSingleton(provider);
@@ -1568,6 +1574,7 @@ public sealed class MainnetResponsesEndpointsTests
         });
         builder.WebHost.UseTestServer();
         builder.Configuration["Aevatar:Authentication:Authority"] = "https://invalid.example";
+        builder.Configuration["Aevatar:Authentication:Audience"] = "aevatar-api";
         builder.AddAevatarAuthentication();
 
         builder.Services.AddSingleton(provider);
@@ -1907,6 +1914,49 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WithNonObjectToolEntries_ShouldSkipThemAndAdmitRequest()
+    {
+        // Some OpenAI-compatible clients emit non-object entries in `tools` (null
+        // padding, stray strings) alongside real tool objects. aevatar only owns
+        // function-typed tool declarations, so a non-object entry — exactly like a
+        // built-in tool object it doesn't own — must be passed over and the request
+        // admitted, never failing the whole request. In particular a bare greeting that
+        // needs no tools must still succeed even when the client ships a malformed entry.
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""
+            {
+              "model": "chrono-llm/gpt-5.5",
+              "input": "你好",
+              "stream": false,
+              "tools": [
+                "not_an_object",
+                null,
+                {"type": "function", "name": "Bash", "description": "Run shell", "parameters": {"type":"object","properties":{}}}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "tools-secret");
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        // Non-object entries are dropped; the function-typed tool still reaches the LLM provider.
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name).Should().Contain("Bash");
+    }
+
+    [Fact]
     public async Task PostResponses_WithFunctionToolMissingName_ShouldStillReturnIndexedInvalidTools()
     {
         // Built-ins are accepted because they have a non-function type. A function-typed
@@ -2149,7 +2199,9 @@ public sealed class MainnetResponsesEndpointsTests
         var root = doc.RootElement;
         root.GetProperty("status").GetString().Should().Be("completed");
         AssertCompletedMessage(root, string.Empty);
-        root.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_gagent_1");
+        root.GetProperty("output").GetArrayLength().Should().Be(1);
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_gagent_1");
     }
 
     [Fact]
@@ -2187,8 +2239,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().NotContain("event: response.output_text.delta");
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("\"text\":\"\"");
-        body.Should().Contain("\"type\":\"function_call\"");
-        body.Should().Contain("\"call_id\":\"call_gagent_stream\"");
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_gagent_stream");
         body.Should().Contain("event: response.completed");
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
@@ -2241,7 +2293,8 @@ public sealed class MainnetResponsesEndpointsTests
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("event: response.completed");
         responseSessions.ForwardedToolCalls.Should().BeEmpty();
-        body.Should().Contain("\"call_id\":\"call_gagent_conflict\"");
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_gagent_conflict");
     }
 
     [Fact]
@@ -2473,7 +2526,9 @@ public sealed class MainnetResponsesEndpointsTests
         var root = doc.RootElement;
         root.GetProperty("status").GetString().Should().Be("completed");
         AssertCompletedMessage(root, string.Empty);
-        root.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_team_1");
+        root.GetProperty("output").GetArrayLength().Should().Be(1);
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_team_1");
     }
 
     [Fact]
@@ -2511,8 +2566,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().NotContain("event: response.output_text.delta");
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("\"text\":\"\"");
-        body.Should().Contain("\"type\":\"function_call\"");
-        body.Should().Contain("\"call_id\":\"call_team_stream\"");
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_team_stream");
         body.Should().Contain("event: response.completed");
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
@@ -2738,6 +2793,10 @@ public sealed class MainnetResponsesEndpointsTests
             var outputText = new StringBuilder();
             TokenUsage? usage = null;
             var forwardedToolCalls = new List<LlmSessionRuntimeToolCall>();
+            var forwardedToolNames = command.ToolSelection?.ForwardedTools
+                .Select(static tool => tool.ToolName)
+                .Except(command.ToolSelection.SubstitutedToolNames, StringComparer.Ordinal)
+                .ToHashSet(StringComparer.Ordinal) ?? [];
 
             foreach (var chunk in chunks)
             {
@@ -2756,7 +2815,8 @@ public sealed class MainnetResponsesEndpointsTests
                 if (chunk.DeltaToolCall is not null)
                 {
                     var runtimeCall = ToRuntimeToolCall(chunk.DeltaToolCall);
-                    forwardedToolCalls.Add(runtimeCall.Clone());
+                    if (forwardedToolNames.Contains(runtimeCall.ToolName))
+                        forwardedToolCalls.Add(runtimeCall.Clone());
                     ProjectionPort.Sink.Push(ObservedEnvelope(new LlmStreamChunkObserved
                     {
                         ResponseId = command.ResponseId,
@@ -3063,8 +3123,13 @@ public sealed class MainnetResponsesEndpointsTests
                 return [];
 
             var tools = new List<IAgentTool>();
-            tools.AddRange(selection.ForwardedTools.Select(static tool =>
-                new StubAgentTool(tool.ToolName, tool.Description, tool.ParametersJson)));
+            var ownedToolNames = selection.OwnedToolNames.Count > 0
+                ? selection.OwnedToolNames.ToHashSet(StringComparer.Ordinal)
+                : selection.SubstitutedToolNames.Concat(selection.AdditiveToolNames).ToHashSet(StringComparer.Ordinal);
+            tools.AddRange(selection.ForwardedTools
+                .Where(tool => !ownedToolNames.Contains(tool.ToolName))
+                .Select(static tool =>
+                    new StubAgentTool(tool.ToolName, tool.Description, tool.ParametersJson)));
             tools.AddRange(selection.SubstitutedToolNames.Select(static name =>
                 new StubAgentTool(name, $"{name} substitute")));
             tools.AddRange(selection.AdditiveToolNames.Select(static name =>
@@ -3438,6 +3503,8 @@ public sealed class MainnetResponsesEndpointsTests
 
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
 
+        public List<(string ActorId, string ResponseId, string RunId)> CancelledRuns { get; } = [];
+
         public List<(string ActorId, string ResponseId, LlmSessionForwardedToolCall Call)> ForwardedToolCalls { get; } = [];
 
         public List<(string ActorId, string ResponseId, LlmSessionCompletion Completion)> RecordedCompletions { get; } = [];
@@ -3496,6 +3563,35 @@ public sealed class MainnetResponsesEndpointsTests
                     LastEventId = $"{responseId}:status:{(int)status}",
                 };
             }
+            return Task.CompletedTask;
+        }
+
+        public Task CancelRunAsync(
+            string sessionActorId,
+            string responseId,
+            string runId,
+            CancellationToken ct = default)
+        {
+            CancelledRuns.Add((sessionActorId, responseId, runId));
+            if (_snapshots.TryGetValue(responseId, out var current))
+            {
+                _snapshots[responseId] = current with
+                {
+                    Status = LlmSessionStatus.Cancelled,
+                    CancelledAt = DateTimeOffset.UtcNow,
+                    ForwardedToolCalls = MarkCallsForStatus(current.ForwardedToolCalls, LlmSessionStatus.Cancelled),
+                    StateVersion = current.StateVersion + 1,
+                    LastEventId = $"{responseId}:run:{runId}:cancelled",
+                    Completion = new LlmSessionCompletionSnapshot(
+                        current.Completion?.OutputText ?? string.Empty,
+                        current.Completion?.ToolCalls ?? [],
+                        DateTimeOffset.UtcNow,
+                        "request_cancelled",
+                        "LLM run was cancelled.",
+                        current.Completion?.Usage),
+                };
+            }
+
             return Task.CompletedTask;
         }
 

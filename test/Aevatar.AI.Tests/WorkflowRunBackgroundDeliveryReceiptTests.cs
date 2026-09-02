@@ -27,7 +27,6 @@ public sealed class WorkflowRunBackgroundDeliveryReceiptTests
                 ReplyMessageId = "reply-message-1",
                 PlatformMessageId = "platform-message-1",
                 RegistrationScopeId = "registration-scope-1",
-                DurableReplyCredentialRef = "secrets://nyx/reply-1",
             },
         };
 
@@ -45,7 +44,9 @@ public sealed class WorkflowRunBackgroundDeliveryReceiptTests
         roundTripped.WorkflowRunDelivery.ReplyMessageId.Should().Be("reply-message-1");
         roundTripped.WorkflowRunDelivery.PlatformMessageId.Should().Be("platform-message-1");
         roundTripped.WorkflowRunDelivery.RegistrationScopeId.Should().Be("registration-scope-1");
-        roundTripped.WorkflowRunDelivery.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
+        // The receipt no longer carries a credential handle field at all.
+        WorkflowRunBackgroundDeliveryReceipt.Descriptor
+            .FindFieldByName("durable_reply_credential_ref").Should().BeNull();
     }
 
     [Fact]

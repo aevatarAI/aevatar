@@ -1,3 +1,5 @@
+using Aevatar.ContentArtifacts.Abstractions;
+
 namespace Aevatar.GAgentService.Abstractions.Queries;
 
 public sealed record ServiceRunSnapshot(
@@ -8,6 +10,7 @@ public sealed record ServiceRunSnapshot(
     string CommandId,
     string CorrelationId,
     string EndpointId,
+    string ScheduleId,
     ServiceImplementationKind ImplementationKind,
     string TargetActorId,
     string RevisionId,
@@ -22,9 +25,16 @@ public sealed record ServiceRunSnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     string LastOutput,
-    string LastError);
+    string LastError)
+{
+    public IReadOnlyList<ContentArtifactReference> ResultArtifacts { get; init; } = [];
+}
 
 public sealed record ServiceRunQuery(
     string ScopeId,
     string ServiceId,
-    int Take = 50);
+    int Take = 50,
+    string? ScheduleId = null,
+    ServiceRunStatus? Status = null,
+    DateTimeOffset? UpdatedFrom = null,
+    DateTimeOffset? UpdatedTo = null);

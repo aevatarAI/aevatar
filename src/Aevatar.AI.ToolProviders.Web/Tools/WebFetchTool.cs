@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Tools;
 
 namespace Aevatar.AI.ToolProviders.Web.Tools;
 
@@ -38,7 +40,51 @@ public sealed class WebFetchTool : IAgentTool
         }
         """;
 
+    public ToolPresentationDescriptor Presentation =>
+        ToolPresentationDescriptors.BuiltIn(Name, "Web fetch", Description);
+
     public bool IsReadOnly => true;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        if (WebToolResultBoundaryJson.TryReadError(resultJson, out var error) && error != null)
+        {
+            var code = error.Code == "host_resolution_failed"
+                ? "WEB_FETCH_DNS_FAILURE"
+                : IsOwnedFailureCode(error.Code)
+                    ? error.Code
+                    : "WEB_FETCH_URL_REJECTED";
+            return Receipt(
+                callId,
+                toolName,
+                AgentToolReceiptStatus.Error,
+                resultJson,
+                code,
+                error.Message);
+        }
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            var isFetchSuccess = root.TryGetProperty("status_code", out var statusCode) &&
+                                 statusCode.TryGetInt32(out var value) &&
+                                 value is >= 200 and <= 299;
+            var isRedirect = root.TryGetProperty("status", out var status) &&
+                             string.Equals(status.GetString(), "redirect", StringComparison.Ordinal);
+            return isFetchSuccess || isRedirect
+                ? Receipt(callId, toolName, AgentToolReceiptStatus.Success, resultJson)
+                : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -63,6 +109,8 @@ public sealed class WebFetchTool : IAgentTool
         // to arbitrary hosts; authenticated downstream access must use a typed
         // NyxID proxy tool instead.
         var result = await _client.FetchUrlAsync(string.Empty, validation.NormalizedUrl!, ct);
+        if (result.Error != null)
+            return WebToolResultBoundaryJson.ToBoundaryJson(result.Error);
 
         if (result.RedirectUrl != null)
         {
@@ -92,6 +140,31 @@ public sealed class WebFetchTool : IAgentTool
             body,
             truncated));
     }
+
+    private AgentToolReceipt Receipt(
+        string callId,
+        string toolName,
+        AgentToolReceiptStatus status,
+        string resultJson,
+        string errorCode = "",
+        string errorMessage = "") =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = status,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ErrorCode = errorCode ?? string.Empty,
+            ErrorMessage = errorMessage ?? string.Empty,
+            ResultJson = resultJson ?? string.Empty,
+        };
+
+    private static bool IsOwnedFailureCode(string code) =>
+        code is "WEB_FETCH_DNS_FAILURE" or
+            "WEB_FETCH_TLS_FAILURE" or
+            "WEB_FETCH_TIMEOUT" or
+            "WEB_FETCH_TRANSPORT_FAILURE" ||
+        code.StartsWith("WEB_FETCH_HTTP_", StringComparison.Ordinal);
 
     private static string HtmlToPlainText(string html)
     {

@@ -131,6 +131,44 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     }
 
     [Fact]
+    public async Task ChatRequest_WithFileIdOnlyInputFileRef_ShouldBindArtifactOwnerBeforeStartingWorkflow()
+    {
+        var runId = "run-1917-" + Guid.NewGuid().ToString("N");
+        var ownershipPort = new RecordingWorkflowFileArtifactOwnershipPort();
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false), ownershipPort);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            InputParts =
+            {
+                new WorkflowChatInputPartPayload
+                {
+                    Kind = WorkflowChatInputPartKind.File,
+                    FileRef = new WorkflowFileRef
+                    {
+                        FileId = "wf-file-only-123",
+                        SourceKind = WorkflowFileSourceKind.ChatInput,
+                        FileName = "invoice.txt",
+                        MediaType = "text/plain",
+                    },
+                },
+            },
+        }));
+
+        ownershipPort.Bindings.Should().ContainSingle().Which.Should().BeEquivalentTo(new FileOwnerBinding(
+            "wf-file-only-123",
+            string.Empty,
+            runId,
+            "scope-1"));
+        harness.Publisher.Published
+            .Where(x => x.Event is StepRequestEvent)
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
     public async Task ChatRequest_WhenInputFileOwnerBindingFails_ShouldNotStartWorkflow()
     {
         var runId = "run-1917-" + Guid.NewGuid().ToString("N");
@@ -170,6 +208,116 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             .Should()
             .ContainSingle()
             .Which.Error.Should().Be("workflow_input_file_binding_failed");
+    }
+
+    [Fact]
+    public async Task ChatRequest_WhenStartSelfPublishFails_ShouldCommitTerminalFailure()
+    {
+        var runId = "run-1917-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false));
+        harness.Publisher.FailPublish = evt => evt is StartWorkflowEvent;
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+        }));
+
+        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Which.RunId.Should().Be(runId);
+        var completed = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completed.RunId.Should().Be(runId);
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().StartWith("start_dispatch_failed: failed during start_dispatch: ");
+        completed.Error.Should().NotContain("super-secret-token");
+        completed.Error.Should().NotContain("Bearer");
+        harness.Agent.State.FinalError.Should().Be(completed.Error);
+    }
+
+    [Fact]
+    public async Task ReplaceWorkflowDefinitionAndExecute_WhenStartSelfPublishFails_ShouldCommitTerminalFailure()
+    {
+        var runId = "run-1917-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false));
+        harness.Publisher.FailPublish = evt => evt is StartWorkflowEvent;
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new ReplaceWorkflowDefinitionAndExecuteEvent
+        {
+            WorkflowYaml = WorkflowYaml(onFailure: false),
+            Input = "direct-input",
+        }));
+
+        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Which.Input.Should().Be("direct-input");
+        var completed = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completed.RunId.Should().Be(runId);
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().StartWith("start_dispatch_failed: failed during start_dispatch: ");
+        completed.Error.Should().NotContain("super-secret-token");
+        completed.Error.Should().NotContain("Bearer");
+    }
+
+    [Fact]
+    public async Task ChatRequest_WhenStartTerminalizationFails_ShouldPublishParentFailure()
+    {
+        var runId = "run-1917-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false));
+        harness.Publisher.FailPublish = evt => evt is StartWorkflowEvent;
+        harness.CommittedPublisher.FailBeforePublish = evt => evt is WorkflowCompletedEvent;
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            SessionId = "session-1",
+        }));
+
+        var fallback = harness.Publisher.Published
+            .Where(x => x.Event is WorkflowLlmInvocationCompletedEvent)
+            .Select(x => (WorkflowLlmInvocationCompletedEvent)x.Event)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        fallback.RunId.Should().Be(runId);
+        fallback.SessionId.Should().Be("session-1");
+        fallback.Success.Should().BeFalse();
+        fallback.Content.Should().Be("Workflow execution failed: start_dispatch_failed");
+        fallback.Error.Should().StartWith("start_dispatch_failed: failed during start_dispatch: ");
+        fallback.Error.Should().NotContain("super-secret-token");
+        fallback.Error.Should().NotContain("Bearer");
+    }
+
+    [Fact]
+    public async Task ChatRequest_ReplayedWithSameCommandId_ShouldStartRunOnlyOnce()
+    {
+        var runId = "work-order-run-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false));
+        var envelope = EnvelopeFrom("work-order", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+        });
+        envelope.Id = "work-order-dispatch-command-1";
+        envelope.Propagation.CorrelationId = "work-order-dispatch-command-1";
+
+        await harness.Agent.HandleEventAsync(envelope);
+        await harness.Agent.HandleEventAsync(envelope.Clone());
+
+        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+            .Should().ContainSingle();
+        harness.Publisher.Published.Count(item => item.Event is StartWorkflowEvent)
+            .Should().Be(1);
+        harness.Agent.State.LastCommandId.Should().Be("work-order-dispatch-command-1");
     }
 
     private static async Task<RunHarness> CreateStartedRunAsync(string workflowYaml, int attempt)
@@ -228,6 +376,7 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             WorkflowYaml = workflowYaml,
             RunId = runId,
             ScopeId = "scope-1",
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
         }));
 
         return new RunHarness(agent, runId, string.Empty, committedHook, topologyPublisher);
@@ -239,6 +388,16 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             return null;
 
         return published.StateEvent.EventData.Unpack<WorkflowRunForkRequestedEvent>();
+    }
+
+    private static IReadOnlyList<TEvent> CommittedEvents<TEvent>(RecordingCommittedStatePublicationHook hook)
+        where TEvent : class, IMessage<TEvent>, new()
+    {
+        var descriptor = new TEvent().Descriptor;
+        return hook.Events
+            .Where(x => x.StateEvent?.EventData?.Is(descriptor) == true)
+            .Select(x => x.StateEvent!.EventData.Unpack<TEvent>())
+            .ToArray();
     }
 
     private static EventEnvelope SelfEnvelope(string runId, IMessage payload) =>
@@ -300,14 +459,14 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         string? OwnerScopeId);
 
     private sealed class RecordingWorkflowFileArtifactOwnershipPort :
-        Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileArtifactOwnershipPort
+        Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort
     {
         public List<FileOwnerBinding> Bindings { get; } = [];
 
         public Exception? Exception { get; init; }
 
         public ValueTask BindOwnerAsync(
-            Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef fileRef,
+            Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef fileRef,
             string ownerRunId,
             string? ownerScopeId,
             CancellationToken cancellationToken = default)
@@ -353,6 +512,8 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     {
         public List<(IMessage Event, TopologyAudience Audience)> Published { get; } = [];
 
+        public Func<IMessage, bool>? FailPublish { get; set; }
+
         public async Task PublishAsync<T>(
             T evt,
             TopologyAudience audience,
@@ -362,6 +523,9 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             where T : IMessage
         {
             ct.ThrowIfCancellationRequested();
+            if (FailPublish?.Invoke(evt) == true)
+                throw new InvalidOperationException("start failed with bearer super-secret-token");
+
             Published.Add((evt, audience));
 
             if (audience == TopologyAudience.Self)
@@ -384,11 +548,32 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     {
         public List<CommittedStateEventPublished> Events { get; } = [];
 
+        public Func<IMessage, bool>? FailBeforePublish { get; set; }
+
         public Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            if (context.Published.StateEvent?.EventData is { } eventData)
+            {
+                var message = TryUnpackKnownEvent(eventData);
+                if (message != null && FailBeforePublish?.Invoke(message) == true)
+                    throw new InvalidOperationException("committed publication failed with bearer super-secret-token");
+            }
+
             Events.Add(context.Published.Clone());
             return Task.CompletedTask;
+        }
+
+        private static IMessage? TryUnpackKnownEvent(Any eventData)
+        {
+            if (eventData.Is(WorkflowCompletedEvent.Descriptor))
+                return eventData.Unpack<WorkflowCompletedEvent>();
+            if (eventData.Is(WorkflowRunExecutionStartedEvent.Descriptor))
+                return eventData.Unpack<WorkflowRunExecutionStartedEvent>();
+            if (eventData.Is(WorkflowRunForkRequestedEvent.Descriptor))
+                return eventData.Unpack<WorkflowRunForkRequestedEvent>();
+
+            return null;
         }
     }
 

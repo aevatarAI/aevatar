@@ -15,14 +15,18 @@ public sealed class StatusProbeAuthorizationResolver
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
+    private readonly IProbeServiceTokenProvider? _scopeTokenProvider;
     private readonly ConcurrentDictionary<string, TokenCacheEntry> _tokenCache = new(StringComparer.Ordinal);
 
     public StatusProbeAuthorizationResolver(
         IHttpClientFactory httpClientFactory,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IEnumerable<IProbeServiceTokenProvider>? scopeTokenProviders = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        // Optional, host-supplied. Absent (empty) when scope service tokens are not enabled.
+        _scopeTokenProvider = scopeTokenProviders?.FirstOrDefault();
     }
 
     public async Task<ResolvedBearerToken?> ResolveBearerTokenAsync(
@@ -37,10 +41,35 @@ public sealed class StatusProbeAuthorizationResolver
             "none" => null,
             "static_bearer" => ResolveStaticBearerToken(descriptor, requireConfigured: true),
             "client_credentials" => await ResolveClientCredentialsTokenAsync(descriptor, requireConfigured: true, ct),
+            "scope_service_token" => await ResolveScopeServiceTokenAsync(descriptor, ct),
             "auto" => await ResolveAutoTokenAsync(descriptor, ct),
             _ => throw new InvalidOperationException(
-                $"Unsupported Auth.Mode '{mode}'. Expected one of: auto, none, static_bearer, client_credentials."),
+                $"Unsupported Auth.Mode '{mode}'. Expected one of: auto, none, static_bearer, client_credentials, scope_service_token."),
         };
+    }
+
+    // Self-issued scope service token (Bearer) for the host's own authenticated endpoints. When the
+    // provider is absent (scope service tokens disabled) or cannot mint, throws
+    // ProbeCredentialUnavailableException so the executor degrades the probe to "unknown" — never an
+    // unauthenticated request that would 401 and read as a false "down".
+    private async Task<ResolvedBearerToken?> ResolveScopeServiceTokenAsync(
+        HealthProbeTargetDescriptor descriptor,
+        CancellationToken ct)
+    {
+        var scopeId = ReadParam(descriptor, "Auth.ScopeId")?.Trim();
+        if (string.IsNullOrWhiteSpace(scopeId))
+            throw new ProbeCredentialUnavailableException("Auth.ScopeId is required for scope_service_token auth.");
+        if (_scopeTokenProvider is null)
+        {
+            throw new ProbeCredentialUnavailableException(
+                "Scope service token provider is not registered (Aevatar:Authentication:ScopeServiceTokens disabled).");
+        }
+
+        var token = await _scopeTokenProvider.GetScopeBearerAsync(scopeId, ct);
+        if (string.IsNullOrWhiteSpace(token))
+            throw new ProbeCredentialUnavailableException("Scope service token provider returned no token.");
+
+        return new ResolvedBearerToken("Bearer", token);
     }
 
     public async Task<string?> ResolveAuthorizationHeaderAsync(

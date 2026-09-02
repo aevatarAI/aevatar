@@ -3,6 +3,17 @@ import { setLocale } from '@umijs/max';
 import React from 'react';
 import { StudioExecutionPage } from './StudioWorkbenchSections';
 
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
+
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  useConsoleToast: () => mockConsoleToast,
+}));
+
 jest.mock('@/shared/graphs/GraphCanvas', () => ({
   __esModule: true,
   default: () => {
@@ -128,6 +139,7 @@ function createBaseProps(overrides = {}) {
 
 describe('StudioExecutionPage', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     setLocale('zh-CN', false);
   });
 
@@ -165,41 +177,96 @@ describe('StudioExecutionPage', () => {
     expect(screen.getByText('人工回放')).toBeInTheDocument();
     expect(screen.getByText('观察事实')).toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '停止运行' }),
+    ).toBeInTheDocument();
     expect(screen.getByText('执行日志')).toBeInTheDocument();
     expect(screen.getByLabelText('选择运行记录')).toBeInTheDocument();
     expect(screen.getByText('Graph canvas')).toBeInTheDocument();
   });
 
-  it('shows the selected execution actor id and lets users copy it', async () => {
+  it('does not show the manual input label for human_input interactions', () => {
+    const baseProps = createBaseProps();
+
+    render(
+      React.createElement(
+        StudioExecutionPage,
+        createBaseProps({
+          selectedExecution: {
+            ...baseProps.selectedExecution,
+            data: {
+              ...baseProps.selectedExecution.data,
+              frames: [
+                {
+                  receivedAtUtc: '2026-03-18T00:00:01Z',
+                  payload: JSON.stringify({
+                    custom: {
+                      name: 'aevatar.step.request',
+                      payload: {
+                        stepId: 'triage',
+                        stepType: 'human_input',
+                        targetRole: 'support',
+                        input: 'Collect the missing details.',
+                      },
+                    },
+                  }),
+                },
+                {
+                  receivedAtUtc: '2026-03-18T00:00:02Z',
+                  payload: JSON.stringify({
+                    custom: {
+                      name: 'aevatar.human_input.request',
+                      payload: {
+                        runId: 'execution-1',
+                        stepId: 'triage',
+                        suspensionType: 'human_input',
+                        prompt: 'Enter the missing information.',
+                        variableName: 'missing_details',
+                      },
+                    },
+                  }),
+                },
+              ],
+            },
+          },
+        }) as any,
+      ),
+    );
+
+    expect(screen.queryByText('等待人工输入')).toBeNull();
+    expect(screen.queryByText('Waiting for manual input')).toBeNull();
+    expect(
+      screen.getAllByText('Enter the missing information.').length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('shows selected execution context without exposing the actor id', async () => {
     const writeText = jest.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, 'clipboard', {
       configurable: true,
       value: { writeText },
     });
 
-    render(
-      React.createElement(StudioExecutionPage, createBaseProps() as any),
-    );
+    render(React.createElement(StudioExecutionPage, createBaseProps() as any));
 
-    expect(screen.getAllByText('Actor ID').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('actor-1').length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByRole('button', { name: '复制 Actor ID。' }));
-
-    await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith('actor-1');
-    });
+    expect(screen.queryByText('Actor ID')).toBeNull();
+    expect(screen.queryByText('actor-1')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: '复制 Actor ID。' }),
+    ).toBeNull();
+    expect(writeText).not.toHaveBeenCalled();
   });
 
   it('surfaces approval playback details from the selected execution trace', () => {
-    render(
-      React.createElement(StudioExecutionPage, createBaseProps() as any),
-    );
+    render(React.createElement(StudioExecutionPage, createBaseProps() as any));
 
-    expect(screen.getAllByText('triage waiting for approval').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('triage waiting for approval').length,
+    ).toBeGreaterThan(0);
     expect(screen.getAllByText('triage approved').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Need L2 approval before refund.').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('Need L2 approval before refund.').length,
+    ).toBeGreaterThan(0);
   });
 
   it('allows sending a signal when the selected run is waiting on wait_signal', async () => {
@@ -321,5 +388,28 @@ describe('StudioExecutionPage', () => {
     );
 
     expect(screen.getByText('Select a member to observe.')).toBeInTheDocument();
+  });
+
+  it('reports execution action failures with a safe toast', async () => {
+    render(
+      React.createElement(
+        StudioExecutionPage,
+        createBaseProps({
+          executionNotice: {
+            message: 'POST /api/runs/stop returned 500',
+            type: 'error',
+          },
+        }) as any,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        '无法完成运行操作，请重试。',
+      );
+    });
+    expect(
+      screen.queryByText('POST /api/runs/stop returned 500'),
+    ).not.toBeInTheDocument();
   });
 });

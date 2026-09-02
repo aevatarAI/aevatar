@@ -3,6 +3,7 @@ package aevatar.gagents.studio_member;
 option csharp_namespace = "Aevatar.GAgents.StudioMember";
 
 import "google/protobuf/timestamp.proto";
+import "workflow_capability_admission.proto";
 
 // ─── Canonical enums ───
 //
@@ -82,6 +83,7 @@ message StudioMemberBindingContract {
   string revision_id = 2;
   StudioMemberImplementationKind implementation_kind = 3;
   google.protobuf.Timestamp bound_at_utc = 4;
+  string expected_actor_id = 5;
 }
 
 message StudioMemberBindingFailure {
@@ -101,6 +103,7 @@ message StudioMemberBindingAuthorityState {
 message StudioMemberWorkflowBindingRequest {
   repeated string workflow_yamls = 1;
   string workflow_id = 2;
+  aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 3;
 }
 
 message StudioMemberScriptBindingRequest {
@@ -199,6 +202,11 @@ message StudioMemberState {
   // string is rejected at the application layer. Mutated only via committed
   // StudioMemberReassignedEvent.
   optional string team_id = 50;
+  // Tombstone flag for physical Studio member deletion. Once true, the member
+  // authority rejects user-facing mutations and the current-state projector
+  // removes the member read model so GET/list surfaces return not found.
+  bool deleted = 60;
+  google.protobuf.Timestamp deleted_at_utc = 61;
 }
 
 // ─── Events ───
@@ -255,6 +263,16 @@ message StudioMemberBindingCompletedEvent {
   StudioMemberImplementationKind implementation_kind = 4;
   StudioMemberImplementationRef implementation_ref = 5;
   google.protobuf.Timestamp completed_at_utc = 6;
+  string expected_actor_id = 7;
+}
+
+message StudioMemberPublishedBindingRecordedEvent {
+  string published_service_id = 1;
+  string revision_id = 2;
+  StudioMemberImplementationKind implementation_kind = 3;
+  StudioMemberImplementationRef implementation_ref = 4;
+  google.protobuf.Timestamp recorded_at_utc = 5;
+  string expected_actor_id = 6;
 }
 
 message StudioMemberBindingFailedEvent {
@@ -341,6 +359,20 @@ message StudioMemberBindingTerminalAcknowledged {
   string binding_run_id = 1;
   StudioMemberBindingRunStatus status = 2;
   google.protobuf.Timestamp acknowledged_at_utc = 3;
+}
+
+message StudioMemberDeleteRequested {
+  string member_id = 1;
+  string scope_id = 2;
+  google.protobuf.Timestamp requested_at_utc = 3;
+}
+
+message StudioMemberDeletedEvent {
+  string member_id = 1;
+  string scope_id = 2;
+  optional string previous_team_id = 3;
+  string published_service_id = 4;
+  google.protobuf.Timestamp deleted_at_utc = 5;
 }
 
 // Actor-owned PATCH intent for a member's team assignment. The HTTP /

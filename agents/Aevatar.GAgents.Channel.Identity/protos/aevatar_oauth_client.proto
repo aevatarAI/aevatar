@@ -5,6 +5,7 @@ package aevatar.gagents.channel.identity;
 option csharp_namespace = "Aevatar.GAgents.Channel.Identity";
 
 import "google/protobuf/timestamp.proto";
+import "Credentials/credential_secret_references.proto";
 
 // Cluster-singleton state for the aevatar host's own OAuth client registration
 // against NyxID. Persisted by AevatarOAuthClientGAgent (well-known id
@@ -12,6 +13,8 @@ import "google/protobuf/timestamp.proto";
 // client_id and HMAC key — no appsettings, no secrets store, no per-host
 // drift. See ADR-0017 §Implementation Notes #1 for the HMAC key invariant.
 message AevatarOAuthClientState {
+  reserved 28, 29;
+  reserved "default_service_slugs", "provisioning_retry_default_service_slugs";
   // Opaque OAuth client_id returned by NyxID's RFC 7591 dynamic registration
   // endpoint. Empty when not yet provisioned.
   string client_id = 1;
@@ -70,6 +73,34 @@ message AevatarOAuthClientState {
   string provisioning_retry_callback_id = 19;
   int64 provisioning_retry_callback_generation = 20;
   string provisioning_retry_last_error = 21;
+  // Full redirect URI allowlist that must be registered at NyxID for the
+  // active client_id. redirect_uri remains the canonical backend callback used
+  // by the broker callback flow; this list also includes explicitly configured
+  // external callbacks such as the Console SPA /auth/callback route.
+  repeated string redirect_uris = 22;
+  // Full redirect URI allowlist captured for an actor-owned provisioning retry.
+  repeated string provisioning_retry_redirect_uris = 23;
+  // Whether the pending actor-owned provisioning retry must preserve a
+  // break-glass force-DCR intent.
+  bool provisioning_retry_force_reprovision = 24;
+  // Actor-side one-shot guard for the startup force-DCR switch. Set after one
+  // forced DCR succeeds so multi-silo startup broadcasts cannot create one
+  // NyxID client per silo. Cleared by the next normal (non-force) ensure after
+  // operators remove AEVATAR_OAUTH_FORCE_DCR_ON_STARTUP.
+  bool force_reprovision_consumed = 25;
+  // Secret-vault reference for the current HMAC signing key. New writes
+  // populate this and leave [hmac_key] empty; the projection provider
+  // resolves the key material from ISecretVault at read time. Legacy state
+  // carries the plaintext key in [hmac_key] with this ref unset — the
+  // provider falls back to the legacy bytes (dual-read migration).
+  aevatar.credentials.SecretReference hmac_key_ref = 26;
+  // Secret-vault reference for the demoted previous HMAC key kept for the
+  // rotation grace window. Set only when a rotation demoted an existing
+  // ref-backed key; empty on initial seed and for legacy state.
+  aevatar.credentials.SecretReference previous_hmac_key_ref = 27;
+  // Last successfully applied operator rotation request. Business idempotency
+  // is actor-owned because transport envelope ids change when a lost 202 is retried.
+  string last_hmac_rotation_idempotency_key = 30;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -78,16 +109,27 @@ message AevatarOAuthClientState {
 // duplicate OAuth clients at NyxID — see PR #521 review (codex/k2p6/v4-pro
 // consensus on the cold-boot race).
 message EnsureAevatarOAuthClientProvisionedCommand {
+  reserved 6;
+  reserved "default_service_slugs";
   string nyxid_authority = 1;
   string redirect_uri = 2;
-  // Optional override for the DCR <c>client_name</c>; bootstrap leaves blank.
+  // Optional override for the legacy explicit DCR command path.
   string client_name = 3;
+  // Full redirect URI allowlist to register at NyxID. Empty means legacy caller;
+  // the actor falls back to [redirect_uri].
+  repeated string redirect_uris = 4;
+  // Break-glass: force DCR even when stored state appears provisioned. Operators
+  // must disable the startup env switch after one successful run to avoid
+  // creating a new NyxID client on every restart.
+  bool force_reprovision = 5;
 }
 
 // Durable self-callback payload fired when an actor-owned OAuth provisioning
 // retry becomes due. The actor validates it against typed retry facts before
 // re-entering the DCR path.
 message AevatarOAuthClientProvisioningRetryFiredEvent {
+  reserved 11;
+  reserved "default_service_slugs";
   int32 attempt = 1;
   int64 due_unix_ms = 2;
   string nyxid_authority = 3;
@@ -96,34 +138,45 @@ message AevatarOAuthClientProvisioningRetryFiredEvent {
   string callback_id = 6;
   int64 callback_generation = 7;
   int64 fired_at_unix_ms = 8;
+  repeated string redirect_uris = 9;
+  bool force_reprovision = 10;
 }
 
-// Issued by tests / manual operator scripts that already hold a client_id
-// (e.g. seeded fixture, post-rotation retag, post-incident rebuild). Bootstrap
-// NEVER uses this — it always sends EnsureAevatarOAuthClientProvisionedCommand
-// instead so the actor mediates the DCR call.
+// Issued by configured host bootstrap, operator reconciliation, and tests that
+// already hold a client_id. The actor materializes the supplied deployment
+// fact without calling DCR.
 message ProvisionAevatarOAuthClientCommand {
+  reserved 7;
+  reserved "default_service_slugs";
   string client_id = 1;
   int64 client_id_issued_at_unix = 2;
   string nyxid_authority = 3;
   // Optional diagnostic scope for manually provisioned clients. Bootstrap
   // never uses this command path; an empty value means unknown. The
-  // operator-rebuild path must set this to AevatarOAuthClientScopes
-  // .AuthorizationScope so the next bootstrap does not detect drift and
-  // re-DCR the freshly-pinned client.
+  // Configured bootstrap and operator reconciliation set this to
+  // AevatarOAuthClientScopes.AuthorizationScope.
   string oauth_scope = 4;
   // Optional redirect URI. The operator-rebuild path (POST /api/oauth/
-  // aevatar-client/rebuild) must set this to the resolver output so the next
-  // bootstrap does not detect redirect drift and re-DCR the freshly-pinned
-  // client. Tests / fixture seeds may leave it empty when they don't care
-  // about drift detection on a subsequent bootstrap pass.
+  // aevatar-client/rebuild) sets this to the resolver output. Tests / fixture
+  // seeds may leave it empty when they do not exercise callback validation.
   string redirect_uri = 5;
+  // Full redirect URI allowlist pinned for the supplied client_id. Empty means
+  // preserve existing list or fall back to [redirect_uri] for legacy callers.
+  repeated string redirect_uris = 6;
 }
 
 // Issued by ops to force a fresh HMAC key rotation. Old tokens signed with
 // the previous key fail decode after the next provision; production rolls
 // out via grace window.
-message RotateAevatarOAuthClientHmacKeyCommand {}
+message RotateAevatarOAuthClientHmacKeyCommand {
+  string idempotency_key = 1;
+  string expected_current_kid = 2;
+}
+
+// Issued by the operator rebuild endpoint: re-materialize the wiped/reset
+// current-state readmodel from the surviving actor state. Appends no event
+// and changes no OAuth client fact — disaster recovery only.
+message RebuildAevatarOAuthClientProjectionCommand {}
 
 // Issued by the OAuth callback handler when it observes binding_id in the
 // token response — confirmation that NyxID admin has enabled
@@ -141,6 +194,8 @@ message AevatarOAuthClientProjectionRebuildRequestedEvent {
 // Persisted after a failed actor-owned provisioning attempt schedules a
 // durable self-callback for the next retry.
 message AevatarOAuthClientProvisioningRetryScheduledEvent {
+  reserved 12;
+  reserved "default_service_slugs";
   int32 attempt = 1;
   int64 due_unix_ms = 2;
   string nyxid_authority = 3;
@@ -150,6 +205,8 @@ message AevatarOAuthClientProvisioningRetryScheduledEvent {
   int64 callback_generation = 7;
   string last_error = 8;
   google.protobuf.Timestamp scheduled_at = 9;
+  repeated string redirect_uris = 10;
+  bool force_reprovision = 11;
 }
 
 // Persisted when provisioning reaches a terminal successful branch and the
@@ -157,6 +214,15 @@ message AevatarOAuthClientProvisioningRetryScheduledEvent {
 message AevatarOAuthClientProvisioningRetryClearedEvent {
   string reason = 1;
   google.protobuf.Timestamp cleared_at = 2;
+}
+
+// Persisted when the actor consumes or resets the one-shot startup force-DCR
+// guard. This keeps AEVATAR_OAUTH_FORCE_DCR_ON_STARTUP cluster-idempotent
+// across multi-silo bootstrap broadcasts while allowing a later normal startup
+// to reset the guard after operators remove the env var.
+message AevatarOAuthClientForceReprovisionConsumedEvent {
+  bool consumed = 1;
+  google.protobuf.Timestamp persisted_at = 2;
 }
 
 // Persisted when actor-owned drift reconciliation succeeds through DCR.
@@ -173,6 +239,8 @@ message AevatarOAuthClientDriftReconciledEvent {
 // the readmodel and so the actor can detect redirect-uri drift across
 // redeploys.
 message AevatarOAuthClientProvisionedEvent {
+  reserved 8;
+  reserved "default_service_slugs";
   string client_id = 1;
   int64 client_id_issued_at_unix = 2;
   string nyxid_authority = 3;
@@ -186,6 +254,8 @@ message AevatarOAuthClientProvisionedEvent {
   // an older event predates scope tracking; the actor treats empty as
   // legacy/unknown and re-DCRs once so proxy-capable bindings can be minted.
   string oauth_scope = 6;
+  // Full redirect URI allowlist registered with NyxID at this DCR call.
+  repeated string redirect_uris = 7;
 }
 
 // Persisted when the actor seeds or rotates its HMAC key. On rotation, the
@@ -199,6 +269,13 @@ message AevatarOAuthClientHmacKeyRotatedEvent {
   bytes previous_hmac_key = 5;
   string previous_hmac_kid = 6;
   int64 previous_hmac_demoted_at_unix = 7;
+  // Secret-vault reference for the newly-generated HMAC key. New writes set
+  // this and leave [hmac_key] empty; the reducer copies the ref into state.
+  aevatar.credentials.SecretReference hmac_key_ref = 8;
+  // Secret-vault reference for the demoted previous key on rotation. Empty on
+  // initial seed and when the demoted key was legacy plaintext-only.
+  aevatar.credentials.SecretReference previous_hmac_key_ref = 9;
+  string idempotency_key = 10;
 }
 
 // Persisted when the OAuth callback observes the broker capability for
@@ -219,6 +296,8 @@ message AevatarOAuthClientBrokerCapabilityObservedEvent {
 // MUST keep ES index `aevatar-oauth-client-*` access scoped to the same
 // services that can read grain events.
 message AevatarOAuthClientDocument {
+  reserved 21;
+  reserved "default_service_slugs";
   string id = 1;
   int64 state_version = 2;
   string last_event_id = 3;
@@ -250,4 +329,15 @@ message AevatarOAuthClientDocument {
   // Mirror of AevatarOAuthClientState.oauth_scope for diagnostics and
   // bootstrap drift detection.
   string oauth_scope = 17;
+  // Mirror of AevatarOAuthClientState.redirect_uris for diagnostics and drift
+  // detection of explicitly configured external callbacks.
+  repeated string redirect_uris = 18;
+  // Secret-vault reference for the current HMAC key mirrored from state. When
+  // set, AevatarOAuthClientProjectionProvider resolves the key material from
+  // ISecretVault; legacy documents carry the plaintext key in [hmac_key] with
+  // this ref unset (dual-read migration).
+  aevatar.credentials.SecretReference hmac_key_ref = 19;
+  // Secret-vault reference for the demoted previous HMAC key mirrored from
+  // state for the rotation grace window.
+  aevatar.credentials.SecretReference previous_hmac_key_ref = 20;
 }

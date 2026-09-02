@@ -156,6 +156,13 @@ message WorkflowRunContextPayload {
   string command_id = 3;
 }
 
+message WorkflowChatContextPayload {
+  string scope_id = 1;
+  string conversation_id = 2;
+  string turn_id = 3;
+  int64 state_version = 4;
+}
+
 message WorkflowStepRequestCustomPayload {
   string run_id = 1;
   string step_id = 2;

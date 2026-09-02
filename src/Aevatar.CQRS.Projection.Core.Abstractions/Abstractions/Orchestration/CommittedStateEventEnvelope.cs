@@ -66,6 +66,21 @@ public static class CommittedStateEventEnvelope
         return true;
     }
 
+    /// <summary>
+    /// The actor that authored the committed event (<see cref="StateEvent.AgentId"/>). This is the
+    /// origin actor id and is preserved when the committed-observation relay forwards the event to a
+    /// parent actor's projection scope, so it can be compared against the projecting scope's root
+    /// actor id to detect relayed (cross-actor) deliveries.
+    /// </summary>
+    public static string GetOriginActorId(EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        return TryUnpack(envelope, out var published)
+            ? published?.StateEvent?.AgentId ?? string.Empty
+            : string.Empty;
+    }
+
     public static bool TryCreateObservedEnvelope(
         EventEnvelope envelope,
         out EventEnvelope? observedEnvelope)

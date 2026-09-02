@@ -16,6 +16,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
     [
         "aevatar_invoke_gagent",
         "aevatar_invoke_team",
+        "aevatar_invoke_member",
         "aevatar_start_workflow",
         "aevatar_observe_run",
         "aevatar_read_workflow_run_artifact",
@@ -40,7 +41,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
         ToolSetResolveResult toolSet;
         try
         {
-            toolSet = _toolSetRegistry.Resolve(new ChatRouteToolSetRef { Name = toolSetName });
+            toolSet = _toolSetRegistry.Resolve(toolSetName);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -143,6 +144,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
         {
             typeof(InvokeGAgentToolSource),
             typeof(InvokeTeamToolSource),
+            typeof(InvokeMemberToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
             typeof(ReadWorkflowRunArtifactToolSource),
@@ -292,6 +294,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
     private static bool IsRequiredInvocationSource(IAgentToolSource source) =>
         source is InvokeGAgentToolSource or
             InvokeTeamToolSource or
+            InvokeMemberToolSource or
             StartWorkflowToolSource or
             ObserveRunToolSource or
             ReadWorkflowRunArtifactToolSource;

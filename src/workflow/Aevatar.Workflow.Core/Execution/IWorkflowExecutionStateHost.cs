@@ -32,9 +32,17 @@ internal interface IWorkflowExecutionStateHost
 
     string ScopeId => string.Empty;
 
+    string ScheduleId => string.Empty;
+
     WorkflowExecutionRuntimeContext RuntimeContext { get; }
 
     WorkflowRunExecutionContextState ExecutionContextSnapshot { get; }
+
+    /// <summary>
+    /// Committed call-site admission proof this Run received at bind time. The Run actor owns
+    /// this copy; runtime never re-reads the Definition actor, a read model, or an event store.
+    /// </summary>
+    WorkflowCapabilityAdmissionPlan CapabilityAdmissionPlanSnapshot => new();
 
     Task UpdateExecutionContextAsync(
         WorkflowRunExecutionContextDelta delta,

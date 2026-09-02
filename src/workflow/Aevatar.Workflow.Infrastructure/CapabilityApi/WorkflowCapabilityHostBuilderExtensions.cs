@@ -1,3 +1,4 @@
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -10,9 +11,13 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 public static class WorkflowCapabilityHostBuilderExtensions
 {
-    public static WebApplicationBuilder AddWorkflowCapabilityBundle(this WebApplicationBuilder builder)
+    public static WebApplicationBuilder AddWorkflowCapabilityBundle(
+        this WebApplicationBuilder builder,
+        bool mapChatPost = true)
     {
         ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Services.AddBackendConsoleStaticAssets(builder.Configuration);
 
         builder.Services.AddAevatarHealthContributor(new AevatarHealthContributorRegistration
         {
@@ -50,6 +55,6 @@ public static class WorkflowCapabilityHostBuilderExtensions
         return builder.AddAevatarCapability(
             name: "workflow-bundle",
             configureServices: static (services, configuration) => services.AddWorkflowCapability(configuration),
-            mapEndpoints: static app => app.MapWorkflowCapabilityEndpoints());
+            mapEndpoints: app => app.MapWorkflowCapabilityEndpoints(mapChatPost));
     }
 }

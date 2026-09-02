@@ -8,6 +8,7 @@ public static class LLMRequestMetadataKeys
     public const string RequestId = "aevatar.request_id";
     public const string CallId = "aevatar.call_id";
     public const string ScopeId = "aevatar.scope_id";
+    public const string OwnerScopeId = "aevatar.owner_scope_id";
     public const string OwnerSubject = "aevatar.owner_subject";
     public const string ResponseId = "aevatar.response_id";
     public const string NyxIdAccessToken = "nyxid.access_token";
@@ -26,6 +27,7 @@ public static class LLMRequestMetadataKeys
     /// caller (Studio API, streaming proxy) — fall back to ambient prefs.
     /// </summary>
     public const string SenderBindingId = "aevatar.sender_binding_id";
+    public const string SenderNyxUserId = "aevatar.sender_nyx_user_id";
 
     /// <summary>
     /// Short-lived NyxID access token issued for <see cref="SenderBindingId"/>.

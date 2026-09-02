@@ -2,6 +2,7 @@ using System.Collections;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Foundation.Abstractions;
@@ -100,6 +101,7 @@ public class AIFeatureBootstrapCoverageTests
     public void AddAevatarAIFeatures_ShouldRegisterCoreServicesWithExplicitApiKey()
     {
         var services = new ServiceCollection();
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         var config = new ConfigurationBuilder().Build();
 
         services.AddAevatarAIFeatures(config, options =>
@@ -124,6 +126,56 @@ public class AIFeatureBootstrapCoverageTests
         var skillOptions = provider.GetRequiredService<SkillsOptions>();
         skillOptions.Directories.Should().ContainSingle().Which.Should().Be("./skills-a");
         provider.GetServices<IAgentToolSource>().Should().ContainSingle(x => x is SkillsAgentToolSource);
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenSystemSkillOverlayEnabledWithSetName_RegistersOrnnProviderWithBoundOptions()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.EnableSystemSkillOverlay = true;
+            options.SystemSkillOverlaySetName = "aevatar-system";
+            options.OrnnNyxIdSlug = "ornn-api-custom";
+            options.SystemSkillOverlayRefreshTtl = TimeSpan.FromMinutes(15);
+            options.SystemSkillOverlayMaxSkills = 32;
+            options.SystemSkillOverlayMaxBytes = 32768;
+        });
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<ISystemSkillOverlayProvider>()
+            .Should().BeOfType<Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay.OrnnSystemSkillOverlayProvider>();
+
+        var overlayOptions = provider.GetRequiredService<SystemSkillOverlayOptions>();
+        overlayOptions.SetName.Should().Be("aevatar-system");
+        overlayOptions.RefreshTtl.Should().Be(TimeSpan.FromMinutes(15));
+        overlayOptions.MaxSkills.Should().Be(32);
+        overlayOptions.MaxBytes.Should().Be(32768);
+
+        // The overlay reads Ornn through the host-configured NyxID proxy slug even when the
+        // model-facing Ornn skill tools are not enabled.
+        provider.GetRequiredService<Aevatar.AI.ToolProviders.Ornn.OrnnOptions>()
+            .NyxIdSlug.Should().Be("ornn-api-custom");
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenSystemSkillOverlayEnabledWithoutSetName_DoesNotRegisterProvider()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.EnableSystemSkillOverlay = true;
+            options.SystemSkillOverlaySetName = "   ";
+        });
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetService<ISystemSkillOverlayProvider>().Should().BeNull();
     }
 
     [Fact]
@@ -158,6 +210,7 @@ public class AIFeatureBootstrapCoverageTests
             options.DefaultProvider = "openai";
             options.EnableMEAIProviders = true;
             options.EnableMEAIToTornadoFailover = true;
+            options.SecretsStore = new InMemorySecretsStore();
         });
 
         using var provider = services.BuildServiceProvider();
@@ -177,6 +230,7 @@ public class AIFeatureBootstrapCoverageTests
         services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
             new EmptyVoicePresenceCapabilityReader());
         AddVoicePresenceTestCredentialResolver(services);
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
 
         services.AddAevatarAIFeatures(config, options =>
         {
@@ -241,6 +295,7 @@ public class AIFeatureBootstrapCoverageTests
         services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
             new EmptyVoicePresenceCapabilityReader());
         AddVoicePresenceTestCredentialResolver(services);
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
 
         services.AddAevatarAIFeatures(config, options =>
         {
@@ -300,6 +355,7 @@ public class AIFeatureBootstrapCoverageTests
             options.DefaultProvider = "openai";
             options.EnableMEAIProviders = true;
             options.EnableMEAIToTornadoFailover = false;
+            options.SecretsStore = new InMemorySecretsStore();
         });
 
         using var provider = services.BuildServiceProvider();
@@ -389,7 +445,9 @@ public class AIFeatureBootstrapCoverageTests
         var tempHome = Path.Combine(Path.GetTempPath(), $"ai-feature-reload-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempHome);
         var previousHome = Environment.GetEnvironmentVariable(AevatarPaths.HomeEnv);
+        var previousAllowPlaintext = Environment.GetEnvironmentVariable(LocalSecretProtectionOptions.AllowPlaintextSecretsEnv);
         Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, tempHome);
+        Environment.SetEnvironmentVariable(LocalSecretProtectionOptions.AllowPlaintextSecretsEnv, "true");
 
         try
         {
@@ -432,6 +490,7 @@ public class AIFeatureBootstrapCoverageTests
         finally
         {
             Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, previousHome);
+            Environment.SetEnvironmentVariable(LocalSecretProtectionOptions.AllowPlaintextSecretsEnv, previousAllowPlaintext);
             Directory.Delete(tempHome, recursive: true);
         }
     }
@@ -549,47 +608,11 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
-    public async Task AddAevatarAIFeatures_ShouldRegisterWorkflowToolSourceAdapterForAgentTools()
-    {
-        var source = new StubAgentToolSource([new StubAgentTool("demo_tool", """{"ok":true}""")]);
-        var services = new ServiceCollection()
-            .AddSingleton<IAgentToolSource>(source);
-        var config = new ConfigurationBuilder().Build();
-
-        services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
-
-        await using var provider = services.BuildServiceProvider();
-        // Yield capability follows the actor, never the container (#2004): bootstrap must
-        // not hand a yielding handler to surfaces without a pending-approval continuation.
-        provider.GetService<IToolApprovalHandler>().Should().BeNull();
-        provider.GetServices<IToolCallMiddleware>().Should().NotContain(x => x is ToolApprovalMiddleware);
-
-        var workflowSource = provider.GetServices<IWorkflowToolSource>()
-            .Should()
-            .ContainSingle()
-            .Subject;
-        var tool = (await workflowSource.GetToolsAsync())
-            .Should()
-            .ContainSingle()
-            .Subject;
-
-        tool.Name.Should().Be("demo_tool");
-        var result = await tool.ExecuteAsync(
-            new WorkflowToolExecutionRequest(
-                ArgumentsJson: "{}",
-                RunId: "run-1",
-                StepId: "step-1",
-                ExecutionId: "exec-1",
-                CallId: "call-1",
-                ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential()));
-        result.ResultJson.Should().Be("""{"ok":true}""");
-    }
-
-    [Fact]
     public void MCPConnectorBuilder_ShouldValidateCommandAndBuildConnector()
     {
-        var builder = new MCPConnectorBuilder();
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
 
         var invalidEntry = new ConnectorConfigEntry
         {
@@ -628,7 +651,9 @@ public class AIFeatureBootstrapCoverageTests
     [Fact]
     public void MCPConnectorBuilder_ShouldSupportRemoteUrlConfiguration()
     {
-        var builder = new MCPConnectorBuilder();
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
         var entry = new ConnectorConfigEntry
         {
             Name = "nyxid_mcp",
@@ -741,29 +766,6 @@ public class AIFeatureBootstrapCoverageTests
         public void Set(string key, string value) => _values[key] = value;
 
         public void Remove(string key) => _values.Remove(key);
-    }
-
-    private sealed class StubAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
-    {
-        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
-        {
-            _ = ct;
-            return Task.FromResult(tools);
-        }
-    }
-
-    private sealed class StubAgentTool(string name, string resultJson) : IAgentTool
-    {
-        public string Name { get; } = name;
-        public string Description => "test tool";
-        public string ParametersSchema => """{"type":"object"}""";
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            _ = argumentsJson;
-            _ = ct;
-            return Task.FromResult(resultJson);
-        }
     }
 
     private static void WriteFlatSecrets(string path, IReadOnlyDictionary<string, string> values)

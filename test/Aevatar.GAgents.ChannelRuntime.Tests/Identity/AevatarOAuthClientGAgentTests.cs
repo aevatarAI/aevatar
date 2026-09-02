@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -33,15 +35,18 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     private AevatarOAuthClientGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
     private RecordingDcrClient _registrar = null!;
+    private InMemorySecretVault _secretVault = null!;
     private IdentityGAgentTestHarness.NoopCallbackScheduler _callbackScheduler = null!;
 
     public async Task InitializeAsync()
     {
         _registrar = new RecordingDcrClient();
+        _secretVault = new InMemorySecretVault();
         _callbackScheduler = new IdentityGAgentTestHarness.NoopCallbackScheduler();
 
         var services = new ServiceCollection();
         services.AddSingleton<IEventStore, IdentityGAgentTestHarness.InMemoryEventStore>();
+        services.AddSingleton<ISecretVault>(_secretVault);
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(
             typeof(IEventSourcingBehaviorFactory<>),
@@ -83,11 +88,15 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
 
         _registrar.Calls.Should().HaveCount(1);
         _registrar.Calls[0].Authority.Should().Be("https://nyxid.test");
-        _registrar.Calls[0].RedirectUri.Should().Be("https://aevatar.test/api/oauth/nyxid-callback");
+        _registrar.Calls[0].RedirectUris.Should().Equal("https://aevatar.test/api/oauth/nyxid-callback");
         _agent.State.ClientId.Should().Be(_registrar.NextClientId);
         _agent.State.NyxidAuthority.Should().Be("https://nyxid.test");
         _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
-        _agent.State.HmacKey.Length.Should().Be(32);
+        // New writes store the key in the vault and leave [hmac_key] empty; the
+        // state carries only a ref that resolves to 32 raw bytes.
+        _agent.State.HmacKey.Length.Should().Be(0, "new writes leave the legacy plaintext field empty");
+        _agent.State.HmacKeyRef.Should().NotBeNull();
+        (await ResolveKeyAsync(_agent.State.HmacKeyRef!)).Should().HaveCount(32);
         _agent.State.ProvisioningRetryAttempt.Should().Be(0);
     }
 
@@ -103,7 +112,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
 
         await _agent.HandleEnsureProvisioned(cmd);
         var firstClientId = _agent.State.ClientId;
-        var firstHmacKey = _agent.State.HmacKey;
+        var firstHmacKeyRef = _agent.State.HmacKeyRef;
         var beforeRefreshState = _agent.State.Clone();
         var beforeRefreshVersion = _agent.EventSourcing!.CurrentVersion;
 
@@ -111,11 +120,115 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
 
         _registrar.Calls.Should().HaveCount(1, "actor must serialize the DCR side-effect");
         _agent.State.ClientId.Should().Be(firstClientId);
-        _agent.State.HmacKey.Should().BeEquivalentTo(firstHmacKey);
+        _agent.State.HmacKeyRef.Should().Be(firstHmacKeyRef, "already-provisioned ensure must not rotate the key");
         _agent.State.Should().BeEquivalentTo(beforeRefreshState,
             "already-provisioned ensure must not mutate OAuth client facts");
         _agent.EventSourcing!.CurrentVersion.Should().Be(beforeRefreshVersion,
             "already-provisioned ensure must not append a projection-only no-op event");
+    }
+
+    [Fact]
+    public async Task HandleEnsureProvisioned_ForceReprovision_ReDcrs_WhenAlreadyProvisioned()
+    {
+        var cmd = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        };
+        cmd.RedirectUris.Add("https://aevatar.test/api/oauth/nyxid-callback");
+        cmd.RedirectUris.Add("https://console.test/auth/callback");
+
+        await _agent.HandleEnsureProvisioned(cmd);
+        var firstClientId = _agent.State.ClientId;
+
+        _registrar.NextClientId = "client-after-force-dcr";
+        cmd.ForceReprovision = true;
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.Calls.Should().HaveCount(2, "break-glass force DCR must bypass the already-provisioned no-op");
+        _agent.State.ClientId.Should().Be("client-after-force-dcr");
+        _agent.State.ClientId.Should().NotBe(firstClientId);
+        _agent.State.RedirectUris.Should().Equal(
+            "https://aevatar.test/api/oauth/nyxid-callback",
+            "https://console.test/auth/callback");
+        _agent.State.ForceReprovisionConsumed.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleEnsureProvisioned_ForceReprovision_IsConsumedOnce()
+    {
+        var cmd = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        };
+        cmd.RedirectUris.Add("https://aevatar.test/api/oauth/nyxid-callback");
+        cmd.RedirectUris.Add("https://console.test/auth/callback");
+
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.NextClientId = "client-after-force-dcr";
+        cmd.ForceReprovision = true;
+        await _agent.HandleEnsureProvisioned(cmd);
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.Calls.Should().HaveCount(2, "only one startup force DCR should be consumed cluster-wide");
+        _agent.State.ClientId.Should().Be("client-after-force-dcr");
+        _agent.State.ForceReprovisionConsumed.Should().BeTrue();
+
+        cmd.ForceReprovision = false;
+        await _agent.HandleEnsureProvisioned(cmd);
+        _agent.State.ForceReprovisionConsumed.Should().BeFalse("normal startup after env removal resets the break-glass guard");
+    }
+
+    [Fact]
+    public async Task HandleProvisioningRetryFired_PreservesForceReprovision_WhenForcedDcrFails()
+    {
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        });
+
+        _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
+        var force = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+            ForceReprovision = true,
+        };
+        force.RedirectUris.Add("https://aevatar.test/api/oauth/nyxid-callback");
+        force.RedirectUris.Add("https://console.test/auth/callback");
+        await _agent.HandleEnsureProvisioned(force);
+
+        _agent.State.ProvisioningRetryForceReprovision.Should().BeTrue();
+        _callbackScheduler.TimeoutRequests.Should().ContainSingle();
+        _callbackScheduler.TimeoutRequests[0].TriggerEnvelope.Payload
+            .Unpack<AevatarOAuthClientProvisioningRetryFiredEvent>()
+            .ForceReprovision.Should().BeTrue();
+
+        _registrar.ThrowOnRegister = null;
+        _registrar.NextClientId = "client-after-force-retry";
+        await _agent.HandleProvisioningRetryFired(AddRedirectUris(new AevatarOAuthClientProvisioningRetryFiredEvent
+        {
+            Attempt = _agent.State.ProvisioningRetryAttempt,
+            DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
+            RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            ClientName = _agent.State.ProvisioningRetryClientName,
+            CallbackId = _agent.State.ProvisioningRetryCallbackId,
+            CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
+            FiredAtUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            ForceReprovision = true,
+        }, _agent.State.ProvisioningRetryRedirectUris));
+
+        _registrar.Calls.Should().HaveCount(3, "the retry must preserve and execute the force-DCR intent");
+        _agent.State.ClientId.Should().Be("client-after-force-retry");
+        _agent.State.ProvisioningRetryAttempt.Should().Be(0);
     }
 
     [Fact]
@@ -133,7 +246,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         });
         var firstClientId = _agent.State.ClientId;
         _agent.State.RedirectUri.Should().Be("http://+:8080/api/oauth/nyxid-callback",
-            "first DCR persists whatever the bootstrap supplied");
+            "first DCR persists whatever the explicit Ensure command supplied");
 
         _registrar.NextClientId = "client-after-redirect-fix";
         await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
@@ -196,6 +309,54 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleEnsureProvisioned_RegistersAndDetectsFullRedirectUriListDrift()
+    {
+        var initial = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+        };
+        initial.RedirectUris.Add("https://aevatar.test/api/oauth/nyxid-callback");
+        initial.RedirectUris.Add("https://console.test/auth/callback");
+
+        await _agent.HandleEnsureProvisioned(initial);
+
+        _registrar.Calls.Should().HaveCount(1);
+        _registrar.Calls[0].RedirectUris.Should().Equal(
+            "https://aevatar.test/api/oauth/nyxid-callback",
+            "https://console.test/auth/callback");
+        _agent.State.RedirectUris.Should().Equal(
+            "https://aevatar.test/api/oauth/nyxid-callback",
+            "https://console.test/auth/callback");
+
+        var expanded = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+        };
+        expanded.RedirectUris.Add("https://aevatar.test/api/oauth/nyxid-callback");
+        expanded.RedirectUris.Add("https://console.test/auth/callback");
+        expanded.RedirectUris.Add("https://ops.test/callback");
+
+        _registrar.NextClientId = "client-after-list-drift";
+        await _agent.HandleEnsureProvisioned(expanded);
+
+        _registrar.Calls.Should().HaveCount(2);
+        _registrar.Calls[1].RedirectUris.Should().Equal(
+            "https://aevatar.test/api/oauth/nyxid-callback",
+            "https://console.test/auth/callback",
+            "https://ops.test/callback");
+        _agent.State.ClientId.Should().Be("client-after-list-drift");
+        _agent.State.RedirectUris.Should().Equal(
+            "https://aevatar.test/api/oauth/nyxid-callback",
+            "https://console.test/auth/callback",
+            "https://ops.test/callback");
+        (await ReadEventsAsync<AevatarOAuthClientDriftReconciledEvent>())
+            .Should()
+            .ContainSingle(e => e.DriftKind == "redirect_uris");
+    }
+
+    [Fact]
     public async Task HandleEnsureProvisioned_ReDcrs_WhenLegacyScopeIsMissingProxy()
     {
         var redirectUri = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback";
@@ -236,6 +397,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         _agent.State.ProvisioningRetryAttempt.Should().Be(1);
         _agent.State.ProvisioningRetryAuthority.Should().Be("https://nyxid.test");
         _agent.State.ProvisioningRetryRedirectUri.Should().Be("https://aevatar.test/api/oauth/nyxid-callback");
+        _agent.State.ProvisioningRetryRedirectUris.Should().Equal("https://aevatar.test/api/oauth/nyxid-callback");
         _agent.State.ProvisioningRetryClientName.Should().Be("aevatar");
         _agent.State.ProvisioningRetryDueUnixMs.Should().BeGreaterThan(0);
         _agent.State.ProvisioningRetryCallbackGeneration.Should().Be(1);
@@ -245,6 +407,52 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         (await ReadEventsAsync<AevatarOAuthClientProvisioningRetryScheduledEvent>())
             .Should()
             .ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleProvision_ConfiguredClientClearsLegacyDcrRetry()
+    {
+        _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        });
+        var staleRetry = new AevatarOAuthClientProvisioningRetryFiredEvent
+        {
+            Attempt = _agent.State.ProvisioningRetryAttempt,
+            DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
+            RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            ClientName = _agent.State.ProvisioningRetryClientName,
+            CallbackId = _agent.State.ProvisioningRetryCallbackId,
+            CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
+            FiredAtUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+        };
+
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "configured-client",
+            ClientIdIssuedAtUnix = 1700000000,
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
+        });
+
+        _agent.State.ClientId.Should().Be("configured-client");
+        _agent.State.ProvisioningRetryAttempt.Should().Be(0);
+        _agent.State.ProvisioningRetryCallbackId.Should().BeEmpty();
+        (await ReadEventsAsync<AevatarOAuthClientProvisioningRetryClearedEvent>())
+            .Should()
+            .ContainSingle(evt => evt.Reason == "configured_client_provisioned");
+
+        _registrar.ThrowOnRegister = null;
+        _registrar.NextClientId = "unexpected-dcr-client";
+        await _agent.HandleProvisioningRetryFired(staleRetry);
+
+        _registrar.Calls.Should().ContainSingle("the cleared retry callback must not re-enter DCR");
+        _agent.State.ClientId.Should().Be("configured-client");
     }
 
     [Fact]
@@ -275,7 +483,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         _agent.State.ProvisioningRetryAttempt.Should().Be(1);
         _callbackScheduler.TimeoutRequests.Should().ContainSingle();
 
-        await _agent.HandleProvisioningRetryFired(new AevatarOAuthClientProvisioningRetryFiredEvent
+        await _agent.HandleProvisioningRetryFired(AddRedirectUris(new AevatarOAuthClientProvisioningRetryFiredEvent
         {
             Attempt = _agent.State.ProvisioningRetryAttempt,
             DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
@@ -285,7 +493,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             CallbackId = _agent.State.ProvisioningRetryCallbackId,
             CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
             FiredAtUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
-        });
+        }, _agent.State.ProvisioningRetryRedirectUris));
 
         _registrar.Calls.Should().HaveCount(2,
             "only the durable self-callback may re-enter DCR before the external due-time gate opens");
@@ -433,10 +641,8 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleProvision_ManualOverride_AcceptsCallerSuppliedClientId()
     {
-        // ProvisionAevatarOAuthClientCommand is the test / manual fixture
-        // path; bootstrap NEVER uses it. Verifies the flow keeps working
-        // for tests that pre-seed a known client_id (e.g. integration tests
-        // pinning a fixture).
+        // ProvisionAevatarOAuthClientCommand is shared by configured bootstrap,
+        // operator repair, and tests that pin a known client_id.
         await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
         {
             ClientId = "manual-fixture-client",
@@ -445,7 +651,9 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         });
 
         _agent.State.ClientId.Should().Be("manual-fixture-client");
-        _agent.State.HmacKey.Length.Should().Be(32, "HMAC key seeds on first provision regardless of which command path triggered it");
+        _agent.State.HmacKey.Length.Should().Be(0, "new writes leave the legacy plaintext field empty");
+        _agent.State.HmacKeyRef.Should().NotBeNull("HMAC key seeds into the vault on first provision regardless of which command path triggered it");
+        (await ResolveKeyAsync(_agent.State.HmacKeyRef!)).Should().HaveCount(32);
         _registrar.Calls.Should().BeEmpty("manual provision must not call DCR");
     }
 
@@ -582,23 +790,84 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             ClientId = "client-x",
             NyxidAuthority = "https://nyxid.test",
         });
-        var seededKey = _agent.State.HmacKey;
+        var seededKeyRef = _agent.State.HmacKeyRef;
+        var seededKeyBytes = await ResolveKeyAsync(seededKeyRef!);
         var seededKid = _agent.State.HmacKid;
         seededKid.Should().Be(AevatarOAuthClientGAgent.InitialHmacKid);
 
-        await _agent.HandleRotateHmacKey(new RotateAevatarOAuthClientHmacKeyCommand());
+        await _agent.HandleRotateHmacKey(new RotateAevatarOAuthClientHmacKeyCommand
+        {
+            IdempotencyKey = "rotation-request-alpha",
+            ExpectedCurrentKid = seededKid,
+        });
 
-        _agent.State.HmacKey.Should().NotBeEquivalentTo(seededKey);
-        _agent.State.HmacKey.Length.Should().Be(32);
+        // The rotated key is a fresh vault ref; [hmac_key] stays empty for new
+        // writes. The resolved current bytes differ from the seeded key.
+        _agent.State.HmacKey.Length.Should().Be(0);
+        _agent.State.HmacKeyRef.Should().NotBeNull();
+        _agent.State.HmacKeyRef.Should().NotBe(seededKeyRef);
+        var rotatedKeyBytes = await ResolveKeyAsync(_agent.State.HmacKeyRef!);
+        rotatedKeyBytes.Should().HaveCount(32);
+        rotatedKeyBytes.Should().NotBeEquivalentTo(seededKeyBytes);
         _agent.State.ClientId.Should().Be("client-x");
         // Kid increments deterministically (v1 → v2) so verifiers can route
         // signed tokens to the right key.
         _agent.State.HmacKid.Should().Be("v2");
         // Previous key must be carried for the grace window so in-flight
-        // state tokens signed with the old key still verify.
+        // state tokens signed with the old key still verify. On a ref-backed
+        // rotation the previous key is demoted as a ref (the demoted seed ref).
         _agent.State.PreviousHmacKid.Should().Be(seededKid);
-        _agent.State.PreviousHmacKey.Should().BeEquivalentTo(seededKey);
+        _agent.State.PreviousHmacKey.Length.Should().Be(0);
+        _agent.State.PreviousHmacKeyRef.Should().Be(seededKeyRef);
+        (await ResolveKeyAsync(_agent.State.PreviousHmacKeyRef!)).Should().Equal(seededKeyBytes);
         _agent.State.PreviousHmacDemotedAtUnix.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task HandleRotateHmacKey_IsIdempotentForRetriedRequest()
+    {
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "client-x",
+            NyxidAuthority = "https://nyxid.test",
+        });
+        var command = new RotateAevatarOAuthClientHmacKeyCommand
+        {
+            IdempotencyKey = "rotation-request-alpha",
+            ExpectedCurrentKid = "v1",
+        };
+
+        await _agent.HandleRotateHmacKey(command);
+        var rotated = _agent.State.Clone();
+        var rotatedVersion = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleRotateHmacKey(command);
+
+        _agent.State.Should().BeEquivalentTo(rotated);
+        _agent.EventSourcing!.CurrentVersion.Should().Be(rotatedVersion);
+        _agent.State.HmacKid.Should().Be("v2");
+        _agent.State.PreviousHmacKid.Should().Be("v1");
+    }
+
+    [Fact]
+    public async Task HandleRotateHmacKey_IgnoresRequestWhenExpectedKidIsStale()
+    {
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "client-x",
+            NyxidAuthority = "https://nyxid.test",
+        });
+        var before = _agent.State.Clone();
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleRotateHmacKey(new RotateAevatarOAuthClientHmacKeyCommand
+        {
+            IdempotencyKey = "rotation-request-stale",
+            ExpectedCurrentKid = "v0",
+        });
+
+        _agent.State.Should().BeEquivalentTo(before);
+        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion);
     }
 
     [Fact]
@@ -641,6 +910,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
                 OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
                 PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             };
+            peerEvent.RedirectUris.Add(resolvedRedirect);
             await store.AppendAsync(
                 actorId,
                 new[]
@@ -743,13 +1013,47 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
 
         _agent.State.HmacKid.Should().Be(AevatarOAuthClientGAgent.InitialHmacKid);
         _agent.State.PreviousHmacKey.Length.Should().Be(0);
+        _agent.State.PreviousHmacKeyRef.Should().BeNull();
         _agent.State.PreviousHmacKid.Should().BeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task HandleProvision_LegacyPlaintextKey_RotatesToRefAndDemotesLegacyBytes()
+    {
+        // Dual-read migration: a legacy actor whose state carries a plaintext
+        // [hmac_key] with no ref must rotate cleanly — the new key is a vault
+        // ref and the demoted previous key keeps the legacy plaintext bytes so
+        // in-flight tokens signed with it still verify during the grace window.
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "legacy-client",
+            NyxidAuthority = "https://nyxid.test",
+        });
+        // Simulate pre-migration state: plaintext key, no ref.
+        var legacyKey = new byte[32];
+        Array.Fill(legacyKey, (byte)0x55);
+        _agent.State.HmacKey = Google.Protobuf.ByteString.CopyFrom(legacyKey);
+        _agent.State.HmacKeyRef = null;
+
+        await _agent.HandleRotateHmacKey(new RotateAevatarOAuthClientHmacKeyCommand
+        {
+            IdempotencyKey = "legacy-rotation-alpha",
+            ExpectedCurrentKid = _agent.State.HmacKid,
+        });
+
+        _agent.State.HmacKeyRef.Should().NotBeNull("rotation stores the new key in the vault");
+        _agent.State.HmacKey.Length.Should().Be(0, "new writes leave the legacy field empty");
+        (await ResolveKeyAsync(_agent.State.HmacKeyRef!)).Should().HaveCount(32);
+        // The demoted previous key is the legacy plaintext (no ref existed).
+        _agent.State.PreviousHmacKeyRef.Should().BeNull();
+        _agent.State.PreviousHmacKey.ToByteArray().Should().Equal(legacyKey);
+        _agent.State.PreviousHmacDemotedAtUnix.Should().BeGreaterThan(0);
     }
 
     private sealed class RecordingDcrClient
     {
         public string NextClientId { get; set; } = "client-first";
-        public List<(string Authority, string ClientName, string RedirectUri)> Calls { get; } = new();
+        public List<(string Authority, string ClientName, string[] RedirectUris)> Calls { get; } = new();
         public Exception? ThrowOnRegister { get; set; }
 
         /// <summary>
@@ -773,9 +1077,9 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             }
 
             public override async Task<RegistrationResult> RegisterPublicClientAsync(
-                string authority, string clientName, string redirectUri, CancellationToken ct = default)
+                string authority, string clientName, IReadOnlyCollection<string> redirectUris, CancellationToken ct = default)
             {
-                _owner.Calls.Add((authority, clientName, redirectUri));
+                _owner.Calls.Add((authority, clientName, redirectUris.ToArray()));
                 if (_owner.OnRegistered is not null)
                     await _owner.OnRegistered().ConfigureAwait(false);
                 if (_owner.ThrowOnRegister is not null)
@@ -789,6 +1093,26 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
                 throw new InvalidOperationException("HTTP client must not be invoked in unit tests");
         }
+    }
+
+    private static AevatarOAuthClientProvisioningRetryFiredEvent AddRedirectUris(
+        AevatarOAuthClientProvisioningRetryFiredEvent evt,
+        IEnumerable<string> redirectUris)
+    {
+        evt.RedirectUris.AddRange(redirectUris);
+        return evt;
+    }
+
+    private async Task<byte[]> ResolveKeyAsync(SecretReference reference)
+    {
+        var result = await _secretVault.ResolveAsync(new ResolveSecretRequest(
+            reference.Ref,
+            CredentialSecretPurposes.OAuthStateTokenHmacKey,
+            AevatarOAuthClientGAgent.WellKnownId,
+            AevatarOAuthClientGAgent.WellKnownId,
+            "test.resolve"));
+        result.Resolved.Should().BeTrue("the actor must have stored the key under this ref");
+        return Convert.FromBase64String(result.Secret!);
     }
 
     private async Task<IReadOnlyList<T>> ReadEventsAsync<T>()

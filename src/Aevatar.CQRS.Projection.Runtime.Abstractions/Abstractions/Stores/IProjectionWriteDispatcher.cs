@@ -6,4 +6,10 @@ public interface IProjectionWriteDispatcher<in TReadModel>
     Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default);
 
     Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default);
+
+    Task<ProjectionWriteResult> DeleteAsync(
+        ProjectionDocumentDeleteMarker marker,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            $"Projection write dispatcher '{GetType().FullName}' does not support versioned read-model deletes.");
 }

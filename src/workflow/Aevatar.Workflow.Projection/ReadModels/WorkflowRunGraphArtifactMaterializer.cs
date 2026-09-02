@@ -99,6 +99,10 @@ public sealed class WorkflowRunGraphArtifactMaterializer
             updatedAt);
         edges[ownsEdge.EdgeId] = ownsEdge;
 
+        var stepIds = new HashSet<string>(
+            readModel.Steps.Select(step => NormalizeToken(step.StepId)),
+            StringComparer.Ordinal);
+
         foreach (var step in readModel.Steps)
         {
             var stepNodeId = BuildStepNodeId(rootActorId, readModel.CommandId, step.StepId);
@@ -113,6 +117,22 @@ public sealed class WorkflowRunGraphArtifactMaterializer
                 },
                 updatedAt);
             edges[containsEdge.EdgeId] = containsEdge;
+
+            // step -> next-step execution-flow edge (only when the next step is a known step node), so the
+            // graph carries the real run order; the branch taken rides along as branchKey.
+            if (!string.IsNullOrWhiteSpace(step.NextStepId) && stepIds.Contains(NormalizeToken(step.NextStepId)))
+            {
+                var nextProperties = new Dictionary<string, string>(StringComparer.Ordinal);
+                if (!string.IsNullOrWhiteSpace(step.BranchKey))
+                    nextProperties["branchKey"] = step.BranchKey;
+                var nextEdge = CreateEdge(
+                    WorkflowExecutionGraphConstants.EdgeTypeNext,
+                    stepNodeId,
+                    BuildStepNodeId(rootActorId, readModel.CommandId, step.NextStepId),
+                    nextProperties,
+                    updatedAt);
+                edges[nextEdge.EdgeId] = nextEdge;
+            }
         }
 
         foreach (var topologyEdge in readModel.Topology)

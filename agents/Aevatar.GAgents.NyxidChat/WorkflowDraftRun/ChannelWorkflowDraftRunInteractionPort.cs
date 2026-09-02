@@ -2,11 +2,13 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 
 namespace Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 
@@ -18,7 +20,8 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ChannelWorkflowDraftRunInteractionPort> _logger;
     private readonly ILarkNyxClient? _larkClient;
-    private readonly IWorkflowFileIngressPort? _fileIngressPort;
+    private readonly IFileArtifactIngressPort? _fileIngressPort;
+    private readonly ILarkOutboundClientFactory? _larkOutboundClientFactory;
 
     public ChannelWorkflowDraftRunInteractionPort(
         IActorRuntime actorRuntime,
@@ -27,7 +30,8 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         IWorkflowChatRunInteractionPort? workflowInteractionPort = null,
         TimeProvider? timeProvider = null,
         ILarkNyxClient? larkClient = null,
-        IWorkflowFileIngressPort? fileIngressPort = null)
+        IFileArtifactIngressPort? fileIngressPort = null,
+        ILarkOutboundClientFactory? larkOutboundClientFactory = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
@@ -36,6 +40,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         _timeProvider = timeProvider ?? TimeProvider.System;
         _larkClient = larkClient;
         _fileIngressPort = fileIngressPort;
+        _larkOutboundClientFactory = larkOutboundClientFactory;
     }
 
     public async Task DispatchAsync(NeedsWorkflowDraftRunEvent request, CancellationToken ct)
@@ -68,7 +73,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
             },
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = commandId,
                 },
@@ -107,6 +112,8 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                 ct);
         }
 
+        // This observer is transient by design. It only publishes typed frames/completion
+        // back to the run actor; the actor-owned durable deadline guarantees termination.
         _ = Task.Run(
             () => ExecuteWorkflowInteractionAsync(runActorId, request.Clone(), CancellationToken.None),
             CancellationToken.None);
@@ -245,6 +252,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         if (_fileIngressPort is null)
             throw new WorkflowAttachmentIngressException("file_ingress_port_unavailable");
 
+        var larkClient = ResolveLarkResourceDownloadClient(request);
         var token = NormalizeOptional(request.NyxUserAccessToken) ??
                     NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
         if (token is null)
@@ -257,14 +265,14 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         var inputParts = new List<WorkflowChatInputPart>(attachments.Length);
         foreach (var attachment in attachments)
         {
-            var resourceKey = NormalizeOptional(attachment.AttachmentId);
+            var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
             if (resourceKey is null)
                 throw new WorkflowAttachmentIngressException("resource_key_missing");
 
             LarkMessageResourceDownloadResult download;
             try
             {
-                download = await _larkClient.DownloadMessageResourceAsync(
+                download = await larkClient.DownloadMessageResourceAsync(
                         token,
                         new LarkMessageResourceDownloadRequest(
                             messageId,
@@ -283,18 +291,17 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
             if (!download.Succeeded || download.Content is not { Length: > 0 })
                 throw new WorkflowAttachmentIngressException("download_failed");
 
-            WorkflowFileIngressResult ingress;
+            FileArtifactIngressResult ingress;
             try
             {
                 ingress = await _fileIngressPort.IngestAsync(
-                        new WorkflowFileIngressRequest(
+                        new FileArtifactIngressRequest(
                             download.Content,
-                            WorkflowFileSourceKind.ConnectedServiceResource,
+                            FileArtifactSourceKind.ConnectedServiceResource,
                             SourceMessageId: messageId,
                             SourceResourceKey: resourceKey,
                             FileName: NormalizeOptional(download.FileName) ?? NormalizeOptional(attachment.Name),
                             MediaType: NormalizeOptional(download.ContentType) ?? NormalizeOptional(attachment.ContentType),
-                            OwnerRunId: NormalizeOptional(request.RunId),
                             OwnerScopeId: NormalizeOptional(request.WorkflowSource?.ScopeId)),
                         ct)
                     .ConfigureAwait(false);
@@ -304,19 +311,23 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                 throw new WorkflowAttachmentIngressException("ingress_failed", ex);
             }
 
-            inputParts.Add(new WorkflowChatInputPart
-            {
-                Kind = attachment.Kind == AttachmentKind.Image
+            inputParts.Add(WorkflowChatInputParts.FromFileRef(
+                ingress.FileRef,
+                attachment.Kind == AttachmentKind.Image
                     ? WorkflowChatInputPartKind.Image
-                    : WorkflowChatInputPartKind.Text,
-                MediaType = ingress.FileRef.MediaType,
-                Uri = ingress.FileRef.ArtifactId,
-                Name = ingress.FileRef.FileName,
-                FileRef = ingress.FileRef,
-            });
+                    : WorkflowChatInputPartKind.File));
         }
 
         return inputParts;
+    }
+
+    private ILarkNyxClient ResolveLarkResourceDownloadClient(NeedsWorkflowDraftRunEvent request)
+    {
+        var providerSlug = NormalizeOptional(request.Activity?.TransportExtras?.NyxProviderSlug);
+        if (providerSlug is null || _larkOutboundClientFactory is null)
+            return _larkClient!;
+
+        return _larkOutboundClientFactory.ResolveNyxClient(providerSlug);
     }
 
     private static WorkflowChatRunRequest BuildCommand(
@@ -328,6 +339,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         return new WorkflowChatRunRequest(
             Prompt: request.Prompt ?? string.Empty,
             Source: WorkflowChatSource.DefinitionActor(source.DefinitionActorId, source.WorkflowName),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: request.RunId,
             InputParts: inputParts,
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
@@ -355,10 +367,8 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         {
             if (attachment.Kind is not (AttachmentKind.Image or AttachmentKind.File))
                 continue;
-            var resourceKey = NormalizeOptional(attachment.AttachmentId);
-            if (resourceKey is null || IsHttpUrl(resourceKey))
-                continue;
-            if (!string.IsNullOrWhiteSpace(attachment.ExternalUrl))
+            var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
+            if (resourceKey is null)
                 continue;
 
             yield return attachment;
@@ -372,10 +382,6 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         return string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
     }
-
-    private static bool IsHttpUrl(string value) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

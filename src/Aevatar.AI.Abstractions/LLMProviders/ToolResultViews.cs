@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+
 namespace Aevatar.AI.Abstractions.LLMProviders;
 
 public enum ToolResultViewStatus
@@ -32,7 +34,13 @@ public sealed record SkillLoadToolResultView(
     int? HttpStatus,
     string DisplayText);
 
+public sealed record ToolFailureResultView(
+    AgentToolReceiptStatus Status,
+    string ErrorCode,
+    string SafeMessage);
+
 public sealed record ToolResultView(
     string ToolName,
     SkillSearchToolResultView? SkillSearch,
-    SkillLoadToolResultView? SkillLoad);
+    SkillLoadToolResultView? SkillLoad,
+    ToolFailureResultView? Failure = null);

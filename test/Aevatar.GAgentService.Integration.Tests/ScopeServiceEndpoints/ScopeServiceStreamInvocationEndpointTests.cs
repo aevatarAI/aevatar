@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -10,23 +11,22 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
-using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
-using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -35,10 +35,10 @@ using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -113,7 +113,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -815,7 +815,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-orders", "orders", "cmd-orders", "corr-orders");
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -847,10 +847,15 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
     }
 
     [Fact]
-    public async Task MemberInvokeStreamEndpoint_ShouldResolveMemberPublishedServiceAndDelegateToWorkflowPipeline()
+    public async Task MemberInvokeStreamEndpoint_ShouldIngestInlineFileIntoTypedFileRef()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        var service = BuildService("scope-a", "member-a", "definition-actor-member-a");
+        host.MemberPublishedServiceResolver.Result = new MemberPublishedServiceResolution(
+            "scope-a",
+            "m-alpha",
+            "svc-alpha",
+            IsMemberAuthorityBacked: true);
+        var service = BuildService("scope-a", "svc-alpha", "wf-alpha");
         host.ServiceCatalogReader.Service = service;
         host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
             service.ServiceKey,
@@ -861,9 +866,9 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                     "chat",
                     [
                         new ServiceTrafficTargetSnapshot(
-                            "dep-member-a-1",
-                            "rev-member-a-1",
-                            "definition-actor-member-a",
+                            "dep-alpha-1",
+                            "rev-alpha-1",
+                            "wf-alpha",
                             100,
                             ServiceServingState.Active.ToString()),
                     ]),
@@ -871,7 +876,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             DateTimeOffset.UtcNow);
         await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
-            "rev-member-a-1",
+            "rev-alpha-1",
             new PreparedServiceRevisionArtifact
             {
                 Identity = new ServiceIdentity
@@ -879,9 +884,9 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                     TenantId = "scope-a",
                     AppId = "default",
                     Namespace = "default",
-                    ServiceId = "member-a",
+                    ServiceId = "svc-alpha",
                 },
-                RevisionId = "rev-member-a-1",
+                RevisionId = "rev-alpha-1",
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 Endpoints =
                 {
@@ -898,42 +903,245 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
                 {
                     WorkflowPlan = new WorkflowServiceDeploymentPlan
                     {
-                        WorkflowName = "member-a",
-                        WorkflowYaml = "name: member_a\nsteps:\n  - run: echo member",
-                        DefinitionActorId = "definition-actor-member-a",
+                        WorkflowName = "file-probe",
+                        WorkflowYaml = "name: file_probe\nsteps:\n  - run: echo file",
+                        DefinitionActorId = "wf-alpha",
                     },
                 },
             },
             CancellationToken.None);
         host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
         {
-            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-member-a", "member-a", "cmd-member-a", "corr-member-a");
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-alpha", "file-probe", "cmd-alpha", "corr-alpha");
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
         using var request = CreateAuthenticatedJsonRequest(
             HttpMethod.Post,
-            "/api/scopes/scope-a/members/member-a/invoke/chat:stream",
+            "/api/scopes/scope-a/members/m-alpha/invoke/chat:stream",
             new
             {
-                prompt = "hello member",
+                prompt = "inspect the sanitized attachment",
+                inputParts = new[]
+                {
+                    new
+                    {
+                        type = "image",
+                        inlineFile = new
+                        {
+                            dataBase64 = "AQID",
+                            mediaType = "image/png",
+                            name = "probe.png",
+                            sizeBytes = 3,
+                            ownerScopeId = "scope-a",
+                        },
+                    },
+                },
+            },
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "m-alpha");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
+        host.WorkflowFileIngressPort.Requests.Should().ContainSingle();
+        var ingressRequest = host.WorkflowFileIngressPort.Requests[0];
+        ingressRequest.Content.ToArray().Should().Equal(new byte[] { 1, 2, 3 });
+        ingressRequest.SourceKind.Should().Be(FileArtifactSourceKind.ChatInput);
+        ingressRequest.OwnerScopeId.Should().Be("scope-a");
+        var part = host.InteractionService.LastRequest!.InputParts.Should().ContainSingle().Which;
+        part.DataBase64.Should().BeNull();
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.ArtifactId.Should().Be("workflow-file://file-1");
+        part.FileRef.OwnerScopeId.Should().Be("scope-a");
+    }
+
+    [Fact]
+    public async Task MemberInvokeStreamEndpoint_ShouldAllowEmptyInputForAuthorityBackedWorkflowService()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.MemberPublishedServiceResolver.Result = new MemberPublishedServiceResolution(
+            "scope-a",
+            "m-alpha",
+            "svc-alpha",
+            IsMemberAuthorityBacked: true);
+        var service = BuildService("scope-a", "svc-alpha", "wf-alpha");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-alpha-1",
+                            "rev-alpha-1",
+                            "wf-alpha",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        await host.RevisionCatalog.UpsertRevisionAsync(
+            service.ServiceKey,
+            "rev-alpha-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "svc-alpha",
+                },
+                RevisionId = "rev-alpha-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                        ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "status-report",
+                        WorkflowYaml = "name: status_report\nsteps:\n  - run: echo member",
+                        DefinitionActorId = "wf-alpha",
+                    },
+                },
+            },
+            CancellationToken.None);
+        host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-alpha", "status-report", "cmd-alpha", "corr-alpha");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+            return WorkflowChatRunInteractionResult
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/m-alpha/invoke/chat:stream",
+            new
+            {
+                prompt = "   ",
                 headers = new Dictionary<string, string> { ["channel"] = "member-tests" },
             },
             "scope-a");
-        request.Headers.Add("X-Test-Member-Id", "member-b");
+        request.Headers.Add("X-Test-Member-Id", "m-alpha");
 
         var response = await host.Client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
+        host.MemberPublishedServiceResolver.Calls.Should().ContainSingle()
+            .Which.Should().Be(new MemberPublishedServiceResolveRequest("scope-a", "m-alpha"));
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-member-a");
+        host.InteractionService.LastRequest!.Prompt.Should().BeEmpty();
+        host.InteractionService.LastRequest.Source.ActorId.Should().Be("wf-alpha");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("member-tests");
+        host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle()
+            .Which.ServiceId.Should().Be("svc-alpha");
+    }
+
+    [Fact]
+    public async Task MemberInvokeStreamEndpoint_ShouldRejectEmptyInputWithoutAuthorityBackedResolution()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.MemberPublishedServiceResolver.Result = new MemberPublishedServiceResolution(
+            "scope-a",
+            "m-alpha",
+            "svc-alpha");
+        var service = BuildService("scope-a", "svc-alpha", "wf-alpha");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-alpha-1",
+                            "rev-alpha-1",
+                            "wf-alpha",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        await host.RevisionCatalog.UpsertRevisionAsync(
+            service.ServiceKey,
+            "rev-alpha-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "svc-alpha",
+                },
+                RevisionId = "rev-alpha-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                        ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "status-report",
+                        WorkflowYaml = "name: status_report\nsteps:\n  - run: echo member",
+                        DefinitionActorId = "wf-alpha",
+                    },
+                },
+            },
+            CancellationToken.None);
+
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/m-alpha/invoke/chat:stream",
+            new
+            {
+                prompt = "   ",
+            },
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "m-alpha");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, "stream body: {0}", body);
+        body.Should().Contain("PROMPT_REQUIRED");
+        host.MemberPublishedServiceResolver.Calls.Should().ContainSingle()
+            .Which.Should().Be(new MemberPublishedServiceResolveRequest("scope-a", "m-alpha"));
+        host.InteractionService.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -1005,7 +1213,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-team-a", "member-a", "cmd-team-a", "corr-team-a");
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -1134,7 +1342,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-orders", "orders", "cmd-orders", "corr-orders");
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 

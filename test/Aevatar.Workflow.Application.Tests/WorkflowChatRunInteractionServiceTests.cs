@@ -5,7 +5,9 @@ using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using WorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
 
@@ -25,7 +27,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -51,6 +53,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "hello",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 CallerCredential: new WorkflowCallerCredential("Bearer token-123")),
             static (_, _) => ValueTask.CompletedTask);
 
@@ -62,6 +65,40 @@ public sealed class WorkflowChatRunInteractionServiceTests
         projectionPort.ReleaseCalls.Should().BeEmpty();
         inner.Requests.Should().BeEmpty();
         runProvisioningPort.DestroyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldPreserveActorResolutionFailureDetail()
+    {
+        var failureDetail = WorkflowChatRunStartFailureDetail.Create(
+            WorkflowChatRunStartError.InvalidWorkflowYaml,
+            "Workflow step 'call' external capability is invalid.");
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    null,
+                    string.Empty,
+                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    failureDetail),
+            },
+        };
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.InlineYamlBundle(["bad"]), ExternalCapabilityExecutionMode.Interactive),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        result.FailureDetail.Should().BeSameAs(failureDetail);
+        inner.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -78,7 +115,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             },
         };
         var inner = new RecordingInteractionService();
-        var acceptedReceipts = new List<WorkflowChatRunAcceptedReceipt>();
+        var acceptedReceipts = new List<WorkflowChatInteractionAcceptedReceipt>();
         var headers = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["trace"] = "trace-1",
@@ -90,7 +127,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), Headers: headers),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive, Headers: headers),
             static (_, _) => ValueTask.CompletedTask,
             (receipt, _) =>
             {
@@ -110,8 +147,654 @@ public sealed class WorkflowChatRunInteractionServiceTests
         command.CorrelationIdSeed.Should().NotBeNullOrWhiteSpace();
         command.Headers.Should().BeSameAs(headers);
         acceptedReceipts.Should().ContainSingle();
-        acceptedReceipts[0].CommandId.Should().Be(command.CommandIdSeed);
-        acceptedReceipts[0].CorrelationId.Should().Be(command.CorrelationIdSeed);
+        acceptedReceipts[0].Run.CommandId.Should().Be(command.CommandIdSeed);
+        acceptedReceipts[0].Run.CorrelationId.Should().Be(command.CorrelationIdSeed);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldPreserveTrustedCallerCommandAndCorrelationSeeds()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                CommandIdSeed: "caller-command",
+                CorrelationIdSeed: "caller-correlation"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        inner.Requests.Should().ContainSingle();
+        inner.Requests[0].CommandIdSeed.Should().Be("caller-command");
+        inner.Requests[0].CorrelationIdSeed.Should().Be("caller-correlation");
+        result.Receipt!.Run.CommandId.Should().Be("caller-command");
+        result.Receipt.Run.CorrelationId.Should().Be("caller-correlation");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldReturnRecoveredCreateContextWithoutResolvingActor_WhenCreateRecoveryMatchesRequest()
+    {
+        var recovery = new RecordingChatHistoryCreateRecoveryReadPort();
+        var request = new WorkflowChatRunRequest(
+            "execution prompt",
+            WorkflowChatSource.Direct(),
+            ExternalCapabilityExecutionMode.Interactive,
+            ScopeId: "scope-a",
+            CommandIdSeed: "create-command-1",
+            ChatConversation: WorkflowChatConversationIntent.Create());
+        recovery.Recovery = new WorkflowChatHistoryCreateRecovery(
+            WorkflowChatHistoryCreateRecoveryStatus.Reserved,
+            "scope-a",
+            "create-command-1",
+            "conversation-stable",
+            "turn-stable",
+            "run-stable",
+            "create-command-1",
+            "create-command-1",
+            WorkflowChatCreateRequestFingerprint.Compute(request),
+            2,
+            DateTimeOffset.Parse("2026-07-21T01:00:00Z"));
+        var actorResolver = new RecordingActorResolver();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryCreateRecoveryReadPort: recovery);
+
+        var result = await service.ExecuteAsync(
+            request,
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt!.Run.ActorId.Should().Be("run-stable");
+        result.Receipt.Run.CommandId.Should().Be("create-command-1");
+        result.Receipt.ChatContext.Should().BeEquivalentTo(
+            new WorkflowChatContext("scope-a", "conversation-stable", "turn-stable", 2));
+        actorResolver.Requests.Should().BeEmpty();
+        inner.Requests.Should().BeEmpty();
+        recovery.Requests.Should().ContainSingle().Which.Should().Be(("scope-a", "create-command-1"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldReturnIdempotencyConflictWithoutResolvingActor_WhenCreateRecoveryFingerprintDiffers()
+    {
+        var recovery = new RecordingChatHistoryCreateRecoveryReadPort
+        {
+            Recovery = new WorkflowChatHistoryCreateRecovery(
+                WorkflowChatHistoryCreateRecoveryStatus.Reserved,
+                "scope-a",
+                "create-command-1",
+                "conversation-stable",
+                "turn-stable",
+                "run-stable",
+                "create-command-1",
+                "create-command-1",
+                "different-fingerprint",
+                2,
+                DateTimeOffset.Parse("2026-07-21T01:00:00Z")),
+        };
+        var actorResolver = new RecordingActorResolver();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryCreateRecoveryReadPort: recovery);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "execution prompt",
+                WorkflowChatSource.Direct(),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                CommandIdSeed: "create-command-1",
+                ChatConversation: WorkflowChatConversationIntent.Create()),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.IdempotencyConflict);
+        actorResolver.Requests.Should().BeEmpty();
+        inner.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldReserveAndBindChatHistoryDelivery_WhenConversationCreateIntentIsPresent()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "execution prompt with transcript",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Create()),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        deliveryPort.Reservations.Should().ContainSingle();
+        deliveryPort.Reservations[0].DeliveryId.Should().StartWith("chat-history-create:");
+        deliveryPort.Reservations[0].DeliveryId.Should().NotContain("run-1");
+        deliveryPort.Reservations[0].ScopeId.Should().Be("scope-a");
+        deliveryPort.Reservations[0].Conversation.Intent.Should().Be(WorkflowChatConversationIntentKind.Create);
+        deliveryPort.Reservations[0].Conversation.ConversationId.Should().BeNull();
+        deliveryPort.Reservations[0].UserText.Should().Be("execution prompt with transcript");
+        deliveryPort.Reservations[0].WorkflowActorId.Should().Be("run-1");
+        deliveryPort.Reservations[0].WorkflowCommandId.Should().Be(inner.Requests[0].CommandIdSeed);
+        deliveryPort.Reservations[0].RequestFingerprint.Should().Be(
+            WorkflowChatCreateRequestFingerprint.Compute(inner.Requests[0] with
+            {
+                TargetSeed = null,
+                CompletionNotificationTarget = null,
+            }));
+        var notificationTarget = inner.Requests[0].CompletionNotificationTarget;
+        notificationTarget.Should().NotBeNull();
+        notificationTarget!.ActorId.Should().Be(deliveryPort.ReservedDeliveryActorId);
+        notificationTarget.DeliveryId.Should().Be(deliveryPort.Reservations[0].DeliveryId);
+        notificationTarget.ActorId.Should().NotBe(notificationTarget.DeliveryId);
+        notificationTarget.ExpiresAtUnixMs.Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        deliveryPort.Bindings.Should().ContainSingle();
+        deliveryPort.Bindings[0].WorkflowActorId.Should().Be("run-1");
+        deliveryPort.Bindings[0].WorkflowCommandId.Should().Be(inner.Requests[0].CommandIdSeed);
+        deliveryPort.Abandons.Should().BeEmpty();
+        result.Receipt!.Run.ActorId.Should().Be("run-1");
+        result.Receipt.ChatContext.Should().BeEquivalentTo(
+            new WorkflowChatContext("scope-a", "generated-conversation", "generated-turn"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldReserveAndBindChatHistoryDelivery_WhenConversationContinueIntentIsPresent()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "next turn",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Continue(
+                    "conversation-existing",
+                    minimumStateVersion: 7)),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        deliveryPort.Reservations.Should().ContainSingle();
+        deliveryPort.Reservations[0].Conversation.Intent.Should().Be(WorkflowChatConversationIntentKind.Continue);
+        deliveryPort.Reservations[0].Conversation.ConversationId.Should().Be("conversation-existing");
+        deliveryPort.Reservations[0].Conversation.MinimumStateVersion.Should().Be(7);
+        result.Receipt!.ChatContext.Should().BeEquivalentTo(
+            new WorkflowChatContext("scope-a", "conversation-existing", "generated-turn", 7));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldInjectMaterializedConversationContext_WhenContinuingConversation()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort
+        {
+            ConversationContext = new WorkflowConversationExecutionContext(
+                ScopeId: "scope-a",
+                ConversationId: "conversation-existing",
+                StateVersion: 3,
+                Messages:
+                [
+                    new WorkflowConversationExecutionMessage(
+                        Sequence: 1,
+                        TurnId: "turn-previous",
+                        Role: WorkflowConversationExecutionRole.User,
+                        Content: "Create a workflow that generates fund analysis reports."),
+                    new WorkflowConversationExecutionMessage(
+                        Sequence: 2,
+                        TurnId: "turn-previous",
+                        Role: WorkflowConversationExecutionRole.Assistant,
+                        Content: "Choose a Team: team01 or team02."),
+                ],
+                Truncated: false,
+                MaxMessageCount: 24),
+        };
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "team01",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Continue(
+                    "conversation-existing",
+                    minimumStateVersion: 3)),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        var dispatched = inner.Requests.Should().ContainSingle().Subject;
+        dispatched.Prompt.Should().Be("team01");
+        dispatched.ConversationContext.Should().BeEquivalentTo(deliveryPort.ConversationContext);
+        dispatched.CompletionNotificationTarget.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldPassConversationMinimumStateVersionToReservation_WhenContinuingConversation()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "team01",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Continue(
+                    "conversation-existing",
+                    minimumStateVersion: 7)),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        deliveryPort.Reservations.Should().ContainSingle()
+            .Which.Conversation.MinimumStateVersion.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailBeforeResolvingActor_WhenContinuationStateVersionIsMissing()
+    {
+        var actorResolver = new RecordingActorResolver();
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "team01",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Continue("conversation-existing")),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
+        actorResolver.Requests.Should().BeEmpty();
+        deliveryPort.Reservations.Should().BeEmpty();
+        inner.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotReserveChatHistoryDelivery_WhenConversationIntentIsNone()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.None()),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        deliveryPort.Reservations.Should().BeEmpty();
+        inner.Requests.Should().ContainSingle();
+        inner.Requests[0].CompletionNotificationTarget.Should().BeNull();
+        result.Receipt!.ChatContext.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotReserveChatHistoryDelivery_WhenContinueConversationIdIsBlank()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Continue("  ")),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        deliveryPort.Reservations.Should().BeEmpty();
+        inner.Requests.Should().ContainSingle();
+        inner.Requests[0].CompletionNotificationTarget.Should().BeNull();
+        result.Receipt!.ChatContext.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailBeforeDispatch_WhenConversationRequiresDeliveryButPortIsMissing()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var inner = new RecordingInteractionService();
+        var runProvisioningPort = new RecordingRunProvisioningPort();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            runProvisioningPort,
+            inner);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Create()),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
+        inner.Requests.Should().BeEmpty();
+        runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailBeforeDispatch_WhenChatHistoryReservationIsUnavailable()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort
+        {
+            ReturnNullReservation = true,
+        };
+        var inner = new RecordingInteractionService();
+        var runProvisioningPort = new RecordingRunProvisioningPort();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            runProvisioningPort,
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "execution prompt",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Create()),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
+        deliveryPort.Reservations.Should().ContainSingle();
+        inner.Requests.Should().BeEmpty();
+        deliveryPort.Bindings.Should().BeEmpty();
+        deliveryPort.Abandons.Should().BeEmpty();
+        runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRollbackWithoutDispatch_WhenCreateDeliveryIsAlreadyReserved()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort
+        {
+            ExistingReservation = true,
+        };
+        var inner = new RecordingInteractionService();
+        var runProvisioningPort = new RecordingRunProvisioningPort();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            runProvisioningPort,
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "execution prompt",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Create()),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
+        deliveryPort.Reservations.Should().ContainSingle();
+        inner.Requests.Should().BeEmpty();
+        deliveryPort.Bindings.Should().BeEmpty();
+        deliveryPort.Abandons.Should().BeEmpty();
+        runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailBeforeDispatch_WhenConversationContinueReservationIsNotFound()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort
+        {
+            ReturnNotFound = true,
+        };
+        var inner = new RecordingInteractionService();
+        var runProvisioningPort = new RecordingRunProvisioningPort();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            runProvisioningPort,
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "execution prompt",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Continue(
+                    "conversation-missing",
+                    minimumStateVersion: 7)),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ConversationNotFound);
+        deliveryPort.Reservations.Should().ContainSingle();
+        inner.Requests.Should().BeEmpty();
+        deliveryPort.Bindings.Should().BeEmpty();
+        deliveryPort.Abandons.Should().BeEmpty();
+        runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldAbandonChatHistoryDelivery_WhenInnerFailsBeforeAccepted()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var inner = new RecordingInteractionService
+        {
+            Result = CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Failure(WorkflowChatRunStartError.ProjectionUnavailable),
+        };
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Create()),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        deliveryPort.Reservations.Should().ContainSingle();
+        deliveryPort.Bindings.Should().BeEmpty();
+        deliveryPort.Abandons.Should().ContainSingle();
+        deliveryPort.Abandons[0].DeliveryId.Should().Be(deliveryPort.Reservations[0].DeliveryId);
     }
 
     [Fact]
@@ -140,7 +823,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -175,7 +858,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -209,7 +892,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -245,7 +928,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -278,7 +961,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -315,7 +998,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -347,7 +1030,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -382,7 +1065,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-auto", "auto")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-auto", "auto"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
@@ -422,7 +1105,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-auto", "auto")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-auto", "auto"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
@@ -436,13 +1119,17 @@ public sealed class WorkflowChatRunInteractionServiceTests
         RecordingProjectionPort projectionPort,
         RecordingRunProvisioningPort runProvisioningPort,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> inner,
-        WorkflowDirectFallbackPolicy? fallbackPolicy = null) =>
+        WorkflowDirectFallbackPolicy? fallbackPolicy = null,
+        IWorkflowChatHistoryTerminalDeliveryPort? chatHistoryTerminalDeliveryPort = null,
+        IWorkflowChatHistoryCreateRecoveryReadPort? chatHistoryCreateRecoveryReadPort = null) =>
         new(
             actorResolver,
             projectionPort,
             runProvisioningPort,
             inner,
-            fallbackPolicy ?? new WorkflowDirectFallbackPolicy());
+            fallbackPolicy ?? new WorkflowDirectFallbackPolicy(),
+            chatHistoryTerminalDeliveryPort,
+            chatHistoryCreateRecoveryReadPort);
 
     private static ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> CreateDefaultInner(
         RecordingProjectionPort projectionPort,
@@ -669,6 +1356,85 @@ public sealed class WorkflowChatRunInteractionServiceTests
         {
             await onAcceptedAsync(receipt, ct);
             throw exception;
+        }
+    }
+
+    private sealed class RecordingChatHistoryTerminalDeliveryPort : IWorkflowChatHistoryTerminalDeliveryPort
+    {
+        public string ReservedDeliveryActorId { get; } = "chat-history-delivery-actor-alpha";
+        public bool ReturnNullReservation { get; init; }
+        public bool ReturnNotFound { get; init; }
+        public bool ExistingReservation { get; init; }
+        public WorkflowConversationExecutionContext? ConversationContext { get; init; }
+        public List<WorkflowChatHistoryTerminalDeliveryReservationRequest> Reservations { get; } = [];
+        public List<WorkflowChatHistoryTerminalDeliveryReservation> Bindings { get; } = [];
+        public List<WorkflowChatHistoryTerminalDeliveryReservation> Abandons { get; } = [];
+
+        public Task<WorkflowChatHistoryTerminalDeliveryReservationResult> ReserveAsync(
+            WorkflowChatHistoryTerminalDeliveryReservationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Reservations.Add(request);
+            if (ReturnNullReservation)
+                return Task.FromResult(WorkflowChatHistoryTerminalDeliveryReservationResult.Unavailable());
+            if (ReturnNotFound)
+                return Task.FromResult(WorkflowChatHistoryTerminalDeliveryReservationResult.NotFound());
+
+            var conversationId = request.Conversation.Intent == WorkflowChatConversationIntentKind.Continue
+                ? request.Conversation.ConversationId!
+                : "generated-conversation";
+            return Task.FromResult(WorkflowChatHistoryTerminalDeliveryReservationResult.Success(
+                new WorkflowChatHistoryTerminalDeliveryReservation(
+                    ReservedDeliveryActorId,
+                    request.DeliveryId,
+                    request.WorkflowActorId,
+                    request.WorkflowCommandId,
+                    ExistingReservation),
+                new WorkflowChatContext(
+                    request.ScopeId,
+                    conversationId,
+                    "generated-turn",
+                    request.Conversation.MinimumStateVersion ?? 0),
+                ConversationContext));
+        }
+
+        public Task BindAcceptedAsync(
+            WorkflowChatHistoryTerminalDeliveryReservation reservation,
+            WorkflowChatRunAcceptedReceipt receipt,
+            CancellationToken ct = default)
+        {
+            _ = receipt;
+            ct.ThrowIfCancellationRequested();
+            Bindings.Add(reservation);
+            return Task.CompletedTask;
+        }
+
+        public Task AbandonAsync(
+            WorkflowChatHistoryTerminalDeliveryReservation reservation,
+            string reason,
+            CancellationToken ct = default)
+        {
+            _ = reason;
+            ct.ThrowIfCancellationRequested();
+            Abandons.Add(reservation);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingChatHistoryCreateRecoveryReadPort : IWorkflowChatHistoryCreateRecoveryReadPort
+    {
+        public WorkflowChatHistoryCreateRecovery? Recovery { get; set; }
+        public List<(string ScopeId, string CommandId)> Requests { get; } = [];
+
+        public Task<WorkflowChatHistoryCreateRecovery?> GetAsync(
+            string scopeId,
+            string commandId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add((scopeId, commandId));
+            return Task.FromResult(Recovery);
         }
     }
 

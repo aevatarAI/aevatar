@@ -59,6 +59,24 @@ public sealed class WebFetchResultBoundaryJsonTests
                 "https://example.com/empty"));
     }
 
+    [Fact]
+    public void FetchResultBoundaryJson_ShouldRoundTripTypedErrorWithoutRawBody()
+    {
+        var result = new WebFetchResult(
+            503,
+            "error",
+            null,
+            null,
+            "https://example.com/failure",
+            new WebToolError("WEB_FETCH_HTTP_503", "The web request failed."));
+
+        var json = WebToolResultBoundaryJson.ToBoundaryJson(result);
+
+        json.Should().Be(
+            """{"error":"WEB_FETCH_HTTP_503","message":"The web request failed."}""");
+        WebToolResultBoundaryJson.ParseFetchPayload(json).Error.Should().Be(result.Error);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("plain text")]

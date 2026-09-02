@@ -1,7 +1,11 @@
 using System.Text.Json;
 using Aevatar.Capabilities;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -20,6 +24,10 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 /// Error mapping:
 ///   - <see cref="StudioMemberNotFoundException"/> → 404
 ///   - other <see cref="InvalidOperationException"/> (validation) → 400
+///
+/// <c>DELETE /api/scopes/{scopeId}/members/{memberId}</c> tombstones the
+/// StudioMember authority and leaves the member-owned published service
+/// artifacts/revisions untouched; the platform service lifecycle owns those.
 ///
 /// IMPORTANT: every <see cref="IStudioMemberService"/> parameter must carry
 /// the <see cref="FromServicesAttribute"/>. Minimal API's
@@ -69,6 +77,8 @@ internal static class StudioMemberEndpoints
         // Merge-Patch semantics for `teamId` — see HandlePatchAsync.
         app.MapPatch("/api/scopes/{scopeId}/members/{memberId}", HandlePatchAsync)
             .WithTags("StudioMembers");
+        app.MapDelete("/api/scopes/{scopeId}/members/{memberId}", HandleDeleteAsync)
+            .WithTags("StudioMembers");
     }
 
     internal static async Task<IResult> HandleCreateAsync(
@@ -85,6 +95,10 @@ internal static class StudioMemberEndpoints
         {
             var summary = await memberService.CreateAsync(scopeId, request, ct);
             return Results.Created($"/api/scopes/{scopeId}/members/{summary.MemberId}", summary);
+        }
+        catch (StudioMemberCreateImplementationRefNotAllowedException ex)
+        {
+            return CreateImplementationRefNotAllowed(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -153,10 +167,32 @@ internal static class StudioMemberEndpoints
 
         try
         {
-            var receipt = await memberService.BindAsync(scopeId, memberId, request, ct);
+            var admittedRequest = request with
+            {
+                ExplicitRequestConfirmations = null,
+                CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
+                    http,
+                    ExternalCapabilityExecutionMode.Interactive,
+                    request.ExplicitRequestConfirmations),
+            };
+            var receipt = await memberService.BindAsync(scopeId, memberId, admittedRequest, ct);
             return Results.Accepted(
                 $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding-runs/{Uri.EscapeDataString(receipt.BindingRunId)}",
                 receipt);
+        }
+        catch (NyxIdExplicitRequestConfirmationInputException ex)
+        {
+            return BadRequest(NyxIdExplicitRequestConfirmationInputException.ErrorCode, ex.Message);
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return BadRequest(
+                WorkflowCallerCredentialSelectionException.ErrorCode,
+                WorkflowCallerCredentialSelectionException.SafeMessage);
+        }
+        catch (WorkflowExternalCapabilityAdmissionException ex)
+        {
+            return StudioExternalCapabilityAdmissionHttpMapper.BadRequest(ex.Readiness);
         }
         catch (InvalidOperationException ex)
         {
@@ -436,11 +472,46 @@ internal static class StudioMemberEndpoints
         }
     }
 
+    internal static async Task<IResult> HandleDeleteAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        [FromServices] IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            var receipt = await memberService.DeleteAsync(scopeId, memberId, ct);
+            return Results.Accepted(BuildMemberLocation(scopeId, memberId), receipt);
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
+        }
+    }
+
     private static string BuildMemberLocation(string scopeId, string memberId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
 
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });
+
+    private static IResult CreateImplementationRefNotAllowed(
+        StudioMemberCreateImplementationRefNotAllowedException ex) =>
+        Results.BadRequest(new
+        {
+            code = StudioMemberCreateImplementationRefNotAllowedException.ErrorCode,
+            message = ex.Message,
+            scopeId = ex.ScopeId,
+            field = ex.Field,
+        });
 
     private static IResult NotFound(StudioMemberNotFoundException ex) =>
         Results.Json(

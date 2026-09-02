@@ -5,6 +5,8 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
@@ -25,6 +27,7 @@ public sealed class StudioMemberService : IStudioMemberService
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IScopeBindingReadinessQueryPort _readinessQueryPort;
     private readonly IServiceCommandPort _serviceCommandPort;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
 
     public StudioMemberService(
         IStudioMemberCommandPort memberCommandPort,
@@ -33,7 +36,8 @@ public sealed class StudioMemberService : IStudioMemberService
         IStudioTeamQueryPort teamQueryPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IScopeBindingReadinessQueryPort readinessQueryPort,
-        IServiceCommandPort serviceCommandPort)
+        IServiceCommandPort serviceCommandPort,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService)
     {
         _memberCommandPort = memberCommandPort ?? throw new ArgumentNullException(nameof(memberCommandPort));
         _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
@@ -44,6 +48,8 @@ public sealed class StudioMemberService : IStudioMemberService
         _readinessQueryPort = readinessQueryPort ?? throw new ArgumentNullException(nameof(readinessQueryPort));
         _serviceCommandPort = serviceCommandPort
             ?? throw new ArgumentNullException(nameof(serviceCommandPort));
+        _capabilityAdmissionService = capabilityAdmissionService
+            ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
     }
 
     public async Task<StudioMemberSummaryResponse> CreateAsync(
@@ -53,7 +59,7 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var normalizedRequest = StudioMemberCreateRequestValidator.Validate(request);
+        var normalizedRequest = StudioMemberCreateRequestValidator.Validate(scopeId, request);
 
         if (!string.IsNullOrEmpty(normalizedRequest.TeamId))
         {
@@ -97,6 +103,49 @@ public sealed class StudioMemberService : IStudioMemberService
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedMemberId = NormalizeRequired(memberId, nameof(memberId));
         var implementationKindWire = ResolveBindingImplementationKind(normalizedMemberId, request);
+        if (request.Workflow is { } workflow)
+        {
+            var suppliedAdmission = request.CapabilityAdmission;
+            var callerId = suppliedAdmission?.CallerId ?? string.Empty;
+            var callerCredential = suppliedAdmission?.NyxIdCallerCredential;
+            var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
+            var existingPlan = (workflow.CapabilityAdmissionPlan ?? suppliedAdmission?.ExistingPlan)?.Clone();
+            var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
+            var executionMode = suppliedAdmission?.ExecutionMode
+                ?? ExternalCapabilityExecutionMode.Interactive;
+            var capabilityAdmissionPlan = existingPlan is not null
+                ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                    PersistedWorkflowCapabilityAdmissionRequest.FromWorkflowYamls(
+                        existingPlan,
+                        workflow.WorkflowYamls,
+                        "studio_member_binding_run",
+                        executionMode,
+                        workflow.WorkflowId,
+                        request.RevisionId),
+                    ct)
+                : await _capabilityAdmissionService.AdmitAsync(
+                    WorkflowExternalCapabilityAdmissionRequest.FromWorkflowYamls(
+                    new ExternalWorkflowCapabilityAccessContext(
+                        normalizedScopeId,
+                        callerId,
+                        callerCredential,
+                        organizationBearerToken),
+                    workflow.WorkflowYamls,
+                    "studio_member_binding_run",
+                    executionMode,
+                    explicitRequestConfirmations,
+                    workflow.WorkflowId,
+                    request.RevisionId),
+                    ct);
+            request = request with
+            {
+                CapabilityAdmission = null,
+                Workflow = workflow with
+                {
+                    CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                },
+            };
+        }
         var bindingRunId = GenerateBindingRunId();
 
         await _memberCommandPort.StartBindingRunAsync(
@@ -375,6 +424,26 @@ public sealed class StudioMemberService : IStudioMemberService
             StudioMemberCommandStatusNames.Accepted,
             scopeId,
             memberId,
+            DateTimeOffset.UtcNow);
+    }
+
+    public async Task<StudioMemberCommandResponse> DeleteAsync(
+        string scopeId,
+        string memberId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedMemberId = NormalizeRequired(memberId, nameof(memberId));
+
+        var existing = await _memberQueryPort.GetAsync(normalizedScopeId, normalizedMemberId, ct);
+        if (existing == null)
+            throw new StudioMemberNotFoundException(normalizedScopeId, normalizedMemberId);
+
+        await _memberCommandPort.DeleteAsync(normalizedScopeId, normalizedMemberId, ct);
+        return new StudioMemberCommandResponse(
+            StudioMemberCommandStatusNames.DeleteAccepted,
+            normalizedScopeId,
+            normalizedMemberId,
             DateTimeOffset.UtcNow);
     }
 

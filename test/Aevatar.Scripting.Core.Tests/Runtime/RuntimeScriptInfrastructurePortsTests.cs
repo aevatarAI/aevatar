@@ -227,6 +227,46 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
+    public async Task RunRuntimeAsync_ShouldPropagateCompletionNotificationContract_WhenProvided()
+    {
+        RunScriptRequestedEvent? captured = null;
+        var runtime = new TestActorRuntime();
+        runtime.RegisterActor(new TestActor("runtime-1", (envelope, ct) =>
+        {
+            captured = envelope.Payload.Unpack<RunScriptRequestedEvent>();
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }));
+        var service = CreateRuntimeCommandService(runtime);
+
+        await service.RunRuntimeAsync(
+            runtimeActorId: "runtime-1",
+            runId: "run-1",
+            commandId: "command-1",
+            correlationId: "correlation-1",
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
+            scriptRevision: "rev-1",
+            definitionActorId: "definition-1",
+            requestedEventType: "chat.requested",
+            scopeId: "scope-7",
+            completionNotificationActorId: "service-run:scope-7:service-1:run-1",
+            completionNotificationDeliveryId: "service-run-source:run-1:command-1",
+            completionNotificationExpiresAtUnixMs: 1_800_000_000_000,
+            ct: CancellationToken.None);
+
+        captured.Should().NotBeNull();
+        captured!.CompletionNotificationActorId.Should()
+            .Be("service-run:scope-7:service-1:run-1");
+        captured.CompletionNotificationDeliveryId.Should()
+            .Be("service-run-source:run-1:command-1");
+        captured.CompletionNotificationExpiresAtUnixMs.Should().Be(1_800_000_000_000);
+    }
+
+    [Fact]
     public async Task SpawnRuntimeAsync_ShouldPropagateScopeId_WhenProvided()
     {
         BindScriptBehaviorRequestedEvent? captured = null;

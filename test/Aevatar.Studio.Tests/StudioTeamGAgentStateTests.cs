@@ -248,6 +248,44 @@ public sealed class StudioTeamGAgentStateTests
     }
 
     [Fact]
+    public async Task HandleMemberReassigned_ShouldClearEntryMember_WhenDeleteDerivedRemovalArrives()
+    {
+        var created = CreateActiveTeam();
+        var withMember = _agent.Apply(created, new StudioTeamMemberRosterChangedEvent
+        {
+            TeamId = "team-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            Effect = StudioTeamRosterEffect.Added,
+            MemberCount = 1,
+            ChangedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var withEntry = _agent.Apply(withMember, new StudioTeamEntryMemberChangedEvent
+        {
+            TeamId = "team-1",
+            ScopeId = "scope-1",
+            EntryMemberId = "m-1",
+            ChangedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+        var eventSourcing = new RecordingEventSourcing(withEntry);
+        var agent = NewHandlerAgent(withEntry, eventSourcing);
+
+        await agent.HandleMemberReassigned(new StudioMemberReassignedEvent
+        {
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            FromTeamId = "team-1",
+            ReassignedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+        });
+
+        eventSourcing.RaisedEvents.Should().HaveCount(2);
+        eventSourcing.RaisedEvents[0].Should().BeOfType<StudioTeamMemberRosterChangedEvent>()
+            .Which.Effect.Should().Be(StudioTeamRosterEffect.Removed);
+        eventSourcing.RaisedEvents[1].Should().BeOfType<StudioTeamEntryMemberChangedEvent>()
+            .Which.HasEntryMemberId.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task HandleEntryMemberChanged_ShouldReject_WhenTeamNotCreated()
     {
         var state = new StudioTeamState();
@@ -630,15 +668,24 @@ public sealed class StudioTeamGAgentStateTests
     private sealed class RecordingEventSourcing(StudioTeamState replayState)
         : IEventSourcingBehavior<StudioTeamState>
     {
+        private readonly List<IMessage> _pending = [];
         public List<IMessage> RaisedEvents { get; } = [];
-        public long CurrentVersion => 0;
+        public long CurrentVersion { get; private set; }
 
-        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage =>
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage
+        {
             RaisedEvents.Add(evt);
+            _pending.Add(evt);
+        }
 
         public Task<EventStoreCommitResult> ConfirmEventsAsync(
-            CancellationToken ct = default) =>
-            Task.FromResult(new EventStoreCommitResult());
+            CancellationToken ct = default)
+        {
+            var result = EventSourcingTestCommit.From(_pending, CurrentVersion);
+            CurrentVersion = result.LatestVersion;
+            _pending.Clear();
+            return Task.FromResult(result);
+        }
 
         public Task PersistSnapshotAsync(StudioTeamState currentState, CancellationToken ct = default) =>
             Task.CompletedTask;
@@ -646,8 +693,11 @@ public sealed class StudioTeamGAgentStateTests
         public Task<StudioTeamState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
             Task.FromResult<StudioTeamState?>(replayState.Clone());
 
-        public void DiscardPendingEvents() =>
+        public void DiscardPendingEvents()
+        {
             RaisedEvents.Clear();
+            _pending.Clear();
+        }
 
         public StudioTeamState TransitionState(StudioTeamState current, IMessage evt) =>
             _agent.Apply(current, evt);

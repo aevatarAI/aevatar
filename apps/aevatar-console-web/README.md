@@ -42,20 +42,29 @@ console at the hosted backend, set both targets to the hosted API URL in
 `.env.local` and set `AEVATAR_PROXY_PRESERVE_AUTH_HOST=false` so `/api/auth/*`
 uses the hosted backend Host header.
 
-For NyxID login, also set these values in `.env.local`:
+For NyxID login, the console reads the authority, public OAuth client id, scope,
+and callback URI from the frontend build environment. It finalizes callbacks
+through `/api/auth/nyxid/finalize`, so keep `/api/auth/*` proxied to the Studio
+backend. Configure all four browser OAuth values before building:
 
 ```bash
-NYXID_BASE_URL=http://127.0.0.1:3001
-NYXID_CLIENT_ID=your-public-client-id
+NYXID_BASE_URL=https://nyx.chrono-ai.fun
+NYXID_CLIENT_ID=replace-with-public-client-id
+NYXID_SCOPE="openid profile email offline_access urn:nyxid:scope:broker_binding proxy"
 NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
-NYXID_SCOPE="openid profile email"
 ORNN_BASE_URL=https://ornn.chrono-ai.fun
 # Optional when deploying under a sub-path such as /console/
 AEVATAR_CONSOLE_PUBLIC_PATH=/
 ```
 
-`NYXID_BASE_URL` and `NYXID_CLIENT_ID` are required. The console no longer ships a baked-in NyxID tenant or client id.
-`NYXID_REDIRECT_URI` must exactly match the public client registration in NyxID.
+`NYXID_BASE_URL`, `NYXID_CLIENT_ID`, and `NYXID_SCOPE` are injected into the
+browser bundle at build time and are the single configuration source for
+authorization, PKCE pending state, and token refresh. Keep them aligned with
+the OAuth client configured for backend token finalization.
+`NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
+NyxID when you override it locally.
+Default service preselection is owned by the NyxID OAuth Client
+`default_service_catalog_slugs`; the browser does not send OAuth `resource` parameters.
 `ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
 
@@ -93,7 +102,7 @@ pnpm dev
 Current proxy split during local development:
 
 - `/api/chat`, `/api/workflows/*`, `/api/actors/*`, `/api/runs/*`, `/api/primitives`, `/api/capabilities`, most `/api/scopes/*` runtime routes -> `Mainnet Host API`
-- `/api/app/*`, `/api/auth/*`, `/api/workspace/*`, `/api/editor/*`, `/api/executions/*`, `/api/roles/*`, `/api/connectors/*`, `/api/settings/*`, `/api/scopes/{scopeId}/teams*` -> `Studio Hosting API target`
+- `/api/app/*`, `/api/auth/*`, `/api/workspace/*`, `/api/editor/*`, `/api/executions/*`, `/api/roles/*`, `/api/connectors/*`, `/api/scopes/{scopeId}/teams*` -> `Studio Hosting API target`
 
 ## Current scope
 

@@ -29,6 +29,10 @@ import {
 } from "../runWorkbenchConfig";
 import { AevatarHelpTooltip } from "@/shared/ui/aevatarPageShells";
 import { t } from "@/shared/i18n/messages";
+import {
+  getUserFacingIdentifierLabel,
+  sanitizeUserFacingText,
+} from "@/shared/ui/userFacingIdentifiers";
 
 type RunsInspectorPaneProps = {
   actorSnapshot?: WorkflowActorSnapshot;
@@ -202,6 +206,13 @@ function renderPrimitiveTags(primitives: string[]): React.ReactNode {
   );
 }
 
+function formatRuntimeAvailability(
+  value: string | null | undefined,
+  availableLabel: string,
+): string {
+  return value?.trim() ? availableLabel : "n/a";
+}
+
 function renderInteractionSummary(
   humanInputRecord: HumanInputRecord | undefined,
   waitingSignalRecord: WaitingSignalRecord | undefined,
@@ -215,7 +226,13 @@ function renderInteractionSummary(
         </Space>
         <div style={summaryFieldGridStyle}>
           <SummaryField label={t("pages.runs.runsinspectorpane.step", "Step")} value={humanInputRecord.stepId || "n/a"} />
-          <SummaryField label={t("pages.runs.runsinspectorpane.run", "Run")} value={humanInputRecord.runId || "n/a"} />
+          <SummaryField
+            label={t("pages.runs.runsinspectorpane.run", "Run")}
+            value={formatRuntimeAvailability(
+              humanInputRecord.runId,
+              t("pages.runs.runsinspectorpane.current.run", "Current run"),
+            )}
+          />
           <SummaryField
             label={t("pages.runs.runsinspectorpane.timeout", "Timeout")}
             value={`${humanInputRecord.timeoutSeconds || 0}s`}
@@ -251,7 +268,13 @@ function renderInteractionSummary(
             label={t("pages.runs.runsinspectorpane.step.2", "Step")}
             value={waitingSignalRecord.stepId || "n/a"}
           />
-          <SummaryField label={t("pages.runs.runsinspectorpane.run.2", "Run")} value={waitingSignalRecord.runId || "n/a"} />
+          <SummaryField
+            label={t("pages.runs.runsinspectorpane.run.2", "Run")}
+            value={formatRuntimeAvailability(
+              waitingSignalRecord.runId,
+              t("pages.runs.runsinspectorpane.current.run.2", "Current run"),
+            )}
+          />
         </div>
         <div>
           <Typography.Text style={summaryFieldLabelStyle}>{t("pages.runs.runsinspectorpane.prompt.2", "Prompt")}</Typography.Text>
@@ -291,7 +314,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       <div style={embeddedPanelStyle}>
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
-            help={t("pages.runs.runsinspectorpane.compact.summary.help", "A compact summary of the current run state, identifiers, and latest visible output.")}
+            help={t("pages.runs.runsinspectorpane.compact.summary.help", "A compact summary of the current run state and latest visible output.")}
             title={t("pages.runs.runsinspectorpane.run.summary", "Run summary")}
           />
           <div
@@ -347,19 +370,25 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
           </div>
           <div style={summaryFieldGridStyle}>
             <SummaryField
-              copyable
-              label={t("pages.runs.runsinspectorpane.run.id", "Run ID")}
-              value={runSummaryRecord.runId || "n/a"}
+              label={t("pages.runs.runsinspectorpane.run", "Run")}
+              value={formatRuntimeAvailability(
+                runSummaryRecord.runId,
+                t("pages.runs.runsinspectorpane.current.run.ready", "Current run ready"),
+              )}
             />
             <SummaryField
-              copyable
-              label={t("pages.runs.runsinspectorpane.actor.id", "Actor ID")}
-              value={runSummaryRecord.actorId || "n/a"}
+              label={t("pages.runs.runsinspectorpane.actor", "Actor")}
+              value={formatRuntimeAvailability(
+                runSummaryRecord.actorId,
+                t("pages.runs.runsinspectorpane.runtime.actor.ready", "Runtime actor ready"),
+              )}
             />
             <SummaryField
-              copyable
-              label={t("pages.runs.runsinspectorpane.command.id", "Command ID")}
-              value={runSummaryRecord.commandId || "n/a"}
+              label={t("pages.runs.runsinspectorpane.command", "Command")}
+              value={formatRuntimeAvailability(
+                runSummaryRecord.commandId,
+                t("pages.runs.runsinspectorpane.command.accepted", "Command accepted"),
+              )}
             />
           </div>
           <div>
@@ -419,11 +448,17 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                 />
                 <SummaryField
                   label={t("pages.runs.runsinspectorpane.agent", "Agent")}
-                  value={selectedTraceItem.agentId || "n/a"}
+                  value={formatRuntimeAvailability(
+                    selectedTraceItem.agentId,
+                    t("pages.runs.runsinspectorpane.runtime.actor.ready.2", "Runtime actor ready"),
+                  )}
                 />
                 <SummaryField
                   label={t("pages.runs.runsinspectorpane.step.3", "Step")}
-                  value={selectedTraceItem.stepId || "n/a"}
+                  value={getUserFacingIdentifierLabel(
+                    selectedTraceItem.stepId,
+                    t("pages.runs.runsinspectorpane.step", "Step"),
+                  )}
                 />
                 <SummaryField
                   label={t("pages.runs.runsinspectorpane.step.type", "Step type")}
@@ -453,7 +488,8 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                     wordBreak: "break-word",
                   }}
                 >
-                  {selectedTraceItem.payloadText}
+                  {sanitizeUserFacingText(selectedTraceItem.payloadText) ||
+                    t("pages.runs.runsinspectorpane.no.user.visible.payload", "No user-visible payload fields.")}
                 </pre>
               </div>
             </>
@@ -532,9 +568,11 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                 <>
                   <div style={summaryFieldGridStyle}>
                     <SummaryField
-                      copyable
-                      label={t("pages.runs.runsinspectorpane.actor.id.2", "Actor ID")}
-                      value={actorSnapshot.actorId}
+                      label={t("pages.runs.runsinspectorpane.actor", "Actor")}
+                      value={formatRuntimeAvailability(
+                        actorSnapshot.actorId,
+                        t("pages.runs.runsinspectorpane.runtime.actor.ready.3", "Runtime actor ready"),
+                      )}
                     />
                     <SummaryField
                       label={t("pages.runs.runsinspectorpane.state.version", "State version")}
@@ -556,11 +594,17 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                     />
                     <SummaryField
                       label={t("pages.runs.runsinspectorpane.last.command", "Last command")}
-                      value={actorSnapshot.lastCommandId || "n/a"}
+                      value={formatRuntimeAvailability(
+                        actorSnapshot.lastCommandId,
+                        t("pages.runs.runsinspectorpane.command.accepted.2", "Command accepted"),
+                      )}
                     />
                     <SummaryField
                       label={t("pages.runs.runsinspectorpane.last.event.2", "Last event")}
-                      value={actorSnapshot.lastEventId || "n/a"}
+                      value={formatRuntimeAvailability(
+                        actorSnapshot.lastEventId,
+                        t("pages.runs.runsinspectorpane.event.recorded", "Event recorded"),
+                      )}
                     />
                   </div>
                   <div>

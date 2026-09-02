@@ -47,15 +47,18 @@ Conversation state 维护 bounded `recent_deliveries` 与 `last_successful_deliv
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
     autonumber
-    participant U as User (Lark)
-    participant CGA as ConversationGAgent
-    participant D as IChannelLlmReplyRunDispatcher
-    participant ARG as AgentRunGAgent
-    participant CR as ChatRuntime
-    participant LK as Lark API
+    participant U as "User (Lark)"
+    participant CGA as "ConversationGAgent"
+    participant RS as "IRuntimeSecretStore"
+    participant D as "IChannelLlmReplyRunDispatcher"
+    participant ARG as "AgentRunGAgent"
+    participant CR as "ChatRuntime"
+    participant LK as "Lark API"
 
     U->>CGA: inbound message
-    CGA->>CGA: raise NeedsLlmReplyEvent<br/>(accepted)
+    CGA->>RS: Put(reply token + user token, TTL)
+    RS-->>CGA: typed RuntimeSecretReference values
+    CGA->>CGA: raise NeedsLlmReplyEvent<br/>(accepted, references only)
     CGA->>D: DispatchAsync(evt)
     D-->>CGA: normal return (accepted for dispatch)
     D->>ARG: AgentRunStartRequested (via IActorDispatchPort)
@@ -79,7 +82,30 @@ sequenceDiagram
 
 ## 4. 时序图：Failure Paths
 
-### 4.1 LLM 产出失败（committed 前 dropped）
+### 4.1 Actor inbox handoff 瞬时失败
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+sequenceDiagram
+    autonumber
+    participant CGA as "ConversationGAgent"
+    participant RS as "IRuntimeSecretStore"
+    participant D as "IChannelLlmReplyRunDispatcher"
+    participant ARG as "AgentRunGAgent"
+
+    CGA->>D: DispatchAsync(evt + runtime credentials)
+    D--xCGA: transport exception before inbox acceptance
+    CGA->>CGA: schedule durable retry
+    CGA->>RS: Resolve(typed references)
+    RS-->>CGA: runtime-only credentials
+    CGA->>D: DispatchAsync(same run_id)
+    D->>ARG: AgentRunStartRequested
+```
+
+`NeedsLlmReplyEvent` 只持久化引用，不持久化 raw token。retry clone 在进入
+`IActorDispatchPort` 前恢复凭据；引用缺失或过期时提交明确失败事实，禁止静默丢 turn。
+
+### 4.2 LLM 产出失败（committed 前 dropped）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -96,7 +122,7 @@ sequenceDiagram
     ARG->>ARG: cleanup_completed_at = now
 ```
 
-### 4.2 Lark sink 失败（committed 后、delivered 失败）
+### 4.3 Lark sink 失败（committed 后、delivered 失败）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -113,7 +139,7 @@ sequenceDiagram
     CGA->>CGA: raise ConversationContinueFailedEvent<br/>(finalized, committed-but-not-delivered)
 ```
 
-### 4.3 Stale signal 到达终态 actor（必须 no-op）
+### 4.4 Stale signal 到达终态 actor（必须 no-op）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -132,6 +158,7 @@ sequenceDiagram
 
 | 故障发生时所处阶段 | 故障类型 | 终态 status | last_reply_delivery | 上抛事件 | 责任 actor |
 |---|---|---|---|---|---|
+| accepted → committed | initial actor inbox handoff exception | pending; same `run_id` durable retry | `null` | runtime-secret reference resolve + redispatch | ConversationGAgent |
 | accepted → committed | duplicate run start | 不变（terminal duplicate no-op / retry path keeps `REPLY_PRODUCED`） | 不变 | log only or persisted retry handoff | AgentRunGAgent |
 | accepted → committed | stale run age > MaxRunRequestAgeMs | `AgentRunStatus.DROPPED` | `null` | `AgentRunDroppedEvent` + `DeferredLlmReplyDroppedEvent` | AgentRunGAgent |
 | accepted → committed | LLM provider error | `AgentRunStatus.FAILED` | `null` | `AgentRunFailedEvent` + `ConversationContinueFailedEvent` | AgentRunGAgent |
@@ -225,15 +252,32 @@ internal static bool IsTerminal(AgentRunState s) =>
 - 在终态 actor 上发起新的 redispatch / callback schedule
 - 通过 `lock` / `ConcurrentDictionary` 维护 "is this signal stale" 的内存字典（破坏 Actor 单线程事实源）
 
-## 10. Workflow wait=stream 后台投递契约
+## 10. Workflow channel 后台投递契约
 
-`aevatar_start_workflow wait=stream` 在 channel chat turn 中只承诺 workflow run command 已 accepted，并返回 typed `WorkflowRunBackgroundDeliveryReceipt`。聊天轮必须 ack-fast 结束，不能挂住原 LLM turn 等 workflow terminal，也不能依赖一次性 report artifact 或用户 relay token 作为后续完成态投递依据。
+channel chat turn 中的 `aevatar_start_workflow`（`wait=ack` / `wait=stream`）只承诺 workflow run command 已 accepted，并返回 typed `WorkflowRunBackgroundDeliveryReceipt`。聊天轮必须 ack-fast 结束，不能挂住原 LLM turn 等 workflow terminal，也不能依赖一次性 report artifact 或用户 relay token 作为后续完成态投递依据。
 
-AgentRun/NyxidChat 侧为每个 workflow command 注册一个 run-scoped `WorkflowRunDeliveryGAgent`。该 actor 的 Protobuf state 持久化 delivery id、workflow actor/run/command/correlation id、channel reply target、registration scope 与 long-lived `bot_agent_key_id`；projection callback 只把 terminal frame 包成 `WorkflowRunDeliveryTerminalFrameObserved` 自消息投回 actor，actor handler 内完成 stale check、relay side effect 与 delivered/failed event 持久化。
+AgentRun/NyxidChat 侧为每个 workflow command 预留一个 run-scoped `WorkflowRunDeliveryGAgent`。dispatcher 必须在 workflow command 进入目标 inbox 前完成 `ReserveAsync`，把 delivery actor id、delivery id 与截止时间作为强类型 `WorkflowCompletionNotificationTarget` 随 `WorkflowChatRunRequest` 发送；accepted receipt 返回后，`RegisterAsync` 只补齐 workflow actor/run/correlation identity。terminal notification 可以早于 accepted receipt 或 registration 到达，delivery actor 必须先持久化并在 reservation/binding 可对账后继续处理，不能依赖跨 actor 的偶然执行顺序。
 
-后台观察必须复用 `IWorkflowExecutionProjectionPort.AttachExistingActorProjectionAsync(...)` 连接既有 workflow run event projection 链，只消费 committed `RunFinished` / `RunError` / `RunStopped` terminal frame。禁止新增平行 workflow stream subscriber、禁止 query-time replay/priming、禁止用进程内 run-to-context registry 保存会话事实。MVP 只做 completion/error/stopped terminal reply；progress edit 流后续可在同一 projection input 上叠加 throttle。
+`delivery_id` 是一次后台回投的业务身份，`delivery_actor_id` 是 runtime address，二者禁止共用同一个字段或假设字符串相等。只有 registration infrastructure 可以从完整 delivery id 稳定派生 opaque actor address；dispatcher、workflow actor 与测试 fixture 都必须显式携带两种身份，不得解析 actor id 前缀反推业务事实。
+
+`WorkflowRunGAgent` 是 workflow 终态语义与通知 outbox 的权威拥有者。completion/failure/stopped 已提交后，它先把强类型 `WorkflowRunTerminalNotification` 持久化到自身 Protobuf state，再通过标准 actor inbox 投递给 reservation target；发送失败优先通过 durable self-timeout 触发重试，scheduler 不可用时只允许发布标准 self continuation，callback 携带 delivery id、workflow command id 与 attempt 并由 actor 对账。激活恢复必须能从已提交 terminal state 重建缺失 outbox，重复发送由 delivery actor 按稳定身份幂等吸收。
+
+该业务通知协议不创建 `ExecutionSession`，也不 attach live projection sink。Projection Pipeline 继续只消费 committed state、物化 actor-scoped current-state readmodel，并服务显式 SSE/WS 交互观察；不得用 query-time replay/priming、detached in-process sink 或 `actorId -> context` registry 补偿后台投递。accepted-only command、actor 业务通知与 readmodel 查询是三个独立契约，不能互相冒充。
 
 Nyx relay terminal reply 必须经 channel-relay `/reply` 使用长效 bot agent key 投递到同一 reply target。用户 inbound relay token 过期不得影响后台 terminal delivery；短命用户凭据只属于原入站 turn，不能进入 `WorkflowRunDeliveryGAgentState`。
+
+### 10.1 Delivery credential：typed vault handle + fail closed（#2675）
+
+- **凭据来源唯一**：Lark provisioning 在创建 relay api key 时捕获 NyxID 一次性 `full_key`，立即写入分布式 `ISecretVault`（purpose `channel.workflow-result-delivery-agent-key`，owner scope = registration scope，subject = `nyx_agent_api_key_id`）。raw key 不进入 Protobuf state、event、read model、result 或日志；mainnet 只读 secrets store 不参与。
+- **强类型 handle 贯穿链路**：`ChannelBotRegistrationEntry.workflow_result_delivery_credential`（vault `SecretReference`）→ registration read model → `AgentToolChannelContext.WorkflowResultDeliveryCredential`（`SecretReference` + subject）→ `WorkflowRunBackgroundDeliveryReservation` → `WorkflowRunDeliveryGAgentState`。`WorkflowRunDeliveryStartRequested` 只绑定 accepted workflow identity，不再重复承载 credential。泛化字符串 `nyx_reply_credential_ref` / `durable_reply_credential_ref` 字段已 reserved 删除。
+- **窄解析边界**：终态回投经 `IWorkflowResultDeliveryCredentialResolver` 在 actor turn 内解析，固定 purpose + handle 自带 owner scope + api-key subject；purpose/owner/subject 不匹配、vault 未命中或 revoked 一律 fail closed 且不发出 HTTP。raw bearer 只进入 `NyxIdRelayOutboundPort` adapter 调用。
+- **身份与凭据分离**：`ConversationReference.BotInstanceId` 使用稳定 `bot_registration_id`；secret handle 只负责授权解析。缺 registration id 的历史 delivery 用 `"nyx-relay-bot"` 共享别名。
+- **channel 后台回投 + fail closed**：channel skill 触发 workflow 且无可用 handle 时，dispatcher 在 dispatch 前返回产品级 `channel_workflow_delivery_unavailable`（不泄漏 credential 细节），不创建注定丢失终态结果的 run；reservation actor 对 typed handle、command identity 与 channel target 做第二道校验。pre-dispatch `ReserveAsync` 未 accepted 时禁止 dispatch workflow；workflow command 已 accepted 后，`RegisterAsync` 只补充 accepted workflow identity，失败不得把已运行的 workflow 伪装成 tool failure，也不得 abandon reservation，而应返回 reservation-backed accepted receipt 并记录 `binding_degraded`。内部日志用 typed reason 区分 `credential_handle_missing` / `resolver_unavailable` / `workflow_background_delivery_reservation_failed` / `binding_degraded`。
+- **存量 registration 原地修复**：NyxID `full_key` 只在 create/rotate 时返回，无法回读；缺 handle 的 Lark registration 保持 fail closed，owner 在 `/channels` 对原 registration 执行 `Repair workflow replies`。该命令保留 `registration_id`、NyxID channel bot id、conversation route id、webhook URL、scope 与 `default_skill_name`，不要求修改 Lark developer console；只有 active agent key id 与 typed vault handle 在完成事件提交后更新。
+- **forward-only 顺序**：repair request 先由 `ChannelBotRegistrationGAgent` commit；application service 随后 rotate 当前 NyxID agent key，把一次性 `full_key` 立即写入 `ISecretVault`，再向 actor commit `CREDENTIAL_PREPARED`，更新**现有** conversation route 到新 key id，最后 commit complete。rotate 会立即停用旧 key，因此 vault-first prepare 之后只能前滚，不能把旧 key 当回滚目标。
+- **中断恢复**：`REQUESTED`、`CREDENTIAL_PREPARED`、`FAILED` 及 typed phase/reason 都由 registration actor 持有。prepared 后重试复用同一个 typed `SecretReference`，只重做幂等 route update + actor completion；vault write 失败可从已记录的 rotated key 前滚再 rotate。处于 requested 状态时先查询 NyxID active keys：若 expected original key 仍明确 active，说明 rotation 尚未发生，可以继续 rotate；否则只能按确定性 key name 与 `requested_at` 恢复唯一 active replacement。expected key 已 inactive 且没有 replacement，或存在多个 replacement，都返回 `AMBIGUOUS_ROTATED_KEY_RECOVERY`，禁止猜测。禁止 query-time repair、event replay priming 或进程内 repair registry。
+- **配置失败不是 skill 失败**：`channel_workflow_delivery_unavailable` 是 exact typed `ConfigurationRequired` outcome。`SkillRecoveryPlanner` 必须停止 `ornn_search_skills`，并引导 owner 到 `/channels` 执行原地修复；不能因为展示文本相似就改变分类，其他 error code 仍走既有 recovery 规则。
+- **secret 边界不变**：禁止把短期 inbound reply token 冒充 delivery credential。raw bearer / `full_key` 不进入 command、event、actor state、read model、repair result、HTTP response、audit summary 或日志；browser 只看到 capability status、typed failure phase/reason 与非敏感 key id。vault revoke/rotate 基建见 #2689；provisioning 失败补偿会尽力 revoke vault 记录并回滚 NyxID api key。
 
 ## 11. 实现 Checklist
 
@@ -256,7 +300,7 @@ Nyx relay terminal reply 必须经 channel-relay `/reply` 使用长效 bot agent
   - [ ] 实现 Usage 重排（early-usage buffer + merge to last chunk）
   - [ ] 保证 stream-local 唯一 `IsLast = true` chunk
 - [ ] 测试：
-  - [x] dispatcher handoff 测试：typed `run_id` 派生 actor id / envelope id / dedup operation id
+  - [x] dispatcher handoff 测试：typed `run_id` 派生 actor id / envelope id / delivery operation id
   - [x] duplicate / stale admission 测试落在 `AgentRunGAgent`
   - [ ] AgentRunGAgent terminal short-circuit 五类 late signal 各 1 测试
   - [ ] `ConversationGAgent` 失败 delivery 路径测试（lark 4xx / 5xx）
@@ -275,6 +319,8 @@ Nyx relay terminal reply 必须经 channel-relay `/reply` 使用长效 bot agent
 - 用 `reply_dispatched` bool 替代 `Status == REPLY_HANDED_OFF` 做新代码判断
 - `wait=stream` 后仍阻塞聊天轮等待 workflow terminal
 - 后台 workflow terminal delivery 读取 report artifact 或 event store replay 拼装完成态
+- accepted-only workflow dispatch 后再临时创建 projection session 或 attach non-replay live sink 来猜测 terminal
+- workflow terminal 已提交但没有进入 actor-owned pending notification outbox
 - 使用用户 relay token 而不是 bot agent key 执行后台 channel-relay reply
 
 ## 13. 参考

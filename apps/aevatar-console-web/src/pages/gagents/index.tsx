@@ -58,7 +58,10 @@ import {
   AevatarStatusTag,
   AevatarWorkbenchLayout,
 } from '@/shared/ui/aevatarPageShells';
+import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { describeError } from '@/shared/ui/errorText';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
+import { getUserFacingIdentifierLabel } from '@/shared/ui/userFacingIdentifiers';
 import { resolveStudioScopeContext } from '@/pages/scopes/components/resolvedScope';
 import { t } from "@/shared/i18n/messages";
 
@@ -822,7 +825,7 @@ const GAgentsPage: React.FC = () => {
     setIsActorRegistryDrawerOpen(false);
     setRegistryNotice({
       type: 'success',
-      message: t('pages.gagents.index.prepared.actor.for.next', 'Prepared {actorId} for the next draft run.', { actorId }),
+      message: t('pages.gagents.index.prepared.actor.for.next', 'Saved actor is ready for the next draft run.'),
     });
   };
 
@@ -858,7 +861,7 @@ const GAgentsPage: React.FC = () => {
       }
       setRegistryNotice({
         type: 'success',
-        message: t('pages.gagents.index.removed.actor.from.registry', 'Removed {actorId} from the saved actor registry.', { actorId }),
+        message: t('pages.gagents.index.removed.actor.from.registry', 'Removed the saved actor from the registry.'),
       });
     } catch (error) {
       setRegistryNotice({
@@ -1023,8 +1026,7 @@ const GAgentsPage: React.FC = () => {
         type: 'error',
         message: t(
           'pages.gagents.index.endpoint.id.duplicated',
-          'Endpoint id {endpointId} is duplicated. Published endpoints must be unique.',
-          { endpointId: duplicateEndpointId },
+          'Endpoint is duplicated. Published endpoints must be unique.',
         ),
       });
       return;
@@ -1071,9 +1073,8 @@ const GAgentsPage: React.FC = () => {
         type: 'success',
         message: t(
           'pages.gagents.index.published.target.on.revision',
-          'Published {targetName} on revision {revisionId}.',
+          'Published {targetName}.',
           {
-            revisionId: result.revisionId,
             targetName: result.displayName || result.targetName,
           },
         ),
@@ -1112,11 +1113,7 @@ const GAgentsPage: React.FC = () => {
         type: 'success',
         message: t(
           'pages.gagents.index.workspace.serving.revision',
-          'Workspace {scopeId} is now serving revision {revisionId}.',
-          {
-            revisionId: result.revisionId,
-            scopeId: result.scopeId,
-          },
+          'Workspace is now serving the selected revision.',
         ),
       });
     } catch (error) {
@@ -1147,8 +1144,7 @@ const GAgentsPage: React.FC = () => {
         type: 'success',
         message: t(
           'pages.gagents.index.revision.accepted.for.retirement',
-          'Revision {revisionId} was accepted for retirement.',
-          { revisionId: result.revisionId },
+          'Revision was accepted for retirement.',
         ),
       });
     } catch (error) {
@@ -1394,7 +1390,10 @@ const GAgentsPage: React.FC = () => {
             <Typography.Text style={cliFieldLabelStyle}>
               {t("pages.gagents.index.current.default", "Current default")}</Typography.Text>
             <Typography.Text strong style={{ overflowWrap: 'anywhere' }}>
-              {bindingQuery.data.displayName || bindingQuery.data.serviceId}
+              {getUserFacingIdentifierLabel(
+                bindingQuery.data.displayName || bindingQuery.data.serviceId,
+                t("pages.gagents.index.service", "Service"),
+              )}
             </Typography.Text>
             <Typography.Text style={cliCardDescriptionStyle}>
               {formatRuntimeGAgentBindingImplementationKind(
@@ -1451,7 +1450,14 @@ const GAgentsPage: React.FC = () => {
           ) : null}
         </div>
 
-        {filteredKinds.length === 0 ? (
+        {gAgentKindsQuery.isLoading ? (
+          <AevatarContentSkeleton
+            ariaLabel="Loading runtime GAgent kinds"
+            listLayout="stack"
+            rows={5}
+            variant="list"
+          />
+        ) : filteredKinds.length === 0 ? (
           <div style={{ padding: 16 }}>
             <Empty
               description={
@@ -1616,16 +1622,13 @@ const GAgentsPage: React.FC = () => {
       eyebrow={t("pages.gagents.index.selected.revision", "Selected Revision")}
       title={
         selectedRevision
-          ? selectedRevision.revisionId
+          ? t("pages.gagents.index.selected.revision", "Selected Revision")
           : t("pages.gagents.index.no.revision.selected", "No revision selected")
       }
     >
       {selectedRevision ? (
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           <Space size={[8, 8]} wrap>
-            <Typography.Text strong copyable>
-              {selectedRevision.revisionId}
-            </Typography.Text>
             <Tag color={getBindingTone(selectedRevision)}>
               {formatRuntimeGAgentBindingImplementationKind(
                 selectedRevision.implementationKind,
@@ -1642,19 +1645,25 @@ const GAgentsPage: React.FC = () => {
               <Typography.Text type="secondary">
                 {t("pages.gagents.index.preferred.actor", "Preferred actor")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
-                {selectedRevision.staticPreferredActorId || 'n/a'}
+                {selectedRevision.staticPreferredActorId
+                  ? t("pages.gagents.index.configured", "Configured")
+                  : 'n/a'}
               </Typography.Paragraph>
             </div>
             <div>
               <Typography.Text type="secondary">{t("pages.gagents.index.primary.actor", "Primary actor")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
-                {selectedRevision.primaryActorId || 'n/a'}
+                {selectedRevision.primaryActorId
+                  ? t("pages.gagents.index.available", "Available")
+                  : 'n/a'}
               </Typography.Paragraph>
             </div>
             <div>
               <Typography.Text type="secondary">{t("pages.gagents.index.deployment", "Deployment")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
-                {selectedRevision.deploymentId || 'draft'}
+                {selectedRevision.deploymentId
+                  ? t("pages.gagents.index.attached", "Attached")
+                  : 'draft'}
               </Typography.Paragraph>
             </div>
             <div>
@@ -1675,13 +1684,7 @@ const GAgentsPage: React.FC = () => {
     <WorkbenchCard
       description={t("pages.gagents.index.transcript.and.runtime.events.from", "Transcript and runtime events from the most recent draft run.")}
       eyebrow="Run Output"
-      extra={
-        <Space size={[8, 8]} wrap>
-          {runState.actorId ? <Tag>{runState.actorId}</Tag> : null}
-          {runState.commandId ? <Tag>{runState.commandId}</Tag> : null}
-        </Space>
-      }
-      title={runState.runId ? `Run ${runState.runId}` : 'Run Output'}
+      title={runState.runId ? t("pages.gagents.index.latest.run.output", "Latest Run Output") : 'Run Output'}
     >
       <Tabs
         activeKey={activeRunOutputTab}
@@ -1725,11 +1728,6 @@ const GAgentsPage: React.FC = () => {
                     >
                       <Space size={[8, 8]} wrap>
                         <Tag>{event.type}</Tag>
-                        {readEventString(event, 'runId') ? (
-                          <Typography.Text type="secondary">
-                            {readEventString(event, 'runId')}
-                          </Typography.Text>
-                        ) : null}
                       </Space>
                       <Typography.Text
                         style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
@@ -1767,21 +1765,27 @@ const GAgentsPage: React.FC = () => {
       title={t("pages.gagents.index.actor.registry", "Actor Registry")}
     >
       <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-        {registryNotice ? (
-          <Alert
-            closable
-            onClose={() => setRegistryNotice(null)}
-            showIcon
-            title={registryNotice.message}
-            type={registryNotice.type}
-          />
-        ) : null}
+        <ConsoleOperationNotice
+          errorMessage={t(
+            'pages.gagents.index.registryActionFailed',
+            'Actor registry action could not be completed. Try again.',
+          )}
+          notice={registryNotice}
+          onClose={() => setRegistryNotice(null)}
+        />
 
         {gAgentActorsQuery.error ? (
           <Alert
             showIcon
             title={describeError(gAgentActorsQuery.error)}
             type="warning"
+          />
+        ) : gAgentActorsQuery.isLoading ? (
+          <AevatarContentSkeleton
+            ariaLabel="Loading actor registry"
+            listLayout="stack"
+            rows={4}
+            variant="list"
           />
         ) : actorGroups.length === 0 ? (
           <Empty
@@ -1856,16 +1860,8 @@ const GAgentsPage: React.FC = () => {
                             justifyContent: 'space-between',
                           }}
                         >
-                          <Typography.Text
-                            code
-                            style={{
-                              flex: 1,
-                              minWidth: 0,
-                              overflowWrap: 'anywhere',
-                              wordBreak: 'break-word',
-                            }}
-                          >
-                            {actorId}
+                          <Typography.Text style={{ flex: 1, minWidth: 0 }}>
+                            {t("pages.gagents.index.saved.actor", "Saved actor")}
                           </Typography.Text>
                           <Space
                             size={[8, 8]}
@@ -1962,7 +1958,10 @@ const GAgentsPage: React.FC = () => {
               <div style={infoCardStyle}>
                 <Typography.Text type="secondary">{t("pages.gagents.index.display.name", "Display name")}</Typography.Text>
                 <Typography.Paragraph style={wrappedTextStyle}>
-                  {bindingQuery.data.displayName || bindingQuery.data.serviceId}
+                  {getUserFacingIdentifierLabel(
+                    bindingQuery.data.displayName || bindingQuery.data.serviceId,
+                    t("pages.gagents.index.service", "Service"),
+                  )}
                 </Typography.Paragraph>
               </div>
               <div style={infoCardStyle}>
@@ -2213,7 +2212,7 @@ const GAgentsPage: React.FC = () => {
                         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                           {bindingDraft.endpoints.map((endpoint, index) => (
                             <div
-                              key={`binding-endpoint-${index}`}
+                              key={endpoint.endpointId}
                               style={{
                                 ...summaryMetricStyle,
                                 display: 'flex',
@@ -2329,7 +2328,10 @@ const GAgentsPage: React.FC = () => {
                             }))
                           }
                           options={launchableBindingEndpoints.map((endpoint) => ({
-                            label: t("pages.gagents.index.copy", "{value1} ({value2})", { value1: endpoint.displayName, value2: endpoint.endpointId }),
+                            label: getUserFacingIdentifierLabel(
+                              endpoint.displayName || endpoint.endpointId,
+                              t("pages.gagents.index.endpoint", "Endpoint"),
+                            ),
                             value: endpoint.endpointId,
                           }))}
                           value={
@@ -2453,9 +2455,6 @@ const GAgentsPage: React.FC = () => {
                     }}
                   >
                     <Space size={[8, 8]} wrap>
-                      <Typography.Text strong copyable>
-                        {revision.revisionId}
-                      </Typography.Text>
                       <Tag color={getBindingTone(revision)}>
                         {formatRuntimeGAgentBindingImplementationKind(
                           revision.implementationKind,
@@ -2487,10 +2486,12 @@ const GAgentsPage: React.FC = () => {
                       }}
                       type="secondary"
                     >
-                      {t("pages.gagents.index.deployment.2", "Deployment")}{revision.deploymentId || 'draft'} {t("pages.gagents.index.actor", "· Actor")}{' '}
-                      {revision.primaryActorId ||
-                        revision.staticPreferredActorId ||
-                        'n/a'}{' '}
+                      {revision.deploymentId
+                        ? t("pages.gagents.index.deployment.ready", "Deployment ready")
+                        : t("pages.gagents.index.draft.deployment", "Draft deployment")}{' '}
+                      {revision.primaryActorId || revision.staticPreferredActorId
+                        ? t("pages.gagents.index.actor.ready", "· Actor ready")
+                        : t("pages.gagents.index.actor.not.assigned", "· Actor not assigned")}{' '}
                       {t("pages.gagents.index.updated", "· Updated")}{' '}
                       {formatTimestamp(
                         revision.publishedAt ||
@@ -2550,7 +2551,6 @@ const GAgentsPage: React.FC = () => {
       extra={
         <Space size={[8, 8]} wrap>
           <AevatarStatusTag domain="run" status={runState.status} />
-          {runState.runId ? <Tag>{runState.runId}</Tag> : null}
         </Space>
       }
       title={selectedKindDescriptor ? selectedKindDescriptor.displayName : 'GAgent Draft Run'}
@@ -2579,7 +2579,7 @@ const GAgentsPage: React.FC = () => {
             <div>
               <Typography.Text type="secondary">{t("pages.gagents.index.observed.actor", "Observed actor")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
-                {runState.actorId || 'n/a'}
+                {runState.actorId ? t("pages.gagents.index.available", "Available") : 'n/a'}
               </Typography.Paragraph>
             </div>
           </div>
@@ -2719,15 +2719,14 @@ const GAgentsPage: React.FC = () => {
       }}
     >
       {selectedTypePanel}
-      {bindingNotice ? (
-        <Alert
-          closable
-          onClose={() => setBindingNotice(null)}
-          showIcon
-          type={bindingNotice.type}
-          title={bindingNotice.message}
-        />
-      ) : null}
+      <ConsoleOperationNotice
+        errorMessage={t(
+          'pages.gagents.index.bindingActionFailed',
+          'Binding action could not be completed. Try again.',
+        )}
+        notice={bindingNotice}
+        onClose={() => setBindingNotice(null)}
+      />
       <Tabs
         activeKey={activeWorkbenchTab}
         items={workbenchTabs}

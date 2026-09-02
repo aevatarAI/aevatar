@@ -52,6 +52,8 @@ public sealed class NyxIdRemoteToolApprovalPortTests
     [InlineData("denied", RemoteToolApprovalStatus.Rejected)]
     [InlineData("pending", RemoteToolApprovalStatus.Pending)]
     [InlineData("expired", RemoteToolApprovalStatus.Expired)]
+    [InlineData("cancelled", RemoteToolApprovalStatus.Cancelled)]
+    [InlineData("canceled", RemoteToolApprovalStatus.Cancelled)]
     [InlineData("unexpected", RemoteToolApprovalStatus.Unknown)]
     public async Task GetStatusAsync_ShouldCallStatusEndpointOnceAndMapStatuses(
         string rawStatus,

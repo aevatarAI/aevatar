@@ -6,7 +6,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -45,8 +45,12 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                         Delta = "hello",
                     },
                 }, ct);
-                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+                return WorkflowChatRunInteractionResult
+                    .Success(
+                        receipt,
+                        new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true));
             },
         };
 
@@ -74,7 +78,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         var service = new FakeCommandInteractionService
         {
             Handler = (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.WorkflowNotFound)),
         };
 
@@ -100,7 +104,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         var service = new FakeCommandInteractionService
         {
             Handler = (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.AgentNotFound)),
         };
 
@@ -214,8 +218,12 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct);
-                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+                return WorkflowChatRunInteractionResult
+                    .Success(
+                        receipt,
+                        new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true));
             },
         };
         var input = JsonSerializer.Deserialize<ChatInput>(
@@ -344,17 +352,17 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
     private sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort
     {
-        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> Handler { get; set; } =
+        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> Handler { get; set; } =
             (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.AgentNotFound));
 
         public WorkflowChatRunRequest? LastRequest { get; private set; }
 
-        public Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+        public Task<WorkflowChatRunInteractionResult> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
-            Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {
             LastRequest = request;
@@ -362,17 +370,17 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         }
     }
 
-    private sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    private sealed class RecordingWorkflowFileIngressPort : IFileArtifactIngressPort
     {
-        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
-            return ValueTask.FromResult(new WorkflowFileIngressResult(new ApplicationWorkflowFileRef
+            return ValueTask.FromResult(new FileArtifactIngressResult(new ApplicationFileArtifactRef
             {
                 FileId = "file-1",
                 ArtifactId = "workflow-file://file-1",

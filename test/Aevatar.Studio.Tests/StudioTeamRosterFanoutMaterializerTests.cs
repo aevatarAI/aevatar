@@ -48,7 +48,7 @@ public sealed class StudioTeamRosterFanoutMaterializerTests
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldUseStableCommandId_ForCommittedEventReplay()
+    public async Task ProjectAsync_ShouldUseStableCommandAndDeliveryOperationIds_ForCommittedEventReplay()
     {
         var dispatch = new RecordingDispatchPort();
         var materializer = new StudioTeamRosterFanoutMaterializer(
@@ -69,9 +69,9 @@ public sealed class StudioTeamRosterFanoutMaterializerTests
         dispatch.Dispatches[0].ActorId.Should().Be("studio-team:scope-1:t-new");
         dispatch.Dispatches[1].ActorId.Should().Be("studio-team:scope-1:t-new");
         dispatch.Dispatches[1].Envelope.Id.Should().Be(dispatch.Dispatches[0].Envelope.Id);
-        dispatch.Dispatches[1].Envelope.Runtime?.Deduplication?.OperationId
-            .Should().Be(dispatch.Dispatches[0].Envelope.Runtime?.Deduplication?.OperationId);
-        dispatch.Dispatches[0].Envelope.Runtime?.Deduplication?.OperationId
+        dispatch.Dispatches[1].Envelope.Runtime?.DeliveryIdentity?.OperationId
+            .Should().Be(dispatch.Dispatches[0].Envelope.Runtime?.DeliveryIdentity?.OperationId);
+        dispatch.Dispatches[0].Envelope.Runtime?.DeliveryIdentity?.OperationId
             .Should().NotBeNullOrWhiteSpace();
     }
 
@@ -108,6 +108,38 @@ public sealed class StudioTeamRosterFanoutMaterializerTests
             WrapCommitted(new StudioMemberCreatedEvent { MemberId = "m-1" }, version: 1, eventId: "evt-1"));
 
         dispatch.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldDispatchDeletedMemberRemovalToPreviousTeam()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var materializer = new StudioTeamRosterFanoutMaterializer(
+            bootstrap,
+            CreateCommandDispatch(dispatch));
+        var deletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-09T06:45:00Z"));
+
+        await materializer.ProjectAsync(
+            NewContext(),
+            WrapCommitted(new StudioMemberDeletedEvent
+            {
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                PreviousTeamId = "t-old",
+                PublishedServiceId = "member-m-1",
+                DeletedAtUtc = deletedAt,
+            }, version: 10, eventId: "evt-10"));
+
+        bootstrap.EnsuredActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-team:scope-1:t-old");
+        var payload = dispatch.Dispatches.Should().ContainSingle().Subject
+            .Envelope.Payload.Unpack<StudioMemberReassignedEvent>();
+        payload.MemberId.Should().Be("m-1");
+        payload.ScopeId.Should().Be("scope-1");
+        payload.FromTeamId.Should().Be("t-old");
+        payload.HasToTeamId.Should().BeFalse();
+        payload.ReassignedAtUtc.Should().Be(deletedAt);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
-import { Space, Tooltip, Typography, theme } from "antd";
+import { Space, Typography, theme } from "antd";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import {
   AevatarCompactText,
   aevatarMonoFontFamily,
@@ -48,7 +49,7 @@ export const SignalCard: React.FC<{
         {value}
       </Typography.Title>
       {typeof caption === "string" ? (
-        <Tooltip
+        <AevatarTooltip
           placement="topLeft"
           title={typeof captionTooltip === "string" ? captionTooltip : caption}
         >
@@ -64,7 +65,7 @@ export const SignalCard: React.FC<{
           >
             {caption}
           </Typography.Text>
-        </Tooltip>
+        </AevatarTooltip>
       ) : caption ? (
         <Typography.Text style={{ fontSize: 13 }} type="secondary">
           {caption}
@@ -111,7 +112,7 @@ export const FactLine: React.FC<{
   const normalized = text || "--";
 
   return (
-    <Tooltip placement="topLeft" title={tooltipText || normalized}>
+    <AevatarTooltip placement="topLeft" title={tooltipText || normalized}>
       <Typography.Text
         strong={!secondary}
         style={{
@@ -129,7 +130,7 @@ export const FactLine: React.FC<{
       >
         {normalized}
       </Typography.Text>
-    </Tooltip>
+    </AevatarTooltip>
   );
 };
 

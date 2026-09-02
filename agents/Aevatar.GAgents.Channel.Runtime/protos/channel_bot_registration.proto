@@ -5,6 +5,7 @@ package aevatar.gagents.channel.runtime;
 option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 
 import "google/protobuf/timestamp.proto";
+import "Credentials/credential_secret_references.proto";
 
 // ─── Persistent State ───
 
@@ -24,9 +25,28 @@ message ChannelBotRegistrationEntry {
   string nyx_channel_bot_id = 9;
   string nyx_agent_api_key_id = 10;
   string nyx_conversation_route_id = 11;
-  reserved 12;
-  reserved "credential_ref";
-  string nyx_reply_credential_ref = 13;
+  reserved 12, 13;
+  reserved "credential_ref", "nyx_reply_credential_ref";
+  // Last verified inbound observed by aevatar's relay for this bot. Set the first
+  // time the relay accepts an inbound; powers cross-account "active/pending" status
+  // when NyxID's owner-scoped channel-bot API can't be queried (admin all-view).
+  google.protobuf.Timestamp last_inbound_at_utc = 14;
+  // Typed vault handle for the workflow terminal-result delivery agent key
+  // (purpose channel.workflow-result-delivery-agent-key). The vault subject is
+  // nyx_agent_api_key_id. Absent when the registration was provisioned without
+  // capturing the NyxID full_key; such bots fail closed for wait=stream workflow
+  // background delivery until the owner completes in-place repair.
+  aevatar.credentials.SecretReference workflow_result_delivery_credential = 15;
+  // Ornn skill this bot's plain inbound text messages are routed to. When set,
+  // a non-command message is treated as an invocation of this skill with the
+  // full message text as its arguments (same deterministic pre-turn use_skill
+  // path as an explicit "/<skill> <text>" trigger). Empty = generic assistant
+  // turn (pre-binding behavior). Explicit triggers and local slash commands
+  // always take priority over this default.
+  string default_skill_name = 16;
+  // Actor-owned progress for in-place workflow result delivery repair. Raw
+  // NyxID key material never enters this state; only a typed vault handle may.
+  ChannelWorkflowResultDeliveryRepairState workflow_result_delivery_repair = 17;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -53,13 +73,165 @@ message ChannelBotRegisterCommand {
   string nyx_channel_bot_id = 6;
   string nyx_agent_api_key_id = 7;
   string nyx_conversation_route_id = 8;
-  reserved 9;
-  reserved "credential_ref";
-  string nyx_reply_credential_ref = 10;
+  reserved 9, 10;
+  reserved "credential_ref", "nyx_reply_credential_ref";
+  aevatar.credentials.SecretReference workflow_result_delivery_credential = 11;
+  // Optional inbound default-skill binding; see ChannelBotRegistrationEntry.default_skill_name.
+  string default_skill_name = 12;
 }
 
 message ChannelBotUnregisterCommand {
   string registration_id = 1;
+}
+
+enum ChannelWorkflowResultDeliveryCapabilityStatus {
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_UNSPECIFIED = 0;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_ENABLED = 1;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_REPAIR_REQUIRED = 2;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_REPAIRING = 3;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_REPAIR_FAILED = 4;
+}
+
+enum ChannelWorkflowResultDeliveryRepairStatus {
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_STATUS_UNSPECIFIED = 0;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_STATUS_REQUESTED = 1;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_STATUS_CREDENTIAL_PREPARED = 2;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_STATUS_FAILED = 3;
+}
+
+enum ChannelWorkflowResultDeliveryRepairPhase {
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_UNSPECIFIED = 0;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_REQUEST_ADMISSION = 1;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_ROTATED_KEY_RECOVERY = 2;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_API_KEY_ROTATION = 3;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_VAULT_STORAGE = 4;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_CREDENTIAL_PREPARATION = 5;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_ROUTE_REBINDING = 6;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_ACTOR_COMPLETION = 7;
+}
+
+enum ChannelWorkflowResultDeliveryRepairFailureReason {
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_UNSPECIFIED = 0;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_REGISTRATION_NOT_FOUND = 1;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_UNAUTHORIZED_OWNER = 2;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_UNSUPPORTED_PLATFORM = 3;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_ALREADY_ENABLED = 4;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_INVALID_REQUEST = 5;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_REQUEST_CONFLICT = 6;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_STALE_ACTIVE_KEY = 7;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_ROTATION_FAILED = 8;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_VAULT_STORAGE_FAILED = 9;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_ROUTE_UPDATE_FAILED = 10;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_COMPLETION_FAILED = 11;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_AMBIGUOUS_ROTATED_KEY_RECOVERY = 12;
+  CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_OBSERVATION_UNAVAILABLE = 13;
+}
+
+message ChannelWorkflowResultDeliveryRepairState {
+  string request_id = 1;
+  ChannelWorkflowResultDeliveryRepairStatus status = 2;
+  string expected_api_key_id = 3;
+  string expected_conversation_route_id = 4;
+  string rotated_api_key_id = 5;
+  aevatar.credentials.SecretReference prepared_secret_reference = 6;
+  ChannelWorkflowResultDeliveryRepairPhase failure_phase = 7;
+  ChannelWorkflowResultDeliveryRepairFailureReason failure_reason = 8;
+  string requested_by_subject_id = 9;
+  int64 requested_at_unix_ms = 10;
+  int64 updated_at_unix_ms = 11;
+}
+
+message ChannelBotWorkflowResultDeliveryRepairRequestCommand {
+  string registration_id = 1;
+  string request_id = 2;
+  string expected_api_key_id = 3;
+  string expected_conversation_route_id = 4;
+  string requested_by_subject_id = 5;
+  int64 requested_at_unix_ms = 6;
+}
+
+message ChannelBotWorkflowResultDeliveryRepairPrepareCommand {
+  string registration_id = 1;
+  string request_id = 2;
+  string expected_api_key_id = 3;
+  string rotated_api_key_id = 4;
+  aevatar.credentials.SecretReference prepared_secret_reference = 5;
+  int64 updated_at_unix_ms = 6;
+}
+
+message ChannelBotWorkflowResultDeliveryRepairCompleteCommand {
+  string registration_id = 1;
+  string request_id = 2;
+  string expected_api_key_id = 3;
+  string rotated_api_key_id = 4;
+  aevatar.credentials.SecretReference prepared_secret_reference = 5;
+  int64 updated_at_unix_ms = 6;
+}
+
+message ChannelBotWorkflowResultDeliveryRepairFailCommand {
+  string registration_id = 1;
+  string request_id = 2;
+  string expected_api_key_id = 3;
+  string rotated_api_key_id = 4;
+  aevatar.credentials.SecretReference prepared_secret_reference = 5;
+  ChannelWorkflowResultDeliveryRepairPhase failure_phase = 6;
+  ChannelWorkflowResultDeliveryRepairFailureReason failure_reason = 7;
+  int64 updated_at_unix_ms = 8;
+}
+
+message ChannelBotWorkflowResultDeliveryRepairRequestedEvent {
+  string registration_id = 1;
+  ChannelWorkflowResultDeliveryRepairState repair = 2;
+}
+
+message ChannelBotWorkflowResultDeliveryRepairPreparedEvent {
+  string registration_id = 1;
+  ChannelWorkflowResultDeliveryRepairState repair = 2;
+}
+
+message ChannelBotWorkflowResultDeliveryRepairCompletedEvent {
+  string registration_id = 1;
+  string request_id = 2;
+  string expected_api_key_id = 3;
+  string rotated_api_key_id = 4;
+  aevatar.credentials.SecretReference prepared_secret_reference = 5;
+  int64 completed_at_unix_ms = 6;
+}
+
+message ChannelBotWorkflowResultDeliveryRepairFailedEvent {
+  string registration_id = 1;
+  ChannelWorkflowResultDeliveryRepairState repair = 2;
+}
+
+message ChannelBotWorkflowResultDeliveryRepairRejectedEvent {
+  string registration_id = 1;
+  string request_id = 2;
+  ChannelWorkflowResultDeliveryRepairPhase phase = 3;
+  ChannelWorkflowResultDeliveryRepairFailureReason reason = 4;
+  int64 rejected_at_unix_ms = 5;
+}
+
+message ChannelBotWorkflowResultDeliveryRepairOutcome {
+  oneof outcome {
+    ChannelBotWorkflowResultDeliveryRepairRequestedEvent requested = 1;
+    ChannelBotWorkflowResultDeliveryRepairPreparedEvent prepared = 2;
+    ChannelBotWorkflowResultDeliveryRepairCompletedEvent completed = 3;
+    ChannelBotWorkflowResultDeliveryRepairFailedEvent failed = 4;
+    ChannelBotWorkflowResultDeliveryRepairRejectedEvent rejected = 5;
+  }
+}
+
+// Fire-and-forget signal from the relay: a verified inbound was accepted for this
+// registration. Stamps last_inbound_at_utc so the readmodel can report
+// active/pending status for bots whose live status NyxID won't serve cross-account.
+message ChannelBotRecordInboundCommand {
+  string registration_id = 1;
+  google.protobuf.Timestamp observed_at_utc = 2;
+}
+
+message ChannelBotInboundObservedEvent {
+  string registration_id = 1;
+  google.protobuf.Timestamp observed_at_utc = 2;
 }
 
 message ChannelBotCompactTombstonesCommand {
@@ -107,9 +279,16 @@ message ChannelBotRegistrationDocument {
   string nyx_channel_bot_id = 10;
   string nyx_agent_api_key_id = 11;
   string nyx_conversation_route_id = 12;
-  reserved 13;
-  reserved "credential_ref";
-  string nyx_reply_credential_ref = 14;
+  reserved 13, 14;
+  reserved "credential_ref", "nyx_reply_credential_ref";
+  // Mirrors ChannelBotRegistrationEntry.last_inbound_at_utc into the read model so
+  // the /channels status endpoint can report active/pending without a NyxID call.
+  google.protobuf.Timestamp last_inbound_at_utc = 15;
+  aevatar.credentials.SecretReference workflow_result_delivery_credential = 16;
+  // Mirrors ChannelBotRegistrationEntry.default_skill_name.
+  string default_skill_name = 17;
+  // Current actor-owned repair progress; copied without read-side inference.
+  ChannelWorkflowResultDeliveryRepairState workflow_result_delivery_repair = 18;
 }
 
 // ─── Relay / conversation normalization ───

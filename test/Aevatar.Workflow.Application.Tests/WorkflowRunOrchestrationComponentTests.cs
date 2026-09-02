@@ -4,7 +4,9 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using WorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
 
@@ -23,7 +25,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new FakeWorkflowRunActorPort(),
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")));
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto"), ExternalCapabilityExecutionMode.Interactive));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
@@ -41,7 +43,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new FakeWorkflowRunActorPort(),
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")));
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto"), ExternalCapabilityExecutionMode.Interactive));
 
         result.Succeeded.Should().BeTrue();
         result.Target.Should().NotBeNull();
@@ -63,6 +65,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var request = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.CatalogWorkflow("direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",
@@ -92,6 +95,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var request = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.CatalogWorkflow("direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",
@@ -118,6 +122,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var request = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.CatalogWorkflow("direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             CallerCredential: new WorkflowCallerCredential("Bearer token-123"),
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
@@ -144,6 +149,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var request = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.CatalogWorkflow("auto"),
+            ExternalCapabilityExecutionMode.Interactive,
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",
@@ -168,6 +174,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var request = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.DefinitionActor("actor-2", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",
@@ -191,7 +198,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt(actor.Id, string.Empty, ["definition-1", "actor-accepted"]), "direct", WorkflowChatRunStartError.None)),
             actorPort);
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")), CancellationToken.None);
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive), CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         result.Target.Should().NotBeNull();
@@ -210,7 +217,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             actorResolver,
             new FakeWorkflowRunActorPort());
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")));
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto"), ExternalCapabilityExecutionMode.Interactive));
 
         result.Succeeded.Should().BeTrue();
         actorResolver.ResolveCallCount.Should().Be(1);
@@ -225,7 +232,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             actorResolver,
             new FakeWorkflowRunActorPort());
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing")));
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing"), ExternalCapabilityExecutionMode.Interactive));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
@@ -246,6 +253,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new WorkflowChatRunRequest(
                 "hello",
                 WorkflowChatSource.CatalogWorkflow("auto"),
+                ExternalCapabilityExecutionMode.Interactive,
                 CallerCredential: new WorkflowCallerCredential("Bearer token-123")));
 
         result.Succeeded.Should().BeFalse();
@@ -360,7 +368,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             actorPort,
             new WorkflowRunDurableCompletionResolver(queryPort));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")), CancellationToken.None);
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive), CancellationToken.None);
         result.Target.Should().NotBeNull();
         result.Target!.BindLiveObservation(
             new FakeProjectionLease("actor-1", "cmd-1"),
@@ -372,6 +380,9 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"),
                 WorkflowProjectionCompletionStatus.Unknown),
             CancellationToken.None);
+        // 06-20-observatory-run-state-feed (R2): created-actor reclaim is scheduled detached; await it so the
+        // destroy is observed deterministically. (Resolver wired here without a gate → direct-destroy fallback.)
+        await result.Target.PendingReclaimTask;
 
         queryPort.ActorIds.Should().Equal("actor-1");
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
@@ -396,7 +407,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new Dictionary<string, string>());
 
         var result = await lifecycle.BindAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             CreateExecution(target, context),
             CancellationToken.None);
 
@@ -432,7 +443,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new Dictionary<string, string>());
 
         var result = await lifecycle.BindAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             CreateExecution(target, context),
             CancellationToken.None);
 
@@ -466,7 +477,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new Dictionary<string, string>());
 
         var act = () => lifecycle.BindAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             CreateExecution(target, context),
             CancellationToken.None);
 
@@ -603,6 +614,11 @@ public sealed class WorkflowRunOrchestrationComponentTests
             Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

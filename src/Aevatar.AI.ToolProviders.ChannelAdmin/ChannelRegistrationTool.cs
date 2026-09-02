@@ -9,7 +9,7 @@ namespace Aevatar.AI.ToolProviders.ChannelAdmin;
 /// <summary>
 /// Tool for NyxID chat to manage ChannelRuntime registrations.
 /// ChannelRuntime is no longer a channel credential authority; the supported
-/// production path is Lark registration provisioned through Nyx relay.
+/// production path is channel bot registration provisioned through Nyx relay.
 /// </summary>
 public sealed class ChannelRegistrationTool : IAgentTool
 {
@@ -21,27 +21,26 @@ public sealed class ChannelRegistrationTool : IAgentTool
     // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
     //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
     //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
-    private const string DefaultNyxProviderSlug = "api-lark-bot";
     private readonly IChannelBotRegistrationQueryPort _queryPort;
     private readonly ChannelRegistrationCommandFacade _commandFacade;
-    private readonly INyxLarkProvisioningService _provisioningService;
+    private readonly ChannelRelayRegistrationFacade _registrationFacade;
 
     public ChannelRegistrationTool(
         IChannelBotRegistrationQueryPort queryPort,
         ChannelRegistrationCommandFacade commandFacade,
-        INyxLarkProvisioningService provisioningService)
+        ChannelRelayRegistrationFacade registrationFacade)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
-        _provisioningService = provisioningService ?? throw new ArgumentNullException(nameof(provisioningService));
+        _registrationFacade = registrationFacade ?? throw new ArgumentNullException(nameof(registrationFacade));
     }
 
     public string Name => "channel_registrations";
 
     public string Description =>
-        "Manage Aevatar ChannelRuntime registrations for the supported Nyx-backed Lark relay flow. " +
-        "Actions: list, register_lark_via_nyx, delete. " +
-        "Use register_lark_via_nyx for provisioning. " +
+        "Manage Aevatar ChannelRuntime registrations for supported Nyx-backed channel relay flows. " +
+        "Actions: list, register_channel_via_nyx, delete. " +
+        "Use register_channel_via_nyx with platform=lark or platform=telegram for provisioning. " +
         "Legacy direct callback registration and update_token flows are retired because ChannelRuntime no longer stores channel credentials. " +
         "Do not ask the user for scope_id; it is resolved from the current NyxID request context and should only be supplied explicitly for diagnostics.";
 
@@ -51,12 +50,16 @@ public sealed class ChannelRegistrationTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "register_lark_via_nyx", "delete"],
+              "enum": ["list", "register_channel_via_nyx", "delete"],
               "description": "Action to perform (default: list)."
+            },
+            "platform": {
+              "type": "string",
+              "description": "Channel platform to provision for register_channel_via_nyx, for example lark or telegram."
             },
             "nyx_provider_slug": {
               "type": "string",
-              "description": "NyxID bot service slug (optional for register_lark_via_nyx; defaults to api-lark-bot)"
+              "description": "NyxID bot service slug (optional for register_channel_via_nyx; defaults to api-{platform}-bot)"
             },
             "scope_id": {
               "type": "string",
@@ -64,23 +67,37 @@ public sealed class ChannelRegistrationTool : IAgentTool
             },
             "webhook_base_url": {
               "type": "string",
-              "description": "Base URL for Nyx relay callbacks, e.g. 'https://aevatar-console-backend-api.aevatar.ai' (required for register_lark_via_nyx)"
+              "description": "Base URL for Nyx relay callbacks, e.g. 'https://aevatar-console-backend-api.aevatar.ai' (required for register_channel_via_nyx)"
             },
-            "app_id": {
-              "type": "string",
-              "description": "Lark app ID (required for register_lark_via_nyx)"
+            "credentials": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Platform credential map for register_channel_via_nyx. Lark requires app_id, app_secret, and verification_token, and accepts optional encrypt_key. Telegram accepts bot_token."
             },
-            "app_secret": {
-              "type": "string",
-              "description": "Lark app secret (required for register_lark_via_nyx)"
+            "lark": {
+              "type": "object",
+              "description": "Lark-scoped credentials for register_channel_via_nyx when platform is lark.",
+              "properties": {
+                "app_id": { "type": "string" },
+                "app_secret": { "type": "string" },
+                "verification_token": { "type": "string" },
+                "encrypt_key": { "type": "string" }
+              }
             },
-            "verification_token": {
-              "type": "string",
-              "description": "Lark verification token (optional for register_lark_via_nyx, but pass it through when the backend requires it)"
+            "telegram": {
+              "type": "object",
+              "description": "Telegram-scoped credentials for register_channel_via_nyx when platform is telegram.",
+              "properties": {
+                "bot_token": { "type": "string" }
+              }
             },
             "label": {
               "type": "string",
               "description": "Human-readable label for the Nyx channel bot (optional)"
+            },
+            "default_skill_name": {
+              "type": "string",
+              "description": "Optional Ornn skill to bind this bot's plain inbound messages to. When set, every non-command message deterministically runs this skill with the message text as its arguments. Explicit /<skill> triggers and local slash commands still take priority."
             },
             "registration_id": {
               "type": "string",
@@ -107,9 +124,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
         return action switch
         {
             "list" => await ListAsync(_queryPort, ct),
-            "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(token, root, ct),
+            "register_channel_via_nyx" => await RegisterChannelViaNyxAsync(token, root, ct),
             "delete" => await DeleteAsync(_queryPort, _commandFacade, root, ct),
-            "register" => RetiredActionError("Direct callback registration is retired. Use action=register_lark_via_nyx."),
+            "register" => RetiredActionError("Direct callback registration is retired. Use action=register_channel_via_nyx."),
+            "register_lark_via_nyx" => RetiredActionError("register_lark_via_nyx is retired. Use action=register_channel_via_nyx with platform=lark."),
             "update_token" => RetiredActionError("update_token is retired. ChannelRuntime no longer stores or refreshes channel credentials."),
             _ => SerializeError($"Unsupported channel registration action '{action}'."),
         };
@@ -120,10 +138,18 @@ public sealed class ChannelRegistrationTool : IAgentTool
             ? value.GetString()
             : null;
 
-    private static string ResolveNyxProviderSlug(JsonElement args)
+    private static string? GetNestedStr(JsonElement element, string objectName, string propertyName)
     {
-        var slug = GetStr(args, "nyx_provider_slug")?.Trim();
-        return string.IsNullOrWhiteSpace(slug) ? DefaultNyxProviderSlug : slug;
+        if (!element.TryGetProperty(objectName, out var nested) || nested.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return GetStr(nested, propertyName);
+    }
+
+    private static string ResolveNyxProviderSlug(JsonElement args, string platform)
+    {
+        var slug = NormalizeOptional(GetStr(args, "nyx_provider_slug"));
+        return slug ?? $"api-{platform}-bot";
     }
 
     private static ToolScopeResolution ResolveToolScopeId(JsonElement args, bool required)
@@ -162,8 +188,9 @@ public sealed class ChannelRegistrationTool : IAgentTool
             error = message,
         });
 
-    private static string SerializeLarkRegistrationPayload(
+    private static string SerializeRegistrationPayload(
         string status,
+        string platform,
         string registrationId,
         string nyxProviderSlug,
         string nyxChannelBotId,
@@ -177,7 +204,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         {
             status,
             registration_id = registrationId,
-            platform = "lark",
+            platform,
             nyx_provider_slug = nyxProviderSlug,
             nyx_channel_bot_id = nyxChannelBotId,
             nyx_agent_api_key_id = nyxAgentApiKeyId,
@@ -203,6 +230,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             nyx_channel_bot_id = entry.NyxChannelBotId,
             nyx_agent_api_key_id = entry.NyxAgentApiKeyId,
             nyx_conversation_route_id = entry.NyxConversationRouteId,
+            default_skill_name = entry.DefaultSkillName,
         }).ToList();
 
         return JsonSerializer.Serialize(
@@ -210,7 +238,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
     }
 
-    private async Task<string> RegisterLarkViaNyxAsync(
+    private async Task<string> RegisterChannelViaNyxAsync(
         string accessToken,
         JsonElement args,
         CancellationToken ct)
@@ -219,22 +247,34 @@ public sealed class ChannelRegistrationTool : IAgentTool
         if (scopeResolution.Error is not null)
             return SerializeError(scopeResolution.Error);
 
-        var result = await _provisioningService.ProvisionAsync(
-            new NyxLarkProvisioningRequest(
+        var platform = NormalizeOptional(GetStr(args, "platform"));
+        if (platform is null)
+            return SerializeError("platform is required for register_channel_via_nyx");
+        platform = platform.ToLowerInvariant();
+
+        var credentials = BuildCredentialsMap(args, platform);
+        var result = await _registrationFacade.RegisterAsync(
+            new ChannelRelayRegistrationRequest(
+                Platform: platform,
                 AccessToken: accessToken,
-                AppId: GetStr(args, "app_id")?.Trim() ?? string.Empty,
-                AppSecret: GetStr(args, "app_secret")?.Trim() ?? string.Empty,
-                VerificationToken: GetStr(args, "verification_token")?.Trim() ?? string.Empty,
                 WebhookBaseUrl: GetStr(args, "webhook_base_url")?.Trim() ?? string.Empty,
                 ScopeId: scopeResolution.ScopeId!,
                 Label: GetStr(args, "label")?.Trim() ?? string.Empty,
-                NyxProviderSlug: GetStr(args, "nyx_provider_slug")?.Trim() ?? string.Empty),
+                NyxProviderSlug: GetStr(args, "nyx_provider_slug")?.Trim() ?? string.Empty,
+                Lark: new NyxChannelLarkCredentials(
+                    AppId: ResolveCredential(args, credentials, platform, "app_id"),
+                    AppSecret: ResolveCredential(args, credentials, platform, "app_secret"),
+                    VerificationToken: ResolveCredential(args, credentials, platform, "verification_token"),
+                    EncryptKey: ResolveCredential(args, credentials, platform, "encrypt_key")),
+                Credentials: credentials,
+                DefaultSkillName: GetStr(args, "default_skill_name")?.Trim() ?? string.Empty),
             ct);
 
-        return SerializeLarkRegistrationPayload(
+        return SerializeRegistrationPayload(
             status: result.Status,
+            platform: result.Platform,
             registrationId: result.RegistrationId ?? string.Empty,
-            nyxProviderSlug: ResolveNyxProviderSlug(args),
+            nyxProviderSlug: ResolveNyxProviderSlug(args, result.Platform),
             nyxChannelBotId: result.NyxChannelBotId ?? string.Empty,
             nyxAgentApiKeyId: result.NyxAgentApiKeyId ?? string.Empty,
             nyxConversationRouteId: result.NyxConversationRouteId ?? string.Empty,
@@ -242,6 +282,85 @@ public sealed class ChannelRegistrationTool : IAgentTool
             webhookUrl: result.WebhookUrl ?? string.Empty,
             error: result.Error ?? string.Empty,
             note: result.Note ?? string.Empty);
+    }
+
+    private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(JsonElement args, string platform)
+    {
+        var credentials = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (args.TryGetProperty("credentials", out var credentialsElement) &&
+            credentialsElement.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in credentialsElement.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.String)
+                {
+                    var value = NormalizeOptional(property.Value.GetString());
+                    if (value is not null)
+                        credentials[property.Name] = value;
+                }
+            }
+        }
+
+        if (args.TryGetProperty(platform, out var platformElement) &&
+            platformElement.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in platformElement.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.String &&
+                    !credentials.ContainsKey(property.Name))
+                {
+                    var value = NormalizeOptional(property.Value.GetString());
+                    if (value is not null)
+                        credentials[property.Name] = value;
+                }
+            }
+        }
+
+        // Compatibility input for callers that only changed the action name. These fields are not
+        // exposed in the schema because the public contract is platform-scoped credentials.
+        if (string.Equals(platform, "lark", StringComparison.Ordinal))
+        {
+            AddTopLevelCredentialIfMissing(args, credentials, "app_id");
+            AddTopLevelCredentialIfMissing(args, credentials, "app_secret");
+            AddTopLevelCredentialIfMissing(args, credentials, "verification_token");
+            AddTopLevelCredentialIfMissing(args, credentials, "encrypt_key");
+        }
+        else if (string.Equals(platform, "telegram", StringComparison.Ordinal))
+        {
+            AddTopLevelCredentialIfMissing(args, credentials, "bot_token");
+        }
+
+        return credentials.Count == 0 ? null : credentials;
+    }
+
+    private static void AddTopLevelCredentialIfMissing(
+        JsonElement args,
+        Dictionary<string, string> credentials,
+        string key)
+    {
+        if (credentials.ContainsKey(key))
+            return;
+
+        var value = NormalizeOptional(GetStr(args, key));
+        if (value is not null)
+            credentials[key] = value;
+    }
+
+    private static string ResolveCredential(
+        JsonElement args,
+        IReadOnlyDictionary<string, string>? credentials,
+        string platform,
+        string key)
+    {
+        if (credentials is not null &&
+            credentials.TryGetValue(key, out var fromCredentials) &&
+            !string.IsNullOrWhiteSpace(fromCredentials))
+        {
+            return fromCredentials.Trim();
+        }
+
+        return GetNestedStr(args, platform, key)?.Trim() ?? string.Empty;
     }
 
     private async Task<string> DeleteAsync(

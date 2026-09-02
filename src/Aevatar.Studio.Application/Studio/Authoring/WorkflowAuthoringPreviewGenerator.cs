@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Models;
 
 namespace Aevatar.Studio.Application.Studio.Authoring;
@@ -15,7 +16,7 @@ internal sealed class WorkflowAuthoringPreviewGenerator
     private static readonly Regex YamlFenceRegex = new(
         @"```(?:ya?ml)?\s*\n([\s\S]*?)```",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly string[] AuthoringSchemaRules =
+    private static readonly string[] BaseAuthoringSchemaRules =
     [
         "Use canonical step types only. For a simple assistant/chat workflow, the step type must be llm_call (not llm, chat, or task).",
         "Use only these step-level fields: id, type, target_role (or role), parameters, next, branches, children, retry, on_error, timeout_ms.",
@@ -26,10 +27,14 @@ internal sealed class WorkflowAuthoringPreviewGenerator
     ];
 
     private readonly WorkflowEditorService _editorService;
+    private readonly WorkflowCompatibilityProfile _profile;
 
-    public WorkflowAuthoringPreviewGenerator(WorkflowEditorService editorService)
+    public WorkflowAuthoringPreviewGenerator(
+        WorkflowEditorService editorService,
+        WorkflowCompatibilityProfile? profile = null)
     {
         _editorService = editorService;
+        _profile = profile ?? WorkflowCompatibilityProfile.AevatarV1;
     }
 
     public async Task<WorkflowGenerateResult> GenerateAsync(
@@ -193,7 +198,7 @@ internal sealed class WorkflowAuthoringPreviewGenerator
     private static bool HasErrors(IReadOnlyList<ValidationFinding> findings) =>
         findings.Any(static finding => finding.Level == ValidationLevel.Error);
 
-    private static string BuildInitialPrompt(string request, string currentYaml)
+    private string BuildInitialPrompt(string request, string currentYaml)
     {
         var parts = new List<string>
         {
@@ -219,7 +224,7 @@ internal sealed class WorkflowAuthoringPreviewGenerator
         return string.Join("\n\n", parts);
     }
 
-    private static string BuildRepairPrompt(
+    private string BuildRepairPrompt(
         string request,
         string currentYaml,
         string previousCandidate,
@@ -265,7 +270,7 @@ internal sealed class WorkflowAuthoringPreviewGenerator
 
         builder.AppendLine();
         builder.AppendLine("Workflow authoring constraints:");
-        foreach (var rule in AuthoringSchemaRules)
+        foreach (var rule in BuildAuthoringSchemaRules())
         {
             builder.Append("- ");
             builder.AppendLine(rule);
@@ -276,17 +281,26 @@ internal sealed class WorkflowAuthoringPreviewGenerator
         return builder.ToString().Trim();
     }
 
-    private static string BuildAuthoringSchemaHintBlock()
+    private string BuildAuthoringSchemaHintBlock()
     {
         var builder = new StringBuilder();
         builder.AppendLine("Workflow authoring constraints:");
-        foreach (var rule in AuthoringSchemaRules)
+        foreach (var rule in BuildAuthoringSchemaRules())
         {
             builder.Append("- ");
             builder.AppendLine(rule);
         }
 
         return builder.ToString().Trim();
+    }
+
+    private IEnumerable<string> BuildAuthoringSchemaRules()
+    {
+        yield return $"Use only these top-level fields: {_profile.FormatRootFields()}.";
+        yield return $"Do not emit top-level fields from other workflow dialects, including {_profile.FormatRejectedDialectRootFields()}.";
+
+        foreach (var rule in BaseAuthoringSchemaRules)
+            yield return rule;
     }
 
     private static string BuildFailureMessage(IReadOnlyList<ValidationFinding> findings)
@@ -318,14 +332,18 @@ internal sealed class WorkflowAuthoringPreviewGenerator
     private static bool IsSanitizableParseFinding(ValidationFinding finding)
     {
         if (string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase))
-            return true;
+            return !IsRootFieldPath(finding.Path);
 
         if (!string.Equals(finding.Code, "runtime_validation", StringComparison.OrdinalIgnoreCase))
             return false;
 
         var message = finding.Message ?? string.Empty;
-        return message.Contains("Unknown field '", StringComparison.OrdinalIgnoreCase) ||
-               (message.Contains("Property '", StringComparison.OrdinalIgnoreCase) &&
-                message.Contains("not found on type", StringComparison.OrdinalIgnoreCase));
+        return !IsRootFieldPath(finding.Path) &&
+               (message.Contains("Unknown field '", StringComparison.OrdinalIgnoreCase) ||
+                (message.Contains("Property '", StringComparison.OrdinalIgnoreCase) &&
+                 message.Contains("not found on type", StringComparison.OrdinalIgnoreCase)));
     }
+
+    private static bool IsRootFieldPath(string path) =>
+        path.StartsWith("/", StringComparison.Ordinal) && path.IndexOf("/", 1, StringComparison.Ordinal) < 0;
 }

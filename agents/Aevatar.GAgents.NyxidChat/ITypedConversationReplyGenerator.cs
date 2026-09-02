@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 
@@ -37,7 +38,8 @@ internal interface IAgentRunStepConversationReplyGenerator : ITypedConversationR
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
-        CancellationToken ct);
+        CancellationToken ct,
+        AgentProfileTurnCatalog? turnCatalog = null);
 
     MessageContent? TryTakeOutboundIntent() => null;
 }

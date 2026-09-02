@@ -106,6 +106,8 @@ message ScriptDefinitionState {
 message ScriptBehaviorState {
   reserved 4;
   reserved "source_text";
+  reserved 20, 21;
+  reserved "last_run_outcome", "last_run_outcome_notification_dispatched";
   string definition_actor_id = 1;
   string script_id = 2;
   string revision = 3;
@@ -124,7 +126,7 @@ message ScriptBehaviorState {
   string read_model_descriptor_full_name = 17;
   ScriptRuntimeSemanticsSpec runtime_semantics = 18;
   string scope_id = 19;
-  ScriptRunOutcomeRecordedEvent last_run_outcome = 20;
+  map<string, ScriptRunOutcomeDeliveryState> run_outcomes = 22;
 }
 
 message ScriptCatalogEntryState {
@@ -272,6 +274,9 @@ message RunScriptRequestedEvent {
   string command_id = 6;
   string correlation_id = 7;
   string scope_id = 8;
+  string completion_notification_actor_id = 9;
+  string completion_notification_delivery_id = 10;
+  int64 completion_notification_expires_at_unix_ms = 11;
 }
 
 enum ScriptRunOutcomeStatus {
@@ -295,6 +300,57 @@ message ScriptRunOutcomeRecordedEvent {
   int32 committed_fact_count = 12;
   int64 state_version = 13;
   int64 occurred_at_unix_time_ms = 14;
+  string completion_notification_actor_id = 15;
+  string delivery_id = 16;
+  int64 expires_at_unix_time_ms = 17;
+}
+
+enum ScriptRunOutcomeDeliveryStatus {
+  SCRIPT_RUN_OUTCOME_DELIVERY_STATUS_UNSPECIFIED = 0;
+  SCRIPT_RUN_OUTCOME_DELIVERY_STATUS_PREPARED = 1;
+  SCRIPT_RUN_OUTCOME_DELIVERY_STATUS_RETRY_SCHEDULED = 2;
+  SCRIPT_RUN_OUTCOME_DELIVERY_STATUS_DISPATCHED = 3;
+  SCRIPT_RUN_OUTCOME_DELIVERY_STATUS_EXPIRED = 4;
+}
+
+message ScriptRunOutcomeDeliveryState {
+  ScriptRunOutcomeRecordedEvent outcome = 1;
+  string delivery_id = 2;
+  int64 expires_at_unix_time_ms = 3;
+  ScriptRunOutcomeDeliveryStatus status = 4;
+  int32 attempt = 5;
+  string retry_callback_id = 6;
+  int64 retry_at_unix_time_ms = 7;
+}
+
+message ScriptRunOutcomeNotificationRetryScheduledEvent {
+  string script_run_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  string retry_callback_id = 4;
+  int64 retry_at_unix_time_ms = 5;
+}
+
+message ScriptRunOutcomeNotificationRetryFiredEvent {
+  string script_run_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+}
+
+message ScriptRunOutcomeNotificationDispatchedEvent {
+  string script_run_id = 1;
+  string command_id = 2;
+  string completion_notification_actor_id = 3;
+  int64 dispatched_at_unix_time_ms = 4;
+  string delivery_id = 5;
+  int32 attempt = 6;
+}
+
+message ScriptRunOutcomeNotificationExpiredEvent {
+  string script_run_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  int64 expired_at_unix_time_ms = 4;
 }
 
 message BindScriptBehaviorRequestedEvent {

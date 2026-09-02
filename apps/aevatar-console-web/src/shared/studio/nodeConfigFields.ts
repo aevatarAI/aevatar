@@ -19,6 +19,7 @@ export {
   getStudioNodeConfigurationSchema,
   hasStudioNodeConfigurationSchema,
   readStudioNodeConfigurationValues,
+  shouldShowRawStudioNodeConfiguration,
 } from './nodeConfigFieldSchemas';
 export type {
   NodeConfigField as StudioStructuredNodeConfigField,

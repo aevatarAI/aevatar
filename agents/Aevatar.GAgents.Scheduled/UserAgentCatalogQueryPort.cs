@@ -28,13 +28,16 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
 {
     private readonly IProjectionDocumentReader<UserAgentCatalogDocument, string> _documentReader;
+    private readonly IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string> _revocationDocumentReader;
     private readonly ILogger<UserAgentCatalogQueryPort>? _logger;
 
     public UserAgentCatalogQueryPort(
         IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader,
+        IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string> revocationDocumentReader,
         ILogger<UserAgentCatalogQueryPort>? logger = null)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _revocationDocumentReader = revocationDocumentReader ?? throw new ArgumentNullException(nameof(revocationDocumentReader));
         _logger = logger;
     }
 
@@ -197,6 +200,52 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         return byAgentId.Values.ToArray();
     }
 
+    public async Task<IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry>> QueryPendingApiKeyRevocationsByCallerAsync(
+        OwnerScope caller,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+
+        var documentsByIdentity = new Dictionary<RevocationDocumentIdentity, UserAgentApiKeyRevocationDocument>();
+        string? cursor = null;
+        do
+        {
+            var query = new ProjectionDocumentQuery
+            {
+                Take = 200,
+                Filters = BuildOwnerScopeFilters(caller),
+                Cursor = cursor,
+            };
+
+            var page = await _revocationDocumentReader.QueryAsync(query, ct);
+            foreach (var document in page.Items)
+            {
+                if (string.IsNullOrWhiteSpace(document.AgentId) ||
+                    string.IsNullOrWhiteSpace(document.ApiKeyId) ||
+                    !RevocationDocumentMatchesCaller(document, caller))
+                {
+                    continue;
+                }
+
+                var identity = RevocationDocumentIdentity.From(document);
+                if (documentsByIdentity.TryGetValue(identity, out var existingDocument))
+                {
+                    if (ShouldReplaceRevocationDocument(existingDocument, document))
+                        documentsByIdentity[identity] = document;
+                    continue;
+                }
+
+                if (documentsByIdentity.Count < MaxCallerCatalogEntries)
+                    documentsByIdentity.Add(identity, document);
+            }
+
+            cursor = page.NextCursor;
+        }
+        while (!string.IsNullOrEmpty(cursor));
+
+        return documentsByIdentity.Values.Select(ToRevocationEntry).ToArray();
+    }
+
     public async Task<long?> GetStateVersionForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(agentId)) return null;
@@ -351,6 +400,9 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         return caller.MatchesStrictly(documentScope);
     }
 
+    private static bool RevocationDocumentMatchesCaller(UserAgentApiKeyRevocationDocument document, OwnerScope caller) =>
+        caller.MatchesStrictly(document.OwnerScope);
+
     /// <summary>
     /// Project a stored document onto the public DTO. Issue #466 §A: the public surface
     /// carries OwnerScope as the single source of truth; the deprecated scattered fields
@@ -380,10 +432,17 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             CreatedAt = document.CreatedAtUtc,
             UpdatedAt = document.UpdatedAtUtc,
             Tombstoned = document.Tombstoned,
-            LarkReceiveId = document.LarkReceiveId ?? string.Empty,
-            LarkReceiveIdType = document.LarkReceiveIdType ?? string.Empty,
-            LarkReceiveIdFallback = document.LarkReceiveIdFallback ?? string.Empty,
-            LarkReceiveIdTypeFallback = document.LarkReceiveIdTypeFallback ?? string.Empty,
+#pragma warning disable CS0612 // deprecated document fields are read only as a channel_address compatibility bridge
+            ChannelAddress = UserAgentCatalogChannelAddress.ToModel(
+                document.ChannelAddress,
+                document.TargetPlatform,
+                document.NyxProviderSlug,
+                document.ConversationId,
+                document.LarkReceiveId,
+                document.LarkReceiveIdType,
+                document.LarkReceiveIdFallback,
+                document.LarkReceiveIdTypeFallback),
+#pragma warning restore CS0612
             OutputFormat = document.OutputFormat,
             OwnerScope = documentScope,
             SharingGrant = document.SharingGrant?.Clone(),
@@ -392,4 +451,54 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             CatalogLastEventId = document.LastEventId ?? string.Empty,
         };
     }
+
+    private static UserAgentApiKeyRevocationReadModelEntry ToRevocationEntry(UserAgentApiKeyRevocationDocument document) =>
+        new()
+        {
+            AgentId = document.AgentId ?? string.Empty,
+            ApiKeyId = document.ApiKeyId ?? string.Empty,
+            OwnerScope = document.OwnerScope?.Clone(),
+            NyxApiKeyReference = document.NyxApiKeyReference?.Clone(),
+            RequestedAt = document.RequestedAtUtc?.Clone(),
+            AttemptCount = document.AttemptCount,
+            LastAttemptAt = document.LastAttemptAtUtc?.Clone(),
+            LastHttpStatus = document.LastHttpStatus,
+            LastError = document.LastError ?? string.Empty,
+            FailureKind = document.FailureKind,
+            NyxIdTrack = document.NyxIdTrack?.Clone(),
+            VaultTrack = document.VaultTrack?.Clone(),
+            VaultRevocationDescriptor = document.VaultRevocationDescriptor?.Clone(),
+            SecretSubjectId = document.SecretSubjectId ?? string.Empty,
+            RepairReason = document.RepairReason ?? string.Empty,
+            RequestedBySubjectId = document.RequestedBySubjectId ?? string.Empty,
+            RepairRequestedAtUnixMs = document.RepairRequestedAtUnixMs,
+            CatalogAuthorityStateVersion = document.StateVersion,
+            CatalogLastEventId = document.LastEventId ?? string.Empty,
+        };
+
+    private static bool ShouldReplaceRevocationDocument(
+        UserAgentApiKeyRevocationDocument existing,
+        UserAgentApiKeyRevocationDocument candidate)
+    {
+        if (candidate.StateVersion != existing.StateVersion)
+            return candidate.StateVersion > existing.StateVersion;
+
+        return IsCanonicalRevocationDocument(candidate) && !IsCanonicalRevocationDocument(existing);
+    }
+
+    private static bool IsCanonicalRevocationDocument(UserAgentApiKeyRevocationDocument document) =>
+        document.Id.StartsWith("scr1_", StringComparison.Ordinal);
+
+    private readonly record struct RevocationDocumentIdentity(
+        string AgentId,
+        string ApiKeyId,
+        string SecretReference)
+    {
+        public static RevocationDocumentIdentity From(UserAgentApiKeyRevocationDocument document) =>
+            new(
+                document.AgentId.Trim(),
+                document.ApiKeyId.Trim(),
+                ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(document));
+    }
+
 }

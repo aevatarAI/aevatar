@@ -17,8 +17,11 @@ internal sealed class WorkflowRunCommandTarget
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
     private readonly WorkflowRunDurableCompletionResolver _durableCompletionResolver;
+    private readonly WorkflowRunMaterializationReclaimGate? _reclaimGate;
+    private readonly Func<Func<Task>, Task> _detachedReclaimLauncher;
     private readonly bool _destroyCreatedActorsOnDispatchFailure;
     private bool _createdActorsDestroyed;
+    private Task _pendingReclaim = Task.CompletedTask;
 
     public WorkflowRunCommandTarget(
         string actorId,
@@ -27,7 +30,9 @@ internal sealed class WorkflowRunCommandTarget
         IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowRunProvisioningPort runProvisioningPort,
         WorkflowRunDurableCompletionResolver durableCompletionResolver,
-        bool destroyCreatedActorsOnDispatchFailure = true)
+        bool destroyCreatedActorsOnDispatchFailure = true,
+        WorkflowRunMaterializationReclaimGate? reclaimGate = null,
+        Func<Func<Task>, Task>? detachedReclaimLauncher = null)
     {
         // Refactor (iter18/cluster-005):
         //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
@@ -43,6 +48,14 @@ internal sealed class WorkflowRunCommandTarget
         _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
         _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
         _destroyCreatedActorsOnDispatchFailure = destroyCreatedActorsOnDispatchFailure;
+        // 06-20-observatory-run-state-feed (R2): reclaim throwaway ad-hoc run actors only after their
+        // current-state doc is confirmed materialized. The gate is absent for seeded/non-ephemeral targets.
+        _reclaimGate = reclaimGate;
+        // The reclaim wait runs detached so the in-request interaction (and thus SSE latency) is unaffected:
+        // the launcher returns the reclaim task, but the caller never awaits it. Production runs it on the
+        // thread pool; tests can await PendingReclaimTask (or inject an inline launcher) for determinism.
+        _detachedReclaimLauncher = detachedReclaimLauncher
+            ?? (reclaim => Task.Run(reclaim));
     }
 
     public string ActorId { get; }
@@ -279,15 +292,47 @@ internal sealed class WorkflowRunCommandTarget
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentNullException.ThrowIfNull(cleanup);
 
-        var destroyCreatedActors = cleanup.ObservedCompleted || cleanup.DurableCompletion.HasTerminalCompletion;
-        if (destroyCreatedActors)
+        // 06-20-observatory-run-state-feed (R2): the in-request cleanup releases only the session
+        // projection lease + live sink (never destroys), so SSE latency is unaffected. The throwaway
+        // ad-hoc run/definition actors are reclaimed separately, gated on confirmed materialization, so
+        // their current-state doc is not dropped before the durable projection scope materializes it.
+        await ReleaseAsync(destroyCreatedActors: false, ct: ct);
+
+        var runReachedTerminal = cleanup.ObservedCompleted || cleanup.DurableCompletion.HasTerminalCompletion;
+        if (runReachedTerminal)
+            ScheduleMaterializationGatedReclaim();
+    }
+
+    private void ScheduleMaterializationGatedReclaim()
+    {
+        // No gate (seeded/non-ephemeral target) → fall back to the original behavior: destroy the created
+        // actors directly. Such targets are not the throwaway-per-call ad-hoc runs this gate protects.
+        if (_reclaimGate == null)
         {
-            await ReleaseAsync(destroyCreatedActors: true, ct: ct);
+            if (CreatedActorIds.Count > 0)
+                _pendingReclaim = _detachedReclaimLauncher(() => DestroyCreatedActorsAsync(CancellationToken.None));
             return;
         }
 
-        await ReleaseAsync(destroyCreatedActors: false, ct: ct);
+        if (_createdActorsDestroyed || CreatedActorIds.Count == 0)
+            return;
+
+        _pendingReclaim = _detachedReclaimLauncher(ReclaimCreatedActorsWhenMaterializedAsync);
     }
+
+    // 06-20-observatory-run-state-feed (R2): the reclaim wait uses CancellationToken.None (a teardown
+    // lifetime, NOT the request/interaction token) so request cancellation does not abort it before the
+    // materialization gate confirms. Only after confirmation are the throwaway actors destroyed; on a
+    // deferral (timeout / scope absent / unknown head version) the actors are intentionally left persisted.
+    private async Task ReclaimCreatedActorsWhenMaterializedAsync()
+    {
+        var materialized = await _reclaimGate!.TryConfirmMaterializedAsync(ActorId, CancellationToken.None);
+        if (materialized)
+            await DestroyCreatedActorsAsync(CancellationToken.None);
+    }
+
+    // Test seam: production schedules the reclaim fire-and-forget; tests await its completion deterministically.
+    internal Task PendingReclaimTask => _pendingReclaim;
 
     private async Task PublishDetachedCommandSignalCoreAsync(
         DetachedCommandSignal<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> signal,

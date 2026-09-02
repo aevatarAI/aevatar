@@ -5,6 +5,9 @@ option csharp_namespace = "Aevatar.Workflow.Core";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "workflow_execution_messages.proto";
+import "workflow_capability_admission.proto";
+import "workflow_external_action.proto";
+import "Credentials/credential_secret_references.proto";
 
 message WorkflowState
 {
@@ -35,6 +38,7 @@ message WorkflowState
     map<string, string> inline_workflow_yamls = 14;
     string root_run_id = 15;
     int32 depth = 16;
+    repeated WorkflowFileRef input_file_refs = 17;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -51,6 +55,7 @@ message WorkflowState
     int32 timeout_ms = 10;
     string root_run_id = 11;
     int32 requested_depth = 12;
+    repeated WorkflowFileRef input_file_refs = 13;
   }
 
   message ChildRunIdSet
@@ -76,6 +81,11 @@ message WorkflowState
   string source_kind = 15;
   int32 max_sub_workflow_depth = 16;
   int32 max_active_sub_workflows = 17;
+  WorkflowAuthorizationDependencies authorization_dependencies = 18;
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 19;
+  string workflow_id = 20;
+  string revision_id = 21;
+  ExternalCapabilityExecutionMode expected_execution_mode = 22;
 }
 
 message WorkflowRunState
@@ -107,6 +117,7 @@ message WorkflowRunState
     map<string, string> inline_workflow_yamls = 14;
     string root_run_id = 15;
     int32 depth = 16;
+    repeated WorkflowFileRef input_file_refs = 17;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -123,6 +134,7 @@ message WorkflowRunState
     int32 timeout_ms = 10;
     string root_run_id = 11;
     int32 requested_depth = 12;
+    repeated WorkflowFileRef input_file_refs = 13;
   }
 
   message ChildRunIdSet
@@ -164,6 +176,22 @@ message WorkflowRunState
   string dead_letter_error = 31;
   string compensation_origin_failed_step_id = 32;
   bool terminal_workflow_completion_recorded = 33;
+  google.protobuf.Timestamp started_at_utc = 34;
+  // Canonical run origin/type stamped at bind by the creating ingress. Observatory filter
+  // dimension; empty for legacy/unstamped runs. See WorkflowRunOrigins for the canonical set.
+  string run_origin = 35;
+  // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
+  // non-scheduled runs. Observatory filter dimension for "this schedule's runs".
+  string schedule_id = 36;
+  WorkflowCompletionNotificationTarget completion_notification_target = 37;
+  string workflow_correlation_id = 38;
+  WorkflowRunTerminalNotification pending_terminal_notification = 39;
+  int32 terminal_notification_attempt = 40;
+  WorkflowRunTerminalNotificationDeliveryStatus terminal_notification_delivery_status = 41;
+  string terminal_notification_retry_callback_id = 42;
+  // Committed call-site admission proof owned by this Run for its whole lifetime.
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 43;
+  ExternalCapabilityExecutionMode expected_execution_mode = 44;
 }
 
 message WorkflowRunExecutionContextState
@@ -188,6 +216,12 @@ message WorkflowLlmExecutionContextState
 message WorkflowCallerCredentialState
 {
   string bearer_token = 1;
+  aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
+  aevatar.credentials.DurableCallerCredentialRef durable_caller_credential = 3;
+  WorkflowCallerNyxIdAuthority nyx_id_authority = 4;
+  NyxIdCallerCredentialKind kind = 5;
+  string source_readable_user_bearer_token = 6;
+  aevatar.credentials.RuntimeSecretReference source_readable_user_bearer_runtime_secret_reference = 7;
 }
 
 message WorkflowToolRuntimeContextState
@@ -402,6 +436,7 @@ message CapturedSecureInputState
   string run_id = 1;
   string variable_name = 2;
   string value = 3;
+  aevatar.credentials.RuntimeSecretReference value_reference = 4;
 }
 
 message SecureInputModuleState
@@ -422,6 +457,8 @@ message PendingToolCallApprovalState
   string input = 8;
   repeated WorkflowFileRef input_file_refs = 9;
   string idempotency_key = 10;
+  ExternalToolInvocationSpec external_invocation = 11;
+  int64 issued_at_unix_ms = 12;
 }
 
 message ToolCallModuleState
@@ -457,6 +494,7 @@ message WhileRuntimeState
   int32 iteration = 6;
   int32 max_iterations = 7;
   string condition_expression = 8;
+  ExternalToolInvocationSpec sub_external_invocation = 9;
 }
 
 message WhileModuleState
@@ -573,7 +611,7 @@ message PendingLlmCallState
   WorkflowRuntimeCallbackLeaseState watchdog_lease = 4;
   bool request_dispatched = 5;
   string watchdog_callback_id = 6;
-  string dispatch_dedup_id = 7;
+  string dispatch_operation_id = 7;
 }
 
 message LLMCallModuleState
@@ -601,12 +639,68 @@ message PendingConnectorCallState
   bool secure_step = 15;
   string connector_type = 16;
   string idempotency_key = 17;
+  string approval_action_id = 18;
+  bool request_dispatched = 19;
+  int64 issued_at_unix_ms = 20;
+}
+
+message ConnectorCallProtectedParameter
+{
+  string key = 1;
+  string value = 2;
+}
+
+message ConnectorCallProtectedMaterial
+{
+  string schema_version = 1;
+  string action_id = 2;
+  string idempotency_key = 3;
+  string run_id = 4;
+  string step_id = 5;
+  string execution_id = 6;
+  string connector_name = 7;
+  string connector_type = 8;
+  string operation = 9;
+  string payload = 10;
+  repeated ConnectorCallProtectedParameter parameters = 11;
+  string input = 12;
+  bool secure_step = 13;
+  int32 attempts = 14;
+  int32 timeout_ms = 15;
+  bool on_error_continue = 16;
+  aevatar.workflow.WorkflowExternalActionPlan approval_plan = 17;
+}
+
+message ConnectorCallProtectedCompletion
+{
+  string schema_version = 1;
+  aevatar.workflow.StepCompletedEvent completion = 2;
+}
+
+message ConnectorApprovalCoordinationState
+{
+  aevatar.workflow.WorkflowExternalActionApprovalSnapshot snapshot = 1;
+  aevatar.credentials.RuntimeSecretReference material_reference = 2;
+  WorkflowRuntimeCallbackLeaseState status_check_lease = 3;
+  string status_check_callback_id = 4;
+  int32 status_check_count = 5;
+  int32 attempts = 6;
+  int32 timeout_ms = 7;
+  bool on_error_continue = 8;
+  bool secure_step = 9;
+  string connector_type = 10;
+  int32 status_check_interval_seconds = 11;
+  bool step_completion_published = 12;
+  int32 current_attempt = 13;
+  aevatar.credentials.RuntimeSecretReference completion_reference = 14;
 }
 
 message ConnectorCallModuleState
 {
   map<string, PendingConnectorCallState> pending_by_operation_id = 1;
   map<string, string> pending_operation_id_by_step_id = 2;
+  map<string, ConnectorApprovalCoordinationState> approvals_by_action_id = 3;
+  map<string, string> approval_action_id_by_step_id = 4;
 }
 
 message EvalContextState
@@ -681,6 +775,7 @@ message BackpressureQueueEntry
   string target_role = 5;
   map<string, string> parameters = 6;
   repeated WorkflowFileRef input_file_refs = 7;
+  ExternalToolInvocationSpec external_invocation = 8;
 }
 
 message BackpressureQueueState

@@ -20,6 +20,22 @@ internal static class ChannelRegistrationCommandFacadeTestSupport
             CreateDispatchService<ChannelBotUnregisterCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory));
     }
 
+    public static IChannelWorkflowResultDeliveryRepairCommandPort CreateRepairPort(
+        IActorRuntime actorRuntime,
+        IActorDispatchPort dispatchPort)
+    {
+        var contextPolicy = new DefaultCommandContextPolicy();
+        var envelopeFactory = new ChannelBotRegistrationCommandEnvelopeFactory();
+        var targetDispatcher = new ActorCommandTargetDispatcher<ChannelBotRegistrationCommandTarget>(dispatchPort);
+        var receiptFactory = new ChannelRegistrationCommandReceiptFactory();
+
+        return new ChannelWorkflowResultDeliveryRepairCommandPort(
+            CreateDispatchService<ChannelBotWorkflowResultDeliveryRepairRequestCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory),
+            CreateDispatchService<ChannelBotWorkflowResultDeliveryRepairPrepareCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory),
+            CreateDispatchService<ChannelBotWorkflowResultDeliveryRepairCompleteCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory),
+            CreateDispatchService<ChannelBotWorkflowResultDeliveryRepairFailCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory));
+    }
+
     private static ICommandDispatchService<TCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> CreateDispatchService<TCommand>(
         IActorRuntime actorRuntime,
         ICommandContextPolicy contextPolicy,

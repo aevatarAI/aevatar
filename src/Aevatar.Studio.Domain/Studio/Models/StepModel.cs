@@ -12,6 +12,10 @@ public sealed record StepModel
 
     public bool UsedRoleAlias { get; init; }
 
+    public List<string>? AllowedTools { get; init; }
+
+    public StepCapability? Capability { get; init; }
+
     public StudioStepParameters Parameters { get; init; } = new();
 
     public string? Next { get; init; }

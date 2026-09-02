@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Tools;
 
 namespace Aevatar.AI.ToolProviders.Web.Tools;
 
@@ -41,6 +42,9 @@ public sealed class WebSearchTool : IAgentTool
           "required": ["query"]
         }
         """;
+
+    public ToolPresentationDescriptor Presentation =>
+        ToolPresentationDescriptors.BuiltIn(Name, "Web search", Description);
 
     public bool IsReadOnly => true;
 

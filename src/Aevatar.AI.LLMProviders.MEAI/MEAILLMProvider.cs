@@ -25,6 +25,7 @@ namespace Aevatar.AI.LLMProviders.MEAI;
 /// </summary>
 public sealed class MEAILLMProvider : ILLMProvider
 {
+    private IAgentToolExecutionPort? _toolExecutionPort;
     private static readonly LLMProviderCapabilities ProviderCapabilities = new()
     {
         SupportedInputModalities = new HashSet<ContentPartKind>
@@ -60,10 +61,15 @@ public sealed class MEAILLMProvider : ILLMProvider
     /// <param name="name">Provider name (for example "openai", "deepseek").</param>
     /// <param name="client">MEAI IChatClient instance.</param>
     /// <param name="logger">Logger.</param>
-    public MEAILLMProvider(string name, IChatClient client, ILogger? logger = null)
+    public MEAILLMProvider(
+        string name,
+        IChatClient client,
+        ILogger? logger = null,
+        IAgentToolExecutionPort? toolExecutionPort = null)
     {
         Name = name;
         _client = client;
+        _toolExecutionPort = toolExecutionPort;
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -78,11 +84,12 @@ public sealed class MEAILLMProvider : ILLMProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var messages = ConvertMessages(request.Messages, _logger);
-        var options = BuildOptions(request);
+        var options = BuildOptions(request, includeStreamUsage: true);
 
         _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} messages", messages.Count);
         var emittedStreamChunk = false;
         string? lastFinishReason = null;
+        UsageDetails? capturedUsage = null;
         var updateCount = 0;
         var textEmits = 0;
         var reasoningEmits = 0;
@@ -142,6 +149,12 @@ public sealed class MEAILLMProvider : ILLMProvider
                                 DeltaContentPart = uriPart,
                             };
                             break;
+                        case UsageContent usageContent:
+                            // Capture only: do NOT yield and do NOT set emittedStreamChunk — a usage-only
+                            // final update must not be counted as content (else it skews the zero-chunk
+                            // fallback decision). Last non-null wins; OpenAI sends the full usage block once.
+                            capturedUsage = usageContent.Details;
+                            break;
                     }
                 }
             }
@@ -175,7 +188,11 @@ public sealed class MEAILLMProvider : ILLMProvider
                 "MEAI ChatStreamAsync emitted no chunks for provider={Provider}; fallback to non-streaming response.",
                 Name);
 
-            var fallback = ConvertResponse(await _client.GetResponseAsync(messages, options, ct));
+            // The non-streaming fallback must NOT carry stream_options (OpenAI rejects it without
+            // stream=true), so rebuild options without the streaming-usage opt-in. ConvertResponse still
+            // captures usage from the non-streaming response via the same ToTokenUsage helper.
+            var fallbackOptions = BuildOptions(request);
+            var fallback = ConvertResponse(await _client.GetResponseAsync(messages, fallbackOptions, ct));
             foreach (var fallbackChunk in MapResponseToStreamChunks(fallback))
                 yield return fallbackChunk;
             yield break;
@@ -192,8 +209,10 @@ public sealed class MEAILLMProvider : ILLMProvider
             lastFinishReason ?? "(none)",
             messages.Count);
 
-        // The final chunk marks the end
-        yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason };
+        // The final chunk marks the end and carries the captured streaming token usage. Usage is null when
+        // the provider returned none (non-OpenAI client, or service still omitted it) — identical to the
+        // prior behavior, with no extra LLM call.
+        yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason, Usage = ToTokenUsage(capturedUsage) };
     }
 
     private static bool TryExtractOpenAIReasoningDelta(
@@ -570,7 +589,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         };
     }
 
-    private static ChatOptions? BuildOptions(LLMRequest request)
+    private ChatOptions? BuildOptions(LLMRequest request, bool includeStreamUsage = false)
     {
         var options = new ChatOptions();
         var hasOptions = false;
@@ -612,15 +631,57 @@ public sealed class MEAILLMProvider : ILLMProvider
         // Register tools — use each tool's own ParametersSchema so the LLM sees the real parameter structure
         if (request.Tools is { Count: > 0 })
         {
+            var executionPort = _toolExecutionPort
+                ?? throw new InvalidOperationException(
+                    "IAgentToolExecutionPort is required when MEAI exposes server-owned tools.");
             options.Tools = [];
             foreach (var tool in request.Tools)
             {
-                options.Tools.Add(new AgentToolAIFunction(tool));
+                options.Tools.Add(new AgentToolAIFunction(tool, executionPort));
             }
             hasOptions = true;
         }
 
+        // Opt into streaming token usage for the OpenAI-compatible request. The MEAI OpenAI adapter does
+        // NOT request usage by default and OpenAI's StreamOptions is internal, so we set it via the public
+        // experimental JsonPatch escape hatch on a base ChatCompletionOptions that ToOpenAIOptions layers
+        // model/temperature/tools onto (verified: it only overlays unset fields, never drops ours). Scoped
+        // to streaming only — a non-streaming request carrying stream_options would be rejected, so the
+        // zero-chunk fallback rebuilds options without this.
+        if (includeStreamUsage)
+        {
+            options.RawRepresentationFactory = static _ => CreateStreamUsageChatCompletionOptions();
+            hasOptions = true;
+        }
+
         return hasOptions ? options : null;
+    }
+
+#pragma warning disable SCME0001 // ChatCompletionOptions.Patch is an experimental escape hatch (same suppression as TryGetStringFromPatch)
+    private static OpenAI.Chat.ChatCompletionOptions CreateStreamUsageChatCompletionOptions()
+    {
+        var raw = new OpenAI.Chat.ChatCompletionOptions();
+        // Set the whole stream_options object so no intermediate node has to be auto-created.
+        raw.Patch.Set("$.stream_options"u8, "{\"include_usage\":true}"u8);
+        return raw;
+    }
+#pragma warning restore SCME0001
+
+    // Single UsageDetails -> TokenUsage mapping used by both the streaming terminal chunk and the
+    // non-streaming ConvertResponse path. Falls back to prompt+completion when the provider omits the
+    // total so the UI never shows non-zero input/output with a zero grand total.
+    private static TokenUsage? ToTokenUsage(UsageDetails? usage)
+    {
+        if (usage == null)
+            return null;
+
+        var promptTokens = (int)(usage.InputTokenCount ?? 0);
+        var completionTokens = (int)(usage.OutputTokenCount ?? 0);
+        var totalTokens = (int)(usage.TotalTokenCount ?? 0);
+        if (totalTokens == 0 && (promptTokens > 0 || completionTokens > 0))
+            totalTokens = promptTokens + completionTokens;
+
+        return new TokenUsage(promptTokens, completionTokens, totalTokens);
     }
 
     private static AdditionalPropertiesDictionary BuildAdditionalProperties(LLMRequest request)
@@ -673,14 +734,7 @@ public sealed class MEAILLMProvider : ILLMProvider
             }
         }
 
-        TokenUsage? usage = null;
-        if (response.Usage != null)
-        {
-            usage = new TokenUsage(
-                (int)(response.Usage.InputTokenCount ?? 0),
-                (int)(response.Usage.OutputTokenCount ?? 0),
-                (int)(response.Usage.TotalTokenCount ?? 0));
-        }
+        var usage = ToTokenUsage(response.Usage);
 
         return new LLMResponse
         {

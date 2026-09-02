@@ -114,14 +114,6 @@ internal static class ChatCompletionsApiEndpoints
                         BuildStreamingContentChunk(normalized, createdAt, delta.TextDelta),
                         token);
                 }
-
-                if (delta.ToolCallDelta is not null)
-                {
-                    await WriteDataFrameAsync(
-                        response,
-                        BuildStreamingToolCallChunk(normalized, createdAt, delta.ToolCallDelta),
-                        token);
-                }
             },
             ct);
 
@@ -138,6 +130,14 @@ internal static class ChatCompletionsApiEndpoints
         if (completion.Completion is not null)
         {
             var sessionCompletion = completion.Completion;
+            if (sessionCompletion.ToolCalls.Count > 0)
+            {
+                await WriteDataFrameAsync(
+                    response,
+                    BuildStreamingToolCallsSnapshotChunk(normalized, createdAt, sessionCompletion.ToolCalls),
+                    CancellationToken.None);
+            }
+
             await WriteDataFrameAsync(
                 response,
                 BuildStreamingStopChunk(normalized, createdAt, ResolveFinishReason(sessionCompletion)),
@@ -233,10 +233,10 @@ internal static class ChatCompletionsApiEndpoints
             },
         };
 
-    private static object BuildStreamingToolCallChunk(
+    private static object BuildStreamingToolCallsSnapshotChunk(
         NormalizedChatCompletionsCommand normalized,
         long createdAt,
-        ToolCall toolCall) =>
+        IReadOnlyList<LlmSessionCompletedToolCallSnapshot> toolCalls) =>
         new
         {
             id = normalized.CompletionId,
@@ -250,23 +250,25 @@ internal static class ChatCompletionsApiEndpoints
                     index = 0,
                     delta = new
                     {
-                        tool_calls = new[]
-                        {
-                            new
-                            {
-                                index = 0,
-                                id = toolCall.Id,
-                                type = "function",
-                                function = new
-                                {
-                                    name = toolCall.Name,
-                                    arguments = toolCall.ArgumentsJson ?? "{}",
-                                },
-                            },
-                        },
+                        tool_calls = toolCalls.Select(MapStreamingToolCall).ToArray(),
                     },
                     finish_reason = (string?)null,
                 },
+            },
+        };
+
+    private static object MapStreamingToolCall(
+        LlmSessionCompletedToolCallSnapshot toolCall,
+        int index) =>
+        new
+        {
+            index,
+            id = toolCall.CallId,
+            type = "function",
+            function = new
+            {
+                name = toolCall.ToolName,
+                arguments = toolCall.ResultJson ?? "{}",
             },
         };
 

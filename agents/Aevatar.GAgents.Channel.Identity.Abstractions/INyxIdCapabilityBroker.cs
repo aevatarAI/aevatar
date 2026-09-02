@@ -40,7 +40,9 @@ public interface INyxIdCapabilityBroker
     /// <see cref="BindingRevokedException"/> when NyxID reports
     /// <c>invalid_grant</c> on a previously-bound subject; throws
     /// <see cref="BindingScopeMismatchException"/> when NyxID reports
-    /// <c>invalid_scope</c> for an existing binding. Binding-required callers
+    /// <c>invalid_scope</c> for an existing binding; throws
+    /// <see cref="BindingServiceAccessMismatchException"/> when the binding's
+    /// token does not grant every required service resource. Binding-required callers
     /// can prompt the sender to re-run <c>/init</c>; normal LLM turns can
     /// continue with bot-owner fallback credentials.
     /// </summary>
@@ -55,8 +57,29 @@ public interface INyxIdCapabilityBroker
     /// NyxID reports the binding is missing the requested scope (HTTP 400
     /// <c>invalid_scope</c>).
     /// </exception>
+    /// <exception cref="BindingServiceAccessMismatchException">
+    /// The binding does not grant every required NyxID service resource.
+    /// </exception>
     Task<CapabilityHandle> IssueShortLivedAsync(
         ExternalSubjectRef externalSubject,
+        CapabilityScope scope,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Issues a short-lived access token directly from a known
+    /// <paramref name="bindingId"/>, skipping the readmodel resolve that
+    /// <see cref="IssueShortLivedAsync"/> performs. Use when the caller already
+    /// holds the persisted binding id (e.g. a deferred reply run that carried it
+    /// as an identity fact across the run boundary), so token re-mint does not
+    /// depend on the readmodel having observed the bind. Same exception contract
+    /// as <see cref="IssueShortLivedAsync"/>: throws
+    /// <see cref="BindingRevokedException"/> on NyxID <c>invalid_grant</c> and
+    /// <see cref="BindingScopeMismatchException"/> on <c>invalid_scope</c>, and
+    /// <see cref="BindingServiceAccessMismatchException"/> when service access is absent.
+    /// </summary>
+    Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
+        ExternalSubjectRef externalSubject,
+        string bindingId,
         CapabilityScope scope,
         CancellationToken ct = default);
 }

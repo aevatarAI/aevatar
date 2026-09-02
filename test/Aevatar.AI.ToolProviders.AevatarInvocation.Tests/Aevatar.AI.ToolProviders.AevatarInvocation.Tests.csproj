@@ -9,7 +9,10 @@
     <RootNamespace>Aevatar.AI.ToolProviders.AevatarInvocation.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.AevatarInvocation\Aevatar.AI.ToolProviders.AevatarInvocation.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Abstractions\Aevatar.GAgentService.Governance.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />

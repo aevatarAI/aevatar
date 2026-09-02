@@ -68,3 +68,13 @@ dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Run
   -p:UseSharedCompilation=false \
   -p:NuGetAudit=false \
   --filter "FullyQualifiedName~OrleansGarnetPersistenceIntegrationTests"
+
+echo "Running secret-store Garnet sweep target integration test..."
+AEVATAR_TEST_GARNET_CONNECTION_STRING="${GARNET_CONNECTION_STRING}" \
+dotnet test test/Aevatar.SecretStore.Tools.Tests/Aevatar.SecretStore.Tools.Tests.csproj \
+  --nologo \
+  --tl:off \
+  -m:1 \
+  -p:UseSharedCompilation=false \
+  -p:NuGetAudit=false \
+  --filter "FullyQualifiedName~RedisSecretStoreSweepTarget_ShouldScanGetCompareExchangeAndPreserveTtlAgainstGarnet"

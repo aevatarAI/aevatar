@@ -7,11 +7,11 @@ namespace Aevatar.Workflow.Infrastructure.Runs;
 
 public sealed class WorkflowConnectedServiceResourceFetchToolSource(
     IEnumerable<IWorkflowConnectedServiceResourceFetchAdapter> adapters,
-    IWorkflowFileIngressPort fileIngress) : IWorkflowToolSource
+    IFileArtifactIngressPort fileIngress) : IWorkflowToolSource
 {
     private readonly IReadOnlyList<IWorkflowConnectedServiceResourceFetchAdapter> _adapters =
         adapters?.ToArray() ?? throw new ArgumentNullException(nameof(adapters));
-    private readonly IWorkflowFileIngressPort _fileIngress =
+    private readonly IFileArtifactIngressPort _fileIngress =
         fileIngress ?? throw new ArgumentNullException(nameof(fileIngress));
 
     public Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default) =>
@@ -19,7 +19,7 @@ public sealed class WorkflowConnectedServiceResourceFetchToolSource(
 
     private sealed class ConnectedServiceResourceFetchTool(
         IReadOnlyList<IWorkflowConnectedServiceResourceFetchAdapter> adapters,
-        IWorkflowFileIngressPort fileIngress) : IWorkflowTool
+        IFileArtifactIngressPort fileIngress) : IWorkflowTool
     {
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
@@ -29,7 +29,7 @@ public sealed class WorkflowConnectedServiceResourceFetchToolSource(
         };
 
         private readonly IReadOnlyList<IWorkflowConnectedServiceResourceFetchAdapter> _adapters = adapters;
-        private readonly IWorkflowFileIngressPort _fileIngress = fileIngress;
+        private readonly IFileArtifactIngressPort _fileIngress = fileIngress;
 
         public string Name => "workflow_connected_service_resource_fetch";
 
@@ -88,12 +88,12 @@ public sealed class WorkflowConnectedServiceResourceFetchToolSource(
             if (fetchResult.Content.IsEmpty)
                 return Error("empty_resource", "Connected-service resource fetch returned empty content.");
 
-            WorkflowFileIngressResult ingressResult;
+            FileArtifactIngressResult ingressResult;
             try
             {
-                ingressResult = await _fileIngress.IngestAsync(new WorkflowFileIngressRequest(
+                ingressResult = await _fileIngress.IngestAsync(new FileArtifactIngressRequest(
                     fetchResult.Content,
-                    WorkflowFileSourceKind.ConnectedServiceResource,
+                    FileArtifactSourceKind.ConnectedServiceResource,
                     SourceMessageId: arguments.MessageId,
                     SourceResourceKey: arguments.ResourceKey,
                     FileName: fetchResult.FileName,
@@ -176,7 +176,7 @@ public sealed class WorkflowConnectedServiceResourceFetchToolSource(
             string.Equals(left.Operation, right.Operation, StringComparison.Ordinal) &&
             string.Equals(left.ResourceKind, right.ResourceKind, StringComparison.Ordinal);
 
-        private static WorkflowConnectedServiceResourceFetchFileRef ToOutputFileRef(WorkflowFileRef fileRef) =>
+        private static WorkflowConnectedServiceResourceFetchFileRef ToOutputFileRef(FileArtifactRef fileRef) =>
             new(
                 fileRef.FileId,
                 fileRef.ArtifactId,
@@ -192,10 +192,13 @@ public sealed class WorkflowConnectedServiceResourceFetchToolSource(
                 fileRef.OwnerRunId,
                 fileRef.OwnerScopeId);
 
-        private static WorkflowToolExecutionResult Error(string error, string detail) =>
-            WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
+        private static WorkflowToolExecutionResult Error(string error, string detail)
+        {
+            var resultJson = JsonSerializer.Serialize(
                 new WorkflowConnectedServiceResourceFetchError(false, error, detail),
-                JsonOptions));
+                JsonOptions);
+            return WorkflowToolExecutionResult.Failed(resultJson, error, detail);
+        }
 
         private static string? Normalize(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();

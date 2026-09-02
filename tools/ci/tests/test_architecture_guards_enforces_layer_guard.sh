@@ -35,4 +35,14 @@ if printf '%s\n' "${call_block}" | rg -q -- '--mode[[:space:]]+report'; then
   exit 1
 fi
 
+if rg -q 'tool_approval_wiring_guard\.sh' "${ARCHITECTURE_GUARDS}"; then
+  echo "architecture_guards.sh must not invoke the removed tool approval wiring guard."
+  exit 1
+fi
+
+if ! rg -q 'bash "\$\{SCRIPT_DIR\}/nyxid_chat_semantics_guard\.sh"' "${ARCHITECTURE_GUARDS}"; then
+  echo "Expected architecture_guards.sh to invoke nyxid_chat_semantics_guard.sh."
+  exit 1
+fi
+
 echo "architecture_guards layer guard enforcement test passed"

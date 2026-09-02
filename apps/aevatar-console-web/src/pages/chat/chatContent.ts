@@ -35,6 +35,15 @@ export type InlineContentToken =
   | { kind: "code"; text: string }
   | { kind: "link"; text: string; href: string; bold: boolean };
 
+export type MarkdownTableAlignment = "left" | "center" | "right" | null;
+
+export type MarkdownTableBlock = {
+  kind: "table";
+  headers: string[];
+  alignments: MarkdownTableAlignment[];
+  rows: string[][];
+};
+
 export type MarkdownBlock =
   | { kind: "paragraph"; lines: string[] }
   | { kind: "heading"; level: number; text: string }
@@ -42,7 +51,8 @@ export type MarkdownBlock =
   | { kind: "unordered-list"; items: string[] }
   | { kind: "ordered-list"; items: string[] }
   | { kind: "code"; lang: string; code: string }
-  | { kind: "thematic-break" };
+  | { kind: "thematic-break" }
+  | MarkdownTableBlock;
 
 const FUNCTION_CALL_PATTERNS: [string, string, string][] = [
   [
@@ -198,6 +208,91 @@ function appendLinkifiedTokens(
   }
 }
 
+const MARKDOWN_TABLE_DELIMITER_CELL_PATTERN = /^:?-{3,}:?$/;
+
+function splitMarkdownTableRow(line: string): string[] | null {
+  const source = line.trim();
+  const cells: string[] = [];
+  let cell = "";
+  let codeSpanDelimiterLength = 0;
+  let structuralPipeCount = 0;
+  let lastStructuralPipeIndex = -1;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+
+    if (character === "\\" && source[index + 1] === "|") {
+      cell += "|";
+      index += 1;
+      continue;
+    }
+
+    if (character === "`") {
+      let runLength = 1;
+      while (source[index + runLength] === "`") {
+        runLength += 1;
+      }
+
+      cell += "`".repeat(runLength);
+      if (codeSpanDelimiterLength === 0) {
+        codeSpanDelimiterLength = runLength;
+      } else if (codeSpanDelimiterLength === runLength) {
+        codeSpanDelimiterLength = 0;
+      }
+      index += runLength - 1;
+      continue;
+    }
+
+    if (character === "|" && codeSpanDelimiterLength === 0) {
+      structuralPipeCount += 1;
+      lastStructuralPipeIndex = index;
+      cells.push(cell.trim());
+      cell = "";
+      continue;
+    }
+
+    cell += character;
+  }
+
+  if (structuralPipeCount === 0) {
+    return null;
+  }
+
+  cells.push(cell.trim());
+  if (source.startsWith("|")) {
+    cells.shift();
+  }
+  if (lastStructuralPipeIndex === source.length - 1) {
+    cells.pop();
+  }
+
+  return cells;
+}
+
+function parseMarkdownTableAlignments(
+  line: string,
+): MarkdownTableAlignment[] | null {
+  const cells = splitMarkdownTableRow(line);
+  if (!cells || cells.length === 0) {
+    return null;
+  }
+
+  const alignments: MarkdownTableAlignment[] = [];
+  for (const cell of cells) {
+    if (!MARKDOWN_TABLE_DELIMITER_CELL_PATTERN.test(cell)) {
+      return null;
+    }
+
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
+    alignments.push(
+      left && right ? "center" : right ? "right" : left ? "left" : null,
+    );
+  }
+
+  return alignments;
+}
+
 export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
   if (!text) {
     return [];
@@ -242,6 +337,31 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
         code: codeLines.join("\n"),
       });
       index = cursor < lines.length ? cursor : lines.length;
+      continue;
+    }
+
+    const alignments =
+      index + 1 < lines.length
+        ? parseMarkdownTableAlignments(lines[index + 1])
+        : null;
+    const headers = alignments ? splitMarkdownTableRow(line) : null;
+    if (headers && alignments && headers.length === alignments.length) {
+      flushParagraph();
+      const rows: string[][] = [];
+      let cursor = index + 2;
+
+      while (cursor < lines.length) {
+        const cells = splitMarkdownTableRow(lines[cursor]);
+        if (!cells) {
+          break;
+        }
+
+        rows.push(headers.map((_, cellIndex) => cells[cellIndex] ?? ""));
+        cursor += 1;
+      }
+
+      blocks.push({ kind: "table", headers, alignments, rows });
+      index = cursor - 1;
       continue;
     }
 

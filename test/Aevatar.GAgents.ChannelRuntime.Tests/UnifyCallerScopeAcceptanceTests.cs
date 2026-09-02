@@ -151,7 +151,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildDocument("agent-B", OwnerScope.ForNyxIdNative("user-B")),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var asUserA = await port.QueryByCallerAsync(OwnerScope.ForNyxIdNative("user-A"), CancellationToken.None);
         var asUserB = await port.QueryByCallerAsync(OwnerScope.ForNyxIdNative("user-B"), CancellationToken.None);
@@ -171,7 +171,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildDocument("agent-lark", OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1")),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var fromCli = await port.QueryByCallerAsync(OwnerScope.ForNyxIdNative("user-1"), CancellationToken.None);
         var fromLark = await port.QueryByCallerAsync(OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1"), CancellationToken.None);
@@ -191,7 +191,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildDocument("bob-agent", OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob")),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var asBob = await port.QueryByCallerAsync(OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob"), CancellationToken.None);
 
@@ -212,7 +212,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildDocument("my-agent", OwnerScope.ForChannel("sender-nyx-user", "lark", "bot-1", "me")),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var viaOwnerToken = await port.QueryByCallerAsync(
             OwnerScope.ForChannel("bot-owner-nyx-user", "lark", "bot-1", "me"),
@@ -229,7 +229,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildDocument("my-agent", OwnerScope.ForChannel("sender-nyx-user", "lark", "bot-1", "me")),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var entry = await port.GetForCallerAsync(
             "my-agent",
@@ -249,7 +249,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         reader.GetAsync("alice-agent", Arg.Any<CancellationToken>())
             .Returns(BuildDocument("alice-agent", OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice")));
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var asBob = await port.GetForCallerAsync(
             "alice-agent",
@@ -274,7 +274,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         doc.StateVersion = 42;
         reader.GetAsync("alice-agent", Arg.Any<CancellationToken>()).Returns(doc);
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var asAlice = await port.GetStateVersionForCallerAsync(
             "alice-agent",
@@ -311,7 +311,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildLegacyNyxidDocument("legacy-cli-agent", "user-1"),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var asUser1 = await port.QueryByCallerAsync(OwnerScope.ForNyxIdNative("user-1"), CancellationToken.None);
 
@@ -327,7 +327,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildLegacyLarkDocument("legacy-lark-agent", "user-1"),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var asUser1Lark = await port.QueryByCallerAsync(
             OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1"),
@@ -425,6 +425,49 @@ public sealed class UnifyCallerScopeAcceptanceTests
     }
 
     [Fact]
+    public async Task ChannelMetadataCallerScopeResolver_OwnerScopeIdPresent_DoesNotCallNyxIdMe()
+    {
+        var inner = Substitute.For<INyxIdCurrentUserResolver>();
+        inner.ResolveCurrentUserIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<string?>(null));
+        var resolver = new ChannelMetadataCallerScopeResolver(inner);
+
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "proxy-token-that-users-me-would-reject",
+            },
+            Caller = new AgentToolCallerContext(
+                "registration-scope-1",
+                "registration-scope-1",
+                "message-1",
+                OwnerScopeId: "owner-scope-1"),
+            Channel = new AgentToolChannelContext(
+                "lark",
+                "ou_sender_1",
+                "registration-scope-1",
+                "message-1",
+                "platform-message-1"),
+        };
+        try
+        {
+            var scope = await resolver.TryResolveAsync();
+
+            scope.Should().NotBeNull();
+            scope!.NyxUserId.Should().Be("owner-scope-1");
+            scope.Platform.Should().Be("lark");
+            scope.RegistrationScopeId.Should().Be("registration-scope-1");
+            scope.SenderId.Should().Be("ou_sender_1");
+            await inner.DidNotReceiveWithAnyArgs().ResolveCurrentUserIdAsync(default!, default);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task CompositeCallerScopeResolver_RequireAsync_FailsClosedWhenAllReturnNull()
     {
         var a = Substitute.For<ICallerScopeResolver>();
@@ -471,7 +514,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         reader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(BuildDocument("agent-1", OwnerScope.ForNyxIdNative("user-1")));
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
         var entry = await port.GetForCallerAsync("agent-1", OwnerScope.ForNyxIdNative("user-1"), CancellationToken.None);
 
         entry.Should().NotBeNull();
@@ -493,7 +536,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             .ToList<UserAgentCatalogDocument>();
         var reader = new RecordingDocumentReader(docs);
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
         var entries = await port.QueryByCallerAsync(caller, CancellationToken.None);
 
         entries.Should().HaveCount(305,
@@ -512,7 +555,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             catalogDocument,
         });
 
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var entry = (await port.QueryByCallerAsync(caller, CancellationToken.None)).Should().ContainSingle().Subject;
         entry.Status.Should().BeEmpty();
@@ -581,7 +624,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         // dispatcher's last-written documents — close enough to exercise the actor →
         // projector → reader chain end-to-end without standing up the full pipeline.
         var reader = new RecordingDocumentReader(dispatcher.Upserts);
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var fromAlice = await port.QueryByCallerAsync(aliceScope, CancellationToken.None);
         var fromBob = await port.QueryByCallerAsync(bobScope, CancellationToken.None);
@@ -611,6 +654,10 @@ public sealed class UnifyCallerScopeAcceptanceTests
             ActorId = "agent-registry-store",
             OwnerScope = scope.Clone(),
         };
+
+    private static UserAgentCatalogQueryPort CreatePort(
+        IProjectionDocumentReader<UserAgentCatalogDocument, string> reader) =>
+        new(reader, new ThrowingRevocationDocumentReader());
 
 #pragma warning disable CS0612 // legacy fields populated for backward-compat tests
     private static UserAgentCatalogDocument BuildLegacyNyxidDocument(string agentId, string nyxUserId) =>
@@ -752,6 +799,17 @@ public sealed class UnifyCallerScopeAcceptanceTests
             };
             return string.Equals(actual as string, filter.Value.RawValue as string, StringComparison.Ordinal);
         }
+    }
+
+    private sealed class ThrowingRevocationDocumentReader : IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>
+    {
+        public Task<UserAgentApiKeyRevocationDocument?> GetAsync(string key, CancellationToken ct = default) =>
+            throw new InvalidOperationException("This acceptance fixture does not exercise API key revocation documents.");
+
+        public Task<ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("This acceptance fixture does not exercise API key revocation documents.");
     }
 
 }

@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.schedules.authorization;
+option csharp_namespace = "Aevatar.GAgentService.Abstractions.Schedules.Authorization";
+
+import "google/protobuf/timestamp.proto";
+import "llm_selection.proto";
+import "workflow_capability_admission.proto";
+
+enum AuthorizationOwnerKind {
+  AUTHORIZATION_OWNER_KIND_UNSPECIFIED = 0;
+  AUTHORIZATION_OWNER_KIND_PERSONAL = 1;
+  AUTHORIZATION_OWNER_KIND_ORGANIZATION = 2;
+}
+
+enum NyxIdAuthorizationAccess {
+  NYX_ID_AUTHORIZATION_ACCESS_UNSPECIFIED = 0;
+  NYX_ID_AUTHORIZATION_ACCESS_PERMITTED = 1;
+  NYX_ID_AUTHORIZATION_ACCESS_VIEW_ONLY = 2;
+  NYX_ID_AUTHORIZATION_ACCESS_DENIED = 3;
+}
+
+enum AuthorizationGrantRequirement {
+  AUTHORIZATION_GRANT_REQUIREMENT_UNSPECIFIED = 0;
+  AUTHORIZATION_GRANT_REQUIREMENT_REQUIRED = 1;
+  AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED = 2;
+}
+
+message AuthorizationOwnerIdentity {
+  string authority = 1;
+  AuthorizationOwnerKind owner_kind = 2;
+  string owner_subject = 3;
+}
+
+message NyxIdAuthorizationLLMTargetEvidence {
+  aevatar.ai.LLMRouteKind route_kind = 1;
+  string route_value = 2;
+  string nyx_id_user_service_id = 3;
+  string service_slug_snapshot = 4;
+  aevatar.ai.LLMModelCatalog model_catalog = 5;
+  google.protobuf.Timestamp observed_at = 6;
+  google.protobuf.Timestamp fresh_until = 7;
+  google.protobuf.Timestamp evaluated_at = 8;
+  string authority_contract_version = 9;
+  string authority_policy_version = 10;
+}
+
+message NyxIdAuthorizationServiceEvidence {
+  reserved 6;
+  reserved "nodes";
+
+  string user_service_id = 1;
+  string service_slug = 2;
+  string display_name = 3;
+  NyxIdAuthorizationAccess access = 4;
+  AuthorizationGrantRequirement node_grant_requirement = 5;
+  AuthorizationOwnerIdentity resource_owner = 7;
+  repeated string node_ids = 8;
+  google.protobuf.Timestamp observed_at = 9;
+  google.protobuf.Timestamp fresh_until = 10;
+  google.protobuf.Timestamp evaluated_at = 11;
+  string authority_contract_version = 12;
+  string authority_policy_version = 13;
+  NyxIdAuthorizationLLMTargetEvidence llm_target = 14;
+}
+
+message NyxIdAuthorizationCatalogContent {
+  AuthorizationOwnerIdentity owner = 1;
+  repeated NyxIdAuthorizationServiceEvidence services = 2;
+  NyxIdAuthorizationLLMTargetEvidence gateway_llm_target = 3;
+}
+
+message WorkflowRevisionAuthorizationEvidence {
+  reserved 1, 3, 4;
+  reserved "connector_capability_refs", "nyx_id_service_ids", "nyx_id_service_slugs";
+  bool owner_llm_route_required = 2;
+  AuthorizationGrantRequirement service_grant_requirement = 5;
+  repeated aevatar.workflow.ExternalWorkflowCapabilityRef external_capabilities = 6;
+}

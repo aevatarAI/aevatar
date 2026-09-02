@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.projection.authorization;
+option csharp_namespace = "Aevatar.GAgentService.Projection.ReadModels";
+
+import "google/protobuf/timestamp.proto";
+import "scheduled_invocation_authorization_evidence.proto";
+
+message NyxIdAuthorizationCatalogDocument {
+  reserved 10;
+  reserved "external_revision";
+
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 6;
+  repeated aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationServiceEvidence services = 7;
+  google.protobuf.Timestamp observed_at_utc_value = 8;
+  google.protobuf.Timestamp fresh_until_utc_value = 9;
+  string content_digest = 11;
+  bool invalidated = 12;
+  string invalidation_reason = 13;
+  google.protobuf.Timestamp invalidated_at_utc_value = 14;
+  google.protobuf.Timestamp last_refresh_failed_at_utc_value = 15;
+  string last_refresh_failure_code = 16;
+  int64 lifecycle_fence = 17;
+  bool activated = 18;
+  google.protobuf.Timestamp activated_at_utc_value = 19;
+  bool cleaned = 20;
+  google.protobuf.Timestamp cleaned_at_utc_value = 21;
+  string cleanup_reason = 22;
+  string contract_version = 23;
+  string policy_version = 24;
+  google.protobuf.Timestamp evaluated_at_utc_value = 25;
+  aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationLLMTargetEvidence gateway_llm_target = 26;
+}

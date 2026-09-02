@@ -4,7 +4,9 @@ using Aevatar.Workflow.Application.Abstractions.Workflows;
 
 namespace Aevatar.Workflow.Application.Queries;
 
-public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
+public sealed class WorkflowExecutionQueryApplicationService :
+    IWorkflowExecutionQueryApplicationService,
+    IWorkflowExecutionScopeQueryApplicationService
 {
     private readonly IWorkflowDefinitionCatalog _workflowRegistry;
     private readonly IWorkflowExecutionCurrentStateQueryPort _currentStateQueryPort;
@@ -131,5 +133,80 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
             };
 
         return await _artifactQueryPort.GetWorkflowRunGraphExportSubgraphAsync(workflowRunId, depth, take, options, ct);
+    }
+
+    public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(
+        string scopeId,
+        string actorId,
+        CancellationToken ct = default) =>
+        ResolveOwnedCurrentStateAsync(scopeId, actorId, ct);
+
+    public async Task<IReadOnlyList<WorkflowRunTimelineExportItem>?> ListWorkflowRunTimelineExportAsync(
+        string scopeId,
+        string workflowRunId,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        if (!_artifactQueryPort.WorkflowArtifactQueryEnabled ||
+            await ResolveOwnedCurrentStateAsync(scopeId, workflowRunId, ct) == null)
+        {
+            return null;
+        }
+
+        return await _artifactQueryPort.ListWorkflowRunTimelineExportAsync(workflowRunId, take, ct);
+    }
+
+    public async Task<IReadOnlyList<WorkflowRunGraphExportEdge>?> ListWorkflowRunGraphExportEdgesAsync(
+        string scopeId,
+        string workflowRunId,
+        int take = 200,
+        WorkflowRunGraphExportQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        if (!_artifactQueryPort.WorkflowArtifactQueryEnabled ||
+            await ResolveOwnedCurrentStateAsync(scopeId, workflowRunId, ct) == null)
+        {
+            return null;
+        }
+
+        return await _artifactQueryPort.GetWorkflowRunGraphExportEdgesAsync(workflowRunId, take, options, ct);
+    }
+
+    public async Task<WorkflowRunGraphExportSubgraph?> GetWorkflowRunGraphExportSubgraphAsync(
+        string scopeId,
+        string workflowRunId,
+        int depth = 2,
+        int take = 200,
+        WorkflowRunGraphExportQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        if (!_artifactQueryPort.WorkflowArtifactQueryEnabled ||
+            await ResolveOwnedCurrentStateAsync(scopeId, workflowRunId, ct) == null)
+        {
+            return null;
+        }
+
+        return await _artifactQueryPort.GetWorkflowRunGraphExportSubgraphAsync(workflowRunId, depth, take, options, ct);
+    }
+
+    private async Task<WorkflowActorSnapshot?> ResolveOwnedCurrentStateAsync(
+        string scopeId,
+        string actorId,
+        CancellationToken ct)
+    {
+        if (!WorkflowActorCurrentStateQueryEnabled ||
+            string.IsNullOrWhiteSpace(scopeId) ||
+            string.IsNullOrWhiteSpace(actorId))
+        {
+            return null;
+        }
+
+        var snapshot = await _currentStateQueryPort.GetWorkflowActorCurrentStateAsync(actorId, ct);
+        return snapshot != null && string.Equals(
+            snapshot.ScopeId?.Trim(),
+            scopeId.Trim(),
+            StringComparison.Ordinal)
+            ? snapshot
+            : null;
     }
 }

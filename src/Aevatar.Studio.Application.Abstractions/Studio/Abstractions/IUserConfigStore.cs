@@ -1,9 +1,19 @@
+using Aevatar.AI.Abstractions;
+
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public static class UserConfigLlmRouteDefaults
 {
-    public const string Gateway = "";
+    public const string Gateway = "/api/v1/llm/gateway/v1";
 }
+
+public sealed record UserConfigUpdate(
+    LLMSelection? LlmSelection = null,
+    string? RuntimeMode = null,
+    string? LocalRuntimeBaseUrl = null,
+    string? RemoteRuntimeBaseUrl = null,
+    string? GithubUsername = null,
+    int? MaxToolRounds = null);
 
 public static class UserConfigLlmRoute
 {
@@ -174,9 +184,10 @@ public sealed record UserConfigRuntimeView(
 
 public sealed record UserConfig(
     string DefaultModel,
-    string PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
+    string PreferredLlmRoute = "",
     string RuntimeMode = UserConfigRuntimeDefaults.LocalMode,
     string LocalRuntimeBaseUrl = UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
     string RemoteRuntimeBaseUrl = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
     string? GithubUsername = null,
-    int MaxToolRounds = 0);
+    int MaxToolRounds = 0,
+    LLMSelection? LlmSelection = null);

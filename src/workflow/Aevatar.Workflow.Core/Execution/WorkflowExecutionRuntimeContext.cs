@@ -1,5 +1,17 @@
 namespace Aevatar.Workflow.Core.Execution;
 
+using Aevatar.Foundation.Abstractions.Credentials;
+
+internal interface IRuntimeSecretStoreAccessor
+{
+    IRuntimeSecretStore? RuntimeSecretStore { get; }
+}
+
+internal interface ISecretVaultAccessor
+{
+    ISecretVault? SecretVault { get; }
+}
+
 // Refactor (iter16/cluster-031):
 //   Old pattern: helper code discovered the actor-owned Dictionary<string, object?>
 //                runtime bag through a generic items context.

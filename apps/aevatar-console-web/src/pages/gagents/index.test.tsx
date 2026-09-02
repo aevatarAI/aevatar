@@ -248,6 +248,50 @@ describe("GAgentsPage", () => {
     });
   });
 
+  it("renders stack skeletons for the initial kind and actor inventories", async () => {
+    let resolveKinds: (value: unknown[]) => void = () => {};
+    mockedRuntimeGAgentApi.listKinds.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveKinds = resolve;
+        }),
+    );
+    mockedRuntimeGAgentApi.listActors.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    renderWithQueryClient(React.createElement(GAgentsPage));
+
+    const loadingKinds = await screen.findByRole("status");
+    expect(loadingKinds).toHaveAttribute("data-list-layout", "stack");
+    expect(loadingKinds).toHaveAttribute("data-variant", "list");
+    expect(screen.queryByText("Loading runtime GAgent kinds.")).toBeNull();
+
+    resolveKinds([
+      {
+        agentKind: "Tests.OrdersGAgent",
+        displayName: "Orders Assistant",
+        diagnosticClrTypeName: "Tests.OrdersGAgent, Tests",
+        endpoints: [],
+      },
+    ]);
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("button", { name: "Manage actors" })[0],
+      ).not.toBeDisabled();
+    });
+    const manageActors = screen.getAllByRole("button", {
+      name: "Manage actors",
+    });
+    fireEvent.click(manageActors[0]);
+
+    const loadingRegistry = await screen.findByRole("status");
+    expect(loadingRegistry).toHaveAttribute("data-list-layout", "stack");
+    expect(loadingRegistry).toHaveAttribute("data-variant", "list");
+    expect(screen.queryByText("Loading actor registry.")).toBeNull();
+  });
+
   it("switches existing actor suggestions to the clicked GAgent type", async () => {
     window.history.replaceState(
       {},
@@ -488,9 +532,14 @@ describe("GAgentsPage", () => {
 
     expect(
       await screen.findByText(
-        "Acknowledge the replacement impact before publishing a new binding revision."
+        "Binding action could not be completed. Try again."
       )
     ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Acknowledge the replacement impact before publishing a new binding revision."
+      )
+    ).toBeNull();
     expect(mockedRuntimeGAgentApi.bindScopeGAgent).not.toHaveBeenCalled();
 
     fireEvent.click(
@@ -520,9 +569,8 @@ describe("GAgentsPage", () => {
       });
     });
 
-    expect(
-      await screen.findByText("Published Orders Assistant on revision rev-2.")
-    ).toBeTruthy();
+    expect(await screen.findByText("Published Orders Assistant.")).toBeTruthy();
+    expect(screen.queryByText("Published Orders Assistant on revision rev-2.")).toBeNull();
   });
 
   it("activates and retires a selectable binding revision", async () => {
@@ -606,8 +654,9 @@ describe("GAgentsPage", () => {
       ).toHaveBeenCalledWith("scope-a", "rev-2");
     });
     expect(
-      await screen.findByText("Workspace scope-a is now serving revision rev-2.")
+      await screen.findByText("Workspace is now serving the selected revision.")
     ).toBeTruthy();
+    expect(screen.queryByText("Workspace scope-a is now serving revision rev-2.")).toBeNull();
 
     const retireButton = screen
       .getAllByRole("button", { name: "Retire" })
@@ -620,8 +669,7 @@ describe("GAgentsPage", () => {
         mockedRuntimeGAgentApi.retireMemberBindingRevision
       ).toHaveBeenCalledWith("scope-a", "rev-2");
     });
-    expect(
-      await screen.findByText("Revision rev-2 was accepted for retirement.")
-    ).toBeTruthy();
+    expect(await screen.findByText("Revision was accepted for retirement.")).toBeTruthy();
+    expect(screen.queryByText("Revision rev-2 was accepted for retirement.")).toBeNull();
   });
 });

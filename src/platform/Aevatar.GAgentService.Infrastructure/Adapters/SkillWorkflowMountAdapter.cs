@@ -1,6 +1,7 @@
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GAgentService.Infrastructure.Adapters;
@@ -33,6 +34,9 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                 Message: "The skill does not expose workflow YAML bundles.");
         }
 
+        if (string.IsNullOrWhiteSpace(request.CallerId))
+            throw new InvalidOperationException("Skill workflow mounting requires an authenticated caller identity.");
+
         var mounted = new List<MountedSkillWorkflow>(request.Workflows.Count);
         foreach (var workflow in request.Workflows)
         {
@@ -44,7 +48,13 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                     bundle.EntryWorkflowYaml,
                     WorkflowName: bundle.EntryWorkflowName,
                     DisplayName: workflow.WorkflowId,
-                    InlineWorkflowYamls: bundle.SubWorkflowYamls),
+                    InlineWorkflowYamls: bundle.SubWorkflowYamls)
+                {
+                    CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                        request.CallerId.Trim(),
+                        NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+                            request.NyxIdAccessToken)),
+                },
                 ct);
 
             mounted.Add(new MountedSkillWorkflow(

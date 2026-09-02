@@ -85,7 +85,7 @@ public sealed class ScopeServiceTeamStreamMultipartTests : ScopeServiceEndpointT
             var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-team-a", "member-a", "cmd-team-a", "corr-team-a");
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/teams/team-a/invoke/chat:stream")
@@ -108,7 +108,7 @@ public sealed class ScopeServiceTeamStreamMultipartTests : ScopeServiceEndpointT
         host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a", "chat"));
         host.WorkflowFileIngressPort.Requests.Should().ContainSingle();
         var ingressRequest = host.WorkflowFileIngressPort.Requests[0];
-        ingressRequest.SourceKind.Should().Be(WorkflowFileSourceKind.FormUpload);
+        ingressRequest.SourceKind.Should().Be(FileArtifactSourceKind.FormUpload);
         ingressRequest.OwnerScopeId.Should().Be("scope-a");
         ingressRequest.FileName.Should().Be("cat.png");
         ingressRequest.MediaType.Should().Be("image/png");

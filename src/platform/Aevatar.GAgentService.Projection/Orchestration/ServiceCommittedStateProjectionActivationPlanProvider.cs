@@ -4,6 +4,8 @@ using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Core.Schedules;
+using Aevatar.GAgentService.Core.Schedules.Authorization;
+using Aevatar.GAgentService.Core.AgentProfiles;
 using Aevatar.GAgentService.Projection.Contexts;
 using Google.Protobuf.WellKnownTypes;
 
@@ -40,6 +42,9 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
             var type when type == typeof(LlmSessionGAgent) => LlmSessionPlans(context.ActorId),
             var type when type == typeof(ResponsesAgentToolStateGAgent) => ResponsesAgentToolPlans(context.ActorId),
             var type when type == typeof(ScheduledDispatchGAgent) => ScheduledDispatchPlans(context.ActorId),
+            var type when type == typeof(NyxIdAuthorizationCatalogGAgent) => NyxIdAuthorizationCatalogPlans(context.ActorId),
+            var type when type == typeof(AgentProfileNamespaceGAgent) => AgentProfileCatalogPlans(context.ActorId),
+            var type when type == typeof(AgentProfileGAgent) => AgentProfileCurrentStatePlans(context.ActorId),
             _ => [],
         };
     }
@@ -48,7 +53,11 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
     {
         if (!payload.Is(ServiceDefinitionCreatedEvent.Descriptor) &&
             !payload.Is(ServiceDefinitionUpdatedEvent.Descriptor) &&
-            !payload.Is(ServiceExternalExposureUpdatedEvent.Descriptor) &&
+            !payload.Is(ServiceRegistrationRequestedEvent.Descriptor) &&
+            !payload.Is(ServiceRegistrationAttemptStartedEvent.Descriptor) &&
+            !payload.Is(ServiceRegistrationSucceededEvent.Descriptor) &&
+            !payload.Is(ServiceRegistrationFailedEvent.Descriptor) &&
+            !payload.Is(ServiceRegistrationRetiredEvent.Descriptor) &&
             !payload.Is(DefaultServingRevisionChangedEvent.Descriptor))
         {
             return [];
@@ -74,6 +83,27 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
         DurablePlan<ScheduledDispatchProjectionContext>(
             actorId,
             ServiceProjectionKinds.ScheduledDispatches),
+    ];
+
+    private static IEnumerable<ProjectionActivationPlan> NyxIdAuthorizationCatalogPlans(string actorId) =>
+    [
+        DurablePlan<NyxIdAuthorizationCatalogProjectionContext>(
+            actorId,
+            ServiceProjectionKinds.NyxIdAuthorizationCatalog),
+    ];
+
+    private static IEnumerable<ProjectionActivationPlan> AgentProfileCatalogPlans(string actorId) =>
+    [
+        DurablePlan<AgentProfileCatalogProjectionContext>(
+            actorId,
+            ServiceProjectionKinds.AgentProfileCatalog),
+    ];
+
+    private static IEnumerable<ProjectionActivationPlan> AgentProfileCurrentStatePlans(string actorId) =>
+    [
+        DurablePlan<AgentProfileCurrentStateProjectionContext>(
+            actorId,
+            ServiceProjectionKinds.AgentProfileCurrentState),
     ];
 
     private static IEnumerable<ProjectionActivationPlan> DeploymentPlans(string actorId, Any payload)

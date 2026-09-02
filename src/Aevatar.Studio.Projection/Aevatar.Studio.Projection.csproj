@@ -7,13 +7,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.ContentArtifacts.Abstractions\Aevatar.ContentArtifacts.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Runtime.Abstractions\Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
+    <ProjectReference Include="..\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Runtime\Aevatar.CQRS.Projection.Runtime.csproj" />
     <ProjectReference Include="..\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
     <!-- IAppScopeResolver is now in Aevatar.Studio.Application (no Infrastructure dep needed) -->
@@ -23,9 +28,15 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.RoleCatalog\Aevatar.GAgents.RoleCatalog.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.UserMemory\Aevatar.GAgents.UserMemory.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StudioMember\Aevatar.GAgents.StudioMember.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StudioTeam\Aevatar.GAgents.StudioTeam.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.WorkOrder\Aevatar.GAgents.WorkOrder.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.ContentArtifacts\Aevatar.GAgents.ContentArtifacts.csproj" />
+    <ProjectReference Include="..\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
+    <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Studio\Aevatar.Workflow.Studio.csproj" />
+    <ProjectReference Include="..\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,7 +48,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="ReadModels/studio_projection_readmodels.proto" GrpcServices="None" />
+    <Protobuf Include="ReadModels/studio_projection_readmodels.proto" GrpcServices="None" AdditionalImportDirs="../Aevatar.AI.Abstractions" />
   </ItemGroup>
 
   <ItemGroup>

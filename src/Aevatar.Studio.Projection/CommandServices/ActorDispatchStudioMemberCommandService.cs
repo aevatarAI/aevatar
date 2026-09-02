@@ -39,6 +39,11 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        if (request.ImplementationRef != null)
+        {
+            throw new StudioMemberCreateImplementationRefNotAllowedException(scopeId);
+        }
+
         // Length caps + slug pattern are enforced at the Application
         // boundary (StudioMemberCreateRequestValidator). The transport-
         // level guards here only ensure the actor-id remains derivable —
@@ -67,8 +72,6 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             PublishedServiceId = publishedServiceId,
             CreatedAtUtc = Timestamp.FromDateTimeOffset(createdAt),
         };
-        if (request.ImplementationRef != null)
-            evt.ImplementationRef = BuildImplementationRefMessage(request.ImplementationRef);
 
         await DispatchAsync(normalizedScopeId, memberId, evt, ct);
 
@@ -100,16 +103,14 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             DisplayName: displayName,
             Description: evt.Description,
             ImplementationKind: MemberImplementationKindMapper.ToWireName(implementationKind),
-            LifecycleStage: request.ImplementationRef == null
-                ? MemberLifecycleStageNames.Created
-                : MemberLifecycleStageNames.BuildReady,
+            LifecycleStage: MemberLifecycleStageNames.Created,
             PublishedServiceId: publishedServiceId,
             LastBoundRevisionId: null,
             CreatedAt: createdAt,
             UpdatedAt: createdAt)
         {
             TeamId = responseTeamId,
-            ImplementationRef = request.ImplementationRef,
+            ImplementationRef = null,
         };
     }
 
@@ -194,6 +195,31 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
+    public async Task RecordPublishedBindingAsync(
+        string scopeId,
+        string memberId,
+        StudioMemberPublishedBindingRecordRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+        var implementationKind = MemberImplementationKindMapper.Parse(request.ImplementationKind);
+
+        var evt = new StudioMemberPublishedBindingRecordedEvent
+        {
+            PublishedServiceId = request.PublishedServiceId ?? string.Empty,
+            RevisionId = request.RevisionId ?? string.Empty,
+            ImplementationKind = implementationKind,
+            ImplementationRef = BuildImplementationRefMessage(request.ImplementationRef),
+            RecordedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ExpectedActorId = request.ExpectedActorId ?? string.Empty,
+        };
+
+        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
+    }
+
     public async Task RenameAsync(
         string scopeId,
         string memberId,
@@ -208,6 +234,23 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         {
             DisplayName = normalizedDisplayName,
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
+    }
+
+    public async Task DeleteAsync(
+        string scopeId,
+        string memberId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+        var evt = new StudioMemberDeleteRequested
+        {
+            ScopeId = normalizedScopeId,
+            MemberId = normalizedMemberId,
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
@@ -304,6 +347,8 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
                     WorkflowId = binding.Workflow?.WorkflowId ?? string.Empty,
                 };
                 request.Workflow.WorkflowYamls.Add(binding.Workflow?.WorkflowYamls ?? []);
+                if (binding.Workflow?.CapabilityAdmissionPlan is { } capabilityAdmissionPlan)
+                    request.Workflow.CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone();
                 break;
             case MemberImplementationKindNames.Script:
                 request.Script = new StudioMemberScriptBindingRequest

@@ -1,5 +1,4 @@
 using Aevatar.CQRS.Core.Abstractions.Interactions;
-using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -7,37 +6,48 @@ namespace Aevatar.Workflow.Application.Runs;
 
 internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunInteractionPort
 {
+    private static readonly TimeSpan ChatHistoryTerminalDeliveryLifetime = TimeSpan.FromMinutes(30);
     private readonly IWorkflowRunActorResolver _actorResolver;
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
     private readonly ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> _inner;
     private readonly WorkflowDirectFallbackPolicy _fallbackPolicy;
+    private readonly IWorkflowChatHistoryTerminalDeliveryPort? _chatHistoryTerminalDeliveryPort;
+    private readonly IWorkflowChatHistoryCreateRecoveryReadPort? _chatHistoryCreateRecoveryReadPort;
 
     public WorkflowChatRunInteractionService(
         IWorkflowRunActorResolver actorResolver,
         IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowRunProvisioningPort runProvisioningPort,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> inner,
-        WorkflowDirectFallbackPolicy fallbackPolicy)
+        WorkflowDirectFallbackPolicy fallbackPolicy,
+        IWorkflowChatHistoryTerminalDeliveryPort? chatHistoryTerminalDeliveryPort = null,
+        IWorkflowChatHistoryCreateRecoveryReadPort? chatHistoryCreateRecoveryReadPort = null)
     {
         _actorResolver = actorResolver ?? throw new ArgumentNullException(nameof(actorResolver));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _fallbackPolicy = fallbackPolicy ?? throw new ArgumentNullException(nameof(fallbackPolicy));
+        _chatHistoryTerminalDeliveryPort = chatHistoryTerminalDeliveryPort;
+        _chatHistoryCreateRecoveryReadPort = chatHistoryCreateRecoveryReadPort;
     }
 
-    public async Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+    public async Task<WorkflowChatRunInteractionResult> ExecuteAsync(
         WorkflowChatRunRequest request,
         Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
-        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+        Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        var commandId = CreateInteractionId();
-        var correlationId = CreateInteractionId();
+        var commandId = string.IsNullOrWhiteSpace(request.CommandIdSeed)
+            ? CreateInteractionId()
+            : request.CommandIdSeed.Trim();
+        var correlationId = string.IsNullOrWhiteSpace(request.CorrelationIdSeed)
+            ? CreateInteractionId()
+            : request.CorrelationIdSeed.Trim();
         var currentRequest = request with
         {
             CommandIdSeed = commandId,
@@ -45,11 +55,21 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             TargetSeed = null,
         };
 
+        var preflight = ValidatePreActorResolution(currentRequest);
+        if (preflight != WorkflowChatRunStartError.None)
+            return WorkflowChatRunInteractionResult.Failure(
+                preflight,
+                WorkflowChatRunStartFailureDetail.Create(preflight));
+
+        var recoveredCreate = await TryRecoverCreateAsync(currentRequest, ct).ConfigureAwait(false);
+        if (recoveredCreate != null)
+            return recoveredCreate;
+
         while (true)
         {
             var attempt = await StartAttemptAsync(currentRequest, ct).ConfigureAwait(false);
             if (!attempt.Succeeded)
-                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>.Failure(attempt.Error);
+                return WorkflowChatRunInteractionResult.Failure(attempt.Error, attempt.FailureDetail);
 
             try
             {
@@ -85,14 +105,24 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         CancellationToken ct)
     {
         if (!_projectionPort.ProjectionEnabled)
-            return AttemptStartResult.Failure(WorkflowChatRunStartError.ProjectionDisabled);
+            return AttemptStartResult.Failure(
+                WorkflowChatRunStartError.ProjectionDisabled,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.ProjectionDisabled));
 
-        if (WorkflowCallerCredentialTokens.ParseOptional(request.CallerCredential?.BearerToken).IsInvalid)
-            return AttemptStartResult.Failure(WorkflowChatRunStartError.InvalidCallerCredential);
+        if (Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                request.CallerCredential?.BearerToken,
+                request.CallerCredential?.Kind ??
+                Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.Unspecified,
+                request.CallerCredential?.SourceReadableUserBearerToken))
+            return AttemptStartResult.Failure(
+                WorkflowChatRunStartError.InvalidCallerCredential,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.InvalidCallerCredential));
 
         var actorResolution = await _actorResolver.ResolveOrCreateAsync(request, ct).ConfigureAwait(false);
         if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Target == null)
-            return AttemptStartResult.Failure(actorResolution.Error);
+            return AttemptStartResult.Failure(
+                actorResolution.Error,
+                actorResolution.FailureDetail ?? WorkflowChatRunStartFailureDetail.Create(actorResolution.Error));
 
         var seededRequest = request with
         {
@@ -108,34 +138,243 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             actorResolution.Target.CreatedActorIds));
     }
 
-    private async Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAttemptAsync(
+    private async Task<WorkflowChatRunInteractionResult> ExecuteAttemptAsync(
         WorkflowChatRunInteractionAttempt attempt,
         Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
-        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+        Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
         CancellationToken ct)
     {
+        var chatHistoryDelivery = await ReserveChatHistoryDeliveryAsync(attempt.Request, ct).ConfigureAwait(false);
+        if (chatHistoryDelivery is { Succeeded: false })
+        {
+            await CleanupAttemptAsync(attempt, CancellationToken.None).ConfigureAwait(false);
+            var error = MapReservationFailure(chatHistoryDelivery.Failure);
+            return WorkflowChatRunInteractionResult.Failure(
+                error,
+                WorkflowChatRunStartFailureDetail.Create(error));
+        }
+        if (chatHistoryDelivery is { Reservation.ExistingReservation: true } &&
+            attempt.Request.ChatConversation?.Intent == WorkflowChatConversationIntentKind.Create)
+        {
+            await CleanupAttemptAsync(attempt, CancellationToken.None).ConfigureAwait(false);
+            return WorkflowChatRunInteractionResult.Failure(
+                WorkflowChatRunStartError.ChatHistoryReservationUnavailable,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.ChatHistoryReservationUnavailable));
+        }
+
         async ValueTask OnAcceptedAsync(WorkflowChatRunAcceptedReceipt receipt, CancellationToken token)
         {
             attempt.MarkAccepted();
+            if (chatHistoryDelivery is { Reservation: not null })
+                await _chatHistoryTerminalDeliveryPort!
+                    .BindAcceptedAsync(chatHistoryDelivery.Reservation, receipt, token)
+                    .ConfigureAwait(false);
             if (onAcceptedAsync != null)
-                await onAcceptedAsync(receipt, token).ConfigureAwait(false);
+                await onAcceptedAsync(new WorkflowChatInteractionAcceptedReceipt(
+                    receipt,
+                    chatHistoryDelivery?.ChatContext), token).ConfigureAwait(false);
         }
 
-        var result = await _inner.ExecuteAsync(
-            attempt.Request,
-            emitAsync,
-            OnAcceptedAsync,
-            ct).ConfigureAwait(false);
-        if (!result.Succeeded && !attempt.Accepted)
-            await CleanupAttemptAsync(attempt, CancellationToken.None).ConfigureAwait(false);
+        var dispatchRequest = chatHistoryDelivery?.Reservation is null
+            ? attempt.Request
+            : attempt.Request with
+            {
+                CompletionNotificationTarget = CreateCompletionNotificationTarget(chatHistoryDelivery.Reservation),
+                ConversationContext = chatHistoryDelivery.ConversationContext,
+            };
+        CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus> result;
+        try
+        {
+            result = await _inner.ExecuteAsync(
+                dispatchRequest,
+                emitAsync,
+                OnAcceptedAsync,
+                ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (!attempt.Accepted)
+                await CleanupAttemptAsync(attempt, CancellationToken.None, chatHistoryDelivery?.Reservation).ConfigureAwait(false);
+            throw;
+        }
 
-        return result;
+        if (!result.Succeeded && !attempt.Accepted)
+            await CleanupAttemptAsync(attempt, CancellationToken.None, chatHistoryDelivery?.Reservation).ConfigureAwait(false);
+
+        if (!result.Succeeded || result.Receipt == null)
+            return WorkflowChatRunInteractionResult.Failure(
+                result.Error,
+                WorkflowChatRunStartFailureDetail.Create(result.Error));
+
+        return WorkflowChatRunInteractionResult.Success(
+            new WorkflowChatInteractionAcceptedReceipt(result.Receipt, chatHistoryDelivery?.ChatContext),
+            result.FinalizeResult ?? new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                result.Completion,
+                result.Completed));
     }
+
+    private async Task<WorkflowChatHistoryTerminalDeliveryReservationResult?> ReserveChatHistoryDeliveryAsync(
+        WorkflowChatRunRequest request,
+        CancellationToken ct)
+    {
+        var conversation = NormalizeConversationIntent(request);
+        if (conversation is null)
+            return null;
+
+        if (_chatHistoryTerminalDeliveryPort is null ||
+            request.TargetSeed is null ||
+            string.IsNullOrWhiteSpace(request.ScopeId) ||
+            string.IsNullOrWhiteSpace(request.Prompt) ||
+            string.IsNullOrWhiteSpace(request.CommandIdSeed))
+            return WorkflowChatHistoryTerminalDeliveryReservationResult.Unavailable();
+
+        var normalizedScopeId = request.ScopeId.Trim();
+        var normalizedCommandId = request.CommandIdSeed.Trim();
+        var deliveryId = conversation.Intent == WorkflowChatConversationIntentKind.Create
+            ? WorkflowChatHistoryCreateRecoveryIds.FromScopeAndCommandId(normalizedScopeId, normalizedCommandId)
+            : $"chat-history-delivery-{request.TargetSeed.ActorId.Trim()}-{normalizedCommandId}";
+        var requestFingerprint = conversation.Intent == WorkflowChatConversationIntentKind.Create
+            ? WorkflowChatCreateRequestFingerprint.Compute(request with
+            {
+                ChatConversation = WorkflowChatConversationIntent.Create(),
+                ScopeId = normalizedScopeId,
+                CommandIdSeed = normalizedCommandId,
+                TargetSeed = null,
+                CompletionNotificationTarget = null,
+            })
+            : string.Empty;
+        return await _chatHistoryTerminalDeliveryPort.ReserveAsync(
+                new WorkflowChatHistoryTerminalDeliveryReservationRequest(
+                    deliveryId,
+                    normalizedScopeId,
+                    conversation,
+                    request.Prompt.Trim(),
+                    request.TargetSeed.ActorId.Trim(),
+                    normalizedCommandId,
+                    request.CorrelationIdSeed?.Trim() ?? string.Empty,
+                    requestFingerprint),
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<WorkflowChatRunInteractionResult?> TryRecoverCreateAsync(
+        WorkflowChatRunRequest request,
+        CancellationToken ct)
+    {
+        if (_chatHistoryCreateRecoveryReadPort is null ||
+            request.ChatConversation?.Intent != WorkflowChatConversationIntentKind.Create ||
+            string.IsNullOrWhiteSpace(request.ScopeId) ||
+            string.IsNullOrWhiteSpace(request.CommandIdSeed))
+        {
+            return null;
+        }
+
+        var normalizedScopeId = request.ScopeId.Trim();
+        var normalizedCommandId = request.CommandIdSeed.Trim();
+        var requestFingerprint = WorkflowChatCreateRequestFingerprint.Compute(request with
+        {
+            ChatConversation = WorkflowChatConversationIntent.Create(),
+            ScopeId = normalizedScopeId,
+            CommandIdSeed = normalizedCommandId,
+            TargetSeed = null,
+            CompletionNotificationTarget = null,
+        });
+        var recovery = await _chatHistoryCreateRecoveryReadPort
+            .GetAsync(normalizedScopeId, normalizedCommandId, ct)
+            .ConfigureAwait(false);
+        if (recovery == null)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(recovery.RequestFingerprint) &&
+            !string.Equals(recovery.RequestFingerprint, requestFingerprint, StringComparison.Ordinal))
+        {
+            return WorkflowChatRunInteractionResult.Failure(
+                WorkflowChatRunStartError.IdempotencyConflict,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.IdempotencyConflict));
+        }
+
+        if (string.IsNullOrWhiteSpace(recovery.ConversationId) ||
+            string.IsNullOrWhiteSpace(recovery.TurnId) ||
+            string.IsNullOrWhiteSpace(recovery.WorkflowActorId))
+        {
+            return WorkflowChatRunInteractionResult.Failure(
+                WorkflowChatRunStartError.ChatHistoryReservationUnavailable,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.ChatHistoryReservationUnavailable));
+        }
+
+        var receipt = new WorkflowChatInteractionAcceptedReceipt(
+            new WorkflowChatRunAcceptedReceipt(
+                recovery.WorkflowActorId.Trim(),
+                request.Source.WorkflowName ?? WorkflowRunBehaviorOptions.DirectWorkflowName,
+                string.IsNullOrWhiteSpace(recovery.WorkflowCommandId)
+                    ? normalizedCommandId
+                    : recovery.WorkflowCommandId.Trim(),
+                string.IsNullOrWhiteSpace(recovery.WorkflowCorrelationId)
+                    ? request.CorrelationIdSeed?.Trim() ?? normalizedCommandId
+                    : recovery.WorkflowCorrelationId.Trim()),
+            new WorkflowChatContext(
+                normalizedScopeId,
+                recovery.ConversationId.Trim(),
+                recovery.TurnId.Trim(),
+                recovery.StateVersion));
+
+        return WorkflowChatRunInteractionResult.Success(
+            receipt,
+            new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                WorkflowProjectionCompletionStatus.Completed,
+                false));
+    }
+
+    private static WorkflowChatConversationIntent? NormalizeConversationIntent(WorkflowChatRunRequest request)
+    {
+        if (request.ChatConversation is { Intent: WorkflowChatConversationIntentKind.Create })
+            return WorkflowChatConversationIntent.Create();
+
+        if (request.ChatConversation is { Intent: WorkflowChatConversationIntentKind.Continue } conversation)
+        {
+            var conversationId = string.IsNullOrWhiteSpace(conversation.ConversationId)
+                ? null
+                : conversation.ConversationId.Trim();
+            return conversationId == null
+                ? null
+                : WorkflowChatConversationIntent.Continue(
+                    conversationId,
+                    conversation.MinimumStateVersion);
+        }
+
+        return null;
+    }
+
+    private static WorkflowChatRunStartError MapReservationFailure(
+        WorkflowChatHistoryTerminalDeliveryReservationFailure failure) =>
+        failure switch
+        {
+            WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound =>
+                WorkflowChatRunStartError.ConversationNotFound,
+            WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable =>
+                WorkflowChatRunStartError.ChatHistoryReservationUnavailable,
+            _ => WorkflowChatRunStartError.ChatHistoryReservationUnavailable,
+        };
+
+    private static Application.Abstractions.Runs.WorkflowCompletionNotificationTarget CreateCompletionNotificationTarget(
+        WorkflowChatHistoryTerminalDeliveryReservation reservation) =>
+        new(
+            reservation.DeliveryActorId,
+            reservation.DeliveryId,
+            DateTimeOffset.UtcNow.Add(ChatHistoryTerminalDeliveryLifetime).ToUnixTimeMilliseconds());
 
     private async Task CleanupAttemptAsync(
         WorkflowChatRunInteractionAttempt attempt,
-        CancellationToken ct)
+        CancellationToken ct,
+        WorkflowChatHistoryTerminalDeliveryReservation? chatHistoryDelivery = null)
     {
+        if (!attempt.TryMarkCleanedUp())
+            return;
+
+        if (chatHistoryDelivery is not null && _chatHistoryTerminalDeliveryPort is not null)
+            await _chatHistoryTerminalDeliveryPort
+                .AbandonAsync(chatHistoryDelivery, "workflow_dispatch_not_accepted", ct)
+                .ConfigureAwait(false);
         await RollbackCreatedActorsAsync(attempt.CreatedActorIds, CancellationToken.None).ConfigureAwait(false);
     }
 
@@ -157,25 +396,57 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
 
     private static string CreateInteractionId() => Guid.NewGuid().ToString("N");
 
+    private WorkflowChatRunStartError ValidatePreActorResolution(WorkflowChatRunRequest request)
+    {
+        if (!_projectionPort.ProjectionEnabled)
+            return WorkflowChatRunStartError.ProjectionDisabled;
+        if (request.ChatConversation is { Intent: WorkflowChatConversationIntentKind.Continue } conversation &&
+            !string.IsNullOrWhiteSpace(conversation.ConversationId) &&
+            conversation.MinimumStateVersion is not > 0)
+        {
+            return WorkflowChatRunStartError.ChatHistoryReservationUnavailable;
+        }
+
+        return Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                request.CallerCredential?.BearerToken,
+                request.CallerCredential?.Kind ??
+                Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.Unspecified,
+                request.CallerCredential?.SourceReadableUserBearerToken)
+            ? WorkflowChatRunStartError.InvalidCallerCredential
+            : WorkflowChatRunStartError.None;
+    }
+
     private sealed record WorkflowChatRunInteractionAttempt(
         WorkflowChatRunRequest Request,
         IReadOnlyList<string> CreatedActorIds)
     {
         public bool Accepted { get; private set; }
+        public bool CleanedUp { get; private set; }
 
         public void MarkAccepted() => Accepted = true;
+
+        public bool TryMarkCleanedUp()
+        {
+            if (CleanedUp)
+                return false;
+            CleanedUp = true;
+            return true;
+        }
     }
 
     private sealed record AttemptStartResult(
         WorkflowChatRunInteractionAttempt? Value,
-        WorkflowChatRunStartError Error)
+        WorkflowChatRunStartError Error,
+        WorkflowChatRunStartFailureDetail? FailureDetail = null)
     {
         public bool Succeeded => Error == WorkflowChatRunStartError.None && Value != null;
 
         public static AttemptStartResult Success(WorkflowChatRunInteractionAttempt attempt) =>
             new(attempt, WorkflowChatRunStartError.None);
 
-        public static AttemptStartResult Failure(WorkflowChatRunStartError error) =>
-            new(null, error);
+        public static AttemptStartResult Failure(
+            WorkflowChatRunStartError error,
+            WorkflowChatRunStartFailureDetail? failureDetail = null) =>
+            new(null, error, failureDetail);
     }
 }

@@ -7,14 +7,14 @@ namespace Aevatar.Workflow.Infrastructure.Runs;
 
 public sealed class WorkflowFileArtifactCleanupHostedService : IHostedService, IDisposable
 {
-    private readonly IWorkflowFileArtifactCleanupPort _cleanupPort;
+    private readonly IFileArtifactCleanupPort _cleanupPort;
     private readonly IOptions<WorkflowFileArtifactOptions> _options;
     private readonly ILogger<WorkflowFileArtifactCleanupHostedService> _logger;
     private CancellationTokenSource? _stopping;
     private Task? _loop;
 
     public WorkflowFileArtifactCleanupHostedService(
-        IWorkflowFileArtifactCleanupPort cleanupPort,
+        IFileArtifactCleanupPort cleanupPort,
         IOptions<WorkflowFileArtifactOptions> options,
         ILogger<WorkflowFileArtifactCleanupHostedService> logger)
     {
@@ -68,7 +68,7 @@ public sealed class WorkflowFileArtifactCleanupHostedService : IHostedService, I
 
     private async Task CleanupOnceAsync(CancellationToken cancellationToken)
     {
-        var request = new WorkflowFileArtifactCleanupRequest(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var request = new FileArtifactCleanupRequest(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         var result = await _cleanupPort.CleanupAsync(request, cancellationToken).ConfigureAwait(false);
         if (result.DeletedArtifactCount > 0)
         {

@@ -5,8 +5,21 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID API keys for programmatic access.</summary>
-public sealed class NyxIdApiKeysTool : IAgentTool
+public sealed class NyxIdApiKeysTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    private static readonly NyxIdClosedActionParser<NyxIdApiKeysAction> ActionParser = new(
+    [
+        new("list", NyxIdApiKeysAction.List, new(false, true, false)),
+        new("show", NyxIdApiKeysAction.Show, new(false, true, false)),
+        new("create", NyxIdApiKeysAction.Create, new(true, false, false)),
+        new("rotate", NyxIdApiKeysAction.Rotate, new(true, false, true)),
+        new("delete", NyxIdApiKeysAction.Delete, new(true, false, true)),
+        new("update", NyxIdApiKeysAction.Update, new(true, false, false)),
+        new("bind", NyxIdApiKeysAction.Bind, new(true, false, false)),
+    ]);
+
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdApiKeysTool(NyxIdApiClient client) => _client = client;
@@ -17,13 +30,13 @@ public sealed class NyxIdApiKeysTool : IAgentTool
         "Manage NyxID API keys. " +
         "Actions: list, show, create, rotate, delete, update, bind.";
 
-    public string ParametersSchema => """
+    public string ParametersSchema => $$"""
         {
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "create", "rotate", "delete", "update", "bind"],
+              "enum": {{ActionParser.ActionNamesJson}},
               "description": "Action to perform (default: list)"
             },
             "id": {
@@ -82,33 +95,46 @@ public sealed class NyxIdApiKeysTool : IAgentTool
         }
         """;
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+        ActionParser.Classify(argumentsJson);
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (!parsed.IsValid)
+            return NyxIdClosedActionParser<NyxIdApiKeysAction>.InvalidActionJson;
+
         var args = ToolArgs.Parse(argumentsJson);
-        var action = args.Str("action", "list");
         var id = args.Str("id");
 
-        return action switch
+        return parsed.Action switch
         {
-            "show" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdApiKeysAction.Show when !string.IsNullOrWhiteSpace(id) =>
                 await _client.GetApiKeyAsync(token, id, ct),
-            "rotate" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdApiKeysAction.Rotate when !string.IsNullOrWhiteSpace(id) =>
                 await _client.RotateApiKeyAsync(token, id, ct),
-            "delete" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdApiKeysAction.Delete when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteApiKeyAsync(token, id, ct),
-            "update" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdApiKeysAction.Update when !string.IsNullOrWhiteSpace(id) =>
                 await UpdateKeyAsync(token, id, args, ct),
-            "create" => await CreateKeyAsync(token, args, ct),
-            "bind" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdApiKeysAction.Create => await CreateKeyAsync(token, args, ct),
+            NyxIdApiKeysAction.Bind when !string.IsNullOrWhiteSpace(id) =>
                 await BindKeyAsync(token, id, args, ct),
 
-            "show" or "rotate" or "delete" or "update" or "bind" =>
-                $"{{\"error\":\"'id' is required for {action}\"}}",
-            _ => await ListKeysAsync(token, args, ct),
+            NyxIdApiKeysAction.Show or
+            NyxIdApiKeysAction.Rotate or
+            NyxIdApiKeysAction.Delete or
+            NyxIdApiKeysAction.Update or
+            NyxIdApiKeysAction.Bind =>
+                $"{{\"error\":\"'id' is required for {parsed.Name}\"}}",
+            NyxIdApiKeysAction.List => await ListKeysAsync(token, args, ct),
+            _ => NyxIdClosedActionParser<NyxIdApiKeysAction>.InvalidActionJson,
         };
     }
 
@@ -125,11 +151,30 @@ public sealed class NyxIdApiKeysTool : IAgentTool
         var name = args.Str("name");
         if (string.IsNullOrWhiteSpace(name))
             return """{"error":"'name' is required for create"}""";
+        if (RejectInsecureCallbackUrl(args) is { } callbackError)
+            return callbackError;
         return await _client.CreateApiKeyAsync(token, JsonSerializer.Serialize(BuildPayload(args, name)), ct);
     }
 
-    private async Task<string> UpdateKeyAsync(string token, string id, ToolArgs args, CancellationToken ct) =>
-        await _client.UpdateApiKeyAsync(token, id, JsonSerializer.Serialize(BuildPayload(args, args.Str("name"))), ct);
+    private async Task<string> UpdateKeyAsync(string token, string id, ToolArgs args, CancellationToken ct)
+    {
+        if (RejectInsecureCallbackUrl(args) is { } callbackError)
+            return callbackError;
+        return await _client.UpdateApiKeyAsync(token, id, JsonSerializer.Serialize(BuildPayload(args, args.Str("name"))), ct);
+    }
+
+    // A channel-bot relay callback_url receives NyxID's inbound relay callback carrying the
+    // short-lived X-NyxID-User-Token. Refuse to register a cleartext callback on this agent-facing
+    // key create/update path — the same fail-closed policy the Lark/Telegram provisioning services
+    // apply — so it cannot be used (via nyxid_api_keys create/update + nyxid_channel_bots
+    // create_route) to route that credential to a cleartext public host. Empty is left to NyxID.
+    private static string? RejectInsecureCallbackUrl(ToolArgs args)
+    {
+        var callbackUrl = args.Str("callback_url");
+        if (string.IsNullOrWhiteSpace(callbackUrl) || NyxRelayCallbackUrlPolicy.IsSecureUrl(callbackUrl))
+            return null;
+        return """{"error":"callback_url must be https (or http only for loopback hosts); refusing to register a cleartext callback that would leak the relay user token."}""";
+    }
 
     private async Task<string> BindKeyAsync(string token, string keyId, ToolArgs args, CancellationToken ct)
     {
@@ -158,7 +203,10 @@ public sealed class NyxIdApiKeysTool : IAgentTool
                 }
             }
         }
-        catch { /* ignore parse errors */ }
+        catch (JsonException)
+        {
+            return """{"error":"invalid_services_response"}""";
+        }
 
         if (string.IsNullOrWhiteSpace(userServiceId))
             return $"{{\"error\":\"Service '{serviceSlug}' not found\"}}";
@@ -185,7 +233,10 @@ public sealed class NyxIdApiKeysTool : IAgentTool
                     }
                 }
             }
-            catch { /* ignore */ }
+            catch (JsonException)
+            {
+                return """{"error":"invalid_external_keys_response"}""";
+            }
         }
 
         if (string.IsNullOrWhiteSpace(userApiKeyId))
@@ -220,4 +271,15 @@ public sealed class NyxIdApiKeysTool : IAgentTool
             p["expires_at"] = DateTime.UtcNow.AddDays(days).ToString("o");
         return p;
     }
+}
+
+internal enum NyxIdApiKeysAction
+{
+    List,
+    Show,
+    Create,
+    Rotate,
+    Delete,
+    Update,
+    Bind,
 }

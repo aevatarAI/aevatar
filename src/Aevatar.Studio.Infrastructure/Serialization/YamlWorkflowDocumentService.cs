@@ -6,11 +6,37 @@ using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 using YamlDotNet.RepresentationModel;
+using WorkflowYamlResourceGuard = Aevatar.Workflow.Core.Primitives.WorkflowYamlResourceGuard;
+using WorkflowYamlResourceLimitException = Aevatar.Workflow.Core.Primitives.WorkflowYamlResourceLimitException;
 
 namespace Aevatar.Studio.Infrastructure.Serialization;
 
 public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
 {
+    private static readonly HashSet<string> CapabilityFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "nyxid_operation",
+        "nyxid_request",
+    };
+
+    private static readonly HashSet<string> NyxIdOperationFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "user_service_id",
+        "endpoint_id",
+    };
+
+    private static readonly HashSet<string> NyxIdRequestFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "user_service_id",
+        "method",
+        "path_template",
+        "query_parameters",
+        "header_parameters",
+        "body_required",
+        "body_mode",
+        "response_mode",
+    };
+
     private readonly WorkflowCompatibilityProfile _profile;
     private readonly ISerializer _serializer;
 
@@ -33,12 +59,20 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         }
 
         var findings = new List<ValidationFinding>();
-        YamlStream stream = new();
+        YamlStream stream;
 
         try
         {
+            WorkflowYamlResourceGuard.Validate(yaml);
+            stream = new YamlStream();
             using var reader = new StringReader(yaml);
             stream.Load(reader);
+        }
+        catch (WorkflowYamlResourceLimitException exception)
+        {
+            return new WorkflowParseResult(
+                null,
+                [ValidationFinding.Error("/", exception.Message, code: "yaml_resource_limit")]);
         }
         catch (YamlException exception)
         {
@@ -153,6 +187,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 MaxTokens = ReadInteger(roleNode, "max_tokens", findings, path),
                 MaxToolRounds = ReadInteger(roleNode, "max_tool_rounds", findings, path),
                 MaxHistoryMessages = ReadInteger(roleNode, "max_history_messages", findings, path),
+                AllowedTools = ParseAllowedTools(roleNode, path, findings),
                 EventModules = eventModules,
                 EventRoutes = eventRoutes,
                 Connectors = ParseConnectors(roleNode, path, findings),
@@ -212,6 +247,8 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
             OriginalType = rawType,
             TargetRole = ReadScalar(stepNode, "target_role") ?? ReadScalar(stepNode, "role"),
             UsedRoleAlias = GetNode(stepNode, "target_role") is null && GetNode(stepNode, "role") is not null,
+            AllowedTools = ParseAllowedTools(stepNode, path, findings),
+            Capability = ParseCapability(stepNode, path, findings),
             Parameters = parameters,
             Next = ReadScalar(stepNode, "next"),
             Branches = ParseBranches(stepNode, path, findings),
@@ -221,6 +258,123 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
             OnError = ParseOnError(stepNode, path, findings),
             TimeoutMs = timeoutMs,
         };
+    }
+
+    private static StepCapability? ParseCapability(
+        YamlMappingNode stepNode,
+        string path,
+        ICollection<ValidationFinding> findings)
+    {
+        var raw = GetNode(stepNode, "capability");
+        if (raw is null)
+            return null;
+        if (raw is not YamlMappingNode capabilityNode)
+        {
+            findings.Add(ValidationFinding.Error(
+                $"{path}/capability",
+                "`capability` must be a mapping.",
+                code: "invalid_field"));
+            return null;
+        }
+
+        ReportUnknownKeys(capabilityNode, CapabilityFields, $"{path}/capability", findings);
+        var operation = ParseNyxIdOperation(capabilityNode, path, findings);
+        var request = ParseNyxIdRequest(capabilityNode, path, findings);
+        if (operation is not null && request is not null)
+        {
+            findings.Add(ValidationFinding.Error(
+                $"{path}/capability",
+                "Select exactly one NyxID capability.",
+                code: "invalid_field"));
+        }
+
+        return operation is null && request is null
+            ? null
+            : new StepCapability { NyxIdOperation = operation, NyxIdRequest = request };
+    }
+
+    private static NyxIdOperationCapability? ParseNyxIdOperation(
+        YamlMappingNode capabilityNode,
+        string path,
+        ICollection<ValidationFinding> findings)
+    {
+        var raw = GetNode(capabilityNode, "nyxid_operation");
+        if (raw is null)
+            return null;
+        if (raw is not YamlMappingNode node)
+        {
+            findings.Add(ValidationFinding.Error(
+                $"{path}/capability/nyxid_operation",
+                "`nyxid_operation` must be a mapping.",
+                code: "invalid_field"));
+            return null;
+        }
+
+        ReportUnknownKeys(node, NyxIdOperationFields, $"{path}/capability/nyxid_operation", findings);
+        return new NyxIdOperationCapability
+        {
+            UserServiceId = ReadScalar(node, "user_service_id") ?? string.Empty,
+            EndpointId = ReadScalar(node, "endpoint_id") ?? string.Empty,
+        };
+    }
+
+    private static NyxIdRequestCapability? ParseNyxIdRequest(
+        YamlMappingNode capabilityNode,
+        string path,
+        ICollection<ValidationFinding> findings)
+    {
+        var raw = GetNode(capabilityNode, "nyxid_request");
+        if (raw is null)
+            return null;
+        if (raw is not YamlMappingNode node)
+        {
+            findings.Add(ValidationFinding.Error(
+                $"{path}/capability/nyxid_request",
+                "`nyxid_request` must be a mapping.",
+                code: "invalid_field"));
+            return null;
+        }
+
+        ReportUnknownKeys(node, NyxIdRequestFields, $"{path}/capability/nyxid_request", findings);
+        return new NyxIdRequestCapability
+        {
+            UserServiceId = ReadScalar(node, "user_service_id") ?? string.Empty,
+            Method = ReadScalar(node, "method") ?? string.Empty,
+            PathTemplate = ReadScalar(node, "path_template") ?? string.Empty,
+            QueryParameters = ReadStringList(node, "query_parameters", path, findings),
+            HeaderParameters = ReadStringList(node, "header_parameters", path, findings),
+            BodyRequired = ReadBoolean(
+                node,
+                "body_required",
+                findings,
+                $"{path}/capability/nyxid_request") ?? false,
+            BodyMode = ReadScalar(node, "body_mode") ?? string.Empty,
+            ResponseMode = ReadScalar(node, "response_mode") ?? string.Empty,
+        };
+    }
+
+    private static List<string> ReadStringList(
+        YamlMappingNode node,
+        string key,
+        string stepPath,
+        ICollection<ValidationFinding> findings)
+    {
+        var value = GetNode(node, key);
+        if (value is null)
+            return [];
+        if (value is not YamlSequenceNode sequence ||
+            sequence.Children.Any(static child => child is not YamlScalarNode))
+        {
+            findings.Add(ValidationFinding.Error(
+                $"{stepPath}/capability/nyxid_request/{key}",
+                $"`{key}` must be a list of strings.",
+                code: "invalid_field"));
+            return [];
+        }
+
+        return sequence.Children.Cast<YamlScalarNode>()
+            .Select(static child => child.Value ?? string.Empty)
+            .ToList();
     }
 
     private StudioStepParameters ParseParameters(
@@ -398,6 +552,50 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         return [];
     }
 
+    private static List<string>? ParseAllowedTools(
+        YamlMappingNode node,
+        string path,
+        ICollection<ValidationFinding> findings)
+    {
+        var allowedToolsNode = GetNode(node, "allowed_tools");
+        if (allowedToolsNode is null)
+        {
+            return null;
+        }
+
+        if (allowedToolsNode is YamlSequenceNode sequenceNode)
+        {
+            var tools = new List<string>();
+            for (var index = 0; index < sequenceNode.Children.Count; index++)
+            {
+                if (sequenceNode.Children[index] is not YamlScalarNode scalarNode)
+                {
+                    findings.Add(ValidationFinding.Error(
+                        $"{path}/allowed_tools/{index}",
+                        "Each `allowed_tools` entry must be a string."));
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(scalarNode.Value))
+                {
+                    tools.Add(scalarNode.Value.Trim());
+                }
+            }
+
+            return tools;
+        }
+
+        if (allowedToolsNode is YamlScalarNode scalar)
+        {
+            return (scalar.Value ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+        }
+
+        findings.Add(ValidationFinding.Error($"{path}/allowed_tools", "`allowed_tools` must be a list or comma-delimited string."));
+        return [];
+    }
+
     private Dictionary<string, object?> SerializeRole(RoleModel role)
     {
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
@@ -424,6 +622,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         AddIfNotNull(result, "max_tokens", role.MaxTokens);
         AddIfNotNull(result, "max_tool_rounds", role.MaxToolRounds);
         AddIfNotNull(result, "max_history_messages", role.MaxHistoryMessages);
+        AddIfPresent(result, "allowed_tools", role.AllowedTools);
         AddIfNotNull(result, "event_modules", role.EventModules);
         AddIfNotNull(result, "event_routes", role.EventRoutes);
 
@@ -447,6 +646,9 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         {
             result["target_role"] = step.TargetRole;
         }
+
+        AddIfPresent(result, "allowed_tools", step.AllowedTools);
+        AddIfNotNull(result, "capability", SerializeCapability(step.Capability));
 
         if (step.Parameters.Count > 0)
         {
@@ -495,6 +697,47 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
 
         AddIfNotNull(result, "timeout_ms", step.TimeoutMs);
         return result;
+    }
+
+    private static object? SerializeCapability(StepCapability? capability)
+    {
+        if (capability is null)
+            return null;
+
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (capability.NyxIdOperation is not null)
+        {
+            result["nyxid_operation"] = new Dictionary<string, object?>
+            {
+                ["user_service_id"] = capability.NyxIdOperation.UserServiceId,
+                ["endpoint_id"] = capability.NyxIdOperation.EndpointId,
+            };
+        }
+        if (capability.NyxIdRequest is not null)
+        {
+            var request = new Dictionary<string, object?>
+            {
+                ["user_service_id"] = capability.NyxIdRequest.UserServiceId,
+                ["method"] = capability.NyxIdRequest.Method,
+                ["path_template"] = capability.NyxIdRequest.PathTemplate,
+                ["body_required"] = capability.NyxIdRequest.BodyRequired,
+                ["body_mode"] = capability.NyxIdRequest.BodyMode,
+                ["response_mode"] = capability.NyxIdRequest.ResponseMode,
+            };
+            AddIfPresent(request, "query_parameters", capability.NyxIdRequest.QueryParameters);
+            AddIfPresent(request, "header_parameters", capability.NyxIdRequest.HeaderParameters);
+            result["nyxid_request"] = request;
+        }
+
+        return result.Count == 0 ? null : result;
+    }
+
+    private static void AddIfPresent(IDictionary<string, object?> dictionary, string key, List<string>? value)
+    {
+        if (value is not null)
+        {
+            dictionary[key] = value;
+        }
     }
 
     private void CanonicalizeStepTypeParameters(IDictionary<string, StudioStepParameterValue?> parameters)

@@ -4,8 +4,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to list NyxID active sessions.</summary>
-public sealed class NyxIdSessionsTool : IAgentTool
+public sealed class NyxIdSessionsTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdSessionsTool(NyxIdApiClient client) => _client = client;
@@ -16,6 +18,8 @@ public sealed class NyxIdSessionsTool : IAgentTool
         "List the user's active NyxID sessions, showing device info, IP address, and expiration.";
 
     public string ParametersSchema => """{"type":"object","properties":{}}""";
+
+    public bool IsReadOnly => true;
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

@@ -45,11 +45,14 @@ import {
   fillCardStyle,
 } from '@/shared/ui/proComponents';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { describeError } from '@/shared/ui/errorText';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
   AEVATAR_PRESSABLE_CARD_CLASS,
 } from '@/shared/ui/interactionStandards';
+import { sanitizeUserFacingText } from '@/shared/ui/userFacingIdentifiers';
 import { t } from "@/shared/i18n/messages";
 
 type QueryState<T> = {
@@ -73,6 +76,10 @@ type StudioCompactNoticeLike = {
 function readWorkflowSortTimestamp(value: string): number {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function sanitizeVisibleText(value: string | null | undefined): string {
+  return sanitizeUserFacingText(value) || '';
 }
 
 function compareWorkflowSummaryPriority(
@@ -667,11 +674,19 @@ function buildObserveCompareRows(input: {
     ),
     compare(
       t("pages.studio.studioworkbenchsections.actor.lower", "actor"),
-      trimObserveText(selectedExecution.actorId),
-      trimObserveText(baselineExecution?.actorId),
+      selectedExecution.actorId
+        ? t("pages.studio.studioworkbenchsections.runtime.available", "Runtime available")
+        : formatObserveNotAvailable(),
+      baselineExecution?.actorId
+        ? t("pages.studio.studioworkbenchsections.runtime.available.2", "Runtime available")
+        : formatObserveNotAvailable(),
       resolveObserveDelta({
-        current: trimObserveText(selectedExecution.actorId),
-        baseline: trimObserveText(baselineExecution?.actorId),
+        current: selectedExecution.actorId
+          ? t("pages.studio.studioworkbenchsections.runtime.available.3", "Runtime available")
+          : formatObserveNotAvailable(),
+        baseline: baselineExecution?.actorId
+          ? t("pages.studio.studioworkbenchsections.runtime.available.4", "Runtime available")
+          : formatObserveNotAvailable(),
       }),
     ),
     compare(
@@ -749,9 +764,8 @@ function buildObserveHealthItems(input: {
       note: selectedExecution
         ? t(
             "pages.studio.studioworkbenchsections.selected.run.updated",
-            "Selected run {executionId} · updated {updatedAt}",
+            "Selected run updated {updatedAt}.",
             {
-              executionId: trimObserveText(selectedExecution.executionId),
               updatedAt: formatDateTime(
                 selectedExecution.updatedAtUtc || selectedExecution.startedAtUtc,
               ),
@@ -842,10 +856,7 @@ function buildObserveHealthItems(input: {
       note: baselineExecution
         ? t(
             "pages.studio.studioworkbenchsections.comparing.against.baseline",
-            "Comparing against {executionId} from the same member service.",
-            {
-              executionId: trimObserveText(baselineExecution.executionId),
-            },
+            "Comparing against the nearest previous run from the same member service.",
           )
         : t("pages.studio.studioworkbenchsections.observe.trustworthy.after.baseline", "Observe becomes more trustworthy after another member run lands and a baseline exists."),
       status: baselineExecution ? 'active' : 'pending',
@@ -877,7 +888,10 @@ function buildObservePlaybackEntries(
     )
     .slice(-6)
     .map((log) => ({
-      detail: trimObserveText(log.previewText || log.meta || '', 140),
+      detail: trimObserveText(
+        sanitizeVisibleText(log.previewText || log.meta || ''),
+        140,
+      ),
       label: log.title,
       status: log.interaction
         ? 'waiting'
@@ -953,8 +967,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   const [copiedExecutionLogIndex, setCopiedExecutionLogIndex] =
     React.useState<number | null>(null);
   const [copiedAllExecutionLogs, setCopiedAllExecutionLogs] = React.useState(false);
-  const [copiedExecutionActorId, setCopiedExecutionActorId] =
-    React.useState<string | null>(null);
   const [executionActionInput, setExecutionActionInput] = React.useState('');
   const [executionActionPendingKey, setExecutionActionPendingKey] =
     React.useState('');
@@ -978,7 +990,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     [executions.data],
   );
 
-  const selectedExecutionActorId = selectedExecutionDetail?.actorId || null;
   const activeExecutionLog =
     executionTrace && Number.isInteger(activeExecutionLogIndex)
       ? executionTrace.logs[activeExecutionLogIndex as number] || null
@@ -1186,20 +1197,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     }
   };
 
-  const handleCopyExecutionActorId = async (actorId: string) => {
-    const copied = await copyText(actorId);
-    if (!copied) {
-      return;
-    }
-
-    setCopiedExecutionActorId(actorId);
-    window.setTimeout(() => {
-      setCopiedExecutionActorId((current) =>
-        current === actorId ? null : current,
-      );
-    }, 1600);
-  };
-
   const handleExecutionInteraction = async (
     interaction: ExecutionInteractionState,
     action: 'submit' | 'approve' | 'reject' | 'signal',
@@ -1302,42 +1299,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               </button>
             ) : null}
 
-            {selectedExecutionActorId ? (
-              <>
-                <Typography.Text type="secondary" style={{ fontSize: 11, margin: 0 }}>
-                  {t("pages.studio.studioworkbenchsections.actor.id", "Actor ID")}</Typography.Text>
-                <code
-                  title={selectedExecutionActorId}
-                  style={{
-                    color: '#595959',
-                    fontSize: 11,
-                    maxWidth: 220,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {selectedExecutionActorId}
-                </code>
-                <button
-                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                  type="button"
-                  style={panelIconButtonStyle}
-                  title={t("pages.studio.studioworkbenchsections.copy.actor.id", "Copy actor ID")}
-                  aria-label={t("pages.studio.studioworkbenchsections.copy.actor.id.2", "Copy Actor ID.")}
-                  onClick={() =>
-                    void handleCopyExecutionActorId(selectedExecutionActorId)
-                  }
-                >
-                  {copiedExecutionActorId === selectedExecutionActorId ? (
-                    <CheckOutlined />
-                  ) : (
-                    <CopyOutlined />
-                  )}
-                </button>
-              </>
-            ) : null}
-
             {selectedExecutionDetail?.executionId && !fullscreen ? (
               <button
                 aria-pressed={logsDetached}
@@ -1399,7 +1360,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                     ? t("pages.studio.studioworkbenchsections.waiting.for.manual.approval", "Waiting for manual approval")
                     : activeExecutionInteraction.kind === 'wait_signal'
                       ? t("pages.studio.studioworkbenchsections.wait.for.external.signal", "wait for external signal")
-                    : t("pages.studio.studioworkbenchsections.waiting.for.manual.input", "Waiting for manual input")}
+                    : null}
                 </Typography.Text>
                 <div style={{ color: '#6b7280', fontSize: 12, marginTop: 4 }}>
                   {activeExecutionInteraction.kind === 'human_approval'
@@ -1605,11 +1566,11 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 </div>
                 {log.meta ? (
                   <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                    {log.meta}
+                    {sanitizeVisibleText(log.meta)}
                   </Typography.Text>
                 ) : null}
                 <div style={{ color: '#374151', fontSize: 12 }}>
-                  {log.previewText || log.meta || log.title}
+                  {sanitizeVisibleText(log.previewText || log.meta) || log.title}
                 </div>
               </button>
             ))
@@ -1661,15 +1622,13 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
       type: 'error',
     });
   }
-  if (executionNotice) {
+  if (executionNotice && executionNotice.type !== 'error') {
     compactNotices.push({
       description: executionNotice.message,
       title:
-        executionNotice.type === 'error'
-          ? t("pages.studio.studioworkbenchsections.operation.failed", "Operation failed")
-          : executionNotice.type === 'info'
-            ? t("pages.studio.studioworkbenchsections.requested.to.stop.running", "Requested to stop running")
-            : t("pages.studio.studioworkbenchsections.execution.status.updated", "Execution status updated"),
+        executionNotice.type === 'info'
+          ? t("pages.studio.studioworkbenchsections.requested.to.stop.running", "Requested to stop running")
+          : t("pages.studio.studioworkbenchsections.execution.status.updated", "Execution status updated"),
       type: executionNotice.type,
     });
   }
@@ -1690,11 +1649,20 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
   return (
     <div style={cardStackStyle}>
+      <ConsoleOperationNotice
+        errorMessage={t(
+          'pages.studio.studioworkbenchsections.executionActionFailed',
+          'Execution action could not be completed. Try again.',
+        )}
+        notice={
+          executionNotice?.type === 'error' ? executionNotice : null
+        }
+      />
       {compactNotices.length > 0 ? (
         <div style={studioCompactNoticeStackStyle}>
-          {compactNotices.map((notice, index) => (
+          {compactNotices.map((notice) => (
             <StudioCompactNotice
-              key={`${notice.type}-${index}`}
+              key={String(notice.title)}
               {...notice}
             />
           ))}
@@ -1778,17 +1746,14 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               <Typography.Text type="secondary">{t("pages.studio.studioworkbenchsections.events.2", "Events")}</Typography.Text>
               <Typography.Text strong>{executionLogCount} {t("pages.studio.studioworkbenchsections.logs", "logs")}</Typography.Text>
             </div>
-            <div style={observeRunMetricStyle}>
-              <Typography.Text type="secondary">{t("pages.studio.studioworkbenchsections.actor", "Actor")}</Typography.Text>
-              <Typography.Text
-                strong
-                ellipsis={{
-                  tooltip: selectedExecutionActorId || formatObserveNotAvailable(),
-                }}
-              >
-                {selectedExecutionActorId || formatObserveNotAvailable()}
-              </Typography.Text>
-            </div>
+	            <div style={observeRunMetricStyle}>
+	              <Typography.Text type="secondary">{t("pages.studio.studioworkbenchsections.runtime", "Runtime")}</Typography.Text>
+	              <Typography.Text strong>
+	                {selectedExecutionDetail?.actorId
+                    ? t("pages.studio.studioworkbenchsections.runtime.available", "Runtime available")
+                    : formatObserveNotAvailable()}
+	              </Typography.Text>
+	            </div>
             <div style={observeRunMetricStyle}>
               <Typography.Text type="secondary">{t("pages.studio.studioworkbenchsections.state.version", "State Version")}</Typography.Text>
               <Typography.Text strong>
@@ -1908,9 +1873,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           extra={
             baselineExecution ? (
               <Tag>
-                {t("pages.studio.studioworkbenchsections.baseline.execution.label", "{executionId} baseline", {
-                  executionId: baselineExecution.executionId,
-                })}
+                {t("pages.studio.studioworkbenchsections.baseline.execution.label", "Baseline")}
               </Tag>
             ) : (
               <Tag>{t("pages.studio.studioworkbenchsections.no.baseline.yet", "no baseline yet")}</Tag>
@@ -1931,12 +1894,14 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 }}
               >
                 <Typography.Text type="secondary">{row.label}</Typography.Text>
-                <Typography.Text ellipsis={{ tooltip: row.current }}>
-                  {row.current}
-                </Typography.Text>
-                <Typography.Text type="secondary" ellipsis={{ tooltip: row.baseline }}>
-                  {row.baseline}
-                </Typography.Text>
+                <AevatarTooltip title={row.current}>
+                  <Typography.Text ellipsis>{row.current}</Typography.Text>
+                </AevatarTooltip>
+                <AevatarTooltip title={row.baseline}>
+                  <Typography.Text ellipsis type="secondary">
+                    {row.baseline}
+                  </Typography.Text>
+                </AevatarTooltip>
                 <AevatarStatusTag
                   domain="observation"
                   label="delta"
@@ -2024,23 +1989,12 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
             </div>
             <Space wrap size={[8, 8]}>
               <Tag>
-                {t("pages.studio.studioworkbenchsections.service", "Service")}{selectedExecutionDetail?.serviceId ||
-                  formatObserveNotAvailable()}
+                {selectedExecutionDetail
+                  ? t("pages.studio.studioworkbenchsections.runtime.facts.available", "Runtime facts available")
+                  : formatObserveNotAvailable()}
               </Tag>
               <Tag>
-                {t("pages.studio.studioworkbenchsections.revision", "Revision")}{selectedExecutionDetail?.revisionId ||
-                  formatObserveNotAvailable()}
-              </Tag>
-              <Tag>
-                {t("pages.studio.studioworkbenchsections.definition", "Definition")}{selectedExecutionDetail?.definitionActorId ||
-                  formatObserveNotAvailable()}
-              </Tag>
-              <Tag>
-                {t("pages.studio.studioworkbenchsections.last.event", "Last event")}{selectedExecutionDetail?.lastEventId ||
-                  formatObserveNotAvailable()}
-              </Tag>
-              <Tag>
-                {t("pages.studio.studioworkbenchsections.workspace", "Workspace")}{activeDirectoryLabel ||
+                {activeDirectoryLabel ||
                   t("pages.studio.studioworkbenchsections.workspace", "Workspace")}
               </Tag>
             </Space>
@@ -2048,12 +2002,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               {selectedExecutionDetail
                 ? t(
                     "pages.studio.studioworkbenchsections.selected.facts.come.from",
-                    "Selected facts come from service {serviceId}, revision {revisionId}, actor {actorId}.",
-                    {
-                      actorId: trimObserveText(selectedExecutionDetail.actorId),
-                      revisionId: trimObserveText(selectedExecutionDetail.revisionId),
-                      serviceId: trimObserveText(selectedExecutionDetail.serviceId),
-                    },
+                    "Selected facts come from the current member runtime.",
                   )
                 : activeWorkflowDescription ||
                   t("pages.studio.studioworkbenchsections.the.current.observe.page", "The current Observe page only displays the running facts of the current member; contract and release information remain in Bind.")}
@@ -2062,10 +2011,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               {baselineExecution
                 ? t(
                     "pages.studio.studioworkbenchsections.baseline.detail",
-                    "Baseline: {executionId}, revision {revisionId}, started {startedAt}.",
+                    "Baseline started {startedAt}.",
                     {
-                      executionId: baselineExecution.executionId,
-                      revisionId: trimObserveText(baselineExecution.revisionId),
                       startedAt: formatDateTime(baselineExecution.startedAtUtc),
                     },
                   )

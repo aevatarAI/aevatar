@@ -17,23 +17,333 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     {
         var services = new ServiceCollection();
 
-        services.AddElasticsearchDocumentProjectionStore<TestStoreReadModel, string>(
-            _ => new ElasticsearchProjectionDocumentStoreOptions
-            {
-                AutoCreateIndex = true,
-                Endpoints = ["http://localhost:9200"],
-            },
-            _ => new DocumentIndexMetadata(
-                IndexName: "projection-core-tests",
-                Mappings: new Dictionary<string, object?>(),
-                Settings: new Dictionary<string, object?>(),
-                Aliases: new Dictionary<string, object?>()),
-            keySelector: model => model.Id,
-            keyFormatter: key => key);
+        RegisterProjectionStore(services);
 
         services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IProjectionIndexReconcileTarget) &&
             descriptor.Lifetime == ServiceLifetime.Singleton);
+    }
+
+    [Fact]
+    public void AddElasticsearchDocumentProjectionStore_ShouldNotRegisterRepairStore()
+    {
+        var services = new ServiceCollection();
+
+        RegisterProjectionStore(services);
+
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType ==
+            typeof(IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>));
+        using var provider = services.BuildServiceProvider();
+        provider.GetService<
+                IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>>()
+            .Should()
+            .BeNull();
+    }
+
+    [Fact]
+    public void ConcreteStore_ShouldNotImplementRepairStore()
+    {
+        typeof(IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>)
+            .IsAssignableFrom(
+                typeof(ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>))
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
+    public void AddElasticsearchDocumentProjectionRepairStore_ShouldRegisterSeparateRepairAdapter()
+    {
+        var services = new ServiceCollection();
+        RegisterProjectionStore(services);
+
+        services.AddElasticsearchDocumentProjectionRepairStore<TestStoreReadModel, string>();
+
+        using var provider = services.BuildServiceProvider();
+        var repair = provider.GetRequiredService<
+            IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>>();
+        var concrete = provider.GetRequiredService<
+            ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>>();
+
+        repair.Should().NotBeSameAs(concrete);
+        repair.Should().NotBeAssignableTo<
+            ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>>();
+    }
+
+    [Fact]
+    public async Task RepairInspectAsync_ReturnsDocumentAndOpaqueRevisionLease()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var lease = await RepairStore(provider).InspectAsync("doc-1");
+
+        lease.Should().NotBeNull();
+        lease!.Key.Should().Be("doc-1");
+        lease.Document.ActorId.Should().Be("actor-1");
+        lease.Document.StateVersion.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task RepairInspectAsync_WhenDocumentMissing_ShouldReturnNull()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            MissingRepairDocumentJson("aevatar-projection-core-tests")));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var lease = await RepairStore(provider).InspectAsync("doc-1");
+
+        lease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_UsesConcreteIndexAndOccRevision()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"deleted"}"""));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var result = await repair.DeleteIfUnchangedAsync(lease!);
+
+        result.Should().Be(ElasticsearchProjectionDocumentRepairDeleteDisposition.Deleted);
+        handler.CapturedRequests[1].PathAndQuery.Should().Be(
+            "/aevatar-mainnet-test-v1/_doc/doc-1?if_seq_no=12&if_primary_term=3");
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenDocumentMissing_ShouldReturnAlreadyAbsent()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            DeleteMissingRepairDocumentJson()));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var result = await repair.DeleteIfUnchangedAsync(lease!);
+
+        result.Should().Be(ElasticsearchProjectionDocumentRepairDeleteDisposition.AlreadyAbsent);
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenRevisionChanged_ShouldReturnRevisionConflict()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.Conflict,
+            """{"error":{"type":"version_conflict_engine_exception"},"status":409}"""));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var result = await repair.DeleteIfUnchangedAsync(lease!);
+
+        result.Should().Be(ElasticsearchProjectionDocumentRepairDeleteDisposition.RevisionConflict);
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenDeleteResponseIsLostAndDocumentIsGone_ShouldReturnAlreadyAbsent()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => throw new HttpRequestException("delete response lost"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            MissingRepairDocumentJson()));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var result = await repair.DeleteIfUnchangedAsync(lease!);
+
+        result.Should().Be(ElasticsearchProjectionDocumentRepairDeleteDisposition.AlreadyAbsent);
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "DELETE", "GET");
+        handler.CapturedRequests[2].PathAndQuery.Should().Be(
+            "/aevatar-mainnet-test-v1/_doc/doc-1");
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenDeleteTimesOutAndDocumentIsGone_ShouldReturnAlreadyAbsent()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => throw new TimeoutException("delete timed out"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            MissingRepairDocumentJson()));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var result = await repair.DeleteIfUnchangedAsync(lease!);
+
+        result.Should().Be(ElasticsearchProjectionDocumentRepairDeleteDisposition.AlreadyAbsent);
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "DELETE", "GET");
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenDeleteReturnsIndexNotFound_ShouldSurfaceProviderFailure()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            """{"error":{"type":"index_not_found_exception","index":"aevatar-mainnet-test-v1"},"status":404}"""));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var act = () => repair.DeleteIfUnchangedAsync(lease!);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*repair-delete*");
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "DELETE");
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenReinspectionReturnsIndexNotFound_ShouldSurfaceProviderFailure()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => throw new HttpRequestException("delete response lost"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            """{"error":{"type":"index_not_found_exception","index":"aevatar-mainnet-test-v1"},"status":404}"""));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var act = () => repair.DeleteIfUnchangedAsync(lease!);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*repair-inspect*");
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "DELETE", "GET");
+    }
+
+    [Theory]
+    [InlineData("""{"found":false}""")]
+    [InlineData("""{"_index":"wrong-index","_id":"doc-1","found":false}""")]
+    [InlineData("""{"_index":"aevatar-mainnet-test-v1","_id":"wrong-doc","found":false}""")]
+    [InlineData("<html>not found</html>")]
+    public async Task RepairDeleteIfUnchangedAsync_WhenReinspectionReturnsNonExactDocument404_ShouldSurfaceProviderFailure(
+        string payload)
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => throw new HttpRequestException("delete response lost"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, payload));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var act = () => repair.DeleteIfUnchangedAsync(lease!);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*repair-inspect*");
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "DELETE", "GET");
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenCallerCancelsAfterDeleteIsSent_ShouldStillReinspect()
+    {
+        using var callerCancellation = new CancellationTokenSource();
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ =>
+        {
+            callerCancellation.Cancel();
+            throw new HttpRequestException("delete response lost");
+        });
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            MissingRepairDocumentJson()));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var result = await repair.DeleteIfUnchangedAsync(lease!, callerCancellation.Token);
+
+        callerCancellation.IsCancellationRequested.Should().BeTrue();
+        result.Should().Be(ElasticsearchProjectionDocumentRepairDeleteDisposition.AlreadyAbsent);
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "DELETE", "GET");
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenDeleteResponseIsLostAndDocumentRemains_ShouldSurfaceFailure()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => throw new HttpRequestException("delete response lost"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var act = () => repair.DeleteIfUnchangedAsync(lease!);
+
+        await act.Should().ThrowAsync<HttpRequestException>()
+            .WithMessage("delete response lost");
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "DELETE", "GET");
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenCallerAlreadyCanceled_ShouldNotIssueDelete()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var act = () => repair.DeleteIfUnchangedAsync(lease!, cancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET");
     }
 
     [Fact]
@@ -151,6 +461,43 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task QueryAsync_ShouldTranslateAnyOfFiltersToMinimumOneShouldMatch()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[]}}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            AnyOfFilters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("active"),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("revocation-pending"),
+                },
+            ],
+        });
+
+        var body = handler.CapturedRequests.Should().ContainSingle().Subject.Body;
+        body.Should().Contain("\"should\"");
+        body.Should().Contain("\"minimum_should_match\":1");
+        body.Should().Contain("\"active\"");
+        body.Should().Contain("\"revocation-pending\"");
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenTimestampDescriptorFieldIsUnmapped_ShouldInitializeItAsDate()
     {
         var handler = CreateSuccessfulUpsertHandler();
@@ -243,7 +590,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task UpsertAsync_WhenDescriptorContainsOpenFields_ShouldNotInitializeStaticMappingsForThem()
+    public async Task UpsertAsync_WhenDescriptorContainsOpenFields_ShouldOnlySkipOpenMessagesAndRepeatedPrimitives()
     {
         var handler = CreateSuccessfulUpsertHandler();
         var options = new ElasticsearchProjectionDocumentStoreOptions
@@ -274,10 +621,138 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         var properties = GetProperties(indexPayload);
         properties.Should().NotContainKey("fields_value");
         properties.Should().NotContainKey("open_payload");
-        properties.Should().NotContainKey("labels");
-        properties.Should().NotContainKey("entries");
         properties.Should().NotContainKey("tags");
+        GetMappingType(indexPayload, "labels").Should().Be("object");
+        GetFieldMapping(indexPayload, "labels").GetProperty("enabled").GetBoolean().Should().BeFalse();
         GetMappingType(indexPayload, "updated_at_utc_value").Should().Be("date");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenDescriptorContainsProtoMaps_ShouldDisableMapMappingsAndUseObjectParents()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestRecursiveWellKnownReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        await store.UpsertAsync(new TestRecursiveWellKnownReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            UpdatedAt = DateTimeOffset.Parse("2026-05-15T00:00:00Z"),
+        });
+
+        var indexCreateRequest = GetIndexCreateRequest(handler);
+        var indexPayload = ParseJson(indexCreateRequest.Body);
+        var mappings = indexPayload.GetProperty("mappings");
+        mappings.TryGetProperty("dynamic", out _).Should().BeFalse();
+        indexCreateRequest.Body.Should().NotContain("\"nested\"");
+
+        GetMappingType(indexPayload, "labels").Should().Be("object");
+        GetFieldMapping(indexPayload, "labels").GetProperty("enabled").GetBoolean().Should().BeFalse();
+
+        GetMappingType(indexPayload, "primary_entry").Should().Be("object");
+        GetMappingType(indexPayload, "primary_entry", "entry_id").Should().Be("keyword");
+        GetMappingType(indexPayload, "primary_entry", "attributes").Should().Be("object");
+        GetFieldMapping(indexPayload, "primary_entry", "attributes")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+        GetMappingType(indexPayload, "primary_entry", "leaf").Should().Be("object");
+        GetMappingType(indexPayload, "primary_entry", "leaf", "leaf_id").Should().Be("keyword");
+        GetFieldMapping(indexPayload, "primary_entry", "leaf", "annotations")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+
+        GetMappingType(indexPayload, "entries").Should().Be("object");
+        GetFieldMapping(indexPayload, "entries").TryGetProperty("properties", out _).Should().BeTrue();
+        GetFieldMapping(indexPayload, "entries", "attributes")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+        GetMappingType(indexPayload, "child_entries").Should().Be("object");
+        GetFieldMapping(indexPayload, "child_entries", "leaf", "annotations")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenProviderDeclaresExplicitNestedMapMapping_ShouldPreserveExactPath()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestRecursiveWellKnownReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>
+                {
+                    ["properties"] = new Dictionary<string, object?>
+                    {
+                        ["primary_entry"] = new Dictionary<string, object?>
+                        {
+                            ["type"] = "object",
+                            ["properties"] = new Dictionary<string, object?>
+                            {
+                                ["attributes"] = new Dictionary<string, object?>
+                                {
+                                    ["type"] = "object",
+                                    ["enabled"] = true,
+                                },
+                            },
+                        },
+                    },
+                },
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        await store.UpsertAsync(new TestRecursiveWellKnownReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            UpdatedAt = DateTimeOffset.Parse("2026-05-15T00:00:00Z"),
+        });
+
+        var indexPayload = ParseJson(GetIndexCreateRequest(handler).Body);
+        GetMappingType(indexPayload, "primary_entry").Should().Be("object");
+        GetMappingType(indexPayload, "primary_entry", "attributes").Should().Be("object");
+        GetFieldMapping(indexPayload, "primary_entry", "attributes")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeTrue();
+        GetFieldMapping(indexPayload, "primary_entry", "leaf", "annotations")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
     }
 
     [Fact]
@@ -699,6 +1174,58 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task UpsertAsync_WhenDelayedWriteFollowsVersionedDelete_ShouldRemainTombstoned()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-tombstone","actor_id":"actor-tombstone","state_version":"7","last_event_id":"evt-7","updated_at_utc_value":"2026-07-29T00:00:07Z","value":"live"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"result":"updated"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":8,"_primary_term":3,"_source":{"__projection_tombstone":true,"id":"actor-tombstone","actor_id":"actor-tombstone","state_version":"8","last_event_id":"evt-8-delete","updated_at_utc_value":"2026-07-29T00:00:08Z","__projection_deleted_at_utc":"2026-07-29T00:00:08Z","ProjectionDocumentId":"actor-tombstone"}}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        var deleted = await store.DeleteAsync(new ProjectionDocumentDeleteMarker(
+            "actor-tombstone",
+            "actor-tombstone",
+            8,
+            "evt-8-delete",
+            DateTimeOffset.Parse("2026-07-29T00:00:08Z")));
+        var delayed = await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-tombstone",
+            ActorId = "actor-tombstone",
+            StateVersion = 7,
+            LastEventId = "evt-7",
+            UpdatedAt = DateTimeOffset.Parse("2026-07-29T00:00:07Z"),
+            Value = "delayed",
+        });
+
+        deleted.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        delayed.Disposition.Should().Be(ProjectionWriteDisposition.Stale);
+        handler.CapturedRequests.Should().HaveCount(3);
+        handler.CapturedRequests[1].Method.Should().Be("PUT");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_seq_no=7");
+        var tombstonePayload = ParseJson(handler.CapturedRequests[1].Body);
+        tombstonePayload.GetProperty("__projection_tombstone").GetBoolean().Should().BeTrue();
+        tombstonePayload.GetProperty("state_version").GetString().Should().Be("8");
+        tombstonePayload.GetProperty("last_event_id").GetString().Should().Be("evt-8-delete");
+        var tombstoneRequests = handler.CapturedRequests
+            .Where(r => r.Method == "PUT" && HasTombstonePayload(r.Body))
+            .ToList();
+        tombstoneRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenReadModelUsesDynamicIndexScope_ShouldTargetScopeSpecificIndices()
     {
         var handler = new ScriptedHttpMessageHandler();
@@ -939,6 +1466,37 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 
         // 2xx with unparseable body: treat as Applied (conservative default vs dropping the delete).
         result.IsApplied.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetAndQueryAsync_ShouldHideProviderOwnedTombstones()
+    {
+        var getHandler = new ScriptedHttpMessageHandler();
+        getHandler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":8,"_primary_term":3,"_source":{"__projection_tombstone":true,"id":"actor-tombstone","actor_id":"actor-tombstone","state_version":"8","last_event_id":"evt-8-delete","updated_at_utc_value":"2026-07-29T00:00:08Z","__projection_deleted_at_utc":"2026-07-29T00:00:08Z","ProjectionDocumentId":"actor-tombstone"}}"""));
+        using var getStore = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            getHandler);
+
+        var hidden = await getStore.GetAsync("actor-tombstone");
+
+        hidden.Should().BeNull();
+
+        var queryHandler = new ScriptedHttpMessageHandler();
+        queryHandler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[{"_source":{"__projection_tombstone":true,"id":"actor-tombstone","actor_id":"actor-tombstone","state_version":"8","last_event_id":"evt-8-delete","updated_at_utc_value":"2026-07-29T00:00:08Z"}}]}}"""));
+        using var queryStore = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            queryHandler);
+
+        var query = await queryStore.QueryAsync(new ProjectionDocumentQuery { Take = 10 });
+
+        query.Items.Should().BeEmpty();
+        queryHandler.CapturedRequests.Should().ContainSingle()
+            .Which.Body.Should().Contain("\"must_not\"");
+        queryHandler.CapturedRequests[0].Body.Should().Contain("\"__projection_tombstone\":true");
     }
 
     [Fact]
@@ -1469,6 +2027,75 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             httpMessageHandler: handler);
     }
 
+    private static ServiceProvider CreateRepairProvider(
+        ElasticsearchProjectionDocumentStoreOptions options,
+        HttpMessageHandler handler)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(CreateStore(options, handler));
+        services.AddElasticsearchDocumentProjectionRepairStore<TestStoreReadModel, string>();
+        return services.BuildServiceProvider();
+    }
+
+    private static IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string> RepairStore(
+        IServiceProvider provider) =>
+        provider.GetRequiredService<
+            IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>>();
+
+    private static void RegisterProjectionStore(IServiceCollection services)
+    {
+        services.AddElasticsearchDocumentProjectionStore<TestStoreReadModel, string>(
+            _ => new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = true,
+                Endpoints = ["http://localhost:9200"],
+            },
+            _ => new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key);
+    }
+
+    private static string ExistingRepairDocumentJson()
+    {
+        return """
+               {
+                 "_index":"aevatar-mainnet-test-v1",
+                 "_seq_no":12,
+                 "_primary_term":3,
+                 "_source":{
+                   "id":"doc-1",
+                   "actor_id":"actor-1",
+                   "state_version":"7",
+                   "last_event_id":"event-7",
+                   "updated_at_utc_value":"2026-07-25T00:00:00Z"
+                 }
+               }
+               """;
+    }
+
+    private static string MissingRepairDocumentJson(
+        string indexName = "aevatar-mainnet-test-v1") =>
+        $$"""
+        {
+          "_index":"{{indexName}}",
+          "_id":"doc-1",
+          "found":false
+        }
+        """;
+
+    private static string DeleteMissingRepairDocumentJson() =>
+        """
+        {
+          "_index":"aevatar-mainnet-test-v1",
+          "_id":"doc-1",
+          "result":"not_found"
+        }
+        """;
+
     private static ScriptedHttpMessageHandler CreateSuccessfulUpsertHandler()
     {
         var handler = new ScriptedHttpMessageHandler();
@@ -1504,6 +2131,13 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         return document.RootElement.Clone();
     }
 
+    private static bool HasTombstonePayload(string json)
+    {
+        var payload = ParseJson(json);
+        return payload.TryGetProperty("__projection_tombstone", out var tombstone) &&
+               tombstone.ValueKind == JsonValueKind.True;
+    }
+
     private static IReadOnlyDictionary<string, JsonElement> GetProperties(JsonElement indexPayload)
     {
         return indexPayload
@@ -1513,14 +2147,30 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             .ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.Ordinal);
     }
 
-    private static JsonElement GetFieldMapping(JsonElement indexPayload, string fieldName)
+    private static JsonElement GetFieldMapping(JsonElement indexPayload, params string[] fieldPath)
     {
-        return GetProperties(indexPayload)[fieldName];
+        fieldPath.Should().NotBeEmpty();
+
+        IReadOnlyDictionary<string, JsonElement> properties = GetProperties(indexPayload);
+        JsonElement mapping = default;
+        for (var index = 0; index < fieldPath.Length; index++)
+        {
+            mapping = properties[fieldPath[index]];
+            if (index == fieldPath.Length - 1)
+                return mapping;
+
+            properties = mapping
+                .GetProperty("properties")
+                .EnumerateObject()
+                .ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.Ordinal);
+        }
+
+        throw new InvalidOperationException("The field path must contain at least one segment.");
     }
 
-    private static string? GetMappingType(JsonElement indexPayload, string fieldName)
+    private static string? GetMappingType(JsonElement indexPayload, params string[] fieldPath)
     {
-        return GetFieldMapping(indexPayload, fieldName).GetProperty("type").GetString();
+        return GetFieldMapping(indexPayload, fieldPath).GetProperty("type").GetString();
     }
 
     private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, string json)

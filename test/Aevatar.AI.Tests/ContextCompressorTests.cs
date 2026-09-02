@@ -369,7 +369,7 @@ public class ContextCompressorTests
             history: history,
             toolLoop: toolLoop,
             hooks: pipeline,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages(null),
                 Tools = null,
@@ -377,7 +377,7 @@ public class ContextCompressorTests
             compressionConfig: compressionConfig);
 
         await ChatStreamContentAggregator.AggregateContentAsync(
-            chat.ChatStreamAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None),
+            chat.ChatStreamAsync("trigger", maxToolRounds: 1, turnCatalog: null, ct: CancellationToken.None),
             ct: CancellationToken.None);
 
         hook.CompactStartCount.Should().Be(1);
@@ -694,7 +694,7 @@ public class ContextCompressorTests
             history: history,
             toolLoop: toolLoop,
             hooks: pipeline,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages(null),
                 Tools = null,
@@ -702,7 +702,7 @@ public class ContextCompressorTests
             compressionConfig: compressionConfig);
 
         await ChatStreamContentAggregator.AggregateContentAsync(
-            chat.ChatStreamAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None),
+            chat.ChatStreamAsync("trigger", maxToolRounds: 1, turnCatalog: null, ct: CancellationToken.None),
             ct: CancellationToken.None);
 
         hook.CompactStartCount.Should().Be(0);
@@ -727,7 +727,7 @@ public class ContextCompressorTests
             history: history,
             toolLoop: toolLoop,
             hooks: pipeline,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages(null),
                 Tools = null,
@@ -735,7 +735,7 @@ public class ContextCompressorTests
             compressionConfig: compressionConfig);
 
         await ChatStreamContentAggregator.AggregateContentAsync(
-            chat.ChatStreamAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None),
+            chat.ChatStreamAsync("trigger", maxToolRounds: 1, turnCatalog: null, ct: CancellationToken.None),
             ct: CancellationToken.None);
 
         hook.CompactStartCount.Should().Be(0);

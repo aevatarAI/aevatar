@@ -117,6 +117,21 @@ llm-anthropic/claude-haiku-4-5
 
 这只是兼容无状态客户端的历史上下文折叠，不等于正式 continuation。
 
+### 4.1 Run 记录与 streaming 完成语义
+
+Responses、Messages 和 Chat Completions 三条直连入口都把模型调用收敛到 `LlmSessionGAgent` 的 typed run 记录链路。HTTP handler 只 dispatch run command 并观察 terminal projection；真正的 provider stream 不在 Host 内同步消费，也不占用 session actor command turn，当前由 off-grain hosted run executor（`LlmRunExecutionWorker`，普通线程池任务，不占用任何 Orleans grain turn）连续消费。
+
+执行边界如下：
+
+1. `LlmRunRequested` 进入 session actor 后先记录 `LlmRunStartedEvent`，ACK 只表示 run 已被 actor 接受。
+2. session actor 持久化 `LlmRunExecutionReadyEvent` 后，在自身 turn 内通过 `ILlmRunExecutionScheduler` 把 run 非阻塞入队到有界 `ILlmRunExecutionQueue`（满则抛 `LlmRunExecutionQueueFullException` → actor 落 `execution_dispatch_failed` 终态，不阻塞 actor turn）；host 注册的 `LlmRunExecutionWorker`（`BackgroundService`）取出后通过 `ILlmRunExecutionService` / `ILlmRunExecutor` 调用 `ILlmRunCore`，在任何 grain turn 之外连续消费 NyxID/provider 的 live `ChatStreamAsync`。run 的 crash/abandon 兜底由 session actor 自持久 run-timeout finalizer（分钟级，与 24h session TTL 解耦）负责。
+3. 执行侧 sink 不直接写 session 状态，而是通过 `IActorDispatchPort` 把 chunk/tool/terminal 结果作为 typed `Record*` recorder commands 发回 session actor；session actor handler 再提交 `LlmStreamChunkObserved`、`LlmToolCallObserved`、`LlmSessionForwardedToolCallEmittedEvent`、`LlmRunCompleted`、`LlmRunFailed`、`LlmRunCancelled`。
+4. session actor 是唯一权威状态源。它使用 `responseId + runId + sequence` 做幂等接受，重复 chunk、晚到 recorder command、重复 terminal dispatch、terminal 后失败重试都不会改写已提交 terminal 状态，也不依赖执行侧或进程内 sequence counter。
+5. provider stream 没有 terminal chunk 时，取消或观察超时必须落成 `LlmRunCancelled` / terminal failure 这类 typed fact；不能依赖 Host 临时拼 response，也不能用 query-time replay 修补。
+6. self-continuation 只适合持久化 actor 下一拍要处理的稳定事实，不适合保存 HTTP stream 枚举器。live provider stream 一旦离开当前 async consumption frame，就没有可重放的远端连接状态；因此不能设计为 session actor self-message 小步恢复，也不能交给无权威状态的 `Task.Run` callback 推进。若未来继续拆分执行器，执行器必须保持 run-scoped execution boundary，并通过 typed recorder commands 让 session actor 拥有 durable sequence/watermark、cancellation 和 terminal facts。
+
+这组约束保证 streaming 与非 streaming create 都从同一个 committed terminal fact 得到结果：成功映射为 completed response，provider failure 映射为非 2xx error envelope，取消映射为 `run_cancelled`。
+
 ## 5. 直连工具行为
 
 `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 使用同一套 `IResponsesDirectToolPlanService` + `IResponsesToolClassificationService` 抽象组装 tool sources 并做工具分类。三条 create 入口都会合并同一批全局 `IResponsesToolProvider`，并按 chat-route `ForwardToModel.ToolSetRef` 追加同一个 route tool set。Mainnet 的 direct LLM ingress 默认补 `workspace.default`；`lark.self_notify`、`voice.realtime` 也必须组合 `workspace.default`，所以 NyxID/Aevatar workspace tools 是默认可见能力，不依赖调用方显式配置 route tool set。最终工具分成三类：
@@ -124,6 +139,8 @@ llm-anthropic/claude-haiku-4-5
 - Aevatar substitute tools：由服务端接管执行并记录状态。
 - Aevatar additive tools：由服务端额外注入，供模型主动调用。
 - forwarded tools：保留给客户端或上游模型继续处理。
+
+前两类是 server-owned tools，最终参数在 caller-owned trusted prefill/hook 完成后冻结，并统一进入 `IAgentToolExecutionPort`。端口内只做一次 safety classification，再执行 credential policy、actor-owned grant、start-once admission ledger 和 `WAITING_APPROVAL/RUNNING/TERMINAL` audit observation；只有 ledger 返回 `Started` 可以进入唯一 raw terminal `AdmittedAgentToolExecutor`。audit append status 不授予执行，terminal 已调用后的 audit failure 保留实际结果且不可重试。Responses 不再拥有单独的 safe-executor wrapper，也不组装第二套 approval/audit middleware。
 
 当前 substitute tools 包括：
 
@@ -147,7 +164,7 @@ llm-anthropic/claude-haiku-4-5
 
 chat-route policy 指定 `tool_set_ref` 或 `tool_choice_hint` 时，三条直连入口都会使用同一个 direct tool plan：同一个 tool set 会被注入，同一个 trusted prefilled arguments 合并规则会生效。不要为 `/v1/messages` 或 `/v1/chat/completions` 另建工具白名单。
 
-直连工具的失败语义按边界分层处理。客户端声明但未被 Aevatar substitute 的 forwarded tools 仍然由客户端执行；这类工具不会在 Aevatar 内被降级。Aevatar 本地 direct tools 执行失败时，actor 会把失败转成合法 JSON tool output，并继续把结果送回模型，避免一个可选本地工具异常终止整次 response。该 JSON 只暴露稳定错误码、工具名和异常类型，不透出 token、请求头或内部路径。调用方取消仍然取消整次 run，不会被转成 tool output。chat-route `tool_set_ref` 解析错误仍然 fail closed 返回配置错误；但已经解析出的 tool source、全局 provider、skills/Ornn discovery 如果单个 source 失败，会记录 warning 并跳过该 source，其他可用工具继续进入本次计划。
+直连工具的失败语义按边界分层处理。客户端声明但不属于 Aevatar substitute 或 additive 的 forwarded tools 仍然由客户端执行；这类工具不会在 Aevatar 内被降级，也不会进入 `IAgentToolExecutionPort`，本地端口调用数恒为 0。只要某个工具名来自 Aevatar-owned substitute/additive discovery，即使客户端也声明了同名工具，该名称也会作为 `owned_tool_names` 写入 run command，并由运行时作为 deny-forward 边界处理，不能被转成 forwarded tool call。Aevatar 本地 direct tools 执行失败时，actor 会把端口 outcome 转成合法 JSON tool output，并继续把结果送回模型，避免一个可选本地工具异常终止整次 response。`RUNNING Duplicate/Conflict` 不会重放；terminal 已执行但 terminal audit 失败时保留真实 result，标记 audit incomplete，且不可重试。错误 JSON 只暴露稳定错误码、工具名和异常类型，不透出 token、请求头或内部路径。调用方取消仍然取消整次 run，不会被转成 tool output。chat-route `tool_set_ref` 解析错误仍然 fail closed 返回配置错误；但已经解析出的 tool source、全局 provider、skills/Ornn discovery 如果单个 source 失败，会记录 warning 并跳过该 source，其他可用工具继续进入本次计划。
 
 ## 6. 显式 Skill 触发
 

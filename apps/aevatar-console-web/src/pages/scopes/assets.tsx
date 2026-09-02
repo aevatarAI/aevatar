@@ -543,7 +543,12 @@ const TeamAssetsPage: React.FC = () => {
               />
               <AssetMetaField
                 label={record.tertiaryMetaLabel ?? "Actor"}
-                value={record.tertiaryMetaValue ?? record.actorId ?? "n/a"}
+                value={
+                  record.tertiaryMetaValue ??
+                  (record.actorId
+                    ? t("pages.scopes.assets.actor.available", "Actor available")
+                    : "n/a")
+                }
               />
             </div>
           </div>
@@ -664,7 +669,12 @@ const TeamAssetsPage: React.FC = () => {
               />
               <AssetMetaField
                 label={record.tertiaryMetaLabel ?? "Catalog actor"}
-                value={record.tertiaryMetaValue ?? record.actorId ?? "n/a"}
+                value={
+                  record.tertiaryMetaValue ??
+                  (record.actorId
+                    ? t("pages.scopes.assets.actor.available", "Actor available")
+                    : "n/a")
+                }
               />
             </div>
           </div>

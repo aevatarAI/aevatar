@@ -148,6 +148,85 @@ public sealed class MainnetChatCompletionsEndpointsTests
     }
 
     [Fact]
+    public async Task PostChatCompletions_StreamingWithToolCalls_ShouldEmitOnlyTerminalToolCallSnapshotBeforeStop()
+    {
+        var provider = new ChatCompletionsRecordingLLMProvider();
+        var observation = ChatCompletionsObservationScenarioBuilder.ForText(string.Empty)
+            .WithChunkText("Checking")
+            .WithToolCallDelta("call_1", "get_weather", """{"city":"SF"}""")
+            .WithToolCallDelta("call_2", "get_time", """{"zone":"UTC"}""")
+            .WithCompletedToolCall("call_1", "get_weather", """{"city":"SF"}""")
+            .WithCompletedToolCall("call_2", "get_time", """{"zone":"UTC"}""")
+            .Build();
+        await using var app = await CreateAppAsync(provider, observationRuntime: observation);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""
+            {
+              "model": "gpt-4o-mini",
+              "messages": [{"role": "user", "content": "weather and time"}],
+              "stream": true,
+              "tools": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "get_weather",
+                    "parameters": {"type":"object","properties":{"city":{"type":"string"}}}
+                  }
+                },
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "get_time",
+                    "parameters": {"type":"object","properties":{"zone":{"type":"string"}}}
+                  }
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "stream-tool-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        var frames = ParseDataFrames(body).ToArray();
+        frames.Should().HaveCount(3);
+        frames[0].RootElement.GetProperty("choices")[0].GetProperty("delta").GetProperty("content")
+            .GetString()
+            .Should()
+            .Be("Checking");
+        var toolChunk = frames[1].RootElement.GetProperty("choices")[0].GetProperty("delta").GetProperty("tool_calls");
+        toolChunk.GetArrayLength().Should().Be(2);
+        toolChunk[0].GetProperty("index").GetInt32().Should().Be(0);
+        toolChunk[0].GetProperty("id").GetString().Should().Be("call_1");
+        toolChunk[1].GetProperty("index").GetInt32().Should().Be(1);
+        toolChunk[1].GetProperty("id").GetString().Should().Be("call_2");
+        frames[2].RootElement.GetProperty("choices")[0].GetProperty("finish_reason").GetString()
+            .Should()
+            .Be("tool_calls");
+        body.Should().Contain("data: [DONE]");
+        body.IndexOf("\"tool_calls\":", StringComparison.Ordinal)
+            .Should()
+            .Be(body.LastIndexOf("\"tool_calls\":", StringComparison.Ordinal));
+        body.IndexOf("\"tool_calls\":", StringComparison.Ordinal)
+            .Should()
+            .BeLessThan(body.IndexOf("\"finish_reason\":\"tool_calls\"", StringComparison.Ordinal));
+
+        foreach (var frame in frames)
+        {
+            if (frame.RootElement.GetProperty("choices").GetArrayLength() == 0)
+                continue;
+            var delta = frame.RootElement.GetProperty("choices")[0].GetProperty("delta");
+            if (delta.TryGetProperty("tool_calls", out var calls))
+                calls.GetArrayLength().Should().Be(2);
+        }
+    }
+
+    [Fact]
     public async Task PostChatCompletions_WithToolCall_ShouldDispatchForwardedToolSelection_AndReturnToolCalls()
     {
         var provider = new ChatCompletionsRecordingLLMProvider();
@@ -250,7 +329,10 @@ public sealed class MainnetChatCompletionsEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             chatRoutePolicyQueryPort: queryPort,
-            observationRuntime: ChatCompletionsObservationScenarioBuilder.ForText("tool-driven").Build());
+            observationRuntime: ChatCompletionsObservationScenarioBuilder.ForText(string.Empty)
+                .WithToolCallDelta("call_team_1", "aevatar_invoke_team", """{"team_id":"team-1"}""")
+                .WithCompletedToolCall("call_team_1", "aevatar_invoke_team", """{"team_id":"team-1"}""")
+                .Build());
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
@@ -273,12 +355,11 @@ public sealed class MainnetChatCompletionsEndpointsTests
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_team");
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("choices")[0]
-            .GetProperty("message")
-            .GetProperty("content")
-            .GetString()
-            .Should()
-            .Be("tool-driven");
+        var choice = doc.RootElement.GetProperty("choices")[0];
+        choice.GetProperty("finish_reason").GetString().Should().Be("stop");
+        if (choice.GetProperty("message").TryGetProperty("tool_calls", out var toolCalls))
+            toolCalls.ValueKind.Should().Be(JsonValueKind.Null);
+        body.Should().NotContain("call_team_1");
     }
 
     [Fact]
@@ -313,6 +394,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
         });
         builder.WebHost.UseTestServer();
         builder.Configuration["Aevatar:Authentication:Authority"] = "https://invalid.example";
+        builder.Configuration["Aevatar:Authentication:Audience"] = "aevatar-api";
         builder.AddAevatarAuthentication();
 
         builder.Services.AddSingleton<ILLMProviderFactory>(provider);
@@ -406,6 +488,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.SubstitutedToolNames.Should().Contain("WebSearch");
         command.ToolSelection.AdditiveToolNames.Should().Contain(["use_skill", "ornn_search_skills", "ornn_publish_skill"]);
+        command.ToolSelection.OwnedToolNames.Should().Contain(["WebSearch", "use_skill", "ornn_search_skills", "ornn_publish_skill"]);
     }
 
     [Fact]
@@ -478,6 +561,20 @@ public sealed class MainnetChatCompletionsEndpointsTests
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
 
+    private static IEnumerable<JsonDocument> ParseDataFrames(string body)
+    {
+        foreach (var frame in body.Split("\n\n", StringSplitOptions.RemoveEmptyEntries))
+        {
+            const string prefix = "data: ";
+            if (!frame.StartsWith(prefix, StringComparison.Ordinal))
+                continue;
+            var payload = frame[prefix.Length..];
+            if (string.Equals(payload, "[DONE]", StringComparison.Ordinal))
+                continue;
+            yield return JsonDocument.Parse(payload);
+        }
+    }
+
     private static string FindRepositoryFile(params string[] segments)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -544,7 +641,8 @@ public sealed class MainnetChatCompletionsEndpointsTests
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Calls.Add((actorId, envelope));
-            _observationRuntime.PublishAll();
+            var command = envelope.Payload.Unpack<LlmRunRequested>();
+            _observationRuntime.PublishAll(command);
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
@@ -653,6 +751,13 @@ public sealed class MainnetChatCompletionsEndpointsTests
             return Task.CompletedTask;
         }
 
+        public Task CancelRunAsync(
+            string sessionActorId,
+            string responseId,
+            string runId,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
         public Task RecordForwardedToolCallAsync(
             string sessionActorId,
             string responseId,
@@ -745,10 +850,35 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
         public ChatCompletionsObservationProjectionPort ProjectionPort { get; }
 
-        public void PublishAll()
+        public void PublishAll(LlmRunRequested command)
         {
             foreach (var envelope in _events)
-                ProjectionPort.Sink?.Push(envelope);
+            {
+                ProjectionPort.Sink?.Push(RewriteRunEvent(envelope, command));
+            }
+        }
+
+        private static EventEnvelope RewriteRunEvent(EventEnvelope envelope, LlmRunRequested command)
+        {
+            if (!envelope.Payload.Is(LlmRunCompleted.Descriptor))
+                return envelope;
+
+            var completed = envelope.Payload.Unpack<LlmRunCompleted>();
+            var forwardedToolNames = command.ToolSelection?.ForwardedTools
+                .Select(static tool => tool.ToolName)
+                .Except(command.ToolSelection.SubstitutedToolNames, StringComparer.Ordinal)
+                .ToHashSet(StringComparer.Ordinal) ?? [];
+            for (var i = completed.ForwardedToolCalls.Count - 1; i >= 0; i--)
+            {
+                if (!forwardedToolNames.Contains(completed.ForwardedToolCalls[i].ToolName))
+                    completed.ForwardedToolCalls.RemoveAt(i);
+            }
+
+            return new EventEnvelope
+            {
+                Id = envelope.Id,
+                Payload = Any.Pack(completed),
+            };
         }
     }
 

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
@@ -55,6 +56,21 @@ internal sealed class ToolArgs
 
     /// <summary>Get a string property with a default value.</summary>
     public string Str(string name, string defaultValue) => Str(name) ?? defaultValue;
+
+    /// <summary>Get an integer property from either a JSON number or numeric string.</summary>
+    public int? Int(string name)
+    {
+        if (!_props.TryGetValue(name, out var el)) return null;
+        if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var number))
+            return number;
+        if (el.ValueKind == JsonValueKind.String &&
+            int.TryParse(el.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number))
+        {
+            return number;
+        }
+
+        return null;
+    }
 
     /// <summary>Get a boolean property. Returns null if missing.</summary>
     public bool? Bool(string name)

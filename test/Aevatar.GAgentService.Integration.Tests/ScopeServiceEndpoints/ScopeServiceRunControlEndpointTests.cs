@@ -43,6 +43,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.GAgentService.Integration.Tests;
 
@@ -63,6 +64,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -105,6 +107,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             new WorkflowActorBinding(
                 WorkflowActorKind.Run,
@@ -114,6 +117,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -143,6 +147,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             new WorkflowActorBinding(
                 WorkflowActorKind.Run,
@@ -152,6 +157,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -183,6 +189,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -215,6 +222,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             new WorkflowActorBinding(
                 WorkflowActorKind.Run,
@@ -224,6 +232,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -253,6 +262,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -283,6 +293,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -317,6 +328,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "orders",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -363,6 +375,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "orders",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -404,6 +417,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "orders",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -436,6 +450,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "orders",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -470,6 +485,7 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
                 "other",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 

@@ -32,6 +32,12 @@ public sealed partial class ServiceCatalogExternalExposureReadModel
         get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(RegisteredAtUtcValue);
         set => RegisteredAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
     }
+
+    public DateTimeOffset? NextAttemptAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(NextAttemptAtUtcValue);
+        set => NextAttemptAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
 }
 
 public sealed partial class ServiceDeploymentCatalogReadModel : IProjectionReadModel<ServiceDeploymentCatalogReadModel>
@@ -436,10 +442,34 @@ public sealed partial class ScheduledDispatchDocument : IProjectionReadModel<Sch
         set => LastFireAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
     }
 
+    public DateTimeOffset? LastOverdueFireAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(LastOverdueFireAtUtcValue);
+        set => LastOverdueFireAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
     public DateTimeOffset? DeletedAt
     {
         get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(DeletedAtUtcValue);
         set => DeletedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? OneShotFireAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(OneShotFireAtUtcValue);
+        set => OneShotFireAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? CompletedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(CompletedAtUtcValue);
+        set => CompletedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? CredentialExpiresAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(CredentialExpiresAtUtcValue);
+        set => CredentialExpiresAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
     }
 
     public IDictionary<string, string> Headers

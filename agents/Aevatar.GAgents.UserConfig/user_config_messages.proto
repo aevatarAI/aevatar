@@ -2,6 +2,8 @@ syntax = "proto3";
 package aevatar.gagents.user_config;
 option csharp_namespace = "Aevatar.GAgents.UserConfig";
 
+import "llm_selection.proto";
+
 // ─── State ───
 
 message UserConfigGAgentState {
@@ -12,6 +14,18 @@ message UserConfigGAgentState {
   string remote_runtime_base_url = 5;
   int32 max_tool_rounds = 6;
   string github_username = 7;
+  aevatar.ai.LLMSelection llm_selection = 8;
+}
+
+message UpdateUserConfigCommand {
+  reserved 1;
+  reserved "default_model";
+  aevatar.ai.LLMSelection llm_selection = 2;
+  optional string runtime_mode = 3;
+  optional string local_runtime_base_url = 4;
+  optional string remote_runtime_base_url = 5;
+  optional int32 max_tool_rounds = 6;
+  optional string github_username = 7;
 }
 
 // ─── Events ───
@@ -24,6 +38,7 @@ message UserConfigUpdatedEvent {
   string remote_runtime_base_url = 5;
   int32 max_tool_rounds = 6;
   string github_username = 7;
+  aevatar.ai.LLMSelection llm_selection = 8;
 }
 
 message UserConfigGithubUsernameUpdatedEvent {

@@ -1,5 +1,4 @@
 using System.Net;
-using System.Text.Json;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Web;
@@ -12,6 +11,43 @@ namespace Aevatar.AI.Tests;
 //   Cluster intent: Tool-provider HTTP clients use factory-owned clients and only dispose self-created fallbacks.
 public sealed class ToolProviderHttpClientOwnershipTests
 {
+    [Fact]
+    public void NyxIdApiClient_WhenItOwnsTheHttpClient_UsesTheConfiguredRequestCeiling()
+    {
+        var options = new NyxIdToolOptions
+        {
+            BaseUrl = "https://nyx.test",
+            MaxRequestDurationSeconds = 420,
+        };
+        using var client = new NyxIdApiClient(options);
+
+        GetNyxIdHttpClient(client).Timeout.Should().Be(TimeSpan.FromSeconds(420));
+    }
+
+    [Fact]
+    public async Task NyxIdApiClient_WhenTheCallerOwnsAStartedHttpClient_DoesNotChangeItsTimeout()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}"),
+        });
+        using var http = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(17),
+        };
+        await http.GetAsync("https://nyx.test/warmup");
+
+        using var client = new NyxIdApiClient(
+            new NyxIdToolOptions
+            {
+                BaseUrl = "https://nyx.test",
+                MaxRequestDurationSeconds = 420,
+            },
+            http);
+
+        http.Timeout.Should().Be(TimeSpan.FromSeconds(17));
+    }
+
     [Fact]
     public async Task NyxIdApiClient_Dispose_ShouldNotDisposeInjectedHttpClient()
     {
@@ -166,86 +202,6 @@ public sealed class ToolProviderHttpClientOwnershipTests
         request.Headers.Authorization!.Parameter.Should().Be("token-1");
     }
 
-    [Fact]
-    public async Task ConnectedServiceSpecCache_ShouldUseNamedFactoryClientAndAvoidTokenOnUntrustedHost()
-    {
-        var handler = new RecordingHttpMessageHandler(_ =>
-            new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(BuildOpenApiJson()),
-            });
-        var factory = new RecordingHttpClientFactory(name => new HttpClient(handler));
-        var cache = new ConnectedServiceSpecCache(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
-            factory);
-
-        var operations = await cache.GetOrFetchAsync(
-            "github",
-            serviceId: null,
-            specUrl: "https://specs.test/openapi.json",
-            accessToken: "secret-token",
-            ct: CancellationToken.None);
-
-        operations.Should().ContainSingle().Which.OperationId.Should().Be("listRepos");
-        factory.CreatedNames.Should().ContainSingle().Which.Should().Be(ConnectedServiceSpecCache.HttpClientName);
-        var request = handler.Requests.Should().ContainSingle().Subject;
-        request.RequestUri!.ToString().Should().Be("https://specs.test/openapi.json");
-        request.Headers.Authorization.Should().BeNull("NyxID bearer tokens must not be sent to third-party spec hosts");
-    }
-
-    [Fact]
-    public async Task ConnectedServiceSpecCache_ShouldUseNamedFactoryClientForEachLiveFetch()
-    {
-        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(BuildOpenApiJson()),
-        });
-        var factory = new RecordingHttpClientFactory(name => new HttpClient(handler));
-        var cache = new ConnectedServiceSpecCache(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
-            factory);
-
-        var first = await cache.GetOrFetchAsync("github", "svc-1", null, "secret-token", CancellationToken.None);
-        var second = await cache.GetOrFetchAsync("github", "svc-1", null, "secret-token", CancellationToken.None);
-
-        first.Should().BeEquivalentTo(second);
-        first.Should().ContainSingle().Which.Path.Should().Be("/repos");
-        factory.CreatedNames.Should().HaveCount(2)
-            .And.OnlyContain(name => name == ConnectedServiceSpecCache.HttpClientName);
-        handler.Requests.Should().HaveCount(2, "connected-service spec hints must not keep process-local OpenAPI snapshots");
-        handler.Requests[0].RequestUri!.ToString().Should().Be("https://nyx.test/api/v1/proxy/services/svc-1/openapi.json");
-        handler.Requests[0].Headers.Authorization!.Parameter.Should().Be("secret-token");
-        handler.Requests[1].RequestUri!.ToString().Should().Be("https://nyx.test/api/v1/proxy/services/svc-1/openapi.json");
-        handler.Requests[1].Headers.Authorization!.Parameter.Should().Be("secret-token");
-    }
-
-    private static string BuildOpenApiJson() =>
-        JsonSerializer.Serialize(new
-        {
-            paths = new Dictionary<string, object>
-            {
-                ["/repos"] = new
-                {
-                    get = new
-                    {
-                        operationId = "listRepos",
-                        summary = "List repositories",
-                    },
-                },
-            },
-        });
-
-    private sealed class RecordingHttpClientFactory(Func<string, HttpClient> createClient) : IHttpClientFactory
-    {
-        public List<string> CreatedNames { get; } = [];
-
-        public HttpClient CreateClient(string name)
-        {
-            CreatedNames.Add(name);
-            return createClient(name);
-        }
-    }
-
     private sealed class RecordingHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
         : HttpMessageHandler
     {
@@ -268,4 +224,9 @@ public sealed class ToolProviderHttpClientOwnershipTests
             return clone;
         }
     }
+
+    private static HttpClient GetNyxIdHttpClient(NyxIdApiClient client) =>
+        (HttpClient)typeof(NyxIdApiClient)
+            .GetField("_http", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(client)!;
 }

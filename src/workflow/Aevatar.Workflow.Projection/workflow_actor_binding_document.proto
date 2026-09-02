@@ -5,6 +5,7 @@ package aevatar.workflow.projection.readmodels;
 option csharp_namespace = "Aevatar.Workflow.Projection.ReadModels";
 
 import "google/protobuf/timestamp.proto";
+import "workflow_capability_admission.proto";
 
 message WorkflowActorBindingDocument {
   string id = 1;
@@ -20,4 +21,9 @@ message WorkflowActorBindingDocument {
   string workflow_yaml = 11;
   map<string, string> inline_workflow_yaml_entries = 12;
   string scope_id = 13;
+  string source_kind = 14;
+  aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 15;
+  string workflow_id = 16;
+  string revision_id = 17;
+  aevatar.workflow.ExternalCapabilityExecutionMode expected_execution_mode = 18;
 }

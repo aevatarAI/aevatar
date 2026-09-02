@@ -2,7 +2,9 @@
 // MCPToolAdapter — 将 MCP Tool 适配为 IAgentTool
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Tools;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Microsoft.Extensions.Logging;
@@ -28,6 +30,14 @@ public sealed class MCPToolAdapter : IAgentTool
     /// <summary>参数 JSON Schema。</summary>
     public string ParametersSchema { get; }
 
+    public ToolPresentationDescriptor Presentation =>
+        ToolPresentationDescriptors.Mcp(
+            Name,
+            _mcpToolName,
+            Description,
+            _serverName,
+            _mcpToolName);
+
     public MCPToolAdapter(
         string name, string description, string parametersSchema,
         McpClient client, string serverName, ILogger? logger = null)
@@ -42,7 +52,14 @@ public sealed class MCPToolAdapter : IAgentTool
     }
 
     /// <summary>通过 MCP 协议执行工具（使用原始 MCP tool name）。</summary>
-    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+        (await ExecuteWithOutcomeAsync(string.Empty, Name, argumentsJson, ct).ConfigureAwait(false)).ResultJson;
+
+    public async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        CancellationToken ct = default)
     {
         _logger?.LogDebug("MCP Tool {Name} (mcp={McpName}) 执行: server={Server}",
             Name, _mcpToolName, _serverName);
@@ -53,15 +70,50 @@ public sealed class MCPToolAdapter : IAgentTool
                        ?? [];
 
             var result = await _client.CallToolAsync(_mcpToolName, args, cancellationToken: ct);
-
-            return result.Content?.ToString() ?? "";
+            var resultJson = result.Content?.ToString() ?? "";
+            var isError = result.IsError == true;
+            return new AgentToolTerminalOutcome(
+                resultJson,
+                CreateReceipt(
+                    callId,
+                    toolName,
+                    resultJson,
+                    isError ? AgentToolReceiptStatus.Error : AgentToolReceiptStatus.Success,
+                    isError ? "tool_execution_error" : string.Empty,
+                    isError ? "The MCP tool reported an execution error." : string.Empty));
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "MCP Tool {Name} 执行失败", Name);
-            return System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message });
+            var resultJson = System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message });
+            return new AgentToolTerminalOutcome(
+                resultJson,
+                CreateReceipt(
+                    callId,
+                    toolName,
+                    resultJson,
+                    AgentToolReceiptStatus.Error,
+                    "tool_execution_error",
+                    ex.GetType().Name));
         }
     }
+
+    private AgentToolReceipt CreateReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        AgentToolReceiptStatus status,
+        string errorCode,
+        string errorMessage) =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = status,
+            ResultJson = resultJson,
+            ErrorCode = errorCode,
+            ErrorMessage = errorMessage,
+        };
 
     /// <summary>
     /// 将 tool name sanitize 为 OpenAI 兼容格式：仅保留 [a-zA-Z0-9_-]，

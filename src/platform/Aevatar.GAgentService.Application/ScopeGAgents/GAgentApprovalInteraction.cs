@@ -33,7 +33,7 @@ internal sealed class GAgentApprovalCommandTarget
     public IActor Actor { get; }
     public string TargetId => Actor.Id;
     public string ActorId => Actor.Id;
-    public string SessionId { get; private set; } = string.Empty;
+    public string ContinuationTurnId { get; } = $"turn-{Guid.NewGuid():N}";
     public IGAgentDraftRunProjectionLease? ProjectionLease { get; private set; }
     public IGAgentRunTerminalProjectionLease? TerminalProjectionLease { get; private set; }
     public IAsyncDisposable? LiveSinkLease { get; private set; }
@@ -47,8 +47,7 @@ internal sealed class GAgentApprovalCommandTarget
     public void BindLiveObservation(
         IGAgentDraftRunProjectionLease lease,
         IAsyncDisposable? liveSinkLease,
-        IEventSink<AGUIEvent> sink,
-        string sessionId)
+        IEventSink<AGUIEvent> sink)
     {
         // Refactor (iter25/cluster-002-observation-lifecycle-core):
         //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
@@ -56,7 +55,6 @@ internal sealed class GAgentApprovalCommandTarget
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
         LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
-        SessionId = sessionId;
     }
 
     public IEventSink<AGUIEvent> RequireLiveSink() =>
@@ -245,8 +243,7 @@ internal sealed class GAgentApprovalObservationLifecycle
             target.BindLiveObservation(
                 attachment.ProjectionLease,
                 attachment.LiveSinkLease,
-                sink,
-                command.SessionId?.Trim() ?? string.Empty);
+                sink);
             return CommandObservationBindingResult<GAgentApprovalStartError>.Success();
         }
         catch
@@ -274,17 +271,21 @@ internal sealed class GAgentApprovalObservationLifecycle
 }
 
 internal sealed class GAgentApprovalCommandEnvelopeFactory
-    : ICommandEnvelopeFactory<GAgentApprovalCommand>
+    : ICommandTargetEnvelopeFactory<GAgentApprovalCommand, GAgentApprovalCommandTarget>
 {
-    public EventEnvelope CreateEnvelope(GAgentApprovalCommand command, CommandContext context)
+    public EventEnvelope CreateEnvelope(
+        GAgentApprovalCommand command,
+        GAgentApprovalCommandTarget target,
+        CommandContext context)
     {
         ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(context);
 
         var decisionEvent = new ToolApprovalDecisionEvent
         {
             RequestId = command.RequestId,
-            SessionId = command.SessionId?.Trim() ?? string.Empty,
+            ContinuationTurnId = target.ContinuationTurnId,
             Approved = command.Approved,
             Reason = command.Reason?.Trim() ?? string.Empty,
         };
@@ -317,7 +318,7 @@ internal sealed class GAgentApprovalAcceptedReceiptFactory
             target.ActorId,
             context.CommandId,
             context.CorrelationId,
-            target.SessionId);
+            target.ContinuationTurnId);
     }
 }
 
@@ -342,7 +343,12 @@ internal sealed class GAgentApprovalCompletionPolicy
                 completion = GAgentApprovalCompletionStatus.RunFinished;
                 return true;
             case AGUIEvent.EventOneofCase.RunError:
-                completion = GAgentApprovalCompletionStatus.Failed;
+                completion = string.Equals(
+                    evt.RunError.Code,
+                    GAgentRunFailureCodes.OutcomeUncertain,
+                    StringComparison.Ordinal)
+                    ? GAgentApprovalCompletionStatus.OutcomeUncertain
+                    : GAgentApprovalCompletionStatus.Failed;
                 return true;
             default:
                 return false;
@@ -434,6 +440,7 @@ internal sealed class GAgentApprovalDurableCompletionResolver
             GAgentRunTerminalStatus.TextMessageCompleted => new(true, GAgentApprovalCompletionStatus.TextMessageCompleted),
             GAgentRunTerminalStatus.RunFinished => new(true, GAgentApprovalCompletionStatus.RunFinished),
             GAgentRunTerminalStatus.Failed => new(true, GAgentApprovalCompletionStatus.Failed),
+            GAgentRunTerminalStatus.OutcomeUncertain => new(true, GAgentApprovalCompletionStatus.OutcomeUncertain),
             _ => CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete,
         };
 }

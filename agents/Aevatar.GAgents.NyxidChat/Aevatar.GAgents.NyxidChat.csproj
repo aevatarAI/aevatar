@@ -18,7 +18,6 @@
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
     <ProjectReference Include="..\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
     <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
-    <ProjectReference Include="..\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.ChatRouting\Aevatar.GAgents.ChatRouting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
@@ -34,11 +33,14 @@
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Runtime\Aevatar.CQRS.Projection.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Studio.Application.Abstractions\Aevatar.Studio.Application.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
@@ -49,12 +51,13 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="UglyToad.PdfPig" />
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="protos\*.proto"
               GrpcServices="None"
               ProtoRoot="protos"
-              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Runtime\protos;..\Aevatar.GAgents.Channel.Abstractions\protos;..\..\src\Aevatar.ChatRouting.Abstractions;..\..\src\Aevatar.Foundation.Abstractions;..\..\src\Aevatar.AI.Abstractions;..\..\src\Aevatar.Foundation.VoicePresence.Abstractions" />
+              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Runtime\protos;..\Aevatar.GAgents.Channel.Abstractions\protos;..\..\src\Aevatar.ChatRouting.Abstractions;..\..\src\Aevatar.Foundation.Abstractions;..\..\src\Aevatar.AI.Abstractions;..\..\src\Aevatar.Foundation.VoicePresence.Abstractions;..\..\src\workflow\Aevatar.Workflow.Abstractions;..\..\src\platform\Aevatar.GAgentService.Abstractions\Protos" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

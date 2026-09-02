@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -61,7 +62,7 @@ public sealed class WorkflowScheduleProjectionTests
                         ServiceId = "workflow-a",
                     },
                     EndpointId = "chat",
-                    Payload = Any.Pack(new StringValue { Value = "run it" }),
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "run it" }),
                 },
             },
         };
@@ -121,6 +122,7 @@ public sealed class WorkflowScheduleProjectionTests
         document.ServiceKey.Should().Be("scope-1:default:default:workflow-a");
         document.ServiceId.Should().Be("workflow-a");
         document.ServiceEndpointId.Should().Be("chat");
+        document.Prompt.Should().Be("run it");
         document.TargetActorId.Should().Be("target-actor-1");
         document.StateVersion.Should().Be(7);
         document.LastEventId.Should().Be("evt-7");
@@ -201,6 +203,7 @@ public sealed class WorkflowScheduleProjectionTests
             {
                 ["caller"] = "kept",
             },
+            Prompt = "saved prompt",
             FireRecords =
             {
                 new ScheduledDispatchFireRecordDocument
@@ -241,6 +244,7 @@ public sealed class WorkflowScheduleProjectionTests
         detail.Schedule.Headers.Should().Contain("caller", "kept");
         detail.Schedule.ScheduleActorId.Should().BeEmpty();
         detail.Schedule.TargetActorId.Should().BeEmpty();
+        detail.Schedule.Prompt.Should().Be("saved prompt");
         detail.RecentFires.Select(x => x.IdempotencyKey).Should().Equal("newer", "older");
         detail.RecentFires[0].TargetActorId.Should().Be("run-actor");
         detail.RecentFires[0].CommandId.Should().Be("cmd");
@@ -298,6 +302,7 @@ public sealed class WorkflowScheduleProjectionTests
                         {
                             ["trace"] = "on",
                         },
+                        Prompt = "list prompt",
                         ScheduleActorId = "schedule-actor",
                         TargetActorId = "target-actor",
                     },
@@ -329,6 +334,7 @@ public sealed class WorkflowScheduleProjectionTests
         summary.DisplayName.Should().Be("Daily");
         summary.CronExpression.Should().Be("0 9 * * *");
         summary.Headers.Should().Contain("trace", "on");
+        summary.Prompt.Should().Be("list prompt");
         summary.ScheduleActorId.Should().Be("schedule-actor");
         summary.TargetActorId.Should().Be("target-actor");
     }

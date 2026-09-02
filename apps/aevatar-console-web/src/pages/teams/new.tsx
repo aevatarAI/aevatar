@@ -1,23 +1,26 @@
 import { TeamOutlined } from '@ant-design/icons';
-import { Alert, Button, Input, Space, Typography, message } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Button, Input, Space, Typography } from 'antd';
 import React from 'react';
 import { loadRestorableAuthSession } from '@/shared/auth/session';
+import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
-import { buildTeamCreateHref, buildTeamDetailHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
-import { studioApi } from '@/shared/studio/api';
-import { describeError } from '@/shared/ui/errorText';
 import {
-  AevatarPanel,
+  buildTeamCreateHref,
+  buildTeamDetailHref,
+  buildTeamsHref,
+} from '@/shared/navigation/teamRoutes';
+import { studioApi } from '@/shared/studio/api';
+import {
   type AevatarBreadcrumbItem,
+  AevatarPanel,
 } from '@/shared/ui/aevatarPageShells';
 import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
-import { rememberPendingTeamRosterSummary } from './pendingTeamRoster';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import { describeError } from '@/shared/ui/errorText';
 import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
-import {
-  readScopeQueryDraft,
-} from '../scopes/components/scopeQuery';
-import { t } from "@/shared/i18n/messages";
+import { readScopeQueryDraft } from '../scopes/components/scopeQuery';
+import { rememberPendingTeamRosterSummary } from './pendingTeamRoster';
 
 const primaryActionButtonStyle: React.CSSProperties = {
   borderRadius: 10,
@@ -48,9 +51,10 @@ function readCreateTeamDraftFromLocation(): {
 
 const TeamCreatePage: React.FC = () => {
   const queryClient = useQueryClient();
+  const toast = useConsoleToast();
   const initialDraft = React.useMemo(readCreateTeamDraftFromLocation, []);
-  const [routeScopeId, setRouteScopeId] = React.useState(
-    () => readScopeQueryDraft().scopeId.trim(),
+  const [routeScopeId, setRouteScopeId] = React.useState(() =>
+    readScopeQueryDraft().scopeId.trim(),
   );
   const [teamName, setTeamName] = React.useState(initialDraft.teamName);
   const [teamDescription, setTeamDescription] = React.useState('');
@@ -73,7 +77,8 @@ const TeamCreatePage: React.FC = () => {
     };
   }, [localScopeId]);
   const resolvedScope = React.useMemo(
-    () => resolveStudioScopeContext(authSessionQuery.data) ?? locallyResolvedScope,
+    () =>
+      resolveStudioScopeContext(authSessionQuery.data) ?? locallyResolvedScope,
     [authSessionQuery.data, locallyResolvedScope],
   );
   React.useEffect(() => {
@@ -116,7 +121,10 @@ const TeamCreatePage: React.FC = () => {
 
     return describeError(
       authSessionQuery.error,
-      t("pages.teams.new.the.login.status.is", "The login status is temporarily unavailable, please refresh and try again."),
+      t(
+        'pages.teams.new.the.login.status.is',
+        'The login status is temporarily unavailable, please refresh and try again.',
+      ),
     );
   }, [authSessionQuery.error, authSessionQuery.isError]);
   const canCreateTeam = Boolean(scopeId && teamName.trim());
@@ -140,19 +148,17 @@ const TeamCreatePage: React.FC = () => {
       await queryClient.invalidateQueries({
         queryKey: ['teams', 'roster', team.scopeId],
       });
-      void message.success(t("pages.teams.new.team.created", "team created."));
+      toast.success(t('pages.teams.new.team.created', 'team created.'));
       history.push(
         buildTeamDetailHref({
           scopeId: team.scopeId,
           teamId: team.teamId,
         }),
       );
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error && error.message.trim()
-          ? error.message
-          : t("pages.teams.new.failed.to.create.team", "Failed to create team.");
-      void message.error(errorMessage);
+    } catch {
+      toast.error(
+        t('pages.teams.new.failed.to.create.team', 'Failed to create team.'),
+      );
     } finally {
       setIsCreatingTeam(false);
     }
@@ -167,11 +173,11 @@ const TeamCreatePage: React.FC = () => {
         event.preventDefault();
         history.push(teamsHref);
       },
-      title: t("pages.teams.new.teamsBreadcrumb", "Teams"),
+      title: t('pages.teams.new.teamsBreadcrumb', 'Teams'),
     },
     {
       current: true,
-      title: t("pages.teams.new.create.team.2", "Create Team"),
+      title: t('pages.teams.new.create.team.2', 'Create Team'),
     },
   ];
 
@@ -187,24 +193,35 @@ const TeamCreatePage: React.FC = () => {
             style={primaryActionButtonStyle}
             type="primary"
           >
-            {t("pages.teams.new.create.team", "Create Team")}</Button>
+            {t('pages.teams.new.create.team', 'Create Team')}
+          </Button>
         </Space>
       }
-      title={t("pages.teams.new.create.team.2", "Create Team")}
+      title={t('pages.teams.new.create.team.2', 'Create Team')}
     >
       {authSessionIssue ? (
         <Alert
           description={
             resolvedScope?.scopeId
-              ? t("pages.teams.new.has.continued.creating.team", "{value1} has continued creating team using local login information.", { value1: authSessionIssue })
+              ? t(
+                  'pages.teams.new.has.continued.creating.team',
+                  '{value1} has continued creating team using local login information.',
+                  { value1: authSessionIssue },
+                )
               : authSessionIssue
           }
           showIcon
           style={{ marginBottom: 20 }}
           title={
             resolvedScope?.scopeId
-              ? t("pages.teams.new.the.current.login.status", "The current login status verification failed, local login information has been used")
-              : t("pages.teams.new.current.login.status.verification", "Current login status verification failed")
+              ? t(
+                  'pages.teams.new.the.current.login.status',
+                  'The current login status verification failed, local login information has been used',
+                )
+              : t(
+                  'pages.teams.new.current.login.status.verification',
+                  'Current login status verification failed',
+                )
           }
           type="warning"
         />
@@ -214,7 +231,10 @@ const TeamCreatePage: React.FC = () => {
         <Alert
           showIcon
           style={{ marginBottom: 20 }}
-          title={t("pages.teams.new.the.current.login.status.2", "The current login status has not resolved the available team scope, please refresh and try again.")}
+          title={t(
+            'pages.teams.new.the.current.login.status.2',
+            'The current login status has not resolved the available team scope, please refresh and try again.',
+          )}
           type="info"
         />
       ) : null}
@@ -222,7 +242,7 @@ const TeamCreatePage: React.FC = () => {
       <AevatarPanel
         layoutMode="document"
         padding={20}
-        title={t("pages.teams.new.team.information", "team information")}
+        title={t('pages.teams.new.team.information', 'team information')}
       >
         <div
           style={{
@@ -230,22 +250,37 @@ const TeamCreatePage: React.FC = () => {
             flexDirection: 'column',
             gap: 18,
             maxWidth: 760,
+            minWidth: 0,
+            width: '100%',
           }}
         >
           <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Text strong>{t("pages.teams.new.team.name", "Team name")}</Typography.Text>
+            <Typography.Text strong>
+              {t('pages.teams.new.team.name', 'Team name')}
+            </Typography.Text>
             <Input
-              aria-label={t("pages.teams.new.team.name.2", "Team name")}
-              placeholder={t("pages.teams.new.for.example.order.assistant", "For example: Order Assistant team")}
+              aria-label={t('pages.teams.new.team.name.2', 'Team name')}
+              placeholder={t(
+                'pages.teams.new.for.example.order.assistant',
+                'For example: Order Assistant team',
+              )}
               value={teamName}
               onChange={(event) => setTeamName(event.target.value)}
             />
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Text strong>{t("pages.teams.new.description", "Description")}</Typography.Text>
+            <Typography.Text strong>
+              {t('pages.teams.new.description', 'Description')}
+            </Typography.Text>
             <Input
-              aria-label={t("pages.teams.new.team.description", "Team description")}
-              placeholder={t("pages.teams.new.what.is.this.team", "What is this team responsible for?")}
+              aria-label={t(
+                'pages.teams.new.team.description',
+                'Team description',
+              )}
+              placeholder={t(
+                'pages.teams.new.what.is.this.team',
+                'What is this team responsible for?',
+              )}
               value={teamDescription}
               onChange={(event) => setTeamDescription(event.target.value)}
             />
@@ -259,9 +294,11 @@ const TeamCreatePage: React.FC = () => {
               style={primaryActionButtonStyle}
               type="primary"
             >
-              {t("pages.teams.new.create.team.3", "Create Team")}</Button>
+              {t('pages.teams.new.create.team.3', 'Create Team')}
+            </Button>
             <Button onClick={() => history.push(teamsHref)}>
-              {t("pages.teams.new.back.to.my.teams", "Back to My Teams")}</Button>
+              {t('pages.teams.new.back.to.my.teams', 'Back to My Teams')}
+            </Button>
           </Space>
         </div>
       </AevatarPanel>

@@ -10,6 +10,10 @@ public sealed record HumanInteractionRequest
 
     public required string StepId { get; init; }
 
+    public required string SourceEventId { get; init; }
+
+    public long IssuedAtUnixMs { get; init; }
+
     public required string SuspensionType { get; init; }
 
     public required string Prompt { get; init; }

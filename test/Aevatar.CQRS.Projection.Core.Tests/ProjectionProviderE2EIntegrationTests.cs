@@ -40,18 +40,24 @@ public sealed class ProjectionProviderE2EIntegrationTests
         {
             Id = id,
             ActorId = id,
+            StateVersion = 1,
+            LastEventId = $"event-{id}-1",
             Value = "v1",
             UpdatedAtEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
-        await store.UpsertAsync(readModel);
+        var initialWrite = await store.UpsertAsync(readModel);
+        initialWrite.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
         var fetched = await store.GetAsync(readModel.Id);
         fetched.Should().NotBeNull();
         fetched!.Value.Should().Be("v1");
 
+        readModel.StateVersion = 2;
+        readModel.LastEventId = $"event-{id}-2";
         readModel.Value = "v2";
         readModel.UpdatedAtEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        await store.UpsertAsync(readModel);
+        var overwriteWrite = await store.UpsertAsync(readModel);
+        overwriteWrite.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
 
         var mutated = await store.GetAsync(readModel.Id);
         mutated.Should().NotBeNull();

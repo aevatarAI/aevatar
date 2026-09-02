@@ -18,10 +18,10 @@ import {
   Space,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
 } from "antd";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { studioApi } from "@/shared/studio/api";
 import { formatDateTime } from "@/shared/datetime/dateTime";
@@ -36,6 +36,7 @@ import {
   buildTeamDetailHref,
   buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
+  buildTeamsHref,
 } from "@/shared/navigation/teamRoutes";
 import GraphCanvas from "@/shared/graphs/GraphCanvas";
 import type {
@@ -43,16 +44,25 @@ import type {
   StudioGraphNodeData,
 } from "@/shared/studio/graph";
 import { t } from "@/shared/i18n/messages";
+import {
+  getUserFacingIdentifierLabel,
+  isMachineIdentifierValue,
+  sanitizeUserFacingRecord,
+  sanitizeUserFacingText,
+} from "@/shared/ui/userFacingIdentifiers";
 
 type MemberPublishedRunsReplayProps = {
   readonly initialActorId?: string;
   readonly initialRunId?: string;
   readonly memberId: string;
+  readonly scheduleId?: string;
   readonly scopeId: string;
   readonly teamId?: string;
 };
 
 type RunStatusTone = "default" | "processing" | "success" | "warning" | "error";
+
+const memberPublishedRunsTake = 200;
 
 const memberPublishedRunsReplayCss = `
 .member-published-runs-replay {
@@ -153,6 +163,41 @@ const memberPublishedRunsReplayCss = `
   gap: 8px;
   justify-content: space-between;
   min-width: 0;
+}
+
+.member-published-runs-replay__filter {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.member-published-runs-replay__filter-label {
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.member-published-runs-replay__filter-value {
+  color: #111827;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-published-runs-replay__filter-hint {
+  color: #475467;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .member-published-runs-replay__list {
@@ -505,6 +550,26 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
+function isStudioMemberNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const record = error as {
+    readonly code?: unknown;
+    readonly message?: unknown;
+    readonly status?: unknown;
+  };
+  const code = typeof record.code === "string" ? record.code.trim().toUpperCase() : "";
+  if (code === "STUDIO_MEMBER_NOT_FOUND") {
+    return true;
+  }
+
+  const status = typeof record.status === "number" ? record.status : 0;
+  const message = typeof record.message === "string" ? record.message.toUpperCase() : "";
+  return status === 404 && message.includes("STUDIO_MEMBER_NOT_FOUND");
+}
+
 function normalizeRunStatus(status: string | null | undefined): string {
   const normalized = trimOptional(status).toLowerCase().replace(/[\s-]+/g, "_");
   return normalized || "unknown";
@@ -634,6 +699,20 @@ function getAuditDurationMs(
 
 function formatRunTime(run: ScopeMemberRunSummary): string {
   return formatDateTime(run.lastUpdatedAt || run.boundAt || run.bindingUpdatedAt);
+}
+
+function getRunDisplayName(run: ScopeMemberRunSummary | null | undefined): string {
+  const workflowName = trimOptional(run?.workflowName);
+  return workflowName && !isMachineIdentifierValue(workflowName) ? workflowName : "";
+}
+
+function getStepDisplayName(step: ScopeServiceRunAuditStep | null | undefined): string {
+  const stepId = trimOptional(step?.stepId);
+  const stepType = trimOptional(step?.stepType);
+  return getUserFacingIdentifierLabel(
+    stepId,
+    stepType || t("pages.runs.memberPublishedRuns.step", "Step"),
+  );
 }
 
 function getRunSortTimestamp(run: ScopeMemberRunSummary): number {
@@ -841,11 +920,11 @@ function renderDetailsSkeleton(): React.ReactNode {
 }
 
 function summarizeStepParameters(step: ScopeServiceRunAuditStep): string {
-  const entries = Object.entries(step.requestParameters).filter(
+  const entries = Object.entries(sanitizeUserFacingRecord(step.requestParameters)).filter(
     ([key, value]) => trimOptional(key) || trimOptional(value),
   );
   if (!entries.length) {
-    return step.targetRole ? `role: ${step.targetRole}` : step.stepType || "step";
+    return step.stepType || t("pages.runs.memberPublishedRuns.step", "step");
   }
 
   return entries
@@ -889,13 +968,13 @@ function buildExecutionGraph(
       executionFocused: step.stepId === selectedStepId,
       executionStatus: getStepExecutionStatus(step),
       kind: "step",
-      label: step.stepId,
+      label: getStepDisplayName(step),
       parametersSummary: summarizeStepParameters(step),
       stepId: step.stepId,
       stepType: step.stepType || "step",
-      subtitle: step.stepType || "Step",
+      subtitle: step.stepType || t("pages.runs.memberPublishedRuns.step", "Step"),
       targetRole: step.targetRole,
-      title: step.stepId,
+      title: getStepDisplayName(step),
     },
     id: `step:${step.stepId}`,
     position: {
@@ -994,7 +1073,7 @@ function filterTimelineForStep(
 }
 
 function renderKeyValueRows(values: Readonly<Record<string, string>>) {
-  const entries = Object.entries(values).filter(
+  const entries = Object.entries(sanitizeUserFacingRecord(values)).filter(
     ([key, value]) => trimOptional(key) || trimOptional(value),
   );
   if (!entries.length) {
@@ -1014,7 +1093,7 @@ function renderKeyValueRows(values: Readonly<Record<string, string>>) {
 }
 
 function renderTextBlock(value: string) {
-  const normalized = trimOptional(value);
+  const normalized = sanitizeUserFacingText(value);
   if (!normalized) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />;
   }
@@ -1026,12 +1105,14 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   initialActorId,
   initialRunId,
   memberId,
+  scheduleId,
   scopeId,
   teamId,
 }) => {
   const [selectedStepId, setSelectedStepId] = React.useState("");
   const normalizedInitialActorId = trimOptional(initialActorId);
   const normalizedInitialRunId = trimOptional(initialRunId);
+  const normalizedScheduleId = trimOptional(scheduleId);
   const normalizedTeamId = trimOptional(teamId);
 
   const memberQuery = useQuery({
@@ -1040,11 +1121,36 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
     queryKey: ["runtime-member-published-runs", "member", scopeId, memberId],
     retry: false,
   });
+  const memberNotFound = isStudioMemberNotFoundError(memberQuery.error);
+  const memberReady = Boolean(scopeId && memberId && memberQuery.isSuccess && !memberNotFound);
+
+  React.useEffect(() => {
+    if (memberNotFound) {
+      history.replace(buildTeamsHref());
+    }
+  }, [memberNotFound]);
 
   const runsQuery = useQuery({
-    enabled: Boolean(scopeId && memberId),
-    queryFn: () => scopeRuntimeApi.listMemberRuns(scopeId, memberId, { take: 200 }),
-    queryKey: ["runtime-member-published-runs", scopeId, memberId],
+    enabled: memberReady,
+    queryFn: () =>
+      scopeRuntimeApi.listMemberRuns(
+        scopeId,
+        memberId,
+        normalizedScheduleId
+          ? {
+              scheduleId: normalizedScheduleId,
+              take: memberPublishedRunsTake,
+            }
+          : {
+              take: memberPublishedRunsTake,
+            },
+      ),
+    queryKey: [
+      "runtime-member-published-runs",
+      scopeId,
+      memberId,
+      normalizedScheduleId,
+    ],
     retry: false,
   });
 
@@ -1060,6 +1166,14 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const selectedRunId = selectedCatalogRun?.runId ?? normalizedInitialRunId;
   const selectedRunActorId =
     selectedCatalogRun?.actorId || normalizedInitialActorId || "";
+  const selectedRunNeedsCatalogMatch = Boolean(
+    normalizedInitialRunId && !normalizedInitialActorId,
+  );
+  const auditCanLoad = Boolean(
+    memberReady &&
+      selectedRunId &&
+      (!selectedRunNeedsCatalogMatch || selectedCatalogRun),
+  );
 
   React.useEffect(() => {
     if (!selectedCatalogRun?.runId || normalizedInitialRunId) {
@@ -1071,14 +1185,22 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
         actorId: selectedCatalogRun.actorId || undefined,
         memberId,
         runId: selectedCatalogRun.runId,
+        scheduleId: normalizedScheduleId || undefined,
         scopeId,
         teamId: normalizedTeamId,
       }),
     );
-  }, [memberId, normalizedInitialRunId, normalizedTeamId, scopeId, selectedCatalogRun]);
+  }, [
+    memberId,
+    normalizedInitialRunId,
+    normalizedScheduleId,
+    normalizedTeamId,
+    scopeId,
+    selectedCatalogRun,
+  ]);
 
   const auditQuery = useQuery({
-    enabled: Boolean(scopeId && memberId && selectedRunId),
+    enabled: auditCanLoad,
     queryFn: () =>
       scopeRuntimeApi.getMemberRunAudit(scopeId, memberId, selectedRunId, {
         actorId: selectedRunActorId || undefined,
@@ -1122,8 +1244,12 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
       run.runId === selectedAuditSummary.runId ? selectedAuditSummary : run,
     );
   }, [runs, selectedAuditSummary, selectedRun]);
+  const runsLoadError = memberNotFound ? null : memberQuery.error || runsQuery.error;
   const showReplaySkeleton = Boolean(
-    runsQuery.isLoading || (selectedRun && auditQuery.isLoading),
+    memberQuery.isLoading ||
+      memberNotFound ||
+      runsQuery.isLoading ||
+      (selectedRun && auditQuery.isLoading),
   );
   const graph = React.useMemo(
     () => buildExecutionGraph(audit, selectedStepId),
@@ -1172,13 +1298,14 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
           actorId: run.actorId || undefined,
           memberId,
           runId: run.runId,
+          scheduleId: normalizedScheduleId || undefined,
           scopeId,
           teamId: normalizedTeamId,
         }),
       );
       setSelectedStepId("");
     },
-    [memberId, normalizedTeamId, scopeId],
+    [memberId, normalizedScheduleId, normalizedTeamId, scopeId],
   );
 
   const handleNodeSelect = React.useCallback((nodeId: string) => {
@@ -1190,6 +1317,11 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const selectedRunTime = selectedRun ? formatRunTime(selectedRun) : "n/a";
   const auditDuration = getAuditDurationMs(audit);
   const selectedRunDuration = formatDurationMs(auditDuration);
+  const memberDisplayName =
+    trimOptional(runsQuery.data?.displayName) ||
+    trimOptional(memberQuery.data?.summary.displayName) ||
+    t("pages.runs.memberPublishedRuns.member", "Team member");
+  const selectedRunDisplayName = getRunDisplayName(selectedRun);
   const teamOverviewHref = buildTeamDetailHref({
     scopeId,
     tab: "overview",
@@ -1232,7 +1364,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
             )}
             className="member-published-runs-replay__navigation"
           >
-            <Tooltip title={backToTeamMembersLabel}>
+            <AevatarTooltip title={backToTeamMembersLabel}>
               <Button
                 aria-label={backToTeamMembersLabel}
                 className="member-published-runs-replay__back-button"
@@ -1241,7 +1373,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 shape="circle"
                 size="small"
               />
-            </Tooltip>
+            </AevatarTooltip>
             <div className="member-published-runs-replay__breadcrumbs">
               <a
                 className="member-published-runs-replay__breadcrumb-link"
@@ -1256,7 +1388,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 href={teamMembersHref}
                 onClick={navigateToTeamMembers}
               >
-                {runsQuery.data?.displayName || memberId}
+                {memberDisplayName}
               </a>
               <span className="member-published-runs-replay__breadcrumb-separator">/</span>
               <span className="member-published-runs-replay__breadcrumb-current">
@@ -1275,11 +1407,11 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                   style={{ display: "block", maxWidth: 260 }}
                   type="secondary"
                 >
-                  {runsQuery.data?.displayName || memberId}
+                  {memberDisplayName}
                 </Typography.Text>
               </div>
             </div>
-            <Tooltip title={t("pages.runs.memberPublishedRuns.refresh", "Refresh")}>
+            <AevatarTooltip title={t("pages.runs.memberPublishedRuns.refresh", "Refresh")}>
               <Button
                 aria-label={t("pages.runs.memberPublishedRuns.refresh", "Refresh")}
                 icon={<ReloadOutlined />}
@@ -1288,13 +1420,38 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 shape="circle"
                 size="small"
               />
-            </Tooltip>
+            </AevatarTooltip>
           </div>
+          {normalizedScheduleId ? (
+            <div
+              className="member-published-runs-replay__filter"
+              data-testid="member-published-runs-schedule-filter"
+            >
+              <span className="member-published-runs-replay__filter-label">
+                {t(
+                  "pages.runs.memberPublishedRuns.scheduleFilter",
+                  "Schedule filter",
+                )}
+              </span>
+              <span
+                className="member-published-runs-replay__filter-value"
+                title={normalizedScheduleId}
+              >
+                {normalizedScheduleId}
+              </span>
+              <span className="member-published-runs-replay__filter-hint">
+                {t(
+                  "pages.runs.memberPublishedRuns.scheduleFilterLagHint",
+                  "Accepted manual runs may take a moment to appear.",
+                )}
+              </span>
+            </div>
+          ) : null}
         </div>
         <div className="member-published-runs-replay__list">
-          {runsQuery.isLoading ? (
+          {memberQuery.isLoading || memberNotFound || runsQuery.isLoading ? (
             renderRunListSkeleton()
-          ) : runsQuery.error ? (
+          ) : runsLoadError ? (
             <Alert
               showIcon
               type="error"
@@ -1303,9 +1460,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 "Published runs are unavailable.",
               )}
               description={
-                runsQuery.error instanceof Error
-                  ? runsQuery.error.message
-                  : String(runsQuery.error)
+                runsLoadError instanceof Error
+                  ? runsLoadError.message
+                  : String(runsLoadError)
               }
             />
           ) : displayRuns.length ? (
@@ -1331,9 +1488,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                       {formatRunTime(run)}
                     </Typography.Text>
                   </div>
-                  {run.workflowName ? (
+                  {getRunDisplayName(run) ? (
                     <Typography.Text ellipsis type="secondary">
-                      {run.workflowName}
+                      {getRunDisplayName(run)}
                     </Typography.Text>
                   ) : null}
                 </button>
@@ -1344,10 +1501,15 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                 description={
-                  t(
-                    "pages.runs.memberPublishedRuns.noRuns",
-                    "No published runs yet.",
-                  )
+                  normalizedScheduleId
+                    ? t(
+                        "pages.runs.memberPublishedRuns.noScheduleRuns",
+                        "No runs for this schedule yet. Accepted manual runs may take a moment to appear.",
+                      )
+                    : t(
+                        "pages.runs.memberPublishedRuns.noRuns",
+                        "No published runs yet.",
+                      )
                 }
               />
             </div>
@@ -1379,9 +1541,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                   ) : null}
                   {audit ? <Tag>{selectedRunDuration}</Tag> : null}
                 </Space>
-                {selectedRun?.workflowName ? (
+                {selectedRunDisplayName ? (
                   <Typography.Text ellipsis type="secondary">
-                    {selectedRun.workflowName}
+                    {selectedRunDisplayName}
                   </Typography.Text>
                 ) : !selectedRun ? (
                   <Typography.Text ellipsis type="secondary">
@@ -1397,7 +1559,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
               loading={auditQuery.isFetching}
               onClick={() => {
                 runsQuery.refetch();
-                auditQuery.refetch();
+                if (auditCanLoad) {
+                  auditQuery.refetch();
+                }
               }}
             >
               {t("pages.runs.memberPublishedRuns.refresh", "Refresh")}
@@ -1487,7 +1651,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                         {renderStepStatusIcon(step)}
                         <span style={{ minWidth: 0 }}>
                           <Typography.Text ellipsis style={{ display: "block" }}>
-                            {step.stepId}
+                            {getStepDisplayName(step)}
                           </Typography.Text>
                           <Typography.Text ellipsis type="secondary">
                             {step.stepType || "step"}
@@ -1510,7 +1674,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                   <Space size={8} style={{ minWidth: 0 }}>
                     <NodeIndexOutlined style={{ color: "#1677ff" }} />
                     <Typography.Text ellipsis strong style={{ maxWidth: 360 }}>
-                      {selectedStep?.stepId ||
+                      {getStepDisplayName(selectedStep) ||
                         t("pages.runs.memberPublishedRuns.details", "Details")}
                     </Typography.Text>
                     {selectedStep ? (
@@ -1569,7 +1733,11 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                                   </Typography.Text>
                                   <br />
                                   <Typography.Text type="secondary">
-                                    {event.message || event.agentId || "n/a"}
+                                    {sanitizeUserFacingText(event.message) ||
+                                      getUserFacingIdentifierLabel(
+                                        event.agentId,
+                                        t("pages.runs.memberPublishedRuns.event", "Event"),
+                                      )}
                                   </Typography.Text>
                                 </div>
                               </div>

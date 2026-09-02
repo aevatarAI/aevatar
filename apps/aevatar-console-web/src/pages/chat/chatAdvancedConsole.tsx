@@ -28,6 +28,7 @@ import {
 } from "@/shared/runs/scopeConsole";
 import { studioApi } from "@/shared/studio/api";
 import { AevatarContextDrawer } from "@/shared/ui/aevatarPageShells";
+import { useConsoleToast } from "@/shared/ui/ConsoleToast";
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
   AEVATAR_INTERACTIVE_CHIP_CLASS,
@@ -467,8 +468,8 @@ export function ChatAdvancedConsole({
   );
   const [timelineActionInput, setTimelineActionInput] = useState("");
   const [timelineActionLoading, setTimelineActionLoading] = useState(false);
-  const [timelineActionError, setTimelineActionError] = useState("");
   const [timelineActionNotice, setTimelineActionNotice] = useState("");
+  const toast = useConsoleToast();
 
   const [executeServiceId, setExecuteServiceId] = useState(defaultServiceId || "");
   const [executeEndpointId, setExecuteEndpointId] = useState("chat");
@@ -758,7 +759,6 @@ export function ChatAdvancedConsole({
   }, [timelineRows]);
 
   useEffect(() => {
-    setTimelineActionError("");
     setTimelineActionInput("");
     setTimelineActionNotice("");
   }, [timelineBlockingSummary?.kind, timelineBlockingSummary?.stepId]);
@@ -1078,7 +1078,6 @@ export function ChatAdvancedConsole({
       }
 
       setTimelineActionLoading(true);
-      setTimelineActionError("");
       setTimelineActionNotice("");
 
       try {
@@ -1156,7 +1155,12 @@ export function ChatAdvancedConsole({
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        setTimelineActionError(errorMessage);
+        toast.error(
+          t(
+            "pages.chat.chatadvancedconsole.timelineActionFailed",
+            "Run action could not be completed. Try again.",
+          ),
+        );
         onTimelineActionResult?.({
           action,
           actorId: effectiveTimelineActorId,
@@ -2391,10 +2395,6 @@ export function ChatAdvancedConsole({
                   {!executeRunId || !effectiveTimelineServiceId ? (
                     <Typography.Text type="secondary">
                       {t("pages.chat.chatadvancedconsole.run.actions.become.available.after", "Run actions become available after the console has a run ID and service context.")}</Typography.Text>
-                  ) : null}
-
-                  {timelineActionError ? (
-                    <Alert showIcon title={timelineActionError} type="error" />
                   ) : null}
 
                   {timelineActionNotice ? (

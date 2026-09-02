@@ -210,7 +210,7 @@ Orleans Silo 集群（Garnet/Redis 状态、Kafka 流、Gossip 集群发现）
 - **串行邮箱保证**：每个 Actor 同时只处理一个事件 — 无锁、无并发状态变更。
 - **延迟激活**：Agent 类型名存储在 Grain 状态中；实际实例在首次收到消息时通过 DI 创建。
 - **层级化流拓扑**：父子关系存储在 Grain 状态中；`StreamTopologyGrain` 管理转发规则，支持 BFS 中继、环路防止和受众/类型过滤。
-- **事件去重**：`IEventDeduplicator` 备忘表防止跨重试的重复处理。
+- **稳定投递身份**：Envelope 携带 operation/attempt identity；重复投递由 Actor 已提交状态或下游权威幂等契约判定，运行时不使用进程内 cache 抑制消息。
 - **持久化回调**：`RuntimeCallbackSchedulerGrain` 使用 Orleans Reminder 进行超时/定时器调度，支持基于 generation 的取消。
 
 **生产基础设施：**

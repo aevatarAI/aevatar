@@ -37,32 +37,23 @@ public class NyxIdSshExecToolTests
     {
         var tool = new NyxIdSshExecTool(CreateDummyClient());
 
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.IsDestructive.Should().BeTrue();
         tool.Description.Should().Contain("ssh://");
         tool.Description.Should().Contain("nyxid_proxy");
+        tool.Description.Should().Contain("nyxid_services");
+        tool.Description.Should().NotContain("(no slug)");
         tool.ParametersSchema.Should().Contain("\"service\"");
         tool.ParametersSchema.Should().Contain("\"timeout_secs\"");
     }
 
     [Fact]
-    public void RequiresApproval_DefaultsToTrue()
+    public void ApprovalPolicy_AlwaysRequiresDurableGrant()
     {
         var tool = new NyxIdSshExecTool(CreateDummyClient());
-        tool.RequiresApproval(
-            """{"service":"sg-office","command":"uname -a","principal":"ubuntu"}""")
-            .Should().BeTrue();
-    }
 
-    [Fact]
-    public void RequiresApproval_WhenBypassEnabled_ReturnsFalse()
-    {
-        var tool = new NyxIdSshExecTool(
-            CreateDummyClient(),
-            new NyxIdToolOptions { BypassSshExecApproval = true });
-
-        tool.RequiresApproval(
-                """{"service":"sg-office","command":"uname -a","principal":"ubuntu"}""")
-            .Should().BeFalse();
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.IsDestructive.Should().BeTrue();
     }
 
     [Fact]
@@ -447,7 +438,7 @@ public class NyxIdSshExecToolTests
     [Fact]
     public async Task ExecuteAsync_ThrowsConfiguredBaseUrlError_AfterResolverLookupsFail()
     {
-        var tool = new NyxIdSshExecTool(new NyxIdApiClient(new NyxIdToolOptions()));
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = null }));
         SetMetadata("test-token");
         try
         {

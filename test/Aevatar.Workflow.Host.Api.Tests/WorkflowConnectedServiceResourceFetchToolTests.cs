@@ -7,8 +7,8 @@ using Aevatar.Workflow.Infrastructure.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using AppWorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
-using AppWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
-using AppWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using AppFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using AppFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 using ProtoWorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -81,7 +81,7 @@ public sealed class WorkflowConnectedServiceResourceFetchToolTests
         ingressPort.Requests.Should().ContainSingle();
         var ingressRequest = ingressPort.Requests[0];
         ingressRequest.Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("image-bytes"));
-        ingressRequest.SourceKind.Should().Be(AppWorkflowFileSourceKind.ConnectedServiceResource);
+        ingressRequest.SourceKind.Should().Be(AppFileArtifactSourceKind.ConnectedServiceResource);
         ingressRequest.SourceMessageId.Should().Be("om_123");
         ingressRequest.SourceResourceKey.Should().Be("img_v3_456");
         ingressRequest.FileName.Should().Be("photo.png");
@@ -271,7 +271,7 @@ public sealed class WorkflowConnectedServiceResourceFetchToolTests
 
     private static async Task<IWorkflowTool> GetFetchToolAsync(
         IWorkflowConnectedServiceResourceFetchAdapter adapter,
-        IWorkflowFileIngressPort ingressPort)
+        IFileArtifactIngressPort ingressPort)
     {
         var source = new WorkflowConnectedServiceResourceFetchToolSource([adapter], ingressPort);
         return (await source.GetToolsAsync()).Single();
@@ -291,6 +291,9 @@ public sealed class WorkflowConnectedServiceResourceFetchToolTests
 
     private static void AssertError(WorkflowToolExecutionResult output, string expectedError)
     {
+        output.Failure.Should().NotBeNull();
+        output.Failure!.ErrorCode.Should().Be(expectedError);
+        output.Failure.ErrorMessage.Should().NotBeNullOrWhiteSpace();
         using var document = JsonDocument.Parse(output.ResultJson);
         var root = document.RootElement;
         root.GetProperty("success").GetBoolean().Should().BeFalse();
@@ -299,21 +302,21 @@ public sealed class WorkflowConnectedServiceResourceFetchToolTests
         root.TryGetProperty("file_ref", out _).Should().BeFalse();
     }
 
-    private sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    private sealed class RecordingWorkflowFileIngressPort : IFileArtifactIngressPort
     {
-        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
 
         public Exception? IngestException { get; init; }
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
             if (IngestException != null)
                 throw IngestException;
 
-            return ValueTask.FromResult(new WorkflowFileIngressResult(new AppWorkflowFileRef
+            return ValueTask.FromResult(new FileArtifactIngressResult(new AppFileArtifactRef
             {
                 FileId = "wf-file-1",
                 ArtifactId = "workflow-file://wf-file-1",

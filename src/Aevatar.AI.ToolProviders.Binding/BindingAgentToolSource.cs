@@ -3,6 +3,7 @@ using Aevatar.AI.ToolProviders.Binding.Ports;
 using Aevatar.AI.ToolProviders.Binding.Tools;
 using Aevatar.AI.ToolProviders.Workflow.Ports;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -23,6 +24,8 @@ public sealed class BindingAgentToolSource : IAgentToolSource
     private readonly IWorkflowDefinitionCommandAdapter? _definitionAdapter;
     private readonly IScopeWorkflowCommandPort? _scopeWorkflowCommandPort;
     private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
+    private readonly IExternalWorkflowCapabilityListPort? _externalCapabilityListPort;
+    private readonly IExternalWorkflowCapabilityReadinessPort? _externalCapabilityReadinessPort;
     private readonly ILogger _logger;
 
     public BindingAgentToolSource(
@@ -33,6 +36,8 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         IWorkflowDefinitionCommandAdapter? definitionAdapter = null,
         IScopeWorkflowCommandPort? scopeWorkflowCommandPort = null,
         IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
+        IExternalWorkflowCapabilityListPort? externalCapabilityListPort = null,
+        IExternalWorkflowCapabilityReadinessPort? externalCapabilityReadinessPort = null,
         ILogger<BindingAgentToolSource>? logger = null)
     {
         _options = options;
@@ -42,13 +47,16 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         _definitionAdapter = definitionAdapter;
         _scopeWorkflowCommandPort = scopeWorkflowCommandPort;
         _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
+        _externalCapabilityListPort = externalCapabilityListPort;
+        _externalCapabilityReadinessPort = externalCapabilityReadinessPort;
         _logger = logger ?? NullLogger<BindingAgentToolSource>.Instance;
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         if (_commandPort == null && _queryAdapter == null &&
-            _scopeWorkflowCommandPort == null && _scopeWorkflowQueryPort == null)
+            _scopeWorkflowCommandPort == null && _scopeWorkflowQueryPort == null &&
+            _externalCapabilityListPort == null && _externalCapabilityReadinessPort == null)
         {
             _logger.LogDebug("Binding adapter implementations not registered, skipping binding tools");
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
@@ -82,6 +90,12 @@ public sealed class BindingAgentToolSource : IAgentToolSource
             tools.Add(new ScopeWorkflowsListTool(_scopeWorkflowQueryPort, _options));
             tools.Add(new ScopeWorkflowsGetTool(_scopeWorkflowQueryPort));
         }
+
+        if (_externalCapabilityListPort != null)
+            tools.Add(new ListExternalWorkflowCapabilitiesTool(_externalCapabilityListPort, _options));
+
+        if (_externalCapabilityReadinessPort != null)
+            tools.Add(new InspectExternalWorkflowCapabilityReadinessTool(_externalCapabilityReadinessPort));
 
         _logger.LogInformation("Binding tools registered ({Count} tools)", tools.Count);
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);

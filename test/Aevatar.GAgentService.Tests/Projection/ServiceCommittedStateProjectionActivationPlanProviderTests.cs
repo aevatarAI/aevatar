@@ -36,8 +36,28 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
     {
         yield return [new ServiceDefinitionCreatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } }];
         yield return [new ServiceDefinitionUpdatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } }];
-        yield return [new ServiceExternalExposureUpdatedEvent { Identity = Identity(), ExternalExposure = new ExternalExposure { NyxidSlug = "aevatar-orders" } }];
+        yield return [new ServiceRegistrationRequestedEvent { Identity = Identity(), DesiredSpecHash = "hash-1", Attempt = 1 }];
+        yield return [new ServiceRegistrationAttemptStartedEvent { Identity = Identity(), DesiredSpecHash = "hash-1", Attempt = 1 }];
+        yield return [new ServiceRegistrationSucceededEvent { Identity = Identity(), NyxidServiceId = "svc-1", NyxidSlug = "orders", DesiredSpecHash = "hash-1", RegisteredSpecHash = "hash-1", Attempt = 1 }];
+        yield return [new ServiceRegistrationFailedEvent { Identity = Identity(), DesiredSpecHash = "hash-1", LastError = "Transient:timeout", Attempt = 1 }];
+        yield return [new ServiceRegistrationRetiredEvent { Identity = Identity(), NyxidServiceId = "svc-1", NyxidSlug = "orders", Attempt = 1 }];
         yield return [new DefaultServingRevisionChangedEvent { Identity = Identity(), RevisionId = "r1" }];
+    }
+
+    [Fact]
+    public void GetPlans_ShouldNotMapLegacyExternalExposureUpdatedEventToCatalogScope()
+    {
+        var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
+
+        var plans = provider.GetPlans(BuildContext(
+            typeof(ServiceDefinitionGAgent),
+            new ServiceExternalExposureUpdatedEvent
+            {
+                Identity = Identity(),
+                ExternalExposure = new ExternalExposure { NyxidSlug = "legacy" },
+            })).ToArray();
+
+        plans.Should().BeEmpty();
     }
 
     [Fact]

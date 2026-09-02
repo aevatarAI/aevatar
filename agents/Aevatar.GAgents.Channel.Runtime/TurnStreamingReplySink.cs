@@ -69,14 +69,14 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     public int ChunksEmitted { get; private set; }
 
     public Task OnDeltaAsync(string accumulatedText, CancellationToken ct) =>
-        DispatchAsync(accumulatedText, ct);
+        DispatchAsync(accumulatedText, false, ct);
 
     public Task FinalizeAsync(string finalText, CancellationToken ct) =>
-        DispatchAsync(finalText, ct);
+        DispatchAsync(finalText, true, ct);
 
     public void Dispose() => _disposed = true;
 
-    public async Task DispatchAsync(string text, CancellationToken ct)
+    public async Task DispatchAsync(string text, bool isFinal, CancellationToken ct)
     {
         if (_disposed || string.IsNullOrWhiteSpace(text))
             return;
@@ -95,6 +95,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                 ReplyToken = _replyToken,
                 ReplyTokenExpiresAtUnixMs = _replyTokenExpiresAtUnixMs,
                 RunId = _runId,
+                IsFinal = isFinal,
             }
             : new LlmReplyStreamChunkEvent
             {

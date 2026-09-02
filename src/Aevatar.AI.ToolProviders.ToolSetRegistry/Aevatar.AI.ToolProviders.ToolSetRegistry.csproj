@@ -10,7 +10,6 @@
 
     <ItemGroup>
         <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
-        <ProjectReference Include="..\Aevatar.ChatRouting.Abstractions\Aevatar.ChatRouting.Abstractions.csproj" />
     </ItemGroup>
 
     <ItemGroup>

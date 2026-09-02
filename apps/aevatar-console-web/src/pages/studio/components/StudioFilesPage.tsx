@@ -7,9 +7,9 @@ import {
   FileOutlined,
   FolderOpenOutlined,
   MessageOutlined,
+  ReloadOutlined,
   RightOutlined,
   SearchOutlined,
-  SettingOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
@@ -23,17 +23,17 @@ import { useExplorerStore } from '@/pages/studio/explorer/useExplorerStore';
 import type {
   StudioConnectorCatalog,
   StudioRoleCatalog,
-  StudioSettings,
   StudioWorkflowSummary,
-  StudioWorkspaceSettings,
 } from '@/shared/studio/models';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
+import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
 import {
   cardStackStyle,
   embeddedPanelStyle,
   stretchColumnStyle,
 } from '@/shared/ui/proComponents';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
+import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import StudioFilesDetailPane from './StudioFilesDetailPane';
 import {
   formatConsoleMessage,
@@ -49,7 +49,6 @@ type QueryState<T> = {
 };
 
 type StudioFileKey =
-  | 'settings.json'
   | 'role-catalog'
   | 'connector-catalog'
   | `chat-history:${string}`
@@ -57,7 +56,7 @@ type StudioFileKey =
   | `script:${string}`;
 
 type StaticFileDescriptor = {
-  readonly file: 'settings.json' | 'role-catalog' | 'connector-catalog';
+  readonly file: 'role-catalog' | 'connector-catalog';
   readonly icon: React.ReactNode;
   readonly label: ConsoleMessageDescriptor;
 };
@@ -69,12 +68,9 @@ type PendingExplorerAction =
 
 type StudioFilesPageProps = {
   readonly workflows: QueryState<StudioWorkflowSummary[]>;
-  readonly workspaceSettings: QueryState<StudioWorkspaceSettings>;
   readonly roles: QueryState<StudioRoleCatalog>;
   readonly connectors: QueryState<StudioConnectorCatalog>;
-  readonly settings: QueryState<StudioSettings>;
   readonly scopeId: string;
-  readonly workflowStorageMode: string;
   readonly scriptsEnabled: boolean;
   readonly onOpenWorkflowInStudio: (workflowId: string) => void;
   readonly onOpenScriptInStudio: (scriptId: string) => void;
@@ -82,14 +78,6 @@ type StudioFilesPageProps = {
 };
 
 const staticFiles: readonly StaticFileDescriptor[] = [
-  {
-    file: 'settings.json',
-    icon: <SettingOutlined />,
-    label: {
-      id: 'pages.studio.studiofilespage.settings.json',
-      defaultMessage: 'settings.json',
-    },
-  },
   {
     file: 'role-catalog',
     icon: <TeamOutlined />,
@@ -193,6 +181,24 @@ function matchesSearch(values: Array<string | null | undefined>, search: string)
   return values.some((value) => String(value || '').toLowerCase().includes(keyword));
 }
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatScriptTreeLabel(detail: ScopedScriptDetail, index: number): string {
+  const record = detail as ScopedScriptDetail & {
+    script?: { displayName?: string | null; name?: string | null } | null;
+    source?: { displayName?: string | null; name?: string | null } | null;
+  };
+  const candidate =
+    record.script?.displayName ||
+    record.script?.name ||
+    record.source?.displayName ||
+    record.source?.name ||
+    '';
+  return candidate.trim() || `script-${index + 1}.cs`;
+}
+
 function fileKeyIsVisible(
   fileKey: StudioFileKey,
   visibleWorkflowIds: readonly string[],
@@ -213,6 +219,17 @@ function fileKeyIsVisible(
   }
 
   return visibleStaticFiles.includes(fileKey);
+}
+
+function formatChatTurnCount(count: number): string {
+  const normalizedCount = Number.isFinite(count) ? Math.max(0, count) : 0;
+  return normalizedCount === 1
+    ? t("pages.studio.studiofilespage.chat.history.turn.count.one", "1 turn")
+    : t(
+        "pages.studio.studiofilespage.chat.history.turn.count.many",
+        "{count} turns",
+        { count: normalizedCount },
+      );
 }
 
 const TreeRow: React.FC<{
@@ -271,18 +288,17 @@ const FolderToggle: React.FC<{
 
 const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
   workflows,
-  workspaceSettings,
   roles,
   connectors,
-  settings,
   scopeId,
-  workflowStorageMode,
   scriptsEnabled,
   onOpenWorkflowInStudio,
   onOpenScriptInStudio,
   showHeader = true,
 }) => {
-  const [selectedFile, setSelectedFile] = React.useState<StudioFileKey>('settings.json');
+  const scopeIdRef = React.useRef(scopeId);
+  scopeIdRef.current = scopeId;
+  const [selectedFile, setSelectedFile] = React.useState<StudioFileKey>('role-catalog');
   const [viewMode, setViewMode] = React.useState<FilesViewMode>('curated');
   const [explorerDirty, setExplorerDirty] = React.useState(false);
   const [pendingExplorerAction, setPendingExplorerAction] =
@@ -291,6 +307,8 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
   const [workflowsOpen, setWorkflowsOpen] = React.useState(true);
   const [scriptsOpen, setScriptsOpen] = React.useState(true);
   const [chatHistoriesOpen, setChatHistoriesOpen] = React.useState(false);
+  const [deletedChatConversationIds, setDeletedChatConversationIds] =
+    React.useState<ReadonlySet<string>>(() => new Set());
   const explorer = useExplorerStore(scopeId);
 
   const scripts = useQuery({
@@ -302,6 +320,7 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
     queryKey: ['studio-files-chat-histories', scopeId],
     enabled: Boolean(scopeId),
     queryFn: () => chatHistoryApi.listConversationMetas(scopeId),
+    retry: false,
   });
 
   const filteredWorkflows = React.useMemo(
@@ -348,16 +367,20 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
         .map((item) => item.file),
     [search],
   );
+  const availableChatConversations = React.useMemo(
+    () =>
+      (chatConversations.data ?? []).filter(
+        (conversation) => !deletedChatConversationIds.has(conversation.id),
+      ),
+    [chatConversations.data, deletedChatConversationIds],
+  );
   const filteredChatConversations = React.useMemo(
     () =>
-      [...(chatConversations.data ?? [])]
+      [...availableChatConversations]
         .filter((conversation) =>
           matchesSearch(
             [
               conversation.id,
-              conversation.actorId,
-              conversation.commandId,
-              conversation.runId,
               conversation.title,
               conversation.serviceId,
               conversation.serviceKind,
@@ -366,7 +389,7 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
           ),
         )
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-    [chatConversations.data, search],
+    [availableChatConversations, search],
   );
   const visibleExplorerKeys = React.useMemo(
     () =>
@@ -376,6 +399,27 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
         )
         .map((entry) => entry.key),
     [explorer.manifest, search],
+  );
+
+  React.useEffect(() => {
+    setDeletedChatConversationIds(new Set());
+  }, [scopeId]);
+
+  const handleChatConversationDeleted = React.useCallback(
+    (operationScopeId: string, conversationId: string) => {
+      if (scopeIdRef.current !== operationScopeId) {
+        return;
+      }
+      setDeletedChatConversationIds((current) => {
+        const next = new Set(current);
+        next.add(conversationId);
+        return next;
+      });
+      setSelectedFile((current) =>
+        current === `chat-history:${conversationId}` ? 'role-catalog' : current,
+      );
+    },
+    [],
   );
 
   React.useEffect(() => {
@@ -394,8 +438,8 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
       return;
     }
 
-    if (visibleStaticFiles.includes('settings.json')) {
-      setSelectedFile('settings.json');
+    if (visibleStaticFiles[0]) {
+      setSelectedFile(visibleStaticFiles[0]);
       return;
     }
 
@@ -600,7 +644,17 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                 onToggle={() => setWorkflowsOpen((current) => !current)}
               />
               {workflowsOpen ? (
-                filteredWorkflows.length > 0 ? (
+                workflows.isLoading ? (
+                  <AevatarContentSkeleton
+                    ariaLabel={t(
+                      "pages.studio.studiofilespage.loading.workflows",
+                      "Loading workflows",
+                    )}
+                    listLayout="tree"
+                    rows={3}
+                    variant="list"
+                  />
+                ) : filteredWorkflows.length > 0 ? (
                   filteredWorkflows.map((workflow) => (
                     <TreeRow
                       key={workflow.workflowId}
@@ -637,15 +691,29 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                   />
                   {scriptsOpen ? (
                     scopeId ? (
-                      filteredScripts.length > 0 ? (
-                        filteredScripts.map((detail) => (
+                      scripts.isLoading ? (
+                        <AevatarContentSkeleton
+                          ariaLabel={t(
+                            "pages.studio.studiofilespage.loading.scripts",
+                            "Loading scripts",
+                          )}
+                          listLayout="tree"
+                          rows={3}
+                          variant="list"
+                        />
+                      ) : filteredScripts.length > 0 ? (
+                        filteredScripts.map((detail, index) => (
                           <TreeRow
                             key={detail.script?.scriptId}
                             active={selectedFile === `script:${detail.script?.scriptId || ''}`}
                             icon={<CodeOutlined />}
                             indent
-                            label={`${detail.script?.scriptId || 'script'}.cs`}
-                            meta={detail.script?.activeRevision || 'Draft'}
+                            label={formatScriptTreeLabel(detail, index)}
+                            meta={
+                              detail.script?.activeRevision
+                                ? t("pages.studio.studiofilespage.version.ready", "Version ready")
+                                : t("pages.studio.studiofilespage.draft", "Draft")
+                            }
                             onClick={() =>
                               detail.script?.scriptId
                                 ? setSelectedFile(`script:${detail.script.scriptId}`)
@@ -697,7 +765,7 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
               <FolderToggle
                 label="chat-histories/"
                 open={chatHistoriesOpen}
-                count={scopeId ? chatConversations.data?.length ?? 0 : 0}
+                count={scopeId ? availableChatConversations.length : 0}
                 onToggle={() => setChatHistoriesOpen((current) => !current)}
               />
               {chatHistoriesOpen ? (
@@ -709,11 +777,34 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                         active={selectedFile === `chat-history:${conversation.id}`}
                         icon={<MessageOutlined />}
                         indent
-                        label={conversation.actorId || conversation.id}
-                        meta={conversation.title || `${conversation.messageCount} messages`}
+                        label={conversation.title || t("pages.studio.studiofilespage.chat.history", "Chat history")}
+                        meta={formatChatTurnCount(conversation.messageCount)}
                         onClick={() => setSelectedFile(`chat-history:${conversation.id}`)}
                       />
                     ))
+                  ) : chatConversations.isError ? (
+                    <Alert
+                      action={
+                        <Button
+                          aria-label={t(
+                            "pages.studio.studiofilespage.retry.conversations",
+                            "Retry conversations",
+                          )}
+                          icon={<ReloadOutlined />}
+                          onClick={() => void chatConversations.refetch()}
+                          size="small"
+                          type="text"
+                        />
+                      }
+                      description={describeError(chatConversations.error)}
+                      message={t(
+                        "pages.studio.studiofilespage.failed.to.load.conversations",
+                        "Failed to load conversations",
+                      )}
+                      showIcon
+                      style={{ marginInline: 12 }}
+                      type="error"
+                    />
                   ) : (
                     <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
                       {chatConversations.isLoading
@@ -751,17 +842,20 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
             <StudioFilesDetailPane
               selectedFile={selectedFile}
               workflows={workflows}
-              workspaceSettings={workspaceSettings}
               roles={roles}
               connectors={connectors}
-              settings={settings}
               scripts={scripts}
-              chatConversations={chatConversations}
+              chatConversations={{
+                data: availableChatConversations,
+                error: chatConversations.error,
+                isError: chatConversations.isError,
+                isLoading: chatConversations.isLoading,
+              }}
               scopeId={scopeId}
-              workflowStorageMode={workflowStorageMode}
               scriptsEnabled={scriptsEnabled}
               onOpenWorkflowInStudio={onOpenWorkflowInStudio}
               onOpenScriptInStudio={onOpenScriptInStudio}
+              onChatConversationDeleted={handleChatConversationDeleted}
             />
           )}
         </section>

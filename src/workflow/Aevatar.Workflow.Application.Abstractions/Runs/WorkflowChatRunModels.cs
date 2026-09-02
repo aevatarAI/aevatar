@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Abstractions;
 using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
@@ -13,7 +14,7 @@ public enum WorkflowChatInputPartKind
     File = 5,
 }
 
-public enum WorkflowFileSourceKind
+public enum FileArtifactSourceKind
 {
     Unspecified = 0,
     ChatInput = 1,
@@ -23,11 +24,11 @@ public enum WorkflowFileSourceKind
     Generated = 5,
 }
 
-public sealed record WorkflowFileRef
+public sealed record FileArtifactRef
 {
     public string? FileId { get; init; }
     public string? ArtifactId { get; init; }
-    public WorkflowFileSourceKind SourceKind { get; init; }
+    public FileArtifactSourceKind SourceKind { get; init; }
     public string? SourceMessageId { get; init; }
     public string? SourceResourceKey { get; init; }
     public string? FileName { get; init; }
@@ -48,7 +49,7 @@ public sealed record WorkflowChatInputPart
     public string? MediaType { get; init; }
     public string? Uri { get; init; }
     public string? Name { get; init; }
-    public WorkflowFileRef? FileRef { get; init; }
+    public FileArtifactRef? FileRef { get; init; }
 }
 
 public sealed record WorkflowLlmControl(
@@ -58,7 +59,23 @@ public sealed record WorkflowLlmControl(
     string? RoutePreference = null,
     string? SenderNyxIdAccessToken = null);
 
-public sealed record WorkflowCallerCredential(string? BearerToken = null);
+public sealed record WorkflowCallerNyxIdAuthority(
+    string Platform,
+    string Tenant,
+    string ExternalUserId,
+    string Scope,
+    string? BindingId = null);
+
+public sealed record WorkflowCallerCredential(
+    string? BearerToken = null,
+    WorkflowCallerNyxIdAuthority? NyxIdAuthority = null,
+    Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind Kind =
+        Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.Unspecified,
+    string? SourceReadableUserBearerToken = null)
+{
+    public override string ToString() =>
+        $"{nameof(WorkflowCallerCredential)} {{ BearerToken = [REDACTED], SourceReadableUserBearerToken = [REDACTED], NyxIdAuthorityPresent = {NyxIdAuthority is not null} }}";
+}
 
 public sealed record WorkflowExternalIngressContext(
     string RouteKey,
@@ -69,6 +86,60 @@ public sealed record WorkflowExternalIngressContext(
     string? PayloadFingerprint = null,
     string? AuthScheme = null,
     string? PrincipalSubject = null);
+
+public enum WorkflowConversationExecutionRole
+{
+    Unspecified = 0,
+    User = 1,
+    Assistant = 2,
+    Tool = 3,
+}
+
+public sealed record WorkflowConversationExecutionMessage(
+    int Sequence,
+    string TurnId,
+    WorkflowConversationExecutionRole Role,
+    string Content);
+
+public sealed record WorkflowConversationExecutionContext(
+    string ScopeId,
+    string ConversationId,
+    long StateVersion,
+    IReadOnlyList<WorkflowConversationExecutionMessage> Messages,
+    bool Truncated,
+    int MaxMessageCount);
+
+public enum WorkflowChatConversationIntentKind
+{
+    None = 0,
+    Create = 1,
+    Continue = 2,
+}
+
+public sealed record WorkflowChatConversationIntent(
+    WorkflowChatConversationIntentKind Intent,
+    string? ConversationId = null,
+    long? MinimumStateVersion = null)
+{
+    public static WorkflowChatConversationIntent None() =>
+        new(WorkflowChatConversationIntentKind.None);
+
+    public static WorkflowChatConversationIntent Create() =>
+        new(WorkflowChatConversationIntentKind.Create);
+
+    public static WorkflowChatConversationIntent Continue(
+        string conversationId,
+        long? minimumStateVersion = null) =>
+        new(
+            WorkflowChatConversationIntentKind.Continue,
+            conversationId,
+            minimumStateVersion is > 0 ? minimumStateVersion : null);
+}
+
+public sealed record WorkflowCompletionNotificationTarget(
+    string ActorId,
+    string DeliveryId,
+    long ExpiresAtUnixMs);
 
 public sealed record WorkflowChatRunForkSeed(
     string SourceRunId,
@@ -174,6 +245,7 @@ public sealed record WorkflowChatSource
 public sealed record WorkflowChatRunRequest(
     string Prompt,
     WorkflowChatSource Source,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
     string? SessionId = null,
     IReadOnlyList<WorkflowChatInputPart>? InputParts = null,
     IReadOnlyDictionary<string, string>? Metadata = null,
@@ -188,7 +260,10 @@ public sealed record WorkflowChatRunRequest(
     string? CorrelationIdSeed = null,
     WorkflowChatRunForkSeed? ForkSeed = null,
     WorkflowExternalIngressContext? ExternalIngress = null,
-    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
+    WorkflowChatConversationIntent? ChatConversation = null,
+    WorkflowConversationExecutionContext? ConversationContext = null,
+    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
+    [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
 
@@ -218,6 +293,11 @@ public enum WorkflowChatRunStartError
     ProjectionUnavailable = 10,
     InvalidCallerCredential = 11,
     InvalidFileInput = 12,
+    InvalidConversationInput = 14,
+    InvalidConversationId = 15,
+    ConversationNotFound = 16,
+    ChatHistoryReservationUnavailable = 17,
+    IdempotencyConflict = 18,
 }
 
 public enum WorkflowProjectionCompletionStatus
@@ -236,3 +316,18 @@ public sealed record WorkflowChatRunAcceptedReceipt(
     string WorkflowName,
     string CommandId,
     string CorrelationId);
+
+public sealed record WorkflowChatContext(
+    string ScopeId,
+    string ConversationId,
+    string TurnId,
+    long StateVersion = 0);
+
+public sealed record WorkflowChatInteractionAcceptedReceipt(
+    WorkflowChatRunAcceptedReceipt Run,
+    WorkflowChatContext? ChatContext)
+{
+    public static implicit operator WorkflowChatInteractionAcceptedReceipt(
+        WorkflowChatRunAcceptedReceipt run) =>
+        new(run, null);
+}

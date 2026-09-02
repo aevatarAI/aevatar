@@ -1,6 +1,4 @@
-using System.Text.Encodings.Web;
-using System.Text.Json;
-using System.Text.RegularExpressions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -9,6 +7,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -22,10 +21,17 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
     private const string ModuleStateKey = "connector_call";
     private const string TimeoutCallbackPrefix = "workflow-connector-timeout";
     private readonly IWorkflowConnectorResolver _connectorResolver;
+    private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
+    private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
 
-    public ConnectorCallModule(IWorkflowConnectorResolver connectorResolver)
+    public ConnectorCallModule(
+        IWorkflowConnectorResolver connectorResolver,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null,
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
     {
         _connectorResolver = connectorResolver ?? throw new ArgumentNullException(nameof(connectorResolver));
+        _callerAccessTokenProvider = callerAccessTokenProvider;
+        _remoteToolApprovalPort = remoteToolApprovalPort;
     }
 
     public string Name => "connector_call";
@@ -40,6 +46,8 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 payload.Is(SecureValueCapturedEvent.Descriptor) ||
                 payload.Is(WorkflowConnectorTimeoutFiredEvent.Descriptor) ||
                 payload.Is(WorkflowConnectorAttemptCompletedEvent.Descriptor) ||
+                payload.Is(WorkflowConnectorApprovalStatusCheckFiredEvent.Descriptor) ||
+                payload.Is(WorkflowRunStoppedEvent.Descriptor) ||
                 payload.Is(WorkflowCompletedEvent.Descriptor));
     }
 
@@ -66,9 +74,30 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
 
         if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
         {
+            var completed = envelope.Payload.Unpack<WorkflowCompletedEvent>();
             await SecureInputRuntimeContextAccess.RemoveRunAsync(
                 ctx,
-                envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId,
+                completed.RunId,
+                ct);
+            await HandleApprovalRunTerminatedAsync(completed.RunId, ctx, ct);
+            return;
+        }
+
+        if (envelope.Payload.Is(WorkflowRunStoppedEvent.Descriptor))
+        {
+            await HandleApprovalRunTerminatedAsync(
+                envelope.Payload.Unpack<WorkflowRunStoppedEvent>().RunId,
+                ctx,
+                ct);
+            return;
+        }
+
+        if (envelope.Payload.Is(WorkflowConnectorApprovalStatusCheckFiredEvent.Descriptor))
+        {
+            await HandleApprovalStatusCheckAsync(
+                envelope.Payload.Unpack<WorkflowConnectorApprovalStatusCheckFiredEvent>(),
+                envelope,
+                ctx,
                 ct);
             return;
         }
@@ -150,6 +179,23 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         var runId = string.IsNullOrEmpty(request.RunId)
             ? envelope.Propagation?.CorrelationId ?? string.Empty
             : request.RunId;
+        if (RequiresConnectorApproval(request))
+        {
+            await BeginConnectorApprovalAsync(
+                request,
+                runId,
+                connectorName,
+                operation,
+                connector,
+                attempts,
+                timeoutMs,
+                string.Equals(onError, "continue", StringComparison.OrdinalIgnoreCase),
+                isSecureStep,
+                ctx,
+                ct);
+            return;
+        }
+
         await StartAttemptAsync(
             envelope,
             request,
@@ -162,6 +208,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             timeoutMs,
             string.Equals(onError, "continue", StringComparison.OrdinalIgnoreCase),
             isSecureStep,
+            ResolveIssuedAtUnixMs(envelope),
             ctx,
             ct);
     }
@@ -184,6 +231,12 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             ctx.Logger.LogDebug(
                 "ConnectorCall: ignore timeout without matching lease operation={OperationId}",
                 evt.OperationId);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(pending.ApprovalActionId))
+        {
+            await HandleApprovedTimeoutAsync(pending, evt, state, ctx, ct);
             return;
         }
 
@@ -233,6 +286,12 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         if (!state.PendingByOperationId.TryGetValue(evt.OperationId, out var pending))
             return;
 
+        if (!string.IsNullOrWhiteSpace(pending.ApprovalActionId))
+        {
+            await HandleApprovedAttemptCompletedAsync(evt, pending, state, ctx, ct);
+            return;
+        }
+
         RemovePending(state, pending);
         await SaveStateAsync(state, ctx, ct);
         await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.TimeoutLease, CancellationToken.None);
@@ -255,7 +314,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         }
 
         var errorText = string.IsNullOrWhiteSpace(evt.Error) ? "connector call failed" : evt.Error;
-        if (pending.Attempt < pending.Attempts)
+        if (pending.Attempt < pending.Attempts && CanRetry(evt))
         {
             ctx.Logger.LogWarning(
                 "ConnectorCall: step={StepId} connector={Connector} attempt={Attempt}/{Attempts} failed: {Error}",
@@ -288,6 +347,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 pending.TimeoutMs,
                 pending.OnErrorContinue,
                 pending.SecureStep,
+                pending.IssuedAtUnixMs,
                 ctx,
                 ct);
             return;
@@ -316,8 +376,10 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         int timeoutMs,
         bool onErrorContinue,
         bool isSecureStep,
+        long issuedAtUnixMs,
         IWorkflowExecutionContext ctx,
-        CancellationToken ct)
+        CancellationToken ct,
+        string approvalActionId = "")
     {
         var pending = await RegisterPendingAsync(
             envelope,
@@ -331,20 +393,23 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             timeoutMs,
             onErrorContinue,
             isSecureStep,
+            issuedAtUnixMs,
             ctx,
-            ct);
+            ct,
+            approvalActionId);
         var requestMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, requestMetadata);
         var connectorRequest = new ConnectorRequest
         {
-            HttpAuthorization = ReconstructConnectorHttpAuthorization(ctx),
+            HttpAuthorization = await ReconstructConnectorHttpAuthorizationAsync(ctx, ct),
             RunId = runId,
             StepId = request.StepId,
             Connector = connectorName,
             Operation = operation,
-            Payload = ResolvePayload(request, isSecureStep, ctx) ?? string.Empty,
+            Payload = await ResolvePayloadAsync(request, isSecureStep, ctx, ct) ?? string.Empty,
             Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
+            IssuedAtUnixMs = pending.IssuedAtUnixMs,
         };
         _ = ExecuteConnectorAndSignalAsync(ctx, connector, connectorRequest, pending);
     }
@@ -370,6 +435,10 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             completed.Success = response.Success;
             completed.Output = response.Output ?? string.Empty;
             completed.Error = response.Error ?? string.Empty;
+            if (response.TerminalInvoked is { } terminalInvoked)
+                completed.TerminalInvoked = terminalInvoked;
+            if (response.Retryable is { } retryable)
+                completed.Retryable = retryable;
             foreach (var (key, value) in response.Metadata)
                 completed.Annotations[key] = value;
         }
@@ -377,10 +446,23 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         {
             completed.Success = false;
             completed.Error = ex.Message;
+            completed.TerminalInvoked = false;
+            completed.Retryable = true;
         }
 
         completed.Annotations["connector.duration_ms"] = ctx.GetElapsedTime(startedAt).TotalMilliseconds.ToString("F2");
         await ctx.PublishAsync(completed, TopologyAudience.Self, CancellationToken.None);
+    }
+
+    private static bool CanRetry(WorkflowConnectorAttemptCompletedEvent evt)
+    {
+        if (!evt.HasTerminalInvoked && !evt.HasRetryable)
+            return true;
+
+        return evt.HasTerminalInvoked &&
+               evt.HasRetryable &&
+               !evt.TerminalInvoked &&
+               evt.Retryable;
     }
 
     private async Task<PendingConnectorCallState> RegisterPendingAsync(
@@ -395,8 +477,10 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         int timeoutMs,
         bool onErrorContinue,
         bool isSecureStep,
+        long issuedAtUnixMs,
         IWorkflowExecutionContext ctx,
-        CancellationToken ct)
+        CancellationToken ct,
+        string approvalActionId = "")
     {
         var operationId = BuildOperationId(runId, request.StepId, attempt, request.ExecutionId, ResolveOriginEnvelopeId(envelope));
         var callbackId = RuntimeCallbackKeyComposer.BuildCallbackId(
@@ -410,7 +494,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             StepId = request.StepId,
             RunId = runId,
             OperationId = operationId,
-            Input = request.Input ?? string.Empty,
+            Input = string.IsNullOrWhiteSpace(approvalActionId) ? request.Input ?? string.Empty : string.Empty,
             ConnectorName = connectorName,
             Operation = operation,
             Attempt = attempt,
@@ -422,9 +506,15 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             SecureStep = isSecureStep,
             ConnectorType = connectorType,
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
+            ApprovalActionId = approvalActionId,
+            RequestDispatched = false,
+            IssuedAtUnixMs = issuedAtUnixMs,
         };
-        foreach (var (key, value) in request.Parameters)
-            pending.Parameters[key] = value;
+        if (string.IsNullOrWhiteSpace(approvalActionId))
+        {
+            foreach (var (key, value) in request.Parameters)
+                pending.Parameters[key] = value;
+        }
 
         var state = WorkflowExecutionStateAccess.Load<ConnectorCallModuleState>(ctx, ModuleStateKey);
         RemovePendingForStep(state, runId, request.StepId);
@@ -432,27 +522,52 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         state.PendingOperationIdByStepId[BuildStepKey(runId, request.StepId)] = operationId;
         await SaveStateAsync(state, ctx, ct);
 
+        return await EnsurePendingTimeoutScheduledAsync(pending, ctx, ct);
+    }
+
+    private async Task<PendingConnectorCallState> EnsurePendingTimeoutScheduledAsync(
+        PendingConnectorCallState pending,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (pending.TimeoutLease != null)
+            return pending;
+
         var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
-            callbackId,
-            TimeSpan.FromMilliseconds(timeoutMs),
+            pending.TimeoutCallbackId,
+            TimeSpan.FromMilliseconds(pending.TimeoutMs),
             new WorkflowConnectorTimeoutFiredEvent
             {
-                RunId = runId,
-                StepId = request.StepId,
-                OperationId = operationId,
-                TimeoutMs = timeoutMs,
-                Attempt = attempt,
+                RunId = pending.RunId,
+                StepId = pending.StepId,
+                OperationId = pending.OperationId,
+                TimeoutMs = pending.TimeoutMs,
+                Attempt = pending.Attempt,
             },
             ct: ct);
 
-        state = WorkflowExecutionStateAccess.Load<ConnectorCallModuleState>(ctx, ModuleStateKey);
-        if (!state.PendingByOperationId.TryGetValue(operationId, out pending))
+        var state = WorkflowExecutionStateAccess.Load<ConnectorCallModuleState>(ctx, ModuleStateKey);
+        if (!state.PendingByOperationId.TryGetValue(pending.OperationId, out var persistedPending))
             return pending;
 
-        pending.TimeoutLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
-        state.PendingByOperationId[operationId] = pending;
+        persistedPending.TimeoutLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+        state.PendingByOperationId[persistedPending.OperationId] = persistedPending;
         await SaveStateAsync(state, ctx, ct);
-        return pending;
+        return persistedPending;
+    }
+
+    private static async Task MarkConnectorRequestDispatchedAsync(
+        PendingConnectorCallState pending,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var state = WorkflowExecutionStateAccess.Load<ConnectorCallModuleState>(ctx, ModuleStateKey);
+        if (!state.PendingByOperationId.TryGetValue(pending.OperationId, out var persistedPending))
+            return;
+
+        persistedPending.RequestDispatched = true;
+        state.PendingByOperationId[persistedPending.OperationId] = persistedPending;
+        await SaveStateAsync(state, ctx, ct);
     }
 
     private static bool MatchesPendingTimeout(EventEnvelope envelope, PendingConnectorCallState pending)
@@ -494,6 +609,9 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.IsNullOrWhiteSpace(envelope.Id)
             ? Guid.NewGuid().ToString("N")
             : envelope.Id;
+
+    private static long ResolveIssuedAtUnixMs(EventEnvelope envelope) =>
+        envelope.Timestamp?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0;
 
     private static string BuildOperationId(
         string runId,
@@ -546,6 +664,26 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
+        await ctx.PublishAsync(
+            BuildPendingCompletion(
+                pending,
+                success,
+                output,
+                error,
+                durationMs,
+                responseAnnotations),
+            TopologyAudience.Self,
+            ct);
+    }
+
+    private static StepCompletedEvent BuildPendingCompletion(
+        PendingConnectorCallState pending,
+        bool success,
+        string output,
+        string error,
+        double durationMs,
+        IReadOnlyDictionary<string, string> responseAnnotations)
+    {
         var completed = new StepCompletedEvent
         {
             StepId = pending.StepId,
@@ -571,7 +709,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             completed.Annotations["connector.error"] = error ?? string.Empty;
         }
 
-        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
+        return completed;
     }
 
     private static async Task PublishFailureAsync(
@@ -613,208 +751,6 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         await ctx.PublishAsync(skipped, TopologyAudience.Self, ct);
     }
 
-    private string? ResolvePayload(
-        StepRequestEvent request,
-        bool isSecureStep,
-        IWorkflowExecutionContext ctx)
-    {
-        var mode = WorkflowParameterValueParser.GetString(
-            request.Parameters,
-            isSecureStep ? "secure_template" : "input",
-            "stdin_mode",
-            "stdin").Trim();
-        if (string.Equals(mode, "input", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(mode, "inherit", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(mode, "none", StringComparison.OrdinalIgnoreCase))
-        {
-            return request.Input;
-        }
-
-        if (string.Equals(mode, "secure_variable", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(mode, "secure_input", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(mode, "secret_input", StringComparison.OrdinalIgnoreCase))
-        {
-            var variable = WorkflowParameterValueParser.GetString(
-                request.Parameters,
-                string.Empty,
-                "stdin_secret_variable",
-                "secret_variable",
-                "secure_variable",
-                "variable");
-            return ResolveSecureVariable(ctx, request.RunId, variable);
-        }
-
-        if (string.Equals(mode, "template", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(mode, "secure_template", StringComparison.OrdinalIgnoreCase))
-        {
-            var template = WorkflowParameterValueParser.GetString(
-                request.Parameters,
-                request.Input ?? string.Empty,
-                "stdin_template",
-                "payload_template",
-                "stdin_value");
-            return ResolveSecureTemplate(ctx, request.RunId, template);
-        }
-
-        return request.Input;
-    }
-
-    private static string ResolveSecureVariable(
-        IWorkflowExecutionContext ctx,
-        string? runId,
-        string variable)
-    {
-        var normalizedVariable = NormalizeSecureVariableName(variable);
-        if (string.IsNullOrWhiteSpace(normalizedVariable))
-            throw new InvalidOperationException("connector_call secure stdin requires 'stdin_secret_variable'.");
-
-        if (SecureInputRuntimeContextAccess.TryGetCapturedValue(ctx, runId, normalizedVariable, out var value))
-        {
-            return value;
-        }
-
-        throw new InvalidOperationException(
-            $"connector_call is missing captured secure value '{normalizedVariable}' for run '{WorkflowRunIdNormalizer.Normalize(runId)}'.");
-    }
-
-    private static string ResolveSecureTemplate(
-        IWorkflowExecutionContext ctx,
-        string? runId,
-        string template)
-    {
-        if (string.IsNullOrEmpty(template))
-            return string.Empty;
-
-        var withJsonEscapedSecureValues = SecureJsonPlaceholderPattern().Replace(template, match =>
-        {
-            var variable = match.Groups[1].Value;
-            var value = ResolveSecureVariable(ctx, runId, variable);
-            return JsonEncodedText.Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping).ToString();
-        });
-
-        return SecurePlaceholderPattern().Replace(withJsonEscapedSecureValues, match =>
-        {
-            var variable = match.Groups[1].Value;
-            return ResolveSecureVariable(ctx, runId, variable);
-        });
-    }
-
-    private static string NormalizeSecureVariableName(string? variable) =>
-        string.IsNullOrWhiteSpace(variable) ? string.Empty : variable.Trim();
-
-    [GeneratedRegex(@"\[\[secure:([A-Za-z0-9_.:-]+)\]\]", RegexOptions.Compiled)]
-    private static partial Regex SecurePlaceholderPattern();
-
-    [GeneratedRegex(@"\[\[secure_json:([A-Za-z0-9_.:-]+)\]\]", RegexOptions.Compiled)]
-    private static partial Regex SecureJsonPlaceholderPattern();
-
-    private static void AppendBaseMetadata(
-        StepCompletedEvent evt,
-        PendingConnectorCallState pending,
-        double durationMs)
-    {
-        evt.Annotations["connector.name"] = pending.ConnectorName;
-        evt.Annotations["connector.type"] = pending.ConnectorType;
-        evt.Annotations["connector.operation"] = pending.Operation;
-        evt.Annotations["connector.attempts"] = pending.Attempt.ToString();
-        evt.Annotations["connector.timeout_ms"] = pending.TimeoutMs.ToString();
-        evt.Annotations["connector.duration_ms"] = durationMs.ToString("F2");
-    }
-
-    private static bool TryAssertResponseOutput(
-        IReadOnlyDictionary<string, string> parameters,
-        string responseOutput,
-        out string error)
-    {
-        error = string.Empty;
-        var responsePath = WorkflowParameterValueParser.GetString(
-            parameters,
-            string.Empty,
-            "assert_response_path");
-        if (string.IsNullOrWhiteSpace(responsePath))
-            return true;
-
-        if (string.IsNullOrWhiteSpace(responseOutput))
-        {
-            error = $"connector_call assertion failed: response path '{responsePath}' is missing";
-            return false;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(responseOutput);
-            if (!TryResolveJsonPath(document.RootElement, responsePath, out var value))
-            {
-                error = $"connector_call assertion failed: response path '{responsePath}' is missing";
-                return false;
-            }
-
-            if (!IsTruthy(value))
-            {
-                error = $"connector_call assertion failed: response path '{responsePath}' was not truthy";
-                return false;
-            }
-
-            return true;
-        }
-        catch (JsonException)
-        {
-            error = $"connector_call assertion failed: response output is not valid JSON for path '{responsePath}'";
-            return false;
-        }
-    }
-
-    private static bool TryResolveJsonPath(JsonElement current, string path, out JsonElement value)
-    {
-        var normalizedSegments = path
-            .Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (normalizedSegments.Length == 0)
-        {
-            value = current;
-            return true;
-        }
-
-        foreach (var segment in normalizedSegments)
-        {
-            if (current.ValueKind == JsonValueKind.Object &&
-                current.TryGetProperty(segment, out var property))
-            {
-                current = property;
-                continue;
-            }
-
-            if (current.ValueKind == JsonValueKind.Array &&
-                int.TryParse(segment, out var index) &&
-                index >= 0 &&
-                index < current.GetArrayLength())
-            {
-                current = current[index];
-                continue;
-            }
-
-            value = default;
-            return false;
-        }
-
-        value = current;
-        return true;
-    }
-
-    private static bool IsTruthy(JsonElement value)
-    {
-        return value.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.Number => !string.Equals(value.GetRawText(), "0", StringComparison.Ordinal),
-            JsonValueKind.String => !string.IsNullOrWhiteSpace(value.GetString()) &&
-                                    !string.Equals(value.GetString(), "false", StringComparison.OrdinalIgnoreCase),
-            JsonValueKind.Null => false,
-            JsonValueKind.Undefined => false,
-            _ => true,
-        };
-    }
-
     private static int ParseBoundedInt(string raw, int min, int max, int fallback)
     {
         if (!int.TryParse(raw, out var parsed)) return fallback;
@@ -828,16 +764,4 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
 
-    private static string ReconstructConnectorHttpAuthorization(
-        IWorkflowExecutionContext ctx)
-    {
-        if (WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(ctx, out var credential) &&
-            !string.IsNullOrWhiteSpace(credential.BearerToken))
-        {
-            var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential.BearerToken);
-            return parsed.IsValid ? $"Bearer {parsed.NormalizedBearerToken}" : string.Empty;
-        }
-
-        return string.Empty;
-    }
 }

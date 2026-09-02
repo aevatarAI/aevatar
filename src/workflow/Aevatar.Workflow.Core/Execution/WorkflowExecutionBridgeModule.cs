@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.EventModules;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -32,7 +33,33 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
             if (!executor.CanHandle(envelope))
                 continue;
 
-            await executor.HandleAsync(envelope, workflowContext, ct);
+            try
+            {
+                await executor.HandleAsync(envelope, workflowContext, ct);
+            }
+            catch (Exception ex) when (envelope.Payload?.Is(StepRequestEvent.Descriptor) == true)
+            {
+                var request = envelope.Payload.Unpack<StepRequestEvent>();
+                ctx.Logger.LogError(
+                    ex,
+                    "workflow_execution_bridge: executor failed run={RunId} step={StepId} type={StepType}",
+                    request.RunId,
+                    request.StepId,
+                    request.StepType);
+                await ctx.PublishAsync(
+                    new StepCompletedEvent
+                    {
+                        RunId = request.RunId,
+                        StepId = request.StepId,
+                        ExecutionId = request.ExecutionId,
+                        Success = false,
+                        FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+                        Error = WorkflowRuntimeFailureMessages.StepExecutorFailed(request.StepId, request.StepType, ex),
+                    },
+                    TopologyAudience.Self,
+                    ct);
+                return;
+            }
         }
     }
 }

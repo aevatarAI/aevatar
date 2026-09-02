@@ -5,8 +5,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to show NyxID account overview (user, services, API keys, nodes).</summary>
-public sealed class NyxIdStatusTool : IAgentTool
+public sealed class NyxIdStatusTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdStatusTool(NyxIdApiClient client) => _client = client;
@@ -17,6 +19,8 @@ public sealed class NyxIdStatusTool : IAgentTool
         "Get a comprehensive account overview combining user profile, connected services, API keys, and nodes in one call.";
 
     public string ParametersSchema => """{"type":"object","properties":{}}""";
+
+    public bool IsReadOnly => true;
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

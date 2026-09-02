@@ -12,7 +12,14 @@ run_guard_meta_tests() {
   bash "${SCRIPT_DIR}/test_coverage_file_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_project_reference_layer_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_architecture_guards_enforces_layer_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_projection_document_reader_list_async_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_catch_exception_observability_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_audit_trail_guards.sh"
+  bash "${SCRIPT_DIR}/tests/test_lark_agent_path_contract_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_fkst_host_policy_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_gagent_registry_kind_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_query_projection_priming_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_nyxid_chat_semantics_guard.sh"
 }
 
 if [[ ! -f "${allowlist_file}" ]]; then

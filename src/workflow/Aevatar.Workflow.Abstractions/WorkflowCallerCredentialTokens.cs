@@ -20,6 +20,19 @@ public readonly record struct WorkflowCallerCredentialTokenParseResult(
 
 public static class WorkflowCallerCredentialTokens
 {
+    public static bool IsInvalidCredentialSet(
+        string? executionBearerToken,
+        NyxIdCallerCredentialKind executionKind,
+        string? sourceReadableUserBearerToken)
+    {
+        var execution = ParseOptional(executionBearerToken);
+        var sourceReadable = ParseOptional(sourceReadableUserBearerToken);
+        return execution.IsInvalid ||
+               sourceReadable.IsInvalid ||
+               sourceReadable.IsValid &&
+               (!execution.IsValid || executionKind != NyxIdCallerCredentialKind.ProxyDelegation);
+    }
+
     public static WorkflowCallerCredentialTokenParseResult ParseOptional(string? rawBearerToken)
     {
         if (string.IsNullOrWhiteSpace(rawBearerToken))

@@ -112,6 +112,14 @@ Builder 当前行为：
 - `http`、`cli`、`host_callback` builder 在 `AddAevatarBootstrap()` 默认注册；
 - `mcp` builder 只有在 `AddAevatarAIFeatures(..., options => options.EnableMCPTools = true)` 时注册。
 
+## 2.5 Workflow 外部能力所有权与 readiness
+
+Connector 是否需要认证不改变它的所有权。只要 operation 由部署配置并进入 Host Connector catalog，它就是 Host-owned capability；`public`、`client_credentials` 和 `secret_ref_header` 都走同一条 Connector 主链。反过来，用户/org credential、OAuth connection、NyxID UserService 或 local Node 拥有的 operation 必须走 NyxID capability，不能因为它看起来像 HTTP 就改写成 Connector。
+
+Workflow authoring 只消费 `ConnectorExternalWorkflowCapabilitySource` 从 `IConnectorCatalogQueryPort` 读取的 typed descriptor。每个 descriptor 使用三元组 `connector_capability_ref + operation_id + contract_digest` 标识一个 exact operation；digest 是安全的 contract fingerprint，不包含 secret value。只有 connector 当前存在、启用、operation 仍在 allowlist 且 digest 匹配时，point-in-time readiness 才是 `READY`。缺失、禁用和 contract drift 返回 typed blocker 与 `studio:connectors` trusted remediation，不在 Chat 中接收凭据。
+
+所有普通 Workflow write 仍由服务器端 `IWorkflowExternalCapabilityAdmissionService` 重新解析 YAML 和校验 readiness。Chat 的 `list_external_workflow_capabilities` / `inspect_external_workflow_capability_readiness` 只负责只读引导，不是安全边界，也不创建或刷新 Connector。Definition actor 会独立重算 capability tuple，并把 definition 与 admission digest 在同一个 actor transition 中提交。
+
 ---
 
 ## 3. Workflow/Agent 如何使用 Connector
@@ -179,6 +187,55 @@ Ergonomic 别名（解析期归一化到 `connector_call`）：
 - skip：`connector.skipped`, `connector.skip_reason`
 - continue：`connector.continued_on_error`, `connector.error`
 - 具体实现附加字段：`connector.http.*` / `connector.cli.*` / `connector.mcp.*` / `host_callback.result.*`
+
+### Durable approval-gated execution
+
+`connector_call` and `secure_connector_call` can suspend before dispatching an external action by setting
+`approval.policy: required`. Approval is an execution gate for one exact logical action; it is not evidence that
+the connector call succeeded.
+
+The required typed approval parameters are:
+
+- `approval.service_ref`, `approval.node_id`, `approval.http_verb`, `approval.resource`, and
+  `approval.permission_scope`;
+- `approval.expiration_seconds`, which defines the local validity window;
+- a stable step `idempotency_key`, plus the normal workflow `run_id` and `step_id` identities.
+
+`approval.status_check_interval_seconds` defaults to 2 and must be positive and no greater than the approval
+validity window. `approval.destructive`, `approval.team_id`, `approval.member_id`, `approval.workflow_id`,
+`approval.published_service_id`, and `approval.policy_reason` add typed policy and provenance facts.
+
+The workflow actor owns the coordination state. Before submitting to NyxID it:
+
+1. resolves the connector payload and parameters;
+2. creates a versioned `WorkflowExternalActionPlan` and stable action identity;
+3. serializes the exact request material as Protobuf into `IRuntimeSecretStore`;
+4. stores only the safe plan, lifecycle facts, and protected-material reference in actor state;
+5. computes a SHA-256 digest over the protected Protobuf material and binds that digest to the remote request.
+
+Raw payload, input, parameters, credentials, and authorization headers never enter approval records, logs,
+committed-state projections, or public APIs. The committed-state redaction hook also removes the protected-material
+reference before projection.
+
+NyxID submission is never repeated after an indeterminate response because the current external Tool Approval API
+creates a unique request for every submission. A missing port, indeterminate submission, unavailable status read,
+binding mismatch, authority mismatch, digest mismatch, expiry mismatch, denial, expiration, cancellation, or
+superseded plan fails closed without connector execution.
+
+Status checks are durable self callbacks. Approval resumes only when the callback still matches the actor-owned
+remote request ID, action ID, material digest, principal, scope, node, service, permission scope, and remote expiry.
+Immediately before each physical connector dispatch, the actor re-resolves the protected material, rechecks the
+digest and current authority, and verifies both local and remote expiry. Every physical retry uses the same logical
+`idempotency_key`. HTTP connector approvals additionally fail closed unless the approved verb and resource match the
+concrete `method` and normalized `path` that the connector will execute.
+
+The actor persists approval and connector execution as separate facts. The current-state projection and
+`GET /api/workflow-actors/{actorId}/current-state` expose only safe plan fields and distinguish
+`waiting_approval`, `approved`, `denied`, `expired`, `cancelled`, `executing`, `succeeded`, and `failed` lifecycle
+states. Dispatch intent is persisted before invocation and acknowledged afterward; an unacknowledged dispatch is
+replayed with the same idempotency key. The exact pending step completion is also stored as protected Protobuf until
+publication is durably acknowledged, so terminal recovery can republish the original result without exposing it in
+Actor audit facts. Recovery then revokes both protected request and completion material.
 
 ## 3.3 三类 Connector 的执行逻辑
 
@@ -319,6 +376,8 @@ steps:
     role: coordinator
     parameters:
       connector: maker_post_processor
+      operation: "<exact operation_id from capability listing>"
+      contract_digest: "<exact contract_digest from READY capability>"
       timeout_ms: "8000"
       retry: "1"
       on_missing: "skip"

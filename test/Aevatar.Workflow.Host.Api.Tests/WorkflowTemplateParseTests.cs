@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
+using Aevatar.Workflow.Core;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -32,6 +33,16 @@ public class WorkflowTemplateParseTests
         definition.Name.Should().NotBeNullOrWhiteSpace();
         definition.Steps.Should().NotBeEmpty();
         WorkflowValidator.Validate(definition).Should().BeEmpty();
+        definition.Steps
+            .Where(step => step.Type == "await_job" || step.Type == "async_job")
+            .Should()
+            .BeEmpty();
+        WorkflowAuthorizationDependencyEvaluator.Evaluate(definition).ExternalCapabilities
+            .Should()
+            .NotContain(capability =>
+                capability.CapabilityCase ==
+                Aevatar.Workflow.Abstractions.ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService,
+                "repository startup workflows cannot embed a tenant-owned NyxID UserService identity");
     }
 
     private static string FindRepositoryRoot()

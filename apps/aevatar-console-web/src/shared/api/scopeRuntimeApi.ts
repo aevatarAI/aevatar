@@ -1,5 +1,37 @@
-import { jsonBody, requestJson, withQuery } from "./http/client";
-import { decodeServiceCatalogSnapshots } from "./servicesApi";
+import { authFetch } from '@/shared/auth/fetch';
+import type {
+  BoundConnectorReference,
+  BoundSecretReference,
+  BoundServiceReference,
+  ServiceBindingSnapshot,
+} from '@/shared/models/governance';
+import type {
+  ScopeMemberRunAuditSnapshot,
+  ScopeMemberRunCatalogSnapshot,
+  ScopeMemberRunSummary,
+  ScopeServiceBindingCatalogSnapshot,
+  ScopeServiceBindingInput,
+  ScopeServiceEndpointContract,
+  ScopeServiceRevisionActionResult,
+  ScopeServiceRevisionCatalogSnapshot,
+  ScopeServiceRunAuditReply,
+  ScopeServiceRunAuditReport,
+  ScopeServiceRunAuditSnapshot,
+  ScopeServiceRunAuditStep,
+  ScopeServiceRunAuditSummary,
+  ScopeServiceRunAuditTimelineEvent,
+  ScopeServiceRunCatalogSnapshot,
+  ScopeServiceRunSummary,
+} from '@/shared/models/runtime/scopeServices';
+import type {
+  ServiceCatalogSnapshot,
+  ServiceCommandAcceptedReceipt,
+} from '@/shared/models/services';
+import {
+  normalizeStudioScopeBindingImplementationKind,
+  type StudioScopeBindingRevision,
+} from '@/shared/studio/models';
+import { jsonBody, requestJson, withQuery } from './http/client';
 import {
   expectArray,
   expectRecord,
@@ -10,73 +42,52 @@ import {
   readString,
   readStringArray,
   readStringRecord,
-} from "./http/decoders";
-import type {
-  ScopeMemberRunAuditSnapshot,
-  ScopeMemberRunCatalogSnapshot,
-  ScopeMemberRunSummary,
-  ScopeServiceBindingCatalogSnapshot,
-  ScopeServiceBindingInput,
-  ScopeServiceEndpointContract,
-  ScopeServiceRevisionActionResult,
-  ScopeServiceRevisionCatalogSnapshot,
-  ScopeServiceRunAuditReport,
-  ScopeServiceRunAuditReply,
-  ScopeServiceRunAuditSnapshot,
-  ScopeServiceRunAuditStep,
-  ScopeServiceRunAuditSummary,
-  ScopeServiceRunAuditTimelineEvent,
-  ScopeServiceRunCatalogSnapshot,
-  ScopeServiceRunSummary,
-} from "@/shared/models/runtime/scopeServices";
-import type {
-  BoundConnectorReference,
-  BoundSecretReference,
-  BoundServiceReference,
-  ServiceBindingSnapshot,
-} from "@/shared/models/governance";
-import type {
-  ServiceCatalogSnapshot,
-  ServiceCommandAcceptedReceipt,
-} from "@/shared/models/services";
-import {
-  normalizeStudioScopeBindingImplementationKind,
-  type StudioScopeBindingRevision,
-} from "@/shared/studio/models";
+} from './http/decoders';
+import { readResponseError } from './http/error';
+import { decodeServiceCatalogSnapshots } from './servicesApi';
+
+export type ScopeServiceBindingCatalogRead =
+  | {
+      readonly kind: 'available';
+      readonly snapshot: ScopeServiceBindingCatalogSnapshot;
+    }
+  | {
+      readonly kind: 'not_materialized';
+    };
 
 const bindingKindMap = {
-  "0": "unspecified",
-  "1": "service",
-  "2": "connector",
-  "3": "secret",
-  service_binding_kind_unspecified: "unspecified",
-  service_binding_kind_service: "service",
-  service_binding_kind_connector: "connector",
-  service_binding_kind_secret: "secret",
-  unspecified: "unspecified",
-  service: "service",
-  connector: "connector",
-  secret: "secret",
+  '0': 'unspecified',
+  '1': 'service',
+  '2': 'connector',
+  '3': 'secret',
+  service_binding_kind_unspecified: 'unspecified',
+  service_binding_kind_service: 'service',
+  service_binding_kind_connector: 'connector',
+  service_binding_kind_secret: 'secret',
+  unspecified: 'unspecified',
+  service: 'service',
+  connector: 'connector',
+  secret: 'secret',
 };
 
 const completionStatusMap = {
-  "0": "running",
-  "1": "completed",
-  "2": "timed_out",
-  "3": "failed",
-  "4": "stopped",
-  "5": "not_found",
-  "6": "disabled",
-  "99": "unknown",
-  running: "running",
-  completed: "completed",
-  timed_out: "timed_out",
-  timedout: "timed_out",
-  failed: "failed",
-  stopped: "stopped",
-  not_found: "not_found",
-  disabled: "disabled",
-  unknown: "unknown",
+  '0': 'running',
+  '1': 'completed',
+  '2': 'timed_out',
+  '3': 'failed',
+  '4': 'stopped',
+  '5': 'not_found',
+  '6': 'disabled',
+  '99': 'unknown',
+  running: 'running',
+  completed: 'completed',
+  timed_out: 'timed_out',
+  timedout: 'timed_out',
+  failed: 'failed',
+  stopped: 'stopped',
+  not_found: 'not_found',
+  disabled: 'disabled',
+  unknown: 'unknown',
 };
 
 function readOptionalString(
@@ -85,7 +96,7 @@ function readOptionalString(
 ): string | undefined {
   for (const key of keys) {
     const rawValue = record[key];
-    if (typeof rawValue !== "string") {
+    if (typeof rawValue !== 'string') {
       continue;
     }
 
@@ -104,7 +115,7 @@ function readOptionalScalar(
 ): string | number | undefined {
   for (const key of keys) {
     const rawValue = record[key];
-    if (typeof rawValue === "string") {
+    if (typeof rawValue === 'string') {
       const normalized = rawValue.trim();
       if (normalized) {
         return normalized;
@@ -112,7 +123,7 @@ function readOptionalScalar(
       continue;
     }
 
-    if (typeof rawValue === "number" && !Number.isNaN(rawValue)) {
+    if (typeof rawValue === 'number' && !Number.isNaN(rawValue)) {
       return rawValue;
     }
   }
@@ -134,7 +145,7 @@ function readNullableBoolean(
       return null;
     }
 
-    if (typeof rawValue === "boolean") {
+    if (typeof rawValue === 'boolean') {
       return rawValue;
     }
 
@@ -159,7 +170,7 @@ function readNullableNumber(
       return null;
     }
 
-    if (typeof rawValue === "number" && !Number.isNaN(rawValue)) {
+    if (typeof rawValue === 'number' && !Number.isNaN(rawValue)) {
       return rawValue;
     }
 
@@ -171,23 +182,23 @@ function readNullableNumber(
 
 function decodeServiceCommandAcceptedReceipt(
   value: unknown,
-  label = "ServiceCommandAcceptedReceipt",
+  label = 'ServiceCommandAcceptedReceipt',
 ): ServiceCommandAcceptedReceipt {
   const record = expectRecord(value, label);
   return {
     targetActorId: readString(
       record,
-      ["targetActorId", "TargetActorId"],
+      ['targetActorId', 'TargetActorId'],
       `${label}.targetActorId`,
     ),
     commandId: readString(
       record,
-      ["commandId", "CommandId"],
+      ['commandId', 'CommandId'],
       `${label}.commandId`,
     ),
     correlationId: readString(
       record,
-      ["correlationId", "CorrelationId"],
+      ['correlationId', 'CorrelationId'],
       `${label}.correlationId`,
     ),
   };
@@ -195,7 +206,7 @@ function decodeServiceCommandAcceptedReceipt(
 
 function decodeBoundServiceReference(
   value: unknown,
-  label = "BoundServiceReference",
+  label = 'BoundServiceReference',
 ): BoundServiceReference {
   const record = expectRecord(value, label);
   const identityRecord = expectRecord(
@@ -207,28 +218,28 @@ function decodeBoundServiceReference(
     identity: {
       tenantId: readString(
         identityRecord,
-        ["tenantId", "TenantId"],
+        ['tenantId', 'TenantId'],
         `${label}.identity.tenantId`,
       ),
       appId: readString(
         identityRecord,
-        ["appId", "AppId"],
+        ['appId', 'AppId'],
         `${label}.identity.appId`,
       ),
       namespace: readString(
         identityRecord,
-        ["namespace", "Namespace"],
+        ['namespace', 'Namespace'],
         `${label}.identity.namespace`,
       ),
       serviceId: readString(
         identityRecord,
-        ["serviceId", "ServiceId"],
+        ['serviceId', 'ServiceId'],
         `${label}.identity.serviceId`,
       ),
     },
     endpointId: readString(
       record,
-      ["endpointId", "EndpointId"],
+      ['endpointId', 'EndpointId'],
       `${label}.endpointId`,
     ),
   };
@@ -236,18 +247,18 @@ function decodeBoundServiceReference(
 
 function decodeBoundConnectorReference(
   value: unknown,
-  label = "BoundConnectorReference",
+  label = 'BoundConnectorReference',
 ): BoundConnectorReference {
   const record = expectRecord(value, label);
   return {
     connectorType: readString(
       record,
-      ["connectorType", "ConnectorType"],
+      ['connectorType', 'ConnectorType'],
       `${label}.connectorType`,
     ),
     connectorId: readString(
       record,
-      ["connectorId", "ConnectorId"],
+      ['connectorId', 'ConnectorId'],
       `${label}.connectorId`,
     ),
   };
@@ -255,13 +266,13 @@ function decodeBoundConnectorReference(
 
 function decodeBoundSecretReference(
   value: unknown,
-  label = "BoundSecretReference",
+  label = 'BoundSecretReference',
 ): BoundSecretReference {
   const record = expectRecord(value, label);
   return {
     secretName: readString(
       record,
-      ["secretName", "SecretName"],
+      ['secretName', 'SecretName'],
       `${label}.secretName`,
     ),
   };
@@ -269,7 +280,7 @@ function decodeBoundSecretReference(
 
 function decodeServiceBindingSnapshot(
   value: unknown,
-  label = "ServiceBindingSnapshot",
+  label = 'ServiceBindingSnapshot',
 ): ServiceBindingSnapshot {
   const record = expectRecord(value, label);
   const serviceRef = record.serviceRef ?? record.ServiceRef;
@@ -279,12 +290,12 @@ function decodeServiceBindingSnapshot(
   return {
     bindingId: readString(
       record,
-      ["bindingId", "BindingId"],
+      ['bindingId', 'BindingId'],
       `${label}.bindingId`,
     ),
     displayName: readString(
       record,
-      ["displayName", "DisplayName"],
+      ['displayName', 'DisplayName'],
       `${label}.displayName`,
     ),
     bindingKind: normalizeEnumValue(
@@ -294,10 +305,10 @@ function decodeServiceBindingSnapshot(
     ),
     policyIds: readStringArray(
       record,
-      ["policyIds", "PolicyIds"],
+      ['policyIds', 'PolicyIds'],
       `${label}.policyIds`,
     ),
-    retired: readBoolean(record, ["retired", "Retired"], `${label}.retired`),
+    retired: readBoolean(record, ['retired', 'Retired'], `${label}.retired`),
     serviceRef:
       serviceRef === undefined || serviceRef === null
         ? null
@@ -315,13 +326,13 @@ function decodeServiceBindingSnapshot(
 
 function decodeServiceBindingCatalogSnapshot(
   value: unknown,
-  label = "ScopeServiceBindingCatalogSnapshot",
+  label = 'ScopeServiceBindingCatalogSnapshot',
 ): ScopeServiceBindingCatalogSnapshot {
   const record = expectRecord(value, label);
   return {
     serviceKey: readString(
       record,
-      ["serviceKey", "ServiceKey"],
+      ['serviceKey', 'ServiceKey'],
       `${label}.serviceKey`,
     ),
     bindings: expectArray(
@@ -331,7 +342,7 @@ function decodeServiceBindingCatalogSnapshot(
     ),
     updatedAt: readNullableString(
       record,
-      ["updatedAt", "UpdatedAt"],
+      ['updatedAt', 'UpdatedAt'],
       `${label}.updatedAt`,
     ),
   };
@@ -340,197 +351,198 @@ function decodeServiceBindingCatalogSnapshot(
 function readImplementationKind(
   record: Record<string, unknown>,
   label: string,
-): StudioScopeBindingRevision["implementationKind"] {
+): StudioScopeBindingRevision['implementationKind'] {
   const rawValue =
-    readOptionalScalar(record, ["implementationKind", "ImplementationKind"]) ??
-    "unknown";
+    readOptionalScalar(record, ['implementationKind', 'ImplementationKind']) ??
+    'unknown';
   return normalizeStudioScopeBindingImplementationKind(
     normalizeEnumValue(rawValue, `${label}.implementationKind`, {
-      "0": "unknown",
-      "1": "workflow",
-      "2": "script",
-      "3": "gagent",
-      workflow: "workflow",
-      scripting: "script",
-      script: "script",
-      gagent: "gagent",
-      unspecified: "unknown",
+      '0': 'unknown',
+      '1': 'workflow',
+      '2': 'script',
+      '3': 'gagent',
+      workflow: 'workflow',
+      scripting: 'script',
+      script: 'script',
+      gagent: 'gagent',
+      unspecified: 'unknown',
     }),
   );
 }
 
 function decodeScopeServiceRevision(
   value: unknown,
-  label = "ScopeServiceRevision",
+  label = 'ScopeServiceRevision',
 ): StudioScopeBindingRevision {
   const record = expectRecord(value, label);
   return {
     revisionId: readString(
       record,
-      ["revisionId", "RevisionId"],
+      ['revisionId', 'RevisionId'],
       `${label}.revisionId`,
     ),
     implementationKind: readImplementationKind(record, label),
-    status: readString(record, ["status", "Status"], `${label}.status`),
+    status: readString(record, ['status', 'Status'], `${label}.status`),
     artifactHash: readString(
       record,
-      ["artifactHash", "ArtifactHash"],
+      ['artifactHash', 'ArtifactHash'],
       `${label}.artifactHash`,
     ),
     failureReason: readString(
       record,
-      ["failureReason", "FailureReason"],
+      ['failureReason', 'FailureReason'],
       `${label}.failureReason`,
     ),
     isDefaultServing: readBoolean(
       record,
-      ["isDefaultServing", "IsDefaultServing"],
+      ['isDefaultServing', 'IsDefaultServing'],
       `${label}.isDefaultServing`,
     ),
     isActiveServing: readBoolean(
       record,
-      ["isActiveServing", "IsActiveServing"],
+      ['isActiveServing', 'IsActiveServing'],
       `${label}.isActiveServing`,
     ),
     isServingTarget: readBoolean(
       record,
-      ["isServingTarget", "IsServingTarget"],
+      ['isServingTarget', 'IsServingTarget'],
       `${label}.isServingTarget`,
     ),
     allocationWeight: readNumber(
       record,
-      ["allocationWeight", "AllocationWeight"],
+      ['allocationWeight', 'AllocationWeight'],
       `${label}.allocationWeight`,
     ),
     servingState: readString(
       record,
-      ["servingState", "ServingState"],
+      ['servingState', 'ServingState'],
       `${label}.servingState`,
     ),
     deploymentId: readString(
       record,
-      ["deploymentId", "DeploymentId"],
+      ['deploymentId', 'DeploymentId'],
       `${label}.deploymentId`,
     ),
     primaryActorId: readString(
       record,
-      ["primaryActorId", "PrimaryActorId"],
+      ['primaryActorId', 'PrimaryActorId'],
       `${label}.primaryActorId`,
     ),
     createdAt: readNullableString(
       record,
-      ["createdAt", "CreatedAt"],
+      ['createdAt', 'CreatedAt'],
       `${label}.createdAt`,
     ),
     preparedAt: readNullableString(
       record,
-      ["preparedAt", "PreparedAt"],
+      ['preparedAt', 'PreparedAt'],
       `${label}.preparedAt`,
     ),
     publishedAt: readNullableString(
       record,
-      ["publishedAt", "PublishedAt"],
+      ['publishedAt', 'PublishedAt'],
       `${label}.publishedAt`,
     ),
     retiredAt: readNullableString(
       record,
-      ["retiredAt", "RetiredAt"],
+      ['retiredAt', 'RetiredAt'],
       `${label}.retiredAt`,
     ),
     workflowName:
-      readOptionalString(record, ["workflowName", "WorkflowName"]) || "",
+      readOptionalString(record, ['workflowName', 'WorkflowName']) || '',
     workflowDefinitionActorId:
       readOptionalString(record, [
-        "workflowDefinitionActorId",
-        "WorkflowDefinitionActorId",
-      ]) || "",
+        'workflowDefinitionActorId',
+        'WorkflowDefinitionActorId',
+      ]) || '',
     inlineWorkflowCount:
       record.inlineWorkflowCount === undefined &&
       record.InlineWorkflowCount === undefined
         ? 0
         : readNumber(
             record,
-            ["inlineWorkflowCount", "InlineWorkflowCount"],
+            ['inlineWorkflowCount', 'InlineWorkflowCount'],
             `${label}.inlineWorkflowCount`,
           ),
-    scriptId: readOptionalString(record, ["scriptId", "ScriptId"]) || "",
+    scriptId: readOptionalString(record, ['scriptId', 'ScriptId']) || '',
     scriptRevision:
-      readOptionalString(record, ["scriptRevision", "ScriptRevision"]) || "",
+      readOptionalString(record, ['scriptRevision', 'ScriptRevision']) || '',
     scriptDefinitionActorId:
       readOptionalString(record, [
-        "scriptDefinitionActorId",
-        "ScriptDefinitionActorId",
-      ]) || "",
+        'scriptDefinitionActorId',
+        'ScriptDefinitionActorId',
+      ]) || '',
     scriptSourceHash:
-      readOptionalString(record, ["scriptSourceHash", "ScriptSourceHash"]) || "",
+      readOptionalString(record, ['scriptSourceHash', 'ScriptSourceHash']) ||
+      '',
     staticActorTypeName:
       readOptionalString(record, [
-        "staticActorTypeName",
-        "StaticActorTypeName",
-      ]) || "",
+        'staticActorTypeName',
+        'StaticActorTypeName',
+      ]) || '',
   };
 }
 
 function decodeScopeServiceRevisionCatalogSnapshot(
   value: unknown,
-  label = "ScopeServiceRevisionCatalogSnapshot",
+  label = 'ScopeServiceRevisionCatalogSnapshot',
 ): ScopeServiceRevisionCatalogSnapshot {
   const record = expectRecord(value, label);
   return {
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
     serviceId: readString(
       record,
-      ["serviceId", "ServiceId"],
+      ['serviceId', 'ServiceId'],
       `${label}.serviceId`,
     ),
     serviceKey: readString(
       record,
-      ["serviceKey", "ServiceKey"],
+      ['serviceKey', 'ServiceKey'],
       `${label}.serviceKey`,
     ),
     displayName: readString(
       record,
-      ["displayName", "DisplayName"],
+      ['displayName', 'DisplayName'],
       `${label}.displayName`,
     ),
     defaultServingRevisionId: readString(
       record,
-      ["defaultServingRevisionId", "DefaultServingRevisionId"],
+      ['defaultServingRevisionId', 'DefaultServingRevisionId'],
       `${label}.defaultServingRevisionId`,
     ),
     activeServingRevisionId: readString(
       record,
-      ["activeServingRevisionId", "ActiveServingRevisionId"],
+      ['activeServingRevisionId', 'ActiveServingRevisionId'],
       `${label}.activeServingRevisionId`,
     ),
     deploymentId: readString(
       record,
-      ["deploymentId", "DeploymentId"],
+      ['deploymentId', 'DeploymentId'],
       `${label}.deploymentId`,
     ),
     deploymentStatus: readString(
       record,
-      ["deploymentStatus", "DeploymentStatus"],
+      ['deploymentStatus', 'DeploymentStatus'],
       `${label}.deploymentStatus`,
     ),
     primaryActorId: readString(
       record,
-      ["primaryActorId", "PrimaryActorId"],
+      ['primaryActorId', 'PrimaryActorId'],
       `${label}.primaryActorId`,
     ),
     catalogStateVersion: readNumber(
       record,
-      ["catalogStateVersion", "CatalogStateVersion"],
+      ['catalogStateVersion', 'CatalogStateVersion'],
       `${label}.catalogStateVersion`,
     ),
     catalogLastEventId: readString(
       record,
-      ["catalogLastEventId", "CatalogLastEventId"],
+      ['catalogLastEventId', 'CatalogLastEventId'],
       `${label}.catalogLastEventId`,
     ),
     updatedAt: readNullableString(
       record,
-      ["updatedAt", "UpdatedAt"],
+      ['updatedAt', 'UpdatedAt'],
       `${label}.updatedAt`,
     ),
     revisions: expectArray(
@@ -543,128 +555,128 @@ function decodeScopeServiceRevisionCatalogSnapshot(
 
 function decodeScopeServiceRevisionActionResult(
   value: unknown,
-  label = "ScopeServiceRevisionActionResult",
+  label = 'ScopeServiceRevisionActionResult',
 ): ScopeServiceRevisionActionResult {
   const record = expectRecord(value, label);
   return {
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
     serviceId: readString(
       record,
-      ["serviceId", "ServiceId"],
+      ['serviceId', 'ServiceId'],
       `${label}.serviceId`,
     ),
     revisionId: readString(
       record,
-      ["revisionId", "RevisionId"],
+      ['revisionId', 'RevisionId'],
       `${label}.revisionId`,
     ),
-    status: readString(record, ["status", "Status"], `${label}.status`),
+    status: readString(record, ['status', 'Status'], `${label}.status`),
   };
 }
 
 function decodeScopeServiceEndpointContract(
   value: unknown,
-  label = "ScopeServiceEndpointContract",
+  label = 'ScopeServiceEndpointContract',
 ): ScopeServiceEndpointContract {
   const record = expectRecord(value, label);
-  const serviceId = readOptionalString(record, ["serviceId", "ServiceId"]);
+  const serviceId = readOptionalString(record, ['serviceId', 'ServiceId']);
   return {
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
-    serviceId: serviceId || "",
-    memberId: readOptionalString(record, ["memberId", "MemberId"]),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
+    serviceId: serviceId || '',
+    memberId: readOptionalString(record, ['memberId', 'MemberId']),
     publishedServiceId: readOptionalString(record, [
-      "publishedServiceId",
-      "PublishedServiceId",
+      'publishedServiceId',
+      'PublishedServiceId',
     ]),
     endpointId: readString(
       record,
-      ["endpointId", "EndpointId"],
+      ['endpointId', 'EndpointId'],
       `${label}.endpointId`,
     ),
     invokePath: readString(
       record,
-      ["invokePath", "InvokePath"],
+      ['invokePath', 'InvokePath'],
       `${label}.invokePath`,
     ),
-    method: readString(record, ["method", "Method"], `${label}.method`),
+    method: readString(record, ['method', 'Method'], `${label}.method`),
     requestContentType: readString(
       record,
-      ["requestContentType", "RequestContentType"],
+      ['requestContentType', 'RequestContentType'],
       `${label}.requestContentType`,
     ),
     responseContentType: readString(
       record,
-      ["responseContentType", "ResponseContentType"],
+      ['responseContentType', 'ResponseContentType'],
       `${label}.responseContentType`,
     ),
     requestTypeUrl: readString(
       record,
-      ["requestTypeUrl", "RequestTypeUrl"],
+      ['requestTypeUrl', 'RequestTypeUrl'],
       `${label}.requestTypeUrl`,
     ),
     responseTypeUrl: readString(
       record,
-      ["responseTypeUrl", "ResponseTypeUrl"],
+      ['responseTypeUrl', 'ResponseTypeUrl'],
       `${label}.responseTypeUrl`,
     ),
     supportsSse: readBoolean(
       record,
-      ["supportsSse", "SupportsSse"],
+      ['supportsSse', 'SupportsSse'],
       `${label}.supportsSse`,
     ),
     supportsWebSocket: readBoolean(
       record,
-      ["supportsWebSocket", "SupportsWebSocket"],
+      ['supportsWebSocket', 'SupportsWebSocket'],
       `${label}.supportsWebSocket`,
     ),
     supportsAguiFrames: readBoolean(
       record,
-      ["supportsAguiFrames", "SupportsAguiFrames"],
+      ['supportsAguiFrames', 'SupportsAguiFrames'],
       `${label}.supportsAguiFrames`,
     ),
     streamFrameFormat: readNullableString(
       record,
-      ["streamFrameFormat", "StreamFrameFormat"],
+      ['streamFrameFormat', 'StreamFrameFormat'],
       `${label}.streamFrameFormat`,
     ),
     smokeTestSupported: readBoolean(
       record,
-      ["smokeTestSupported", "SmokeTestSupported"],
+      ['smokeTestSupported', 'SmokeTestSupported'],
       `${label}.smokeTestSupported`,
     ),
     defaultSmokeInputMode: readString(
       record,
-      ["defaultSmokeInputMode", "DefaultSmokeInputMode"],
+      ['defaultSmokeInputMode', 'DefaultSmokeInputMode'],
       `${label}.defaultSmokeInputMode`,
-    ) as ScopeServiceEndpointContract["defaultSmokeInputMode"],
+    ) as ScopeServiceEndpointContract['defaultSmokeInputMode'],
     defaultSmokePrompt: readNullableString(
       record,
-      ["defaultSmokePrompt", "DefaultSmokePrompt"],
+      ['defaultSmokePrompt', 'DefaultSmokePrompt'],
       `${label}.defaultSmokePrompt`,
     ),
     sampleRequestJson: readNullableString(
       record,
-      ["sampleRequestJson", "SampleRequestJson"],
+      ['sampleRequestJson', 'SampleRequestJson'],
       `${label}.sampleRequestJson`,
     ),
     deploymentStatus: readString(
       record,
-      ["deploymentStatus", "DeploymentStatus"],
+      ['deploymentStatus', 'DeploymentStatus'],
       `${label}.deploymentStatus`,
     ),
     revisionId: readString(
       record,
-      ["revisionId", "RevisionId"],
+      ['revisionId', 'RevisionId'],
       `${label}.revisionId`,
     ),
     curlExample: readNullableString(
       record,
-      ["curlExample", "CurlExample"],
+      ['curlExample', 'CurlExample'],
       `${label}.curlExample`,
     ),
     fetchExample: readNullableString(
       record,
-      ["fetchExample", "FetchExample"],
+      ['fetchExample', 'FetchExample'],
       `${label}.fetchExample`,
     ),
   };
@@ -672,36 +684,36 @@ function decodeScopeServiceEndpointContract(
 
 function decodeScopeServiceRunSummary(
   value: unknown,
-  label = "ScopeServiceRunSummary",
+  label = 'ScopeServiceRunSummary',
 ): ScopeServiceRunSummary {
   const record = expectRecord(value, label);
   return {
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
     serviceId: readString(
       record,
-      ["serviceId", "ServiceId"],
+      ['serviceId', 'ServiceId'],
       `${label}.serviceId`,
     ),
-    runId: readString(record, ["runId", "RunId"], `${label}.runId`),
-    actorId: readString(record, ["actorId", "ActorId"], `${label}.actorId`),
+    runId: readString(record, ['runId', 'RunId'], `${label}.runId`),
+    actorId: readString(record, ['actorId', 'ActorId'], `${label}.actorId`),
     definitionActorId: readString(
       record,
-      ["definitionActorId", "DefinitionActorId"],
+      ['definitionActorId', 'DefinitionActorId'],
       `${label}.definitionActorId`,
     ),
     revisionId: readString(
       record,
-      ["revisionId", "RevisionId"],
+      ['revisionId', 'RevisionId'],
       `${label}.revisionId`,
     ),
     deploymentId: readString(
       record,
-      ["deploymentId", "DeploymentId"],
+      ['deploymentId', 'DeploymentId'],
       `${label}.deploymentId`,
     ),
     workflowName: readString(
       record,
-      ["workflowName", "WorkflowName"],
+      ['workflowName', 'WorkflowName'],
       `${label}.workflowName`,
     ),
     completionStatus: normalizeEnumValue(
@@ -711,53 +723,53 @@ function decodeScopeServiceRunSummary(
     ),
     stateVersion: readNumber(
       record,
-      ["stateVersion", "StateVersion"],
+      ['stateVersion', 'StateVersion'],
       `${label}.stateVersion`,
     ),
     lastEventId: readString(
       record,
-      ["lastEventId", "LastEventId"],
+      ['lastEventId', 'LastEventId'],
       `${label}.lastEventId`,
     ),
     lastUpdatedAt: readNullableString(
       record,
-      ["lastUpdatedAt", "LastUpdatedAt"],
+      ['lastUpdatedAt', 'LastUpdatedAt'],
       `${label}.lastUpdatedAt`,
     ),
     boundAt: readNullableString(
       record,
-      ["boundAt", "BoundAt"],
+      ['boundAt', 'BoundAt'],
       `${label}.boundAt`,
     ),
     bindingUpdatedAt: readNullableString(
       record,
-      ["bindingUpdatedAt", "BindingUpdatedAt"],
+      ['bindingUpdatedAt', 'BindingUpdatedAt'],
       `${label}.bindingUpdatedAt`,
     ),
-    lastSuccess: readNullableBoolean(record, ["lastSuccess", "LastSuccess"]),
+    lastSuccess: readNullableBoolean(record, ['lastSuccess', 'LastSuccess']),
     totalSteps: readNumber(
       record,
-      ["totalSteps", "TotalSteps"],
+      ['totalSteps', 'TotalSteps'],
       `${label}.totalSteps`,
     ),
     completedSteps: readNumber(
       record,
-      ["completedSteps", "CompletedSteps"],
+      ['completedSteps', 'CompletedSteps'],
       `${label}.completedSteps`,
     ),
     roleReplyCount: readNumber(
       record,
-      ["roleReplyCount", "RoleReplyCount"],
+      ['roleReplyCount', 'RoleReplyCount'],
       `${label}.roleReplyCount`,
     ),
     lastOutput: readString(
       record,
-      ["lastOutput", "LastOutput"],
+      ['lastOutput', 'LastOutput'],
       `${label}.lastOutput`,
     ),
     lastError: readString(
       record,
-      ["lastError", "LastError"],
+      ['lastError', 'LastError'],
       `${label}.lastError`,
     ),
   };
@@ -765,24 +777,24 @@ function decodeScopeServiceRunSummary(
 
 function decodeScopeServiceRunCatalogSnapshot(
   value: unknown,
-  label = "ScopeServiceRunCatalogSnapshot",
+  label = 'ScopeServiceRunCatalogSnapshot',
 ): ScopeServiceRunCatalogSnapshot {
   const record = expectRecord(value, label);
   return {
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
     serviceId: readString(
       record,
-      ["serviceId", "ServiceId"],
+      ['serviceId', 'ServiceId'],
       `${label}.serviceId`,
     ),
     serviceKey: readString(
       record,
-      ["serviceKey", "ServiceKey"],
+      ['serviceKey', 'ServiceKey'],
       `${label}.serviceKey`,
     ),
     displayName: readString(
       record,
-      ["displayName", "DisplayName"],
+      ['displayName', 'DisplayName'],
       `${label}.displayName`,
     ),
     runs: expectArray(
@@ -795,41 +807,37 @@ function decodeScopeServiceRunCatalogSnapshot(
 
 function decodeScopeMemberRunSummary(
   value: unknown,
-  label = "ScopeMemberRunSummary",
+  label = 'ScopeMemberRunSummary',
 ): ScopeMemberRunSummary {
   const record = expectRecord(value, label);
   return {
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
-    memberId: readString(
-      record,
-      ["memberId", "MemberId"],
-      `${label}.memberId`,
-    ),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
+    memberId: readString(record, ['memberId', 'MemberId'], `${label}.memberId`),
     publishedServiceId: readString(
       record,
-      ["publishedServiceId", "PublishedServiceId"],
+      ['publishedServiceId', 'PublishedServiceId'],
       `${label}.publishedServiceId`,
     ),
-    runId: readString(record, ["runId", "RunId"], `${label}.runId`),
-    actorId: readString(record, ["actorId", "ActorId"], `${label}.actorId`),
+    runId: readString(record, ['runId', 'RunId'], `${label}.runId`),
+    actorId: readString(record, ['actorId', 'ActorId'], `${label}.actorId`),
     definitionActorId: readString(
       record,
-      ["definitionActorId", "DefinitionActorId"],
+      ['definitionActorId', 'DefinitionActorId'],
       `${label}.definitionActorId`,
     ),
     revisionId: readString(
       record,
-      ["revisionId", "RevisionId"],
+      ['revisionId', 'RevisionId'],
       `${label}.revisionId`,
     ),
     deploymentId: readString(
       record,
-      ["deploymentId", "DeploymentId"],
+      ['deploymentId', 'DeploymentId'],
       `${label}.deploymentId`,
     ),
     workflowName: readString(
       record,
-      ["workflowName", "WorkflowName"],
+      ['workflowName', 'WorkflowName'],
       `${label}.workflowName`,
     ),
     completionStatus: normalizeEnumValue(
@@ -839,53 +847,53 @@ function decodeScopeMemberRunSummary(
     ),
     stateVersion: readNumber(
       record,
-      ["stateVersion", "StateVersion"],
+      ['stateVersion', 'StateVersion'],
       `${label}.stateVersion`,
     ),
     lastEventId: readString(
       record,
-      ["lastEventId", "LastEventId"],
+      ['lastEventId', 'LastEventId'],
       `${label}.lastEventId`,
     ),
     lastUpdatedAt: readNullableString(
       record,
-      ["lastUpdatedAt", "LastUpdatedAt"],
+      ['lastUpdatedAt', 'LastUpdatedAt'],
       `${label}.lastUpdatedAt`,
     ),
     boundAt: readNullableString(
       record,
-      ["boundAt", "BoundAt"],
+      ['boundAt', 'BoundAt'],
       `${label}.boundAt`,
     ),
     bindingUpdatedAt: readNullableString(
       record,
-      ["bindingUpdatedAt", "BindingUpdatedAt"],
+      ['bindingUpdatedAt', 'BindingUpdatedAt'],
       `${label}.bindingUpdatedAt`,
     ),
-    lastSuccess: readNullableBoolean(record, ["lastSuccess", "LastSuccess"]),
+    lastSuccess: readNullableBoolean(record, ['lastSuccess', 'LastSuccess']),
     totalSteps: readNumber(
       record,
-      ["totalSteps", "TotalSteps"],
+      ['totalSteps', 'TotalSteps'],
       `${label}.totalSteps`,
     ),
     completedSteps: readNumber(
       record,
-      ["completedSteps", "CompletedSteps"],
+      ['completedSteps', 'CompletedSteps'],
       `${label}.completedSteps`,
     ),
     roleReplyCount: readNumber(
       record,
-      ["roleReplyCount", "RoleReplyCount"],
+      ['roleReplyCount', 'RoleReplyCount'],
       `${label}.roleReplyCount`,
     ),
     lastOutput: readString(
       record,
-      ["lastOutput", "LastOutput"],
+      ['lastOutput', 'LastOutput'],
       `${label}.lastOutput`,
     ),
     lastError: readString(
       record,
-      ["lastError", "LastError"],
+      ['lastError', 'LastError'],
       `${label}.lastError`,
     ),
   };
@@ -893,29 +901,25 @@ function decodeScopeMemberRunSummary(
 
 function decodeScopeMemberRunCatalogSnapshot(
   value: unknown,
-  label = "ScopeMemberRunCatalogSnapshot",
+  label = 'ScopeMemberRunCatalogSnapshot',
 ): ScopeMemberRunCatalogSnapshot {
   const record = expectRecord(value, label);
   return {
-    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
-    memberId: readString(
-      record,
-      ["memberId", "MemberId"],
-      `${label}.memberId`,
-    ),
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
+    memberId: readString(record, ['memberId', 'MemberId'], `${label}.memberId`),
     publishedServiceId: readString(
       record,
-      ["publishedServiceId", "PublishedServiceId"],
+      ['publishedServiceId', 'PublishedServiceId'],
       `${label}.publishedServiceId`,
     ),
     publishedServiceKey: readString(
       record,
-      ["publishedServiceKey", "PublishedServiceKey"],
+      ['publishedServiceKey', 'PublishedServiceKey'],
       `${label}.publishedServiceKey`,
     ),
     displayName: readString(
       record,
-      ["displayName", "DisplayName"],
+      ['displayName', 'DisplayName'],
       `${label}.displayName`,
     ),
     runs: expectArray(
@@ -933,7 +937,7 @@ function decodeStepTypeCounts(
   const record = expectRecord(value, label);
   return Object.fromEntries(
     Object.entries(record).map(([key, rawValue]) => {
-      if (typeof rawValue !== "number" || Number.isNaN(rawValue)) {
+      if (typeof rawValue !== 'number' || Number.isNaN(rawValue)) {
         throw new Error(`${label}.${key} must be a number.`);
       }
       return [key, rawValue];
@@ -943,28 +947,28 @@ function decodeStepTypeCounts(
 
 function decodeScopeServiceRunAuditSummary(
   value: unknown,
-  label = "ScopeServiceRunAuditSummary",
+  label = 'ScopeServiceRunAuditSummary',
 ): ScopeServiceRunAuditSummary {
   const record = expectRecord(value, label);
   return {
     totalSteps: readNumber(
       record,
-      ["totalSteps", "TotalSteps"],
+      ['totalSteps', 'TotalSteps'],
       `${label}.totalSteps`,
     ),
     requestedSteps: readNumber(
       record,
-      ["requestedSteps", "RequestedSteps"],
+      ['requestedSteps', 'RequestedSteps'],
       `${label}.requestedSteps`,
     ),
     completedSteps: readNumber(
       record,
-      ["completedSteps", "CompletedSteps"],
+      ['completedSteps', 'CompletedSteps'],
       `${label}.completedSteps`,
     ),
     roleReplyCount: readNumber(
       record,
-      ["roleReplyCount", "RoleReplyCount"],
+      ['roleReplyCount', 'RoleReplyCount'],
       `${label}.roleReplyCount`,
     ),
     stepTypeCounts: decodeStepTypeCounts(
@@ -976,88 +980,88 @@ function decodeScopeServiceRunAuditSummary(
 
 function decodeScopeServiceRunAuditStep(
   value: unknown,
-  label = "ScopeServiceRunAuditStep",
+  label = 'ScopeServiceRunAuditStep',
 ): ScopeServiceRunAuditStep {
   const record = expectRecord(value, label);
   return {
-    stepId: readString(record, ["stepId", "StepId"], `${label}.stepId`),
-    stepType: readString(record, ["stepType", "StepType"], `${label}.stepType`),
+    stepId: readString(record, ['stepId', 'StepId'], `${label}.stepId`),
+    stepType: readString(record, ['stepType', 'StepType'], `${label}.stepType`),
     targetRole: readString(
       record,
-      ["targetRole", "TargetRole"],
+      ['targetRole', 'TargetRole'],
       `${label}.targetRole`,
     ),
     requestedAt: readNullableString(
       record,
-      ["requestedAt", "RequestedAt"],
+      ['requestedAt', 'RequestedAt'],
       `${label}.requestedAt`,
     ),
     completedAt: readNullableString(
       record,
-      ["completedAt", "CompletedAt"],
+      ['completedAt', 'CompletedAt'],
       `${label}.completedAt`,
     ),
-    success: readNullableBoolean(record, ["success", "Success"]),
-    workerId: readString(record, ["workerId", "WorkerId"], `${label}.workerId`),
+    success: readNullableBoolean(record, ['success', 'Success']),
+    workerId: readString(record, ['workerId', 'WorkerId'], `${label}.workerId`),
     outputPreview: readString(
       record,
-      ["outputPreview", "OutputPreview"],
+      ['outputPreview', 'OutputPreview'],
       `${label}.outputPreview`,
     ),
-    error: readString(record, ["error", "Error"], `${label}.error`),
+    error: readString(record, ['error', 'Error'], `${label}.error`),
     requestParameters: readStringRecord(
       record,
-      ["requestParameters", "RequestParameters"],
+      ['requestParameters', 'RequestParameters'],
       `${label}.requestParameters`,
     ),
     completionAnnotations: readStringRecord(
       record,
-      ["completionAnnotations", "CompletionAnnotations"],
+      ['completionAnnotations', 'CompletionAnnotations'],
       `${label}.completionAnnotations`,
     ),
     nextStepId: readString(
       record,
-      ["nextStepId", "NextStepId"],
+      ['nextStepId', 'NextStepId'],
       `${label}.nextStepId`,
     ),
     branchKey: readString(
       record,
-      ["branchKey", "BranchKey"],
+      ['branchKey', 'BranchKey'],
       `${label}.branchKey`,
     ),
     assignedVariable: readString(
       record,
-      ["assignedVariable", "AssignedVariable"],
+      ['assignedVariable', 'AssignedVariable'],
       `${label}.assignedVariable`,
     ),
     assignedValue: readString(
       record,
-      ["assignedValue", "AssignedValue"],
+      ['assignedValue', 'AssignedValue'],
       `${label}.assignedValue`,
     ),
     suspensionType: readString(
       record,
-      ["suspensionType", "SuspensionType"],
+      ['suspensionType', 'SuspensionType'],
       `${label}.suspensionType`,
     ),
     suspensionPrompt: readString(
       record,
-      ["suspensionPrompt", "SuspensionPrompt"],
+      ['suspensionPrompt', 'SuspensionPrompt'],
       `${label}.suspensionPrompt`,
     ),
     suspensionTimeoutSeconds: readNullableNumber(
       record,
-      ["suspensionTimeoutSeconds", "SuspensionTimeoutSeconds"],
+      ['suspensionTimeoutSeconds', 'SuspensionTimeoutSeconds'],
       `${label}.suspensionTimeoutSeconds`,
     ),
     requestedVariableName: readString(
       record,
-      ["requestedVariableName", "RequestedVariableName"],
+      ['requestedVariableName', 'RequestedVariableName'],
       `${label}.requestedVariableName`,
     ),
     durationMs: readNullableNumber(
       record,
-      ["durationMs", "DurationMs"],
+      ['durationMs', 'DurationMs'],
       `${label}.durationMs`,
     ),
   };
@@ -1065,25 +1069,25 @@ function decodeScopeServiceRunAuditStep(
 
 function decodeScopeServiceRunAuditReply(
   value: unknown,
-  label = "ScopeServiceRunAuditReply",
+  label = 'ScopeServiceRunAuditReply',
 ): ScopeServiceRunAuditReply {
   const record = expectRecord(value, label);
   return {
     timestamp: readNullableString(
       record,
-      ["timestamp", "Timestamp"],
+      ['timestamp', 'Timestamp'],
       `${label}.timestamp`,
     ),
-    roleId: readString(record, ["roleId", "RoleId"], `${label}.roleId`),
+    roleId: readString(record, ['roleId', 'RoleId'], `${label}.roleId`),
     sessionId: readString(
       record,
-      ["sessionId", "SessionId"],
+      ['sessionId', 'SessionId'],
       `${label}.sessionId`,
     ),
-    content: readString(record, ["content", "Content"], `${label}.content`),
+    content: readString(record, ['content', 'Content'], `${label}.content`),
     contentLength: readNumber(
       record,
-      ["contentLength", "ContentLength"],
+      ['contentLength', 'ContentLength'],
       `${label}.contentLength`,
     ),
   };
@@ -1091,135 +1095,146 @@ function decodeScopeServiceRunAuditReply(
 
 function decodeScopeServiceRunAuditTimelineEvent(
   value: unknown,
-  label = "ScopeServiceRunAuditTimelineEvent",
+  label = 'ScopeServiceRunAuditTimelineEvent',
 ): ScopeServiceRunAuditTimelineEvent {
   const record = expectRecord(value, label);
   return {
     timestamp: readNullableString(
       record,
-      ["timestamp", "Timestamp"],
+      ['timestamp', 'Timestamp'],
       `${label}.timestamp`,
     ),
-    stage: readString(record, ["stage", "Stage"], `${label}.stage`),
-    message: readString(record, ["message", "Message"], `${label}.message`),
-    agentId: readString(record, ["agentId", "AgentId"], `${label}.agentId`),
-    stepId: readString(record, ["stepId", "StepId"], `${label}.stepId`),
-    stepType: readString(record, ["stepType", "StepType"], `${label}.stepType`),
+    stage: readString(record, ['stage', 'Stage'], `${label}.stage`),
+    message: readString(record, ['message', 'Message'], `${label}.message`),
+    agentId: readString(record, ['agentId', 'AgentId'], `${label}.agentId`),
+    stepId: readString(record, ['stepId', 'StepId'], `${label}.stepId`),
+    stepType: readString(record, ['stepType', 'StepType'], `${label}.stepType`),
     eventType: readString(
       record,
-      ["eventType", "EventType"],
+      ['eventType', 'EventType'],
       `${label}.eventType`,
     ),
-    data: readStringRecord(record, ["data", "Data"], `${label}.data`),
+    data: readStringRecord(record, ['data', 'Data'], `${label}.data`),
   };
 }
 
 function decodeScopeServiceRunAuditReport(
   value: unknown,
-  label = "ScopeServiceRunAuditReport",
+  label = 'ScopeServiceRunAuditReport',
 ): ScopeServiceRunAuditReport {
   const record = expectRecord(value, label);
   return {
     reportVersion: readString(
       record,
-      ["reportVersion", "ReportVersion"],
+      ['reportVersion', 'ReportVersion'],
       `${label}.reportVersion`,
     ),
     projectionScope: normalizeEnumValue(
-      record.projectionScope ?? record.ProjectionScope ?? "unknown",
+      record.projectionScope ?? record.ProjectionScope ?? 'unknown',
       `${label}.projectionScope`,
       {
-        "0": "actor_shared",
-        "1": "run_isolated",
-        "99": "unknown",
-        actor_shared: "actor_shared",
-        run_isolated: "run_isolated",
-        unknown: "unknown",
+        '0': 'actor_shared',
+        '1': 'run_isolated',
+        '99': 'unknown',
+        actor_shared: 'actor_shared',
+        run_isolated: 'run_isolated',
+        unknown: 'unknown',
       },
     ),
     topologySource: normalizeEnumValue(
-      record.topologySource ?? record.TopologySource ?? "unknown",
+      record.topologySource ?? record.TopologySource ?? 'unknown',
       `${label}.topologySource`,
       {
-        "0": "runtime_snapshot",
-        "99": "unknown",
-        runtime_snapshot: "runtime_snapshot",
-        unknown: "unknown",
+        '0': 'runtime_snapshot',
+        '99': 'unknown',
+        runtime_snapshot: 'runtime_snapshot',
+        unknown: 'unknown',
       },
     ),
     completionStatus: normalizeEnumValue(
-      record.completionStatus ?? record.CompletionStatus ?? "unknown",
+      record.completionStatus ?? record.CompletionStatus ?? 'unknown',
       `${label}.completionStatus`,
       completionStatusMap,
     ),
     workflowName: readString(
       record,
-      ["workflowName", "WorkflowName"],
+      ['workflowName', 'WorkflowName'],
       `${label}.workflowName`,
     ),
     rootActorId: readString(
       record,
-      ["rootActorId", "RootActorId"],
+      ['rootActorId', 'RootActorId'],
       `${label}.rootActorId`,
     ),
-    commandId: readString(record, ["commandId", "CommandId"], `${label}.commandId`),
+    commandId: readString(
+      record,
+      ['commandId', 'CommandId'],
+      `${label}.commandId`,
+    ),
     stateVersion: readNumber(
       record,
-      ["stateVersion", "StateVersion"],
+      ['stateVersion', 'StateVersion'],
       `${label}.stateVersion`,
     ),
     lastEventId: readString(
       record,
-      ["lastEventId", "LastEventId"],
+      ['lastEventId', 'LastEventId'],
       `${label}.lastEventId`,
     ),
     createdAt: readNullableString(
       record,
-      ["createdAt", "CreatedAt"],
+      ['createdAt', 'CreatedAt'],
       `${label}.createdAt`,
     ),
     updatedAt: readNullableString(
       record,
-      ["updatedAt", "UpdatedAt"],
+      ['updatedAt', 'UpdatedAt'],
       `${label}.updatedAt`,
     ),
     startedAt: readNullableString(
       record,
-      ["startedAt", "StartedAt"],
+      ['startedAt', 'StartedAt'],
       `${label}.startedAt`,
     ),
     endedAt: readNullableString(
       record,
-      ["endedAt", "EndedAt"],
+      ['endedAt', 'EndedAt'],
       `${label}.endedAt`,
     ),
-    durationMs: readNumber(record, ["durationMs", "DurationMs"], `${label}.durationMs`),
-    success: readNullableBoolean(record, ["success", "Success"]),
-    input: readString(record, ["input", "Input"], `${label}.input`),
+    durationMs: readNumber(
+      record,
+      ['durationMs', 'DurationMs'],
+      `${label}.durationMs`,
+    ),
+    success: readNullableBoolean(record, ['success', 'Success']),
+    input: readString(record, ['input', 'Input'], `${label}.input`),
     finalOutput: readString(
       record,
-      ["finalOutput", "FinalOutput"],
+      ['finalOutput', 'FinalOutput'],
       `${label}.finalOutput`,
     ),
     finalError: readString(
       record,
-      ["finalError", "FinalError"],
+      ['finalError', 'FinalError'],
       `${label}.finalError`,
     ),
     topology: expectArray(
       record.topology ?? record.Topology ?? [],
       `${label}.topology`,
       (entry, nestedLabel) => {
-        const nestedRecord = expectRecord(entry, nestedLabel || `${label}.topology[]`);
+        const nestedRecord = expectRecord(
+          entry,
+          nestedLabel || `${label}.topology[]`,
+        );
         return {
           parent: readString(
             nestedRecord,
-            ["parent", "Parent"],
+            ['parent', 'Parent'],
             `${nestedLabel}.parent`,
           ),
           child: readString(
             nestedRecord,
-            ["child", "Child"],
+            ['child', 'Child'],
             `${nestedLabel}.child`,
           ),
         };
@@ -1249,7 +1264,7 @@ function decodeScopeServiceRunAuditReport(
 
 function decodeScopeServiceRunAuditSnapshot(
   value: unknown,
-  label = "ScopeServiceRunAuditSnapshot",
+  label = 'ScopeServiceRunAuditSnapshot',
 ): ScopeServiceRunAuditSnapshot {
   const record = expectRecord(value, label);
   return {
@@ -1266,7 +1281,7 @@ function decodeScopeServiceRunAuditSnapshot(
 
 function decodeScopeMemberRunAuditSnapshot(
   value: unknown,
-  label = "ScopeMemberRunAuditSnapshot",
+  label = 'ScopeMemberRunAuditSnapshot',
 ): ScopeMemberRunAuditSnapshot {
   const record = expectRecord(value, label);
   return {
@@ -1286,7 +1301,9 @@ function encodeScopeServiceBindingPayload(input: ScopeServiceBindingInput) {
     bindingId: input.bindingId.trim(),
     displayName: input.displayName.trim(),
     bindingKind: input.bindingKind.trim(),
-    policyIds: (input.policyIds ?? []).map((item) => item.trim()).filter(Boolean),
+    policyIds: (input.policyIds ?? [])
+      .map((item) => item.trim())
+      .filter(Boolean),
     service: input.service
       ? {
           serviceId: input.service.serviceId.trim(),
@@ -1331,6 +1348,25 @@ export const scopeRuntimeApi = {
     );
   },
 
+  async getServiceBindingCatalogSnapshot(
+    scopeId: string,
+    serviceId: string,
+  ): Promise<ScopeServiceBindingCatalogRead> {
+    const response = await authFetch(
+      `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/bindings`,
+    );
+    if (response.status === 404) {
+      return { kind: 'not_materialized' };
+    }
+    if (!response.ok) {
+      throw new Error(await readResponseError(response));
+    }
+    return {
+      kind: 'available',
+      snapshot: decodeServiceBindingCatalogSnapshot(await response.json()),
+    };
+  },
+
   createServiceBinding(
     scopeId: string,
     serviceId: string,
@@ -1340,7 +1376,7 @@ export const scopeRuntimeApi = {
       `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/bindings`,
       decodeServiceCommandAcceptedReceipt,
       {
-        method: "POST",
+        method: 'POST',
         ...jsonBody(encodeScopeServiceBindingPayload(input)),
       },
     );
@@ -1356,7 +1392,7 @@ export const scopeRuntimeApi = {
       `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/bindings/${encodeURIComponent(bindingId)}`,
       decodeServiceCommandAcceptedReceipt,
       {
-        method: "PUT",
+        method: 'PUT',
         ...jsonBody(encodeScopeServiceBindingPayload(input)),
       },
     );
@@ -1371,7 +1407,7 @@ export const scopeRuntimeApi = {
       `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/bindings/${encodeURIComponent(bindingId)}:retire`,
       decodeServiceCommandAcceptedReceipt,
       {
-        method: "POST",
+        method: 'POST',
         ...jsonBody({}),
       },
     );
@@ -1429,7 +1465,7 @@ export const scopeRuntimeApi = {
       `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/revisions/${encodeURIComponent(revisionId)}:retire`,
       decodeScopeServiceRevisionActionResult,
       {
-        method: "POST",
+        method: 'POST',
         ...jsonBody({}),
       },
     );
@@ -1457,14 +1493,22 @@ export const scopeRuntimeApi = {
     scopeId: string,
     memberId: string,
     options?: {
+      scheduleId?: string;
+      status?: string;
       take?: number;
+      updatedFrom?: string;
+      updatedTo?: string;
     },
   ): Promise<ScopeMemberRunCatalogSnapshot> {
     return requestJson(
       withQuery(
         `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/runs`,
         {
+          scheduleId: options?.scheduleId?.trim(),
+          status: options?.status?.trim(),
           take: options?.take,
+          updatedFrom: options?.updatedFrom?.trim(),
+          updatedTo: options?.updatedTo?.trim(),
         },
       ),
       decodeScopeMemberRunCatalogSnapshot,

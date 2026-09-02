@@ -62,6 +62,27 @@ public class RoleGAgentTests
     }
 
     [Fact]
+    public void TurnToolContext_ShouldCarryStableRequestAndActorExecutionOwner()
+    {
+        var request = new ChatRequestEvent
+        {
+            SessionId = "session-1",
+        };
+        var context = ResolveTurnToolContext(
+            request,
+            AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity(null, null),
+            },
+            "role-agent-1");
+
+        context.Request.RequestId.Should().Be("session-1");
+        context.Request.CallId.Should().BeNull();
+        context.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
+        context.ExecutionOwner.OwnerId.Should().Be("role-agent-1");
+    }
+
+    [Fact]
     public void ProductionSources_ShouldNotCallAgentToolExecutionContextMapperFromMetadata()
     {
         var root = FindRepoRoot();
@@ -91,6 +112,21 @@ public class RoleGAgentTests
 
         method.Should().NotBeNull();
         var result = (AgentToolExecutionContext?)method!.Invoke(null, [pending]);
+        result.Should().NotBeNull();
+        return result!;
+    }
+
+    private static AgentToolExecutionContext ResolveTurnToolContext(
+        ChatRequestEvent request,
+        AgentToolExecutionContext context,
+        string actorId)
+    {
+        var method = typeof(RoleGAgent).GetMethod(
+            "ResolveTurnToolContext",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        method.Should().NotBeNull();
+        var result = (AgentToolExecutionContext?)method!.Invoke(null, [request, context, actorId]);
         result.Should().NotBeNull();
         return result!;
     }

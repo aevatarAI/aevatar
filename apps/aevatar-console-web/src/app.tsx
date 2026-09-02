@@ -1,81 +1,91 @@
-import {
-  PageLoading,
-  ProConfigProvider,
-} from "@ant-design/pro-components";
-import {
-  DownOutlined,
-  GlobalOutlined,
-  LogoutOutlined,
-  SettingOutlined,
-  UserOutlined,
-} from "@ant-design/icons";
-import { QueryClientProvider } from "@tanstack/react-query";
-import { Avatar, Badge, Button, ConfigProvider, Dropdown, Typography } from "antd";
-import { getLocale, setLocale, useIntl } from "@umijs/max";
-import React from "react";
-import MainLayout from "@/layouts/MainLayout";
-import { history } from "./shared/navigation/history";
-import { CONSOLE_HOME_ROUTE } from "@/shared/navigation/consoleHome";
-import BrandLogo from "@/components/BrandLogo";
-import defaultSettings from "../config/defaultSettings";
-import { errorConfig } from "./requestErrorConfig";
-import {
-  ensureActiveAuthSession,
-  hasRestorableAuthSession,
-} from "./shared/auth/client";
-import { getNyxIDRuntimeConfig } from "./shared/auth/config";
-import {
-  buildAuthInitialState,
-  clearStoredAuthSession,
-  loadRestorableAuthSession,
-  loadStoredAuthSession,
-  sanitizeReturnTo,
-} from "./shared/auth/session";
-import { ProtectedRouteRedirectGate } from "./shared/auth/ProtectedRouteRedirectGate";
-import {
-  getNavigationGroupOrder,
-  type NavigationGroup,
-} from "./shared/navigation/navigationGroups";
-import { getNavigationSelectedKeys } from "./shared/navigation/navigationMenuSelection";
-import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
-import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
-import { buildMissionSnapshotFromRuntime } from "@/pages/MissionControl/runtimeAdapter";
-import { readMissionControlRouteContext } from "@/pages/MissionControl/services/api";
-import { loadRecentRuns } from "@/shared/runs/recentRuns";
-import { queryClient } from "./shared/query/queryClient";
-import { aevatarThemeConfig } from "@/shared/ui/aevatarWorkbench";
+import { ProConfigProvider } from '@ant-design/pro-components';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { getLocale, useIntl } from '@umijs/max';
+import { Badge, ConfigProvider } from 'antd';
+import React from 'react';
+import BrandLogo from '@/components/BrandLogo';
+import MainLayout from '@/layouts/MainLayout';
+import { buildMissionSnapshotFromRuntime } from '@/pages/MissionControl/runtimeAdapter';
+import { readMissionControlRouteContext } from '@/pages/MissionControl/services/api';
+import { runtimeActorsApi } from '@/shared/api/runtimeActorsApi';
+import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import {
   normalizeConsoleLocale,
   resolveAntdLocale,
   resolveProIntl,
-} from "@/shared/i18n/localeProvider";
+} from '@/shared/i18n/localeProvider';
+import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
+import { loadRecentRuns } from '@/shared/runs/recentRuns';
+import { AevatarPageLoading } from '@/shared/ui/AevatarLoading';
+import { aevatarThemeConfig } from '@/shared/ui/aevatarWorkbench';
+import { ConsoleHeaderActions } from '@/shared/ui/ConsoleHeaderActions';
+import { ConsoleToastProvider } from '@/shared/ui/ConsoleToast';
+import defaultSettings from '../config/defaultSettings';
+import { errorConfig } from './requestErrorConfig';
+import {
+  ensureActiveAuthSession,
+  hasRestorableAuthSession,
+} from './shared/auth/client';
+import { getNyxIDRuntimeConfig } from './shared/auth/config';
+import { ProtectedRouteRedirectGate } from './shared/auth/ProtectedRouteRedirectGate';
+import {
+  buildAuthInitialState,
+  loadStoredAuthSession,
+  sanitizeReturnTo,
+} from './shared/auth/session';
+import { history } from './shared/navigation/history';
+import {
+  getNavigationGroupOrder,
+  type NavigationGroup,
+} from './shared/navigation/navigationGroups';
+import {
+  groupNavigationMenuItems,
+  type NavigationMenuItem,
+} from './shared/navigation/navigationMenuGrouping';
+import { getNavigationSelectedKeys } from './shared/navigation/navigationMenuSelection';
+import { queryClient } from './shared/query/queryClient';
 
-const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
+const PUBLIC_ROUTES = new Set(['/login', '/auth/callback']);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
+const FULLSCREEN_DISPLAY_ROUTES = new Set(['/runtime/mission-wall']);
+const WORKFLOW_ACTIVITY_VNEXT_ROUTE =
+  /^\/scopes\/[^/]+\/workflow-activity-vnext(?:\/|$)/;
 const STUDIO_HOST_ROUTES = new Set([
-  "/studio",
-  "/scopes/:scopeId/teams/:teamId/members/new/workflow",
-  "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow",
+  '/studio',
+  '/scopes/:scopeId/teams/:teamId/members/new/workflow',
+  '/scopes/:scopeId/teams/:teamId/members/:memberId/workflow',
 ]);
+
+function isFullscreenDisplayRoute(pathname: string): boolean {
+  return (
+    FULLSCREEN_DISPLAY_ROUTES.has(pathname) ||
+    WORKFLOW_ACTIVITY_VNEXT_ROUTE.test(pathname)
+  );
+}
+
+function isWorkflowActivityVNextRoute(pathname: string): boolean {
+  return WORKFLOW_ACTIVITY_VNEXT_ROUTE.test(pathname);
+}
 
 function isStudioHostRoute(pathname: string): boolean {
   if (STUDIO_HOST_ROUTES.has(pathname)) {
     return true;
   }
 
-  return (
-    /^\/scopes\/[^/]+\/teams\/[^/]+\/members\/(?:new|[^/]+)\/workflow$/.test(
-      pathname,
-    )
+  return /^\/scopes\/[^/]+\/teams\/[^/]+\/members\/(?:new|[^/]+)\/workflow$/.test(
+    pathname,
   );
 }
 
-function shouldDefaultCollapseLayout(pathname: string, search: string): boolean {
+function shouldDefaultCollapseLayout(
+  pathname: string,
+  search: string,
+): boolean {
   if (!isStudioHostRoute(pathname)) {
     return false;
   }
 
-  return new URLSearchParams(search).get("intent") === "create-member";
+  return new URLSearchParams(search).get('intent') === 'create-member';
 }
 
 function shouldCollapseLayout(pathname: string, search: string): boolean {
@@ -90,7 +100,7 @@ function buildLoginRoute(returnTo: string): string {
 }
 
 function getCurrentReturnTo(pathname: string): string {
-  return pathname === "/"
+  return pathname === '/'
     ? DEFAULT_PROTECTED_ROUTE
     : `${pathname}${window.location.search}${window.location.hash}`;
 }
@@ -127,19 +137,6 @@ type LiveOpsAttentionCandidate = {
   serviceId?: string;
 };
 
-type NavigationMenuItem = {
-  children?: NavigationMenuItem[];
-  className?: string;
-  disabled?: boolean;
-  icon?: React.ReactNode;
-  menuBadgeKey?: string;
-  menuGroupKey?: string;
-  name?: React.ReactNode;
-  path?: string;
-  key?: React.Key;
-  [key: string]: unknown;
-};
-
 type AuthSessionBootstrapProps = {
   pathname: string;
   children: React.ReactNode;
@@ -147,34 +144,28 @@ type AuthSessionBootstrapProps = {
 
 type ConsoleRuntimeProvidersProps = {
   children: React.ReactNode;
+  isFullscreenDisplayRoute: boolean;
   isPublicRoute: boolean;
   isStudioRoute: boolean;
   pathname: string;
   search: string;
 };
 
-type ConsoleLocaleOption = {
-  readonly key: "zh-CN" | "en-US";
-  readonly messageId: "common.language.zhCN" | "common.language.english";
-};
-
-const LIVE_OPS_ATTENTION_BADGE_KEY = "live.attention";
+const LIVE_OPS_ATTENTION_BADGE_KEY = 'live.attention';
 const LIVE_OPS_ATTENTION_MAX_CANDIDATES = 6;
 const LIVE_OPS_ATTENTION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_OPS_ATTENTION_REFRESH_MS = 30_000;
-const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = getNavigationGroupOrder();
-const CONSOLE_LOCALE_OPTIONS: readonly ConsoleLocaleOption[] = [
-  { key: "zh-CN", messageId: "common.language.zhCN" },
-  { key: "en-US", messageId: "common.language.english" },
-];
+const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] =
+  getNavigationGroupOrder();
 const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
-  "/scopes": "nav.items.myTeams",
-  "/runtime/runs": "nav.items.eventStream",
-  "/services": "nav.items.services",
-  "/governance": "nav.items.governance",
-  "/deployments": "nav.items.deployments",
-  "/runtime/explorer": "nav.items.topology",
-  "/settings": "nav.items.settings",
+  '/chat': 'nav.items.chat',
+  '/scopes': 'nav.items.myTeams',
+  '/runtime/runs': 'nav.items.eventStream',
+  '/services': 'nav.items.services',
+  '/governance': 'nav.items.governance',
+  '/deployments': 'nav.items.deployments',
+  '/runtime/explorer': 'nav.items.topology',
+  '/settings': 'nav.items.settings',
 };
 const LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT: LiveOpsAttentionSnapshot = {
   hasPendingAttention: false,
@@ -184,11 +175,11 @@ const liveOpsAttentionListeners = new Set<() => void>();
 let liveOpsAttentionSnapshot = LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT;
 
 const navigationGroupLabelStyle: React.CSSProperties = {
-  color: "#667085",
-  display: "inline-flex",
+  color: '#667085',
+  display: 'inline-flex',
   fontSize: 14,
   fontWeight: 700,
-  lineHeight: "22px",
+  lineHeight: '22px',
 };
 
 const LocalizedNavigationText: React.FC<{
@@ -197,7 +188,7 @@ const LocalizedNavigationText: React.FC<{
 }> = ({ defaultLabel, messageId }) => {
   const intl = useIntl();
   const defaultMessage =
-    typeof defaultLabel === "string" ? defaultLabel : undefined;
+    typeof defaultLabel === 'string' ? defaultLabel : undefined;
 
   return (
     <>
@@ -219,134 +210,6 @@ const NavigationGroupLabel: React.FC<{
     />
   </span>
 );
-
-const ConsoleLanguageSwitch: React.FC = () => {
-  const intl = useIntl();
-  const selectedLocale = normalizeConsoleLocale(intl.locale || getLocale());
-  const selectedOption =
-    CONSOLE_LOCALE_OPTIONS.find((option) => option.key === selectedLocale) ||
-    CONSOLE_LOCALE_OPTIONS[0];
-
-  return (
-    <Dropdown
-      menu={{
-        items: CONSOLE_LOCALE_OPTIONS.map((option) => ({
-          key: option.key,
-          label: intl.formatMessage({ id: option.messageId }),
-        })),
-        onClick: ({ key }) => {
-          const nextLocale = key === "en-US" ? "en-US" : "zh-CN";
-          if (nextLocale === selectedLocale) {
-            return;
-          }
-
-          setLocale(nextLocale, false);
-        },
-        selectedKeys: [selectedLocale],
-      }}
-      placement="bottomRight"
-      trigger={["click"]}
-    >
-      <Button
-        aria-label={intl.formatMessage({ id: "common.language.switch" })}
-        icon={<GlobalOutlined />}
-        style={{
-          alignItems: "center",
-          display: "inline-flex",
-          height: 36,
-        }}
-        type="text"
-      >
-        {intl.formatMessage({ id: selectedOption.messageId })}
-      </Button>
-    </Dropdown>
-  );
-};
-
-const ConsoleAuthActions: React.FC = () => {
-  const intl = useIntl();
-  const session = loadRestorableAuthSession();
-  if (!session) {
-    return null;
-  }
-
-  const displayName =
-    session.user.name || session.user.email || session.user.sub;
-
-  return (
-    <Dropdown
-      menu={{
-        items: [
-          {
-            key: "settings",
-            icon: <SettingOutlined />,
-            label: intl.formatMessage({ id: "common.user.settings" }),
-          },
-          {
-            key: "logout",
-            icon: <LogoutOutlined />,
-            label: intl.formatMessage({ id: "common.user.logout" }),
-          },
-        ],
-        onClick: ({ key }) => {
-          if (key === "settings") {
-            history.push("/settings");
-            return;
-          }
-
-          if (key === "logout") {
-            clearStoredAuthSession();
-            window.location.replace("/login");
-          }
-        },
-      }}
-      placement="bottomRight"
-      trigger={["click"]}
-    >
-      <span
-        style={{
-          alignItems: "center",
-          background: "var(--ant-color-fill-tertiary)",
-          border: "1px solid var(--ant-color-border-secondary)",
-          borderRadius: 999,
-          cursor: "pointer",
-          display: "inline-flex",
-          gap: 8,
-          height: 36,
-          maxWidth: 220,
-          padding: "0 10px 0 6px",
-        }}
-        title={displayName}
-      >
-        <Avatar
-          icon={<UserOutlined />}
-          size={24}
-          src={session.user.picture}
-        />
-        <Typography.Text
-          style={{
-            flex: 1,
-            color: "var(--ant-color-text)",
-            lineHeight: "20px",
-            marginBottom: 0,
-            maxWidth: 160,
-            minWidth: 0,
-            whiteSpace: "nowrap",
-          }}
-          ellipsis={{ tooltip: displayName }}
-        >
-          {displayName}
-        </Typography.Text>
-        <DownOutlined
-          style={{
-            color: "var(--ant-color-text-tertiary)",
-            fontSize: 11,
-          }}
-        />
-      </span>
-    </Dropdown>
-  );
-};
 
 function trimOptional(value?: string | null): string | undefined {
   const normalized = value?.trim();
@@ -373,11 +236,13 @@ function setLiveOpsAttentionSnapshot(next: LiveOpsAttentionSnapshot): void {
   }
 
   liveOpsAttentionSnapshot = next;
-  liveOpsAttentionListeners.forEach((listener) => listener());
+  liveOpsAttentionListeners.forEach((listener) => {
+    listener();
+  });
 }
 
 function buildLiveOpsAttentionCandidateKey(
-  candidate: LiveOpsAttentionCandidate
+  candidate: LiveOpsAttentionCandidate,
 ): string {
   const actorId = trimOptional(candidate.actorId);
   if (actorId) {
@@ -385,16 +250,16 @@ function buildLiveOpsAttentionCandidateKey(
   }
 
   return [
-    "run",
-    trimOptional(candidate.scopeId) || "",
-    trimOptional(candidate.serviceId) || "",
-    trimOptional(candidate.runId) || "",
-  ].join(":");
+    'run',
+    trimOptional(candidate.scopeId) || '',
+    trimOptional(candidate.serviceId) || '',
+    trimOptional(candidate.runId) || '',
+  ].join(':');
 }
 
 function collectLiveOpsAttentionCandidates(
   pathname: string,
-  search: string
+  search: string,
 ): LiveOpsAttentionCandidate[] {
   const nowMs = Date.now();
   const deduped = new Map<string, LiveOpsAttentionCandidate>();
@@ -408,7 +273,7 @@ function collectLiveOpsAttentionCandidates(
       continue;
     }
 
-    if (entry.status === "finished" || entry.status === "error") {
+    if (entry.status === 'finished' || entry.status === 'error') {
       continue;
     }
 
@@ -428,7 +293,7 @@ function collectLiveOpsAttentionCandidates(
     }
   }
 
-  if (pathname === "/runtime/mission-control") {
+  if (pathname === '/runtime/mission-control') {
     const context = readMissionControlRouteContext(search);
     const candidate: LiveOpsAttentionCandidate = {
       actorId: trimOptional(context.actorId),
@@ -445,11 +310,14 @@ function collectLiveOpsAttentionCandidates(
     }
   }
 
-  return Array.from(deduped.values()).slice(0, LIVE_OPS_ATTENTION_MAX_CANDIDATES);
+  return Array.from(deduped.values()).slice(
+    0,
+    LIVE_OPS_ATTENTION_MAX_CANDIDATES,
+  );
 }
 
 async function resolveLiveOpsAttentionActorId(
-  candidate: LiveOpsAttentionCandidate
+  candidate: LiveOpsAttentionCandidate,
 ): Promise<string | undefined> {
   const actorId = trimOptional(candidate.actorId);
   if (actorId) {
@@ -473,7 +341,7 @@ async function resolveLiveOpsAttentionActorId(
 }
 
 async function runNeedsLiveOpsAttention(
-  candidate: LiveOpsAttentionCandidate
+  candidate: LiveOpsAttentionCandidate,
 ): Promise<boolean> {
   const actorId = await resolveLiveOpsAttentionActorId(candidate);
   if (!actorId) {
@@ -485,7 +353,7 @@ async function runNeedsLiveOpsAttention(
     const [graph, timeline] = await Promise.all([
       runtimeActorsApi.getActorGraphEnriched(actorId, {
         depth: 4,
-        direction: "Both",
+        direction: 'Both',
         take: 120,
       }),
       runtimeActorsApi.getActorTimeline(actorId, {
@@ -494,7 +362,7 @@ async function runNeedsLiveOpsAttention(
     ]);
 
     const snapshot = buildMissionSnapshotFromRuntime({
-      connectionStatus: "degraded",
+      connectionStatus: 'degraded',
       nowMs: fetchedAtMs,
       recentEvents: [],
       routeContext: {
@@ -511,15 +379,15 @@ async function runNeedsLiveOpsAttention(
         },
         session: {
           runId: trimOptional(candidate.runId),
-          status: "running",
+          status: 'running',
         },
       },
     });
 
     return (
       snapshot.intervention?.required === true &&
-      (snapshot.intervention.kind === "human_approval" ||
-        snapshot.intervention.kind === "human_input")
+      (snapshot.intervention.kind === 'human_approval' ||
+        snapshot.intervention.kind === 'human_input')
     );
   } catch {
     return false;
@@ -528,7 +396,7 @@ async function runNeedsLiveOpsAttention(
 
 async function loadLiveOpsAttentionSnapshot(
   pathname: string,
-  search: string
+  search: string,
 ): Promise<LiveOpsAttentionSnapshot> {
   const candidates = collectLiveOpsAttentionCandidates(pathname, search);
   if (candidates.length === 0) {
@@ -536,10 +404,10 @@ async function loadLiveOpsAttentionSnapshot(
   }
 
   const results = await Promise.allSettled(
-    candidates.map((candidate) => runNeedsLiveOpsAttention(candidate))
+    candidates.map((candidate) => runNeedsLiveOpsAttention(candidate)),
   );
   const pendingCount = results.reduce((count, result) => {
-    if (result.status === "fulfilled" && result.value) {
+    if (result.status === 'fulfilled' && result.value) {
       return count + 1;
     }
 
@@ -560,7 +428,7 @@ const NavigationMenuLabel: React.FC<{
   const snapshot = React.useSyncExternalStore(
     subscribeLiveOpsAttention,
     getLiveOpsAttentionSnapshot,
-    getLiveOpsAttentionSnapshot
+    getLiveOpsAttentionSnapshot,
   );
   const showCountBadge =
     badgeKey === LIVE_OPS_ATTENTION_BADGE_KEY && snapshot.pendingCount > 0;
@@ -568,18 +436,18 @@ const NavigationMenuLabel: React.FC<{
   return (
     <span
       style={{
-        alignItems: "center",
-        display: "inline-flex",
+        alignItems: 'center',
+        display: 'inline-flex',
         gap: 8,
-        justifyContent: "space-between",
+        justifyContent: 'space-between',
         minWidth: 0,
-        width: "100%",
+        width: '100%',
       }}
     >
       <span
         style={{
-          alignItems: "center",
-          display: "inline-flex",
+          alignItems: 'center',
+          display: 'inline-flex',
           gap: 8,
           minWidth: 0,
         }}
@@ -587,9 +455,9 @@ const NavigationMenuLabel: React.FC<{
         <span
           style={{
             minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
           }}
         >
           {label}
@@ -598,10 +466,10 @@ const NavigationMenuLabel: React.FC<{
           <span
             aria-hidden="true"
             style={{
-              background: "#ef4444",
+              background: '#ef4444',
               borderRadius: 999,
-              display: "inline-block",
-              flex: "0 0 auto",
+              display: 'inline-block',
+              flex: '0 0 auto',
               height: 8,
               width: 8,
             }}
@@ -614,8 +482,8 @@ const NavigationMenuLabel: React.FC<{
           overflowCount={9}
           size="small"
           style={{
-            backgroundColor: "#ef4444",
-            boxShadow: "none",
+            backgroundColor: '#ef4444',
+            boxShadow: 'none',
           }}
         />
       ) : null}
@@ -623,7 +491,7 @@ const NavigationMenuLabel: React.FC<{
   );
 });
 
-NavigationMenuLabel.displayName = "NavigationMenuLabel";
+NavigationMenuLabel.displayName = 'NavigationMenuLabel';
 
 const LiveOpsGroupIcon: React.FC<{
   icon: React.ReactNode;
@@ -631,7 +499,7 @@ const LiveOpsGroupIcon: React.FC<{
   const snapshot = React.useSyncExternalStore(
     subscribeLiveOpsAttention,
     getLiveOpsAttentionSnapshot,
-    getLiveOpsAttentionSnapshot
+    getLiveOpsAttentionSnapshot,
   );
 
   if (!snapshot.hasPendingAttention || !React.isValidElement(icon)) {
@@ -645,83 +513,33 @@ const LiveOpsGroupIcon: React.FC<{
   );
 });
 
-LiveOpsGroupIcon.displayName = "LiveOpsGroupIcon";
-
-function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuItem[] {
-  const grouped = new Map<string, NavigationMenuItem[]>();
-  const ungrouped: NavigationMenuItem[] = [];
-
-  for (const item of items) {
-    const groupKey =
-      typeof item.menuGroupKey === "string" ? item.menuGroupKey : undefined;
-    if (!groupKey) {
-      ungrouped.push(item);
-      continue;
-    }
-
-    const existing = grouped.get(groupKey);
-    if (existing) {
-      existing.push(item);
-      continue;
-    }
-
-    grouped.set(groupKey, [item]);
-  }
-
-  const menuGroups = NAVIGATION_GROUP_ORDER.reduce<NavigationMenuItem[]>(
-    (result, group) => {
-      const children = grouped.get(group.key);
-      if (!children || children.length === 0) {
-        return result;
-      }
-
-      if (group.flattenSingleItem && children.length === 1) {
-        result.push({
-          ...children[0],
-          icon: children[0].icon ?? group.icon,
-          menuGroupKey: group.key,
-        });
-        return result;
-      }
-
-      result.push({
-        children: children.map((child) => ({
-          ...child,
-          menuGroupKey: group.key,
-        })),
-        key: `menu-group:${group.key}`,
-        menuGroupKey: group.key,
-        name: React.createElement(NavigationGroupLabel, { group }),
-      });
-      return result;
-    },
-    []
-  );
-
-  return [...menuGroups, ...ungrouped];
-}
+LiveOpsGroupIcon.displayName = 'LiveOpsGroupIcon';
 
 function decorateNavigationMenuItems(
   items: NavigationMenuItem[],
-  groupItems = true
+  groupItems = true,
 ): NavigationMenuItem[] {
-  const sourceItems = groupItems ? groupNavigationMenuItems(items) : items;
+  const sourceItems = groupItems
+    ? groupNavigationMenuItems(items, NAVIGATION_GROUP_ORDER, (group) =>
+        React.createElement(NavigationGroupLabel, { group }),
+      )
+    : items;
 
   return sourceItems.map((item) => {
-    const path = typeof item.path === "string" ? item.path : undefined;
+    const path = typeof item.path === 'string' ? item.path : undefined;
     const badgeKey =
-      typeof item.menuBadgeKey === "string" ? item.menuBadgeKey : undefined;
+      typeof item.menuBadgeKey === 'string' ? item.menuBadgeKey : undefined;
     const groupKey =
-      typeof item.menuGroupKey === "string" ? item.menuGroupKey : undefined;
+      typeof item.menuGroupKey === 'string' ? item.menuGroupKey : undefined;
     const nameMessageId =
-      path && typeof item.name === "string"
+      path && typeof item.name === 'string'
         ? NAVIGATION_MENU_MESSAGE_IDS[path]
         : undefined;
     const children = Array.isArray(item.children)
       ? decorateNavigationMenuItems(item.children, false)
       : undefined;
     const isLiveOpsGroup =
-      groupKey === "live" && Array.isArray(children) && children.length > 0;
+      groupKey === 'live' && Array.isArray(children) && children.length > 0;
     const hasRenderableIcon = React.isValidElement(item.icon);
     const localizedName = nameMessageId
       ? React.createElement(LocalizedNavigationText, {
@@ -784,7 +602,7 @@ const LiveOpsAttentionBridge: React.FC<{
     };
 
     const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") {
+      if (document.visibilityState === 'visible') {
         void refresh();
       }
     };
@@ -797,16 +615,16 @@ const LiveOpsAttentionBridge: React.FC<{
     const intervalId = window.setInterval(() => {
       void refresh();
     }, LIVE_OPS_ATTENTION_REFRESH_MS);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    window.addEventListener("focus", refreshOnFocus);
-    window.addEventListener("storage", refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    window.addEventListener('focus', refreshOnFocus);
+    window.addEventListener('storage', refreshOnFocus);
 
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-      window.removeEventListener("focus", refreshOnFocus);
-      window.removeEventListener("storage", refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      window.removeEventListener('focus', refreshOnFocus);
+      window.removeEventListener('storage', refreshOnFocus);
     };
   }, [enabled, pathname, search]);
 
@@ -818,7 +636,7 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
   children,
 }) => {
   const [ready, setReady] = React.useState(() =>
-    Boolean(loadStoredAuthSession())
+    Boolean(loadStoredAuthSession()),
   );
 
   React.useEffect(() => {
@@ -849,7 +667,7 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
   }, [pathname]);
 
   if (!ready) {
-    return <PageLoading fullscreen />;
+    return <AevatarPageLoading fullscreen />;
   }
 
   return <>{children}</>;
@@ -857,6 +675,7 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
 
 const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
   children,
+  isFullscreenDisplayRoute,
   isPublicRoute,
   isStudioRoute,
   pathname,
@@ -864,27 +683,32 @@ const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
 }) => {
   const intl = useIntl();
   const currentLocale = normalizeConsoleLocale(intl.locale || getLocale());
-  const localizedContent = isPublicRoute ? (
-    children
-  ) : (
-    <MainLayout>{children}</MainLayout>
-  );
+  const localizedContent =
+    isPublicRoute || isFullscreenDisplayRoute ? (
+      children
+    ) : (
+      <MainLayout>{children}</MainLayout>
+    );
 
   return (
     <ConfigProvider
-      autoInsertSpaceInButton={false}
+      button={{ autoInsertSpace: false }}
       locale={resolveAntdLocale(currentLocale)}
       theme={aevatarThemeConfig}
     >
       <ProConfigProvider intl={resolveProIntl(currentLocale)}>
-        <QueryClientProvider client={queryClient}>
-          <LiveOpsAttentionBridge
-            enabled={!isPublicRoute && !isStudioRoute}
-            pathname={pathname}
-            search={search}
-          />
-          <React.Fragment key={currentLocale}>{localizedContent}</React.Fragment>
-        </QueryClientProvider>
+        <ConsoleToastProvider>
+          <QueryClientProvider client={queryClient}>
+            <LiveOpsAttentionBridge
+              enabled={!isPublicRoute && !isStudioRoute}
+              pathname={pathname}
+              search={search}
+            />
+            <React.Fragment key={currentLocale}>
+              {localizedContent}
+            </React.Fragment>
+          </QueryClientProvider>
+        </ConsoleToastProvider>
       </ProConfigProvider>
     </ConfigProvider>
   );
@@ -897,6 +721,8 @@ export const layout = ({
   const pathname = window.location.pathname;
   const search = window.location.search;
   const collapseForRoute = shouldCollapseLayout(pathname, search);
+  const fullscreenDisplayRoute = isFullscreenDisplayRoute(pathname);
+  const workflowActivityVNextRoute = isWorkflowActivityVNextRoute(pathname);
 
   return {
     onPageChange: () => {
@@ -909,13 +735,17 @@ export const layout = ({
         return;
       }
 
-      if (pathname === "/") {
+      if (pathname === '/') {
         history.replace(DEFAULT_PROTECTED_ROUTE);
       }
     },
     postMenuData: (menuData: NavigationMenuItem[]) =>
       decorateNavigationMenuItems(menuData),
     menuRender: (_: unknown, defaultDom: React.ReactNode) => {
+      if (isFullscreenDisplayRoute(window.location.pathname)) {
+        return false;
+      }
+
       if (!React.isValidElement(defaultDom)) {
         return defaultDom;
       }
@@ -928,10 +758,11 @@ export const layout = ({
       );
     },
     actionsRender: () => {
-      return [
-        <ConsoleLanguageSwitch key="language-switch" />,
-        <ConsoleAuthActions key="auth-actions" />,
-      ];
+      if (isFullscreenDisplayRoute(window.location.pathname)) {
+        return [];
+      }
+
+      return [<ConsoleHeaderActions key="header-actions" />];
     },
     childrenRender: (children: React.ReactNode) =>
       initialState ? (
@@ -940,6 +771,7 @@ export const layout = ({
           const search = window.location.search;
           const isPublicRoute = PUBLIC_ROUTES.has(pathname);
           const isStudioRoute = isStudioHostRoute(pathname);
+          const isDisplayRoute = isFullscreenDisplayRoute(pathname);
           const liveSession = loadStoredAuthSession();
           const needsProtectedRouteRedirect =
             !isPublicRoute &&
@@ -950,14 +782,15 @@ export const layout = ({
           const content = needsProtectedRouteRedirect ? (
             <ProtectedRouteRedirectGate pathname={pathname} />
           ) : !isPublicRoute && !isStudioRoute && !liveSession ? (
-              <AuthSessionBootstrap pathname={pathname}>
-                {children}
-              </AuthSessionBootstrap>
-            ) : (
-              children
-            );
+            <AuthSessionBootstrap pathname={pathname}>
+              {children}
+            </AuthSessionBootstrap>
+          ) : (
+            children
+          );
           return (
             <ConsoleRuntimeProviders
+              isFullscreenDisplayRoute={isDisplayRoute}
               isPublicRoute={isPublicRoute}
               isStudioRoute={isStudioRoute}
               pathname={pathname}
@@ -968,27 +801,49 @@ export const layout = ({
           );
         })()
       ) : (
-        <PageLoading fullscreen />
+        <AevatarPageLoading fullscreen />
       ),
     ...initialState?.settings,
-    title: "",
+    title: '',
     menu: {
       ...(initialState?.settings.menu as Record<string, unknown> | undefined),
       collapsedWidth: 40,
       collapsedShowGroupTitle: false,
       collapsedShowTitle: false,
-      type: "group",
+      type: 'group',
     },
-    contentStyle: {
-      background: "transparent",
-      display: "flex",
-      flexDirection: "column",
-      height: "calc(100vh - 56px)",
-      minHeight: 0,
-      overflow: "hidden",
-      padding: 0,
-    },
+    contentStyle: workflowActivityVNextRoute
+      ? {
+          background: '#ffffff',
+          display: 'block',
+          height: 'auto',
+          inset: 0,
+          minHeight: 0,
+          overflow: 'hidden',
+          padding: 0,
+          position: 'fixed',
+          width: '100%',
+        }
+      : fullscreenDisplayRoute
+        ? {
+            background: '#09110f',
+            display: 'block',
+            height: '100vh',
+            minHeight: 0,
+            overflow: 'hidden',
+            padding: 0,
+          }
+        : {
+            background: 'transparent',
+            display: 'flex',
+            flexDirection: 'column',
+            height: 'calc(100vh - 56px)',
+            minHeight: 0,
+            overflow: 'hidden',
+            padding: 0,
+          },
     defaultCollapsed: shouldDefaultCollapseLayout(pathname, search),
+    headerRender: fullscreenDisplayRoute ? false : undefined,
     ...(collapseForRoute ? { collapsed: true } : {}),
     logo: <BrandLogo />,
   };

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
@@ -9,9 +10,11 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
     public const string ApplyPresetActionId = "lp";
     public const string ListPageActionId = "llp";
     public const string LegacySelectServiceActionId = "llm_select_service";
+    public const string LegacySelectModelActionId = "llm_select_model";
     public const string LegacyApplyPresetActionId = "llm_apply_preset";
     public const string LlmActionArgument = "llm_action";
     public const string SelectServiceAction = "select_service";
+    public const string LegacySelectModelAction = "select_model";
     public const string ApplyPresetAction = "apply_preset";
     public const string ListPageAction = "list_page";
     public const string ServiceIdArgument = "service_id";
@@ -51,7 +54,7 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         lines.Add("");
         lines.Add($"查看可配置选项: `{command} list`");
         lines.Add($"切换 route: `/route use <编号|service-name> [model-name]`");
-        lines.Add($"只改 model: `/model use <model-name>`");
+        lines.Add($"选择 service/model: `/model use <编号|service-name> [model-name]`");
 
         var reply = new MessageContent { Text = string.Join('\n', lines) };
         reply.Cards.Add(new CardBlock
@@ -112,7 +115,7 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         if (pagination.TotalPages > 1)
             lines.Add($"翻页: `{command} list {PreviousPage(pagination)}` / `{command} list {NextPage(pagination)}`");
         lines.Add("选择 route: `/route use <编号|service-name> [model-name]`");
-        lines.Add("只改 model: `/model use <model-name>`");
+        lines.Add("选择 service/model: `/model use <编号|service-name> [model-name]`");
 
         var reply = new MessageContent { Text = string.Join('\n', lines) };
         reply.Cards.Add(new CardBlock
@@ -137,25 +140,23 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         return reply;
     }
 
-    public MessageContent RenderSelectionConfirm(UserLlmOption picked, string? model)
+    public MessageContent RenderSelectionConfirm(UserLlmOption picked, LLMModelSelection modelSelection)
     {
         ArgumentNullException.ThrowIfNull(picked);
+        ArgumentNullException.ThrowIfNull(modelSelection);
 
-        var resolvedModel = string.IsNullOrWhiteSpace(model)
-            ? picked.DefaultModel
-            : model.Trim();
-        var modelLine = string.IsNullOrWhiteSpace(resolvedModel)
-            ? "未覆盖,使用 route 默认"
-            : resolvedModel;
+        var modelLine = modelSelection.Kind == LLMModelSelectionKind.ExplicitModel
+            ? modelSelection.ModelId
+            : "Provider default";
         var reply = new MessageContent
         {
-            Text = $"已切换到 **{picked.DisplayName}**。\n- Route: `{picked.RouteValue}`\n- Model: {modelLine}\n下一条消息会用这个设置回复。",
+            Text = $"**{picked.DisplayName}** 的 LLM 选择更新已提交。\n- Route: `{picked.RouteValue}`\n- Model: {modelLine}\n观察到更新后的设置后生效。",
         };
         reply.Cards.Add(new CardBlock
         {
             Kind = CardBlockKind.Section,
-            Title = "模型设置已更新",
-            Text = $"已切换到 {picked.DisplayName}",
+            Title = "模型设置更新已提交",
+            Text = $"等待观察 {picked.DisplayName} 的完整选择",
             Fields =
             {
                 new CardField { Title = "Route", Text = picked.RouteValue },
@@ -240,16 +241,16 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         if (!string.IsNullOrWhiteSpace(view.CurrentModel))
             return view.CurrentModel.Trim();
 
-        if (!string.IsNullOrWhiteSpace(view.Current?.DefaultModel))
-            return $"{view.Current.DefaultModel} (route 默认)";
+        if (!string.IsNullOrWhiteSpace(view.Current?.ModelCatalog.DefaultModelId))
+            return $"{view.Current.ModelCatalog.DefaultModelId} (route 默认)";
 
         return "未覆盖,使用 route 默认";
     }
 
     private static string RenderDefaultModel(UserLlmOption option) =>
-        string.IsNullOrWhiteSpace(option.DefaultModel)
+        string.IsNullOrWhiteSpace(option.ModelCatalog.DefaultModelId)
             ? "service default"
-            : option.DefaultModel.Trim();
+            : option.ModelCatalog.DefaultModelId.Trim();
 
     private static string RenderStatus(UserLlmOption option) =>
         option.Allowed ? option.Status : $"{option.Status}, not allowed";
@@ -259,7 +260,10 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
 
     private static bool IsCurrent(UserLlmOption option, UserLlmOption? current) =>
         current is not null &&
-        string.Equals(option.ServiceId, current.ServiceId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            InventoryUserServiceId(option),
+            InventoryUserServiceId(current),
+            StringComparison.Ordinal) &&
         string.Equals(option.RouteValue, current.RouteValue, StringComparison.OrdinalIgnoreCase);
 
     private static PageWindow ResolvePagination(int totalCount, int requestedPage)
@@ -285,20 +289,35 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
             ActionId = ServiceIdArgument,
             Label = "选择本页 route",
             Placeholder = "选择一个 route",
-            Value = options.FirstOrDefault(option => IsCurrent(option, current))?.ServiceId ?? string.Empty,
+            Value = options
+                .Where(option => IsCurrent(option, current))
+                .Select(InventoryUserServiceId)
+                .FirstOrDefault() ?? string.Empty,
         };
 
         foreach (var option in options)
         {
+            var userServiceId = InventoryUserServiceId(option);
+            if (userServiceId is null)
+                continue;
+
             action.Options.Add(new ActionOption
             {
                 Label = $"{option.DisplayName}{RenderCurrentMarker(option, current)}",
-                Value = option.ServiceId,
+                Value = userServiceId,
             });
         }
 
         return action;
     }
+
+    private static string? InventoryUserServiceId(UserLlmOption option) =>
+        option.Identity is
+        {
+            Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+        } identity
+            ? UserLlmPreferenceWriteCore.NormalizeOptional(identity.NyxIdUserServiceId)
+            : null;
 
     private static ActionElement BuildSubmitSelectedServiceAction() => new()
     {

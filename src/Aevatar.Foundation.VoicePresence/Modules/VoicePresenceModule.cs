@@ -101,13 +101,21 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
         if (envelope.Payload.Is(VoiceModuleSignal.Descriptor))
         {
-            await HandleModuleSignalAsync(envelope.Payload.Unpack<VoiceModuleSignal>(), ctx, ct);
+            await HandleModuleSignalAsync(
+                envelope.Payload.Unpack<VoiceModuleSignal>(),
+                ResolveIssuedAtUnixMs(envelope),
+                ctx,
+                ct);
             return;
         }
 
         if (envelope.Payload.Is(VoiceProviderEvent.Descriptor))
         {
-            await HandleProviderEventAsync(envelope.Payload.Unpack<VoiceProviderEvent>(), ctx, ct);
+            await HandleProviderEventAsync(
+                envelope.Payload.Unpack<VoiceProviderEvent>(),
+                ResolveIssuedAtUnixMs(envelope),
+                ctx,
+                ct);
             return;
         }
 
@@ -122,6 +130,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
     private async Task HandleModuleSignalAsync(
         VoiceModuleSignal signal,
+        long issuedAtUnixMs,
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
@@ -131,7 +140,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         switch (signal.SignalCase)
         {
             case VoiceModuleSignal.SignalOneofCase.ProviderEvent:
-                await HandleProviderEventAsync(signal.ProviderEvent, ctx, ct);
+                await HandleProviderEventAsync(signal.ProviderEvent, issuedAtUnixMs, ctx, ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.ControlFrame:
                 await HandleControlFrameAsync(signal.ControlFrame, ctx, ct);
@@ -176,7 +185,11 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 await HandleTransportLifetimeCompletedAsync(signal.TransportLifetimeCompleted, ctx, ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.ProviderEventReceived:
-                await HandleProviderEventReceivedAsync(signal.ProviderEventReceived, ctx, ct);
+                await HandleProviderEventReceivedAsync(
+                    signal.ProviderEventReceived,
+                    issuedAtUnixMs,
+                    ctx,
+                    ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.InputImageReceived:
                 await HandleInputImageReceivedAsync(signal.InputImageReceived, ctx, ct);
@@ -210,6 +223,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
     internal async Task HandleProviderEventAsync(
         VoiceProviderEvent providerEvent,
+        long issuedAtUnixMs,
         IEventHandlerContext ctx,
         CancellationToken ct,
         string? transportLeaseId = null)
@@ -294,6 +308,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 stateChanged = await HandleFunctionCallRequestedAsync(
                     normalizedEvent.FunctionCall,
                     state,
+                    issuedAtUnixMs,
                     ctx,
                     ct,
                     transportLeaseId);
@@ -473,13 +488,14 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     private async Task<bool> HandleFunctionCallRequestedAsync(
         VoiceFunctionCallRequested request,
         VoicePresenceRuntimeState state,
+        long issuedAtUnixMs,
         IEventHandlerContext ctx,
         CancellationToken ct,
         string? transportLeaseId)
     {
         if (await ResolveToolOwnerAsync(state, request.ToolName, ct) != VoiceToolOwner.Client)
         {
-            await ExecuteToolCallAsync(request, ctx, ct, transportLeaseId);
+            await ExecuteToolCallAsync(request, issuedAtUnixMs, ctx, ct, transportLeaseId);
             return false;
         }
 
@@ -499,6 +515,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
     private async Task HandleProviderEventReceivedAsync(
         VoiceProviderEventReceived request,
+        long issuedAtUnixMs,
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
@@ -521,7 +538,12 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         // persisted state.ActiveTransportLeaseId is empty — which it is on the policy-aware /ws/voice
         // relay path, where the FunctionCall is admitted via the RemoteSessionId fallback and the
         // transport lease is never persisted into runtime state.
-        await HandleProviderEventAsync(request.ProviderEvent, ctx, ct, request.TransportLeaseId);
+        await HandleProviderEventAsync(
+            request.ProviderEvent,
+            issuedAtUnixMs,
+            ctx,
+            ct,
+            request.TransportLeaseId);
     }
 
     private async Task HandleInputImageReceivedAsync(
@@ -1254,6 +1276,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
     private async Task ExecuteToolCallAsync(
         VoiceFunctionCallRequested request,
+        long issuedAtUnixMs,
         IEventHandlerContext ctx,
         CancellationToken ct,
         string? transportLeaseId = null)
@@ -1290,6 +1313,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 }
 
                 resultJson = await invoker.ExecuteAsync(
+                    ctx.AgentId,
+                    state.ActiveSessionId ?? string.Empty,
+                    request.CallId,
+                    issuedAtUnixMs,
                     request.ToolName,
                     string.IsNullOrWhiteSpace(request.ArgumentsJson) ? "{}" : request.ArgumentsJson,
                     state.ActiveToolContext?.Clone(),
@@ -1491,6 +1518,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
     private static string BuildToolErrorJson(string message) =>
         JsonSerializer.Serialize(new { error = message });
+
+    private static long ResolveIssuedAtUnixMs(EventEnvelope envelope) =>
+        envelope.Timestamp?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0;
 
     private async Task HandleControlFrameAsync(VoiceControlFrame frame, IEventHandlerContext ctx, CancellationToken ct)
     {

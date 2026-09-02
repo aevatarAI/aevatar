@@ -7,6 +7,8 @@
     <RootNamespace>Aevatar.GAgents.UserConfig</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.Studio.Tests" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
   </ItemGroup>
@@ -19,6 +21,6 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="user_config_messages.proto" GrpcServices="None" />
+    <Protobuf Include="user_config_messages.proto" GrpcServices="None" AdditionalImportDirs="..\..\src\Aevatar.AI.Abstractions" />
   </ItemGroup>
 </Project>

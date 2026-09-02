@@ -8,6 +8,55 @@ owner: eanzhao
 
 Aevatar 的 Agent 可以通过 NyxID LLM Gateway 使用用户在 NyxID 上配置的 LLM API Key（OpenAI、Anthropic、DeepSeek 等），无需在 Aevatar 端存储任何密钥。
 
+## Catalog lifecycle authority
+
+NyxID catalog snapshots are owned by one catalog actor per authenticated `authority + owner_kind + owner_subject`. This identity is independent of Aevatar `scopeId`; adapters must not derive one from the other. Host and Identity adapters may use a transient bearer to read the external catalog, but dispatch only secret-free typed activation, observation, refresh-failure, invalidation, or cleanup commands. The actor commits the corresponding domain event and the unified projection pipeline materializes its actor-scoped current-state replica.
+
+Activation is committed before an external refresh begins. Every refresh reads the actor-issued `lifecycle_fence` from the current-state replica and includes it as `expected_lifecycle_fence` on the typed begin command. A stale epoch commits a correlated `Superseded` outcome. While a refresh is active in the same epoch, contenders are ordered by `(started_at, refresh_id)`; after an observed, failed, invalidated, or cleaned terminal transition, the actor advances the fence and clears active ownership. New terminal events carry exactly the next epoch; replay applies at least `current fence + 1` for every terminal and activation never reduces an already migrated fence, so historical events that predate the fence fields still establish distinct epochs. State and lifecycle events carry a typed lifecycle-fence semantics version. After replay or snapshot restore, a persisted legacy state commits one actor-owned migration event before serving commands, advances the fence once, clears and supersedes any restored active refresh, and publishes the migrated state root through the normal projection pipeline; fresh empty actors skip this migration. The actor retains no wall-clock watermark across terminal epochs, so delayed prior-epoch begins remain fenced while a legitimate later refresh can start after clock rollback. A successful observation activates or refreshes the snapshot; a `401/403` response or explicit binding revocation invalidates it immediately; transient provider failures record a failure without extending `fresh_until`.
+
+Cleanup is stronger than invalidation: it clears services, observation freshness, revision, and content digest while retaining owner identity and a terminal reason. Invalidation and cleanup both produce projected tombstones, including when the actor has never published a successful observation. Consumers can therefore distinguish `missing` from an actor-owned `invalidated` or `cleaned` state through the projected `state_version`, `lifecycle_fence`, and lifecycle fields. Scheduling reads this replica only and never fetches, refreshes, replays, or primes NyxID inside the query call stack.
+
+## Atomic selection and durable model evidence
+
+`LLMSelection` is the atomic UserConfig route/model fact. It contains the route kind and canonical route identity together with either `ProviderDefault` or one explicit model. `UserConfigGAgent` is its only authoritative owner: settings, channel commands, and preset flows submit a complete selection, the actor commits it, and the unified projection pipeline publishes the actor-scoped current-state replica. Compatibility `default_model` and `preferred_llm_route` strings are derived reads only; no normal write can update either string independently.
+
+Reset commits a complete `Unspecified` selection and the product displays it as System default, not Gateway. Gateway is a separate typed selection with the canonical `/api/v1/llm/gateway/v1` route. A saved route that becomes unavailable remains visible with typed Retry, Choose replacement, or Reselect remediation; runtime and UI must not silently fall back to Gateway or another provider.
+
+An accepted UserConfig receipt means accepted-for-dispatch only. The UI shows Update submitted with the command ID until the current-state projection observes the exact submitted `LLMSelection`; only that equality makes the selection Active.
+
+Durable execution requires `ExplicitModel` plus exact `Enumerated` evidence from the committed authorization catalog for the same route. In other words, only enumerated committed catalog evidence can authorize a durable route/model pair. `NotVerifiable`, `Unavailable`, a missing snapshot, an empty model list, a model outside the ordinal exact list, or Gateway without its own committed evidence all fail closed. An empty list is never an open identifier set.
+
+The evidence path has one owner and one projection path:
+
+```text
+configured NyxID authority + verified canonical owner
+  -> bounded catalog refresh
+  -> authorization catalog actor commit
+  -> unified current-state projection
+  -> planner exact route/model match and permission digest
+  -> persisted authorization fact and identical runtime payload
+  -> runtime exact match before actor inbox
+```
+
+Refresh destinations come only from configured NyxID authority and verified canonical identity; caller route strings, URLs, labels, slugs, and model prefixes cannot choose a network destination. Query, planner, and invocation paths do not refresh catalogs, replay events, prime projections, or perform external I/O. The legacy bare-model fallback described for external Responses clients is not authority for UserConfig, scheduling, or workflow execution.
+
+## Published topology contract boundary
+
+The external source of truth is a published NyxID contract, not the shape or iteration order of a runtime JSON response. The read-only audit target for this integration is `/Users/chronoai/Code/NyxID`; Aevatar work must not patch that repository as part of Milestone 33.
+
+At NyxID revision `c885cbfa`, `GET /api/v1/user-services` and its response schemas are included in the published OpenAPI document. Runtime handlers and prose exist for `GET /api/v1/nodes` and `GET /api/v1/nodes/{node_id}/bindings`, but those routes and their response schemas are not included in that published OpenAPI document. Route existence is not a contract locator.
+
+Before node-backed catalog evidence can be authoritative, a published locator must guarantee all of the following:
+
+- the exact owner of every user service, node, and binding, including personal versus organization ownership;
+- caller access and visibility semantics, including inherited and cross-owner resources;
+- the exact service-to-primary-node and service-to-binding topology;
+- route order and tie behavior, including whether priority alone is total ordering;
+- edge multiplicity, including whether repeated bindings are distinct authorization facts;
+- a revision or watermark that proves the service, node, and binding reads belong to one coherent source snapshot.
+
+Until that locator exists, any plan that depends on those unproven node/topology fields is blocked and must fail closed. Aevatar must not manufacture authority by sorting node or binding identifiers, selecting a minimum priority, collapsing repeated edges, or treating two equal local reads as a published ordering or snapshot guarantee. Organization ownership and cross-owner topology remain unsupported for the same reason. The adapter's double-read/content-digest check can detect local instability, but it cannot replace the missing NyxID contract.
+
 ## 原理
 
 ```
@@ -58,9 +107,34 @@ llm-anthropic/claude-haiku-4-5
 
 Workflow 层只承载 provider-neutral 调用者凭据与路由偏好。`WorkflowCallerCredential.BearerToken` 保存的是已经规范化的 raw bearer token，不包含 HTTP `Authorization` scheme；`WorkflowLlmControl.RoutePreference` / workflow proto `route_preference` 表达的是 workflow 自身的路由偏好，不使用 NyxID 专有字段名。
 
-Host/Infrastructure 只负责从 HTTP header 提取 bearer scheme，并把 raw token 交给 workflow-owned `WorkflowCallerCredentialTokens.ParseOptional` 做一次规范化与 fail-closed 校验。进入 Workflow Application/Core 后，调用者凭据继续作为 typed workflow credential 在 command、actor state 与 LLM execution intent 中传递；不得在 workflow 中间层通过 headers、metadata 或 provider-specific 字段回填身份语义。
+当前 internal P0 的 Host/Infrastructure HTTP 边界在 `Authorization: Bearer` 与 NyxID proxy 注入的 `X-NyxID-Delegation-Token` 同时存在时，优先选择合法的 forwarded Authorization bearer；只有 Authorization 缺失时才回退 delegation token。原因是透明 managed Codex readiness 需要用当前用户 bearer 调用 NyxID `/users/me` 与 API-key 管理接口，而 `proxy:*` delegation token 只负责下游 proxy 能力。被选择的凭据会交给 workflow-owned `WorkflowCallerCredentialTokens.ParseOptional` 做一次规范化与 fail-closed 校验；已出现但格式非法的 Authorization 不得回退 delegation。`X-NyxID-Identity-Token` 只用于 Host 认证和从 `sub` 派生 caller scope，绝不能作为 workflow caller credential 下传。
+
+进入 Workflow Application/Core 后，调用者凭据继续作为 typed workflow credential 在 command、actor state 与 LLM execution intent 中传递；不得在 workflow 中间层通过 headers、metadata 或 provider-specific 字段回填身份语义。internal P0 中代理 Aevatar 的 NyxID UserService 必须暂时保持 `forward_access_token=true`，可以同时保持 `inject_delegation_token=true`；这项较弱边界不能外推为 public rollout 合同。关闭 access-token forwarding 前，必须先引入按用途分离的 typed 双凭据合同，或由 NyxID 提供可完成 self-service readiness 的窄 delegation capability。
+
+定时 workflow 调度不把 fire-time 换出的短期 NyxID bearer 写入 `connector_http_authorization`、`llm_control` 或 run 级 runtime secret。Scheduled Dispatch 在可信 fire 链路中把短期 token 存入 durable vault，向 `ChatRequestEvent.caller_durable_credential` 只传 typed `DurableCallerCredentialRef`；NyxID source 的原始 subject + capability scope 作为独立 typed caller authority 随 handle 传入，禁止从 token、vault `subject_id` 或 Aevatar `scopeId` 解析。`WorkflowRunGAgent` 把 handle 与 authority 保存到 `WorkflowCallerCredentialState`，但 committed projection 会移除二者。LLM、tool 与 connector 外呼继续走统一 `TryGetCallerCredentialAsync` 漏斗，每次外呼前用 handle 现场解析 raw bearer。只有不属于 `scheduled_invocation_agent_key` 完整性契约的历史 workflow run 才可按其原版本留在旧 runtime-secret 路径；新建、reauthorize 或再次 fire 的 Agent Key automation 不允许 missing handle、missing binding 或 legacy bearer fallback。
+
+外部 API 不接受 `caller_durable_credential`；该字段只能由 Scheduled Dispatch 内部生成。Projection、readmodel、日志与诊断只允许展示 caller credential 的 source kind，不回显 durable ref、vault ref、fingerprint 或 raw bearer。
 
 NyxID 专有映射只发生在 `Workflow.Integration.AI` 边界：workflow raw token 分别映射到 LLM provider auth 与 tool execution credentials，workflow `RoutePreference` 在这里映射为 provider-specific `NyxIdRoutePreference`。NyxID provider 本身继续读取 typed provider auth，不从 tool context 或 workflow headers 兜底推断身份。
+
+### Scheduled Agent Key LLM 完整性链
+
+依赖 owner LLM 的 Team member automation 只有一条权威链路：
+
+```text
+committed typed UserConfig selection
+  -> digest-covered ScheduledInvocationOwnerLLMSelection
+  -> constrained NyxID Agent Key + Vault reference
+  -> actor-owned authorization fact + persisted ChatRequestEvent.LlmControl
+  -> runtime caller/payload/fact cross-check
+  -> workflow inbox
+```
+
+UserConfig read model 中的 typed selection 是 planning-time authority。`NyxIdUserService` 必须同时包含 canonical route、精确 `UserService.id`、service slug snapshot 与 model；显式 Gateway selection 也必须是 typed `Gateway`，不能由空字段或 Host default 推断。缺失或 malformed selection 保持 `Unspecified`，对 owner-LLM-dependent schedule 直接 fail closed。
+
+计划把 selection 写入 Protobuf permission digest，并复制到 schedule actor 的 authorization fact。Studio adapter 只能从已验证的 plan/fact 生成持久化 `ChatRequestEvent.LlmControl`；schedule fire 时禁止再次查询 UserConfig、从 Host default 补 route/model、从 slug 或 model prefix 反推 service identity，或把 v1 digest 当作 v2 compatibility 输入。运行时必须在 workflow inbox 之前校验 verified caller binding、fact selection、payload route/model 与 exact service grant 全部一致；任何缺失或漂移都进入 typed `needs_authorization` 失败路径。
+
+Caller authority 与 `VerifiedBindingId` 是 write/runtime-side authority，不属于 projection 或 public API。成功 create 仅通过 Host category `Aevatar.Studio.MemberAutomation` 的 Information event `6201/StudioMemberAutomationCreateAccepted` 提供非投影 operational correlation；其 structured state 除日志框架的 `{OriginalFormat}` 外只有 `ScopeId`、`TeamId`、`MemberId`、`ScheduleId`、`OperationId` 与 `BindingId`。accepted committed revocation outcome 在两个 pending flag 都为 false 后，通过同一 category 的 `6202/StudioMemberAutomationRevocationCompleted` 记录精确的 `ScopeId`、`TeamId`、`MemberId`、`ScheduleId`、`OperationId`、两个值为 `Completed` 的 revocation status、`StateVersion` 与 `ObservedAtUtc`。仓库工具 `tools/schedules/query_member_automation_audit.sh` 是这两个事件的 canonical allowlisted query。两个事件都不得包含 permission digest、bearer、Agent Key/API-key identifier、Vault reference/ciphertext 或 refresh token。
 
 ---
 
@@ -74,13 +148,13 @@ Lark bot 等 channel surface 通过 `/model`、`/models`、`/llm`、`/route` 暴
 - `/model preset <preset-id>`：按 NyxID 返回的 setup preset 使用或创建 service
 - `/model reset`：清空用户偏好，回退到 bot 默认配置
 
-这些命令不读取 Aevatar 内部密钥，也不使用独立的 `llm:status` scope。Aevatar 通过 per-user NyxID binding 做 broker token-exchange，请求 `proxy` scope 的短期 token，然后调用 NyxID LLM service catalog / route API。集群自举注册的 OAuth client 以及 `/oauth/authorize` 必须使用同一 canonical scope：
+这些命令不读取 Aevatar 内部密钥，也不使用独立的 `llm:status` scope。Aevatar 通过 per-user NyxID binding 做 broker token-exchange，请求 `proxy` scope 的短期 token，然后调用 NyxID LLM service catalog / route API。`Aevatar:BackendConsole:OidcClientId` 配置的 OAuth client 与 `/oauth/authorize` 必须使用同一 canonical interactive authorization scope：
 
 ```text
-openid urn:nyxid:scope:broker_binding proxy
+openid profile email offline_access urn:nyxid:scope:broker_binding proxy
 ```
 
-如果旧 binding 对应的 OAuth client 未包含 `proxy`，NyxID 会在 token-exchange 返回 `invalid_scope`。用户可重新发送 `/init` 完成绑定刷新；Aevatar 不会降级到 bot-owner credential 或缓存 token。
+`llm:proxy` 是通常的短期 LLM capability token-exchange scope，不是 interactive OAuth scope；DCR、Console login 与 channel `/init` 都不得把它发送到 `/oauth/authorize`。managed Codex 的内部 canary 是明确例外：它调用 NyxID REST proxy 的固定 `chrono-llm-public` 路由，而 NyxID 当前没有 service-scoped delegation，因此暂时要求五分钟 `proxy:*` token。`proxy:*` 同样不得进入 interactive OAuth consent，且在 NyxID 提供窄 capability 前不得用于全用户 rollout。如果旧 binding 缺少 canonical authorization scope，用户可重新发送 `/init` 或重新完成 Studio 登录 consent 来刷新 binding；Aevatar 不会降级到 bot-owner credential、复用入站 bearer 或缓存 token。
 
 ---
 
@@ -98,6 +172,8 @@ Canonical endpoints：
 `GET /api/user-config/llm` 是 Settings 闭环的唯一 route truth。响应必须至少表达：
 
 - `savedRoute` / `savedRouteLabel`：用户保存的 route 及展示名。
+- `savedRouteKind`：`unspecified`、`gateway` 或 `nyx_id_user_service` 的 typed selection kind。
+- `savedUserServiceId` / `savedServiceSlug`：精确 UserService identity 与 slug snapshot；仅 `nyx_id_user_service` 有值。
 - `effectiveRoute` / `effectiveRouteLabel`：本次实际可用的 route 及展示名；当 saved route 不可用时由后端选择 fallback。
 - `routeFallbackActive` / `fallbackReason`：诚实暴露 saved route 与 effective route 是否分离。
 - `routeOptions`：可选 route 列表，包含 `routeValue`、`label`、`source`、`status`、`allowed`、`ready`、`serviceId`、`serviceSlug`。
@@ -107,7 +183,9 @@ Canonical endpoints：
 
 NyxID catalog 不可用时，后端返回 degraded view，而不是空列表：保留 `savedRoute`、`effectiveRoute`、`defaultModel`，设置 `catalogStatus = "unavailable"`，并通过 `capabilities` 禁止编辑和保存、允许 retry。前端只展示这个 degraded view，不做 query-time fallback 或本地补跑 catalog。
 
-Gateway route 的稳定值是空字符串 `""`。Gateway 的展示名由后端 settings view 返回；前端只消费 `savedRouteLabel`、`effectiveRouteLabel`、`routeOptions[].label`，不得把 `NyxID Gateway` 当作 route display source 硬编码。
+`effectiveRoute` 只描述交互式 Settings/运行时可用性，不会升级成 scheduled authorization authority。Scheduled planner 只读取 committed `savedRouteKind` 对应的 typed selection；`savedRouteKind == "unspecified"` 时，即使 GET 同时展示一个 Host-derived `effectiveRoute`，也不得据此授权或填充定时调用。
+
+Gateway 的强类型 canonical route 是 `/api/v1/llm/gateway/v1`。Console Settings 中的空字符串 `""` 只是在保存与选择 surface 上表示显式 Gateway option 的稳定 selector；后端在形成 scheduled authorization selection 时必须把 typed `Gateway` 映射到 canonical route，不能把空 selector 带入 permission digest 或 runtime payload。Gateway 的展示名由后端 settings view 返回；前端只消费 `savedRouteLabel`、`effectiveRouteLabel`、`routeOptions[].label`，不得把 `NyxID Gateway` 当作 route display source 硬编码。
 
 旧 Console surface 不再保留兼容入口：`/api/user-config/models`、`/api/user-config/llm/options`、`/api/user-config/llm/preference` 已被 canonical `/api/user-config/llm` 取代。
 

@@ -1,0 +1,115 @@
+name: codex-runner-image
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/codex-runner-image.yml"
+      - "containers/codex-runner/**"
+      - "Directory.Packages.props"
+  push:
+    branches:
+      - feature/integrate
+    paths:
+      - ".github/workflows/codex-runner-image.yml"
+      - "containers/codex-runner/**"
+      - "Directory.Packages.props"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-runner-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY_IMAGE: ghcr.io/aevatarai/codex-runner
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: versions
+        name: Load pinned versions
+        shell: bash
+        run: |
+          source containers/codex-runner/version.env
+          echo "codex_version=${PINNED_CODEX_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "runner_version=${PINNED_RUNNER_VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Check Dockerfile
+        run: |
+          docker build --check \
+            --build-arg "CODEX_VERSION=${{ steps.versions.outputs.codex_version }}" \
+            --build-arg "RUNNER_VERSION=${{ steps.versions.outputs.runner_version }}" \
+            containers/codex-runner
+
+      - name: Build and run native image smoke
+        env:
+          CODEX_VERSION: ${{ steps.versions.outputs.codex_version }}
+          RUNNER_VERSION: ${{ steps.versions.outputs.runner_version }}
+        run: bash containers/codex-runner/smoke.sh
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: versions
+        name: Load pinned versions
+        shell: bash
+        run: |
+          source containers/codex-runner/version.env
+          echo "codex_version=${PINNED_CODEX_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "runner_version=${PINNED_RUNNER_VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        name: Build and publish multi-architecture image
+        uses: docker/build-push-action@v6
+        with:
+          context: containers/codex-runner
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY_IMAGE }}:${{ steps.versions.outputs.runner_version }}
+            ${{ env.REGISTRY_IMAGE }}:sha-${{ github.sha }}
+          build-args: |
+            CODEX_VERSION=${{ steps.versions.outputs.codex_version }}
+            RUNNER_VERSION=${{ steps.versions.outputs.runner_version }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=codex-runner
+          cache-to: type=gha,mode=max,scope=codex-runner
+          provenance: mode=max
+          sbom: true
+
+      - name: Record immutable digest
+        shell: bash
+        run: |
+          {
+            echo "### Codex runner image"
+            echo
+            echo "- tag: \`${REGISTRY_IMAGE}:${{ steps.versions.outputs.runner_version }}\`"
+            echo "- digest: \`${{ steps.build.outputs.digest }}\`"
+            echo "- platforms: \`linux/amd64,linux/arm64\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

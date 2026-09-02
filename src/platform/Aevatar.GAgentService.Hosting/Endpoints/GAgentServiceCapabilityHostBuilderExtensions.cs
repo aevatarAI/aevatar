@@ -12,11 +12,12 @@ public static class GAgentServiceCapabilityHostBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        builder.Services.AddAevatarHealthContributor(new AevatarHealthContributorRegistration
-        {
-            Name = "gagent-service",
-            Category = "capability",
-            RequiredRoutes =
+        // Scope script routes and the script query probe exist only when the host composed
+        // the scripting capability before this bundle (see AddGAgentServiceCapability).
+        var scriptingCapabilityRegistered = builder.Services.Any(x =>
+            x.ServiceType == typeof(Aevatar.Scripting.Hosting.DependencyInjection.ServiceCollectionExtensions.ScriptCapabilityRegistrationsMarker));
+        string[] requiredRoutes = scriptingCapabilityRegistered
+            ?
             [
                 "/api/services",
                 "/api/scopes/{scopeId}/binding",
@@ -24,7 +25,21 @@ public static class GAgentServiceCapabilityHostBuilderExtensions
                 "/api/scopes/{scopeId}/scripts",
                 "/api/schedules",
                 "/api/schedules/{scheduleId}",
-            ],
+            ]
+            :
+            [
+                "/api/services",
+                "/api/scopes/{scopeId}/binding",
+                "/api/scopes/{scopeId}/workflows",
+                "/api/schedules",
+                "/api/schedules/{scheduleId}",
+            ];
+
+        builder.Services.AddAevatarHealthContributor(new AevatarHealthContributorRegistration
+        {
+            Name = "gagent-service",
+            Category = "capability",
+            RequiredRoutes = requiredRoutes,
             ProbeAsync = static async (serviceProvider, cancellationToken) =>
             {
                 var lifecycleQueryPort = serviceProvider.GetRequiredService<IServiceLifecycleQueryPort>();
@@ -33,8 +48,8 @@ public static class GAgentServiceCapabilityHostBuilderExtensions
                 var scopeWorkflowQueryPort = serviceProvider.GetRequiredService<IScopeWorkflowQueryPort>();
                 _ = await scopeWorkflowQueryPort.ListAsync("health", cancellationToken);
 
-                var scopeScriptQueryPort = serviceProvider.GetRequiredService<IScopeScriptQueryPort>();
-                _ = await scopeScriptQueryPort.ListAsync("health", cancellationToken);
+                if (serviceProvider.GetService<IScopeScriptQueryPort>() is { } scopeScriptQueryPort)
+                    _ = await scopeScriptQueryPort.ListAsync("health", cancellationToken);
 
                 return AevatarHealthContributorResult.Healthy("GAgent service capability is ready.");
             },

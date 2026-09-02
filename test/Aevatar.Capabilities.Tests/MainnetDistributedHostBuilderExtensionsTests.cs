@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
@@ -30,15 +31,20 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var kafkaServers = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaBootstrapServers", "localhost:19092");
         using var topicName = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaTopicName", "mainnet-kafka-provider-events");
         using var consumerGroup = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaConsumerGroup", "mainnet-kafka-provider-group");
+        using var receiverCapacity = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaReceiverBufferCapacity", "96");
+        using var receiverHighWatermark = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaReceiverBufferHighWatermark", "72");
+        using var receiverLowWatermark = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaReceiverBufferLowWatermark", "36");
         using var queueCount = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCount", "6");
         using var queueCacheSize = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCacheSize", "512");
+        using var keyringFile = TemporaryKeyringFile.Create();
+        using var keyringPath = new EnvironmentVariableScope("AEVATAR_ActorRuntime__SecretStoreKeyringPath", keyringFile.Path);
 
         var builder = CreateBuilder(new Dictionary<string, string?>
         {
             ["ActorRuntime:Provider"] = "Orleans",
         });
 
-        builder.AddAevatarDefaultHost();
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
         builder.AddMainnetDistributedOrleansHost();
 
         using var app = builder.Build();
@@ -49,6 +55,9 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         runtimeOptions.QueueCacheSize.Should().Be(512);
         transportOptions.TopicPartitionCount.Should().Be(6);
         transportOptions.TopicName.Should().Be("mainnet-kafka-provider-events");
+        transportOptions.ReceiverBufferCapacity.Should().Be(96);
+        transportOptions.ReceiverBufferHighWatermark.Should().Be(72);
+        transportOptions.ReceiverBufferLowWatermark.Should().Be(36);
         app.Services.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaProviderQueueAdapterFactory>();
         app.Services.GetRequiredService<KafkaProviderProducer>().Should().NotBeNull();
     }
@@ -80,7 +89,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var bare = new EnvironmentVariableScope(
             "Projection__Policies__Environment", "Development");
 
-        builder.AddAevatarDefaultHost();
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
         builder.AddMainnetDistributedOrleansHost();
 
         // AEVATAR_ prefixed env vars should win.
@@ -102,13 +111,15 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var streamBackend = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansStreamBackend", "KafkaProvider");
         using var persistence = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansPersistenceBackend", "Garnet");
         using var garnetConn = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansGarnetConnectionString", "127.0.0.1:6379");
+        using var keyringFile = TemporaryKeyringFile.Create();
+        using var keyringPath = new EnvironmentVariableScope("AEVATAR_ActorRuntime__SecretStoreKeyringPath", keyringFile.Path);
 
         var builder = CreateBuilder(new Dictionary<string, string?>
         {
             ["ActorRuntime:Provider"] = "Orleans",
         });
 
-        builder.AddAevatarDefaultHost();
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
         builder.AddMainnetDistributedOrleansHost();
 
         using var app = builder.Build();
@@ -140,7 +151,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
             ["ActorRuntime:Provider"] = "Orleans",
         });
 
-        builder.AddAevatarDefaultHost();
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
         builder.AddMainnetDistributedOrleansHost();
 
         using var app = builder.Build();
@@ -176,5 +187,41 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         }
 
         public void Dispose() => Environment.SetEnvironmentVariable(_name, _previous);
+    }
+
+    private sealed class TemporaryKeyringFile : IDisposable
+    {
+        private TemporaryKeyringFile(string path)
+        {
+            Path = path;
+        }
+
+        public string Path { get; }
+
+        public static TemporaryKeyringFile Create()
+        {
+            var path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"aevatar-secret-keyring-{Guid.NewGuid():N}.json");
+            File.WriteAllText(
+                path,
+                """
+                {
+                  "activeKeyId": "key-1",
+                  "keys": {
+                    "key-1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+                  },
+                  "fingerprintKey": "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA="
+                }
+                """,
+                Encoding.UTF8);
+            return new TemporaryKeyringFile(path);
+        }
+
+        public void Dispose()
+        {
+            if (File.Exists(Path))
+                File.Delete(Path);
+        }
     }
 }

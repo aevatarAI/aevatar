@@ -29,14 +29,19 @@ public sealed class ChatCompletionsCommandFacade(
     ILlmSessionRunObservationService observationService,
     ILogger<ChatCompletionsCommandFacade> logger,
     TimeSpan? observationTimeout = null,
-    IOptions<ResponsesIngressOptions>? ingressOptions = null) : IChatCompletionsCommandFacade
+    IOptions<ResponsesIngressOptions>? ingressOptions = null,
+    IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+    ILlmRunExecutor? llmRunExecutor = null) : IChatCompletionsCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
-    private readonly TimeSpan _observationTimeout = observationTimeout ?? DefaultObservationTimeout;
+    private readonly TimeSpan _observationTimeout =
+        observationTimeout ?? ingressOptions?.Value?.ObservationTimeout ?? DefaultObservationTimeout;
 
     // Default model applied when a direct caller omits `model`; null preserves the
     // "model is required" contract (see ResponsesIngressOptions).
     private readonly string? _defaultIngressModel = ingressOptions?.Value?.NormalizedDefaultModel;
+    private readonly bool _offActorLlmRunExecutorEnabled =
+        ingressOptions?.Value?.OffActorLlmRunExecutorEnabled == true && llmRunExecutor is not null;
     public async Task<ChatCompletionsCreateCommandResult> CreateAsync(
         ChatCompletionsCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -62,8 +67,15 @@ public sealed class ChatCompletionsCommandFacade(
                 callerScopeResult.Error.Code,
                 callerScopeResult.Error.Message);
 
+        // Single preferred-model source: an explicit caller model wins (standard OpenAI
+        // semantics); otherwise the account's UserConfig preference; otherwise the route
+        // policy / deployment default. See IngressModelPreference.
+        var explicitCallerModel = IngressModelPreference.Normalize(request.Model);
+        var ownerControl = await TryLoadOwnerControlAsync(callerScopeResult.Scope!.ScopeId, ct);
+
         var trigger = ParseSkillInvocationTrigger(BuildRouteContentHint(normalized));
-        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, trigger, ct);
+        var routedModelResult = await ResolveRouteTargetAsync(
+            normalized, callerScopeResult.Scope!, explicitCallerModel, ownerControl, trigger, ct);
         if (routedModelResult.Error is not null)
             return ChatCompletionsCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -83,6 +95,7 @@ public sealed class ChatCompletionsCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
+            ownerControl,
             trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
@@ -112,12 +125,6 @@ public sealed class ChatCompletionsCommandFacade(
             var observed = await ObserveRunAsync(plan, onObservedDelta, ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ResponsesStreamCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -143,7 +150,6 @@ public sealed class ChatCompletionsCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ResponsesStreamCommandResult.FromError(499, "client_closed_request", "Client closed request.");
         }
         catch (Exception ex)
@@ -206,12 +212,42 @@ public sealed class ChatCompletionsCommandFacade(
         }
     }
 
+    // Account UserConfig is the single "preferred model" source for ingress. Reads are
+    // swallow-and-logged (mirroring OwnerLlmConfigApplier) so a flaky projection never fails a
+    // request — resolution then falls through to the route policy / deployment default.
+    private async Task<LLMControlContext?> TryLoadOwnerControlAsync(string scopeId, CancellationToken ct)
+    {
+        if (ownerLlmConfigSource is null || string.IsNullOrWhiteSpace(scopeId))
+            return null;
+
+        try
+        {
+            var config = await ownerLlmConfigSource.GetForScopeAsync(scopeId, ct).ConfigureAwait(false);
+            return config.ApplyTo(LLMControlContext.Empty);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (LLMSelectionRepairRequiredException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to load owner LLM config for scope {ScopeId}; using request/deployment default model", scopeId);
+            return null;
+        }
+    }
+
     // Refactor (iter344/cluster-001):
     //   Old pattern: Host queried route policy and rewrote the model inline before opening a session.
     //   New principle: Application resolves the command target and returns either a routed model/action or a typed rejection.
     private async Task<RouteTargetResult> ResolveRouteTargetAsync(
         NormalizedChatCompletionsCommand normalized,
         ResponsesCallerScope callerScope,
+        string? explicitCallerModel,
+        LLMControlContext? ownerControl,
         SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
@@ -235,9 +271,14 @@ public sealed class ChatCompletionsCommandFacade(
         }
 
         var action = routeDecision.Action.Clone();
-        var routedModel = !string.IsNullOrWhiteSpace(action.ForwardToModel?.ModelName)
-            ? action.ForwardToModel.ModelName.Trim()
-            : normalized.Model;
+        // Preferred-model precedence: explicit caller > account UserConfig > route-policy
+        // ForwardToModel > deployment default. The route policy keeps Reject (above) and its
+        // tool-set selection on `action`; it can no longer silently swap an explicit/preferred model.
+        var routedModel = IngressModelPreference.ResolveModel(
+            explicitCallerModel,
+            ownerControl?.ModelOverride,
+            action.ForwardToModel?.ModelName,
+            normalized.Model);
         if (action.ForwardToModel is null)
             action.ForwardToModel = new ForwardToModel();
 
@@ -280,6 +321,7 @@ public sealed class ChatCompletionsCommandFacade(
         ResponsesCallerScope callerScope,
         string routedModel,
         ChatRouteAction routeAction,
+        LLMControlContext? ownerControl,
         SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult session,
@@ -296,7 +338,8 @@ public sealed class ChatCompletionsCommandFacade(
             toolProviderContext,
             toolPlan.AdditionalToolProviders,
             ct: ct);
-        var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
+        var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(
+            routedModel, ownerControl?.NyxIdRoutePreference, bearerToken, ct);
         var toolContext = toolProviderContext.ToolContext with
         {
             Routing = toolProviderContext.ToolContext.Routing with
@@ -320,7 +363,8 @@ public sealed class ChatCompletionsCommandFacade(
             llmRequest,
             toolClassification,
             toolPlan.ToolChoiceHintPlan,
-            createdAt));
+            createdAt,
+            toolPlan.ResolvedToolSetName));
     }
 
     // Refactor (iter344/cluster-001):
@@ -335,12 +379,6 @@ public sealed class ChatCompletionsCommandFacade(
             var observed = await ObserveRunAsync(plan, null, ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ChatCompletionsCreateCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -374,7 +412,6 @@ public sealed class ChatCompletionsCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ChatCompletionsCreateCommandResult.FromError(499, "client_closed_request", "Client closed request.");
         }
         catch (Exception ex)
@@ -394,7 +431,9 @@ public sealed class ChatCompletionsCommandFacade(
                 plan.Session.ActorId,
                 plan.Session.ResponseId,
                 $"{plan.Session.ResponseId}:llm-run",
-                token => DispatchRunAsync(plan, token),
+                token => _offActorLlmRunExecutorEnabled
+                    ? StartOffActorRunAsync(plan, token)
+                    : DispatchRunAsync(plan, token),
                 _observationTimeout),
             onObservedDelta,
             ct);
@@ -404,6 +443,7 @@ public sealed class ChatCompletionsCommandFacade(
     //   New principle: Application resolves model-route command context behind the route resolver port.
     private async Task<(string EffectiveModel, string? ResolvedRouteValue)> ResolveModelRouteAsync(
         string routedModel,
+        string? accountPreferredRoute,
         string bearerToken,
         CancellationToken ct)
     {
@@ -417,6 +457,12 @@ public sealed class ChatCompletionsCommandFacade(
                 .ConfigureAwait(false);
             if (resolvedRouteValue is not null)
                 effectiveModel = modelRoute.Model;
+        }
+        else
+        {
+            // Bare model (no vendor slug): honor the account's PreferredLlmRoute so the account
+            // preference is fully expressed even when its model carries no slug.
+            resolvedRouteValue = IngressModelPreference.Normalize(accountPreferredRoute);
         }
 
         return (effectiveModel, resolvedRouteValue);
@@ -478,7 +524,7 @@ public sealed class ChatCompletionsCommandFacade(
         new(
             new AgentToolRequestIdentity(responseId, null),
             new AgentToolCredentials(bearerToken, null, null),
-            new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId),
+            new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId, callerScope.OwnerSubject),
             new AgentToolChannelContext(
                 callerScope.OriginKind.ToString(),
                 null,
@@ -558,12 +604,38 @@ public sealed class ChatCompletionsCommandFacade(
             plan.LlmRequest,
             plan.ToolClassification,
             plan.ToolChoiceHintPlan,
-            plan.CreatedAt);
+            plan.CreatedAt,
+            plan.ResolvedToolSetName);
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
             command,
             plan.Session.ResponseId);
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
+    }
+
+    private async Task<DispatchAdmission> StartOffActorRunAsync(
+        ChatCompletionsCreateCommandPlan plan,
+        CancellationToken ct)
+    {
+        var request = BuildExecutorRequest(plan);
+        return await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
+    }
+
+    private static LlmRunExecutorRequest BuildExecutorRequest(ChatCompletionsCreateCommandPlan plan)
+    {
+        var command = BuildRunRequested(
+            plan.Session.ResponseId,
+            plan.LlmRequest,
+            plan.ToolClassification,
+            plan.ToolChoiceHintPlan,
+            plan.CreatedAt,
+            plan.ResolvedToolSetName);
+        return new LlmRunExecutorRequest(
+            plan.Session.ActorId,
+            plan.Session.ResponseId,
+            command.RunId,
+            command,
+            plan.LlmRequest.ToolContext?.Channel.Platform);
     }
 
     // Refactor (iter344/cluster-001):
@@ -574,7 +646,8 @@ public sealed class ChatCompletionsCommandFacade(
         LLMRequest request,
         ResponsesToolClassification toolClassification,
         ResponsesToolChoiceHintPlan toolChoiceHintPlan,
-        DateTimeOffset requestedAt)
+        DateTimeOffset requestedAt,
+        string toolSetName)
     {
         var command = new LlmRunRequested
         {
@@ -593,7 +666,8 @@ public sealed class ChatCompletionsCommandFacade(
         if (request.MaxTokens is not null)
             command.MaxTokens = request.MaxTokens.Value;
         command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
-        command.ToolSelection = ToToolSelection(toolClassification, toolChoiceHintPlan);
+        command.ToolSelection = ResponsesRuntimeToolSelectionFactory.Create(
+            toolClassification, toolChoiceHintPlan, toolSetName);
         return command;
     }
 
@@ -620,34 +694,6 @@ public sealed class ChatCompletionsCommandFacade(
     // Refactor (iter355/issue1438-first):
     //   Old pattern: Chat Completions LlmRunRequested persisted tool schemas and hints as JSON strings.
     //   New principle: typed Struct fields carry new writes; JSON strings remain legacy fallback.
-    private static LlmSessionRuntimeToolSelection ToToolSelection(
-        ResponsesToolClassification classification,
-        ResponsesToolChoiceHintPlan toolChoiceHintPlan)
-    {
-        var selection = new LlmSessionRuntimeToolSelection
-        {
-            SubstitutedToolNames = { classification.SubstitutedToolNames },
-            AdditiveToolNames = { classification.AdditiveToolNames },
-        };
-        if (!toolChoiceHintPlan.IsEmpty)
-        {
-            selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
-            selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
-            selection.ToolChoiceHintArguments = toolChoiceHintPlan.PrefilledArgumentsStruct();
-        }
-
-        selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
-            new LlmSessionRuntimeToolDeclaration
-            {
-                ToolName = tool.Name,
-                Description = tool.Description,
-                ParametersJson = tool.ParametersJson,
-                Parameters = ResponsesProtoPayloads.ParseStruct(tool.ParametersJson),
-                SchemaHash = tool.SchemaHash,
-            }));
-        return selection;
-    }
-
     private static int ResolveUpstreamStatusCode(NyxIdUpstreamException ex) =>
         ex.Status switch
         {

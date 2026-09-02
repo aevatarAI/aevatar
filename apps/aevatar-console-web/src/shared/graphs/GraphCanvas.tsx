@@ -1,6 +1,6 @@
 import {
-  ApiOutlined,
   ApartmentOutlined,
+  ApiOutlined,
   AppstoreOutlined,
   CodeOutlined,
   DatabaseOutlined,
@@ -9,25 +9,27 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import {
+  applyNodeChanges,
   Background,
   BackgroundVariant,
   Controls,
+  type Edge,
+  type FitViewOptions,
   Handle,
   MiniMap,
-  Position,
-  ReactFlow,
-  applyNodeChanges,
-  useEdgesState,
-  useNodesState,
-  useStore,
-  type Edge,
   type Node,
   type NodeChange,
   type NodeProps,
+  Position,
+  ReactFlow,
   type ReactFlowInstance,
+  useEdgesState,
+  useNodesState,
+  useStore,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo } from 'react';
+import { t } from '@/shared/i18n/messages';
 import {
   getStudioGraphCategory,
   type StudioGraphNodeData,
@@ -70,6 +72,243 @@ const selfManagedSelectionCss = `
   outline: none !important;
 }
 `;
+const STUDIO_FIT_VIEW_OPTIONS = {
+  duration: 0,
+  maxZoom: 1.06,
+  minZoom: 0.34,
+  padding: 0.18,
+} as const satisfies FitViewOptions;
+const STUDIO_CANVAS_MIN_ZOOM = 0.28;
+const STUDIO_CANVAS_MAX_ZOOM = 1.55;
+const STUDIO_FIT_VIEW_ATTEMPT_COUNT = 3;
+const STUDIO_NODE_WIDTH = 268;
+const STUDIO_NODE_COMPACT_WIDTH = 244;
+const STUDIO_NODE_COMPACT_ZOOM = 0.48;
+const SELECTED_EDGE_COLOR = '#1677ff';
+const SELECTED_EDGE_FILTER = 'drop-shadow(0 0 3px rgba(22, 119, 255, 0.55))';
+const SELECTED_EDGE_STROKE_WIDTH = 4;
+const studioCanvasCss = `
+.studio-canvas {
+  background: #f7f9fc;
+}
+
+.studio-canvas .react-flow__pane {
+  cursor: grab;
+}
+
+.studio-canvas .react-flow__pane.dragging {
+  cursor: grabbing;
+}
+
+.studio-canvas .react-flow__node {
+  border-radius: 8px;
+}
+
+.studio-canvas .react-flow__controls {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.11);
+  overflow: hidden;
+}
+
+.studio-canvas .react-flow__controls-button {
+  background: transparent;
+  border-bottom-color: #e7edf4;
+  color: #475569;
+  height: 28px;
+  width: 28px;
+}
+
+.studio-canvas .react-flow__controls-button:hover,
+.studio-canvas .react-flow__controls-button:focus-visible {
+  background: #eef3f8;
+  color: #0f172a;
+}
+
+.studio-canvas .react-flow__minimap {
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.10);
+  opacity: 0.72;
+  transition: opacity 140ms ease, box-shadow 140ms ease;
+}
+
+.studio-canvas .react-flow__minimap:hover,
+.studio-canvas .react-flow__minimap:focus-within {
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+  opacity: 1;
+}
+
+.studio-workflow-node {
+  --studio-node-accent: #3b82f6;
+  background: #ffffff;
+  border: 1px solid #dbe3ee;
+  border-left: 4px solid var(--studio-node-accent);
+  border-radius: 8px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.10);
+  color: #0f172a;
+  overflow: hidden;
+  position: relative;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.studio-workflow-node:hover {
+  border-color: color-mix(in srgb, var(--studio-node-accent) 45%, #dbe3ee);
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.14);
+  transform: translateY(-1px);
+}
+
+.studio-workflow-node--selected {
+  border-color: var(--studio-node-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--studio-node-accent) 22%, transparent), 0 20px 42px rgba(15, 23, 42, 0.16);
+}
+
+.studio-workflow-node--execution-focused:not(.studio-workflow-node--selected) {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18), 0 18px 36px rgba(15, 23, 42, 0.14);
+}
+
+.studio-workflow-node__header {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px 10px;
+}
+
+.studio-workflow-node__icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--studio-node-accent) 13%, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--studio-node-accent) 24%, #ffffff);
+  border-radius: 7px;
+  color: var(--studio-node-accent);
+  display: flex;
+  flex: 0 0 auto;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.studio-workflow-node__title-group {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.studio-workflow-node__title {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-workflow-node__subtitle-row {
+  align-items: center;
+  color: #64748b;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 6px;
+  line-height: 16px;
+  margin-top: 3px;
+  min-width: 0;
+}
+
+.studio-workflow-node__type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-workflow-node__branch-count {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  color: #475569;
+  flex: 0 0 auto;
+  padding: 1px 6px;
+}
+
+.studio-workflow-node__status {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 6px 8px;
+  text-transform: uppercase;
+}
+
+.studio-workflow-node__body {
+  border-top: 1px solid #edf2f7;
+  color: #475569;
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 17px;
+  padding: 10px 14px 12px;
+}
+
+.studio-workflow-node__meta {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.studio-workflow-node__meta-label {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.studio-workflow-node__meta-value,
+.studio-workflow-node__summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-workflow-node__meta-value {
+  color: #334155;
+  font-weight: 650;
+}
+
+.studio-workflow-node__summary {
+  color: #64748b;
+}
+
+.studio-workflow-node__handle {
+  background: var(--studio-node-accent) !important;
+  border: 2px solid #ffffff !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--studio-node-accent) 55%, #ffffff);
+  height: 13px !important;
+  width: 13px !important;
+}
+
+.studio-workflow-node--compact .studio-workflow-node__header {
+  gap: 8px;
+  padding: 10px 12px 8px;
+}
+
+.studio-workflow-node--compact .studio-workflow-node__icon {
+  height: 30px;
+  width: 30px;
+}
+
+.studio-workflow-node--compact .studio-workflow-node__body {
+  font-size: 11px;
+  padding: 9px 12px 10px;
+}
+
+.studio-workflow-node--compact .studio-workflow-node__title {
+  font-size: 13px;
+}
+`;
 
 const STUDIO_NODE_ICON_BY_CATEGORY: Record<
   string,
@@ -91,10 +330,11 @@ function StudioWorkflowNode({
 }: NodeProps<Node<StudioGraphNodeData>>) {
   const category = getStudioGraphCategory(data.stepType);
   const Icon =
-    STUDIO_NODE_ICON_BY_CATEGORY[category.key] ?? STUDIO_NODE_ICON_BY_CATEGORY.custom;
+    STUDIO_NODE_ICON_BY_CATEGORY[category.key] ??
+    STUDIO_NODE_ICON_BY_CATEGORY.custom;
   const zoom = useStore((state) => state.transform[2]);
-  const compact = zoom < 0.72;
-  const width = compact ? 168 : 244;
+  const compact = zoom < STUDIO_NODE_COMPACT_ZOOM;
+  const width = compact ? STUDIO_NODE_COMPACT_WIDTH : STUDIO_NODE_WIDTH;
   const executionStatus = data.executionStatus;
   const executionFocused = Boolean(data.executionFocused);
   const statusColor =
@@ -107,150 +347,101 @@ function StudioWorkflowNode({
           : executionStatus === 'active'
             ? '#2563EB'
             : '#94A3B8';
+  const statusBackground =
+    executionStatus === 'completed'
+      ? '#DCFCE7'
+      : executionStatus === 'failed'
+        ? '#FEE2E2'
+        : executionStatus === 'waiting'
+          ? '#FEF3C7'
+          : '#DBEAFE';
+  const branchCountLabel =
+    data.branchCount === 1
+      ? t('teamMemberWorkflowStudio.graph.branchCount.one', '1 branch')
+      : t(
+          'teamMemberWorkflowStudio.graph.branchCount.other',
+          '{count} branches',
+          { count: data.branchCount },
+        );
 
   return (
     <div
-      style={{
-        width,
-        borderRadius: 24,
-        overflow: 'hidden',
-        border: `1px solid ${selected ? category.color : '#E8E2D9'}`,
-        background: '#FFFFFF',
-        boxShadow: selected
-          ? `0 0 0 2px ${category.color}22, 0 22px 48px rgba(17, 24, 39, 0.14)`
-          : executionFocused
-            ? '0 0 0 2px rgba(37, 99, 235, 0.18), 0 22px 48px rgba(17, 24, 39, 0.14)'
-            : '0 18px 42px rgba(17, 24, 39, 0.10)',
-        transition: 'box-shadow 120ms ease, border-color 120ms ease',
-      }}
+      className={[
+        'studio-workflow-node',
+        compact ? 'studio-workflow-node--compact' : '',
+        selected ? 'studio-workflow-node--selected' : '',
+        executionFocused ? 'studio-workflow-node--execution-focused' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      style={
+        {
+          width,
+          '--studio-node-accent': category.color,
+        } as React.CSSProperties
+      }
     >
       <Handle
+        className="studio-workflow-node__handle studio-workflow-node__handle--target"
         type="target"
         position={Position.Left}
-        style={{
-          background: category.color,
-          border: 'none',
-          height: 10,
-          width: 10,
-        }}
       />
-      <div
-        style={{
-          alignItems: 'center',
-          borderBottom: '1px solid #F1ECE5',
-          display: 'flex',
-          gap: 10,
-          padding: compact ? '10px 12px' : '12px 14px',
-        }}
-      >
-        <div
-          style={{
-            alignItems: 'center',
-            background: `${category.color}18`,
-            borderRadius: 14,
-            color: category.color,
-            display: 'flex',
-            flexShrink: 0,
-            height: compact ? 28 : 32,
-            justifyContent: 'center',
-            width: compact ? 28 : 32,
-          }}
-        >
+      <div className="studio-workflow-node__header">
+        <div className="studio-workflow-node__icon">
           <Icon style={{ fontSize: compact ? 14 : 15 }} />
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              color: '#111827',
-              fontSize: compact ? 12 : 13,
-              fontWeight: 600,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
+        <div className="studio-workflow-node__title-group">
+          <div className="studio-workflow-node__title" title={data.stepId}>
             {data.stepId}
           </div>
-          <div
-            style={{
-              color: '#6B7280',
-              fontSize: 11,
-              lineHeight: 1.4,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {data.subtitle}
+          <div className="studio-workflow-node__subtitle-row">
+            <span className="studio-workflow-node__type" title={data.subtitle}>
+              {data.subtitle}
+            </span>
+            {data.branchCount > 0 ? (
+              <span className="studio-workflow-node__branch-count">
+                {branchCountLabel}
+              </span>
+            ) : null}
           </div>
         </div>
         {executionStatus && executionStatus !== 'idle' ? (
           <span
+            className="studio-workflow-node__status"
             style={{
-              alignItems: 'center',
-              background:
-                executionStatus === 'completed'
-                  ? '#DCFCE7'
-                  : executionStatus === 'failed'
-                    ? '#FEE2E2'
-                    : executionStatus === 'waiting'
-                      ? '#FEF3C7'
-                      : '#DBEAFE',
-              borderRadius: 999,
+              background: statusBackground,
               color: statusColor,
-              display: 'inline-flex',
-              flexShrink: 0,
-              fontSize: 10,
-              fontWeight: 600,
-              letterSpacing: '0.04em',
-              lineHeight: 1,
-              padding: '6px 8px',
-              textTransform: 'uppercase',
             }}
           >
             {executionStatus}
           </span>
         ) : null}
       </div>
-      <div
-        style={{
-          color: '#6B7280',
-          fontSize: 11,
-          lineHeight: 1.55,
-          padding: compact ? '10px 12px' : '12px 14px',
-        }}
-      >
+      <div className="studio-workflow-node__body">
         {data.targetRole ? (
-          <div
-            style={{
-              marginBottom: compact ? 4 : 6,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            <span style={{ color: 'var(--ant-color-text-tertiary)' }}>role:</span> {data.targetRole}
+          <div className="studio-workflow-node__meta">
+            <span className="studio-workflow-node__meta-label">
+              {t('teamMemberWorkflowStudio.graph.role', 'Role')}
+            </span>
+            <span
+              className="studio-workflow-node__meta-value"
+              title={data.targetRole}
+            >
+              {data.targetRole}
+            </span>
           </div>
         ) : null}
         <div
-          style={{
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
+          className="studio-workflow-node__summary"
+          title={data.parametersSummary}
         >
           {data.parametersSummary}
         </div>
       </div>
       <Handle
+        className="studio-workflow-node__handle studio-workflow-node__handle--source"
         type="source"
         position={Position.Right}
-        style={{
-          background: category.color,
-          border: 'none',
-          height: 10,
-          width: 10,
-        }}
       />
     </div>
   );
@@ -275,20 +466,11 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   onDeleteEdges,
   onDeleteNodes,
 }) => {
+  const isStudioVariant = variant === 'studio';
   const [localNodes, setLocalNodes] = useNodesState(nodes);
   const [localEdges, setLocalEdges] = useEdgesState(edges);
   const [flowInstance, setFlowInstance] =
     React.useState<ReactFlowInstance | null>(null);
-  const isStudioVariant = variant === 'studio';
-  const studioFitViewOptions = React.useMemo(
-    () => ({
-      padding: 0.2,
-      minZoom: 0.14,
-      maxZoom: 0.92,
-      duration: 0,
-    }),
-    [],
-  );
 
   useEffect(() => {
     setLocalNodes(nodes);
@@ -298,42 +480,63 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
     setLocalEdges(edges);
   }, [edges, setLocalEdges]);
 
-  useEffect(() => {
-    if (!autoFitKey || !flowInstance || !isStudioVariant || nodes.length === 0) {
+  useLayoutEffect(() => {
+    if (
+      !autoFitKey ||
+      !flowInstance ||
+      !isStudioVariant ||
+      nodes.length === 0
+    ) {
       return;
     }
 
-    if (typeof window === 'undefined') {
-      flowInstance.fitView(studioFitViewOptions);
-      return;
-    }
+    const readyFlowInstance = flowInstance;
+    const animationFrameIds: number[] = [];
+    const timeoutIds: number[] = [];
+    let cancelled = false;
+    let attemptCount = 0;
 
-    const useAnimationFrame =
-      typeof window.requestAnimationFrame === 'function' &&
-      typeof window.cancelAnimationFrame === 'function';
-    const handle = useAnimationFrame
-      ? window.requestAnimationFrame(() => {
-          flowInstance.fitView(studioFitViewOptions);
-        })
-      : window.setTimeout(() => {
-          flowInstance.fitView(studioFitViewOptions);
-        }, 0);
-
-    return () => {
-      if (useAnimationFrame) {
-        window.cancelAnimationFrame(handle);
+    function applyViewport() {
+      if (cancelled) {
         return;
       }
 
-      window.clearTimeout(handle);
+      void readyFlowInstance.fitView(STUDIO_FIT_VIEW_OPTIONS);
+      attemptCount += 1;
+
+      if (attemptCount < STUDIO_FIT_VIEW_ATTEMPT_COUNT) {
+        scheduleFit();
+      }
+    }
+
+    function scheduleFit() {
+      if (typeof window === 'undefined') {
+        applyViewport();
+        return;
+      }
+
+      if (typeof window.requestAnimationFrame === 'function') {
+        const frameId = window.requestAnimationFrame(applyViewport);
+        animationFrameIds.push(frameId);
+        return;
+      }
+
+      const timeoutId = window.setTimeout(applyViewport, 16);
+      timeoutIds.push(timeoutId);
+    }
+
+    scheduleFit();
+
+    return () => {
+      cancelled = true;
+      animationFrameIds.forEach((frameId) => {
+        window.cancelAnimationFrame(frameId);
+      });
+      timeoutIds.forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
     };
-  }, [
-    autoFitKey,
-    flowInstance,
-    isStudioVariant,
-    nodes.length,
-    studioFitViewOptions,
-  ]);
+  }, [autoFitKey, flowInstance, isStudioVariant, nodes.length]);
 
   const decoratedNodes = useMemo(
     () =>
@@ -380,12 +583,22 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         return {
           ...edge,
           selected: isSelected,
+          markerEnd:
+            isSelected && edge.markerEnd && typeof edge.markerEnd === 'object'
+              ? {
+                  ...edge.markerEnd,
+                  color: SELECTED_EDGE_COLOR,
+                }
+              : edge.markerEnd,
           style: {
             ...edge.style,
+            filter: isSelected ? SELECTED_EDGE_FILTER : edge.style?.filter,
             stroke: isSelected
               ? 'var(--ant-color-primary)'
               : edge.style?.stroke,
-            strokeWidth: isSelected ? 3 : (edge.style?.strokeWidth ?? 1.5),
+            strokeWidth: isSelected
+              ? SELECTED_EDGE_STROKE_WIDTH
+              : (edge.style?.strokeWidth ?? 1.5),
           },
           labelStyle: {
             ...edge.labelStyle,
@@ -405,8 +618,9 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   return (
     <div
       style={{
-        border: isStudioVariant ? '1px solid #E8E2D9' : '1px solid #f0f0f0',
-        borderRadius: isStudioVariant ? 24 : 8,
+        background: isStudioVariant ? '#f7f9fc' : undefined,
+        border: isStudioVariant ? '1px solid #d8e0ea' : '1px solid #f0f0f0',
+        borderRadius: 8,
         height,
         minHeight: 0,
         overflow: 'hidden',
@@ -414,17 +628,17 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         width: '100%',
       }}
     >
-      {!isStudioVariant ? <style>{selfManagedSelectionCss}</style> : null}
+      <style>
+        {isStudioVariant ? studioCanvasCss : selfManagedSelectionCss}
+      </style>
       <ReactFlow
         onInit={setFlowInstance}
         nodes={decoratedNodes}
         edges={decoratedEdges}
         fitView
-        fitViewOptions={
-          isStudioVariant ? studioFitViewOptions : undefined
-        }
-        minZoom={isStudioVariant ? 0.14 : undefined}
-        maxZoom={isStudioVariant ? 1.6 : undefined}
+        fitViewOptions={isStudioVariant ? STUDIO_FIT_VIEW_OPTIONS : undefined}
+        minZoom={isStudioVariant ? STUDIO_CANVAS_MIN_ZOOM : undefined}
+        maxZoom={isStudioVariant ? STUDIO_CANVAS_MAX_ZOOM : undefined}
         nodeTypes={
           isStudioVariant
             ? {
@@ -507,31 +721,34 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
             : undefined
         }
         className={isStudioVariant ? 'studio-canvas' : undefined}
+        proOptions={isStudioVariant ? { hideAttribution: true } : undefined}
       >
         <Background
-          color={isStudioVariant ? '#D8D2C8' : undefined}
-          variant={isStudioVariant ? BackgroundVariant.Dots : BackgroundVariant.Lines}
-          gap={isStudioVariant ? 24 : 16}
+          color={isStudioVariant ? '#cbd5e1' : undefined}
+          variant={
+            isStudioVariant ? BackgroundVariant.Dots : BackgroundVariant.Lines
+          }
+          gap={isStudioVariant ? 28 : 16}
           size={isStudioVariant ? 1 : 1}
         />
         {isStudioVariant ? (
           <>
             <MiniMap
-              position="bottom-left"
+              position="bottom-right"
               zoomable
               pannable
               style={{
-                background: 'rgba(248, 247, 244, 0.98)',
-                border: '1px solid #E8E2D9',
-                borderRadius: 18,
-                height: 108,
-                marginBottom: 24 + bottomInset,
-                marginLeft: 16,
-                width: 164,
+                background: 'rgba(255, 255, 255, 0.90)',
+                border: '1px solid #d8e0ea',
+                borderRadius: 8,
+                height: 82,
+                marginBottom: 18 + bottomInset,
+                marginRight: 16,
+                width: 132,
               }}
-              maskColor="rgba(255, 255, 255, 0.76)"
-              bgColor="rgba(248, 247, 244, 0.98)"
-              nodeBorderRadius={8}
+              maskColor="rgba(241, 245, 249, 0.72)"
+              bgColor="rgba(255, 255, 255, 0.90)"
+              nodeBorderRadius={4}
               nodeColor={(node) => {
                 const data = node.data as StudioGraphNodeData | undefined;
                 return getStudioGraphCategory(data?.stepType || '').color;
@@ -539,8 +756,9 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
             />
             <Controls
               position="bottom-left"
+              showInteractive={false}
               style={{
-                marginBottom: 20 + bottomInset,
+                marginBottom: 18 + bottomInset,
                 marginLeft: 16,
               }}
             />

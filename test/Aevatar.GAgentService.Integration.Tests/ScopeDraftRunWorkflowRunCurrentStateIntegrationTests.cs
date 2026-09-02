@@ -2,6 +2,10 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -15,6 +19,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using FluentAssertions;
@@ -185,6 +190,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
             });
             builder.AddAevatarDefaultHost(options =>
             {
+                options.AllowLocalFileSecretsStore = false;
                 options.ServiceName = "Aevatar.ScopeDraftRunWorkflowActorCurrentState.Tests";
                 options.EnableConnectorBootstrap = false;
                 options.EnableHealthEndpoints = false;
@@ -196,6 +202,13 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
                 options.EnableScriptingCapability = false;
             });
             builder.AddGAgentServiceCapabilityBundle();
+            builder.Services.Configure<WorkflowDefinitionFileSourceOptions>(options =>
+            {
+                options.WorkflowDirectories.Clear();
+                options.WorkflowDirectories.Add(Path.Combine(repoRoot, "workflows"));
+            });
+            builder.Services.AddSingleton<IAuditTrailAppender, AppendedAuditTrail>();
+            builder.Services.AddSingleton<IAuditActorIdentityHasher, StableAuditActorIdentityHasher>();
             builder.Services.AddSingleton<InMemoryGAgentActorStore>();
             builder.Services.AddSingleton<IGAgentActorRegistryCommandPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
             builder.Services.AddSingleton<IGAgentActorRegistryQueryPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
@@ -266,6 +279,26 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
                 scopeId,
                 teamId,
                 $"team '{teamId}' is not configured for the draft-run workflow actor current-state query fixture.");
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(
+                record.AuditId,
+                record.AuditActorId,
+                record.OccurredAt.ToDateTimeOffset()));
+    }
+
+    private sealed class StableAuditActorIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) =>
+            new($"hashed:{canonicalActorKey}", "kid-test");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) =>
+            auditActorId == $"hashed:{canonicalActorKey}" && identityKeyId == "kid-test";
     }
 
     private static class DraftRunProjectionActivationServiceCollectionExtensions

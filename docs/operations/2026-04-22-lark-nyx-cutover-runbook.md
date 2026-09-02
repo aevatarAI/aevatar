@@ -22,7 +22,13 @@ Cut production Lark webhook ingress over to `Lark -> NyxID -> Aevatar` and remov
 - Nyx relay JWT validation is enabled in Aevatar.
 - Lark turn replies already go through Nyx `channel-relay/reply`.
 - Lark bot provisioning is done with:
-  - `channel_registrations action=register_lark_via_nyx ...`
+  - `channel_registrations action=register_channel_via_nyx platform=lark ...`
+
+## Canonical Console
+
+- `/channels` is the canonical onboarding and recovery surface. `/admin#/channels` embeds it and must not maintain a second registration workflow.
+- App ID, App Secret, and Verification Token are required for Lark. Encrypt Key is optional. These secrets are request-only and must not appear in registration queries, read models, logs, or browser responses.
+- An accepted provisioning request is not proof that Lark ingress works. Treat `pending_webhook` as incomplete until a verified inbound message is received and the registration becomes `active`.
 
 ## Provisioning Output
 
@@ -39,19 +45,30 @@ Operationally:
 
 - `relay_callback_url` is Aevatar's Nyx relay ingress.
 - `webhook_url` is the Nyx Lark webhook URL that must be configured in the Lark Developer Console.
+- Use the persisted `webhook_url` returned by the registration query exactly as shown. `callback_url` has a separate meaning and must not be substituted or derived.
 
 ## Cutover Steps
 
 1. Complete the preflight wipe/greenfield check for `channel-bot-registration-store`.
 2. Deploy Aevatar with the Nyx relay ingress and reply path already live.
-3. Provision or verify the Lark bot through the Nyx-backed registration flow.
-4. In the Lark Developer Console, change the event callback URL to the returned Nyx `webhook_url`.
-   - Enable `im.message.receive_v1`
-   - Enable `card.action.trigger`
-5. Observe:
+3. Provision or inspect the Lark bot in `/channels`.
+4. While the registration is `pending_webhook`, complete every external action in the Lark Developer Console manually:
+   - Paste the exact `webhook_url` into Event Subscriptions as the Request URL.
+   - Ensure the Verification Token and optional Encrypt Key match the values used during provisioning.
+   - Import the permission JSON shown by `/channels`.
+   - Enable `im.message.receive_v1`; enable `card.action.trigger` when interactive approvals are required.
+   - Create, publish, and obtain approval for the app version.
+5. Send a test message to the bot and refresh `/channels` until the registration becomes `active`. Only a verified inbound message plus `active` proves activation.
+6. Observe:
    - Nyx -> Aevatar relay callback success
    - Aevatar -> Nyx `channel-relay/reply` success
    - no direct Aevatar Lark callback route is registered
+
+Aevatar and `nyxid channel-bot verify` do not configure Event Subscriptions, permissions, or publication in the Lark Developer Console. Operators must complete and verify those steps explicitly.
+
+## Replacement Recovery
+
+Use **Replace onboarding** only when the existing registration cannot be recovered. The console first deletes the current registration and waits for that DELETE to succeed, then starts a blank registration flow. Replacement changes both `nyx_channel_bot_id` and `webhook_url`; repeat the Lark Developer Console steps with the new Request URL. If deletion or provisioning fails, stop and keep the existing management view—do not assume the old or new registration is active.
 
 ## Backfill Notes
 
@@ -60,6 +77,8 @@ Operationally:
 ## Expected Runtime Behavior
 
 - New Lark provisioning goes through Nyx only.
+- `accepted`, `pending_webhook`, and `active` are distinct states; no accepted response or locally completed checklist is promoted to `active`.
+- Registration queries expose the committed `webhook_url` needed for recovery without exposing Lark secrets.
 - `POST /api/channels/registrations` no longer accepts direct Lark registrations.
 - `channel_registrations action=register` no longer accepts `platform=lark`.
 - the direct Aevatar Lark callback path is no longer exposed.

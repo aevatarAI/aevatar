@@ -1,8 +1,10 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.Audit;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -49,6 +51,8 @@ namespace Aevatar.GAgentService.Integration.Tests;
 [Collection(ScopeServiceEndpointCollection.Name)]
 public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestKit
 {
+    private const string RawToken = "eyJhbGciOiJVTklUIn0.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl";
+
     [Fact]
     public async Task ScopeBindingEndpoint_ShouldBindWorkflowBundleToDefaultService()
     {
@@ -58,6 +62,7 @@ public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestK
         {
             implementationKind = "workflow",
             displayName = "Orders App",
+            exposureDesired = true,
             workflow = new
             {
                 workflowYamls = new[]
@@ -77,8 +82,46 @@ public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestK
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ScopeId.Should().Be("scope-a");
         host.ScopeBindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
+        host.ScopeBindingPort.LastRequest.ExposureDesired.Should().BeTrue();
         host.ScopeBindingPort.LastRequest.Workflow.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest.Workflow!.WorkflowYamls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ScopeBindingEndpoint_ShouldAppendEndpointAuditRecord()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Put,
+            $"/api/scopes/scope-a/binding?access_token={RawToken}",
+            new
+            {
+                implementationKind = "scripting",
+                script = new
+                {
+                    scriptId = "script-a",
+                    scriptRevision = "script-rev-1",
+                },
+            },
+            "scope-a");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", RawToken);
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.AuditTrailAppender.Records.Should().HaveCount(2);
+        host.AuditTrailAppender.Records[0].OperationName.Should().Be("scope.binding.upsert.attempted");
+        host.AuditTrailAppender.Records[0].Outcome.Should().Be(AuditOutcome.Accepted);
+        host.AuditTrailAppender.Records[0].ResultSummary.Should().BeEmpty();
+        host.AuditTrailAppender.Records[1].OperationName.Should().Be("scope.binding.upsert");
+        host.AuditTrailAppender.Records[1].Outcome.Should().Be(AuditOutcome.Accepted);
+        host.AuditTrailAppender.Records.Should().OnlyContain(record =>
+            record.Target.Kind == "scope-binding" &&
+            record.Target.Id == "scope-a" &&
+            record.RequestSummary == "PUT /api/scopes/{scopeId}/binding scopeId=scope-a" &&
+            record.CapturePlane == AuditCapturePlane.BoundaryEndpoint);
+        host.AuditTrailAppender.Records.SelectMany(RecordStrings).Should().NotContain(value =>
+            value.Contains(RawToken, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -283,5 +326,33 @@ public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestK
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_SCOPE_BINDING_REQUEST");
         body["message"].Should().Contain("Unsupported implementationKind");
+    }
+
+    private static IEnumerable<string> RecordStrings(AuditRecord record)
+    {
+        yield return record.AuditId;
+        yield return record.ScopeId;
+        yield return record.AuditActorId;
+        yield return record.IdentityKeyId;
+        yield return record.OperationName;
+        yield return record.Target.Kind;
+        yield return record.Target.Id;
+        yield return record.Target.DisplayName;
+        yield return record.Correlation.TraceId;
+        yield return record.Correlation.RequestId;
+        yield return record.Correlation.CommandId;
+        yield return record.Correlation.CallId;
+        yield return record.Correlation.SessionId;
+        yield return record.Correlation.WorkflowRunId;
+        yield return record.Correlation.ApprovalId;
+        yield return record.RequestSummary;
+        yield return record.ResultSummary;
+        yield return record.ErrorCode;
+        yield return record.ErrorSummary;
+        foreach (var annotation in record.Annotations)
+        {
+            yield return annotation.Key;
+            yield return annotation.Value;
+        }
     }
 }

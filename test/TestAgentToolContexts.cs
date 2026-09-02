@@ -20,7 +20,8 @@ internal static class TestAgentToolContexts
             new AgentToolCallerContext(
                 Get(metadata, LLMRequestMetadataKeys.ScopeId) ?? Get(metadata, "scope_id"),
                 Get(metadata, LLMRequestMetadataKeys.OwnerSubject),
-                Get(metadata, LLMRequestMetadataKeys.ResponseId)),
+                Get(metadata, LLMRequestMetadataKeys.ResponseId),
+                Get(metadata, LLMRequestMetadataKeys.OwnerScopeId)),
             new AgentToolChannelContext(
                 Get(metadata, "channel.platform") ?? Get(metadata, "platform"),
                 Get(metadata, "channel.sender_id") ?? Get(metadata, "sender_id") ?? Get(metadata, "lark.open_id"),

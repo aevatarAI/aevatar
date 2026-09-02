@@ -11,6 +11,39 @@ public static class AevatarScopeAccessGuard
     private const string WorkflowScopeClaimType = "workflow.scope_id";
     private const string CanonicalScopeClaimType = "scope_id";
 
+    // 06-19-workflow-run-observatory (C2): the read-only run viewer is a "my runs" surface — scope is
+    // implicit = the caller's own scope_id claim (never a scopeId in the path). This reads the canonical
+    // scope_id claim half of the guard so the data endpoints can pass scopeId into the query service.
+    // Returns false (401) when auth is enabled and the request lacks a single unambiguous scope claim.
+    public static bool TryGetCallerScopeId(HttpContext http, out string scopeId)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        scopeId = string.Empty;
+
+        if (!IsAuthenticationEnabled(http.RequestServices))
+        {
+            // Auth disabled (development only per ResolveAuthenticationEnabled) — no scope claim to read.
+            return false;
+        }
+
+        if (http.User?.Identity?.IsAuthenticated != true)
+            return false;
+
+        var claimedScopeIds = http.User.Claims
+            .Where(static claim =>
+                string.Equals(claim.Type, WorkflowScopeClaimType, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(claim.Type, CanonicalScopeClaimType, StringComparison.OrdinalIgnoreCase))
+            .Select(static claim => claim.Value?.Trim())
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (claimedScopeIds.Count != 1)
+            return false;
+
+        scopeId = claimedScopeIds[0]!;
+        return true;
+    }
+
     public static bool IsAuthenticationEnabled(IServiceProvider services)
     {
         ArgumentNullException.ThrowIfNull(services);

@@ -106,6 +106,7 @@ public class CorrelationIdPropagationTests
             {
                 StateEvent = new StateEvent
                 {
+                    EventId = "committed-event-4",
                     EventData = Google.Protobuf.WellKnownTypes.Any.Pack(new PongEvent { Reply = "committed" }),
                 },
             },
@@ -113,6 +114,7 @@ public class CorrelationIdPropagationTests
 
         var outgoing = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
         outgoing.Route.IsObserverPublication().ShouldBeTrue();
+        outgoing.Id.ShouldBe("committed-event-4");
         outgoing.Runtime!.RouteTargetCount.ShouldBe(0);
         outgoing.Propagation.CorrelationId.ShouldBe("corr-envelope-2");
         outgoing.Propagation.CausationEventId.ShouldBe("inbound-event-4");

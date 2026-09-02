@@ -16,7 +16,7 @@ public static class OrnnSkillAssetPathPolicy
             return (null, new OrnnSkillPublishDiagnostic("invalid_path", "workflow_id must be a path-safe file stem."));
         }
 
-        return ($"assets/{workflowId.Trim()}.yaml", null);
+        return ($"workflows/{workflowId.Trim()}.yaml", null);
     }
 
     public static (string? PackagePath, OrnnSkillPublishDiagnostic? Diagnostic) NormalizeScriptPath(string path) =>

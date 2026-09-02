@@ -39,8 +39,17 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         return await DispatchAsync(actorId, command, CorrelationForService(command.Spec.Identity), ct);
     }
 
-    public async Task<ServiceCommandAcceptedReceipt> UpdateServiceExternalExposureAsync(
-        UpdateServiceExternalExposureCommand command,
+    public async Task<ServiceCommandAcceptedReceipt> ReconcileExternalExposureAsync(
+        ReconcileExternalExposureCommand command,
+        CancellationToken ct = default)
+    {
+        var actorId = await _targetProvisioner.EnsureDefinitionTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
+        return await DispatchAsync(actorId, command, CorrelationForService(command.Identity), ct);
+    }
+
+    public async Task<ServiceCommandAcceptedReceipt> RetireExternalExposureAsync(
+        RetireExternalExposureCommand command,
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureDefinitionTargetAsync(command.Identity, ct);

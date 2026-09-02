@@ -1,0 +1,348 @@
+syntax = "proto3";
+
+package aevatar.workflow;
+
+option csharp_namespace = "Aevatar.Workflow.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+enum ExternalCapabilityExecutionMode {
+  EXTERNAL_CAPABILITY_EXECUTION_MODE_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_EXECUTION_MODE_INTERACTIVE = 1;
+  EXTERNAL_CAPABILITY_EXECUTION_MODE_DURABLE = 2;
+}
+
+enum ExternalCapabilityReadinessStatus {
+  EXTERNAL_CAPABILITY_READINESS_STATUS_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_SELECTION_REQUIRED = 1;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_CONNECTOR_NOT_FOUND = 2;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_SERVICE_REGISTRATION_REQUIRED = 3;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_CREDENTIAL_CONNECTION_REQUIRED = 4;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_SERVICE_ACCESS_DENIED = 5;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_NODE_BINDING_REQUIRED = 6;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_NODE_UNAVAILABLE = 7;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_ENDPOINT_CONTRACT_REQUIRED = 8;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_OPERATION_SELECTION_REQUIRED = 9;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_SOURCE_STALE = 10;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_DURABLE_AUTHORIZATION_UNAVAILABLE = 11;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_CONTRACT_DRIFT = 12;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_READY = 13;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_ADMISSION_REBIND_REQUIRED = 14;
+}
+
+enum ExternalCapabilityRemediationActionKind {
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_SELECT_CAPABILITY = 1;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_CONFIGURE_CONNECTOR = 2;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_REGISTER_SERVICE = 3;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_CONNECT_CREDENTIAL = 4;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_REQUEST_ACCESS = 5;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_BIND_NODE = 6;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_RESTORE_NODE = 7;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_PUBLISH_ENDPOINT_CONTRACT = 8;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_SELECT_OPERATION = 9;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_REFRESH_SOURCE = 10;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_USE_INTERACTIVE_EXECUTION = 11;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_REBIND_WORKFLOW = 12;
+}
+
+enum ExternalCapabilitySourceKind {
+  EXTERNAL_CAPABILITY_SOURCE_KIND_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_SOURCE_KIND_CONNECTOR_CATALOG = 1;
+  EXTERNAL_CAPABILITY_SOURCE_KIND_NYX_ID_USER_SERVICES = 2;
+  EXTERNAL_CAPABILITY_SOURCE_KIND_NYX_ID_OPEN_API = 3;
+  EXTERNAL_CAPABILITY_SOURCE_KIND_DURABLE_AUTHORIZATION_CATALOG = 4;
+  EXTERNAL_CAPABILITY_SOURCE_KIND_NYX_ID_MCP_CONFIG = 5;
+}
+
+enum ExternalCapabilityAuthorizationOwnerKind {
+  EXTERNAL_CAPABILITY_AUTHORIZATION_OWNER_KIND_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_AUTHORIZATION_OWNER_KIND_PERSONAL = 1;
+  EXTERNAL_CAPABILITY_AUTHORIZATION_OWNER_KIND_ORGANIZATION = 2;
+}
+
+message ExternalCapabilityAuthorizationOwner {
+  string authority = 1;
+  ExternalCapabilityAuthorizationOwnerKind owner_kind = 2;
+  string owner_subject = 3;
+}
+
+message HostConnectorCapabilityRef {
+  string connector_capability_ref = 1;
+  string operation_id = 2;
+  string contract_digest = 3;
+}
+
+message NyxIdOperationSelector {
+  reserved 2;
+  reserved "operation_id";
+  string user_service_id = 1;
+  string endpoint_id = 3;
+}
+
+enum NyxIdRequestMethod {
+  NYX_ID_REQUEST_METHOD_UNSPECIFIED = 0;
+  NYX_ID_REQUEST_METHOD_GET = 1;
+  NYX_ID_REQUEST_METHOD_HEAD = 2;
+  NYX_ID_REQUEST_METHOD_OPTIONS = 3;
+  NYX_ID_REQUEST_METHOD_POST = 4;
+  NYX_ID_REQUEST_METHOD_PUT = 5;
+  NYX_ID_REQUEST_METHOD_PATCH = 6;
+  NYX_ID_REQUEST_METHOD_DELETE = 7;
+}
+
+enum NyxIdRequestBodyMode {
+  NYX_ID_REQUEST_BODY_MODE_UNSPECIFIED = 0;
+  NYX_ID_REQUEST_BODY_MODE_NONE = 1;
+  NYX_ID_REQUEST_BODY_MODE_JSON = 2;
+}
+
+enum NyxIdRequestResponseMode {
+  NYX_ID_REQUEST_RESPONSE_MODE_UNSPECIFIED = 0;
+  NYX_ID_REQUEST_RESPONSE_MODE_TEXT = 1;
+  NYX_ID_REQUEST_RESPONSE_MODE_FILE_ARTIFACT = 2;
+}
+
+message NyxIdRequestSelector {
+  string user_service_id = 1;
+  NyxIdRequestMethod method = 2;
+  string path_template = 3;
+  repeated string query_parameters = 4;
+  repeated string header_parameters = 5;
+  NyxIdRequestBodyMode body_mode = 6;
+  NyxIdRequestResponseMode response_mode = 7;
+  bool body_required = 8;
+}
+
+message ExternalWorkflowCapabilitySelector {
+  oneof selector {
+    HostConnectorCapabilityRef host_connector = 1;
+    NyxIdOperationSelector nyx_id_operation = 2;
+    NyxIdRequestSelector nyx_id_request = 3;
+  }
+}
+
+message ExternalToolInvocationSpec {
+  string call_site_id = 1;
+  string tool_name = 2;
+  ExternalWorkflowCapabilitySelector selector = 3;
+}
+
+message NyxIdUserServiceCapabilityRef {
+  reserved 3;
+  reserved "operation_id";
+  string user_service_id = 1;
+  string service_slug_snapshot = 2;
+  string http_method = 4;
+  string path_template = 5;
+  string contract_digest = 6;
+  repeated NyxIdOperationParameterContract parameters = 7;
+  NyxIdOperationRequestBodyContract request_body = 8;
+  NyxIdOperationResponsePolicy response_policy = 9;
+  NyxIdOperationExecutionPolicy execution_policy = 10;
+  string endpoint_id = 11;
+}
+
+message NyxIdUserRequestCapabilityRef {
+  NyxIdRequestSelector request = 1;
+  string service_slug_snapshot = 2;
+  string contract_digest = 3;
+  NyxIdOperationExecutionPolicy execution_policy = 4;
+  string explicit_request_grant_digest = 5;
+}
+
+enum NyxIdOperationRisk {
+  NYX_ID_OPERATION_RISK_UNSPECIFIED = 0;
+  NYX_ID_OPERATION_RISK_READ_ONLY = 1;
+  NYX_ID_OPERATION_RISK_WRITE = 2;
+  NYX_ID_OPERATION_RISK_DESTRUCTIVE = 3;
+}
+
+enum NyxIdOperationApproval {
+  NYX_ID_OPERATION_APPROVAL_UNSPECIFIED = 0;
+  NYX_ID_OPERATION_APPROVAL_NONE = 1;
+  NYX_ID_OPERATION_APPROVAL_REQUIRED = 2;
+}
+
+enum NyxIdOperationEnforcementOwner {
+  NYX_ID_OPERATION_ENFORCEMENT_OWNER_UNSPECIFIED = 0;
+  NYX_ID_OPERATION_ENFORCEMENT_OWNER_AEVATAR = 1;
+  NYX_ID_OPERATION_ENFORCEMENT_OWNER_NYX_ID = 2;
+}
+
+message NyxIdOperationExecutionPolicy {
+  NyxIdOperationRisk risk = 1;
+  NyxIdOperationApproval approval = 2;
+  NyxIdOperationEnforcementOwner enforcement_owner = 3;
+  repeated ExternalCapabilityExecutionMode allowed_execution_modes = 4;
+}
+
+enum NyxIdExplicitRequestGrantorAuthority {
+  NYX_ID_EXPLICIT_REQUEST_GRANTOR_AUTHORITY_UNSPECIFIED = 0;
+  NYX_ID_EXPLICIT_REQUEST_GRANTOR_AUTHORITY_AEVATAR_WORKFLOW_BINDER = 1;
+}
+
+message NyxIdExplicitRequestGrant {
+  string call_site_id = 1;
+  string request_contract_digest = 2;
+  NyxIdExplicitRequestGrantorAuthority grantor_authority = 3;
+  ExternalCapabilityAuthorizationOwnerKind grantor_owner_kind = 4;
+  string grantor_owner_subject = 5;
+  NyxIdOperationRisk risk = 6;
+  repeated ExternalCapabilityExecutionMode allowed_execution_modes = 7;
+  string workflow_id = 8;
+  string revision_id = 9;
+}
+
+message NyxIdExplicitRequestConfirmation {
+  string call_site_id = 1;
+  string request_contract_digest = 2;
+  NyxIdOperationRisk attested_risk = 3;
+  string workflow_id = 4;
+  string revision_id = 5;
+}
+
+enum NyxIdOperationParameterLocation {
+  NYX_ID_OPERATION_PARAMETER_LOCATION_UNSPECIFIED = 0;
+  NYX_ID_OPERATION_PARAMETER_LOCATION_PATH = 1;
+  NYX_ID_OPERATION_PARAMETER_LOCATION_QUERY = 2;
+  NYX_ID_OPERATION_PARAMETER_LOCATION_HEADER = 3;
+}
+
+enum NyxIdOperationValueKind {
+  NYX_ID_OPERATION_VALUE_KIND_UNSPECIFIED = 0;
+  NYX_ID_OPERATION_VALUE_KIND_STRING = 1;
+  NYX_ID_OPERATION_VALUE_KIND_INTEGER = 2;
+  NYX_ID_OPERATION_VALUE_KIND_NUMBER = 3;
+  NYX_ID_OPERATION_VALUE_KIND_BOOLEAN = 4;
+  NYX_ID_OPERATION_VALUE_KIND_OBJECT = 5;
+  NYX_ID_OPERATION_VALUE_KIND_ARRAY = 6;
+}
+
+message NyxIdOperationSchemaProperty {
+  string name = 1;
+  NyxIdOperationSchema schema = 2;
+}
+
+message NyxIdOperationSchema {
+  NyxIdOperationValueKind value_kind = 1;
+  repeated NyxIdOperationSchemaProperty properties = 2;
+  repeated string required_properties = 3;
+  NyxIdOperationSchema items = 4;
+  repeated string allowed_values = 5;
+  bool additional_properties_allowed = 6;
+}
+
+message NyxIdOperationParameterContract {
+  string name = 1;
+  NyxIdOperationParameterLocation location = 2;
+  bool required = 3;
+  NyxIdOperationSchema schema = 4;
+}
+
+message NyxIdOperationRequestBodyContract {
+  bool required = 1;
+  string media_type = 2;
+  NyxIdOperationSchema schema = 3;
+}
+
+message NyxIdOperationResponsePolicy {
+  bool text_allowed = 1;
+  bool file_artifact_allowed = 2;
+  repeated string media_types = 3;
+}
+
+message ExternalWorkflowCapabilityRef {
+  oneof capability {
+    HostConnectorCapabilityRef host_connector = 1;
+    NyxIdUserServiceCapabilityRef nyx_id_user_service = 2;
+    NyxIdUserRequestCapabilityRef nyx_id_user_request = 3;
+  }
+}
+
+message WorkflowCapabilityInvocationAdmission {
+  string call_site_id = 1;
+  ExternalWorkflowCapabilityRef capability = 2;
+  NyxIdExplicitRequestGrant nyx_id_explicit_request_grant = 3;
+}
+
+message ExternalCapabilityBlocker {
+  ExternalCapabilityReadinessStatus status = 1;
+  string code = 2;
+  string safe_message = 3;
+}
+
+message ExternalCapabilityRemediation {
+  ExternalCapabilityRemediationActionKind action_kind = 1;
+  string label = 2;
+  string trusted_locator = 3;
+}
+
+message ExternalCapabilitySourceStamp {
+  ExternalCapabilitySourceKind source_kind = 1;
+  string source_id = 2;
+  int64 source_version = 3;
+  google.protobuf.Timestamp observed_at = 4;
+  google.protobuf.Timestamp fresh_until = 5;
+  string content_digest = 6;
+}
+
+message ExternalWorkflowCapabilityDescriptor {
+  ExternalWorkflowCapabilityRef capability = 1 [deprecated = true];
+  string display_name = 2;
+  bool read_only = 3;
+  bool destructive = 4;
+  ExternalCapabilitySourceStamp source = 5;
+  ExternalWorkflowCapabilitySelector selector = 6;
+}
+
+enum ExternalCapabilityDiscoveryDiagnosticCode {
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_SOURCE_UNAVAILABLE = 1;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_NO_EXACT_USER_SERVICE = 2;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_GENERIC_PROXY_REJECTED = 3;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_INVALID_SERVICE_IDENTITY = 4;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_AMBIGUOUS_SERVICE_IDENTITY = 5;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_INVALID_ENDPOINT_IDENTITY = 6;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_AMBIGUOUS_ENDPOINT_IDENTITY = 7;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_PARAMETER = 8;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_REQUEST_BODY = 9;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_SCHEMA = 10;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_RESPONSE = 11;
+}
+
+message ExternalCapabilityDiscoveryDiagnostic {
+  ExternalCapabilityDiscoveryDiagnosticCode code = 1;
+  string safe_message = 2;
+  int32 count = 3;
+  ExternalCapabilitySourceStamp source = 4;
+}
+
+message ExternalWorkflowCapabilityDiscoveryResult {
+  repeated ExternalWorkflowCapabilityDescriptor capabilities = 1;
+  int32 candidate_count = 2;
+  int32 rejected_count = 3;
+  repeated ExternalCapabilityDiscoveryDiagnostic diagnostics = 4;
+}
+
+message ExternalCapabilityReadiness {
+  ExternalCapabilityExecutionMode execution_mode = 1;
+  ExternalCapabilityReadinessStatus status = 2;
+  ExternalWorkflowCapabilityRef selected_capability = 3;
+  repeated ExternalCapabilityBlocker blockers = 4;
+  repeated ExternalCapabilityRemediation remediations = 5;
+  repeated ExternalCapabilitySourceStamp sources = 6;
+  ExternalWorkflowCapabilitySelector selected_selector = 7;
+}
+
+message WorkflowCapabilityAdmissionPlan {
+  string schema_version = 1;
+  string definition_digest = 2;
+  ExternalCapabilityExecutionMode execution_mode = 3;
+  // Legacy v2 read slot only. v3 creation leaves this empty and validation rejects it when populated.
+  repeated ExternalWorkflowCapabilityRef external_capabilities = 4 [deprecated = true];
+  repeated ExternalCapabilitySourceStamp source_stamps = 5;
+  string admission_digest = 6;
+  ExternalCapabilityAuthorizationOwner durable_authorization_owner = 7;
+  repeated WorkflowCapabilityInvocationAdmission invocation_admissions = 8;
+}

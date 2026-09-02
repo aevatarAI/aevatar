@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Connectors;
@@ -175,6 +176,8 @@ public class ConnectorCallIntegrationTests
         services.AddSingleton(registry);
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
+        services.AddSingleton<IAgentToolExecutionPort>(
+            WorkflowGAgentTestBase.UnexpectedAgentToolExecutionPort.Instance);
         services.AddAevatarAgentKindRegistry(RegisterAssistantRoleKind);
 
         var provider = services.BuildServiceProvider();
@@ -193,6 +196,7 @@ public class ConnectorCallIntegrationTests
     {
         var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-root-definition-" + Guid.NewGuid().ToString("N")[..8]);
         var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-root-run-" + Guid.NewGuid().ToString("N")[..8]);
+        var capabilityAdmissionPlan = CreateCapabilityAdmissionPlan(workflowYaml);
 
         await definitionActor.HandleEventAsync(new EventEnvelope
         {
@@ -202,6 +206,8 @@ public class ConnectorCallIntegrationTests
             {
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "connector_flow",
+                CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -220,6 +226,7 @@ public class ConnectorCallIntegrationTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "connector_flow",
                 RunId = "connector-flow-run",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -262,6 +269,36 @@ public class ConnectorCallIntegrationTests
         await runtime.DestroyAsync(runActor.Id);
         await runtime.DestroyAsync(definitionActor.Id);
         return new WorkflowRunResult(completed, stepCompletions);
+    }
+
+    private static WorkflowCapabilityAdmissionPlan CreateCapabilityAdmissionPlan(string workflowYaml)
+    {
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(workflowYaml)
+                           ?? throw new InvalidOperationException("Connector integration fixture must compile.");
+        return WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            dependencies.ExternalInvocations.Select(static invocation =>
+                new WorkflowCapabilityInvocationAdmission
+                {
+                    CallSiteId = invocation.CallSiteId,
+                    Capability = new ExternalWorkflowCapabilityRef
+                    {
+                        HostConnector = invocation.Selector.HostConnector.Clone(),
+                    },
+                }),
+            [new ExternalCapabilitySourceStamp
+            {
+                SourceKind = ExternalCapabilitySourceKind.ConnectorCatalog,
+                SourceId = "connector-integration-fixture",
+                SourceVersion = 1,
+                ObservedAt = Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 7, 21, 10, 0, 0, TimeSpan.Zero)),
+                FreshUntil = Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 7, 21, 10, 5, 0, TimeSpan.Zero)),
+                ContentDigest = "connector-integration-fixture-digest",
+            }]);
     }
 
     private sealed class FakeConnector(string name, string prefix) : IConnector

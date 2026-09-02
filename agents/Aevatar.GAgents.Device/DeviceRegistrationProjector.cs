@@ -44,6 +44,7 @@ public sealed class DeviceRegistrationProjector
             Id = entry.Id,
             ScopeId = entry.ScopeId ?? string.Empty,
             HmacKey = entry.HmacKey ?? string.Empty,
+            HmacKeyRef = entry.HmacKeyRef,
             NyxConversationId = entry.NyxConversationId ?? string.Empty,
             Description = entry.Description ?? string.Empty,
             DeviceEventTargetActorId = entry.DeviceEventTargetActorId ?? string.Empty,

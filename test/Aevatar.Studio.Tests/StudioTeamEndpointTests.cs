@@ -686,6 +686,9 @@ public sealed class StudioTeamEndpointTests
         public Task<StudioMemberCommandResponse> UpdateAsync(
             string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default) =>
             throw new NotImplementedException();
+        public Task<StudioMemberCommandResponse> DeleteAsync(
+            string scopeId, string memberId, CancellationToken ct = default) =>
+            throw new NotImplementedException();
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

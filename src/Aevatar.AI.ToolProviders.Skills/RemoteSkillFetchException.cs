@@ -4,6 +4,7 @@ public enum RemoteSkillFetchFailureKind
 {
     Unspecified = 0,
     AccessDenied = 1,
+    Unavailable = 2,
 }
 
 public sealed class RemoteSkillFetchException : InvalidOperationException
@@ -32,6 +33,15 @@ public sealed class RemoteSkillFetchException : InvalidOperationException
                 ? $"Remote skill '{skillName}' access denied."
                 : detail,
             RemoteSkillFetchFailureKind.AccessDenied,
+            skillName,
+            httpStatus);
+
+    public static RemoteSkillFetchException Unavailable(string skillName, string detail, int httpStatus = 0) =>
+        new(
+            string.IsNullOrWhiteSpace(detail)
+                ? $"Remote skill '{skillName}' is temporarily unavailable."
+                : detail,
+            RemoteSkillFetchFailureKind.Unavailable,
             skillName,
             httpStatus);
 }

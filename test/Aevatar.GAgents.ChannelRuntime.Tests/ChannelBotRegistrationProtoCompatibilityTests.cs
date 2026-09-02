@@ -22,7 +22,11 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(10);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(11);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
-        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_reply_credential_ref")!.FieldNumber.Should().Be(13);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_reply_credential_ref").Should().BeNull();
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("last_inbound_at_utc")!.FieldNumber.Should().Be(14);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(15);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("default_skill_name")!.FieldNumber.Should().Be(16);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("workflow_result_delivery_repair")!.FieldNumber.Should().Be(17);
     }
 
     [Fact]
@@ -37,7 +41,9 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(7);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(8);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
-        ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_reply_credential_ref")!.FieldNumber.Should().Be(10);
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_reply_credential_ref").Should().BeNull();
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(11);
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("default_skill_name")!.FieldNumber.Should().Be(12);
     }
 
     [Fact]
@@ -56,7 +62,129 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(11);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(12);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
-        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_reply_credential_ref")!.FieldNumber.Should().Be(14);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_reply_credential_ref").Should().BeNull();
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("last_inbound_at_utc")!.FieldNumber.Should().Be(15);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(16);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("default_skill_name")!.FieldNumber.Should().Be(17);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("workflow_result_delivery_repair")!.FieldNumber.Should().Be(18);
+    }
+
+    [Fact]
+    public void WorkflowResultDeliveryRepairContracts_ShouldUseStableFieldNumbers()
+    {
+        AssertEnum(
+            "ChannelWorkflowResultDeliveryCapabilityStatus",
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_UNSPECIFIED", 0),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_ENABLED", 1),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_REPAIR_REQUIRED", 2),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_REPAIRING", 3),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_REPAIR_FAILED", 4));
+
+        AssertEnum(
+            "ChannelWorkflowResultDeliveryRepairStatus",
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_STATUS_UNSPECIFIED", 0),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_STATUS_REQUESTED", 1),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_STATUS_CREDENTIAL_PREPARED", 2),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_STATUS_FAILED", 3));
+
+        AssertEnum(
+            "ChannelWorkflowResultDeliveryRepairPhase",
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_UNSPECIFIED", 0),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_REQUEST_ADMISSION", 1),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_ROTATED_KEY_RECOVERY", 2),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_API_KEY_ROTATION", 3),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_VAULT_STORAGE", 4),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_CREDENTIAL_PREPARATION", 5),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_ROUTE_REBINDING", 6),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_PHASE_ACTOR_COMPLETION", 7));
+
+        AssertEnum(
+            "ChannelWorkflowResultDeliveryRepairFailureReason",
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_UNSPECIFIED", 0),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_REGISTRATION_NOT_FOUND", 1),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_UNAUTHORIZED_OWNER", 2),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_UNSUPPORTED_PLATFORM", 3),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_ALREADY_ENABLED", 4),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_INVALID_REQUEST", 5),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_REQUEST_CONFLICT", 6),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_STALE_ACTIVE_KEY", 7),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_ROTATION_FAILED", 8),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_VAULT_STORAGE_FAILED", 9),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_ROUTE_UPDATE_FAILED", 10),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_COMPLETION_FAILED", 11),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_AMBIGUOUS_ROTATED_KEY_RECOVERY", 12),
+                ("CHANNEL_WORKFLOW_RESULT_DELIVERY_REPAIR_FAILURE_REASON_OBSERVATION_UNAVAILABLE", 13));
+
+        AssertFields<ChannelWorkflowResultDeliveryRepairState>(
+            ("request_id", 1),
+            ("status", 2),
+            ("expected_api_key_id", 3),
+            ("expected_conversation_route_id", 4),
+            ("rotated_api_key_id", 5),
+            ("prepared_secret_reference", 6),
+            ("failure_phase", 7),
+            ("failure_reason", 8),
+            ("requested_by_subject_id", 9),
+            ("requested_at_unix_ms", 10),
+            ("updated_at_unix_ms", 11));
+        AssertFields<ChannelBotWorkflowResultDeliveryRepairRequestCommand>(
+            ("registration_id", 1),
+            ("request_id", 2),
+            ("expected_api_key_id", 3),
+            ("expected_conversation_route_id", 4),
+            ("requested_by_subject_id", 5),
+            ("requested_at_unix_ms", 6));
+        AssertFields<ChannelBotWorkflowResultDeliveryRepairPrepareCommand>(
+            ("registration_id", 1),
+            ("request_id", 2),
+            ("expected_api_key_id", 3),
+            ("rotated_api_key_id", 4),
+            ("prepared_secret_reference", 5),
+            ("updated_at_unix_ms", 6));
+        AssertFields<ChannelBotWorkflowResultDeliveryRepairCompleteCommand>(
+            ("registration_id", 1),
+            ("request_id", 2),
+            ("expected_api_key_id", 3),
+            ("rotated_api_key_id", 4),
+            ("prepared_secret_reference", 5),
+            ("updated_at_unix_ms", 6));
+        AssertFields<ChannelBotWorkflowResultDeliveryRepairFailCommand>(
+            ("registration_id", 1),
+            ("request_id", 2),
+            ("expected_api_key_id", 3),
+            ("rotated_api_key_id", 4),
+            ("prepared_secret_reference", 5),
+            ("failure_phase", 6),
+            ("failure_reason", 7),
+            ("updated_at_unix_ms", 8));
+        AssertFields<ChannelBotWorkflowResultDeliveryRepairRequestedEvent>(
+            ("registration_id", 1),
+            ("repair", 2));
+        AssertFields<ChannelBotWorkflowResultDeliveryRepairPreparedEvent>(
+            ("registration_id", 1),
+            ("repair", 2));
+        AssertFields<ChannelBotWorkflowResultDeliveryRepairCompletedEvent>(
+            ("registration_id", 1),
+            ("request_id", 2),
+            ("expected_api_key_id", 3),
+            ("rotated_api_key_id", 4),
+            ("prepared_secret_reference", 5),
+            ("completed_at_unix_ms", 6));
+        AssertFields<ChannelBotWorkflowResultDeliveryRepairFailedEvent>(
+            ("registration_id", 1),
+            ("repair", 2));
+        AssertFields<ChannelBotWorkflowResultDeliveryRepairRejectedEvent>(
+            ("registration_id", 1),
+            ("request_id", 2),
+            ("phase", 3),
+            ("reason", 4),
+            ("rejected_at_unix_ms", 5));
+        AssertFields<ChannelBotWorkflowResultDeliveryRepairOutcome>(
+            ("requested", 1),
+            ("prepared", 2),
+            ("completed", 3),
+            ("failed", 4),
+            ("rejected", 5));
     }
 
     [Fact]
@@ -99,4 +227,17 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelInboundEvent.Parser.ParseFrom(serialized).Should().BeEquivalentTo(inboundEvent);
         ChannelInboundEvent.Descriptor.FindFieldByName("registration_token").Should().BeNull();
     }
+
+    private static void AssertFields<T>(params (string Name, int Number)[] expected)
+        where T : IMessage<T>, new() =>
+        new T().Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => (field.Name, field.FieldNumber))
+            .Should().Equal(expected);
+
+    private static void AssertEnum(string name, params (string Name, int Number)[] expected) =>
+        ChannelBotRegistrationReflection.Descriptor.EnumTypes
+            .Single(descriptor => string.Equals(descriptor.Name, name, StringComparison.Ordinal))
+            .Values
+            .Select(static value => (value.Name, value.Number))
+            .Should().Equal(expected);
 }

@@ -18,7 +18,6 @@ test/Aevatar.CQRS.Projection.Core.Tests/ProjectionRuntimeCoverageTests.cs	30	#20
 test/Aevatar.CQRS.Projection.Core.Tests/ProjectionStoreValueAndResultCoverageTests.cs	148	#2058	historical coverage-named test file before guard; rename or split before growth
 test/Aevatar.Foundation.Abstractions.Tests/FoundationAbstractionsProtoCoverageTests.cs	242	#2058	historical coverage-named test file before guard; rename or split before growth
 test/Aevatar.Foundation.Core.Tests/InMemoryStreamCoverageTests.cs	308	#2058	historical coverage-named test file before guard; rename or split before growth
-test/Aevatar.Foundation.Core.Tests/RuntimeRoutingAndDeduplicationCoverageTests.cs	49	#2058	historical coverage-named test file before guard; rename or split before growth
 test/Aevatar.Foundation.Runtime.Hosting.Tests/InMemoryStreamingCoverageTests.cs	463	#2058	historical coverage-named test file before guard; rename or split before growth
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansActorStreamCoverageTests.cs	552	#2058	historical coverage-named test file before guard; rename or split before growth
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansDistributedCoverageTests.cs	934	#2058	historical coverage-named test file before guard; rename or split before growth
@@ -49,7 +48,6 @@ test/Aevatar.Workflow.Extensions.Maker.Tests/MakerRecursiveModuleCoverageTests.c
 test/Aevatar.Workflow.Extensions.Maker.Tests/MakerVoteModuleCoverageTests.cs	296	#2058	historical coverage-named test file before guard; rename or split before growth
 test/Aevatar.Workflow.Host.Api.Tests/ChatWebSocketProtocolCoverageTests.cs	147	#2058	historical coverage-named test file before guard; rename or split before growth
 test/Aevatar.Workflow.Host.Api.Tests/WorkflowAbstractionsProtoCoverageTests.cs	617	#2058	historical coverage-named test file before guard; rename or split before growth
-test/Aevatar.Workflow.Host.Api.Tests/WorkflowBindingReaderCoverageTests.cs	229	#2058	historical coverage-named test file before guard; rename or split before growth
 test/Aevatar.Workflow.Host.Api.Tests/WorkflowCapabilityEndpointsCoverageTests.cs	1336	#2058	historical coverage-named test file before guard; rename or split before growth
 test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionQueryPortsCoverageTests.cs	735	#2058	historical coverage-named test file before guard; rename or split before growth
 test/Aevatar.Workflow.Host.Api.Tests/WorkflowHostingExtensionsCoverageTests.cs	408	#2058	historical coverage-named test file before guard; rename or split before growth

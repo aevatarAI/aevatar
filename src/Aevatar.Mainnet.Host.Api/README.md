@@ -33,6 +33,9 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 - `ActorRuntime:Provider=Orleans`
 - `ActorRuntime:OrleansStreamBackend=KafkaProvider`
 - `ActorRuntime:OrleansPersistenceBackend=Garnet`
+- `ActorRuntime:KafkaReceiverBufferCapacity=1024`
+- `ActorRuntime:KafkaReceiverBufferHighWatermark=768`
+- `ActorRuntime:KafkaReceiverBufferLowWatermark=512`
 - `Orleans:ClusteringMode=Garnet`
 
 在上述配置下，Event Sourcing 的 `IEventStore` 会自动使用 `GarnetEventStore`（连接串复用 `ActorRuntime:OrleansGarnetConnectionString`）。
@@ -52,6 +55,9 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 
 ```bash
 export AEVATAR_ActorRuntime__KafkaBootstrapServers=localhost:9092
+export AEVATAR_ActorRuntime__KafkaReceiverBufferCapacity=1024
+export AEVATAR_ActorRuntime__KafkaReceiverBufferHighWatermark=768
+export AEVATAR_ActorRuntime__KafkaReceiverBufferLowWatermark=512
 export AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet
 export AEVATAR_ActorRuntime__OrleansGarnetConnectionString=localhost:6379
 export AEVATAR_Orleans__SiloPort=11111
@@ -84,6 +90,10 @@ bash src/Aevatar.Mainnet.Host.Api/boot.sh
 ```bash
 ASPNETCORE_ENVIRONMENT=Development \
 Aevatar__Authentication__Enabled=false \
+Audit__ActorIdentityHasher__ActiveKeyId=local-development-key \
+Audit__ActorIdentityHasher__Keys__0__KeyId=local-development-key \
+Audit__ActorIdentityHasher__Keys__0__Key=local-development-audit-identity-key \
+ChannelIdentity__OAuthClient__Bootstrap__Enabled=false \
 GAgentService__Demo__Enabled=false \
 Projection__Document__Providers__Elasticsearch__Enabled=false \
 Projection__Document__Providers__InMemory__Enabled=true \
@@ -92,10 +102,13 @@ Projection__Graph__Providers__InMemory__Enabled=true \
 Projection__Policies__Environment=Development \
 Projection__Policies__DenyInMemoryDocumentReadStore=false \
 Projection__Policies__DenyInMemoryGraphFactStore=false \
-ActorRuntime__OrleansStreamBackend=InMemory \
-ActorRuntime__OrleansPersistenceBackend=InMemory \
+ActorRuntime__Provider=InMemory \
+ActorRuntime__SecretStoreBackend=InMemory \
 dotnet run --project src/Aevatar.Mainnet.Host.Api --no-build
 ```
+
+上述审计 key 只用于本机临时开发数据，不得用于共享或生产环境。日常本地启动优先使用
+`bash src/Aevatar.Mainnet.Host.Api/boot.sh`，脚本会注入同一组 Development-only 默认值。
 
 如果只是想避免本地 scope workflow / actor state 因后端重启而完全丢失，而当前机器又没有 Kafka / Elasticsearch / Neo4j，可以使用仓库内置的 `PersistentLocal` 环境：
 
@@ -144,7 +157,7 @@ Responses / Messages 直连接口也挂在主机上，外部推荐经 NyxID prox
 - `stream=true` 时返回 Responses 风格 SSE：`response.created`、`response.output_item.added`、`response.output_text.delta`、`response.output_text.done`、`response.output_item.done`、`response.completed`；失败时输出 `response.failed` / `error`。
 - `Authorization: Bearer <token>` 只在请求上下文中透传，不会落盘；持久化的 response session 只记录 NyxID `/me` 解析出的 caller scope 与 opaque `response.id`。
 - forward tool call 在输出给客户端前会先落 response session actor，记录 `call_id`、`tool_name`、`schema_hash`、arguments、状态与过期时间。客户端续传 tool result 时可携带 `schema_hash`，不匹配会返回明确 4xx。
-- `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 共用同一套 `IResponsesDirectToolPlanService` + `IResponsesToolClassificationService` 抽象。三条入口都会合并全局 `IResponsesToolProvider`，并按 chat-route `ForwardToModel.ToolSetRef` 追加同一个 route tool set；Mainnet 默认补 `workspace.default`，`lark.self_notify` 也组合同一批 workspace tools。`TodoWrite`、`WebFetch`、`WebSearch` 属于 substitute 类，会替换同名客户端 declared tools；其他客户端 declared tools 默认 forward。`use_skill`、`ornn_search_skills`、`ornn_publish_skill` 属于 additive 类，会在三条直连接口注入，并使用当前 caller bearer 经 NyxID proxy 访问调用者可见的 Ornn skills。
+- `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 共用同一套 `IResponsesDirectToolPlanService` + `IResponsesToolClassificationService` 抽象。三条入口都会合并全局 `IResponsesToolProvider`，并按 chat-route `ForwardToModel.ToolSetRef` 追加同一个 route tool set；Mainnet 默认补 `workspace.default`，`lark.self_notify` 也组合同一批 workspace tools。`TodoWrite`、`WebFetch`、`WebSearch` 属于 substitute 类，会替换同名客户端 declared tools；`use_skill`、`ornn_search_skills`、`ornn_publish_skill` 属于 additive 类，会在三条直连接口注入，并使用当前 caller bearer 经 NyxID proxy 访问调用者可见的 Ornn skills。客户端 declared tool 只有在名称不属于 Aevatar-owned substitute/additive discovery 时才会 forward；同名 additive collision 也会写入 `owned_tool_names` 并由运行时拒绝 forward。
 - substitute 工具状态归 `ResponsesAgentToolStateGAgent` 拥有：`TodoWrite` 写入 agent-scoped todo state，`WebFetch` / `WebSearch` 记录 trace 与简单 cache 命中状态；这些状态通过 ProjectionPipeline 物化为 current-state read model，可供后续会话查询。旧 `Task` trace 契约暂留为 dead surface，当前 Mainnet 不再注册 `Task` / `task` substitute。
 - cancel 端点会复用同一 bearer token scope resolution；可见性通过后，session actor 会把 response 标记为 `cancelled` 并将 pending forwarded tool call 标为 `cancelled`。已过期或已取消的 `previous_response_id` 不能 resume。
 - `/v1/messages` 是 Anthropic Messages 兼容门面。它每次请求注册一个新的 `LlmSession`，不支持 `previous_response_id`，`max_tokens` 必填，共享直连 tool-source plan、工具分类与 Ornn skill bridge；`top_p`、`top_k`、`stop_sequences` 和 forced `tool_choice` 会被拒绝，image content v1 会被丢弃并记录 warning。

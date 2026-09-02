@@ -40,7 +40,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 [" trace "] = " enabled ",
                 [" "] = "ignored",
             },
-            ScopeId: " scope-1 "));
+            ScopeId: " scope-1 ",
+            Auth: CreateDefaultAuth()));
 
         receipt.ScheduleId.Should().Be("daily-report");
         receipt.ScheduleActorId.Should().Be("actor:daily-report");
@@ -61,7 +62,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
         });
         configured.Configuration.Target.ServiceInvocation.EndpointId.Should().Be("chat");
         configured.Configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
-        configured.Configuration.Target.ServiceInvocation.Auth.Should().BeNull();
+        configured.Configuration.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService);
+        configured.Configuration.Target.ServiceInvocation.Auth.Should().NotBeNull();
+        configured.Configuration.Target.ServiceInvocation.Auth!.SenderNyxId.Should().NotBeNull();
         configured.Configuration.Timezone.Should().Be("UTC");
         configured.Configuration.Headers.Should().Contain(
             new KeyValuePair<string, string>("trace", "enabled"));
@@ -76,6 +80,32 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldMapOneShotWorkflowSchedule()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var service = CreateService(actorPort);
+        var fireAt = DateTimeOffset.UtcNow.AddHours(1);
+
+        await service.CreateAsync(CreateConfiguration("one-shot") with
+        {
+            CronExpression = "0 9 * * *",
+            ScheduleMode = WorkflowScheduleMode.OneShotAtUtc,
+            OneShotFireAt = fireAt,
+        });
+
+        var configuration = actorPort.Created.Should().ContainSingle().Which.Configuration;
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+        configuration.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.OneShotAtUtc);
+        configuration.CronExpression.Should().BeEmpty();
+        configuration.OneShotFireAt.Should().Be(fireAt.ToUniversalTime());
+        configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
+        configuration.Target.ServiceInvocation!.EndpointId.Should().Be("chat");
+    }
+
+    [Fact]
     public async Task WorkflowScheduleCommandPort_EnsureAsync_ShouldMapWorkflowScheduleAndDispatchEnsure()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
@@ -83,7 +113,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var scheduledDispatches = new ScheduledDispatchApplicationService(
             actorPort,
             queryPort,
-            new FakeScheduledDispatchPreparationService());
+            new FakeScheduledDispatchPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
         var port = new WorkflowScheduleCommandPort(scheduledDispatches);
 
         var receipt = await port.EnsureAsync(new WorkflowScheduleConfiguration(
@@ -95,14 +126,18 @@ public sealed class WorkflowScheduleApplicationServiceTests
             Timezone: " UTC ",
             Enabled: true,
             Headers: new Dictionary<string, string> { [" trace "] = " enabled " },
-            ScopeId: " scope-1 "));
+            ScopeId: " scope-1 ",
+            Auth: CreateDefaultAuth()));
 
         receipt.ScheduleId.Should().Be("daily-report");
         actorPort.EnsureScheduleIds.Should().Equal("daily-report");
         actorPort.Ensured.Should().ContainSingle();
         actorPort.Created.Should().BeEmpty();
         actorPort.Updated.Should().BeEmpty();
-        queryPort.GetScheduleIds.Should().BeEmpty();
+        // Ensure performs exactly one readmodel read: the delete-tombstone guard
+        // (a deleted schedule surfaces as typed not-found instead of a silently
+        // swallowed reconfigure of the tombstoned actor).
+        queryPort.GetScheduleIds.Should().Equal("daily-report");
         var ensured = actorPort.Ensured.Single();
         ensured.Configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         ensured.Configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
@@ -118,6 +153,28 @@ public sealed class WorkflowScheduleApplicationServiceTests
         invocation.EndpointId.Should().Be("chat");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
         invocation.Payload.Unpack<ChatRequestEvent>().Metadata.Should().Contain("trace", "enabled");
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowScheduleCommandPort_EnsureAsync_ShouldForwardScopeOwnerMutationContextToAdmission()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var scheduledDispatches = new ScheduledDispatchApplicationService(
+            actorPort,
+            new FakeWorkflowScheduleQueryPort(),
+            new FakeScheduledDispatchPreparationService(),
+            admissionPort);
+        var port = new WorkflowScheduleCommandPort(scheduledDispatches);
+
+        await port.EnsureAsync(CreateScopeOwnerWorkflowConfiguration("owner-ensure"));
+
+        AssertScopeOwnerAdmissionRequest(admissionPort.Requests.Should().ContainSingle().Which);
+        actorPort.Ensured.Should().ContainSingle()
+            .Which.Configuration.Target.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.OwnerSubject
+            .Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
     }
 
     [Fact]
@@ -153,6 +210,23 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleWithoutCredentialSource()
+    {
+        var service = CreateService(new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        });
+
+        var act = () => service.CreateAsync(CreateConfiguration("no-auth-schedule") with
+        {
+            Auth = null,
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*requires a typed service invocation credential source*");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldMapTenantlessWorkflowScheduleAuthToEmptyTenant()
     {
         var actorPort = new FakeWorkflowScheduleActorPort
@@ -170,6 +244,73 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
         invocation.Auth!.SenderNyxId!.Subject.Tenant.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldMapWorkflowScheduleScopeOwnerAuthToServiceInvocationAuth()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var service = CreateService(actorPort, admissionPort: admissionPort);
+
+        await service.CreateAsync(CreateConfiguration("owner-auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " owner-proxy ",
+                    new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 "))),
+            MutationContext = new WorkflowScheduleMutationContext(
+                "scope-1",
+                new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 ")),
+        });
+
+        var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().BeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+        admissionPort.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleAuthWithMultipleCredentialSources()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                new WorkflowScheduleNyxIdCredentialSource(
+                    new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+                    "proxy"),
+                new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    "owner-proxy",
+                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Exactly one workflow schedule credential source*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleScopeOwnerAuth()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " ",
+                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Scope*required*");
     }
 
     [Fact]
@@ -467,6 +608,30 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task DeleteAsync_ShouldNormalizeReasonAndDispatchToResolvedActor()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
+        var service = CreateService(actorPort, queryPort);
+
+        var receipt = await service.DeleteAsync(" schedule-1 ", " retire ");
+
+        receipt.Should().BeEquivalentTo(new
+        {
+            ScheduleId = "schedule-1",
+            ScheduleActorId = "actor:schedule-1",
+            Accepted = true,
+            AckStage = "accepted",
+        });
+        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        receipt.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        receipt.AckedAt.Should().NotBe(default);
+        actorPort.Deleted.Should().ContainSingle()
+            .Which.Should().Be(("actor:schedule-1", "retire"));
+    }
+
+    [Fact]
     public async Task UpdateAsync_ShouldUseRouteScheduleIdAndScrubOptionalAdapterHeaders()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
@@ -492,7 +657,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
                     ["workflow.schedule.source_actor_id"] = "caller-extension",
                 },
                 ScopeId: " ",
-                TenantId: "tenant-1"));
+                TenantId: "tenant-1",
+                Auth: CreateDefaultAuth()));
 
         receipt.Should().BeEquivalentTo(new
         {
@@ -515,6 +681,24 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configuration.Headers.Should().NotContainKey("empty");
         configuration.Headers.Should().Contain("workflow.schedule.scope_id", "caller-extension");
         configuration.Headers.Should().Contain("workflow.schedule.source_actor_id", "caller-extension");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldForwardScopeOwnerMutationContextToAdmission()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["route-schedule"] = CreateDetail("route-schedule");
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var service = CreateService(actorPort, queryPort, admissionPort: admissionPort);
+
+        await service.UpdateAsync(
+            " route-schedule ",
+            CreateScopeOwnerWorkflowConfiguration("body-schedule"));
+
+        AssertScopeOwnerAdmissionRequest(admissionPort.Requests.Should().ContainSingle().Which);
+        actorPort.Updated.Should().ContainSingle()
+            .Which.Configuration.ScheduleId.Should().Be("route-schedule");
     }
 
     [Theory]
@@ -652,6 +836,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var detail = await service.GetAsync(" schedule-1 ");
 
         detail.Should().NotBeNull();
+        detail!.Schedule.Prompt.Should().Be("saved prompt");
         queryPort.GetScheduleIds.Should().Equal("schedule-1");
     }
 
@@ -680,23 +865,35 @@ public sealed class WorkflowScheduleApplicationServiceTests
     public async Task ListAsync_ShouldRequestWorkflowFilteredReadModelPage()
     {
         var queryPort = new FakeWorkflowScheduleQueryPort();
+        var fireAt = new DateTimeOffset(2026, 7, 14, 1, 30, 0, TimeSpan.Zero);
         queryPort.ListResult = new ScheduledDispatchListResult(
-            [CreateDetail("workflow-1").Schedule],
+            [CreateDetail(
+                "workflow-1",
+                cronExpression: string.Empty,
+                scheduleMode: ScheduledDispatchScheduleMode.OneShotAtUtc,
+                oneShotFireAt: fireAt,
+                completed: true).Schedule],
             "next-workflow",
             1);
         var service = CreateService(new FakeWorkflowScheduleActorPort(), queryPort);
 
         var result = await service.ListAsync(25, "cursor", includeTotalCount: true);
 
-        result.Items.Should().ContainSingle()
-            .Which.ScheduleId.Should().Be("workflow-1");
+        var summary = result.Items.Should().ContainSingle().Subject;
+        summary.ScheduleId.Should().Be("workflow-1");
+        summary.Prompt.Should().Be("saved prompt");
+        summary.ScheduleMode.Should().Be(WorkflowScheduleMode.OneShotAtUtc);
+        summary.OneShotFireAt.Should().Be(fireAt);
+        summary.Completed.Should().BeTrue();
         result.NextCursor.Should().Be("next-workflow");
         result.TotalCount.Should().Be(1);
         queryPort.LastQuery.Should().Be(new ScheduledDispatchListQuery(
             25,
             "cursor",
             true,
-            ScheduleKind: ScheduledDispatchScheduleKind.Workflow));
+            ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+            TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+            ExcludeTeamOwned: true));
     }
 
     [Fact]
@@ -716,16 +913,19 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var update = () => service.UpdateAsync("generic", CreateConfiguration("generic"));
         var enable = () => service.EnableAsync("generic", "resume");
         var disable = () => service.DisableAsync("generic", "pause");
+        var delete = () => service.DeleteAsync("generic", "retire");
         var runNow = () => service.RunNowAsync("generic");
 
         await update.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         await disable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await delete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
 
         actorPort.Updated.Should().BeEmpty();
         actorPort.Enabled.Should().BeEmpty();
         actorPort.Disabled.Should().BeEmpty();
+        actorPort.Deleted.Should().BeEmpty();
         actorPort.RunNowRequests.Should().BeEmpty();
         actorPort.ResolveScheduleIds.Should().BeEmpty();
     }
@@ -752,7 +952,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
             {
                 ["caller"] = "kept",
             },
-            ScopeId: "scope-1"));
+            ScopeId: "scope-1",
+            Auth: CreateDefaultAuth()));
 
         var created = actorPort.Created.Single();
         created.Configuration.Headers.Should().Contain(new KeyValuePair<string, string>("caller", "kept"));
@@ -902,11 +1103,13 @@ public sealed class WorkflowScheduleApplicationServiceTests
     private static WorkflowScheduleApplicationService CreateService(
         FakeWorkflowScheduleActorPort? actorPort = null,
         FakeWorkflowScheduleQueryPort? queryPort = null,
-        FakeScheduledDispatchPreparationService? preparation = null) =>
+        FakeScheduledDispatchPreparationService? preparation = null,
+        IScheduledDispatchCredentialAdmissionPort? admissionPort = null) =>
         new(new ScheduledDispatchApplicationService(
             actorPort ?? new FakeWorkflowScheduleActorPort(),
             queryPort ?? new FakeWorkflowScheduleQueryPort(),
-            preparation ?? new FakeScheduledDispatchPreparationService()));
+            preparation ?? new FakeScheduledDispatchPreparationService(),
+            admissionPort ?? new NoopScheduledDispatchCredentialAdmissionPort()));
 
     private sealed class FakeWorkflowScheduleQueryPort : IScheduledDispatchQueryPort
     {
@@ -940,6 +1143,20 @@ public sealed class WorkflowScheduleApplicationServiceTests
             LastIncludeTotalCount = query.IncludeTotalCount;
             LastQuery = query;
             return Task.FromResult(ListResult);
+        }
+    }
+
+    private sealed class RecordingScheduledDispatchCredentialAdmissionPort : IScheduledDispatchCredentialAdmissionPort
+    {
+        public List<ScheduledDispatchCredentialAdmissionRequest> Requests { get; } = [];
+
+        public Task<ScheduledDispatchCredentialAdmissionResult> AdmitAsync(
+            ScheduledDispatchCredentialAdmissionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(ScheduledDispatchCredentialAdmissionResult.Allowed());
         }
     }
 
@@ -1004,12 +1221,45 @@ public sealed class WorkflowScheduleApplicationServiceTests
             Timezone: "UTC",
             Enabled: true,
             Headers: new Dictionary<string, string>(),
-            ScopeId: "scope-1");
+            ScopeId: "scope-1",
+            Auth: CreateDefaultAuth());
+
+    private static WorkflowScheduleAuth CreateDefaultAuth() =>
+        new(new WorkflowScheduleNyxIdCredentialSource(
+            new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+            "proxy"));
+
+    private static WorkflowScheduleConfiguration CreateScopeOwnerWorkflowConfiguration(string scheduleId) =>
+        CreateConfiguration(scheduleId) with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " owner-proxy ",
+                    new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 "))),
+            MutationContext = new WorkflowScheduleMutationContext(
+                " scope-1 ",
+                new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 ")),
+        };
+
+    private static void AssertScopeOwnerAdmissionRequest(ScheduledDispatchCredentialAdmissionRequest request)
+    {
+        request.Context.AuthenticatedScopeId.Should().Be("scope-1");
+        request.Context.AuthenticatedNyxIdOwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+        request.ScopeOwnerNyxId.Scope.Should().Be("owner-proxy");
+        request.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+        request.ServiceIdentity.TenantId.Should().Be("scope-1");
+        request.ServiceIdentity.ServiceId.Should().Be("direct");
+    }
 
     private static ScheduledDispatchDetail CreateDetail(
         string scheduleId,
         string workflowName = "direct",
-        string cronExpression = "*/15 * * * *") =>
+        string cronExpression = "*/15 * * * *",
+        ScheduledDispatchScheduleMode scheduleMode = ScheduledDispatchScheduleMode.RecurringCron,
+        DateTimeOffset? oneShotFireAt = null,
+        bool completed = false) =>
         new(
             new ScheduledDispatchSummary(
                 ScheduleId: scheduleId,
@@ -1035,10 +1285,17 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 LastCommandId: string.Empty,
                 LastCorrelationId: string.Empty,
                 LastError: string.Empty,
+                LastErrorCode: string.Empty,
                 FireCount: 0,
                 FailureCount: 0,
                 Headers: new Dictionary<string, string>(),
                 ScheduleActorId: string.Empty,
-                ScheduleKind: ScheduledDispatchScheduleKind.Workflow),
+                Prompt: "saved prompt",
+                ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+                CredentialRequirementTargetKind: ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+                CredentialSourceKind: ScheduledDispatchCredentialSourceKind.SenderNyxId,
+                ScheduleMode: scheduleMode,
+                OneShotFireAt: oneShotFireAt,
+                Completed: completed),
             []);
 }

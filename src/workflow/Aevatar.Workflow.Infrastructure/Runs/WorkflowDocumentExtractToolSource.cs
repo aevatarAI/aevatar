@@ -11,15 +11,16 @@ using System.IO.Compression;
 using UglyToad.PdfPig;
 using ProtoWorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
 using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSourceKind;
+using ProtoWorkflowLlmControlContext = Aevatar.Workflow.Abstractions.WorkflowLlmControlContext;
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
 public sealed class WorkflowDocumentExtractToolSource(
-    IWorkflowFileArtifactReadPort fileArtifacts,
+    IFileArtifactReadPort fileArtifacts,
     ILLMProvider? llmProvider = null,
     ILLMProviderFactory? llmProviderFactory = null) : IWorkflowToolSource
 {
-    private readonly IWorkflowFileArtifactReadPort _fileArtifacts =
+    private readonly IFileArtifactReadPort _fileArtifacts =
         fileArtifacts ?? throw new ArgumentNullException(nameof(fileArtifacts));
     private readonly ILLMProvider? _llmProvider = llmProvider;
     private readonly ILLMProviderFactory? _llmProviderFactory = llmProviderFactory;
@@ -30,7 +31,7 @@ public sealed class WorkflowDocumentExtractToolSource(
         ]);
 
     private sealed class DocumentExtractTool(
-        IWorkflowFileArtifactReadPort fileArtifacts,
+        IFileArtifactReadPort fileArtifacts,
         ILLMProvider? llmProvider,
         ILLMProviderFactory? llmProviderFactory) : IWorkflowTool
     {
@@ -45,7 +46,7 @@ public sealed class WorkflowDocumentExtractToolSource(
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         };
 
-        private readonly IWorkflowFileArtifactReadPort _fileArtifacts = fileArtifacts;
+        private readonly IFileArtifactReadPort _fileArtifacts = fileArtifacts;
         private readonly ILLMProvider? _llmProvider = llmProvider;
         private readonly ILLMProviderFactory? _llmProviderFactory = llmProviderFactory;
 
@@ -78,6 +79,7 @@ public sealed class WorkflowDocumentExtractToolSource(
                         if (arguments.RequestKind == DocumentExtractionRequestKind.SchemaBoundJson)
                         {
                             return await ExtractImageSchemaBoundJsonAsync(
+                                request,
                                 artifact.Content,
                                 descriptor,
                                 mediaType,
@@ -86,6 +88,7 @@ public sealed class WorkflowDocumentExtractToolSource(
                         }
 
                         return await ExtractImageTextAsync(
+                            request,
                             artifact.Content,
                             descriptor,
                             mediaType,
@@ -104,6 +107,7 @@ public sealed class WorkflowDocumentExtractToolSource(
                     if (arguments.RequestKind == DocumentExtractionRequestKind.SchemaBoundJson)
                     {
                         return await ExtractSchemaBoundJsonAsync(
+                            request,
                             extracted.Text,
                             descriptor,
                             mediaType,
@@ -142,8 +146,9 @@ public sealed class WorkflowDocumentExtractToolSource(
         }
 
         private async Task<WorkflowToolExecutionResult> ExtractImageSchemaBoundJsonAsync(
+            WorkflowToolExecutionRequest request,
             Stream content,
-            WorkflowFileRef descriptor,
+            FileArtifactRef descriptor,
             string mediaType,
             DocumentSchemaContract schemaContract,
             CancellationToken ct)
@@ -162,6 +167,7 @@ public sealed class WorkflowDocumentExtractToolSource(
             }
 
             return await ExtractSchemaBoundJsonAsync(
+                request,
                 extractedText: null,
                 descriptor,
                 mediaType,
@@ -171,8 +177,9 @@ public sealed class WorkflowDocumentExtractToolSource(
         }
 
         private async Task<WorkflowToolExecutionResult> ExtractSchemaBoundJsonAsync(
+            WorkflowToolExecutionRequest request,
             string? extractedText,
-            WorkflowFileRef descriptor,
+            FileArtifactRef descriptor,
             string mediaType,
             DocumentSchemaContract schemaContract,
             byte[]? imageBytes,
@@ -206,6 +213,7 @@ public sealed class WorkflowDocumentExtractToolSource(
             {
                 var providerJson = await ExtractSchemaBoundJsonWithProviderAsync(
                     schemaProvider,
+                    request,
                     extractedText,
                     imageBytes,
                     descriptor,
@@ -240,8 +248,9 @@ public sealed class WorkflowDocumentExtractToolSource(
         }
 
         private async Task<WorkflowToolExecutionResult> ExtractImageTextAsync(
+            WorkflowToolExecutionRequest request,
             Stream content,
-            WorkflowFileRef descriptor,
+            FileArtifactRef descriptor,
             string mediaType,
             int maxChars,
             CancellationToken ct)
@@ -280,6 +289,7 @@ public sealed class WorkflowDocumentExtractToolSource(
             {
                 var extracted = await ExtractImageTextWithProviderAsync(
                     imageProvider,
+                    request,
                     imageBytes,
                     descriptor,
                     mediaType,
@@ -369,9 +379,9 @@ public sealed class WorkflowDocumentExtractToolSource(
 
         private static bool TryResolveExplicitFileRef(
             JsonElement root,
-            out WorkflowFileRef fileRef)
+            out FileArtifactRef fileRef)
         {
-            fileRef = new WorkflowFileRef();
+            fileRef = new FileArtifactRef();
             if (!TryGetProperty(root, "fileRef", "file_ref", out var fileRefElement))
                 return false;
             if (fileRefElement.ValueKind != JsonValueKind.Object)
@@ -381,7 +391,7 @@ public sealed class WorkflowDocumentExtractToolSource(
             return true;
         }
 
-        private static WorkflowFileRef ResolveSingleInputFileRef(
+        private static FileArtifactRef ResolveSingleInputFileRef(
             IReadOnlyList<ProtoWorkflowFileRef> inputFileRefs)
         {
             if (inputFileRefs.Count == 1)
@@ -392,20 +402,20 @@ public sealed class WorkflowDocumentExtractToolSource(
                 : "document_extract received multiple input file refs; provide fileRef explicitly.");
         }
 
-        private static WorkflowFileRef ToApplicationFileRef(ProtoWorkflowFileRef source) =>
+        private static FileArtifactRef ToApplicationFileRef(ProtoWorkflowFileRef source) =>
             new()
             {
                 FileId = Normalize(source.FileId),
                 ArtifactId = Normalize(source.ArtifactId),
                 SourceKind = source.SourceKind switch
                 {
-                    ProtoWorkflowFileSourceKind.ChatInput => WorkflowFileSourceKind.ChatInput,
-                    ProtoWorkflowFileSourceKind.FormUpload => WorkflowFileSourceKind.FormUpload,
+                    ProtoWorkflowFileSourceKind.ChatInput => FileArtifactSourceKind.ChatInput,
+                    ProtoWorkflowFileSourceKind.FormUpload => FileArtifactSourceKind.FormUpload,
                     ProtoWorkflowFileSourceKind.ConnectedServiceResource =>
-                        WorkflowFileSourceKind.ConnectedServiceResource,
-                    ProtoWorkflowFileSourceKind.ExternalResource => WorkflowFileSourceKind.ExternalResource,
-                    ProtoWorkflowFileSourceKind.Generated => WorkflowFileSourceKind.Generated,
-                    _ => WorkflowFileSourceKind.Unspecified,
+                        FileArtifactSourceKind.ConnectedServiceResource,
+                    ProtoWorkflowFileSourceKind.ExternalResource => FileArtifactSourceKind.ExternalResource,
+                    ProtoWorkflowFileSourceKind.Generated => FileArtifactSourceKind.Generated,
+                    _ => FileArtifactSourceKind.Unspecified,
                 },
                 SourceMessageId = Normalize(source.SourceMessageId),
                 SourceResourceKey = Normalize(source.SourceResourceKey),
@@ -419,13 +429,13 @@ public sealed class WorkflowDocumentExtractToolSource(
                 OwnerScopeId = Normalize(source.OwnerScopeId),
             };
 
-        private static WorkflowFileRef ParseFileRef(JsonElement fileRefElement)
+        private static FileArtifactRef ParseFileRef(JsonElement fileRefElement)
         {
-            var sourceKind = WorkflowFileSourceKind.Unspecified;
+            var sourceKind = FileArtifactSourceKind.Unspecified;
             if (TryGetProperty(fileRefElement, "sourceKind", "source_kind", out var sourceKindElement))
                 sourceKind = ParseSourceKind(sourceKindElement);
 
-            return new WorkflowFileRef
+            return new FileArtifactRef
             {
                 FileId = GetString(fileRefElement, "fileId", "file_id"),
                 ArtifactId = GetString(fileRefElement, "artifactId", "artifact_id"),
@@ -441,24 +451,24 @@ public sealed class WorkflowDocumentExtractToolSource(
             };
         }
 
-        private static WorkflowFileSourceKind ParseSourceKind(JsonElement element)
+        private static FileArtifactSourceKind ParseSourceKind(JsonElement element)
         {
             if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var numeric))
-                return Enum.IsDefined(typeof(WorkflowFileSourceKind), numeric)
-                    ? (WorkflowFileSourceKind)numeric
-                    : WorkflowFileSourceKind.Unspecified;
+                return Enum.IsDefined(typeof(FileArtifactSourceKind), numeric)
+                    ? (FileArtifactSourceKind)numeric
+                    : FileArtifactSourceKind.Unspecified;
 
             if (element.ValueKind != JsonValueKind.String)
-                return WorkflowFileSourceKind.Unspecified;
+                return FileArtifactSourceKind.Unspecified;
 
             return NormalizeKey(element.GetString()) switch
             {
-                "chatinput" => WorkflowFileSourceKind.ChatInput,
-                "formupload" => WorkflowFileSourceKind.FormUpload,
-                "connectedserviceresource" => WorkflowFileSourceKind.ConnectedServiceResource,
-                "externalresource" => WorkflowFileSourceKind.ExternalResource,
-                "generated" => WorkflowFileSourceKind.Generated,
-                _ => WorkflowFileSourceKind.Unspecified,
+                "chatinput" => FileArtifactSourceKind.ChatInput,
+                "formupload" => FileArtifactSourceKind.FormUpload,
+                "connectedserviceresource" => FileArtifactSourceKind.ConnectedServiceResource,
+                "externalresource" => FileArtifactSourceKind.ExternalResource,
+                "generated" => FileArtifactSourceKind.Generated,
+                _ => FileArtifactSourceKind.Unspecified,
             };
         }
 
@@ -541,9 +551,10 @@ public sealed class WorkflowDocumentExtractToolSource(
 
         private async Task<string> ExtractSchemaBoundJsonWithProviderAsync(
             ILLMProvider provider,
+            WorkflowToolExecutionRequest workflowRequest,
             string? extractedText,
             byte[]? imageBytes,
-            WorkflowFileRef descriptor,
+            FileArtifactRef descriptor,
             string mediaType,
             DocumentSchemaContract schemaContract,
             CancellationToken ct)
@@ -552,6 +563,8 @@ public sealed class WorkflowDocumentExtractToolSource(
             {
                 Messages = BuildSchemaBoundMessages(extractedText, imageBytes, descriptor, mediaType, schemaContract),
                 RequestId = $"document_extract:{descriptor.FileId ?? descriptor.ArtifactId ?? "schema"}",
+                CallerContext = ToCallerContext(workflowRequest),
+                LlmControl = ToLlmControl(workflowRequest.LlmControl),
                 ResponseFormat = LLMResponseFormat.ForJsonSchema(
                     schemaContract.Schema,
                     schemaContract.Name,
@@ -572,7 +585,7 @@ public sealed class WorkflowDocumentExtractToolSource(
         private static List<ChatMessage> BuildSchemaBoundMessages(
             string? extractedText,
             byte[]? imageBytes,
-            WorkflowFileRef descriptor,
+            FileArtifactRef descriptor,
             string mediaType,
             DocumentSchemaContract schemaContract)
         {
@@ -626,8 +639,9 @@ public sealed class WorkflowDocumentExtractToolSource(
 
         private async Task<ExtractedText> ExtractImageTextWithProviderAsync(
             ILLMProvider imageProvider,
+            WorkflowToolExecutionRequest workflowRequest,
             byte[] imageBytes,
-            WorkflowFileRef descriptor,
+            FileArtifactRef descriptor,
             string mediaType,
             int maxChars,
             CancellationToken ct)
@@ -646,6 +660,8 @@ public sealed class WorkflowDocumentExtractToolSource(
                     ]),
                 ],
                 RequestId = $"document_extract:{descriptor.FileId ?? descriptor.ArtifactId ?? "image"}",
+                CallerContext = ToCallerContext(workflowRequest),
+                LlmControl = ToLlmControl(workflowRequest.LlmControl),
             };
 
             var builder = new StringBuilder(capacity: Math.Min(maxChars, 4096));
@@ -661,6 +677,31 @@ public sealed class WorkflowDocumentExtractToolSource(
 
             return new ExtractedText(builder.ToString(), truncated);
         }
+
+        private static LLMRequestCallerContext ToCallerContext(WorkflowToolExecutionRequest request)
+        {
+            var scopeId = Normalize(request.ScopeId) ?? string.Empty;
+            var bearer = Normalize(request.CallerCredential?.BearerToken);
+            return new LLMRequestCallerContext(
+                scopeId,
+                scopeId,
+                ResponseId: null,
+                bearer is null ? null : new LLMRequestCallerCredentials(bearer));
+        }
+
+        private static LLMControlContext? ToLlmControl(ProtoWorkflowLlmControlContext? source) =>
+            source is null
+                ? null
+                : new LLMControlContext(
+                    NyxIdAccessToken: null,
+                    NyxIdOrgToken: null,
+                    SenderNyxIdAccessToken: Normalize(source.SenderNyxIdAccessToken),
+                    ModelOverride: Normalize(source.ModelOverride),
+                    NyxIdRoutePreference: Normalize(source.RoutePreference),
+                    MaxToolRoundsOverride: source.HasMaxToolRoundsOverride
+                        ? source.MaxToolRoundsOverride
+                        : null,
+                    UserMemoryPrompt: Normalize(source.UserMemoryPrompt));
 
         private static async Task<byte[]> ReadCappedImageBytesAsync(
             Stream content,
@@ -786,7 +827,7 @@ public sealed class WorkflowDocumentExtractToolSource(
                 _ => "utf8_text",
             };
 
-        private static WorkflowDocumentExtractFileRef ToResultFileRef(WorkflowFileRef descriptor) =>
+        private static WorkflowDocumentExtractFileRef ToResultFileRef(FileArtifactRef descriptor) =>
             new(
                 descriptor.FileId,
                 descriptor.ArtifactId,
@@ -802,17 +843,20 @@ public sealed class WorkflowDocumentExtractToolSource(
                 descriptor.OwnerRunId,
                 descriptor.OwnerScopeId);
 
-        private static WorkflowToolExecutionResult Error(string error, string detail) =>
-            WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
+        private static WorkflowToolExecutionResult Error(string error, string detail)
+        {
+            var resultJson = JsonSerializer.Serialize(
                 new DocumentExtractError(error, detail),
-                JsonOptions));
+                JsonOptions);
+            return WorkflowToolExecutionResult.Failed(resultJson, error, detail);
+        }
 
         private static WorkflowToolExecutionResult SchemaValidationError() =>
             Error("schema_bound_validation_failed", "Schema-bound extraction result failed validation.");
 
         private static string BuildSchemaBoundResultJson(
             string mediaType,
-            WorkflowFileRef descriptor,
+            FileArtifactRef descriptor,
             DocumentSchemaContract schemaContract,
             string canonicalResultJson)
         {
@@ -869,7 +913,7 @@ public sealed class WorkflowDocumentExtractToolSource(
     private sealed class ImageTooLargeException : Exception;
 
     private sealed record DocumentExtractArguments(
-        WorkflowFileRef FileRef,
+        FileArtifactRef FileRef,
         int? MaxChars = null,
         DocumentExtractionRequestKind RequestKind = DocumentExtractionRequestKind.Text,
         DocumentSchemaContract? SchemaContract = null);

@@ -48,8 +48,17 @@ message TestRecursiveWellKnownReadModel {
   map<string, string> labels = 9;
   repeated TestOpenPayloadEntry entries = 10;
   repeated string tags = 11;
+  TestOpenPayloadEntry primary_entry = 12;
+  repeated TestOpenPayloadEntry child_entries = 13;
 }
 
 message TestOpenPayloadEntry {
   string entry_id = 1;
+  map<string, string> attributes = 2;
+  TestOpenPayloadLeaf leaf = 3;
+}
+
+message TestOpenPayloadLeaf {
+  string leaf_id = 1;
+  map<string, string> annotations = 2;
 }

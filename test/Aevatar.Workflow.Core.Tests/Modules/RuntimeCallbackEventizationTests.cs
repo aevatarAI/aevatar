@@ -299,6 +299,32 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task WaitSignalModule_ShouldScheduleTwentyFourHourTimeoutLease()
+    {
+        var module = new WaitSignalModule();
+        var ctx = new SchedulingContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "wait-24h",
+                StepType = "wait_signal",
+                RunId = "run-wait-24h",
+                Parameters =
+                {
+                    ["signal_name"] = "callback",
+                    ["timeout_seconds"] = "86400",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WaitSignalTimeoutFiredEvent);
+        scheduled.DueTime.Should().Be(TimeSpan.FromHours(24));
+        ((WaitSignalTimeoutFiredEvent)scheduled.Event).TimeoutMs.Should().Be(86_400_000);
+    }
+
+    [Fact]
     public async Task WorkflowLoop_ShouldReplayTimeoutCompletion_WhenPublishFailsTransiently()
     {
         var ctx = new SchedulingContext
@@ -362,7 +388,7 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task WorkflowLoop_ShouldResumeInitialDispatch_WhenStartPublishFailsTransiently()
+    public async Task WorkflowLoop_ShouldTerminalizeInitialDispatch_WhenStartPublishFails()
     {
         var ctx = new SchedulingContext
         {
@@ -390,26 +416,19 @@ public class RuntimeCallbackEventizationTests
             Input = "input-v1",
         });
 
-        await FluentActions
-            .Invoking(() => module.HandleAsync(startEnvelope, ctx, CancellationToken.None))
-            .Should()
-            .ThrowAsync<InvalidOperationException>()
-            .WithMessage("transient publish failure");
-
-        var pendingState = ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel");
-        pendingState.Active.Should().BeTrue();
-        pendingState.CurrentStepDispatchPending.Should().BeTrue();
-        pendingState.CurrentStepId.Should().Be("step-1");
-
         await module.HandleAsync(startEnvelope, ctx, CancellationToken.None);
 
-        var retryStepRequest = ctx.Published
+        var completion = ctx.Published
             .Select(x => x.Event)
-            .OfType<StepRequestEvent>()
+            .OfType<WorkflowCompletedEvent>()
             .Single();
-        retryStepRequest.RunId.Should().Be("run-start-replay");
-        retryStepRequest.StepId.Should().Be("step-1");
-        retryStepRequest.Input.Should().Be("input-v1");
+        completion.RunId.Should().Be("run-start-replay");
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().StartWith("step_dispatch_failed: step 'step-1' (transform) failed during dispatch: ");
+
+        var terminalState = ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel");
+        terminalState.Active.Should().BeFalse();
+        terminalState.CurrentStepDispatchPending.Should().BeFalse();
     }
 
     [Fact]
@@ -648,7 +667,7 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task WorkflowLoop_ShouldReplayRetryBackoff_WhenRedispatchFailsTransiently()
+    public async Task WorkflowLoop_ShouldTerminalizeRetryBackoff_WhenRedispatchFails()
     {
         var ctx = new SchedulingContext();
         var module = CreateKernel(new WorkflowDefinition
@@ -711,26 +730,18 @@ public class RuntimeCallbackEventizationTests
             },
             MetadataFor(scheduled));
 
-        await FluentActions
-            .Invoking(() => module.HandleAsync(backoffEnvelope, ctx, CancellationToken.None))
-            .Should()
-            .ThrowAsync<InvalidOperationException>()
-            .WithMessage("transient publish failure");
+        await module.HandleAsync(backoffEnvelope, ctx, CancellationToken.None);
 
-        ctx.Published.Should().BeEmpty();
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<WorkflowCompletedEvent>()
+            .Single();
+        completion.RunId.Should().Be("run-retry-replay");
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().StartWith("step_dispatch_failed: step 'step-1' (transform) failed during dispatch: ");
         ctx.Canceled.Should().ContainSingle(x =>
             x.CallbackId.StartsWith("workflow-step-timeout:run-retry-replay:step-1:", StringComparison.Ordinal) &&
             x.ExpectedGeneration == 2);
-
-        await module.HandleAsync(backoffEnvelope, ctx, CancellationToken.None);
-
-        var retryStepRequest = ctx.Published
-            .Select(x => x.Event)
-            .OfType<StepRequestEvent>()
-            .Single();
-        retryStepRequest.RunId.Should().Be("run-retry-replay");
-        retryStepRequest.StepId.Should().Be("step-1");
-        retryStepRequest.Input.Should().Be("input-v1");
     }
 
     [Fact]
@@ -785,15 +796,18 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldReuseDispatchDedupState_WhenDispatchIsReplayed()
+    public async Task LlmCallModule_ShouldReuseDispatchOperationIdentity_WhenDispatchIsReplayed()
     {
+        PendingLlmCallState.Descriptor.FindFieldByName("dispatch_operation_id")!
+            .FieldNumber.Should().Be(7);
+
         var module = new LLMCallModule();
         var ctx = new SchedulingContext();
         var requestEnvelope = Wrap(new StepRequestEvent
         {
             StepId = "step-1",
             StepType = "llm_call",
-            RunId = "run-llm-dedup",
+            RunId = "run-llm-operation",
             Input = "prompt",
             TargetRole = "assistant",
             Parameters = { ["timeout_ms"] = "5000" },
@@ -807,8 +821,8 @@ public class RuntimeCallbackEventizationTests
         firstDispatch.TargetActorId.Should().NotBeNullOrWhiteSpace();
         firstDispatch.Options.Should().NotBeNull();
         firstDispatch.Options!.Delivery.Should().NotBeNull();
-        var dedupOriginId = firstDispatch.Options.Delivery!.DeduplicationOperationId;
-        dedupOriginId.Should().StartWith("workflow-llm-dispatch:");
+        var dispatchOperationId = firstDispatch.Options.Delivery!.OperationId;
+        dispatchOperationId.Should().StartWith("workflow-llm-dispatch:");
 
         var state = ctx.LoadState<LLMCallModuleState>("llm_call");
         var pending = state.PendingBySessionId[firstIntent.SessionId];
@@ -825,11 +839,11 @@ public class RuntimeCallbackEventizationTests
         var replayIntent = (WorkflowLlmExecutionIntent)replayDispatch.Event;
         replayIntent.SessionId.Should().Be(firstIntent.SessionId);
         replayDispatch.TargetActorId.Should().Be(firstDispatch.TargetActorId);
-        replayDispatch.Options!.Delivery!.DeduplicationOperationId.Should().Be(dedupOriginId);
+        replayDispatch.Options!.Delivery!.OperationId.Should().Be(dispatchOperationId);
 
         ctx.LoadState<LLMCallModuleState>("llm_call")
             .PendingBySessionId[firstIntent.SessionId]
-            .DispatchDedupId.Should().Be(dedupOriginId);
+            .DispatchOperationId.Should().Be(dispatchOperationId);
     }
 
     [Fact]
@@ -1366,12 +1380,11 @@ public class RuntimeCallbackEventizationTests
             EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
-            _ = dueTime;
             _ = options;
             _ = ct;
             var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
             _generations[callbackId] = generation;
-            Scheduled.Add(new ScheduledCallback(callbackId, generation, evt));
+            Scheduled.Add(new ScheduledCallback(callbackId, generation, dueTime, evt));
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
         }
 
@@ -1539,6 +1552,7 @@ public class RuntimeCallbackEventizationTests
     private sealed record ScheduledCallback(
         string CallbackId,
         long Generation,
+        TimeSpan DueTime,
         IMessage Event);
 
     private sealed record CanceledCallback(

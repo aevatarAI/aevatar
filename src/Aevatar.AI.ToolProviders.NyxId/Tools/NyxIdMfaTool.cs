@@ -5,8 +5,17 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID multi-factor authentication.</summary>
-public sealed class NyxIdMfaTool : IAgentTool
+public sealed class NyxIdMfaTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    private static readonly NyxIdClosedActionParser<NyxIdMfaAction> ActionParser = new(
+    [
+        new("status", NyxIdMfaAction.Status, new(false, true, false)),
+        new("setup", NyxIdMfaAction.Setup, new(true, false, false)),
+        new("verify", NyxIdMfaAction.Verify, new(true, false, false)),
+    ], "status");
+
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdMfaTool(NyxIdApiClient client) => _client = client;
@@ -17,13 +26,13 @@ public sealed class NyxIdMfaTool : IAgentTool
         "Manage multi-factor authentication (MFA/TOTP). " +
         "Actions: status, setup, verify.";
 
-    public string ParametersSchema => """
+    public string ParametersSchema => $$"""
         {
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["status", "setup", "verify"],
+              "enum": {{ActionParser.ActionNamesJson}},
               "description": "Action to perform (default: status)"
             },
             "code": {
@@ -34,20 +43,28 @@ public sealed class NyxIdMfaTool : IAgentTool
         }
         """;
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+        ActionParser.Classify(argumentsJson);
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        var args = ToolArgs.Parse(argumentsJson);
-        var action = args.Str("action", "status");
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (!parsed.IsValid)
+            return NyxIdClosedActionParser<NyxIdMfaAction>.InvalidActionJson;
 
-        return action switch
+        var args = ToolArgs.Parse(argumentsJson);
+        return parsed.Action switch
         {
-            "setup" => await _client.SetupMfaAsync(token, ct),
-            "verify" => await VerifyAsync(token, args, ct),
-            _ => await _client.GetCurrentUserAsync(token, ct),
+            NyxIdMfaAction.Setup => await _client.SetupMfaAsync(token, ct),
+            NyxIdMfaAction.Verify => await VerifyAsync(token, args, ct),
+            NyxIdMfaAction.Status => await _client.GetCurrentUserAsync(token, ct),
+            _ => NyxIdClosedActionParser<NyxIdMfaAction>.InvalidActionJson,
         };
     }
 
@@ -58,4 +75,11 @@ public sealed class NyxIdMfaTool : IAgentTool
             return """{"error":"'code' is required for verify"}""";
         return await _client.VerifyMfaSetupAsync(token, JsonSerializer.Serialize(new { code }), ct);
     }
+}
+
+internal enum NyxIdMfaAction
+{
+    Status,
+    Setup,
+    Verify,
 }

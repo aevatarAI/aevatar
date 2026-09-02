@@ -55,6 +55,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
                 RevisionId = "rev-9",
                 ImplementationKind = StudioMemberImplementationKind.Workflow,
                 BoundAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+                ExpectedActorId = "scope-workflow:scope-1:m-1",
             },
             Binding = new StudioMemberBindingAuthorityState
             {
@@ -102,6 +103,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.LastBoundRevisionId.Should().Be("rev-9");
         written.LastBoundImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
         written.LastBoundAt.Should().NotBeNull();
+        written.LastBoundExpectedActorId.Should().Be("scope-workflow:scope-1:m-1");
 
         // async binding status denormalized from member authority state.
         written.BindingCurrentRunId.Should().Be("bind-1");
@@ -187,6 +189,49 @@ public sealed class StudioMemberCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldDeleteDocument_WhenMemberStateIsDeleted()
+    {
+        var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
+        var projector = new StudioMemberCurrentStateProjector(
+            dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var deletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-09T06:40:00Z"));
+        var state = new StudioMemberState
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Deleted Member",
+            PublishedServiceId = "member-m-1",
+            Deleted = true,
+            DeletedAtUtc = deletedAt,
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new StudioMemberDeletedEvent
+                {
+                    MemberId = "m-1",
+                    ScopeId = "scope-1",
+                    PublishedServiceId = "member-m-1",
+                    DeletedAtUtc = deletedAt,
+                },
+                state,
+                6,
+                "evt-deleted",
+                DateTimeOffset.Parse("2026-07-09T06:40:00Z")));
+
+        dispatcher.Upserts.Should().BeEmpty();
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be(RootActorId);
+        dispatcher.DeleteMarkers.Should().ContainSingle().Which.Should().Be(
+            new ProjectionDocumentDeleteMarker(
+                RootActorId,
+                RootActorId,
+                6,
+                "evt-deleted",
+                DateTimeOffset.Parse("2026-07-09T06:40:00Z")));
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldNoOp_WhenPayloadIsNotCommittedStateEvent()
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
@@ -247,12 +292,14 @@ public sealed class StudioMemberCurrentStateProjectorTests
         IMessage payload,
         StudioMemberState state,
         long version,
-        string eventId)
+        string eventId,
+        DateTimeOffset? timestamp = null)
     {
+        var timestampValue = timestamp ?? DateTimeOffset.UtcNow;
         return new EventEnvelope
         {
             Id = eventId,
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(timestampValue),
             Route = EnvelopeRouteSemantics.CreateObserverPublication(RootActorId),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
@@ -261,7 +308,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
                     EventId = eventId,
                     Version = version,
                     EventData = Any.Pack(payload),
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Timestamp = Timestamp.FromDateTimeOffset(timestampValue),
                 },
                 StateRoot = Any.Pack(state),
             }),
@@ -272,6 +319,8 @@ public sealed class StudioMemberCurrentStateProjectorTests
         where TReadModel : class, IProjectionReadModel
     {
         public List<TReadModel> Upserts { get; } = [];
+        public List<string> Deletes { get; } = [];
+        public List<ProjectionDocumentDeleteMarker> DeleteMarkers { get; } = [];
 
         public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
         {
@@ -283,6 +332,17 @@ public sealed class StudioMemberCurrentStateProjectorTests
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(
+            ProjectionDocumentDeleteMarker marker,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(marker.Id);
+            DeleteMarkers.Add(marker);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

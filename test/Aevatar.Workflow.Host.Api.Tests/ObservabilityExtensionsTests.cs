@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using Aevatar.Bootstrap.Hosting;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -10,8 +11,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public class ObservabilityExtensionsTests
 {
     private const double DefaultRatio = 0.1d;
-    private static readonly Type ObservabilityExtensionsType =
-        Type.GetType("Aevatar.Workflow.Host.Api.ObservabilityExtensions, Aevatar.Workflow.Host.Api", throwOnError: true)!;
+    private static readonly Type ObservabilityExtensionsType = typeof(AevatarHostObservabilityExtensions);
 
     private static readonly MethodInfo ResolveSamplingRatioMethod =
         ObservabilityExtensionsType.GetMethod("ResolveSamplingRatio", BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -23,7 +23,7 @@ public class ObservabilityExtensionsTests
         ObservabilityExtensionsType.GetMethod("ResolveHistogramBuckets", BindingFlags.NonPublic | BindingFlags.Static)!;
 
     private static readonly MethodInfo AddObservabilityMethod =
-        ObservabilityExtensionsType.GetMethod("AddAevatarWorkflowObservability", BindingFlags.NonPublic | BindingFlags.Static)!;
+        ObservabilityExtensionsType.GetMethod("AddAevatarHostObservability", BindingFlags.Public | BindingFlags.Static)!;
 
     [Fact]
     public void ResolveSamplingRatio_WhenNotConfigured_ShouldReturnDefault()
@@ -131,7 +131,7 @@ public class ObservabilityExtensionsTests
     }
 
     [Fact]
-    public void AddAevatarWorkflowObservability_ShouldRegisterTelemetry_WithAndWithoutOtlp()
+    public void AddAevatarHostObservability_ShouldRegisterTelemetry_WithAndWithoutOtlp()
     {
         var productionBuilder = CreateBuilder(new Dictionary<string, string?>
         {
@@ -214,7 +214,9 @@ public class ObservabilityExtensionsTests
     {
         try
         {
-            return (WebApplicationBuilder)AddObservabilityMethod.Invoke(null, [builder, defaultServiceName])!;
+            return (WebApplicationBuilder)AddObservabilityMethod.Invoke(
+                null,
+                [builder, defaultServiceName, new[] { "Aevatar.Workflow" }])!;
         }
         catch (TargetInvocationException ex) when (ex.InnerException is not null)
         {

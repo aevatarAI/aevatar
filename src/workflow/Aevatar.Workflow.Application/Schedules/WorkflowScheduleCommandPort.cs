@@ -18,6 +18,7 @@ public sealed class WorkflowScheduleCommandPort : IWorkflowScheduleCommandPort
     {
         var receipt = await _scheduledDispatches.EnsureAsync(
             WorkflowScheduleConfigurationMapper.ToScheduledDispatchConfiguration(configuration),
+            WorkflowScheduleConfigurationMapper.ToScheduledDispatchMutationContext(configuration),
             ct);
         return new WorkflowScheduleMutationReceipt(
             receipt.ScheduleId,

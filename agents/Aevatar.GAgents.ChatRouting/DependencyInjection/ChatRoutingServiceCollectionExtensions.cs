@@ -1,3 +1,5 @@
+using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
@@ -70,6 +72,15 @@ public static class ChatRoutingServiceCollectionExtensions
             IProjectionActivationPlanProvider,
             ChatRoutePolicyCommittedStateProjectionActivationPlanProvider>());
         services.TryAddSingleton<IChatRoutePolicyCommandPort, ChatRoutePolicyCommandPort>();
+        services.TryAddSingleton<IChatRoutePolicyProjectionRecoveryPort, ChatRoutePolicyProjectionRecoveryPort>();
+
+        // Committed-fact audit: materialize a system audit record whenever the
+        // per-scope route policy changes (all three write commands persist the
+        // same ChatRoutePolicyUpdated committed event).
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator,
+            Audit.ChatRoutePolicyUpdatedAuditTranslator>());
+        services.AddAuditCommittedFactMaterializer<ChatRoutePolicyMaterializationContext>();
 
         return services;
     }

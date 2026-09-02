@@ -6,6 +6,13 @@ public enum GAgentRunTerminalStatus
     TextMessageCompleted = 1,
     RunFinished = 2,
     Failed = 3,
+    OutcomeUncertain = 4,
+}
+
+public static class GAgentRunFailureCodes
+{
+    public const string CapacityExhausted = "CAPACITY_EXHAUSTED";
+    public const string OutcomeUncertain = "SESSION_OUTCOME_UNCERTAIN";
 }
 
 public enum GAgentRunTerminalInteractionKind

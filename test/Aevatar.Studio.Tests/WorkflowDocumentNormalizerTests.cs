@@ -87,6 +87,51 @@ public sealed class WorkflowDocumentNormalizerTests
     }
 
     [Fact]
+    public void NormalizeForExport_ShouldPreserveNestedNyxIdRequestBodyRequirement()
+    {
+        var doc = new WorkflowDocument
+        {
+            Name = "wf-alpha",
+            Steps =
+            [
+                new StepModel
+                {
+                    Id = "parallel-alpha",
+                    Type = "parallel",
+                    Children =
+                    [
+                        new StepModel
+                        {
+                            Id = "request-alpha",
+                            Type = "tool_call",
+                            Capability = new StepCapability
+                            {
+                                NyxIdRequest = new NyxIdRequestCapability
+                                {
+                                    UserServiceId = " usvc-alpha ",
+                                    Method = " POST ",
+                                    PathTemplate = " /api/resources ",
+                                    BodyRequired = true,
+                                    BodyMode = " json ",
+                                    ResponseMode = " text ",
+                                },
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+
+        var result = _normalizer.NormalizeForExport(doc);
+
+        var request = result.Steps.Should().ContainSingle().Which.Children
+            .Should().ContainSingle().Which.Capability!.NyxIdRequest!;
+        request.BodyRequired.Should().BeTrue();
+        request.UserServiceId.Should().Be("usvc-alpha");
+        request.Method.Should().Be("POST");
+    }
+
+    [Fact]
     public void NormalizeForExport_ShouldResetUsedRoleAlias()
     {
         var doc = new WorkflowDocument

@@ -32,10 +32,10 @@ public partial class EnvelopePropagation
 
 public partial class EnvelopeRuntime
 {
-    public DeliveryDeduplication EnsureDeduplication()
+    public DeliveryIdentity EnsureDeliveryIdentity()
     {
-        Deduplication ??= new DeliveryDeduplication();
-        return Deduplication;
+        DeliveryIdentity ??= new DeliveryIdentity();
+        return DeliveryIdentity;
     }
 
     public EnvelopeRetryContext EnsureRetry()

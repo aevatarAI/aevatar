@@ -100,7 +100,7 @@ const LoginPage: React.FC = () => {
             subTitle={
               config.configurationError
                 ? config.configurationError
-                : 'Set NYXID_CLIENT_ID and NYXID_BASE_URL in apps/aevatar-console-web/.env.local before starting the console.'
+                : 'Configure NYXID_BASE_URL, NYXID_CLIENT_ID, NYXID_SCOPE, and NYXID_REDIRECT_URI before building the console.'
             }
           />
         </Card>

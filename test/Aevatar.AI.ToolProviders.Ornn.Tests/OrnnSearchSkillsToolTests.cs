@@ -20,6 +20,10 @@ public sealed class OrnnSearchSkillsToolTests
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
         schema.RootElement.GetProperty("properties").TryGetProperty("query", out _).Should().BeTrue();
         schema.RootElement.TryGetProperty("required", out _).Should().BeFalse();
+
+        // The model-facing `scope` knob is intentionally gone: a discovery-for-use tool must never
+        // let the model narrow visibility and hide skills it can actually use. Always searches mixed.
+        schema.RootElement.GetProperty("properties").TryGetProperty("scope", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -79,6 +83,9 @@ public sealed class OrnnSearchSkillsToolTests
             var request = handler.Requests.Should().ContainSingle().Subject;
             request.RequestUri!.ToString().Should().Contain("query=");
             request.RequestUri!.ToString().Should().Contain("scope=mixed");
+            // Discovery requests the server max page so a normal catalog comes back in one call
+            // instead of being silently truncated to the old 20-item first page.
+            request.RequestUri!.ToString().Should().Contain("pageSize=100");
         }
         finally
         {
@@ -125,7 +132,36 @@ public sealed class OrnnSearchSkillsToolTests
             var request = handler.Requests.Should().ContainSingle().Subject;
             request.Authorization!.Parameter.Should().Be("access-token");
             request.RequestUri!.ToString().Should().Contain("query=translate");
-            request.RequestUri!.ToString().Should().Contain("scope=private");
+            // A model-supplied scope is ignored — the request is always scope=mixed.
+            request.RequestUri!.ToString().Should().Contain("scope=mixed");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_IgnoresModelScopePublic_StillSearchesMixed()
+    {
+        // Regression guard for the original bug: the model picked scope=public for "org-shared
+        // skills", and the server returns only isPrivate:false for public — excluding every
+        // org-shared skill. With the scope knob removed, public must collapse to mixed.
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }""");
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
+            });
+            var tool = CreateTool(handler);
+
+            await tool.ExecuteAsync("""{ "query": "office", "scope": "public" }""");
+
+            var request = handler.Requests.Should().ContainSingle().Subject;
+            request.RequestUri!.ToString().Should().Contain("scope=mixed");
+            request.RequestUri!.ToString().Should().NotContain("scope=public");
         }
         finally
         {

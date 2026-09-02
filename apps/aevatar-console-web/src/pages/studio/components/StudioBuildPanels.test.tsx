@@ -1,11 +1,17 @@
 import { AGUIEventType } from '@aevatar-react-sdk/types';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { setLocale } from '@umijs/max';
 import * as React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
-import { scriptsApi } from '@/shared/studio/scriptsApi';
 import {
   applyStepInspectorDraft,
   connectStepToTarget,
@@ -17,11 +23,24 @@ import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
 } from '@/shared/studio/graph';
+import { scriptsApi } from '@/shared/studio/scriptsApi';
 import {
+  STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING,
   StudioGAgentBuildPanel,
   StudioScriptBuildPanel,
   StudioWorkflowBuildPanel,
 } from './StudioBuildPanels';
+
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
+
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  useConsoleToast: () => mockConsoleToast,
+}));
 
 type WorkflowPrimitiveParameterTestDescriptor = {
   readonly name: string;
@@ -148,7 +167,10 @@ jest.mock('@/modules/studio/scripts/ScriptCodeEditor', () => ({
     value = '',
     onChange,
   }: {
-    readonly focusTarget?: { readonly filePath: string; readonly startLineNumber: number } | null;
+    readonly focusTarget?: {
+      readonly filePath: string;
+      readonly startLineNumber: number;
+    } | null;
     readonly value?: string;
     readonly onChange?: (nextValue: string) => void;
   }) => (
@@ -159,7 +181,9 @@ jest.mock('@/modules/studio/scripts/ScriptCodeEditor', () => ({
         onChange={(event) => onChange?.(event.target.value)}
       />
       <div data-testid="mock-script-focus-target">
-        {focusTarget ? `${focusTarget.filePath}:${focusTarget.startLineNumber}` : ''}
+        {focusTarget
+          ? `${focusTarget.filePath}:${focusTarget.startLineNumber}`
+          : ''}
       </div>
     </div>
   ),
@@ -282,6 +306,7 @@ function WorkflowBuildHarness({
   initialDocumentOverride,
   onApplyStepDraftOverride,
   onContinueToBind,
+  onInsertStepOverride,
   onSaveDraft,
   runtimePrimitivesOverride,
 }: {
@@ -289,19 +314,23 @@ function WorkflowBuildHarness({
   readonly initialDocumentOverride?: WorkflowBuildHarnessDocument;
   readonly onApplyStepDraftOverride?: (draft: any) => Promise<void>;
   readonly onContinueToBind: jest.Mock;
+  readonly onInsertStepOverride?: (stepType: string) => Promise<void>;
   readonly onSaveDraft: jest.Mock;
   readonly runtimePrimitivesOverride?: readonly WorkflowPrimitiveTestDescriptor[];
 }) {
   const documentSeed = initialDocumentOverride ?? initialDocument;
-  const [document, setDocument] = React.useState(() => cloneValue(documentSeed));
+  const [document, setDocument] = React.useState(() =>
+    cloneValue(documentSeed),
+  );
   const [draftYaml, setDraftYaml] = React.useState(() =>
     buildWorkflowYaml(documentSeed),
   );
-  const [selectedGraphNodeId, setSelectedGraphNodeId] = React.useState(
-    'step:draft_step',
-  );
+  const [selectedGraphNodeId, setSelectedGraphNodeId] =
+    React.useState('step:draft_step');
   const [layout, setLayout] = React.useState<unknown>(null);
-  const [runPrompt, setRunPrompt] = React.useState('Please triage the refund request.');
+  const [runPrompt, setRunPrompt] = React.useState(
+    'Please triage the refund request.',
+  );
   const workflowGraph = React.useMemo(
     () => buildStudioGraphElements(document, layout),
     [document, layout],
@@ -326,7 +355,9 @@ function WorkflowBuildHarness({
   return (
     <StudioWorkflowBuildPanel
       availableStepTypes={['llm_call', 'human_approval', 'connector_call']}
-      buildWorkflowYamls={buildWorkflowYamlsOverride ?? (async () => [draftYaml])}
+      buildWorkflowYamls={
+        buildWorkflowYamlsOverride ?? (async () => [draftYaml])
+      }
       canSaveWorkflow
       draftYaml={draftYaml}
       dryRunModelLabel="gpt-5.4-mini"
@@ -336,17 +367,26 @@ function WorkflowBuildHarness({
           ? onApplyStepDraftOverride
           : async (draft) => {
               const currentStepId = selectedGraphNodeId.replace(/^step:/, '');
-              const result = applyStepInspectorDraft(document, currentStepId, draft);
-              await commitDocument(result.document as WorkflowBuildHarnessDocument, {
-                nextSelectedNodeId: result.nodeId,
-              });
+              const result = applyStepInspectorDraft(
+                document,
+                currentStepId,
+                draft,
+              );
+              await commitDocument(
+                result.document as WorkflowBuildHarnessDocument,
+                {
+                  nextSelectedNodeId: result.nodeId,
+                },
+              );
             }
       }
       onAutoLayout={() => setLayout(null)}
       onConnectNodes={(sourceNodeId: string, targetNodeId: string) => {
         const sourceStepId = sourceNodeId.replace(/^step:/, '');
         const targetStepId = targetNodeId.replace(/^step:/, '');
-        const sourceStep = document.steps.find((step) => step.id === sourceStepId);
+        const sourceStep = document.steps.find(
+          (step) => step.id === sourceStepId,
+        );
         const result = connectStepToTarget(
           document,
           sourceStepId,
@@ -361,15 +401,21 @@ function WorkflowBuildHarness({
         });
       }}
       onContinueToBind={() => onContinueToBind(draftYaml)}
-      onInsertStep={async (stepType: string) => {
-        const result = insertStepByType(document, stepType, {
-          afterStepId: selectedGraphNodeId.replace(/^step:/, ''),
-          targetRoleId: 'assistant',
-        });
-        await commitDocument(result.document as WorkflowBuildHarnessDocument, {
-          nextSelectedNodeId: result.nodeId,
-        });
-      }}
+      onInsertStep={
+        onInsertStepOverride ??
+        (async (stepType: string) => {
+          const result = insertStepByType(document, stepType, {
+            afterStepId: selectedGraphNodeId.replace(/^step:/, ''),
+            targetRoleId: 'assistant',
+          });
+          await commitDocument(
+            result.document as WorkflowBuildHarnessDocument,
+            {
+              nextSelectedNodeId: result.nodeId,
+            },
+          );
+        })
+      }
       onNodeLayoutChange={(nodes) => {
         setLayout(
           buildStudioWorkflowLayout(
@@ -404,59 +450,61 @@ function WorkflowBuildHarness({
       onRunPromptChange={setRunPrompt}
       onSaveDraft={(pendingDraft) => onSaveDraft(pendingDraft ?? draftYaml)}
       onSetDraftYaml={setDraftYaml}
-      runtimePrimitives={runtimePrimitivesOverride ?? [
-        {
-          name: 'llm_call',
-          aliases: [],
-          description: 'Call the LLM.',
-          category: 'ai',
-          parameters: [
-            {
-              name: 'prompt_prefix',
-              type: 'string',
-              required: false,
-              description: 'Prompt prefix',
-              default: '',
-              enumValues: [],
-            },
-          ],
-          exampleWorkflows: ['workflow-demo'],
-        },
-        {
-          name: 'human_approval',
-          aliases: [],
-          description: 'Pause for approval.',
-          category: 'human',
-          parameters: [
-            {
-              name: 'reviewer',
-              type: 'string',
-              required: false,
-              description: 'Reviewer',
-              default: '',
-              enumValues: [],
-            },
-          ],
-          exampleWorkflows: ['workflow-demo'],
-        },
-        {
-          name: 'connector_call',
-          aliases: [],
-          description: 'Call an external connector.',
-          category: 'integration',
-          parameters: [
-            {
-              name: 'connector',
-              type: 'string',
-              required: true,
-              description: 'Connector name',
-              default: '',
-              enumValues: [],
-            },
-          ],
-          exampleWorkflows: ['workflow-demo'],
-        },
-      ]}
+      runtimePrimitives={
+        runtimePrimitivesOverride ?? [
+          {
+            name: 'llm_call',
+            aliases: [],
+            description: 'Call the LLM.',
+            category: 'ai',
+            parameters: [
+              {
+                name: 'prompt_prefix',
+                type: 'string',
+                required: false,
+                description: 'Prompt prefix',
+                default: '',
+                enumValues: [],
+              },
+            ],
+            exampleWorkflows: ['workflow-demo'],
+          },
+          {
+            name: 'human_approval',
+            aliases: [],
+            description: 'Pause for approval.',
+            category: 'human',
+            parameters: [
+              {
+                name: 'reviewer',
+                type: 'string',
+                required: false,
+                description: 'Reviewer',
+                default: '',
+                enumValues: [],
+              },
+            ],
+            exampleWorkflows: ['workflow-demo'],
+          },
+          {
+            name: 'connector_call',
+            aliases: [],
+            description: 'Call an external connector.',
+            category: 'integration',
+            parameters: [
+              {
+                name: 'connector',
+                type: 'string',
+                required: true,
+                description: 'Connector name',
+                default: '',
+                enumValues: [],
+              },
+            ],
+            exampleWorkflows: ['workflow-demo'],
+          },
+        ]
+      }
       runPrompt={runPrompt}
       savePending={false}
       saveNotice={null}
@@ -527,6 +575,62 @@ describe('StudioWorkflowBuildPanel', () => {
     });
   });
 
+  it('tracks the legacy pages/studio YAML authoring surface for deletion', () => {
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'YAML' }));
+
+    const yamlPanel = screen.getByTestId('workflow-yaml-panel');
+    expect(yamlPanel).toHaveAttribute(
+      'data-deletion-tracking-id',
+      STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING.issue,
+    );
+    expect(yamlPanel).toHaveAttribute(
+      'data-canonical-yaml-authoring-surface',
+      STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING.canonicalSurfaces.join(
+        ' ',
+      ),
+    );
+    expect(STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING).toMatchObject({
+      legacySurface:
+        'apps/aevatar-console-web/src/pages/studio/components/StudioBuildPanels.tsx',
+      removalCondition:
+        'Delete this raw draft YAML editor after pages/studio workflow authoring is migrated to the canonical Team member workflow editor.',
+    });
+  });
+
+  it('uses a generic shared toast when adding a workflow step fails', async () => {
+    const insertStep = jest.fn<Promise<void>, [string]>(async () => {
+      throw new Error('The workflow adapter rejected this node.');
+    });
+
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onInsertStepOverride={insertStep}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
+    fireEvent.click(await screen.findByRole('button', { name: /llm_call/i }));
+
+    await waitFor(() => {
+      expect(insertStep).toHaveBeenCalledWith('llm_call');
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Could not complete the workflow action. Review the details and try again.',
+      );
+    });
+    expect(
+      screen.queryByText('The workflow adapter rejected this node.'),
+    ).not.toBeInTheDocument();
+  });
+
   it('keeps the Script bind CTA stable and uses the dry-run panel as the run entry', () => {
     const handleContinueToBind = jest.fn();
 
@@ -546,8 +650,12 @@ describe('StudioWorkflowBuildPanel', () => {
     );
 
     expect(screen.getByText('Ready to bind')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Dry-run' })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Continue to Bind' }),
+    ).toBeEnabled();
+    expect(
+      screen.queryByRole('button', { name: 'Dry-run' }),
+    ).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Run' })).toHaveLength(1);
 
     fireEvent.change(screen.getByLabelText('Mock script code editor'), {
@@ -557,7 +665,9 @@ describe('StudioWorkflowBuildPanel', () => {
     });
 
     expect(screen.getByText('Validate current source')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Continue to Bind' }),
+    ).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
   });
 
@@ -586,20 +696,42 @@ describe('StudioWorkflowBuildPanel', () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('No script is selected yet. Start a script draft to open the editor.'),
+      screen.getByText(
+        'No script is selected yet. Start a script draft to open the editor.',
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText('Script ID')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Script lifecycle status')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Script dry run input')).not.toBeInTheDocument();
-    expect(screen.queryByText(/Validation, save, bind/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Script lifecycle status'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Script dry run input'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Validation, save, bind/i),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText(/dry-run controls/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Bind becomes available/i)).not.toBeInTheDocument();
-    expect(screen.queryByText('Create a script before running it')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Validate' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Save script' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Load sample input' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Continue to Bind' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Bind becomes available/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Create a script before running it'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Validate' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Save script' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Run' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Load sample input' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Continue to Bind' }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText('Promotion')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add script' }));
@@ -641,9 +773,11 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    expect(screen.getByText('orders-script (draft)')).toBeInTheDocument();
+    expect(screen.getByText('Script draft')).toBeInTheDocument();
+    expect(screen.queryByText('orders-script (draft)')).not.toBeInTheDocument();
     expect(
-      (screen.getByLabelText('Mock script code editor') as HTMLTextAreaElement).value,
+      (screen.getByLabelText('Mock script code editor') as HTMLTextAreaElement)
+        .value,
     ).toContain('DraftBehavior');
     expect(screen.getByText('Validate current source')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
@@ -679,7 +813,9 @@ describe('StudioWorkflowBuildPanel', () => {
       expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
     });
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
+      expect(
+        screen.getByRole('button', { name: 'Continue to Bind' }),
+      ).toBeEnabled();
     });
     expect(screen.getByText('Ready to bind')).toBeInTheDocument();
   });
@@ -770,10 +906,14 @@ describe('StudioWorkflowBuildPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
 
-    expect(await screen.findByLabelText('Script dry run facts')).toBeInTheDocument();
-    expect(screen.getByText('run-script-1')).toBeInTheDocument();
-    expect(screen.getByText('runtime-run')).toBeInTheDocument();
-    expect(screen.getByText('type.googleapis.com/AppScriptCommand')).toBeInTheDocument();
+    expect(
+      await screen.findByLabelText('Script dry run facts'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('run-script-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('runtime-run')).not.toBeInTheDocument();
+    expect(
+      screen.getByText('type.googleapis.com/AppScriptCommand'),
+    ).toBeInTheDocument();
   });
 
   it('keeps save observation pending honest and exposes catalog refresh', async () => {
@@ -821,14 +961,18 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
     await waitFor(
       () => {
-        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+        expect(
+          screen.getByRole('button', { name: 'Save script' }),
+        ).toBeEnabled();
       },
       { timeout: 3000 },
     );
     fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
 
     expect(await screen.findByText(/Waiting for catalog/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Continue to Bind' }),
+    ).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh catalog' }));
     expect(handleRefreshScripts).toHaveBeenCalled();
   });
@@ -877,15 +1021,21 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
     await waitFor(
       () => {
-        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+        expect(
+          screen.getByRole('button', { name: 'Save script' }),
+        ).toBeEnabled();
       },
       { timeout: 3000 },
     );
     fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
 
-    expect(await screen.findByText('Catalog rejected the revision.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Catalog rejected the revision.'),
+    ).toBeInTheDocument();
     expect(screen.getByText('Save needs attention')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Continue to Bind' }),
+    ).toBeDisabled();
   });
 
   it('polls save observation until a pending Script save is applied', async () => {
@@ -927,7 +1077,7 @@ describe('StudioWorkflowBuildPanel', () => {
         isTerminal: true,
       });
 
-    render(
+    const view = render(
       <StudioScriptBuildPanel
         scopeId="scope-1"
         scriptsQuery={{
@@ -951,21 +1101,44 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
     await waitFor(
       () => {
-        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+        expect(
+          screen.getByRole('button', { name: 'Save script' }),
+        ).toBeEnabled();
       },
       { timeout: 3000 },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+    jest.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
 
-    expect(await screen.findByText(/checking again in 1s/)).toBeInTheDocument();
-    await waitFor(
-      () => {
-        expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
-        expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
-        expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
-      },
-      { timeout: 2500 },
-    );
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/checking again in 1s/)).toBeInTheDocument();
+      expect(handleDraftSaved).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole('button', { name: 'Continue to Bind' }),
+      ).toBeDisabled();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(999);
+      });
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1);
+      });
+
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
+      expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
+      expect(
+        screen.getByRole('button', { name: 'Continue to Bind' }),
+      ).toBeEnabled();
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
   });
 
   it('ignores a save observation that resolves after the source changes', async () => {
@@ -1056,10 +1229,14 @@ describe('StudioWorkflowBuildPanel', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
+      expect(
+        screen.getByRole('button', { name: 'Save script' }),
+      ).toBeDisabled();
     });
     expect(screen.queryByText(/Save applied/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Continue to Bind' }),
+    ).toBeDisabled();
   });
 
   it('edits a multi-file package and entry settings', () => {
@@ -1086,10 +1263,14 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(screen.getByLabelText('Script package tree')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Advanced package'));
     fireEvent.click(screen.getByRole('button', { name: 'Add C#' }));
-    expect(screen.getByRole('button', { name: /Support\.cs/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Support\.cs/ }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
-    expect(screen.getByRole('button', { name: /SupportRenamed\.cs/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /SupportRenamed\.cs/ }),
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Entry behavior type'), {
       target: {
@@ -1154,18 +1335,24 @@ describe('StudioWorkflowBuildPanel', () => {
 
     expect(await screen.findByText('DAG Canvas')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-stage-actions')).toBeInTheDocument();
-    const workflowEditorWorkspace = screen.getByTestId('workflow-editor-workspace');
+    const workflowEditorWorkspace = screen.getByTestId(
+      'workflow-editor-workspace',
+    );
     const workflowDryRunPanel = screen.getByTestId('workflow-dry-run-panel');
     expect(workflowEditorWorkspace).toBeInTheDocument();
     expect(workflowDryRunPanel).toBeInTheDocument();
-    expect(within(workflowEditorWorkspace).queryByText('Dry-run')).not.toBeInTheDocument();
+    expect(
+      within(workflowEditorWorkspace).queryByText('Dry-run'),
+    ).not.toBeInTheDocument();
     expect(
       workflowEditorWorkspace.compareDocumentPosition(workflowDryRunPanel) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
-    expect(await screen.findByTestId('workflow-step-type-picker')).toBeInTheDocument();
+    expect(
+      await screen.findByTestId('workflow-step-type-picker'),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /llm_call/i }));
 
     await waitFor(() => {
@@ -1201,9 +1388,15 @@ describe('StudioWorkflowBuildPanel', () => {
         (screen.getByLabelText('Define YAML') as HTMLTextAreaElement).value,
       ).toContain('review_step');
     });
-    expect(screen.getByTestId('workflow-step-detail-panel')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save draft' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeInTheDocument();
+    expect(
+      screen.getByTestId('workflow-step-detail-panel'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Save draft' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Continue to Bind' }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
 
@@ -1222,15 +1415,15 @@ describe('StudioWorkflowBuildPanel', () => {
             'nyxid.route_preference': '/api/v1/proxy/s/openai',
           },
           prompt: 'Please triage the refund request.',
-          workflowYamls: [
-            expect.stringContaining('name: workflow-demo'),
-          ],
+          workflowYamls: [expect.stringContaining('name: workflow-demo')],
         }),
         expect.any(AbortSignal),
       );
     });
 
-    expect(await screen.findByText('workflow draft output')).toBeInTheDocument();
+    expect(
+      await screen.findByText('workflow draft output'),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue to Bind' }));
 
@@ -1291,7 +1484,9 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(screen.queryByLabelText('Parameter prompt')).not.toBeInTheDocument();
     expect(screen.queryByText('prompt_prefix')).not.toBeInTheDocument();
     expect(
-      screen.getByText(/Instruction added before each workflow run input reaches the LLM/i),
+      screen.getByText(
+        /Instruction added before each workflow run input reaches the LLM/i,
+      ),
     ).toBeInTheDocument();
 
     fireEvent.change(promptPrefixInput, {
@@ -1474,7 +1669,9 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'approve_step' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'approve_step' }),
+    );
     const promptInput = await screen.findByLabelText('Parameter prompt');
     fireEvent.change(promptInput, {
       target: {
@@ -1575,8 +1772,12 @@ describe('StudioWorkflowBuildPanel', () => {
       },
     });
 
-    expect(screen.getByText('Unexpected end of JSON input')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Apply changes' })).toBeDisabled();
+    expect(
+      screen.getByText('Unexpected end of JSON input'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Apply changes' }),
+    ).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled();
 
@@ -1615,20 +1816,30 @@ describe('StudioWorkflowBuildPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
 
-    expect(await screen.findByText('final workflow answer')).toBeInTheDocument();
+    expect(
+      await screen.findByText('final workflow answer'),
+    ).toBeInTheDocument();
 
     const outputSection = screen.getByText('Output');
     const outputPanel = outputSection.parentElement;
     expect(outputPanel).not.toBeNull();
-    expect(within(outputPanel as HTMLElement).getByText('final workflow answer')).toBeInTheDocument();
-    expect(within(outputPanel as HTMLElement).queryByText(/runId:/i)).not.toBeInTheDocument();
-    expect(within(outputPanel as HTMLElement).queryByText(/actorId:/i)).not.toBeInTheDocument();
+    expect(
+      within(outputPanel as HTMLElement).getByText('final workflow answer'),
+    ).toBeInTheDocument();
+    expect(
+      within(outputPanel as HTMLElement).queryByText(/runId:/i),
+    ).not.toBeInTheDocument();
+    expect(
+      within(outputPanel as HTMLElement).queryByText(/actorId:/i),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText('Run summary')).not.toBeInTheDocument();
 
     const debugDetailsToggle = await screen.findByText('Debug details');
     fireEvent.click(debugDetailsToggle);
-    expect(await screen.findByText(/runId: run-1/i)).toBeInTheDocument();
-    expect(screen.getByText(/actorId: actor-1/i)).toBeInTheDocument();
+    expect(await screen.findByText(/current run: ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/runtime actor: ready/i)).toBeInTheDocument();
+    expect(screen.queryByText(/runId: run-1/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/actorId: actor-1/i)).not.toBeInTheDocument();
   });
 
   it('prefers the final workflow output over earlier streamed node text', async () => {
@@ -1659,18 +1870,24 @@ describe('StudioWorkflowBuildPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
 
-    expect(await screen.findByText('second node final answer')).toBeInTheDocument();
+    expect(
+      await screen.findByText('second node final answer'),
+    ).toBeInTheDocument();
     const outputSection = screen.getByText('Output');
     const outputPanel = outputSection.parentElement;
     expect(outputPanel).not.toBeNull();
-    expect(within(outputPanel as HTMLElement).queryByText('first node answer')).toBeNull();
-    expect(within(outputPanel as HTMLElement).getByText('second node final answer')).toBeInTheDocument();
+    expect(
+      within(outputPanel as HTMLElement).queryByText('first node answer'),
+    ).toBeNull();
+    expect(
+      within(outputPanel as HTMLElement).getByText('second node final answer'),
+    ).toBeInTheDocument();
   });
 
   it('shows a friendly provider guidance message when draft run backend rejects the route', async () => {
     mockedRuntimeRunsApi.streamDraftRun.mockRejectedValueOnce(
       new Error(
-        "Service request failed. Status: 400 (Bad Request) | NyxID response: {\"message\":\"Bad request: Provider 'openai' not connected. Connect at /providers.\"}",
+        'Service request failed. Status: 400 (Bad Request) | NyxID response: {"message":"Bad request: Provider \'openai\' not connected. Connect at /providers."}',
       ),
     );
 
@@ -1690,7 +1907,9 @@ describe('StudioWorkflowBuildPanel', () => {
 
   it('keeps a GAgent draft-run failure inside Build with a recovery path', async () => {
     mockedRuntimeGAgentApi.streamDraftRun.mockRejectedValueOnce(
-      new Error('GAgent draft run timed out before the backend returned any event.'),
+      new Error(
+        'GAgent draft run timed out before the backend returned any event.',
+      ),
     );
 
     render(
@@ -1723,7 +1942,9 @@ describe('StudioWorkflowBuildPanel', () => {
         'This only failed the Build dry-run. Adjust the prompt or tools and retry, or continue to Bind when the member definition is ready to publish.',
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
+    expect(
+      screen.getByRole('button', { name: 'Continue to Bind' }),
+    ).toBeEnabled();
   });
 
   it('locks apply changes while the step mutation is pending', async () => {

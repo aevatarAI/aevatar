@@ -34,6 +34,7 @@ import {
   summaryMetricValueStyle,
 } from '@/shared/ui/proComponents';
 import { AevatarHelpTooltip } from '@/shared/ui/aevatarPageShells';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
 import { t } from "@/shared/i18n/messages";
 
 type StudioInspectorTab = 'node' | 'roles' | 'yaml';
@@ -446,16 +447,12 @@ function renderInspectorNotice(
   }
 
   return (
-    <NoticePanel
-      type={inspectorNotice.type}
-      title={
-        inspectorNotice.type === 'success'
-          ? 'Node changes applied'
-          : inspectorNotice.type === 'warning'
-            ? 'Node changes applied with warnings'
-            : 'Node changes failed'
-      }
-      description={inspectorNotice.message}
+    <ConsoleOperationNotice
+      errorMessage={t(
+        'pages.studio.studioinspectorpane.nodeActionFailed',
+        'Could not apply node changes. Try again.',
+      )}
+      notice={inspectorNotice}
     />
   );
 }

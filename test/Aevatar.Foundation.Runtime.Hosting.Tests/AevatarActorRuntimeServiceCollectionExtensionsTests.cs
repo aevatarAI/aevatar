@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -35,6 +37,8 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         provider.GetService<IActorRuntime>().Should().NotBeNull();
         provider.GetService<IAgentKindVerifier>().Should().NotBeNull();
         provider.GetService<IActorKindProbe>().Should().NotBeNull();
+        provider.GetRequiredService<ISecretVault>().Should().BeOfType<InMemorySecretVault>();
+        provider.GetRequiredService<IRuntimeSecretStore>().Should().BeOfType<InMemoryRuntimeSecretStore>();
         provider.GetRequiredService<AevatarActorRuntimeOptions>().Provider.Should().Be(AevatarActorRuntimeOptions.ProviderInMemory);
     }
 
@@ -141,6 +145,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
     [Fact]
     public async Task AddAevatarActorRuntime_WhenOrleansWithKafkaProviderBackend_ShouldRegisterKafkaProviderTransport()
     {
+        using var keyringFile = TemporaryKeyringFile.Create();
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
@@ -153,6 +158,10 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"] = "localhost:19092",
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "runtime-kafka-provider-events",
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"] = "runtime-kafka-provider-group",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaReceiverBufferCapacity"] = "96",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaReceiverBufferHighWatermark"] = "72",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaReceiverBufferLowWatermark"] = "36",
+            [$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreKeyringPath"] = keyringFile.Path,
         });
 
         services.AddAevatarActorRuntime(configuration);
@@ -170,9 +179,15 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         options.KafkaBootstrapServers.Should().Be("localhost:19092");
         options.KafkaTopicName.Should().Be("runtime-kafka-provider-events");
         options.KafkaConsumerGroup.Should().Be("runtime-kafka-provider-group");
+        options.KafkaReceiverBufferCapacity.Should().Be(96);
+        options.KafkaReceiverBufferHighWatermark.Should().Be(72);
+        options.KafkaReceiverBufferLowWatermark.Should().Be(36);
         orleansOptions.QueueCount.Should().Be(6);
         orleansOptions.QueueCacheSize.Should().Be(512);
         transportOptions.TopicPartitionCount.Should().Be(6);
+        transportOptions.ReceiverBufferCapacity.Should().Be(96);
+        transportOptions.ReceiverBufferHighWatermark.Should().Be(72);
+        transportOptions.ReceiverBufferLowWatermark.Should().Be(36);
         provider.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaProviderQueueAdapterFactory>();
         provider.GetRequiredService<KafkaProviderProducer>().Should().NotBeNull();
     }
@@ -243,12 +258,14 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
     [Fact]
     public void AddAevatarActorRuntime_WhenOrleansPersistenceOptionsConfigured_ShouldBindValues()
     {
+        using var keyringFile = TemporaryKeyringFile.Create();
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "garnet.local:6379,abortConnect=false",
+            [$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreKeyringPath"] = keyringFile.Path,
         });
 
         services.AddAevatarActorRuntime(configuration);
@@ -278,12 +295,14 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
     [Fact]
     public void AddAevatarActorRuntime_WhenOrleansPersistenceBackendIsGarnet_ShouldRegisterGarnetEventStore()
     {
+        using var keyringFile = TemporaryKeyringFile.Create();
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "garnet.local:6379,abortConnect=false",
+            [$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreKeyringPath"] = keyringFile.Path,
         });
 
         services.AddAevatarActorRuntime(configuration);
@@ -291,6 +310,10 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IEventStore));
         descriptor.Should().NotBeNull();
         descriptor!.ImplementationType.Should().Be(typeof(GarnetEventStore));
+        services.LastOrDefault(x => x.ServiceType == typeof(ISecretVault))!.ImplementationType
+            .Should().Be(typeof(GarnetBackedSecretVault));
+        services.LastOrDefault(x => x.ServiceType == typeof(IRuntimeSecretStore))!.ImplementationType
+            .Should().Be(typeof(GarnetRuntimeSecretStore));
     }
 
     [Fact]
@@ -405,6 +428,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
     [Fact]
     public void AddAevatarActorRuntime_WhenProductionAndOrleansDurableBackends_ShouldSucceed()
     {
+        using var keyringFile = TemporaryKeyringFile.Create();
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
@@ -416,6 +440,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "events",
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"] = "group",
             [$"{AevatarActorRuntimeOptions.SectionName}:Policies:Environment"] = "Production",
+            [$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreKeyringPath"] = keyringFile.Path,
         });
 
         var act = () => services.AddAevatarActorRuntime(configuration);
@@ -446,5 +471,40 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
             builder.AddInMemoryCollection(values);
 
         return builder.Build();
+    }
+
+    private sealed class TemporaryKeyringFile : IDisposable
+    {
+        private TemporaryKeyringFile(string path)
+        {
+            Path = path;
+        }
+
+        public string Path { get; }
+
+        public static TemporaryKeyringFile Create()
+        {
+            var path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"aevatar-secret-keyring-{Guid.NewGuid():N}.json");
+            File.WriteAllText(
+                path,
+                """
+                {
+                  "activeKeyId": "key-1",
+                  "keys": {
+                    "key-1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+                  },
+                  "fingerprintKey": "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA="
+                }
+                """);
+            return new TemporaryKeyringFile(path);
+        }
+
+        public void Dispose()
+        {
+            if (File.Exists(Path))
+                File.Delete(Path);
+        }
     }
 }

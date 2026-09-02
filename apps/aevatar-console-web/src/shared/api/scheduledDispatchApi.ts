@@ -1,4 +1,6 @@
 import { jsonBody, requestJson, withQuery } from "./http/client";
+import { authFetch } from "@/shared/auth/fetch";
+import { readResponseErrorDetails } from "./http/error";
 import {
   expectArray,
   expectRecord,
@@ -18,6 +20,12 @@ import {
 
 export type ScheduledDispatchTargetKind = "envelope" | "service_invocation";
 export type ScheduledDispatchScheduleKind = "generic" | "workflow";
+export type ScheduledDispatchOwner = {
+  readonly kind: "studio_member_automation";
+  readonly scopeId: string;
+  readonly teamId: string;
+  readonly memberId: string;
+};
 export const scheduledWorkflowPromptMaxLength = 4_000;
 
 export type ScheduledWorkflowChatTargetInput = {
@@ -34,6 +42,7 @@ export type ScheduledDispatchConfigurationInput = {
   readonly timezone?: string;
   readonly enabled?: boolean;
   readonly headers?: Readonly<Record<string, string>>;
+  readonly owner?: ScheduledDispatchOwner;
   readonly workflowChatTarget: ScheduledWorkflowChatTargetInput;
 };
 
@@ -53,6 +62,7 @@ export type ScheduledDispatchSummary = {
   readonly serviceKey: string;
   readonly serviceId: string;
   readonly serviceEndpointId: string;
+  readonly prompt: string;
   readonly cronExpression: string;
   readonly timezone: string;
   readonly enabled: boolean;
@@ -118,8 +128,19 @@ export type ScheduledDispatchListResult = {
 export type ScheduledDispatchListQuery = {
   readonly cursor?: string;
   readonly includeTotalCount?: boolean;
+  readonly owner?: ScheduledDispatchOwner;
   readonly take?: number;
 };
+
+const missingOwnerBindingMessage =
+  "NyxID binding was not found for the scheduled subject.";
+const missingOwnerBindingCodePattern =
+  /nyxid.*binding.*not.*found|missing.*owner.*binding|owner.*binding.*not.*found/i;
+const bindingReadModelRetryDelaysMs = [400, 900] as const;
+let waitForBindingReadModelRetry = (delayMs: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 
 function trimOptional(value: string | null | undefined): string | undefined {
   const normalized = value?.trim();
@@ -208,6 +229,52 @@ function normalizeScheduleKind(value: string | number): ScheduledDispatchSchedul
   }
 }
 
+function encodeOwner(
+  owner: ScheduledDispatchOwner | undefined,
+): ScheduledDispatchOwner | undefined {
+  if (!owner) {
+    return undefined;
+  }
+
+  if (owner.kind !== "studio_member_automation") {
+    throw new Error(`Unsupported scheduled dispatch owner kind '${owner.kind}'.`);
+  }
+
+  const scopeId = owner.scopeId.trim();
+  const teamId = owner.teamId.trim();
+  const memberId = owner.memberId.trim();
+  if (!scopeId) {
+    throw new Error("Schedule owner scopeId is required.");
+  }
+  if (!teamId) {
+    throw new Error("Schedule owner teamId is required.");
+  }
+  if (!memberId) {
+    throw new Error("Schedule owner memberId is required.");
+  }
+
+  return {
+    kind: "studio_member_automation",
+    scopeId,
+    teamId,
+    memberId,
+  };
+}
+
+export function encodeScheduledDispatchOwnerQuery(
+  owner: ScheduledDispatchOwner | undefined,
+) {
+  const normalizedOwner = encodeOwner(owner);
+  return normalizedOwner
+    ? {
+        ownerKind: normalizedOwner.kind,
+        ownerScopeId: normalizedOwner.scopeId,
+        ownerTeamId: normalizedOwner.teamId,
+        ownerMemberId: normalizedOwner.memberId,
+      }
+    : {};
+}
+
 function readTargetKind(
   record: Record<string, unknown>,
   label: string,
@@ -245,6 +312,7 @@ export function decodeScheduledDispatchSummary(
     serviceKey: readString(record, ["serviceKey", "ServiceKey"], `${label}.serviceKey`),
     serviceId: readString(record, ["serviceId", "ServiceId"], `${label}.serviceId`),
     serviceEndpointId: readString(record, ["serviceEndpointId", "ServiceEndpointId"], `${label}.serviceEndpointId`),
+    prompt: readNullableString(record, ["prompt", "Prompt"], `${label}.prompt`) ?? "",
     cronExpression: readString(record, ["cronExpression", "CronExpression"], `${label}.cronExpression`),
     timezone: readString(record, ["timezone", "Timezone"], `${label}.timezone`),
     enabled: readBoolean(record, ["enabled", "Enabled"], `${label}.enabled`),
@@ -384,6 +452,7 @@ function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
     );
   }
   const revisionId = trimOptional(input.workflowChatTarget.revisionId);
+  const owner = encodeOwner(input.owner);
   const chatRequest = {
     prompt,
     sessionId: trimOptional(input.workflowChatTarget.sessionId),
@@ -397,6 +466,7 @@ function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
     timezone: trimOptional(input.timezone),
     enabled: input.enabled ?? true,
     headers: input.headers ?? {},
+    ...(owner ? { owner } : {}),
     scheduleKind: "workflow",
     serviceInvocation: {
       identity,
@@ -417,11 +487,81 @@ function encodePreview(input: ScheduledDispatchPreviewInput) {
   };
 }
 
+export class ScheduledDispatchApiError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ScheduledDispatchApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export function configureScheduledDispatchRetryDelay(
+  waitForRetry: (delayMs: number) => Promise<void>,
+): () => void {
+  const previous = waitForBindingReadModelRetry;
+  waitForBindingReadModelRetry = waitForRetry;
+  return () => {
+    waitForBindingReadModelRetry = previous;
+  };
+}
+
+function isMissingOwnerBindingError(error: unknown): boolean {
+  if (!(error instanceof ScheduledDispatchApiError)) {
+    return false;
+  }
+
+  return (
+    error.message.includes(missingOwnerBindingMessage) ||
+    missingOwnerBindingCodePattern.test(error.message) ||
+    (Boolean(error.code) && missingOwnerBindingCodePattern.test(error.code ?? ""))
+  );
+}
+
+async function requestScheduledDispatchMutation<T>(
+  input: string,
+  decoder: (value: unknown, label?: string) => T,
+  init: RequestInit,
+): Promise<T> {
+  const response = await authFetch(input, init);
+  if (!response.ok) {
+    const details = await readResponseErrorDetails(response);
+    throw new ScheduledDispatchApiError(
+      details.message,
+      details.status,
+      details.code,
+    );
+  }
+
+  return decoder(await response.json());
+}
+
+async function requestScheduleMutationWithBindingRetry<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  for (let attemptIndex = 0; ; attemptIndex += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = bindingReadModelRetryDelaysMs[attemptIndex];
+      if (!isMissingOwnerBindingError(error) || delayMs === undefined) {
+        throw error;
+      }
+
+      await waitForBindingReadModelRetry(delayMs);
+    }
+  }
+}
+
 function listScheduledDispatches(
   query?: ScheduledDispatchListQuery,
 ): Promise<ScheduledDispatchListResult> {
   return requestJson(
     withQuery("/api/schedules", {
+      ...encodeScheduledDispatchOwnerQuery(query?.owner),
       cursor: query?.cursor,
       includeTotalCount: query?.includeTotalCount,
       take: query?.take,
@@ -473,9 +613,14 @@ export const scheduledDispatchApi = {
 
   listAll: listAllScheduledDispatches,
 
-  get(scheduleId: string): Promise<ScheduledDispatchDetail> {
+  get(
+    scheduleId: string,
+    owner?: ScheduledDispatchOwner,
+  ): Promise<ScheduledDispatchDetail> {
     return requestJson(
-      `/api/schedules/${encodeURIComponent(scheduleId.trim())}`,
+      withQuery(`/api/schedules/${encodeURIComponent(scheduleId.trim())}`, {
+        ...encodeScheduledDispatchOwnerQuery(owner),
+      }),
       decodeScheduledDispatchDetail,
     );
   },
@@ -483,50 +628,81 @@ export const scheduledDispatchApi = {
   create(
     input: ScheduledDispatchConfigurationInput,
   ): Promise<ScheduledDispatchMutationReceipt> {
-    return requestJson("/api/schedules", decodeScheduledDispatchMutationReceipt, {
-      method: "POST",
-      ...jsonBody(encodeConfiguration(input)),
-    });
+    const configuration = encodeConfiguration(input);
+    return requestScheduleMutationWithBindingRetry(() =>
+      requestScheduledDispatchMutation(
+        "/api/schedules",
+        decodeScheduledDispatchMutationReceipt,
+        {
+          method: "POST",
+          ...jsonBody(configuration),
+        },
+      ),
+    );
   },
 
   update(
     scheduleId: string,
     input: ScheduledDispatchConfigurationInput,
   ): Promise<ScheduledDispatchMutationReceipt> {
-    return requestJson(
-      `/api/schedules/${encodeURIComponent(scheduleId.trim())}`,
-      decodeScheduledDispatchMutationReceipt,
-      {
-        method: "PUT",
-        ...jsonBody(encodeConfiguration(input)),
-      },
+    const configuration = encodeConfiguration(input);
+    return requestScheduleMutationWithBindingRetry(() =>
+      requestScheduledDispatchMutation(
+        `/api/schedules/${encodeURIComponent(scheduleId.trim())}`,
+        decodeScheduledDispatchMutationReceipt,
+        {
+          method: "PUT",
+          ...jsonBody(configuration),
+        },
+      ),
     );
   },
 
-  enable(scheduleId: string, reason = ""): Promise<ScheduledDispatchMutationReceipt> {
+  enable(
+    scheduleId: string,
+    reason = "",
+    owner?: ScheduledDispatchOwner,
+  ): Promise<ScheduledDispatchMutationReceipt> {
+    const normalizedOwner = encodeOwner(owner);
     return requestJson(
       `/api/schedules/${encodeURIComponent(scheduleId.trim())}:enable`,
       decodeScheduledDispatchMutationReceipt,
       {
         method: "POST",
-        ...jsonBody({ reason }),
+        ...jsonBody({
+          ...(normalizedOwner ? { owner: normalizedOwner } : {}),
+          reason,
+        }),
       },
     );
   },
 
-  disable(scheduleId: string, reason = ""): Promise<ScheduledDispatchMutationReceipt> {
+  disable(
+    scheduleId: string,
+    reason = "",
+    owner?: ScheduledDispatchOwner,
+  ): Promise<ScheduledDispatchMutationReceipt> {
+    const normalizedOwner = encodeOwner(owner);
     return requestJson(
       `/api/schedules/${encodeURIComponent(scheduleId.trim())}:disable`,
       decodeScheduledDispatchMutationReceipt,
       {
         method: "POST",
-        ...jsonBody({ reason }),
+        ...jsonBody({
+          ...(normalizedOwner ? { owner: normalizedOwner } : {}),
+          reason,
+        }),
       },
     );
   },
 
-  delete(scheduleId: string, reason = ""): Promise<ScheduledDispatchMutationReceipt> {
+  delete(
+    scheduleId: string,
+    reason = "",
+    owner?: ScheduledDispatchOwner,
+  ): Promise<ScheduledDispatchMutationReceipt> {
     const normalizedReason = reason.trim();
+    const normalizedOwner = encodeOwner(owner);
     return requestJson(
       withQuery(`/api/schedules/${encodeURIComponent(scheduleId.trim())}`, {
         reason: normalizedReason,
@@ -534,7 +710,10 @@ export const scheduledDispatchApi = {
       decodeScheduledDispatchMutationReceipt,
       {
         method: "DELETE",
-        ...jsonBody({ reason: normalizedReason }),
+        ...jsonBody({
+          ...(normalizedOwner ? { owner: normalizedOwner } : {}),
+          reason: normalizedReason,
+        }),
       },
     );
   },
@@ -546,14 +725,24 @@ export const scheduledDispatchApi = {
     });
   },
 
-  runNow(scheduleId: string): Promise<ScheduledDispatchRunNowReceipt> {
+  runNow(
+    scheduleId: string,
+    owner?: ScheduledDispatchOwner,
+  ): Promise<ScheduledDispatchRunNowReceipt> {
+    const normalizedOwner = encodeOwner(owner);
     return requestJson(
       `/api/schedules/${encodeURIComponent(scheduleId.trim())}:run-now`,
       decodeScheduledDispatchRunNowReceipt,
       {
         method: "POST",
-        ...jsonBody({}),
+        ...jsonBody(normalizedOwner ? { owner: normalizedOwner } : {}),
       },
     );
   },
 };
+
+export function previewScheduledDispatch(
+  input: ScheduledDispatchPreviewInput,
+): Promise<ScheduledDispatchPreview> {
+  return scheduledDispatchApi.preview(input);
+}

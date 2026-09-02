@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(options.BootstrapServers);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.TopicName);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ConsumerGroup);
+        options.ValidateReceiverBufferWatermarks();
 
         AddSharedRegistrations(services);
         services.RemoveAll<KafkaProviderTransportOptions>();

@@ -11,9 +11,15 @@ internal static class ElasticsearchProjectionDocumentStoreHttpSupport
             return;
 
         var payload = await response.Content.ReadAsStringAsync(ct);
-        throw new InvalidOperationException(
-            $"Elasticsearch {operation} failed: {(int)response.StatusCode} {response.ReasonPhrase}. body={payload}");
+        throw CreateFailure(response, operation, payload);
     }
+
+    internal static InvalidOperationException CreateFailure(
+        HttpResponseMessage response,
+        string operation,
+        string payload) =>
+        new(
+            $"Elasticsearch {operation} failed: {(int)response.StatusCode} {response.ReasonPhrase}. body={payload}");
 
     internal static bool IsIndexNotFoundPayload(string payload)
     {

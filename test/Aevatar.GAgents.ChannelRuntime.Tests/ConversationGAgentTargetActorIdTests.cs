@@ -1,5 +1,8 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -32,13 +35,49 @@ public sealed class ConversationGAgentTargetActorIdTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_WhenNyxIdAuthorityIsOnlyDurableToolFact_PersistsItWithoutCredentials()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:dm:ou-channel-alpha");
+        var runner = new DeferredReplyTurnRunner();
+        runner.Request.ToolContext = (AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "owner-runtime-token",
+                "owner-runtime-token",
+                "sender-runtime-token"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-authority-alpha",
+                "ou-authority-alpha"),
+        }).ToPayload();
+        var agent = await CreateAgentAsync(actorId, runner, new RecordingLlmReplyRunDispatcher());
+
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-authority-only-1"));
+
+        var persisted = agent.State.PendingLlmReplyRequests.Should().ContainSingle().Subject;
+        var context = AgentToolExecutionContextMapper.FromPayload(persisted.ToolContext);
+        context.NyxIdAuthority.Should().Be(new AgentToolNyxIdAuthorityContext(
+            "lark",
+            "tenant-authority-alpha",
+            "ou-authority-alpha"));
+        context.Credentials.Should().Be(AgentToolCredentials.Empty);
+    }
+
+    [Fact]
     public async Task HandleNyxRelayInboundActivityAsync_ShouldDispatchWorkflowDraftRunWithRuntimeCredentialsAndPersistScrubbedState()
     {
         var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
         var eventStore = new InMemoryEventStore();
         var runner = new DeferredWorkflowDraftRunTurnRunner();
         var dispatcher = new RecordingWorkflowDraftRunInteractionPort();
-        var agent = await CreateAgentAsync(actorId, runner, new RecordingLlmReplyRunDispatcher(), dispatcher, eventStore);
+        var runtimeSecretStore = new InMemoryRuntimeSecretStore();
+        var agent = await CreateAgentAsync(
+            actorId,
+            runner,
+            new RecordingLlmReplyRunDispatcher(),
+            dispatcher,
+            eventStore,
+            runtimeSecretStore: runtimeSecretStore);
         var activity = BuildInboundActivity("msg-workflow-1");
         activity.OutboundDelivery = new OutboundDeliveryContext
         {
@@ -71,6 +110,8 @@ public sealed class ConversationGAgentTargetActorIdTests
         persisted.ReplyTokenExpiresAtUnixMs.Should().Be(0);
         persisted.NyxUserAccessToken.Should().BeEmpty();
         persisted.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
+        persisted.RelayReplyTokenRef.Ref.Should().NotBeNullOrWhiteSpace();
+        persisted.RelayUserAccessTokenRef.Ref.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -378,7 +419,8 @@ public sealed class ConversationGAgentTargetActorIdTests
         IChannelLlmReplyRunDispatcher dispatcher,
         IChannelWorkflowDraftRunInteractionPort? workflowDispatcher = null,
         InMemoryEventStore? eventStore = null,
-        RecordingEventPublisher? eventPublisher = null)
+        RecordingEventPublisher? eventPublisher = null,
+        IRuntimeSecretStore? runtimeSecretStore = null)
     {
         eventStore ??= new InMemoryEventStore();
         var servicesCollection = new ServiceCollection()
@@ -391,6 +433,8 @@ public sealed class ConversationGAgentTargetActorIdTests
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (workflowDispatcher is not null)
             servicesCollection.AddSingleton(workflowDispatcher);
+        if (runtimeSecretStore is not null)
+            servicesCollection.AddSingleton(runtimeSecretStore);
 
         var services = servicesCollection.BuildServiceProvider();
 
@@ -489,6 +533,7 @@ public sealed class ConversationGAgentTargetActorIdTests
         public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
             LlmReplyStreamChunkEvent chunk,
             string? currentPlatformMessageId,
+            NyxRelayTextOperationKind operation,
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct) =>
             Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId));
@@ -553,6 +598,7 @@ public sealed class ConversationGAgentTargetActorIdTests
         public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
             LlmReplyStreamChunkEvent chunk,
             string? currentPlatformMessageId,
+            NyxRelayTextOperationKind operation,
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct) =>
             Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId));
@@ -580,6 +626,7 @@ public sealed class ConversationGAgentTargetActorIdTests
         public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
             LlmReplyStreamChunkEvent chunk,
             string? currentPlatformMessageId,
+            NyxRelayTextOperationKind operation,
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct) =>
             Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId));

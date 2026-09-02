@@ -5,8 +5,18 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID user profile and OAuth consents.</summary>
-public sealed class NyxIdProfileTool : IAgentTool
+public sealed class NyxIdProfileTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    private static readonly NyxIdClosedActionParser<NyxIdProfileAction> ActionParser = new(
+    [
+        new("consents", NyxIdProfileAction.Consents, new(false, true, false)),
+        new("update", NyxIdProfileAction.Update, new(true, false, false)),
+        new("delete", NyxIdProfileAction.Delete, new(true, false, true)),
+        new("revoke_consent", NyxIdProfileAction.RevokeConsent, new(true, false, true)),
+    ], "consents");
+
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdProfileTool(NyxIdApiClient client) => _client = client;
@@ -17,13 +27,13 @@ public sealed class NyxIdProfileTool : IAgentTool
         "Manage the user's NyxID profile. " +
         "Actions: update (name), delete, consents (list), revoke_consent.";
 
-    public string ParametersSchema => """
+    public string ParametersSchema => $$"""
         {
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["update", "delete", "consents", "revoke_consent"],
+              "enum": {{ActionParser.ActionNamesJson}},
               "description": "Action to perform (default: consents)"
             },
             "name": {
@@ -38,21 +48,29 @@ public sealed class NyxIdProfileTool : IAgentTool
         }
         """;
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+        ActionParser.Classify(argumentsJson);
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        var args = ToolArgs.Parse(argumentsJson);
-        var action = args.Str("action", "consents");
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (!parsed.IsValid)
+            return NyxIdClosedActionParser<NyxIdProfileAction>.InvalidActionJson;
 
-        return action switch
+        var args = ToolArgs.Parse(argumentsJson);
+        return parsed.Action switch
         {
-            "update" => await UpdateAsync(token, args, ct),
-            "delete" => await _client.DeleteAccountAsync(token, ct),
-            "revoke_consent" => await RevokeConsentAsync(token, args, ct),
-            _ => await _client.ListConsentsAsync(token, ct),
+            NyxIdProfileAction.Update => await UpdateAsync(token, args, ct),
+            NyxIdProfileAction.Delete => await _client.DeleteAccountAsync(token, ct),
+            NyxIdProfileAction.RevokeConsent => await RevokeConsentAsync(token, args, ct),
+            NyxIdProfileAction.Consents => await _client.ListConsentsAsync(token, ct),
+            _ => NyxIdClosedActionParser<NyxIdProfileAction>.InvalidActionJson,
         };
     }
 
@@ -72,4 +90,12 @@ public sealed class NyxIdProfileTool : IAgentTool
             return """{"error":"'client_id' is required for revoke_consent"}""";
         return await _client.RevokeConsentAsync(token, clientId, ct);
     }
+}
+
+internal enum NyxIdProfileAction
+{
+    Consents,
+    Update,
+    Delete,
+    RevokeConsent,
 }

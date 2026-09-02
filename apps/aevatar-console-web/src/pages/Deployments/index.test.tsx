@@ -324,10 +324,16 @@ describe('DeploymentsPage', () => {
 
     renderDeploymentsPage();
 
-    expect(await screen.findByText('正在加载发布服务')).toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveAttribute(
+      'data-variant',
+      'table',
+    );
+    expect(screen.getByText('正在加载发布服务')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
     expect(
-      screen.getByText('发布对象清单仍在加载，返回前不会把当前范围误判为空。'),
-    ).toBeInTheDocument();
+      screen.queryByText('发布对象清单仍在加载，返回前不会把当前范围误判为空。'),
+    ).toBeNull();
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4);
     expect(screen.queryByText('当前范围没有服务')).toBeNull();
 
@@ -387,7 +393,7 @@ describe('DeploymentsPage', () => {
     expect(
       screen.getByRole('button', { name: '加载范围变更' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('Trade Agent')).toBeInTheDocument();
+    expect(screen.getAllByText('Trade Agent').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: '重置' }));
 
@@ -426,7 +432,8 @@ describe('DeploymentsPage', () => {
     expect(
       screen.getByRole('button', { name: '部署候选版本' }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText('dep-1').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Trade Agent').length).toBeGreaterThan(0);
+    expect(screen.queryByText('dep-1')).toBeNull();
   });
 
   it('opens the service deployment drawer from the service list row', async () => {
@@ -577,10 +584,8 @@ describe('DeploymentsPage', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText('已观察')).toBeNull();
     expect(screen.getAllByText('需核对').length).toBeGreaterThanOrEqual(3);
-    expect(
-      screen.getByText(/服务目标已包含 rev-12/),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/流量拆分已包含 rev-12/)).toBeInTheDocument();
+    expect(screen.getByText('Serving evidence')).toBeInTheDocument();
+    expect(screen.getByText('Traffic evidence')).toBeInTheDocument();
     expect(screen.getByText('候选修订')).toBeInTheDocument();
     expect(screen.getAllByText('rev-12').length).toBeGreaterThan(0);
     expect(screen.queryByText('候选版本已在服务态生效')).toBeNull();

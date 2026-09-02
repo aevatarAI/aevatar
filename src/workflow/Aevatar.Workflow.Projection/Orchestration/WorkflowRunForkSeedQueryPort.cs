@@ -26,21 +26,32 @@ public sealed class WorkflowRunForkSeedQueryPort : IWorkflowRunForkSeedQueryPort
     }
 
     public async Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
+        string scopeId,
         string runId,
         CancellationToken ct = default)
     {
-        if (!_queryEnabled || string.IsNullOrWhiteSpace(runId))
+        if (!_queryEnabled || string.IsNullOrWhiteSpace(scopeId) || string.IsNullOrWhiteSpace(runId))
             return null;
 
+        var normalizedScopeId = scopeId.Trim();
         var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
-        var bindings = await _runBindingReader.ListByRunIdAsync(normalizedRunId, take: 20, ct);
+        var bindings = await _runBindingReader.QueryAsync(
+            new WorkflowRunBindingQuery(
+                normalizedScopeId,
+                [],
+                Take: 20,
+                RunIds: [normalizedRunId]),
+            ct);
         foreach (var binding in bindings)
         {
-            if (binding.ActorKind != WorkflowActorKind.Run || string.IsNullOrWhiteSpace(binding.ActorId))
+            if (binding.ActorKind != WorkflowActorKind.Run ||
+                string.IsNullOrWhiteSpace(binding.ActorId) ||
+                !string.Equals(binding.ScopeId?.Trim(), normalizedScopeId, StringComparison.Ordinal))
                 continue;
 
             var currentState = await _currentStateReader.GetAsync(binding.ActorId, ct);
-            if (currentState == null)
+            if (currentState == null ||
+                !string.Equals(currentState.ScopeId?.Trim(), normalizedScopeId, StringComparison.Ordinal))
                 continue;
 
             return _mapper.ToSeedView(currentState);

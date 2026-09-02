@@ -7,8 +7,8 @@ import type {
   ChatMessage,
   ChatSessionState,
   ConversationLlmPreferences,
-  ConversationMeta,
   ConversationRuntimeIdentity,
+  ConversationSessionMeta,
   ConversationSessionSnapshot,
 } from "./chatTypes";
 
@@ -39,13 +39,13 @@ function mergeRuntimeIdentity(
 }
 
 export function readConversationRuntimeIdentity(
-  meta?: ConversationMeta
+  meta?: ConversationSessionMeta
 ): ConversationRuntimeIdentity {
   return mergeRuntimeIdentity(meta?.session?.runtime, meta);
 }
 
 export function readConversationPreferences(
-  meta?: ConversationMeta
+  meta?: ConversationSessionMeta
 ): ConversationLlmPreferences {
   return {
     llmModel:
@@ -75,7 +75,7 @@ export function deriveRuntimeIdentityFromMessages(
 
 export function resolveConversationRuntimeIdentity(input?: {
   messages?: readonly Pick<ChatMessage, "events">[];
-  meta?: ConversationMeta;
+  meta?: ConversationSessionMeta;
   session?: Pick<ChatSessionState, "actorId" | "commandId" | "runId">;
 }): ConversationRuntimeIdentity {
   return mergeRuntimeIdentity(

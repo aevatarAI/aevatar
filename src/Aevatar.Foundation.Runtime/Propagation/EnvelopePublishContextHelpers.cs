@@ -34,8 +34,8 @@ public static class EnvelopePublishContextHelpers
         if (options?.Propagation != null)
             MergePropagation(envelope.EnsurePropagation(), options.Propagation);
 
-        if (!string.IsNullOrWhiteSpace(options?.Delivery?.DeduplicationOperationId))
-            runtime.EnsureDeduplication().OperationId = options.Delivery.DeduplicationOperationId;
+        if (!string.IsNullOrWhiteSpace(options?.Delivery?.OperationId))
+            runtime.EnsureDeliveryIdentity().OperationId = options.Delivery.OperationId;
     }
 
     private static void MergePropagation(EnvelopePropagation target, EventEnvelopePropagationOverrides overrides)

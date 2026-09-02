@@ -56,7 +56,11 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
             for (var attempt = 1; attempt <= MaxAttempts; attempt++)
             {
                 var existing = await TryGetExistingStateAsync(indexName, keyValue, ct);
-                var result = ProjectionWriteResultEvaluator.Evaluate(existing.ReadModel, readModel);
+                var result = existing.DeleteMarker is null
+                    ? ProjectionWriteResultEvaluator.Evaluate(existing.ReadModel, readModel)
+                    : ElasticsearchProjectionDeleteMarkerPayload.EvaluateUpsertAgainstDeleteMarker(
+                        existing.DeleteMarker,
+                        readModel);
                 if (!result.IsApplied)
                 {
                     LogWriteSkipped(keyValue, startedAtTimestamp, result);
@@ -84,7 +88,11 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
             }
 
             var reconciled = await TryGetExistingStateAsync(indexName, keyValue, ct);
-            var reconciledResult = ProjectionWriteResultEvaluator.Evaluate(reconciled.ReadModel, readModel);
+            var reconciledResult = reconciled.DeleteMarker is null
+                ? ProjectionWriteResultEvaluator.Evaluate(reconciled.ReadModel, readModel)
+                : ElasticsearchProjectionDeleteMarkerPayload.EvaluateUpsertAgainstDeleteMarker(
+                    reconciled.DeleteMarker,
+                    readModel);
             if (!reconciledResult.IsApplied)
             {
                 LogWriteSkipped(keyValue, startedAtTimestamp, reconciledResult);
@@ -128,9 +136,13 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         var seqNo = TryReadLong(jsonDoc.RootElement, "_seq_no");
         var primaryTerm = TryReadLong(jsonDoc.RootElement, "_primary_term");
         if (!jsonDoc.RootElement.TryGetProperty("_source", out var sourceNode))
-            return new ExistingReadModelState(null, seqNo, primaryTerm);
+            return new ExistingReadModelState(null, null, seqNo, primaryTerm);
 
-        return new ExistingReadModelState(DeserializeOrNull(sourceNode.GetRawText()), seqNo, primaryTerm);
+        var deleteMarker = ElasticsearchProjectionDeleteMarkerPayload.TryParse(sourceNode);
+        if (deleteMarker != null)
+            return new ExistingReadModelState(null, deleteMarker, seqNo, primaryTerm);
+
+        return new ExistingReadModelState(DeserializeOrNull(sourceNode.GetRawText()), null, seqNo, primaryTerm);
     }
 
     private static HttpRequestMessage BuildConditionalUpsertRequest(
@@ -139,7 +151,7 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         string payload,
         ExistingReadModelState existing)
     {
-        var requestPath = existing.ReadModel == null
+        var requestPath = existing.ReadModel == null && existing.DeleteMarker == null
             ? $"{indexName}/_create/{Uri.EscapeDataString(keyValue)}"
             : $"{indexName}/_doc/{Uri.EscapeDataString(keyValue)}?if_seq_no={existing.SeqNo}&if_primary_term={existing.PrimaryTerm}";
         return new HttpRequestMessage(HttpMethod.Put, requestPath)
@@ -167,8 +179,15 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         {
             return _parser.Parse<TReadModel>(json);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(
+                ex,
+                "Projection read-model deserialization failed during optimistic write. provider={Provider} readModelType={ReadModelType} result={Result} errorType={ErrorType}",
+                ProviderName,
+                typeof(TReadModel).FullName,
+                "ignored",
+                ex.GetType().Name);
             return null;
         }
     }
@@ -227,9 +246,10 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
 
     internal sealed record ExistingReadModelState(
         TReadModel? ReadModel,
+        ProjectionDocumentDeleteMarker? DeleteMarker,
         long SeqNo,
         long PrimaryTerm)
     {
-        public static ExistingReadModelState Missing { get; } = new(null, -1, -1);
+        public static ExistingReadModelState Missing { get; } = new(null, null, -1, -1);
     }
 }

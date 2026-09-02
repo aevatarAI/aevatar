@@ -38,6 +38,25 @@ describe("PrimitivesPage", () => {
     setLocale("en-US", false);
   });
 
+  it("renders a card-grid skeleton while the connector catalog is loading", async () => {
+    (runtimeQueryApi.listPrimitives as jest.Mock).mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    renderWithQueryClient(React.createElement(PrimitivesPage));
+
+    expect(screen.getByText("可用连接器")).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveAttribute(
+      "data-list-layout",
+      "grid",
+    );
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "data-variant",
+      "list",
+    );
+    expect(screen.queryByText("当前筛选条件下没有匹配的连接器。")).toBeNull();
+  });
+
   it("keeps primitive examples inside runtime and scope surfaces", async () => {
     renderWithQueryClient(React.createElement(PrimitivesPage));
 

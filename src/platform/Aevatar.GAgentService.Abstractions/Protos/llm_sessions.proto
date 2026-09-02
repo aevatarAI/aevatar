@@ -93,6 +93,8 @@ message LlmSessionRunScope {
   google.protobuf.Timestamp completed_at = 8;
   string failure_code = 9;
   string failure_message = 10;
+  int64 last_applied_sequence = 11;
+  repeated string applied_record_ids = 12;
 }
 
 message LlmSessionState {
@@ -147,6 +149,9 @@ message RecordForwardedToolCallRequested {
 message LlmSessionForwardedToolCallEmittedEvent {
   string response_id = 1;
   LlmSessionForwardedToolCall call = 2;
+  string run_id = 3;
+  int64 sequence = 4;
+  string record_id = 5;
 }
 
 message ReceiveForwardedToolResultRequested {
@@ -175,6 +180,12 @@ message LlmSessionForwardedToolCallResolvedEvent {
   string response_id = 1;
   string call_id = 2;
   google.protobuf.Timestamp resolved_at = 3;
+}
+
+message CancelLlmRunRequested {
+  string response_id = 1;
+  string run_id = 2;
+  google.protobuf.Timestamp cancelled_at = 3;
 }
 
 message LlmSessionRuntimeChatMessage {
@@ -207,6 +218,12 @@ message LlmSessionRuntimeToolSelection {
   string tool_choice_hint_name = 4;
   string tool_choice_hint_arguments_json = 5;
   google.protobuf.Struct tool_choice_hint_arguments = 6;
+  repeated string owned_tool_names = 7;
+  // Route-selected tool set in effect for this run (e.g. "workspace.default"), so the
+  // off-grain run executor can re-resolve the same sources the facade classified against.
+  // Empty = no route tool set (run uses only the always-on DI providers). See task
+  // 06-21-offgrain-run-route-toolset-drop.
+  string tool_set_name = 8;
 }
 
 message LlmRunRequested {
@@ -223,6 +240,44 @@ message LlmRunRequested {
   LlmSessionRuntimeToolSelection tool_selection = 11;
   google.protobuf.Timestamp requested_at = 12;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 13;
+  google.protobuf.Duration timeout_after = 14;
+}
+
+message LlmRunStartedEvent {
+  string response_id = 1;
+  string run_id = 2;
+  int64 sequence = 3;
+  google.protobuf.Timestamp started_at = 4;
+}
+
+message LlmRunExecutionReadyEvent {
+  string response_id = 1;
+  string run_id = 2;
+  google.protobuf.Timestamp ready_at = 3;
+}
+
+message RecordLlmRunStarted {
+  LlmRunRequested command = 1;
+  google.protobuf.Timestamp started_at = 2;
+}
+
+message ExecuteLlmRunRequested {
+  string session_actor_id = 1;
+  string response_id = 2;
+  string run_id = 3;
+  LlmRunRequested command = 4;
+  string origin_platform = 5;
+}
+
+message RecordLlmStreamChunkObserved {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  int32 round = 4;
+  string delta_text = 5;
+  LlmSessionRuntimeToolCall tool_call_delta = 6;
+  LlmSessionTokenUsage usage = 7;
+  google.protobuf.Timestamp observed_at = 8;
 }
 
 message LlmStreamChunkObserved {
@@ -233,6 +288,20 @@ message LlmStreamChunkObserved {
   LlmSessionRuntimeToolCall tool_call_delta = 5;
   LlmSessionTokenUsage usage = 6;
   google.protobuf.Timestamp observed_at = 7;
+  int64 sequence = 8;
+  string record_id = 9;
+}
+
+message RecordLlmToolCallObserved {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  int32 round = 4;
+  LlmSessionRuntimeToolCall tool_call = 5;
+  bool forwarded = 6;
+  string local_result_json = 7;
+  google.protobuf.Timestamp observed_at = 8;
+  google.protobuf.Value local_result = 9;
 }
 
 message LlmToolCallObserved {
@@ -244,6 +313,19 @@ message LlmToolCallObserved {
   string local_result_json = 6;
   google.protobuf.Timestamp observed_at = 7;
   google.protobuf.Value local_result = 8;
+  int64 sequence = 9;
+  string record_id = 10;
+}
+
+message RecordLlmRunCompleted {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  string output_text = 4;
+  repeated LlmSessionRuntimeToolCall forwarded_tool_calls = 5;
+  LlmSessionTokenUsage usage = 6;
+  google.protobuf.Timestamp completed_at = 7;
+  repeated LlmSessionForwardedToolCall forwarded_tool_call_records = 8;
 }
 
 message LlmRunCompleted {
@@ -253,6 +335,18 @@ message LlmRunCompleted {
   repeated LlmSessionRuntimeToolCall forwarded_tool_calls = 4;
   LlmSessionTokenUsage usage = 5;
   google.protobuf.Timestamp completed_at = 6;
+  int64 sequence = 7;
+  string record_id = 8;
+  repeated LlmSessionForwardedToolCall forwarded_tool_call_records = 9;
+}
+
+message RecordLlmRunFailed {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  string failure_code = 4;
+  string failure_message = 5;
+  google.protobuf.Timestamp failed_at = 6;
 }
 
 message LlmRunFailed {
@@ -261,12 +355,30 @@ message LlmRunFailed {
   string failure_code = 3;
   string failure_message = 4;
   google.protobuf.Timestamp failed_at = 5;
+  int64 sequence = 6;
+  string record_id = 7;
+}
+
+message RecordLlmRunCancelled {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  google.protobuf.Timestamp cancelled_at = 4;
+}
+
+message FinalizeLlmRunTimedOut {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  google.protobuf.Timestamp timed_out_at = 4;
 }
 
 message LlmRunCancelled {
   string response_id = 1;
   string run_id = 2;
   google.protobuf.Timestamp cancelled_at = 3;
+  int64 sequence = 4;
+  string record_id = 5;
 }
 
 enum ChatRunSubRunWaitMode {

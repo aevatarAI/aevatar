@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package aevatar.event_sourcing;
+
+option csharp_namespace = "Aevatar.Foundation.Abstractions.EventSourcing";
+
+import "google/protobuf/timestamp.proto";
+
+// Runtime-owned delivery progress for committed-state observation. This is
+// not actor business state and must never be projected as a read model.
+message CommittedStatePublicationState {
+  string actor_id = 1;
+  bool initialized = 2;
+  int64 published_version = 3;
+  string published_event_id = 4;
+  int64 revision = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  CommittedStatePublicationFailure failure = 7;
+}
+
+message CommittedStatePublicationFailure {
+  int64 version = 1;
+  string event_id = 2;
+  int32 attempts = 3;
+  string error_type = 4;
+  string error_message = 5;
+  google.protobuf.Timestamp last_failed_at = 6;
+  CommittedStatePublicationFailureStage stage = 7;
+}
+
+enum CommittedStatePublicationFailureStage {
+  COMMITTED_STATE_PUBLICATION_FAILURE_STAGE_UNSPECIFIED = 0;
+  COMMITTED_STATE_PUBLICATION_FAILURE_STAGE_ADAPTER_ACCEPTANCE = 1;
+  COMMITTED_STATE_PUBLICATION_FAILURE_STAGE_CHECKPOINT = 2;
+}

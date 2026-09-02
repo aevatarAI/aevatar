@@ -58,11 +58,43 @@ public sealed class ResponsesDirectToolPlanServiceTests
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
+    [Fact]
+    public void Build_WhenToolSetResolves_ShouldExposeResolvedToolSetNameForRunReResolution()
+    {
+        var service = new ResponsesDirectToolPlanService(new StaticToolSetRegistry(
+            [new StaticToolSource([new StaticTool("nyxid_services")])]));
+
+        var plan = service.Build(new ChatRouteAction
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
+            },
+        });
+
+        plan.Error.Should().BeNull();
+        plan.ResolvedToolSetName.Should().Be("workspace.default");
+    }
+
+    [Fact]
+    public void Build_WhenNoToolSetRef_ShouldHaveEmptyResolvedToolSetName()
+    {
+        var service = new ResponsesDirectToolPlanService(new StaticToolSetRegistry([]));
+
+        var plan = service.Build(new ChatRouteAction
+        {
+            ForwardToModel = new ForwardToModel(),
+        });
+
+        plan.AdditionalToolProviders.Should().BeEmpty();
+        plan.ResolvedToolSetName.Should().BeEmpty();
+    }
+
     private sealed class StaticToolSetRegistry(IReadOnlyList<IAgentToolSource> sources) : IToolSetRegistry
     {
         public IReadOnlyList<string> GetRegisteredNames() => ["workspace.default"];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+        public ToolSetResolveResult Resolve(string? name) =>
             ToolSetResolveResult.Success("workspace.default", sources);
     }
 

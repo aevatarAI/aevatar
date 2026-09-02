@@ -9,7 +9,9 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\Aevatar.Studio.Application.Abstractions\Aevatar.Studio.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.ContentArtifacts.Abstractions\Aevatar.ContentArtifacts.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Studio.Domain\Aevatar.Studio.Domain.csproj" />
+    <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
@@ -19,6 +21,8 @@
     <ProjectReference Include="..\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.WorkOrder\Aevatar.GAgents.WorkOrder.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.ContentArtifacts\Aevatar.GAgents.ContentArtifacts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

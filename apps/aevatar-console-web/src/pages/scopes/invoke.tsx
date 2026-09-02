@@ -76,6 +76,7 @@ import {
 import type { ChatMessage } from '../chat/chatTypes';
 import ScopeServiceRuntimeWorkbench from './components/ScopeServiceRuntimeWorkbench';
 import { resolveStudioScopeContext } from './components/resolvedScope';
+import { getUserFacingIdentifierLabel } from '@/shared/ui/userFacingIdentifiers';
 import {
   buildScopeHref,
   normalizeScopeDraft,
@@ -1167,21 +1168,6 @@ const ScopeInvokePage: React.FC = () => {
   return (
     <AevatarPageShell pageHeaderRender={false} title={t("pages.scopes.invoke.legacy.invoke.lab", "Legacy Invoke Lab")}>
       <div style={viewportShellStyle}>
-        <style>
-          {`
-            @keyframes pulse {
-              0%, 100% { opacity: 1; }
-              50% { opacity: 0.45; }
-            }
-            @keyframes blink {
-              50% { opacity: 0; }
-            }
-            @keyframes bounce {
-              0%, 80%, 100% { transform: translateY(0); opacity: 0.7; }
-              40% { transform: translateY(-3px); opacity: 1; }
-            }
-          `}
-        </style>
         <div style={pageHeaderStyle}>
           <AevatarPageTitleBlock
             backAriaLabel={t("pages.scopes.invoke.team.home", "Team Home")}
@@ -1335,12 +1321,16 @@ const ScopeInvokePage: React.FC = () => {
                       <MetricRow
                         icon={<CodeOutlined />}
                         label="Revision"
-                        value={currentDefaultRouteRevision.revisionId}
+                        value={t("pages.scopes.invoke.version.ready", "Version ready")}
                       />
                       <MetricRow
                         icon={<DeploymentUnitOutlined />}
                         label="Actor"
-                        value={currentDefaultRouteActor || 'n/a'}
+                        value={
+                          currentDefaultRouteActor
+                            ? t("pages.scopes.invoke.runtime.ready", "Runtime ready")
+                            : 'n/a'
+                        }
                       />
                       {currentDefaultRouteContext ? (
                         <Typography.Text type="secondary">
@@ -1392,7 +1382,10 @@ const ScopeInvokePage: React.FC = () => {
                   <AevatarStatusTag domain="run" status={invokeResult.status} />
                   {selectedService ? (
                     <Typography.Text type="secondary">
-                      {selectedService.displayName || selectedService.serviceId}
+                      {getUserFacingIdentifierLabel(
+                        selectedService.displayName || selectedService.serviceId,
+                        t("pages.scopes.invoke.service", "Service"),
+                      )}
                     </Typography.Text>
                   ) : (
                     <Typography.Text type="secondary">
@@ -1427,7 +1420,7 @@ const ScopeInvokePage: React.FC = () => {
                             />
                           ) : chatMessages.length === 0 ? (
                             <EmptyChatState
-                              description={`Chat with ${selectedService.displayName || selectedService.serviceId} through the legacy lab while keeping raw runtime observation close by.`}
+                              description={`Chat with ${selectedService.displayName || t("pages.scopes.invoke.selected.service", "the selected service")} through the legacy lab while keeping raw runtime observation close by.`}
                               title={
                                 selectedService.displayName ||
                                 selectedService.serviceId
@@ -1632,8 +1625,7 @@ const ScopeInvokePage: React.FC = () => {
                           showIcon
                           title={`${
                             invokeResult.mode === 'stream' ? 'Streaming' : 'Invoke'
-                          } · ${invokeResult.serviceId || selectedService.serviceId} / ${
-                            invokeResult.endpointId ||
+                          } · ${
                             selectedEndpointId ||
                             'endpoint'
                           }`}
@@ -1646,27 +1638,46 @@ const ScopeInvokePage: React.FC = () => {
                           }
                         />
                       ) : null}
+	                      <MetricRow
+	                        icon={<AppstoreOutlined />}
+	                        label="Service"
+	                        value={
+	                          getUserFacingIdentifierLabel(
+	                            selectedService.displayName || selectedService.serviceId,
+	                            t("pages.scopes.invoke.service", "Service"),
+	                          )
+	                        }
+	                      />
+	                      <MetricRow
+	                        icon={<ApiOutlined />}
+	                        label="Endpoint"
+	                        value={
+	                          selectedEndpoint
+	                            ? getUserFacingIdentifierLabel(
+	                                selectedEndpoint.displayName ||
+	                                  selectedEndpoint.endpointId,
+	                                t("pages.scopes.invoke.endpoint", "Endpoint"),
+	                              )
+	                            : 'n/a'
+	                        }
+	                      />
                       <MetricRow
-                        icon={<AppstoreOutlined />}
-                        label="Service"
+                        icon={<CodeOutlined />}
+                        label={t("pages.scopes.invoke.run", "Run")}
                         value={
-                          selectedService.displayName || selectedService.serviceId
+                          invokeResult.runId
+                            ? t("pages.scopes.invoke.run.available", "Run available")
+                            : 'n/a'
                         }
                       />
                       <MetricRow
-                        icon={<ApiOutlined />}
-                        label="Endpoint"
-                        value={selectedEndpoint?.endpointId || 'n/a'}
-                      />
-                      <MetricRow
-                        icon={<CodeOutlined />}
-                        label={t("pages.scopes.invoke.run.id", "Run ID")}
-                        value={invokeResult.runId || 'n/a'}
-                      />
-                      <MetricRow
                         icon={<DeploymentUnitOutlined />}
-                        label={t("pages.scopes.invoke.actor.id", "Actor ID")}
-                        value={invokeResult.actorId || 'n/a'}
+                        label={t("pages.scopes.invoke.runtime", "Runtime")}
+                        value={
+                          invokeResult.actorId
+                            ? t("pages.scopes.invoke.runtime.ready", "Runtime ready")
+                            : 'n/a'
+                        }
                       />
                       <div
                         style={{
@@ -1714,13 +1725,14 @@ const ScopeInvokePage: React.FC = () => {
             open
             subtitle={
               selectedService
-                ? `${selectedService.namespace}/${selectedService.serviceId}`
+                ? selectedService.namespace || 'Published service'
                 : 'Published service'
             }
             title={
-              selectedService?.displayName ||
-              selectedService?.serviceId ||
-              'Service'
+              getUserFacingIdentifierLabel(
+                selectedService?.displayName || selectedService?.serviceId,
+                'Service',
+              )
             }
           >
             <ScopeServiceRuntimeWorkbench

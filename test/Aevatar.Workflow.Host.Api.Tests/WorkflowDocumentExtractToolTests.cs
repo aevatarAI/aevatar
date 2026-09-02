@@ -6,9 +6,11 @@ using Aevatar.Workflow.Infrastructure.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
-using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 using ProtoWorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
+using ProtoWorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
+using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -21,9 +23,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("invoice INV-7 total 42"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider(["""{"total":42,"invoice_id":"INV-7"}"""]);
@@ -92,16 +94,16 @@ public sealed class WorkflowDocumentExtractToolTests
         {
             var imageBytes = new byte[] { 137, 80, 78, 71, 1, 2, 3, 4 };
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 imageBytes,
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.png",
                 MediaType: "image/png"));
             var llmProvider = new RecordingImageLlmProvider(["""{"invoice_id":"IMG-1"}"""]);
             var tool = await GetDocumentExtractToolAsync(port, llmProvider);
 
             var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
-                BuildSchemaBoundDocumentExtractArguments(
+                ArgumentsJson: BuildSchemaBoundDocumentExtractArguments(
                     result.FileRef,
                     """
                     {
@@ -116,12 +118,21 @@ public sealed class WorkflowDocumentExtractToolTests
                       }
                     }
                     """),
-                "run-1",
-                "extract",
-                "exec-1",
-                "call-1",
-                "scope-1",
-                new ProtoWorkflowCallerCredential()));
+                RunId: "run-1",
+                StepId: "extract",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new ProtoWorkflowCallerCredential { BearerToken = "caller-alpha" },
+                RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                LlmControl: new Aevatar.Workflow.Abstractions.WorkflowLlmControlContext
+                {
+                    ModelOverride = "model-alpha",
+                    RoutePreference = "route-alpha",
+                    MaxToolRoundsOverride = 5,
+                    UserMemoryPrompt = "memory-alpha",
+                    SenderNyxIdAccessToken = "sender-alpha",
+                }));
 
             using var document = JsonDocument.Parse(output.ResultJson);
             var rootElement = document.RootElement;
@@ -132,10 +143,12 @@ public sealed class WorkflowDocumentExtractToolTests
             output.ResultJson.Contains("data:image", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
 
             llmProvider.Requests.Should().ContainSingle();
-            llmProvider.Requests.Single().Messages[1].ContentParts.Should().ContainSingle(part =>
+            var request = llmProvider.Requests.Single();
+            request.Messages[1].ContentParts.Should().ContainSingle(part =>
                 part.Kind == ContentPartKind.Image &&
                 part.MediaType == "image/png" &&
                 part.DataBase64 == Convert.ToBase64String(imageBytes));
+            AssertWorkflowLlmContext(request);
         }
         finally
         {
@@ -151,9 +164,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("invoice total 42"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider(["unused"]);
@@ -187,9 +200,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("invoice total 42"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider([
@@ -242,9 +255,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("line items include sku A1 and B2"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider([
@@ -310,9 +323,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("line items include sku A1"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider([
@@ -374,9 +387,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("receipt status approved"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider(["""{"status":"approved"}"""]);
@@ -429,9 +442,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("receipt status escalated"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider(["""{"status":"escalated"}"""]);
@@ -483,9 +496,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("receipt paid with optional memo missing"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider([
@@ -541,9 +554,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("receipt has three lines"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider([
@@ -597,9 +610,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("invoice total 42"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider(["unused"]);
@@ -645,9 +658,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("invoice total 42"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain"));
             var llmProvider = new RecordingImageLlmProvider(["unused"]);
@@ -696,9 +709,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("invoice total 42"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -730,9 +743,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 System.Text.Encoding.UTF8.GetBytes("invoice total 42"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -771,6 +784,78 @@ public sealed class WorkflowDocumentExtractToolTests
     }
 
     [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldUseSingleInputFileRefWhenArgumentsOmitFileRef()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-input-file-ref-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
+                System.Text.Encoding.UTF8.GetBytes("invoice total 42"),
+                ApplicationFileArtifactSourceKind.ChatInput,
+                FileName: "invoice.txt",
+                MediaType: "text/plain"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                "{}",
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential(),
+                [ToProtoInputFileRef(result.FileRef)]));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            var rootElement = document.RootElement;
+            rootElement.GetProperty("extraction_kind").GetString().Should().Be("utf8_text");
+            rootElement.GetProperty("media_type").GetString().Should().Be("text/plain");
+            rootElement.GetProperty("file").GetProperty("file_id").GetString().Should().Be(result.FileRef.FileId);
+            rootElement.GetProperty("text").GetString().Should().Be("invoice total 42");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldNotTreatAttachmentRefAsFileIdentity()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-attachment-ref-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                """
+                {
+                  "attachment_ref": "file_v3_1"
+                }
+                """,
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Contain("fileRef object or exactly one input file ref");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task AddWorkflowInfrastructure_ShouldWireDocumentExtractImageProviderFromLlmFactory()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-di-image-tests", Guid.NewGuid().ToString("N"));
@@ -780,16 +865,16 @@ public sealed class WorkflowDocumentExtractToolTests
             var services = new ServiceCollection();
             services.AddLogging();
             services.AddSingleton<ILLMProviderFactory>(imageProvider);
-            services.Configure<FileSystemWorkflowFileIngressOptions>(options =>
+            services.Configure<FileSystemFileArtifactOptions>(options =>
                 options.RootDirectory = root);
 
             services.AddWorkflowInfrastructure();
 
             using var provider = services.BuildServiceProvider();
-            var filePort = provider.GetRequiredService<FileSystemWorkflowFileIngressPort>();
-            var result = await filePort.IngestAsync(new WorkflowFileIngressRequest(
+            var filePort = provider.GetRequiredService<FileSystemFileArtifactPort>();
+            var result = await filePort.IngestAsync(new FileArtifactIngressRequest(
                 new byte[] { 1, 2, 3 },
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.png",
                 MediaType: "image/png"));
             var tools = new List<IWorkflowTool>();
@@ -829,22 +914,31 @@ public sealed class WorkflowDocumentExtractToolTests
         {
             var imageBytes = new byte[] { 137, 80, 78, 71, 1, 2, 3, 4 };
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 imageBytes,
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: mediaType == "image/png" ? "receipt.png" : "receipt.jpg",
                 MediaType: mediaType));
             var llmProvider = new RecordingImageLlmProvider(["receipt ", "total 42"]);
             var tool = await GetDocumentExtractToolAsync(port, llmProvider);
 
             var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
-                BuildDocumentExtractArguments(result.FileRef),
-                "run-1",
-                "extract",
-                "exec-1",
-                "call-1",
-                "scope-1",
-                new ProtoWorkflowCallerCredential()));
+                ArgumentsJson: BuildDocumentExtractArguments(result.FileRef),
+                RunId: "run-1",
+                StepId: "extract",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new ProtoWorkflowCallerCredential { BearerToken = "caller-alpha" },
+                RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                LlmControl: new Aevatar.Workflow.Abstractions.WorkflowLlmControlContext
+                {
+                    ModelOverride = "model-alpha",
+                    RoutePreference = "route-alpha",
+                    MaxToolRoundsOverride = 5,
+                    UserMemoryPrompt = "memory-alpha",
+                    SenderNyxIdAccessToken = "sender-alpha",
+                }));
 
             using var document = JsonDocument.Parse(output.ResultJson);
             var rootElement = document.RootElement;
@@ -867,6 +961,7 @@ public sealed class WorkflowDocumentExtractToolTests
                 part.MediaType == mediaType &&
                 part.Name == result.FileRef.FileName &&
                 part.DataBase64 == Convert.ToBase64String(imageBytes));
+            AssertWorkflowLlmContext(request);
         }
         finally
         {
@@ -883,9 +978,9 @@ public sealed class WorkflowDocumentExtractToolTests
         {
             var imageBytes = new byte[] { 137, 80, 78, 71, 1, 2, 3, 4 };
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 imageBytes,
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.png",
                 MediaType: "image/png"));
             var llmProvider = new RecordingImageLlmProvider(["receipt total 42"]);
@@ -921,9 +1016,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 new byte[] { 1, 2, 3 },
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.png",
                 MediaType: "image/png"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -956,9 +1051,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 new byte[] { 80, 75, 3, 4 },
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "budget.xlsx",
                 MediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -975,6 +1070,9 @@ public sealed class WorkflowDocumentExtractToolTests
             using var document = JsonDocument.Parse(output.ResultJson);
             document.RootElement.GetProperty("error").GetString().Should().Be("unsupported_media_type");
             document.RootElement.GetProperty("detail").GetString().Should().Contain("spreadsheetml.sheet");
+            output.Failure.Should().NotBeNull();
+            output.Failure!.ErrorCode.Should().Be("unsupported_media_type");
+            output.Failure.ErrorMessage.Should().Contain("spreadsheetml.sheet");
             output.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
         }
         finally
@@ -991,9 +1089,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 new byte[] { 1, 2, 3 },
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.jpeg",
                 MediaType: "image/jpeg"));
             var tool = await GetDocumentExtractToolAsync(port, new TextOnlyLlmProvider());
@@ -1024,9 +1122,9 @@ public sealed class WorkflowDocumentExtractToolTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 new byte[(5 * 1024 * 1024) + 1],
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "large.png",
                 MediaType: "image/png"));
             var llmProvider = new RecordingImageLlmProvider(["unused"]);
@@ -1056,10 +1154,10 @@ public sealed class WorkflowDocumentExtractToolTests
     [Fact]
     public async Task WorkflowDocumentExtractTool_ShouldRejectImagesWhenStreamExceedsFiveMiB()
     {
-        var fileRef = new ApplicationWorkflowFileRef
+        var fileRef = new ApplicationFileArtifactRef
         {
             FileId = "underreported-image",
-            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
             FileName = "underreported.png",
             MediaType = "image/png",
             SizeBytes = 0,
@@ -1093,9 +1191,9 @@ public sealed class WorkflowDocumentExtractToolTests
         {
             var port = CreateFileArtifactPort(root);
             var imageBytes = new byte[] { 1, 2, 3, 4 };
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 imageBytes,
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.png",
                 MediaType: "image/png"));
             var tool = await GetDocumentExtractToolAsync(
@@ -1134,9 +1232,9 @@ public sealed class WorkflowDocumentExtractToolTests
         {
             var port = CreateFileArtifactPort(root);
             var imageBytes = new byte[] { 1, 2, 3, 4 };
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 imageBytes,
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "receipt.png",
                 MediaType: "image/png"));
             var tool = await GetDocumentExtractToolAsync(
@@ -1167,15 +1265,15 @@ public sealed class WorkflowDocumentExtractToolTests
         }
     }
 
-    private static FileSystemWorkflowFileIngressPort CreateFileArtifactPort(string root) =>
-        new(Microsoft.Extensions.Options.Options.Create(new FileSystemWorkflowFileIngressOptions
+    private static FileSystemFileArtifactPort CreateFileArtifactPort(string root) =>
+        new(Microsoft.Extensions.Options.Options.Create(new FileSystemFileArtifactOptions
         {
             RootDirectory = root,
             TimeToLive = TimeSpan.FromMinutes(30),
         }));
 
     private static async Task<IWorkflowTool> GetDocumentExtractToolAsync(
-        IWorkflowFileArtifactReadPort readPort,
+        IFileArtifactReadPort readPort,
         ILLMProvider? llmProvider = null,
         ILLMProviderFactory? llmProviderFactory = null)
     {
@@ -1184,8 +1282,34 @@ public sealed class WorkflowDocumentExtractToolTests
         return tools.Should().ContainSingle(x => x.Name == "document_extract").Subject;
     }
 
+    private static ProtoWorkflowFileRef ToProtoInputFileRef(ApplicationFileArtifactRef fileRef) =>
+        new()
+        {
+            FileId = fileRef.FileId ?? string.Empty,
+            ArtifactId = fileRef.ArtifactId ?? string.Empty,
+            SourceKind = fileRef.SourceKind switch
+            {
+                ApplicationFileArtifactSourceKind.ChatInput => ProtoWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.FormUpload => ProtoWorkflowFileSourceKind.FormUpload,
+                ApplicationFileArtifactSourceKind.ConnectedServiceResource => ProtoWorkflowFileSourceKind.ConnectedServiceResource,
+                ApplicationFileArtifactSourceKind.ExternalResource => ProtoWorkflowFileSourceKind.ExternalResource,
+                ApplicationFileArtifactSourceKind.Generated => ProtoWorkflowFileSourceKind.Generated,
+                _ => ProtoWorkflowFileSourceKind.Unspecified,
+            },
+            SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+            SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+            FileName = fileRef.FileName ?? string.Empty,
+            MediaType = fileRef.MediaType ?? string.Empty,
+            SizeBytes = fileRef.SizeBytes,
+            Sha256 = fileRef.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+            OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+            OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+        };
+
     private static string BuildDocumentExtractArguments(
-        ApplicationWorkflowFileRef fileRef,
+        ApplicationFileArtifactRef fileRef,
         int? maxChars = null,
         string? extractionKind = null)
     {
@@ -1213,7 +1337,7 @@ public sealed class WorkflowDocumentExtractToolTests
     }
 
     private static string BuildSchemaBoundDocumentExtractArguments(
-        ApplicationWorkflowFileRef fileRef,
+        ApplicationFileArtifactRef fileRef,
         string? schemaContractJson)
     {
         using var schemaContract = schemaContractJson == null
@@ -1241,19 +1365,34 @@ public sealed class WorkflowDocumentExtractToolTests
         return JsonSerializer.Serialize(payload);
     }
 
-    private sealed class StaticWorkflowFileArtifactReadPort(
-        ApplicationWorkflowFileRef fileRef,
-        Stream content) : IWorkflowFileArtifactReadPort
+    private static void AssertWorkflowLlmContext(LLMRequest request)
     {
-        public ValueTask<ApplicationWorkflowFileRef> DescribeAsync(
-            ApplicationWorkflowFileRef requestedFileRef,
+        request.CallerContext.Should().NotBeNull();
+        request.CallerContext!.ScopeId.Should().Be("scope-1");
+        request.CallerContext.OwnerSubject.Should().Be("scope-1");
+        request.CallerContext.Credentials.Should().NotBeNull();
+        request.CallerContext.Credentials!.NyxIdBearer.Should().Be("caller-alpha");
+        request.LlmControl.Should().NotBeNull();
+        request.LlmControl!.ModelOverride.Should().Be("model-alpha");
+        request.LlmControl.NyxIdRoutePreference.Should().Be("route-alpha");
+        request.LlmControl.MaxToolRoundsOverride.Should().Be(5);
+        request.LlmControl.UserMemoryPrompt.Should().Be("memory-alpha");
+        request.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-alpha");
+    }
+
+    private sealed class StaticWorkflowFileArtifactReadPort(
+        ApplicationFileArtifactRef fileRef,
+        Stream content) : IFileArtifactReadPort
+    {
+        public ValueTask<ApplicationFileArtifactRef> DescribeAsync(
+            ApplicationFileArtifactRef requestedFileRef,
             CancellationToken cancellationToken = default) =>
             ValueTask.FromResult(fileRef);
 
-        public ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
-            ApplicationWorkflowFileRef requestedFileRef,
+        public ValueTask<FileArtifactContent> OpenReadAsync(
+            ApplicationFileArtifactRef requestedFileRef,
             CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(new WorkflowFileArtifactContent(fileRef, content));
+            ValueTask.FromResult(new FileArtifactContent(fileRef, content));
     }
 
     private sealed class RecordingImageLlmProvider(IReadOnlyList<string> chunks) : ILLMProvider, ILLMProviderFactory

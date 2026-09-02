@@ -5,6 +5,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
@@ -49,6 +50,7 @@ public sealed class WorkflowRunFallbackCoverageTests
                 : string.IsNullOrWhiteSpace(workflowName)
                     ? WorkflowChatSource.Direct()
                     : WorkflowChatSource.CatalogWorkflow(workflowName),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: null,
             InputParts: null);
         Exception exception = operationCanceled
@@ -69,6 +71,7 @@ public sealed class WorkflowRunFallbackCoverageTests
         var request = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.InlineYamlBundle(["name: inline"], "auto", "actor-1"),
+            ExternalCapabilityExecutionMode.Interactive,
             SessionId: "session-1",
             Metadata: null);
 
@@ -95,7 +98,7 @@ public sealed class WorkflowRunFallbackCoverageTests
         var policy = new WorkflowDirectFallbackPolicy(options);
 
         var shouldFallback = policy.ShouldFallback(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-1")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-1"), ExternalCapabilityExecutionMode.Interactive),
             new WorkflowDirectFallbackTriggerException("fallback"));
 
         shouldFallback.Should().BeTrue();
@@ -141,13 +144,14 @@ public sealed class WorkflowRunFallbackCoverageTests
         target.RequireLiveSink().Complete();
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-requested", "auto")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-requested", "auto"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         pipeline.Requests.Select(static x => x.Source.WorkflowName).Should().Equal("auto", "direct");
         pipeline.Requests.Select(static x => x.Source.ActorId).Should().Equal("actor-requested", null);
+        await target.PendingReclaimTask;
         actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
     }
 
@@ -165,7 +169,7 @@ public sealed class WorkflowRunFallbackCoverageTests
             logger: null);
 
         var result = await service.DispatchAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-requested", "auto")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-requested", "auto"), ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
@@ -186,7 +190,10 @@ public sealed class WorkflowRunFallbackCoverageTests
             [actorId],
             projectionPort,
             actorPort,
-            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()),
+            // 06-20-observatory-run-state-feed (R2): run the scheduled created-actor reclaim inline so the
+            // destroy is observed deterministically within the test.
+            detachedReclaimLauncher: reclaim => reclaim());
         target.BindLiveObservation(
             new FakeProjectionLease(actorId, commandId),
             new FakeLiveSinkLease(),
@@ -376,7 +383,7 @@ public sealed class WorkflowRunFallbackCoverageTests
             Task.CompletedTask;
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort
     {
         public List<string> DestroyCalls { get; } = [];
         public TaskCompletionSource<bool> Destroyed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -406,8 +413,6 @@ public sealed class WorkflowRunFallbackCoverageTests
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
-            throw new NotSupportedException();
     }
 
     private sealed class FakeProjectionLease(string actorId, string commandId) : IWorkflowExecutionProjectionLease

@@ -5,6 +5,9 @@ namespace Aevatar.AI.ToolProviders.Lark.Tools;
 
 public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parameters>
 {
+    private const string ChannelDeliveryAddressIdMetadataKey = "channel.delivery.address_id";
+    private const string ChannelDeliveryAddressTypeMetadataKey = "channel.delivery.address_type";
+
     private static readonly HashSet<string> AllowedVisibility =
     [
         "readable",
@@ -153,6 +156,29 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
             });
         }
 
+        // Additionally grant the requester (channel sender) full access while KEEPING the tenant link
+        // applied above, so a doc shared to a group stays group-readable AND the requester gets edit
+        // access. Sender-grant failure is reported but does NOT fail the op (the tenant link is live).
+        var senderGranted = false;
+        string? senderGrantError = null;
+        var sender = AgentToolRequestContext.ChannelSenderId?.Trim();
+        if (!string.IsNullOrWhiteSpace(sender))
+        {
+            var senderGrantResponse = await _client.GrantResourceMemberAsync(
+                request.Token,
+                new LarkResourceMemberGrantRequest(
+                    Token: createResult.DocumentToken,
+                    ObjType: "docx",
+                    MemberId: sender,
+                    MemberType: "openid",
+                    Perm: "full_access"),
+                ct);
+            if (LarkProxyResponseParser.TryParseError(senderGrantResponse, out var senderError))
+                senderGrantError = senderError;
+            else
+                senderGranted = true;
+        }
+
         return LarkProxyResponseParser.Serialize(new
         {
             success = true,
@@ -160,6 +186,8 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
             document_url = documentUrl,
             visibility_applied = true,
             visibility = request.Visibility == LarkDocxVisibility.Editable ? "editable" : "readable",
+            granted_to_sender = senderGranted,
+            sender_grant_error = senderGrantError,
         });
     }
 
@@ -193,9 +221,9 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
         receiveIdType = parameters.ReceiveIdType?.Trim().ToLowerInvariant();
 
         if (string.IsNullOrWhiteSpace(receiveId))
-            receiveId = AgentToolRequestContext.TryGetExternalMetadata("channel.lark.receive_id")?.Trim();
+            receiveId = AgentToolRequestContext.TryGetExternalMetadata(ChannelDeliveryAddressIdMetadataKey)?.Trim();
         if (string.IsNullOrWhiteSpace(receiveIdType))
-            receiveIdType = AgentToolRequestContext.TryGetExternalMetadata("channel.lark.receive_id_type")?.Trim().ToLowerInvariant();
+            receiveIdType = AgentToolRequestContext.TryGetExternalMetadata(ChannelDeliveryAddressTypeMetadataKey)?.Trim().ToLowerInvariant();
 
         if (string.IsNullOrWhiteSpace(receiveId) && string.IsNullOrWhiteSpace(receiveIdType))
         {

@@ -73,13 +73,85 @@ owner: eanzhao
 BindWorkflowDefinition(yaml)
   -> WorkflowParser.Parse (YAML -> WorkflowDefinition)
   -> WorkflowValidator.Validate (结构校验)
-  -> BindWorkflowRunDefinition(yaml/run binding)
+  -> BindWorkflowRunDefinition(yaml/run binding + capability admission plan)
   -> InstallCognitiveModules on WorkflowRunGAgent:
        IWorkflowModuleDependencyExpander[]: 推导模块名集合
        WorkflowModuleFactory: 按名称创建实例
        IWorkflowModuleConfigurator[]: 配置实例
        WorkflowExecutionBridgeModule: 接入 Foundation 事件管线
 ```
+
+### External operation admission proof handoff
+
+NyxID external operation 使用一条 actor-owned proof 主链，step selector 是 `PublishedEndpoint(endpoint_id)` 或 `AuthoredRequest(request_contract_digest)`。`PublishedEndpoint` 持久化 `NyxIdOperationSelector { user_service_id, endpoint_id }`；definition admission 读取 NyxID `/api/v1/mcp/config`，shared typed adapter 只接受 exact non-generic UserService endpoint，并生成 server-owned service slug、method、path template、parameter/body contract、typed response policy、source stamp 与 digest。`AuthoredRequest` 持久化 typed request contract proposal；definition admission 只读取 exact UserService inventory，且必须由 authenticated binder 确认当前 digest 与 risk，actor 才能持久化 `NyxIdExplicitRequestGrant` 并提交 proof。NyxID `catalog_digest` 是 `PublishedEndpoint` 的 normalized descriptor revision；Aevatar 不保存另一份 UserService/OpenAPI catalog，也不以 observation time 或本地 counter 冒充 revision。
+
+Studio 的 authoring draft 是 proof 主链之前的编辑态，不是运行态。`/api/chat` 先发现 structured external capability；没有 exact descriptor 时，可以查询官方文档或推导最小 authoring shape，但只能保存不含 step-level `capability` 的 unresolved YAML。`aevatar_create_member_workflow_draft` 创建或复用 Team workflow member shell，并使用独立稳定 draft identity 保存 YAML；返回 canonical Studio URL、`runnable=false`、`binding_status=not_bound`、Accepted command receipt、`projection_pending` readiness 和 `NYXID_OPERATION_SELECTION_REQUIRED`。
+
+unresolved draft 不调用 bind、schedule、provision、publish、run 或 `nyxid_proxy`。搜索结果、推测 API 形状、display text、slug、method 或 path 都不能构造 selector/proof。后续有 exact MCP descriptor 时，作者才能写入 `PublishedEndpoint` 的 `user_service_id + endpoint_id` selector；已知静态 HTTP contract 时，作者可写入 `AuthoredRequest` typed request contract proposal，但仍必须经 exact inventory admission 与 authenticated binder grant。两条路径都重新进入正式 definition admission；admission 通过后仍需独立 binding/publication，运行时继续按 committed proof 重验。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    A{"Step selector"}
+    A -->|"PublishedEndpoint(endpoint_id)"| B["MCP descriptor"]
+    A -->|"AuthoredRequest(request_contract_digest)"| C["Exact inventory at bind"]
+    C --> D["Authenticated binder confirmation + NyxIdExplicitRequestGrant"]
+    B --> E["Actor-owned WorkflowGAgent v4 invocation_admissions"]
+    D --> E
+    E --> F["BindWorkflowRunDefinitionEvent.capability_admission_plan"]
+    F --> G["WorkflowRunState.capability_admission_plan"]
+    G --> H["StepRequestEvent.external_invocation"]
+    H --> I["WorkflowToolExecutionRequest.InvocationAdmission"]
+    I --> J["AgentToolExecutionContext.OperationAdmission"]
+    J --> K{"Committed selector"}
+    K -->|"PublishedEndpoint"| L["Runtime MCP endpoint-digest revalidation"]
+    K -->|"AuthoredRequest"| M["Validate proof + grant; no MCP/OpenAPI/inventory re-read"]
+    L --> N["NyxIdAdmittedRequestBuilder"]
+    M --> N
+    N --> O["Exact NyxID Proxy HTTP request"]
+```
+
+`WorkflowRunActorPort` 从权威 definition binding 复制 plan 到 `BindWorkflowRunDefinitionEvent`，`WorkflowRunGAgent` 把它提交到本 run 的 state。`WorkflowExecutionKernel` 与 admission 共用 compiler，为 ordinary、nested、`foreach`/`for_each`/`foreach_llm` 和 `while`/`loop` 派生同一稳定 call-site；`ToolCallModule` 只从 run actor state 解析该 call-site 的唯一 proof。missing plan、missing/duplicate call-site、selector mismatch 或 tool mismatch 都在 dispatch 前 fail closed。foreach backpressure、while state 与 tool approval suspend/resume 都复制同一个 typed invocation，不按动态 item id 猜 proof。
+
+AI adapter 把当前 proof 映射到 provider-neutral `AgentToolExecutionContext.OperationAdmission` with one typed identity union: `PublishedEndpoint { endpoint_id }` or `AuthoredRequest { request_contract_digest }`. An authored digest is never stored in `endpoint_id`, and no synthetic/empty operation ID exists. The proof carries typed `risk / approval / enforcement_owner / allowed_execution_modes`; authored requests additionally carry their matching `NyxIdExplicitRequestGrant`, and both participate in the admission digest. The single admitted-request builder accepts only declared `path_params`、`query`、`headers`、`body`; response mode is fixed by the proof. NyxID Proxy wire receives the server-derived route constraint, exact `user_service_id`, and HTTP request; endpoint IDs and digests never enter the wire.
+
+Dynamic LLM exposure、definition admission 与 runtime authorization are separate policies. `nyxid_operation` admission reads its MCP descriptor; `nyxid_request` admission reads only authenticated exact UserService inventory and requires the independent binder grant. Neither selector expands normal current-turn tool exposure. `Shadow` only records a proofless/invalid-policy decision; `Enforce` rejects a managed workflow before token resolution, file ingress, or proxy HTTP when proof, grant, execution mode, or local digest is invalid.
+
+Runtime does no raw OpenAPI read, definition-actor/read-model/event-store side read, admission refresh/priming, or process-local proof registration. `PublishedEndpoint` retains current MCP exact endpoint-digest revalidation. `AuthoredRequest` reads neither MCP nor UserService inventory: before dispatch it validates its committed plan, request identity, matching explicit grant, execution mode, and local digests, then sends exactly one exact NyxID proxy route using exact `user_service_id` and the server-derived route slug constraint. There is no slug-only fallback.
+
+### Admission v4 与 forward-only migration
+
+`external-capability-admission.v4` 只以 call-site scoped `invocation_admissions` 表达当前事实。proto field 4 `external_capabilities` 是 deprecated v2 deserialization slot；v4 creation 保持为空，v4 validation 对非空值 fail closed，禁止双事实源。Published-endpoint proof 必须带 `NYX_ID_MCP_CONFIG` source stamp; authored-request proof 必须带 `NYX_ID_USER_SERVICES` source stamp and a matching typed binder grant. Durable authored read additionally requires `DURABLE_AUTHORIZATION_CATALOG`; no source stamp can authorize a durable write/destructive request.
+
+升级采用 forward-only 语义：旧 serving definition/run 不热替换；持久化 v2/v3 plan 一旦进入 reprepare、publish 或 rebind，就在解析旧 authoring 前返回 typed `CAPABILITY_ADMISSION_REBIND_REQUIRED` 与 rebind remediation，要求使用 `PublishedEndpoint(endpoint_id)` 或带独立 binder grant 的 `AuthoredRequest(request_contract_digest)` 重新 admission 并创建 v4 revision。runtime 不把旧 raw route 或 OpenAPI identity 当 fallback，也不 query-time 迁移。明确的 `schema_version` 字符串是版本边界。
+
+Mainnet 的 `Enforce` startup gate 只读 actor-scoped current-state read models，不 activate、prime、replay 或 mutate projection。它分页校验所有未被 typed deployment state 明确标记为 deactivated 的 definition binding，以及所有非 `completed / failed / stopped` run current state；每个对象都必须携带完整且 digest-valid 的 v4 plan。已 deactivated service definition 可作为历史 revision 留存；缺 deployment relationship、active/failed/unknown deployment、普通 definition 和非终态 run 一律保守校验。失败使用稳定 blocker `CAPABILITY_ADMISSION_REBIND_REQUIRED`，仅含总数与每类最多八个 actor ID sample。`Shadow` 不执行 startup inventory scan。
+
+### Local artifact compatibility before actor lifecycle
+
+Every publish, deployment, chat, schedule, and fork producer supplies a typed, non-`Unspecified` `ExpectedExecutionMode`. The value is protocol evidence owned by that producer; it is never inferred from `scheduleId`, `runOrigin`, an actor ID, a route position, or the admission plan being checked. Definition and run bindings persist the same value, and a run cannot change mode after its first binding.
+
+Before creating, linking, binding, repairing, registering, or dispatching a workflow actor, the Application preflight parses the root YAML and every distinct inline workflow with the canonical parser, evaluates external invocations with the canonical dependency evaluator, and validates the persisted capability plan locally. It performs no network call, catalog lookup, source-freshness check, event replay, projection priming, repair, or invocation-time `RevalidatePersistedAsync`. The authoritative `WorkflowRunActorPort` repeats this pre-mutation gate; exact service-run dispatch also performs it before service-run registration so a deterministic rejection leaves zero Run artifacts.
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  A["Typed selection or persisted workflow"] --> B["Committed read models"]
+  B --> C["Local admission"]
+  C -->|"accepted"| D["Actor inbox"]
+  C -->|"rejected"| E["Typed repair action; zero Run"]
+```
+
+The stable local outcomes are deliberately bounded and safe:
+
+| Condition | Stable code | Safe message | Repair action |
+| --- | --- | --- | --- |
+| Invalid root or inline YAML | `WORKFLOW_DEFINITION_INVALID` | Workflow definition is invalid. | Update and rebind workflow. |
+| Retired direct NyxID authoring | `NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED` | Workflow uses a retired NyxID tool contract. | Update and rebind workflow. |
+| Missing or legacy plan | `CAPABILITY_ADMISSION_REBIND_REQUIRED` | Workflow capability admission must be rebuilt. | Update and rebind workflow. |
+| YAML/plan or execution-mode mismatch | `CAPABILITY_ADMISSION_REBIND_REQUIRED` | Saved workflow and capability admission no longer match. | Update and rebind workflow. |
+
+The exception exposes only the stable code and safe message. YAML, selectors, credentials, upstream response bodies, exception types, and stack traces do not enter state, projection, logs, or API summaries.
 
 ### Event Module
 
@@ -105,11 +177,18 @@ BindWorkflowDefinition(yaml)
 运行边界：
 
 - `ScheduledDispatchGAgent` 是每个 schedule 的唯一写侧事实源，持有 cron、timezone、enabled、typed target descriptor、dispatch headers、next fire lease 与 recent fire records。
-- workflow 内部的 `self_reschedule` / `schedule_workflow` step 只向 `ScheduledDispatchGAgent` 发送幂等 ensure 命令；跨 run schedule fact 不归 workflow run actor 持有。
+- workflow 内部的 `self_reschedule` / `schedule_workflow` step 只向 `ScheduledDispatchGAgent` 发送幂等 ensure 命令；跨 run schedule fact 不归 workflow run actor 持有。创建不同 schedule 时，step 只能复用可信 HTTP ingress 或 Scheduled Dispatch 写入 run actor 的 typed caller NyxID authority，并把该 subject + capability scope 映射为 `SenderNyxId` source；`scopeId` 只表达 Aevatar 资源边界，禁止把它构造成 NyxID `external_user_id`。没有 typed caller authority 的 legacy/untrusted run 必须 fail closed。更新当前 run 所属 schedule 时省略 auth，由 schedule actor 保留其已有 typed source，禁止用本次 run 的 bearer 覆盖 schedule auth。
 - workflow schedule ensure 同步结果只表示 `accepted` command receipt（schedule id、schedule actor id、command id、correlation id）；readmodel freshness 通过 projection/readmodel 观察，不能由 step completion 暗示强一致。
+- 外部 submit/poll job 必须建模为 split-run 模板，而不是 workflow core primitive。submit run 提交一次外部 job 并把 `job_id`、`idempotency_key`、确定性 `schedule_id`、poll cadence、deadline 与 attempt 预算交给 poll workflow；`ScheduledDispatchGAgent` 持有 schedule fact；每个 poll run 查询一次状态；终态分支用同一 `schedule_id` 幂等 ensure `enabled=false` 来停止后续 poll。
+- `await_job` / `async_job` 不是 runtime 原语。`wait_signal` 最多持有一个 actor-owned durable callback/signal lease，当前上限为 24 小时；它不用于把 submit/poll job 扩成同 run long polling。poll handoff 的业务字段必须在 workflow 参数或 prompt payload 中显式表达，不能塞进 dispatch `Headers` 或泛化 `metadata`。
 - 定时唤醒走 `ScheduleSelfDurableTimeoutAsync`，在 Orleans runtime 下由 durable callback/reminder 机制承载；回调只向 schedule actor 发 fire command，不在中间层保存 schedule 状态。
 - schedule actor 只负责计算下一次 fire、生成幂等 key 并投递 prepared target envelope；workflow、GAgent service invocation 与 scripting 目标准备由 application/infrastructure adapter 承载，不进入 schedule actor core。
 - workflow schedule 的 `WorkflowName`、`Prompt`、`ScopeId` 仅存在 typed workflow target descriptor 中；service invocation 与 envelope target 使用各自 typed target descriptor；dispatch `Headers` 只保留传输扩展。
+- service invocation schedule auth 支持且仅支持一个 active typed credential source：HTTP/API 只接受 `senderNyxId` 或 `scopeOwnerNyxId`；trusted internal provisioning 还可写入 `durable` 或 `scheduledInvocationAgentKey` typed reference。HTTP/API、application service、actor port 与 runtime dispatch 均不接受新的 `durableSenderBearerToken`；该 proto 字段仅作为旧事件读取入口保留，reducer 必须把旧 raw bearer 丢弃并标记 legacy blocked，fire 时失败关闭并要求用 typed credential source 重新配置。raw bearer 不得写入 schedule actor current state、dispatch command、`ScheduledDispatchDocument` read model、query response 或 list/get API 回显。
+- service invocation schedule 的 required-credential 判定由统一 `IScheduledDispatchCredentialRequirementPolicy` 承担。Application 在 create/ensure/update 进入 actor 前按 typed target kind 校验；ensure/update 省略 auth 时只能用既有 schedule readmodel 的 credential source kind 通过预检，command 仍保持 auth absent，最终由 actor-owned state 完成保留并重新校验。`ScheduledDispatchGAgent` 持久化 `credential_requirement_target_kind` 作为 actor-owned input classification，并在 fire/run-now 使用最终状态重新校验。`Envelope`、`StaticService`、`ScriptingService` 默认允许 no-auth；`WorkflowService` 与 `Connector` 必须带 typed service invocation credential source。Host 只负责把 HTTP body、认证 principal 与 service revision snapshot 映射成 typed config，不保留 endpoint-private binding/exchange gate；revoked binding 与 scope mismatch 仍由 downstream credential exchange fail closed。
+- workflow caller state 只保留三种互斥 typed source：direct bearer 的 run-scoped secret reference、tag-7 durable secret reference、或 refreshable NyxID authority。scheduled workflow fire 不交换或持久化 presentation token；它把 typed subject + capability scope 交给 service-dispatch consumer，并在进入 workflow actor state 时归一化为 NyxID authority。connector、每次 LLM dispatch/stream、每次 tool execute 都必须在真实外呼前通过同一个 `IWorkflowCallerAccessTokenProvider` 重新签发 presentation token；首版不缓存、不写回 token，也不回读 schedule actor/event store。缺失或不完整 authority、不可用 provider、binding revoked/scope mismatch 均 fail closed。direct bearer 与 tag-7 durable secret 保持非刷新语义。consumer-first 混部期间，只有包含完整 embedded authority 的旧 scheduled ref 可在恢复边界归一化；authority 缺失的 scheduled ref 不得回退为可调用凭据。caller authority 与 token 都必须从 committed projection/readmodel payload 中移除。
+- trusted internal `ScheduledInvocationAgentKey` 已经是 vault-backed credential。workflow fire 必须 exact 复用其 `SecretReference.Ref/Purpose/OwnerScopeKey + ApiKeyId` 构造 borrowed `DurableCallerCredentialRef(SourceKind=ScheduledDispatch)`；dispatch 不得 resolve、复制或重新 put secret，也不得注入 raw credential。borrowed handle 不归 workflow run 所有，因此 dispatch failure 与 run completed/stopped 都不得 revoke；每次 LLM/tool/connector 外呼仍统一通过 `TryGetCallerCredentialAsync` late resolve，使 rotation 生效，并对 revoke、expiry 或 identity mismatch fail closed。
+- scheduled `ChatRequestEvent` 只携带 typed caller credential source：vault-backed caller 使用 `caller_durable_credential` handle，refreshable NyxID caller 使用其中的 typed authority。interactive NyxID proxy ingress 可同时接收用途隔离的 delegation execution credential 与 source-readable user bearer；service invocation 必须以 `caller_nyx_id_credential_kind` 和 `caller_source_readable_nyx_id_bearer_token` 分别传递 credential purpose 与 supplemental source credential，禁止借用 `llm_control` / `metadata`，也禁止按 token 相等、header 优先级或 route 字面推断。两者进入 run 后必须分别转换成 run-scoped runtime-secret reference；delegation 只供下游 proxy execution，source-readable bearer 只供 identity/inventory/readiness。caller raw token 与 authority 必须从 committed event、projection/readmodel payload、log 与 API response 中移除，任一 required reference 无法解析时整体 fail closed。没有 handle 的旧 run 继续走 legacy fallback，不热替换。外部 API 请求若自带 `caller_durable_credential` 必须 fail closed；projection/readmodel/log 只暴露 credential source kind。
 - workflow fork 的 HTTP/automation 入口只构造 typed `WorkflowForkRunCommand` 并走 `ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>`；seed 来源读取 `IWorkflowRunForkSeedQueryPort` read model，不走 event-store replay 或 actor state side-read。
 - public API identity fields 必须显式区分 `ScheduleActorId` 与 `TargetActorId`：`ScheduleActorId` 表示持有定时配置与 fire 事实的 schedule actor receipt，`TargetActorId` 表示最近一次或摘要中的投递目标；不得用一个 `ActorId` 混用 schedule actor receipt 和目标摘要。
 - 幂等 key 格式固定为 `schedule:{scheduleId}:fire:{scheduledFireAtUtc:o}`，并随 scheduled fire dispatch headers 透传。
@@ -165,6 +244,15 @@ Runtime boundary:
 - Scope service endpoints that accept multipart stream requests must resolve the service target first. Only workflow service targets may ingest pending files into artifact storage, and the owner scope must come from the path `scopeId`; static or scripting targets fail closed before artifact ingress.
 - Host composition must fail closed for production/external backends. `WorkflowFileArtifacts:Backend=External` requires explicit registrations for ingress/read/ownership/cleanup ports; production policy rejects the implicit filesystem backend.
 - The filesystem backend is the local/test concrete backend. Its cleanup removes expired descriptor-committed artifacts and stale staged directories without introducing a process-local artifact registry.
+
+Workflow files can back a revisioned ContentArtifact without becoming the
+ContentArtifact authority. The Host adapter accepts only
+`backingObject.provider=workflow-file`, maps `objectKey` to the stable workflow
+`FileArtifactRef.ArtifactId`, and requires descriptor Scope/Run ownership to
+match the ContentArtifact revision provenance. Workflow file expiry and cleanup
+remain unchanged; a missing file makes content unavailable while immutable
+ContentArtifact metadata and provenance survive. See
+[Content Artifacts](content-artifacts.md).
 
 ### Webhook Ingress API
 
@@ -234,6 +322,7 @@ roles:
       event.type == ChatRequestEvent -> llm_handler
     connectors: [incident_api, search_mcp]
     allowed_tools: [web_search, issue_lookup]
+    tool_sets: [nyxid.connected_services]
     extensions:
       event_modules: "fallback_module"
       event_routes: "event.type == X -> fallback_module"
@@ -244,7 +333,9 @@ roles:
 - `workflow roles` 与 `role yaml` 共用同一份解析归一化逻辑（`RoleConfigurationNormalizer`）。
 - `agent_kind` 是 role-level actor lifecycle 入口，可指向任意已注册 primary `[GAgent]` kind；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
 - `allowed_tools` 是 role actor 上 agent tool 可见范围的上限；未配置表示兼容旧行为的全量工具，配置为空数组表示默认不暴露工具。
-- `llm_call` step 可在根部配置 `allowed_tools` 继续收窄本次调用；role scope 与 step scope 取交集后写入 `WorkflowStepParameters.agent_tool_scope`，再由 `WorkflowLlmExecutionIntent.agent_tool_scope` 传给 AI `AgentToolExecutionContext.ToolVisibility`。
+- `tool_sets` 是独立的 typed request-time source refs，不编码成静态 tool name。`allowed_tools` 与 `tool_sets` 两个维度分别合并：step 未声明某维度时继承 role，双方都声明时才对该维度求交，显式空数组只清空对应维度。有效 scope 写入 `WorkflowStepParameters.agent_tool_scope`，再由 `WorkflowLlmExecutionIntent.agent_tool_scope` 传给 AI 边界。
+- `llm_call` step 可在根部配置 `allowed_tools` 继续收窄本次调用；静态工具维度映射到 `AgentToolExecutionContext.ToolVisibility`，named tool-set 维度保持 request-time source refs。
+- Studio 的 `nyxid.connected_services` 每 turn 使用当前 caller token live resolve/discover，结果只存在 request-local catalog；resolution/discovery/collision failure 对本次动态工具 fail closed，不缓存为 role actor 或 process fact。
 - 工具可见范围同时作用于 provider 看到的 `LLMRequest.Tools` 和 streaming tool executor 的实际 lookup；未授权工具调用会得到 not-available tool result，不会执行工具。
 - `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
 - 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。

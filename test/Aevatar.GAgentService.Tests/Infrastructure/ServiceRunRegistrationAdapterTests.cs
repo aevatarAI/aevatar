@@ -1,3 +1,4 @@
+using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -101,6 +102,84 @@ public sealed class ServiceRunRegistrationAdapterTests
         dispatchPort.Calls.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task AttachResultArtifactsAsync_ShouldDispatchStableOrderIndependentCommandIdentity()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var adapter = new ServiceRunRegistrationAdapter(
+            new RecordingRunRegistryRuntime(),
+            dispatchPort);
+        var actorId = "service-run:tenant:svc:run-1";
+        var first = BuildArtifactReference("artifact-b", "revision-2", 'b');
+        var second = BuildArtifactReference("artifact-a", "revision-1", 'a');
+
+        var firstReceipt = await adapter.AttachResultArtifactsAsync(
+            actorId,
+            " run-1 ",
+            expectedStateVersion: 7,
+            [first, second]);
+        var secondReceipt = await adapter.AttachResultArtifactsAsync(
+            actorId,
+            "run-1",
+            expectedStateVersion: 7,
+            [second, first]);
+
+        firstReceipt.RunId.Should().Be("run-1");
+        firstReceipt.CommandId.Should().StartWith("service-run-artifacts-run-1-v7-");
+        firstReceipt.CorrelationId.Should().Be(firstReceipt.CommandId);
+        secondReceipt.CommandId.Should().Be(firstReceipt.CommandId);
+        dispatchPort.Calls.Should().HaveCount(2);
+        var envelope = dispatchPort.Calls[0].envelope;
+        envelope.Id.Should().Be(firstReceipt.CommandId);
+        envelope.Route.GetTargetActorId().Should().Be(actorId);
+        envelope.Propagation.CorrelationId.Should().Be(firstReceipt.CommandId);
+        var command = envelope.Payload.Unpack<AttachServiceRunResultArtifactsRequested>();
+        command.RunId.Should().Be("run-1");
+        command.ExpectedStateVersion.Should().Be(7);
+        command.ResultArtifacts.Should().Equal(first, second);
+    }
+
+    [Fact]
+    public async Task AttachResultArtifactsAsync_ShouldRejectInvalidAttachmentRequests()
+    {
+        var adapter = new ServiceRunRegistrationAdapter(
+            new RecordingRunRegistryRuntime(),
+            new RecordingDispatchPort());
+        var reference = BuildArtifactReference("artifact-1", "revision-1", 'a');
+
+        var missingActor = () => adapter.AttachResultArtifactsAsync(
+            " ",
+            "run-1",
+            1,
+            [reference]);
+        await missingActor.Should().ThrowAsync<ArgumentException>()
+            .WithParameterName("runActorId");
+
+        var missingRun = () => adapter.AttachResultArtifactsAsync(
+            "service-run:tenant:svc:run-1",
+            " ",
+            1,
+            [reference]);
+        await missingRun.Should().ThrowAsync<ArgumentException>()
+            .WithParameterName("runId");
+
+        var nullArtifacts = () => adapter.AttachResultArtifactsAsync(
+            "service-run:tenant:svc:run-1",
+            "run-1",
+            1,
+            null!);
+        await nullArtifacts.Should().ThrowAsync<ArgumentNullException>()
+            .WithParameterName("resultArtifacts");
+
+        var emptyArtifacts = () => adapter.AttachResultArtifactsAsync(
+            "service-run:tenant:svc:run-1",
+            "run-1",
+            1,
+            []);
+        await emptyArtifacts.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("At least one result artifact reference is required.");
+    }
+
     private static ServiceRunRecord BuildRecord(string scopeId, string serviceId, string runId) =>
         new()
         {
@@ -117,6 +196,18 @@ public sealed class ServiceRunRegistrationAdapterTests
             DeploymentId = "dep-1",
             Status = ServiceRunStatus.Unspecified,
             CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        };
+
+    private static ContentArtifactReference BuildArtifactReference(
+        string artifactId,
+        string revisionId,
+        char hashCharacter) =>
+        new()
+        {
+            ArtifactId = artifactId,
+            RevisionId = revisionId,
+            ContentHash = new string(hashCharacter, 64),
+            MediaType = "text/markdown",
         };
 
     private sealed class RecordingRunRegistryRuntime : IActorRuntime

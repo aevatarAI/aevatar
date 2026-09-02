@@ -7,22 +7,26 @@ public sealed class UserConfigService : IUserConfigService
     private readonly IUserConfigQueryPort _queryPort;
     private readonly IUserConfigCommandService _commandService;
     private readonly UserLlmPreferenceWriter _llmPreferenceWriter;
+    private readonly IAppScopeResolver _scopeResolver;
 
     public UserConfigService(
         IUserConfigQueryPort queryPort,
         IUserConfigCommandService commandService,
-        UserLlmPreferenceWriter llmPreferenceWriter)
+        UserLlmPreferenceWriter llmPreferenceWriter,
+        IAppScopeResolver scopeResolver)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandService = commandService ?? throw new ArgumentNullException(nameof(commandService));
         _llmPreferenceWriter = llmPreferenceWriter ?? throw new ArgumentNullException(nameof(llmPreferenceWriter));
+        _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
     }
 
-    public Task<UserConfig> GetAsync(CancellationToken ct = default) => _queryPort.GetAsync(ct);
+    public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
+        _queryPort.GetAsync(ResolveOwnerResource(), ct);
 
     public async Task<UserConfigRuntimeView> GetRuntimeAsync(CancellationToken ct = default)
     {
-        var config = await _queryPort.GetAsync(ct).ConfigureAwait(false);
+        var config = await _queryPort.GetAsync(ResolveOwnerResource(), ct).ConfigureAwait(false);
         return UserConfigRuntime.BuildView(config);
     }
 
@@ -36,47 +40,37 @@ public sealed class UserConfigService : IUserConfigService
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        var current = await _queryPort.GetAsync(ct).ConfigureAwait(false);
-        var next = current with
-        {
-            RuntimeMode = command.RuntimeMode is null
-                ? current.RuntimeMode
+        _ = bearerToken;
+        var update = new UserConfigUpdate(
+            RuntimeMode: command.RuntimeMode is null
+                ? null
                 : UserConfigRuntime.NormalizeConfiguredMode(command.RuntimeMode),
-            LocalRuntimeBaseUrl = command.LocalRuntimeBaseUrl is null
-                ? current.LocalRuntimeBaseUrl
+            LocalRuntimeBaseUrl: command.LocalRuntimeBaseUrl is null
+                ? null
                 : UserConfigRuntime.NormalizeConfiguredBaseUrl(
                     command.LocalRuntimeBaseUrl,
                     nameof(command.LocalRuntimeBaseUrl)),
-            RemoteRuntimeBaseUrl = command.RemoteRuntimeBaseUrl is null
-                ? current.RemoteRuntimeBaseUrl
+            RemoteRuntimeBaseUrl: command.RemoteRuntimeBaseUrl is null
+                ? null
                 : UserConfigRuntime.NormalizeConfiguredBaseUrl(
                     command.RemoteRuntimeBaseUrl,
                     nameof(command.RemoteRuntimeBaseUrl)),
-            GithubUsername = command.GithubUsername is null
-                ? current.GithubUsername
-                : NormalizeOptional(command.GithubUsername),
-            MaxToolRounds = command.MaxToolRounds ?? current.MaxToolRounds,
-        };
+            GithubUsername: command.GithubUsername is null
+                ? null
+                : NormalizeOptional(command.GithubUsername) ?? string.Empty,
+            MaxToolRounds: command.MaxToolRounds);
 
-        if (command.DefaultModel is not null || command.PreferredLlmRoute is not null)
-        {
-            next = await _llmPreferenceWriter.MergeLegacyFieldsAsync(
-                    bearerToken,
-                    next,
-                    command.DefaultModel,
-                    command.PreferredLlmRoute,
-                    ct)
-                .ConfigureAwait(false);
-        }
-
-        return await _commandService.SaveAsync(next, ct).ConfigureAwait(false);
+        return await _commandService.UpdateAsync(ResolveOwnerResource(), update, ct).ConfigureAwait(false);
     }
 
     public Task<UserConfigSaveReceipt> SaveLlmPreferenceAsync(
         string? bearerToken,
-        SaveUserLlmPreferenceCommand command,
+        UserLlmPreferenceIntent intent,
         CancellationToken ct = default) =>
-        _llmPreferenceWriter.SaveAsync(bearerToken, command, ct);
+        _llmPreferenceWriter.SaveAsync(ResolveOwnerResource(), bearerToken, intent, ct);
+
+    private UserConfigResourceKey ResolveOwnerResource() =>
+        UserConfigResourceKey.ForOwnerScope(_scopeResolver.ResolveScopeIdOrDefault());
 
     private static string? NormalizeOptional(string? value)
     {

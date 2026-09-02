@@ -23,6 +23,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(options);
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, WorkflowAgentToolSource>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IAgentToolSource, WorkflowCatalogAgentToolSource>());
         return services;
     }
 }

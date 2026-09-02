@@ -5,8 +5,24 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID channel bots and conversation routes.</summary>
-public sealed class NyxIdChannelBotsTool : IAgentTool
+public sealed class NyxIdChannelBotsTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    private static readonly NyxIdClosedActionParser<NyxIdChannelBotsAction> ActionParser = new(
+    [
+        new("list", NyxIdChannelBotsAction.List, new(false, true, false)),
+        new("show", NyxIdChannelBotsAction.Show, new(false, true, false)),
+        new("register", NyxIdChannelBotsAction.Register, new(true, false, false)),
+        new("delete", NyxIdChannelBotsAction.Delete, new(true, false, true)),
+        new("verify", NyxIdChannelBotsAction.Verify, new(true, false, false)),
+        new("routes", NyxIdChannelBotsAction.Routes, new(false, true, false)),
+        new("show_route", NyxIdChannelBotsAction.ShowRoute, new(false, true, false)),
+        new("create_route", NyxIdChannelBotsAction.CreateRoute, new(true, false, false)),
+        new("update_route", NyxIdChannelBotsAction.UpdateRoute, new(true, false, false)),
+        new("delete_route", NyxIdChannelBotsAction.DeleteRoute, new(true, false, true)),
+    ]);
+
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdChannelBotsTool(NyxIdApiClient client) => _client = client;
@@ -20,13 +36,13 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
         "Use this tool to inspect existing Nyx bot/route state or to register Nyx-native fields such as Lark verification_token. " +
         "Supports per-sender routing in group chats.";
 
-    public string ParametersSchema => """
+    public string ParametersSchema => $$"""
         {
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "register", "delete", "verify", "routes", "show_route", "create_route", "update_route", "delete_route"],
+              "enum": {{ActionParser.ActionNamesJson}},
               "description": "Action to perform (default: list)"
             },
             "id": {
@@ -91,38 +107,52 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
         }
         """;
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+        ActionParser.Classify(argumentsJson);
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (!parsed.IsValid)
+            return NyxIdClosedActionParser<NyxIdChannelBotsAction>.InvalidActionJson;
+
         var args = ToolArgs.Parse(argumentsJson);
-        var action = args.Str("action", "list");
         var id = args.Str("id");
 
-        return action switch
+        return parsed.Action switch
         {
-            "show" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdChannelBotsAction.Show when !string.IsNullOrWhiteSpace(id) =>
                 await _client.GetChannelBotAsync(token, id, ct),
-            "delete" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdChannelBotsAction.Delete when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteChannelBotAsync(token, id, ct),
-            "verify" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdChannelBotsAction.Verify when !string.IsNullOrWhiteSpace(id) =>
                 await _client.VerifyChannelBotAsync(token, id, ct),
-            "register" => await RegisterBotAsync(token, args, ct),
+            NyxIdChannelBotsAction.Register => await RegisterBotAsync(token, args, ct),
 
-            "routes" => await ListRoutesAsync(token, args, ct),
-            "show_route" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdChannelBotsAction.Routes => await ListRoutesAsync(token, args, ct),
+            NyxIdChannelBotsAction.ShowRoute when !string.IsNullOrWhiteSpace(id) =>
                 await _client.GetConversationRouteAsync(token, id, ct),
-            "create_route" => await CreateRouteAsync(token, args, ct),
-            "update_route" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdChannelBotsAction.CreateRoute => await CreateRouteAsync(token, args, ct),
+            NyxIdChannelBotsAction.UpdateRoute when !string.IsNullOrWhiteSpace(id) =>
                 await UpdateRouteAsync(token, id, args, ct),
-            "delete_route" when !string.IsNullOrWhiteSpace(id) =>
+            NyxIdChannelBotsAction.DeleteRoute when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteConversationRouteAsync(token, id, ct),
 
-            "show" or "delete" or "verify" or "show_route" or "update_route" or "delete_route" =>
-                $"{{\"error\":\"'id' is required for {action}\"}}",
-            _ => await _client.ListChannelBotsAsync(token, ct),
+            NyxIdChannelBotsAction.Show or
+            NyxIdChannelBotsAction.Delete or
+            NyxIdChannelBotsAction.Verify or
+            NyxIdChannelBotsAction.ShowRoute or
+            NyxIdChannelBotsAction.UpdateRoute or
+            NyxIdChannelBotsAction.DeleteRoute =>
+                $"{{\"error\":\"'id' is required for {parsed.Name}\"}}",
+            NyxIdChannelBotsAction.List => await _client.ListChannelBotsAsync(token, ct),
+            _ => NyxIdClosedActionParser<NyxIdChannelBotsAction>.InvalidActionJson,
         };
     }
 
@@ -209,4 +239,18 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
 
         return await _client.UpdateConversationRouteAsync(token, id, JsonSerializer.Serialize(payload), ct);
     }
+}
+
+internal enum NyxIdChannelBotsAction
+{
+    List,
+    Show,
+    Register,
+    Delete,
+    Verify,
+    Routes,
+    ShowRoute,
+    CreateRoute,
+    UpdateRoute,
+    DeleteRoute,
 }

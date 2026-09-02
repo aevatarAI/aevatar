@@ -6,6 +6,7 @@ using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Services;
 using Aevatar.Studio.Infrastructure.Serialization;
+using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -32,6 +33,52 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
         events.Should().Contain(e => e is StudioAuthoringPreviewEvent.ContentDelta);
         events.OfType<StudioAuthoringPreviewEvent.WorkflowCompleted>().Single().Result.Yaml.Should().Contain("generated");
         llm.StreamCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenWorkflowGenerated_ShouldEmitYamlAcceptedByPlatformParser()
+    {
+        var llm = new FakeLLMStreamPort([
+            """
+            version: "1.0"
+            inputs: {}
+            name: generated
+            roles:
+              - id: assistant
+                name: Assistant
+            steps:
+              - id: chat
+                type: llm_call
+                target_role: assistant
+            """,
+            """
+            name: generated
+            roles:
+              - id: assistant
+                name: Assistant
+            steps:
+              - id: chat
+                type: llm_call
+                target_role: assistant
+            """
+        ], oneContentPerCall: true);
+        var service = CreateService(llm);
+
+        var events = await service.PreviewAsync(
+                new StudioAuthoringPreviewRequest(
+                    StudioAuthoringKind.Workflow,
+                    "Create a simple workflow",
+                    AvailableWorkflowNames: []),
+                CancellationToken.None)
+            .ToListAsync();
+
+        var yaml = events.OfType<StudioAuthoringPreviewEvent.WorkflowCompleted>().Single().Result.Yaml;
+        yaml.Should().NotContain("version:");
+        yaml.Should().NotContain("inputs:");
+        var parsed = new WorkflowParser().Parse(yaml);
+        parsed.Name.Should().Be("generated");
+        parsed.Steps.Should().ContainSingle(step => step.Id == "chat");
+        llm.StreamCallCount.Should().Be(2);
     }
 
     [Fact]
@@ -136,7 +183,8 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
 
     private sealed class FakeLLMStreamPort(
         IReadOnlyList<string> contentChunks,
-        IReadOnlyList<string>? reasoningChunks = null)
+        IReadOnlyList<string>? reasoningChunks = null,
+        bool oneContentPerCall = false)
         : IStudioAuthoringLLMStreamPort
     {
         public int StreamCallCount { get; private set; }
@@ -149,7 +197,11 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
             StreamCallCount++;
             foreach (var reasoning in reasoningChunks ?? [])
                 yield return new StudioAuthoringLLMChunk(null, reasoning);
-            foreach (var chunk in contentChunks)
+
+            var chunks = oneContentPerCall
+                ? contentChunks.Skip(Math.Min(StreamCallCount - 1, contentChunks.Count - 1)).Take(1)
+                : contentChunks;
+            foreach (var chunk in chunks)
             {
                 ct.ThrowIfCancellationRequested();
                 yield return new StudioAuthoringLLMChunk(chunk, null);

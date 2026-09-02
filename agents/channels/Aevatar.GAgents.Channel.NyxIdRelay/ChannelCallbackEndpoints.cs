@@ -1,5 +1,10 @@
+using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
@@ -26,15 +31,54 @@ public static class ChannelCallbackEndpoints
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
 
         // Registration CRUD — requires authentication
-        group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
+        group.MapGet("/me", HandleGetCallerInfoAsync).RequireAuthorization();
+        group.MapPost("/registrations", HandleRegisterAsync)
+            .WithEndpointAudit(
+                "channel.registration.create",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.Static("channel-registration", "new"),
+                ChannelRegistrationRequestSummary)
+            .RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
-        group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
+        group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
+        group.MapPost(
+                "/registrations/{registrationId}/workflow-result-delivery/repair",
+                HandleRepairWorkflowResultDeliveryAsync)
+            .WithEndpointAudit(
+                "channel.registration.workflow-result-delivery.repair",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
+        group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync)
+            .WithEndpointAudit(
+                "channel.registration.delete",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
-        group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
+        group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync)
+            .WithEndpointAudit(
+                "channel.registration.test-reply",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
         group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
 
         return app;
+    }
+
+    private static ValueTask<string> ChannelRegistrationRequestSummary(EndpointAuditSanitizationContext context)
+    {
+        return ValueTask.FromResult(
+            $"{context.HttpContext.Request.Method} {EndpointAuditSanitizers.ResolveRoutePattern(context.HttpContext)}");
     }
 
     // ─── Registration CRUD ───
@@ -42,6 +86,7 @@ public static class ChannelCallbackEndpoints
     private static readonly JsonSerializerOptions RegistrationJsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     private static async Task<IResult> HandleRegisterAsync(
@@ -97,8 +142,10 @@ public static class ChannelCallbackEndpoints
                 Lark: new NyxChannelLarkCredentials(
                     AppId: request.AppId?.Trim() ?? string.Empty,
                     AppSecret: request.AppSecret?.Trim() ?? string.Empty,
-                    VerificationToken: request.VerificationToken?.Trim() ?? string.Empty),
-                Credentials: BuildCredentialsMap(platformNormalized, request)),
+                    VerificationToken: request.VerificationToken?.Trim() ?? string.Empty,
+                    EncryptKey: request.EncryptKey?.Trim() ?? string.Empty),
+                Credentials: BuildCredentialsMap(platformNormalized, request),
+                DefaultSkillName: request.DefaultSkillName?.Trim() ?? string.Empty),
             ct);
 
         var payload = new
@@ -114,6 +161,9 @@ public static class ChannelCallbackEndpoints
             nyx_conversation_route_id = result.NyxConversationRouteId ?? string.Empty,
             relay_callback_url = result.RelayCallbackUrl ?? string.Empty,
             webhook_url = result.WebhookUrl ?? string.Empty,
+            workflow_result_delivery_status = result.WorkflowResultDeliveryEnabled
+                ? "enabled"
+                : "repair_required",
             error = result.Error ?? string.Empty,
             note = result.Note ?? string.Empty,
         };
@@ -130,25 +180,298 @@ public static class ChannelCallbackEndpoints
         return Results.Json(payload, statusCode: statusCode);
     }
 
+    /// <summary>
+    /// Lists channel-bot registrations. Scoped to the caller's own account by default
+    /// (a tenant must not see other tenants' bots, and their status is only queryable
+    /// for the caller's own bots anyway). <c>?scope=all</c> returns every account's bots
+    /// but is gated on aevatar admin access, resolved server-side from the caller identity.
+    /// </summary>
     private static async Task<IResult> HandleListRegistrationsAsync(
+        HttpContext http,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
+        string? scope,
         CancellationToken ct)
     {
-        var registrations = await queryPort.QueryAllAsync(ct);
-        var result = registrations.Select(e => new
+        var callerScope = ResolveScopeId(http, null, required: false).ScopeId;
+        var wantsAll = string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase);
+
+        if (wantsAll)
         {
-            id = e.Id,
-            platform = e.Platform,
-            registration_mode = "nyx_relay_webhook",
-            nyx_provider_slug = e.NyxProviderSlug,
-            scope_id = e.ScopeId,
-            callback_url = string.Empty,
-            nyx_channel_bot_id = e.NyxChannelBotId,
-            nyx_agent_api_key_id = e.NyxAgentApiKeyId,
-            nyx_conversation_route_id = e.NyxConversationRouteId,
+            var token = ResolveBearerAccessToken(http);
+            var caller = string.IsNullOrWhiteSpace(token)
+                ? PlatformCaller.NotElevated
+                : await adminAuthorizer.ResolveCallerAsync(token, ct);
+            if (!caller.IsElevated)
+            {
+                return Results.Json(
+                    new { error = "scope_admin_required", message = "Listing channel bots across accounts requires aevatar admin access." },
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
+        }
+
+        var registrations = await queryPort.QueryAllAsync(ct);
+        var visible = wantsAll
+            ? registrations
+            : registrations.Where(e => string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal));
+
+        var result = visible.Select(e =>
+        {
+            var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(e);
+            var repairFailed = capabilityStatus ==
+                ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
+            return new
+            {
+                id = e.Id,
+                platform = e.Platform,
+                registration_mode = "nyx_relay_webhook",
+                nyx_provider_slug = e.NyxProviderSlug,
+                scope_id = e.ScopeId,
+                callback_url = string.Empty,
+                webhook_url = e.WebhookUrl,
+                nyx_channel_bot_id = e.NyxChannelBotId,
+                nyx_agent_api_key_id = e.NyxAgentApiKeyId,
+                nyx_conversation_route_id = e.NyxConversationRouteId,
+                default_skill_name = e.DefaultSkillName,
+                workflow_result_delivery_status = MapCapabilityStatus(capabilityStatus),
+                workflow_result_delivery_failure_phase = repairFailed
+                    ? MapRepairPhase(e.WorkflowResultDeliveryRepair?.FailurePhase ??
+                        ChannelWorkflowResultDeliveryRepairPhase.Unspecified)
+                    : null,
+                workflow_result_delivery_failure_reason = repairFailed
+                    ? MapRepairFailureReason(e.WorkflowResultDeliveryRepair?.FailureReason ??
+                        ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
+                    : null,
+                // Whether this bot belongs to the caller's account. Cross-account bots
+                // (admin all-view) cannot have their live status read from NyxID.
+                owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
+            };
         });
 
-        return Results.Ok(result);
+        return Results.Json(result, RegistrationJsonOptions);
+    }
+
+    private static async Task<IResult> HandleRepairWorkflowResultDeliveryAsync(
+        string registrationId,
+        HttpContext http,
+        [FromServices] IChannelWorkflowResultDeliveryRepairService repairService,
+        CancellationToken ct)
+    {
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        var callerScopeId = ResolveScopeId(http, null, required: false).ScopeId;
+        var requestedBySubjectId = ResolveSubjectId(http.User);
+        if (string.IsNullOrWhiteSpace(callerScopeId) ||
+            string.IsNullOrWhiteSpace(requestedBySubjectId))
+        {
+            return Results.NotFound(new { error = "Registration not found" });
+        }
+
+        var result = await repairService.RepairAsync(
+            registrationId,
+            callerScopeId,
+            requestedBySubjectId,
+            accessToken,
+            ct);
+        var repairFailed = result.Status ==
+            ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed;
+        var payload = new
+        {
+            status = MapRepairResultStatus(result.Status),
+            repair_request_id = result.RequestId,
+            registration_id = result.RegistrationId,
+            nyx_agent_api_key_id = result.NyxAgentApiKeyId,
+            workflow_result_delivery_status = MapRepairCapabilityStatus(result.Status),
+            failure_phase = repairFailed ? MapRepairPhase(result.FailurePhase) : null,
+            failure_reason = repairFailed ? MapRepairFailureReason(result.FailureReason) : null,
+            note = MapRepairResultNote(result.Status),
+        };
+        return Results.Json(
+            payload,
+            RegistrationJsonOptions,
+            statusCode: MapRepairResultStatusCode(result.Status));
+    }
+
+    /// <summary>
+    /// Caller info for the page: own scope id + whether the caller has aevatar admin access
+    /// (so the UI can offer the cross-account view).
+    /// </summary>
+    private static async Task<IResult> HandleGetCallerInfoAsync(
+        HttpContext http,
+        [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
+        CancellationToken ct)
+    {
+        var callerScope = ResolveScopeId(http, null, required: false).ScopeId ?? string.Empty;
+        var token = ResolveBearerAccessToken(http);
+        var caller = string.IsNullOrWhiteSpace(token)
+            ? PlatformCaller.NotElevated
+            : await adminAuthorizer.ResolveCallerAsync(token, ct);
+
+        return Results.Json(new
+        {
+            scope_id = callerScope,
+            is_admin = caller.IsElevated,
+            role = caller.Role,
+            grant_source = caller.GrantSource,
+        });
+    }
+
+    /// <summary>
+    /// Live bot status for the catalog badges and the verify-step lights. The facade
+    /// list returns the registration record only; the live <c>active</c> /
+    /// <c>pending_webhook</c> state lives on NyxID, so this reads it server-side via
+    /// the existing channel-bot client (no browser→NyxID CORS, no NyxID change).
+    /// Status read failures degrade to <c>unknown</c> — polling must never 500.
+    /// </summary>
+    /// <remarks>
+    /// L1 (cross-tenant disclosure): a registration the caller does not own is
+    /// indistinguishable from a non-existent one — the handler returns 404 rather
+    /// than a populated degraded response, so an authenticated caller cannot probe
+    /// another tenant's bot platform/last-activity by guessing registration ids.
+    /// The one exception is a caller with aevatar admin access, who is allowed the
+    /// cross-account view (mirrors <see cref="HandleListRegistrationsAsync"/>) and
+    /// still only gets aevatar's own relay-activity observation, never the foreign
+    /// owner's NyxID live status.
+    /// </remarks>
+    private static async Task<IResult> HandleGetStatusAsync(
+        string registrationId,
+        HttpContext http,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] NyxIdApiClient nyxClient,
+        [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var registration = await queryPort.GetAsync(registrationId, ct);
+        if (registration is null)
+            return Results.NotFound(new { error = "Registration not found" });
+        var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(registration);
+        var repairFailed = capabilityStatus ==
+            ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
+        var capabilityStatusValue = MapCapabilityStatus(capabilityStatus);
+        var failurePhaseValue = repairFailed
+            ? MapRepairPhase(registration.WorkflowResultDeliveryRepair?.FailurePhase ??
+                ChannelWorkflowResultDeliveryRepairPhase.Unspecified)
+            : null;
+        var failureReasonValue = repairFailed
+            ? MapRepairFailureReason(registration.WorkflowResultDeliveryRepair?.FailureReason ??
+                ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
+            : null;
+
+        // Cross-account bot: NyxID's channel-bot API is strictly owner-scoped, so we can't query its live status.
+        // Instead report aevatar's OWN observation: the relay-activity read model marks a bot
+        // active once it has received a verified inbound. No historical backfill exists, so a
+        // bot that was active before this feature shipped shows pending until its next inbound.
+        var callerScope = ResolveScopeId(http, null, required: false).ScopeId;
+        if (!string.IsNullOrWhiteSpace(callerScope)
+            && !string.Equals(registration.ScopeId, callerScope, StringComparison.Ordinal))
+        {
+            // L1: only aevatar admin access may see a foreign registration's status.
+            // For any other caller a mismatched scope is a 404 (existence-hiding),
+            // NOT a populated degraded response — otherwise the platform/activity of
+            // another tenant's bot leaks to anyone who can guess a registration id.
+            var token = ResolveBearerAccessToken(http);
+            var caller = string.IsNullOrWhiteSpace(token)
+                ? PlatformCaller.NotElevated
+                : await adminAuthorizer.ResolveCallerAsync(token, ct);
+            if (!caller.IsElevated)
+                return Results.NotFound(new { error = "Registration not found" });
+
+            var observedAt = registration.LastInboundAtUtc;
+            return Results.Json(new
+            {
+                registration_id = registrationId,
+                nyx_channel_bot_id = registration.NyxChannelBotId,
+                status = observedAt is not null ? "active" : "pending_webhook",
+                last_event_at = observedAt?.ToDateTimeOffset(),
+                workflow_result_delivery_status = capabilityStatusValue,
+                workflow_result_delivery_failure_phase = failurePhaseValue,
+                workflow_result_delivery_failure_reason = failureReasonValue,
+                owned = false,
+            }, RegistrationJsonOptions);
+        }
+
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(registration.NyxChannelBotId))
+        {
+            return Results.Json(new
+            {
+                registration_id = registrationId,
+                status = "unknown",
+                workflow_result_delivery_status = capabilityStatusValue,
+                workflow_result_delivery_failure_phase = failurePhaseValue,
+                workflow_result_delivery_failure_reason = failureReasonValue,
+                note = "no channel bot id",
+            }, RegistrationJsonOptions);
+        }
+
+        string raw;
+        try
+        {
+            raw = await nyxClient.GetChannelBotAsync(accessToken, registration.NyxChannelBotId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Status").LogWarning(
+                ex,
+                "Nyx channel-bot status read failed: registration={RegistrationId}, botId={BotId}",
+                registrationId,
+                registration.NyxChannelBotId);
+            return Results.Json(new
+            {
+                registration_id = registrationId,
+                nyx_channel_bot_id = registration.NyxChannelBotId,
+                status = "unknown",
+                workflow_result_delivery_status = capabilityStatusValue,
+                workflow_result_delivery_failure_phase = failurePhaseValue,
+                workflow_result_delivery_failure_reason = failureReasonValue,
+                error = "status_query_failed",
+            }, RegistrationJsonOptions);
+        }
+
+        var (status, lastEventAt) = ParseChannelBotStatus(raw);
+        return Results.Json(new
+        {
+            registration_id = registrationId,
+            nyx_channel_bot_id = registration.NyxChannelBotId,
+            status,
+            last_event_at = lastEventAt,
+            workflow_result_delivery_status = capabilityStatusValue,
+            workflow_result_delivery_failure_phase = failurePhaseValue,
+            workflow_result_delivery_failure_reason = failureReasonValue,
+        }, RegistrationJsonOptions);
+    }
+
+    private static (string Status, string? LastEventAt) ParseChannelBotStatus(string response)
+    {
+        if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+            return ("unknown", null);
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            // NyxID may wrap the resource in { "data": { ... } }.
+            var element = root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
+                ? data
+                : root;
+            var status = element.TryGetProperty("status", out var statusElement) && statusElement.ValueKind == JsonValueKind.String
+                ? statusElement.GetString()
+                : null;
+            var lastEventAt = element.TryGetProperty("last_event_at", out var lastEventElement) && lastEventElement.ValueKind == JsonValueKind.String
+                ? lastEventElement.GetString()
+                : null;
+            return (string.IsNullOrWhiteSpace(status) ? "unknown" : status!, lastEventAt);
+        }
+        catch (JsonException)
+        {
+            return ("unknown", null);
+        }
     }
 
     private static string? ResolveBearerAccessToken(HttpContext http)
@@ -161,21 +484,76 @@ public static class ChannelCallbackEndpoints
         return string.IsNullOrWhiteSpace(accessToken) ? null : accessToken;
     }
 
+    private static string? ResolveSubjectId(ClaimsPrincipal principal)
+    {
+        foreach (var claimType in new[]
+                 {
+                     "uid",
+                     "sub",
+                     ClaimTypes.NameIdentifier,
+                     "user_id",
+                 })
+        {
+            var value = NormalizeOptional(principal.FindFirst(claimType)?.Value);
+            if (value is not null)
+                return value;
+        }
+
+        return null;
+    }
+
     private static async Task<IResult> HandleDeleteRegistrationAsync(
         string registrationId,
+        HttpContext http,
         [FromServices] ChannelRegistrationCommandFacade commandFacade,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] INyxChannelBotDeprovisioningService deprovision,
         CancellationToken ct)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
         //   Old pattern: delete endpoint queried then dispatched unregister through raw helpers.
         //   New principle: query remains readmodel existence check; write enters typed command facade.
-        var exists = await queryPort.GetAsync(registrationId, ct);
-        if (exists is null)
+        // Deprovision (06-25-channel-delete-nyxid-deprovision):
+        //   Delete is the reverse of register — tear down the NyxID side (conversation route →
+        //   channel-bot → relay api-key) BEFORE tombstoning the local mirror, so deleting a bot
+        //   leaves no orphaned NyxID resources and the same app re-registers cleanly. A NyxID 404
+        //   is success (idempotent). A hard channel-bot delete failure returns a non-2xx and does
+        //   NOT tombstone the local mirror (row stays visible/retryable). Residual route/api-key
+        //   cleanup failures are surfaced as warnings but never block the tombstone. NyxID
+            //   channel-bot delete is owner-scoped, so an admin deleting another owner's
+        //   foreign registration cannot delete that owner's NyxID bot — that hard-fails here and
+        //   keeps the local mirror; a pure-local admin purge would be a separate explicit path.
+        var registration = await queryPort.GetAsync(registrationId, ct);
+        if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
 
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        var deprovisionResult = await deprovision.DeprovisionAsync(
+            accessToken,
+            registration.NyxConversationRouteId,
+            registration.NyxChannelBotId,
+            registration.NyxAgentApiKeyId,
+            ct);
+
+        if (!deprovisionResult.Succeeded)
+        {
+            // Hard channel-bot delete failure: leave the local mirror intact so the caller can
+            // retry and the registration row stays visible (no silent half-dead orphan).
+            return Results.Json(
+                new
+                {
+                    error = "nyx_channel_bot_delete_failed",
+                    registration_id = registrationId,
+                    note = "The NyxID channel-bot could not be deleted; the local registration was kept so you can retry.",
+                },
+                statusCode: StatusCodes.Status502BadGateway);
+        }
+
         await commandFacade.UnregisterAsync(registrationId, ct);
-        return Results.Ok(new { status = "deleted" });
+        return Results.Ok(new { status = "deleted", warnings = deprovisionResult.Warnings });
     }
 
     /// <summary>
@@ -211,15 +589,138 @@ public static class ChannelCallbackEndpoints
 
     private static int ResolveProvisioningFailureStatusCode(string? error)
     {
-        return error switch
+        var reason = error ?? string.Empty;
+        return reason switch
         {
             "unsupported_platform" => StatusCodes.Status409Conflict,
             "missing_access_token" => StatusCodes.Status401Unauthorized,
-            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_bot_token" or "missing_webhook_base_url" or "missing_scope_id" => StatusCodes.Status400BadRequest,
+            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_bot_token" or "missing_webhook_base_url" or "missing_scope_id" or "insecure_webhook_base_url" => StatusCodes.Status400BadRequest,
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
+            // A downstream NyxID channel-bot uniqueness conflict (NyxID allows one active bot per
+            // app across all accounts) is a real Conflict, not a gateway failure. Surface 409 so the
+            // caller learns the app is already registered — possibly under another account this
+            // registration cannot auto-clean — instead of an opaque 502 that reads as an outage.
+            _ when reason.Contains("nyx_status=409", StringComparison.Ordinal)
+                || reason.Contains("already registered", StringComparison.OrdinalIgnoreCase)
+                => StatusCodes.Status409Conflict,
             _ => StatusCodes.Status502BadGateway,
         };
     }
+
+    private static int MapRepairResultStatusCode(
+        ChannelWorkflowResultDeliveryRepairResultStatus status) => status switch
+        {
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repaired or
+                ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled =>
+                StatusCodes.Status200OK,
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repairing =>
+                StatusCodes.Status202Accepted,
+            ChannelWorkflowResultDeliveryRepairResultStatus.NotFound =>
+                StatusCodes.Status404NotFound,
+            ChannelWorkflowResultDeliveryRepairResultStatus.UnsupportedPlatform =>
+                StatusCodes.Status409Conflict,
+            ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed =>
+                StatusCodes.Status502BadGateway,
+            _ => StatusCodes.Status502BadGateway,
+        };
+
+    private static string MapRepairResultStatus(
+        ChannelWorkflowResultDeliveryRepairResultStatus status) => status switch
+        {
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repaired => "repaired",
+            ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled => "already_enabled",
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repairing => "repairing",
+            ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed => "repair_failed",
+            ChannelWorkflowResultDeliveryRepairResultStatus.NotFound => "not_found",
+            ChannelWorkflowResultDeliveryRepairResultStatus.UnsupportedPlatform =>
+                "unsupported_platform",
+            _ => "repair_failed",
+        };
+
+    private static string MapRepairCapabilityStatus(
+        ChannelWorkflowResultDeliveryRepairResultStatus status) => status switch
+        {
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repaired or
+                ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled => "enabled",
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repairing => "repairing",
+            ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed => "repair_failed",
+            ChannelWorkflowResultDeliveryRepairResultStatus.NotFound or
+                ChannelWorkflowResultDeliveryRepairResultStatus.UnsupportedPlatform =>
+                "repair_required",
+            _ => "repair_failed",
+        };
+
+    private static string MapRepairResultNote(
+        ChannelWorkflowResultDeliveryRepairResultStatus status) => status switch
+        {
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repaired =>
+                "Workflow result delivery was repaired. No Lark developer-console changes are required.",
+            ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled =>
+                "Workflow result delivery is already enabled.",
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repairing =>
+                "Workflow result delivery repair is still in progress.",
+            ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed =>
+                "Workflow result delivery repair did not complete. Retry from the committed repair state.",
+            ChannelWorkflowResultDeliveryRepairResultStatus.NotFound =>
+                "Registration not found.",
+            ChannelWorkflowResultDeliveryRepairResultStatus.UnsupportedPlatform =>
+                "Workflow result delivery repair is supported only for Lark registrations.",
+            _ => "Workflow result delivery repair did not complete.",
+        };
+
+    private static string MapCapabilityStatus(
+        ChannelWorkflowResultDeliveryCapabilityStatus status) => status switch
+        {
+            ChannelWorkflowResultDeliveryCapabilityStatus.Enabled => "enabled",
+            ChannelWorkflowResultDeliveryCapabilityStatus.RepairRequired => "repair_required",
+            ChannelWorkflowResultDeliveryCapabilityStatus.Repairing => "repairing",
+            ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed => "repair_failed",
+            ChannelWorkflowResultDeliveryCapabilityStatus.Unspecified => "repair_required",
+            _ => "repair_required",
+        };
+
+    private static string MapRepairPhase(
+        ChannelWorkflowResultDeliveryRepairPhase phase) => phase switch
+        {
+            ChannelWorkflowResultDeliveryRepairPhase.RequestAdmission => "request_admission",
+            ChannelWorkflowResultDeliveryRepairPhase.RotatedKeyRecovery => "rotated_key_recovery",
+            ChannelWorkflowResultDeliveryRepairPhase.ApiKeyRotation => "api_key_rotation",
+            ChannelWorkflowResultDeliveryRepairPhase.VaultStorage => "vault_storage",
+            ChannelWorkflowResultDeliveryRepairPhase.CredentialPreparation =>
+                "credential_preparation",
+            ChannelWorkflowResultDeliveryRepairPhase.RouteRebinding => "route_rebinding",
+            ChannelWorkflowResultDeliveryRepairPhase.ActorCompletion => "actor_completion",
+            ChannelWorkflowResultDeliveryRepairPhase.Unspecified => "unspecified",
+            _ => "unspecified",
+        };
+
+    private static string MapRepairFailureReason(
+        ChannelWorkflowResultDeliveryRepairFailureReason reason) => reason switch
+        {
+            ChannelWorkflowResultDeliveryRepairFailureReason.RegistrationNotFound =>
+                "registration_not_found",
+            ChannelWorkflowResultDeliveryRepairFailureReason.UnauthorizedOwner =>
+                "unauthorized_owner",
+            ChannelWorkflowResultDeliveryRepairFailureReason.UnsupportedPlatform =>
+                "unsupported_platform",
+            ChannelWorkflowResultDeliveryRepairFailureReason.AlreadyEnabled => "already_enabled",
+            ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest => "invalid_request",
+            ChannelWorkflowResultDeliveryRepairFailureReason.RequestConflict => "request_conflict",
+            ChannelWorkflowResultDeliveryRepairFailureReason.StaleActiveKey => "stale_active_key",
+            ChannelWorkflowResultDeliveryRepairFailureReason.RotationFailed => "rotation_failed",
+            ChannelWorkflowResultDeliveryRepairFailureReason.VaultStorageFailed =>
+                "vault_storage_failed",
+            ChannelWorkflowResultDeliveryRepairFailureReason.RouteUpdateFailed =>
+                "route_update_failed",
+            ChannelWorkflowResultDeliveryRepairFailureReason.CompletionFailed =>
+                "completion_failed",
+            ChannelWorkflowResultDeliveryRepairFailureReason.AmbiguousRotatedKeyRecovery =>
+                "ambiguous_rotated_key_recovery",
+            ChannelWorkflowResultDeliveryRepairFailureReason.ObservationUnavailable =>
+                "observation_unavailable",
+            ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified => "unspecified",
+            _ => "unspecified",
+        };
 
     private static ScopeIdResolution ResolveScopeId(HttpContext http, string? explicitScopeId, bool required)
     {
@@ -257,12 +758,16 @@ public static class ChannelCallbackEndpoints
         string? AppId,
         string? AppSecret,
         string? VerificationToken,
+        string? EncryptKey,
         // Telegram-specific shorthand: equivalent to Credentials["bot_token"].
         string? BotToken,
         // Platform-extensible credential bag. Per-platform provisioning services document
         // which keys they expect (e.g. Telegram reads "bot_token").
         IReadOnlyDictionary<string, string>? Credentials,
-        string? Label);
+        string? Label,
+        // Optional Ornn skill this bot's plain inbound messages are routed to
+        // (deterministic channel→skill binding; message text becomes the skill args).
+        string? DefaultSkillName);
 
     private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(
         string platform,

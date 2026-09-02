@@ -7,11 +7,18 @@
     <RootNamespace>Aevatar.GAgentService.Abstractions</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.GAgentService.Application" />
+    <InternalsVisibleTo Include="Aevatar.GAgents.ChannelRuntime.Tests" />
+    <InternalsVisibleTo Include="Aevatar.Studio.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.ContentArtifacts.Abstractions\Aevatar.ContentArtifacts.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
     <ProjectReference Include="..\..\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
+    <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Cronos" />
@@ -24,12 +31,15 @@
   <ItemGroup>
     <Protobuf Include="Protos/service_endpoint.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_definition.proto" GrpcServices="None" ProtoRoot="Protos" />
-    <Protobuf Include="Protos/service_artifact.proto" GrpcServices="None" ProtoRoot="Protos" />
-    <Protobuf Include="Protos/service_revision.proto" GrpcServices="None" ProtoRoot="Protos" />
+    <Protobuf Include="Protos/service_artifact.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../Aevatar.AI.Abstractions;$(MSBuildProjectDirectory)/../../workflow/Aevatar.Workflow.Abstractions" />
+    <Protobuf Include="Protos/service_revision.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../Aevatar.AI.Abstractions;$(MSBuildProjectDirectory)/../../workflow/Aevatar.Workflow.Abstractions" />
     <Protobuf Include="Protos/service_deployment.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_serving.proto" GrpcServices="None" ProtoRoot="Protos" />
-    <Protobuf Include="Protos/service_invocation_catalog.proto" GrpcServices="None" ProtoRoot="Protos" />
-    <Protobuf Include="Protos/service_runs.proto" GrpcServices="None" ProtoRoot="Protos" />
-    <Protobuf Include="Protos/llm_sessions.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions" />
+    <Protobuf Include="Protos/service_invocation_catalog.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../Aevatar.AI.Abstractions;$(MSBuildProjectDirectory)/../../workflow/Aevatar.Workflow.Abstractions" />
+    <Protobuf Include="Protos/service_runs.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../Aevatar.AI.Abstractions;$(MSBuildProjectDirectory)/../../workflow/Aevatar.Workflow.Abstractions;$(MSBuildProjectDirectory)/../../Aevatar.ContentArtifacts.Abstractions" />
+    <Protobuf Include="Protos/llm_sessions.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions;..\..\Aevatar.Foundation.Abstractions" />
+    <Protobuf Include="Protos/scheduled_invocation_authorization_evidence.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../Aevatar.AI.Abstractions;$(MSBuildProjectDirectory)/../../workflow/Aevatar.Workflow.Abstractions" />
+    <Protobuf Include="Protos/scheduled_invocation_authorization_plan.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../Aevatar.AI.Abstractions;$(MSBuildProjectDirectory)/../../workflow/Aevatar.Workflow.Abstractions" />
+    <Protobuf Include="Protos/agent_profiles.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../Aevatar.AI.Abstractions;$(MSBuildProjectDirectory)/../../Aevatar.Foundation.VoicePresence.Abstractions;$(MSBuildProjectDirectory)/../../Aevatar.Foundation.Abstractions" />
   </ItemGroup>
 </Project>

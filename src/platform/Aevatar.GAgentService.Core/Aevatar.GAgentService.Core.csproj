@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Governance.Abstractions\Aevatar.GAgentService.Governance.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
@@ -23,6 +24,9 @@
   <ItemGroup>
     <Protobuf Include="Schedules/scheduled_dispatch_state.proto"
               GrpcServices="None"
-              AdditionalImportDirs="..\..\Aevatar.Foundation.Abstractions;..\Aevatar.GAgentService.Abstractions\Protos" />
+              AdditionalImportDirs="..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.Abstractions;..\Aevatar.GAgentService.Abstractions\Protos;..\..\workflow\Aevatar.Workflow.Abstractions" />
+    <Protobuf Include="Schedules/Authorization/nyxid_authorization_catalog_state.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos;..\..\Aevatar.AI.Abstractions;..\..\workflow\Aevatar.Workflow.Abstractions" />
   </ItemGroup>
 </Project>

@@ -17,6 +17,7 @@ import {
   formatRawStudioNodeConfiguration,
   getStudioNodeConfigurationSchema,
   readStudioNodeConfigurationValues,
+  shouldShowRawStudioNodeConfiguration,
   type StudioStructuredNodeConfigField,
 } from "@/shared/studio/nodeConfigFields";
 import { formatConsoleMessage, t } from "@/shared/i18n/messages";
@@ -370,6 +371,10 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
   const parameters = readCurrentParameters(stepDraft, rawConfigurationText);
   const schema = getStudioNodeConfigurationSchema(stepDraft.type, schemaParameters);
   const hasSemanticFields = schema.fields.length > 0;
+  const showRawConfiguration = shouldShowRawStudioNodeConfiguration(
+    stepDraft.type,
+    schemaParameters,
+  );
   const nodeTypeLabel = formatStudioStepTypeLabel(stepDraft.type);
   const branchesSummary = summarizeBranches(stepDraft.branchesText);
   const activeError = structuredError || rawError || error || "";
@@ -619,6 +624,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           zIndex: token.zIndexPopupBase,
         }}
       >
+        {/* biome-ignore lint/a11y/useSemanticElements: The separator is an interactive keyboard and pointer resize handle. */}
         <div
           aria-label={t(
             "teamMemberWorkflowStudio.nodeInspector.resizeHandle",
@@ -800,60 +806,62 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           ) : null}
         </section>
 
-        <Collapse
-          bordered={false}
-          items={[
-            {
-              key: "raw-configuration",
-              label: t(
-                "teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration",
-                "Advanced raw configuration",
-              ),
-              children: (
-                <div style={{ display: "grid", gap: token.paddingXS }}>
-                  <Typography.Paragraph style={{ color: token.colorTextSecondary, margin: 0 }}>
-                    {t(
-                      "teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription",
-                      "Use this only when a node option is not available as a guided field.",
-                    )}
-                  </Typography.Paragraph>
-                  <Input.TextArea
-                    aria-label={t(
-                      "teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria",
-                      "Raw node configuration",
-                    )}
-                    autoSize={{ minRows: 8, maxRows: 16 }}
-                    onChange={(event) =>
-                      updateRawConfigurationText(event.target.value)
-                    }
-                    spellCheck={false}
-                    status={rawError ? "error" : undefined}
-                    style={{
-                      fontFamily:
-                        "SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace",
-                    }}
-                    value={rawConfigurationText}
-                  />
-                  <Button
-                    disabled={Boolean(rawError)}
-                    onClick={applyRawConfigurationToDraft}
-                    size="small"
-                  >
-                    {t(
-                      "teamMemberWorkflowStudio.nodeDetail.applyRawConfiguration",
-                      "Apply raw JSON",
-                    )}
-                  </Button>
-                </div>
-              ),
-            },
-          ]}
-          style={{
-            background: token.colorFillAlter,
-            border: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
-            borderRadius: token.borderRadius,
-          }}
-        />
+        {showRawConfiguration ? (
+          <Collapse
+            bordered={false}
+            items={[
+              {
+                key: "raw-configuration",
+                label: t(
+                  "teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration",
+                  "Advanced raw configuration",
+                ),
+                children: (
+                  <div style={{ display: "grid", gap: token.paddingXS }}>
+                    <Typography.Paragraph style={{ color: token.colorTextSecondary, margin: 0 }}>
+                      {t(
+                        "teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription",
+                        "Use this only when a node option is not available as a guided field.",
+                      )}
+                    </Typography.Paragraph>
+                    <Input.TextArea
+                      aria-label={t(
+                        "teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria",
+                        "Raw node configuration",
+                      )}
+                      autoSize={{ minRows: 8, maxRows: 16 }}
+                      onChange={(event) =>
+                        updateRawConfigurationText(event.target.value)
+                      }
+                      spellCheck={false}
+                      status={rawError ? "error" : undefined}
+                      style={{
+                        fontFamily:
+                          "SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace",
+                      }}
+                      value={rawConfigurationText}
+                    />
+                    <Button
+                      disabled={Boolean(rawError)}
+                      onClick={applyRawConfigurationToDraft}
+                      size="small"
+                    >
+                      {t(
+                        "teamMemberWorkflowStudio.nodeDetail.applyRawConfiguration",
+                        "Apply raw JSON",
+                      )}
+                    </Button>
+                  </div>
+                ),
+              },
+            ]}
+            style={{
+              background: token.colorFillAlter,
+              border: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
+              borderRadius: token.borderRadius,
+            }}
+          />
+        ) : null}
         </div>
       </aside>
     </>

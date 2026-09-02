@@ -17,16 +17,20 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 public sealed class NyxIdRedirectUriResolverTests : IDisposable
 {
     private readonly string? _savedOverride;
+    private readonly string? _savedAdditionalRedirectUris;
 
     public NyxIdRedirectUriResolverTests()
     {
         _savedOverride = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar);
+        _savedAdditionalRedirectUris = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar);
         Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, null);
+        Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar, null);
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, _savedOverride);
+        Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar, _savedAdditionalRedirectUris);
     }
 
     [Fact]
@@ -85,6 +89,37 @@ public sealed class NyxIdRedirectUriResolverTests : IDisposable
 
         url.Should().Be(
             $"{NyxIdRedirectUriResolver.DefaultPublicBaseUrl}{NyxIdRedirectUriResolver.CallbackPath}");
+    }
+
+    [Fact]
+    public void ResolveRegisteredRedirectUris_IncludesExplicitAdditionalCallbacks()
+    {
+        Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, "https://backend.example.com");
+        Environment.SetEnvironmentVariable(
+            NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar,
+            " https://console.example.com/auth/callback,https://ops.example.com/callback;https://console.example.com/auth/callback ");
+
+        var urls = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris();
+
+        urls.Should().Equal(
+            "https://backend.example.com" + NyxIdRedirectUriResolver.CallbackPath,
+            "https://console.example.com/auth/callback",
+            "https://ops.example.com/callback");
+    }
+
+    [Fact]
+    public void ResolveRegisteredRedirectUris_IgnoresWildcardAdditionalCallbacks()
+    {
+        Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, "https://backend.example.com");
+        Environment.SetEnvironmentVariable(
+            NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar,
+            "http://+:8080/callback,https://console.example.com/auth/callback");
+
+        var urls = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(NullLogger.Instance);
+
+        urls.Should().Equal(
+            "https://backend.example.com" + NyxIdRedirectUriResolver.CallbackPath,
+            "https://console.example.com/auth/callback");
     }
 
     [Fact]

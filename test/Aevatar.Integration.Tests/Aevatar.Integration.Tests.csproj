@@ -8,6 +8,7 @@
     <RootNamespace>Aevatar.Integration.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\Shared\SharedOrleansPortAllocator.cs" Link="Shared\SharedOrleansPortAllocator.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
@@ -24,9 +25,20 @@
     <ProjectReference Include="..\..\src\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Scripting.Projection\Aevatar.Scripting.Projection.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Providers.InMemory\Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Studio.Infrastructure\Aevatar.Studio.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application\Aevatar.Workflow.Application.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Integration.AI\Aevatar.Workflow.Integration.AI.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.AevatarInvocation\Aevatar.AI.ToolProviders.AevatarInvocation.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
     <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Maker\Aevatar.Workflow.Extensions.Maker.csproj" />
     <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Hosting\Aevatar.Workflow.Extensions.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
@@ -44,6 +56,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
   </ItemGroup>
   <ItemGroup>
@@ -51,6 +64,7 @@
     <Protobuf Include="Protos/text_normalization_protocol.proto" GrpcServices="None" AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
     <Protobuf Include="Protos/script_evolution_protocol.proto" GrpcServices="None" AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions;..\..\src\Aevatar.Scripting.Abstractions\Protos" />
     <Protobuf Include="Protos/hybrid_service_upgrade_protocol.proto" GrpcServices="None" AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
+    <Protobuf Include="Protos/workflow_delivery_scheduler_probe.proto" GrpcServices="None" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Aevatar.Scripting.Abstractions" />

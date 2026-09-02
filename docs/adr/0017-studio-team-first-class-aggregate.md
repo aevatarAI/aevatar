@@ -552,7 +552,7 @@ message StudioMemberReassignedEvent {
 > but Team roster fanout is driven later by the durable Studio materialization
 > projection after it observes the committed reassignment fact. The materializer
 > sends the same typed event into the affected TeamGAgent inboxes with stable
-> command and deduplication IDs, so committed-event replay retries failed
+> command and delivery operation IDs, so committed-event replay retries failed
 > fanout instead of silently dropping it. `StudioMemberCreatedEvent` never
 > feeds the team pipeline. This keeps the event vocabulary minimal and avoids
 > extending `StudioMemberCreatedEvent` with a `team_id` field. See
@@ -684,7 +684,7 @@ would otherwise need its own consistency contract.
    guaranteed; team roster update is eventually consistent.
 5. Wire the Studio materialization projection to consume committed
    `StudioMemberReassignedEvent` facts and dispatch them into affected
-   `StudioTeamGAgent` inboxes with stable command / deduplication IDs. Each
+   `StudioTeamGAgent` inboxes with stable command / delivery operation IDs. Each
    TeamGAgent applies idempotent set operations to `member_ids`, emitting
    `StudioTeamMemberRosterChangedEvent` with the correct `effect`
    (ADDED / REMOVED / NOOP).

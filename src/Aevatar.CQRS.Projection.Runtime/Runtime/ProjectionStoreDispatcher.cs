@@ -68,4 +68,14 @@ public sealed class ProjectionStoreDispatcher<TReadModel>
         ct.ThrowIfCancellationRequested();
         return _binding.DeleteAsync(id, ct);
     }
+
+    public Task<ProjectionWriteResult> DeleteAsync(
+        ProjectionDocumentDeleteMarker marker,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        ArgumentException.ThrowIfNullOrWhiteSpace(marker.Id);
+        ct.ThrowIfCancellationRequested();
+        return _binding.DeleteAsync(marker, ct);
+    }
 }

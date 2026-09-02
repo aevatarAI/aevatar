@@ -10,4 +10,5 @@ public interface IWorkflowRunActorResolver
 public sealed record WorkflowActorResolutionResult(
     WorkflowRunCreationReceipt? Target,
     string WorkflowNameForRun,
-    WorkflowChatRunStartError Error);
+    WorkflowChatRunStartError Error,
+    WorkflowChatRunStartFailureDetail? FailureDetail = null);

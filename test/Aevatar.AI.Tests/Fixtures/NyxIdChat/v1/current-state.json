@@ -1,0 +1,93 @@
+{
+  "status": "current",
+  "stateVersion": 23,
+  "turnId": "turn-alpha",
+  "reasonCode": null,
+  "snapshot": {
+    "actorId": "conversation-alpha",
+    "scopeId": "scope-alpha",
+    "stateVersion": 23,
+    "progressSequence": 23,
+    "updatedAt": "2026-08-01T12:00:00+00:00",
+    "activeTurn": {
+      "turnId": "turn-alpha",
+      "taskId": "task-alpha",
+      "status": "active",
+      "failureCode": null,
+      "safeMessage": null,
+      "createdAt": "2026-08-01T11:59:00+00:00",
+      "terminalAt": null,
+      "commandId": "command-alpha"
+    },
+    "latestTurn": null,
+    "recentTerminalTurns": [],
+    "activeTask": {
+      "taskId": "task-alpha",
+      "turnId": "turn-alpha",
+      "status": "active",
+      "activeStepId": "step-input-alpha",
+      "activeOperationId": null,
+      "failureCode": null,
+      "safeMessage": null,
+      "createdAt": "2026-08-01T11:59:00+00:00",
+      "updatedAt": "2026-08-01T12:00:00+00:00",
+      "steps": [
+        {
+          "stepId": "step-input-alpha",
+          "order": 1,
+          "kind": "input",
+          "status": "waiting",
+          "required": true,
+          "description": "Select the deployment regions.",
+          "mayChangeExternalState": false,
+          "externalEffect": "not_started",
+          "approvalRequestId": null,
+          "actionRequestId": null,
+          "failureCode": null,
+          "safeMessage": null,
+          "safeToSkip": false,
+          "availableActions": {
+            "retry": false,
+            "skip": false,
+            "stop": true
+          },
+          "updatedAt": "2026-08-01T12:00:00+00:00",
+          "operation": null
+        }
+      ]
+    },
+    "pendingApproval": null,
+    "pendingActions": [],
+    "controlFence": null,
+    "latestControlResult": null,
+    "continuationAdmission": null,
+    "pendingInput": {
+      "requestId": "input-alpha",
+      "turnId": "turn-alpha",
+      "taskId": "task-alpha",
+      "stepId": "step-input-alpha",
+      "prompt": "Select the deployment regions.",
+      "options": [
+        {
+          "optionId": "option-singapore",
+          "label": "Singapore",
+          "description": "Deploy to the Singapore region."
+        },
+        {
+          "optionId": "option-frankfurt",
+          "label": "Frankfurt",
+          "description": "Deploy to the Frankfurt region."
+        }
+      ],
+      "askedAt": "2026-08-01T12:00:00+00:00",
+      "allowFreeText": true,
+      "multiSelect": true
+    },
+    "latestInputResolution": null,
+    "latestApprovalResolution": null,
+    "taskStatus": "active",
+    "attentionKind": "input",
+    "attentionSince": "2026-08-01T12:00:00+00:00",
+    "activeStepSummary": "Select the deployment regions."
+  }
+}

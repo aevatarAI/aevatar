@@ -39,6 +39,7 @@ import {
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
 import { AevatarCompactText } from "@/shared/ui/compactText";
+import { getUserFacingIdentifierLabel } from "@/shared/ui/userFacingIdentifiers";
 import type { GovernanceAuditEvent } from "./GovernanceAuditTimeline";
 import {
   resolveBindingAffordance,
@@ -201,6 +202,13 @@ function renderFactNotice(summary: string) {
   );
 }
 
+function formatInspectorResourceLabel(
+  value: string | null | undefined,
+  fallback: string,
+): string {
+  return getUserFacingIdentifierLabel(value, fallback);
+}
+
 function buildInspectorTitle(target: GovernanceInspectorTarget | null): React.ReactNode {
   if (!target) {
     return t("pages.governance.governanceinspectordrawer.governance.details.3", "Governance details");
@@ -210,7 +218,10 @@ function buildInspectorTitle(target: GovernanceInspectorTarget | null): React.Re
     return target.mode === "create" ? (
       t("pages.governance.governanceinspectordrawer.new.strategy.2", "New strategy")
     ) : (
-      <AevatarCompactText monospace value={target.record.policyId} />
+      formatInspectorResourceLabel(
+        target.record.displayName || target.record.policyId,
+        t("pages.governance.governanceinspectordrawer.strategy", "Strategy"),
+      )
     );
   }
 
@@ -218,7 +229,10 @@ function buildInspectorTitle(target: GovernanceInspectorTarget | null): React.Re
     return target.mode === "create" ? (
       t("pages.governance.governanceinspectordrawer.new.binding.2", "New binding")
     ) : (
-      <AevatarCompactText monospace value={target.record.bindingId} />
+      formatInspectorResourceLabel(
+        target.record.displayName || target.record.bindingId,
+        t("pages.governance.governanceinspectordrawer.binding", "Binding"),
+      )
     );
   }
 
@@ -226,7 +240,10 @@ function buildInspectorTitle(target: GovernanceInspectorTarget | null): React.Re
     return target.mode === "create" ? (
       t("pages.governance.governanceinspectordrawer.new.entrance.2", "New entrance")
     ) : (
-      <AevatarCompactText monospace value={target.record.endpointId} />
+      formatInspectorResourceLabel(
+        target.record.displayName || target.record.endpointId,
+        t("pages.governance.governanceinspectordrawer.entrance", "Entrance"),
+      )
     );
   }
 
@@ -496,13 +513,14 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
             <Space orientation="vertical" size={16} style={{ display: "flex" }}>
               <Space align="center" size={[8, 8]} wrap>
                 <SafetyCertificateOutlined />
-                <Typography.Text strong>
-                  {target.mode === "create"
-                    ? t("pages.governance.governanceinspectordrawer.create.new.governance.policy.2", "Create a new governance policy")
-                    : target.record.displayName || (
-                        <AevatarCompactText monospace value={target.record.policyId} />
-                      )}
-                </Typography.Text>
+	                <Typography.Text strong>
+	                  {target.mode === "create"
+	                    ? t("pages.governance.governanceinspectordrawer.create.new.governance.policy.2", "Create a new governance policy")
+	                    : formatInspectorResourceLabel(
+	                        target.record.displayName || target.record.policyId,
+	                        t("pages.governance.governanceinspectordrawer.strategy", "Strategy"),
+	                      )}
+	                </Typography.Text>
                 {target.mode === "edit" ? (
                   <span
                     style={buildAevatarTagStyle(
@@ -601,13 +619,14 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
             <Space orientation="vertical" size={16} style={{ display: "flex" }}>
               <Space align="center" size={[8, 8]} wrap>
                 <LinkOutlined />
-                <Typography.Text strong>
-                  {target.mode === "create"
-                    ? t("pages.governance.governanceinspectordrawer.create.new.governance.binding.2", "Create a new governance binding")
-                    : target.record.displayName || (
-                        <AevatarCompactText monospace value={target.record.bindingId} />
-                      )}
-                </Typography.Text>
+                      <Typography.Text strong>
+                        {target.mode === "create"
+                          ? t("pages.governance.governanceinspectordrawer.create.new.governance.binding.2", "Create a new governance binding")
+                          : formatInspectorResourceLabel(
+                              target.record.displayName || target.record.bindingId,
+                              t("pages.governance.governanceinspectordrawer.binding", "Binding"),
+                            )}
+                      </Typography.Text>
                 {target.mode === "edit" ? (
                   <span
                     style={buildAevatarTagStyle(
@@ -809,12 +828,13 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               <Space align="center" size={[8, 8]} wrap>
                 <ApiOutlined />
                 <Typography.Text strong>
-                  {target.mode === "create"
-                    ? t("pages.governance.governanceinspectordrawer.add.new.management.entrance.2", "Add a new management entrance")
-                    : target.record.displayName || (
-                        <AevatarCompactText monospace value={target.record.endpointId} />
-                      )}
-                </Typography.Text>
+                      {target.mode === "create"
+                        ? t("pages.governance.governanceinspectordrawer.add.new.management.entrance.2", "Add a new management entrance")
+                        : formatInspectorResourceLabel(
+                            target.record.displayName || target.record.endpointId,
+                            t("pages.governance.governanceinspectordrawer.entrance", "Entrance"),
+                          )}
+                    </Typography.Text>
                 {target.mode === "edit" ? (
                   <span
                     style={buildAevatarTagStyle(
@@ -979,7 +999,9 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               <Space size={8} wrap>
                 <Typography.Text strong>{t("pages.governance.governanceinspectordrawer.version.2", "Version")}</Typography.Text>
                 {target.record.revisionId ? (
-                  <AevatarCompactText monospace value={target.record.revisionId} />
+                  <Typography.Text>
+                    {t("pages.governance.governanceinspectordrawer.version.ready", "Version ready")}
+                  </Typography.Text>
                 ) : (
                   <Typography.Text type="secondary">{t("pages.governance.governanceinspectordrawer.unresolved.2", "Unresolved")}</Typography.Text>
                 )}

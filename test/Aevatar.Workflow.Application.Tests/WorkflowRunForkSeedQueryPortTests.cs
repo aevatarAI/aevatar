@@ -89,13 +89,15 @@ public sealed class WorkflowRunForkSeedQueryPortTests
                 "run-failed",
                 "demo",
                 "name: demo\nsteps: []",
-                new Dictionary<string, string>(StringComparer.Ordinal)));
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive,
+                "scope-1"));
         var port = new WorkflowRunForkSeedQueryPort(
             currentStateReader,
             bindingReader,
             mapper);
 
-        var view = await port.GetForkSeedAsync("run-failed", CancellationToken.None);
+        var view = await port.GetForkSeedAsync("scope-1", "run-failed", CancellationToken.None);
 
         view.Should().NotBeNull();
         view!.Status.Should().Be("failed");
@@ -106,8 +108,68 @@ public sealed class WorkflowRunForkSeedQueryPortTests
         view.LastFailedStepId.Should().Be("step-failed");
         view.FinalError.Should().Be("step boom");
         view.ScopeId.Should().Be("scope-1");
-        bindingReader.RequestedRunIds.Should().ContainSingle().Which.Should().Be("run-failed");
+        bindingReader.LastQuery.Should().NotBeNull();
+        bindingReader.LastQuery!.ScopeId.Should().Be("scope-1");
+        bindingReader.LastQuery.RunIds.Should().Equal("run-failed");
         currentStateReader.GetKeys.Should().ContainSingle().Which.Should().Be("actor-run-failed");
+    }
+
+    [Fact]
+    public async Task GetForkSeedAsync_WhenBindingBelongsToVictimScope_ShouldReturnNullWithoutReadingCurrentState()
+    {
+        var currentStateReader = new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>();
+        var bindingReader = new FakeWorkflowRunBindingReader(
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "actor-victim-run",
+                "wf-alpha",
+                "victim-run",
+                "demo",
+                "name: demo\nsteps: []",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive,
+                "victim-scope"));
+        var port = new WorkflowRunForkSeedQueryPort(
+            currentStateReader,
+            bindingReader,
+            new WorkflowRunForkSeedReadModelMapper());
+
+        var view = await port.GetForkSeedAsync("attacker-scope", "victim-run", CancellationToken.None);
+
+        view.Should().BeNull();
+        bindingReader.LastQuery.Should().NotBeNull();
+        bindingReader.LastQuery!.ScopeId.Should().Be("attacker-scope");
+        bindingReader.LastQuery.RunIds.Should().Equal("victim-run");
+        currentStateReader.GetKeys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetForkSeedAsync_WhenCurrentStateBelongsToVictimScope_ShouldReturnNull()
+    {
+        var victimState = BuildWorkflowRunState("victim-run", "failed", "step boom");
+        victimState.ScopeId = "victim-scope";
+        var mapper = new WorkflowRunForkSeedReadModelMapper();
+        var currentStateReader = new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>
+        {
+            Item = BuildDocument(victimState, mapper.ToProjectionSnapshot(victimState)),
+        };
+        var bindingReader = new FakeWorkflowRunBindingReader(
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "actor-victim-run",
+                "wf-alpha",
+                "victim-run",
+                "demo",
+                "name: demo\nsteps: []",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive,
+                "attacker-scope"));
+        var port = new WorkflowRunForkSeedQueryPort(currentStateReader, bindingReader, mapper);
+
+        var view = await port.GetForkSeedAsync("attacker-scope", "victim-run", CancellationToken.None);
+
+        view.Should().BeNull();
+        currentStateReader.GetKeys.Should().ContainSingle().Which.Should().Be("actor-victim-run");
     }
 
     private static WorkflowRunState BuildWorkflowRunState(
@@ -165,25 +227,23 @@ public sealed class WorkflowRunForkSeedQueryPortTests
     {
         private readonly IReadOnlyList<WorkflowActorBinding> _bindings = bindings;
 
-        public List<string> RequestedRunIds { get; } = [];
+        public WorkflowRunBindingQuery? LastQuery { get; private set; }
 
         public Task<IReadOnlyList<WorkflowActorBinding>> ListByRunIdAsync(
             string runId,
             int take = 20,
             CancellationToken ct = default)
         {
-            ct.ThrowIfCancellationRequested();
-            RequestedRunIds.Add(runId);
-            return Task.FromResult(_bindings);
+            throw new InvalidOperationException("Fork seed lookup must not use the global run-id query.");
         }
 
         public Task<IReadOnlyList<WorkflowActorBinding>> QueryAsync(
             WorkflowRunBindingQuery query,
             CancellationToken ct = default)
         {
-            _ = query;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<WorkflowActorBinding>>([]);
+            LastQuery = query;
+            return Task.FromResult(_bindings);
         }
     }
 

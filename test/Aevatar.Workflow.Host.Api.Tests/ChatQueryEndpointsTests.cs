@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Aevatar.Capabilities;
@@ -7,15 +8,17 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
-using Microsoft.AspNetCore.Http.Json;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -244,11 +247,31 @@ public sealed class ChatQueryEndpointsTests
     {
         var service = new FakeWorkflowExecutionQueryApplicationService();
 
-        var result = await ChatQueryEndpoints.GetWorkflowActorCurrentState("actor-1", service, CancellationToken.None);
+        var result = await ChatQueryEndpoints.GetWorkflowActorCurrentState(
+            "actor-1",
+            CreateAuthenticatedQueryContext(),
+            service,
+            CancellationToken.None);
 
         var http = await ExecuteWithContextAsync(result);
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         service.Calls.Should().ContainSingle().Which.Should().Be("GetWorkflowActorCurrentState:actor-1");
+    }
+
+    [Fact]
+    public async Task GetWorkflowActorCurrentState_ShouldReturnUnauthorized_WhenCallerScopeMissing()
+    {
+        var service = new FakeWorkflowExecutionQueryApplicationService();
+
+        var result = await ChatQueryEndpoints.GetWorkflowActorCurrentState(
+            "actor-1",
+            CreateQueryContext(),
+            service,
+            CancellationToken.None);
+
+        var http = await ExecuteWithContextAsync(result);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        service.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -287,6 +310,104 @@ public sealed class ChatQueryEndpointsTests
     }
 
     [Fact]
+    public async Task GetWorkflowActorCurrentStateRoute_ShouldSerializeSafeConnectorApprovalLifecycles()
+    {
+        var lifecycleStatuses = new[]
+        {
+            WorkflowExternalActionLifecycleStatus.WaitingApproval,
+            WorkflowExternalActionLifecycleStatus.Approved,
+            WorkflowExternalActionLifecycleStatus.Denied,
+            WorkflowExternalActionLifecycleStatus.Expired,
+            WorkflowExternalActionLifecycleStatus.Executing,
+            WorkflowExternalActionLifecycleStatus.Succeeded,
+            WorkflowExternalActionLifecycleStatus.Failed,
+        };
+        var snapshot = new WorkflowActorSnapshot
+        {
+            ActorId = "run-connector-approval",
+            WorkflowName = "connector-approval",
+            CompletionStatus = WorkflowRunCompletionStatus.Running,
+            StateVersion = 17,
+        };
+        foreach (var (status, index) in lifecycleStatuses.Select(static (status, index) => (status, index)))
+        {
+            snapshot.ConnectorApprovals.Add(new WorkflowExternalActionApprovalSnapshot
+            {
+                Plan = new WorkflowExternalActionPlan
+                {
+                    ActionId = $"action-{index}",
+                    IdempotencyKey = $"private-idempotency-{index}",
+                    MaterialDigestSha256 = new string('a', 64),
+                    Summary = "POST /resources/alpha",
+                    ServiceRef = "service-alpha",
+                    NodeId = "node-alpha",
+                    ConnectorName = "service_proxy",
+                    ConnectorType = "http",
+                    Operation = "create_resource",
+                    HttpVerb = "POST",
+                    Resource = "/resources/alpha",
+                    PermissionScope = "resources.write",
+                    CreatedAt = Timestamp.FromDateTime(new DateTime(2026, 7, 17, 8, 0, 0, DateTimeKind.Utc)),
+                    ExpiresAt = Timestamp.FromDateTime(new DateTime(2026, 7, 17, 8, 5, 0, DateTimeKind.Utc)),
+                    Provenance = new WorkflowExternalActionProvenance
+                    {
+                        ScopeId = "scope-alpha",
+                        TeamId = "team-alpha",
+                        MemberId = "member-alpha",
+                        WorkflowId = "workflow-alpha",
+                        PublishedServiceId = "published-service-alpha",
+                        WorkflowActorId = "run-connector-approval",
+                        RunId = "run-connector-approval",
+                        StepId = "connector-approval",
+                        ExecutionId = "execution-alpha",
+                        RequesterPlatform = "nyxid",
+                        RequesterTenant = "tenant-alpha",
+                        RequesterExternalUserId = "user-alpha",
+                        PrincipalSubject = "user-alpha",
+                        RequesterCapabilityScope = "proxy",
+                    },
+                },
+                RemoteApprovalId = $"private-remote-{index}",
+                RemoteExpiresAt = Timestamp.FromDateTime(new DateTime(2026, 7, 17, 8, 2, 0, DateTimeKind.Utc)),
+                LifecycleStatus = status,
+                ApprovalStatus = status == WorkflowExternalActionLifecycleStatus.Denied
+                    ? WorkflowExternalActionApprovalStatus.Denied
+                    : WorkflowExternalActionApprovalStatus.Approved,
+                ApprovalReasonCode = "approval_result",
+                ExecutionStatus = status switch
+                {
+                    WorkflowExternalActionLifecycleStatus.Executing => WorkflowExternalActionExecutionStatus.Executing,
+                    WorkflowExternalActionLifecycleStatus.Succeeded => WorkflowExternalActionExecutionStatus.Succeeded,
+                    WorkflowExternalActionLifecycleStatus.Failed => WorkflowExternalActionExecutionStatus.Failed,
+                    _ => WorkflowExternalActionExecutionStatus.NotStarted,
+                },
+                ExecutionReasonCode = "execution_result",
+            });
+        }
+        var service = new FakeWorkflowExecutionQueryApplicationService { Snapshot = snapshot };
+        await using var app = await CreateRouteAppAsync(service);
+        using var client = CreateClient(app);
+
+        var response = await client.GetAsync("/api/workflow-actors/run-connector-approval/current-state");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(body);
+        var approvals = json.RootElement.GetProperty("connectorApprovals").EnumerateArray().ToList();
+        approvals.Select(static approval => approval.GetProperty("lifecycleStatus").GetString())
+            .Should().Equal(lifecycleStatuses.Select(static status => status.ToString()));
+        approvals[0].GetProperty("actionId").GetString().Should().Be("action-0");
+        approvals[0].GetProperty("principalSubject").GetString().Should().Be("user-alpha");
+        approvals[0].GetProperty("nodeId").GetString().Should().Be("node-alpha");
+        approvals[0].GetProperty("permissionScope").GetString().Should().Be("resources.write");
+        approvals[0].GetProperty("expiresAt").GetDateTimeOffset()
+            .Should().Be(new DateTimeOffset(2026, 7, 17, 8, 5, 0, TimeSpan.Zero));
+        body.Should().NotContain("private-idempotency");
+        body.Should().NotContain("private-remote");
+        body.Should().NotContain(new string('a', 64));
+    }
+
+    [Fact]
     public async Task GraphEndpoints_ShouldNormalizeDirectionAndEdgeTypes()
     {
         var service = new FakeWorkflowExecutionQueryApplicationService
@@ -308,6 +429,7 @@ public sealed class ChatQueryEndpointsTests
 
         var edgesResult = await ChatQueryEndpoints.ListWorkflowRunGraphExportEdges(
             "actor-1",
+            CreateAuthenticatedQueryContext(),
             service,
             take: 12,
             direction: " outbound ",
@@ -315,6 +437,7 @@ public sealed class ChatQueryEndpointsTests
             ct: CancellationToken.None);
         var subgraphResult = await ChatQueryEndpoints.GetWorkflowRunGraphExportSubgraph(
             "actor-1",
+            CreateAuthenticatedQueryContext(),
             service,
             depth: 3,
             take: 8,
@@ -342,6 +465,7 @@ public sealed class ChatQueryEndpointsTests
 
         var result = await ChatQueryEndpoints.GetWorkflowRunGraphExportEnriched(
             "run-1",
+            CreateAuthenticatedQueryContext(),
             service,
             depth: 4,
             take: 9,
@@ -370,7 +494,12 @@ public sealed class ChatQueryEndpointsTests
             ],
         };
 
-        var timelineResult = await ChatQueryEndpoints.ListWorkflowRunTimelineExport("actor-1", service, 15, CancellationToken.None);
+        var timelineResult = await ChatQueryEndpoints.ListWorkflowRunTimelineExport(
+            "actor-1",
+            CreateAuthenticatedQueryContext(),
+            service,
+            15,
+            CancellationToken.None);
 
         (await ExecuteAsync(timelineResult)).Should().Contain("step-1");
         service.Calls.Should().Contain("ListWorkflowRunTimelineExport:actor-1:15");
@@ -472,6 +601,25 @@ public sealed class ChatQueryEndpointsTests
         return http;
     }
 
+    private static DefaultHttpContext CreateAuthenticatedQueryContext()
+    {
+        var http = CreateQueryContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("scope_id", "scope-alpha")],
+            authenticationType: "test"));
+        return http;
+    }
+
+    private static DefaultHttpContext CreateQueryContext() =>
+        new()
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddOptions()
+                .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
+                .BuildServiceProvider(),
+        };
+
     private static async Task<string> ReadBodyAsync(HttpResponse response)
     {
         response.Body.Seek(0, SeekOrigin.Begin);
@@ -487,7 +635,15 @@ public sealed class ChatQueryEndpointsTests
         });
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Services.AddSingleton(service);
+        builder.Services.AddSingleton((IWorkflowExecutionScopeQueryApplicationService)service);
         var app = builder.Build();
+        app.Use(async (http, next) =>
+        {
+            http.User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("scope_id", "scope-alpha")],
+                authenticationType: "test"));
+            await next();
+        });
         ChatQueryEndpoints.Map(app.MapGroup("/api"));
         await app.StartAsync();
         return app;
@@ -553,7 +709,9 @@ public sealed class ChatQueryEndpointsTests
             "aevatar-mainnet-workflow-execution-current-states-v6c660705",
             "aevatar-mainnet-workflow-execution-current-states-vddd647dc");
 
-    private sealed class FakeWorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
+    private sealed class FakeWorkflowExecutionQueryApplicationService :
+        IWorkflowExecutionQueryApplicationService,
+        IWorkflowExecutionScopeQueryApplicationService
     {
         public bool WorkflowActorCurrentStateQueryEnabled => true;
         public IReadOnlyList<WorkflowAgentSummary> Agents { get; init; } = [];
@@ -646,6 +804,45 @@ public sealed class ChatQueryEndpointsTests
             Calls.Add($"GetWorkflowRunGraphExportSubgraph:{actorId}:{depth}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
             return Task.FromResult(GraphSubgraph);
         }
+
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(
+            string scopeId,
+            string actorId,
+            CancellationToken ct = default) =>
+            GetWorkflowActorCurrentStateAsync(actorId, ct);
+
+        public async Task<IReadOnlyList<WorkflowRunTimelineExportItem>?> ListWorkflowRunTimelineExportAsync(
+            string scopeId,
+            string workflowRunId,
+            int take = 200,
+            CancellationToken ct = default) =>
+            await ListWorkflowRunTimelineExportAsync(workflowRunId, take, ct);
+
+        public async Task<IReadOnlyList<WorkflowRunGraphExportEdge>?> ListWorkflowRunGraphExportEdgesAsync(
+            string scopeId,
+            string workflowRunId,
+            int take = 200,
+            WorkflowRunGraphExportQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            await ListWorkflowRunGraphExportEdgesAsync(workflowRunId, take, options, ct);
+
+        public async Task<WorkflowRunGraphExportSubgraph?> GetWorkflowRunGraphExportSubgraphAsync(
+            string scopeId,
+            string workflowRunId,
+            int depth = 2,
+            int take = 200,
+            WorkflowRunGraphExportQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            await GetWorkflowRunGraphExportSubgraphAsync(workflowRunId, depth, take, options, ct);
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = nameof(ChatQueryEndpointsTests);
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 
     private sealed class FakeWorkflowExecutionCurrentStateIndexProbe

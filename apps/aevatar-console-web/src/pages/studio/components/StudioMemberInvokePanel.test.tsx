@@ -1,31 +1,23 @@
 import { AGUIEventType } from '@aevatar-react-sdk/types';
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from '@testing-library/react';
-import { message } from 'antd';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
-import { createIdleInvokeResult } from './StudioMemberInvokePanel.currentRun';
-import StudioMemberInvokePanel from './StudioMemberInvokePanel';
 import StudioMemberInvokeHistoryPanel from './StudioMemberInvokeHistoryPanel';
+import StudioMemberInvokePanel from './StudioMemberInvokePanel';
+import { createIdleInvokeResult } from './StudioMemberInvokePanel.currentRun';
 
-jest.mock('antd', () => {
-  const actual = jest.requireActual('antd');
-  return {
-    ...actual,
-    message: {
-      ...actual.message,
-      info: jest.fn(),
-      success: jest.fn(),
-      warning: jest.fn(),
-    },
-  };
-});
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
+
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  useConsoleToast: () => mockConsoleToast,
+}));
 
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
@@ -215,7 +207,9 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByText('最新输出')).toBeNull();
     expect(screen.queryByText('调用契约')).toBeNull();
     expect(screen.queryByText('Run diagnostics')).toBeNull();
-    expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
+    expect(
+      screen.queryByTestId('studio-invoke-selected-run-detail'),
+    ).toBeNull();
   });
 
   it('keeps prompt validation local and does not create a failed run for empty chat input', async () => {
@@ -246,9 +240,13 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Run workflow' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Run workflow' }),
+    );
 
-    expect(await screen.findByText('Enter a request before running this workflow.')).toBeTruthy();
+    expect(
+      await screen.findByText('Enter a request before running this workflow.'),
+    ).toBeTruthy();
     expect(runtimeRunsApi.streamEndpoint).not.toHaveBeenCalled();
     expect(screen.queryByText('调用契约')).toBeNull();
     expect(screen.queryByText('缺少提示词')).toBeNull();
@@ -282,10 +280,12 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    expect(await screen.findByTestId('studio-invoke-target-summary')).toHaveTextContent(
-      'Select an endpoint before running.',
-    );
-    expect(screen.getAllByText('Select an endpoint before running.').length).toBeGreaterThanOrEqual(1);
+    expect(
+      await screen.findByTestId('studio-invoke-target-summary'),
+    ).toHaveTextContent('Select an endpoint before running.');
+    expect(
+      screen.getAllByText('Select an endpoint before running.').length,
+    ).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole('button', { name: 'Run workflow' })).toBeDisabled();
   });
 
@@ -355,7 +355,9 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    const targetSummary = await screen.findByTestId('studio-invoke-target-summary');
+    const targetSummary = await screen.findByTestId(
+      'studio-invoke-target-summary',
+    );
     expect(targetSummary).toHaveTextContent(
       'Extremely long member display name that should truncate visually but remain available on hover',
     );
@@ -368,15 +370,17 @@ describe('StudioMemberInvokePanel', () => {
     );
     expect(targetSummary).not.toHaveTextContent('(chat)');
     expect(targetSummary).not.toHaveTextContent('Member:');
-    expect(targetSummary).not.toHaveTextContent('Service: workspace-demo-service');
+    expect(targetSummary).not.toHaveTextContent(
+      'Service: workspace-demo-service',
+    );
     expect(targetSummary).not.toHaveTextContent('Workflow');
     expect(targetSummary).not.toHaveTextContent('Team: team-1');
-    expect(screen.getByTestId('studio-invoke-member-run-workbench')).toBeTruthy();
+    expect(
+      screen.getByTestId('studio-invoke-member-run-workbench'),
+    ).toBeTruthy();
     expect(screen.getByText('Launch run')).toBeTruthy();
     expect(
-      screen.getByText(
-        'One input creates one isolated run.',
-      ),
+      screen.getByText('One input creates one isolated run.'),
     ).toBeTruthy();
     expect(screen.getByText('Run launcher')).toBeTruthy();
     expect(screen.getByLabelText('Run input')).toBeTruthy();
@@ -388,11 +392,21 @@ describe('StudioMemberInvokePanel', () => {
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start run' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Run workflow' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Technical details' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Technical details' }),
+    ).toBeTruthy();
+    expect(screen.getByTestId('studio-invoke-target-actions')).toHaveStyle({
+      flex: '0 1 auto',
+      flexWrap: 'wrap',
+      maxWidth: '100%',
+      minWidth: 0,
+    });
     expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
     expect(screen.getByText('Current run')).toBeTruthy();
     expect(screen.getByText('No run result yet')).toBeTruthy();
-    expect(screen.getByText('Start a run to see the result here.')).toBeTruthy();
+    expect(
+      screen.getByText('Start a run to see the result here.'),
+    ).toBeTruthy();
     expect(screen.queryByText('New run')).toBeNull();
     expect(screen.queryByText('Run result')).toBeNull();
     expect(screen.queryByText('Observe handoff')).toBeNull();
@@ -404,28 +418,33 @@ describe('StudioMemberInvokePanel', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
 
-    expect((await screen.findAllByText('Member-run answer')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
+    expect(
+      (await screen.findAllByText('Member-run answer')).length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getByTestId('studio-invoke-observe-handoff'),
+    ).toHaveTextContent(
       'This run is ready for Observe. Switch to Observe when you need backend events, audit frames, or the runtime trail for this member.',
     );
   });
 
   it('locks the member-run input and keeps the submitted task visible while a run is in progress', async () => {
     (runtimeRunsApi.streamEndpoint as jest.Mock).mockResolvedValue({});
-    (parseBackendSSEStream as jest.Mock).mockImplementation(
-      async function* (_response, options?: { signal?: AbortSignal }) {
-        await new Promise<void>((resolve) => {
-          if (options?.signal?.aborted) {
-            resolve();
-            return;
-          }
+    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* (
+      _response,
+      options?: { signal?: AbortSignal },
+    ) {
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) {
+          resolve();
+          return;
+        }
 
-          options?.signal?.addEventListener('abort', () => resolve(), {
-            once: true,
-          });
+        options?.signal?.addEventListener('abort', () => resolve(), {
+          once: true,
         });
-      },
-    );
+      });
+    });
 
     render(
       React.createElement(StudioMemberInvokePanel, {
@@ -501,20 +520,21 @@ describe('StudioMemberInvokePanel', () => {
   it('sends member-run attachments through the selected stream endpoint', async () => {
     const image = new File(['image-bytes'], 'cat.png', { type: 'image/png' });
     (runtimeRunsApi.streamEndpoint as jest.Mock).mockResolvedValue({});
-    (parseBackendSSEStream as jest.Mock).mockImplementation(
-      async function* (_response, options?: { signal?: AbortSignal }) {
-        await new Promise<void>((resolve) => {
-          if (options?.signal?.aborted) {
-            resolve();
-            return;
-          }
+    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* (
+      _response,
+      options?: { signal?: AbortSignal },
+    ) {
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) {
+          resolve();
+          return;
+        }
 
-          options?.signal?.addEventListener('abort', () => resolve(), {
-            once: true,
-          });
+        options?.signal?.addEventListener('abort', () => resolve(), {
+          once: true,
         });
-      },
-    );
+      });
+    });
 
     render(
       React.createElement(StudioMemberInvokePanel, {
@@ -553,9 +573,9 @@ describe('StudioMemberInvokePanel', () => {
         files: [image],
       },
     });
-    expect(screen.getByTestId('studio-invoke-attachment-chip')).toHaveTextContent(
-      'cat.png',
-    );
+    expect(
+      screen.getByTestId('studio-invoke-attachment-chip'),
+    ).toHaveTextContent('cat.png');
 
     fireEvent.change(screen.getByLabelText('Run input'), {
       target: {
@@ -579,12 +599,12 @@ describe('StudioMemberInvokePanel', () => {
       );
     });
 
-    expect(screen.getByTestId('studio-invoke-submitted-input-receipt')).toHaveTextContent(
-      'Files: cat.png',
-    );
-    expect(screen.getByTestId('studio-invoke-attachment-chip')).toHaveTextContent(
-      'cat.png',
-    );
+    expect(
+      screen.getByTestId('studio-invoke-submitted-input-receipt'),
+    ).toHaveTextContent('Files: cat.png');
+    expect(
+      screen.getByTestId('studio-invoke-attachment-chip'),
+    ).toHaveTextContent('cat.png');
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop run' }));
   });
@@ -636,7 +656,9 @@ describe('StudioMemberInvokePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
 
     expect(
-      await screen.findByText('Remove empty file empty.png before starting the run.'),
+      await screen.findByText(
+        'Remove empty file empty.png before starting the run.',
+      ),
     ).toBeTruthy();
     expect(runtimeRunsApi.streamEndpoint).not.toHaveBeenCalled();
   });
@@ -703,8 +725,12 @@ describe('StudioMemberInvokePanel', () => {
       );
     });
 
-    expect((await screen.findAllByText(/핵심 단어로 나누면/)).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
+    expect(
+      (await screen.findAllByText(/핵심 단어로 나누면/)).length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getByTestId('studio-invoke-observe-handoff'),
+    ).toHaveTextContent(
       'This run is ready for Observe. Switch to Observe when you need backend events, audit frames, or the runtime trail for this member.',
     );
     expect(Element.prototype.scrollTo).toHaveBeenCalledWith(
@@ -729,9 +755,9 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText(/빠른 요약/)).toBeTruthy();
     expect(screen.queryByText('可以拆成这些重点词：')).toBeNull();
     expect(screen.getByText('Latest response')).toBeTruthy();
-    expect(screen.getByTestId('studio-invoke-run-status-summary')).toHaveTextContent(
-      'Succeeded',
-    );
+    expect(
+      screen.getByTestId('studio-invoke-run-status-summary'),
+    ).toHaveTextContent('Succeeded');
   });
 
   it('shows workflow node logs on Invoke runs instead of surfacing transient response chunks', async () => {
@@ -746,7 +772,8 @@ describe('StudioMemberInvokePanel', () => {
     Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
       configurable: true,
       get() {
-        return this.getAttribute('data-testid') === 'studio-invoke-run-log-scroll'
+        return this.getAttribute('data-testid') ===
+          'studio-invoke-run-log-scroll'
           ? 120
           : 0;
       },
@@ -754,51 +781,54 @@ describe('StudioMemberInvokePanel', () => {
     Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
       configurable: true,
       get() {
-        return this.getAttribute('data-testid') === 'studio-invoke-run-log-scroll'
+        return this.getAttribute('data-testid') ===
+          'studio-invoke-run-log-scroll'
           ? 480
           : 0;
       },
     });
     try {
       (runtimeRunsApi.streamEndpoint as jest.Mock).mockResolvedValue({});
-      (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
-        yield {
-          runId: 'run-node-log',
-          threadId: 'actor-node-log',
-          timestamp: Date.parse('2026-06-08T00:00:00Z'),
-          type: AGUIEventType.RUN_STARTED,
-        };
-        yield {
-          name: 'aevatar.step.request',
-          payload: {
-            input: 'Classify ticket severity',
-            stepId: 'triage-ticket',
-            stepType: 'llm_call',
-            targetRole: 'support-analyst',
-          },
-          timestamp: Date.parse('2026-06-08T00:00:01Z'),
-          type: AGUIEventType.CUSTOM,
-        };
-        yield {
-          delta: 'Thinking through severity...',
-          type: AGUIEventType.TEXT_MESSAGE_CONTENT,
-        };
-        yield {
-          name: 'aevatar.step.completed',
-          payload: {
-            output: 'Severity: high',
-            stepId: 'triage-ticket',
-            success: true,
-          },
-          timestamp: Date.parse('2026-06-08T00:00:02Z'),
-          type: AGUIEventType.CUSTOM,
-        };
-        yield {
-          result: 'Final answer: route to priority support.',
-          timestamp: Date.parse('2026-06-08T00:00:03Z'),
-          type: AGUIEventType.RUN_FINISHED,
-        };
-      });
+      (parseBackendSSEStream as jest.Mock).mockImplementation(
+        async function* () {
+          yield {
+            runId: 'run-node-log',
+            threadId: 'actor-node-log',
+            timestamp: Date.parse('2026-06-08T00:00:00Z'),
+            type: AGUIEventType.RUN_STARTED,
+          };
+          yield {
+            name: 'aevatar.step.request',
+            payload: {
+              input: 'Classify ticket severity',
+              stepId: 'triage-ticket',
+              stepType: 'llm_call',
+              targetRole: 'support-analyst',
+            },
+            timestamp: Date.parse('2026-06-08T00:00:01Z'),
+            type: AGUIEventType.CUSTOM,
+          };
+          yield {
+            delta: 'Thinking through severity...',
+            type: AGUIEventType.TEXT_MESSAGE_CONTENT,
+          };
+          yield {
+            name: 'aevatar.step.completed',
+            payload: {
+              output: 'Severity: high',
+              stepId: 'triage-ticket',
+              success: true,
+            },
+            timestamp: Date.parse('2026-06-08T00:00:02Z'),
+            type: AGUIEventType.CUSTOM,
+          };
+          yield {
+            result: 'Final answer: route to priority support.',
+            timestamp: Date.parse('2026-06-08T00:00:03Z'),
+            type: AGUIEventType.RUN_FINISHED,
+          };
+        },
+      );
 
       render(
         React.createElement(StudioMemberInvokePanel, {
@@ -858,7 +888,9 @@ describe('StudioMemberInvokePanel', () => {
       expect(nodeDetails).toHaveAttribute('open');
       expect(runLogs).toHaveTextContent('Classify ticket severity');
       expect(runLogs).toHaveTextContent('Severity: high');
-      expect(await screen.findByText('Final answer: route to priority support.')).toBeTruthy();
+      expect(
+        await screen.findByText('Final answer: route to priority support.'),
+      ).toBeTruthy();
       expect(screen.queryByText('Thinking through severity...')).toBeNull();
     } finally {
       if (originalClientHeightDescriptor) {
@@ -929,8 +961,12 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByTestId('studio-invoke-recovery-path')).toHaveTextContent(
       'This run failed. Retry with a smaller request, open diagnostics for backend signals, or edit the member contract from its owning member surface.',
     );
-    expect(screen.getByRole('button', { name: 'Open diagnostics' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Retry as new run' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Open diagnostics' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Retry as new run' }),
+    ).toBeTruthy();
   });
 
   it('lets Run history expand in document flow when many runs are rendered', () => {
@@ -995,7 +1031,9 @@ describe('StudioMemberInvokePanel', () => {
     expect(
       screen.getByRole('button', { name: 'Retry as new run' }),
     ).toBeTruthy();
-    expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
+    expect(
+      screen.queryByTestId('studio-invoke-selected-run-detail'),
+    ).toBeNull();
     expect(screen.queryByText('Member ID')).toBeNull();
   });
 
@@ -1272,6 +1310,122 @@ describe('StudioMemberInvokePanel', () => {
     });
   });
 
+  it('allows bound member-run chat endpoints to start without prompt or files', async () => {
+    (runtimeRunsApi.streamEndpoint as jest.Mock).mockResolvedValue({});
+    (
+      scopeRuntimeApi.getMemberEndpointContract as jest.Mock
+    ).mockResolvedValueOnce({
+      defaultSmokeInputMode: 'prompt',
+      defaultSmokePrompt: null,
+      deploymentStatus: 'Active',
+      endpointId: 'chat',
+      fetchExample: null,
+      curlExample: null,
+      invokePath: '/api/scopes/scope-1/members/m-alpha/invoke/chat:stream',
+      memberId: 'm-alpha',
+      method: 'POST',
+      publishedServiceId: 'svc-alpha',
+      requestContentType: 'application/json',
+      requestTypeUrl: '',
+      responseContentType: 'text/event-stream',
+      responseTypeUrl: '',
+      revisionId: 'rev-workflow',
+      sampleRequestJson: null,
+      scopeId: 'scope-1',
+      serviceId: 'svc-alpha',
+      smokeTestSupported: true,
+      streamFrameFormat: 'workflow-run-event',
+      supportsAguiFrames: false,
+      supportsSse: true,
+      supportsWebSocket: false,
+    });
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        enableFileAttachments: true,
+        memberId: 'm-alpha',
+        memberRevision: {
+          allocationWeight: 100,
+          artifactHash: 'hash-workflow',
+          createdAt: '2026-03-26T07:00:00Z',
+          deploymentId: 'dep-workflow',
+          failureReason: '',
+          implementationKind: 'workflow',
+          inlineWorkflowCount: 1,
+          isActiveServing: true,
+          isDefaultServing: true,
+          isServingTarget: true,
+          preparedAt: '2026-03-26T07:01:00Z',
+          primaryActorId: 'actor-workflow',
+          publishedAt: '2026-03-26T07:02:00Z',
+          retiredAt: null,
+          revisionId: 'rev-workflow',
+          scriptDefinitionActorId: '',
+          scriptId: '',
+          scriptRevision: '',
+          scriptSourceHash: '',
+          servingState: 'Active',
+          staticActorTypeName: '',
+          status: 'Published',
+          workflowDefinitionActorId: 'wf-alpha',
+          workflowName: 'status-report',
+        },
+        presentation: 'member-run',
+        runtimeTarget: 'member',
+        scopeId: 'scope-1',
+        selectedMemberLabel: 'Status reporter',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'Status reporter service',
+            endpoints: [
+              {
+                description: 'Run the bound workflow.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-workflow',
+            serviceId: 'svc-alpha',
+          },
+        ],
+        teamId: 'team-alpha',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(scopeRuntimeApi.getMemberEndpointContract).toHaveBeenCalledWith(
+        'scope-1',
+        'm-alpha',
+        'chat',
+      );
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamEndpoint).toHaveBeenCalledWith(
+        'scope-1',
+        {
+          endpointId: 'chat',
+          prompt: '',
+        },
+        expect.any(AbortSignal),
+        {
+          memberId: 'm-alpha',
+        },
+      );
+    });
+    expect(
+      screen.queryByText('Enter a request before running this workflow.'),
+    ).toBeNull();
+  });
+
   it('records runs into read-only Run history without exposing internal identifiers', async () => {
     const onObserveSessionChange = jest.fn();
 
@@ -1344,7 +1498,9 @@ describe('StudioMemberInvokePanel', () => {
     });
 
     expect(await screen.findByText('Run history (1)')).toBeTruthy();
-    expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
+    expect(
+      screen.getByTestId('studio-invoke-observe-handoff'),
+    ).toHaveTextContent(
       'The workflow run was accepted. Switch to Observe to watch backend events and read-model materialization catch up for this member.',
     );
     expect(
@@ -1357,9 +1513,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('Run status')).toBeTruthy();
     expect(screen.getAllByText('Request').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Response').length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getByText('No readable response returned.'),
-    ).toBeTruthy();
+    expect(screen.getByText('No readable response returned.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy();
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();
@@ -1376,15 +1530,17 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getAllByText('Succeeded').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Endpoint')).toBeTruthy();
     expect(screen.getAllByText('Submit').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Run ID')).toBeTruthy();
-    expect(screen.getByText('run-1')).toBeTruthy();
-    expect(screen.getByText('Command ID')).toBeTruthy();
-    expect(screen.getByText('cmd-1')).toBeTruthy();
-    expect(screen.getByText('Actor ID')).toBeTruthy();
-    expect(screen.getByText('actor-1')).toBeTruthy();
+    expect(screen.queryByText('Run ID')).toBeNull();
+    expect(screen.queryByText('run-1')).toBeNull();
+    expect(screen.queryByText('Command ID')).toBeNull();
+    expect(screen.queryByText('cmd-1')).toBeNull();
+    expect(screen.queryByText('Actor ID')).toBeNull();
+    expect(screen.queryByText('actor-1')).toBeNull();
     expect(screen.queryByText('Member ID')).toBeNull();
     expect(screen.getByText('Event payload')).toBeTruthy();
-    expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
+    expect(
+      screen.queryByTestId('studio-invoke-selected-run-detail'),
+    ).toBeNull();
 
     fireEvent.click(screen.getByLabelText('Close'));
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
@@ -1402,7 +1558,9 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByText('Historical run · Read-only')).toBeNull();
     expect(screen.queryByTestId('studio-invoke-observe-handoff')).toBeNull();
     expect(screen.getByTestId('studio-invoke-diagnostics-drawer')).toBeTruthy();
-    expect(screen.getByTestId('studio-invoke-composer-guidance')).toHaveTextContent(
+    expect(
+      screen.getByTestId('studio-invoke-composer-guidance'),
+    ).toHaveTextContent(
       'Historical run is read-only. Sending this request starts a new run and fresh Observe handoff.',
     );
     expect(screen.getByRole('button', { name: 'Copy input' })).toBeTruthy();
@@ -1411,15 +1569,30 @@ describe('StudioMemberInvokePanel', () => {
     expect(
       screen.getByRole('button', { name: 'Retry as new run' }),
     ).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Continue|Resume|Edit/ })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /Continue|Resume|Edit/ }),
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy input' }));
     expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith(
       'Route this escalation to billing review.',
     );
-    expect(message.success).toHaveBeenCalledWith('Input copied.');
+    await waitFor(() => {
+      expect(mockConsoleToast.success).toHaveBeenCalledWith('Input copied.');
+    });
 
     expect(screen.getByRole('button', { name: 'Copy output' })).toBeDisabled();
+
+    (window.navigator.clipboard.writeText as jest.Mock).mockRejectedValueOnce(
+      new Error('Clipboard access was rejected.'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Copy input' }));
+    await waitFor(() => {
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Could not copy this value.',
+      );
+    });
+    expect(mockConsoleToast.success).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry as new run' }));
     expect(screen.getByLabelText('Workflow request input')).toHaveValue(
@@ -1429,7 +1602,7 @@ describe('StudioMemberInvokePanel', () => {
       behavior: 'smooth',
       block: 'start',
     });
-    expect(message.info).toHaveBeenCalledWith(
+    expect(mockConsoleToast.info).toHaveBeenCalledWith(
       'Request restored. Run workflow to create a new run.',
     );
 
@@ -1506,7 +1679,9 @@ describe('StudioMemberInvokePanel', () => {
   });
 
   it('requires base64 for non text typed payloads and sends it for structured invoke endpoints', async () => {
-    (scopeRuntimeApi.getMemberEndpointContract as jest.Mock).mockResolvedValueOnce({
+    (
+      scopeRuntimeApi.getMemberEndpointContract as jest.Mock
+    ).mockResolvedValueOnce({
       defaultSmokeInputMode: 'typed-payload',
       defaultSmokePrompt: null,
       deploymentStatus: 'Active',
@@ -1558,9 +1733,7 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    expect(
-      await screen.findByRole('button', { name: 'Details' }),
-    ).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Details' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(
       await screen.findByTestId('studio-invoke-diagnostics-drawer'),
@@ -1652,13 +1825,17 @@ describe('StudioMemberInvokePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }));
 
     expect(await screen.findByText('Run failed')).toBeTruthy();
-    const errorNode = screen.getByText(/telegram_chats_tool_with_a_really_long/);
+    const errorNode = screen.getByText(
+      /telegram_chats_tool_with_a_really_long/,
+    );
     expect(errorNode).toHaveStyle({
       overflowWrap: 'anywhere',
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
     });
-    expect(screen.getByRole('button', { name: 'Open diagnostics' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Open diagnostics' }),
+    ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy error' })).toBeTruthy();
     expect(
       screen.getByRole('button', { name: 'Retry as new run' }),
@@ -1717,8 +1894,8 @@ describe('StudioMemberInvokePanel', () => {
       await screen.findByTestId('studio-invoke-diagnostics-drawer'),
     ).toBeTruthy();
     expect(screen.getByText('Run details')).toBeTruthy();
-    expect(screen.getByText('Command ID')).toBeTruthy();
-    expect(screen.getByText('cmd-only')).toBeTruthy();
+    expect(screen.queryByText('Command ID')).toBeNull();
+    expect(screen.queryByText('cmd-only')).toBeNull();
     expect(screen.queryByRole('button', { name: '打开运行记录' })).toBeNull();
   });
 

@@ -54,6 +54,6 @@ Result: passed.
 
 ```text
 Test stability guard passed (polling waits constrained by allowlist).
-========================= 6 passed in 66.21s (0:01:06) =========================
+pytest: 6 passed in 66.21s (0:01:06)
 ```
 ⟦AI:AUTO-LOOP⟧

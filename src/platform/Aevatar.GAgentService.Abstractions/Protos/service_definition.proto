@@ -7,9 +7,27 @@ option csharp_namespace = "Aevatar.GAgentService.Abstractions";
 import "google/protobuf/timestamp.proto";
 import "service_endpoint.proto";
 
+enum ServiceRegistrationStatus {
+  SERVICE_REGISTRATION_STATUS_UNSPECIFIED = 0;
+  SERVICE_REGISTRATION_STATUS_PENDING = 1;
+  SERVICE_REGISTRATION_STATUS_REGISTERING = 2;
+  SERVICE_REGISTRATION_STATUS_REGISTERED = 3;
+  SERVICE_REGISTRATION_STATUS_FAILED = 4;
+  SERVICE_REGISTRATION_STATUS_RETIRED = 5;
+}
+
 message ExternalExposure {
   string nyxid_slug = 1;
   google.protobuf.Timestamp registered_at = 2;
+  ServiceRegistrationStatus status = 3;
+  string nyxid_service_id = 4;
+  string desired_spec_hash = 5;
+  string registered_spec_hash = 6;
+  string last_error = 7;
+  int32 attempt = 8;
+  google.protobuf.Timestamp next_attempt_at = 9;
+  string credential_kid = 10;
+  bool exposure_desired = 11;
 }
 
 message ServiceDefinitionSpec {
@@ -40,6 +58,32 @@ message UpdateServiceExternalExposureCommand {
   ExternalExposure external_exposure = 2;
 }
 
+message ReconcileExternalExposureCommand {
+  ServiceIdentity identity = 1;
+  string openapi_url = 2;
+  string desired_spec_hash = 3;
+  string credential_kid = 4;
+}
+
+message RetireExternalExposureCommand {
+  ServiceIdentity identity = 1;
+  string desired_spec_hash = 2;
+}
+
+message RunRegistrationAttemptCommand {
+  ServiceIdentity identity = 1;
+  int32 expected_attempt = 2;
+  string desired_spec_hash = 3;
+  string openapi_url = 4;
+}
+
+message RegistrationRetryDueCommand {
+  ServiceIdentity identity = 1;
+  int32 expected_attempt = 2;
+  string desired_spec_hash = 3;
+  string openapi_url = 4;
+}
+
 message SetDefaultServingRevisionCommand {
   ServiceIdentity identity = 1;
   string revision_id = 2;
@@ -56,6 +100,52 @@ message ServiceDefinitionUpdatedEvent {
 message ServiceExternalExposureUpdatedEvent {
   ServiceIdentity identity = 1;
   ExternalExposure external_exposure = 2;
+}
+
+message ServiceRegistrationRequestedEvent {
+  ServiceIdentity identity = 1;
+  string openapi_url = 2;
+  string desired_spec_hash = 3;
+  string credential_kid = 4;
+  int32 attempt = 5;
+  google.protobuf.Timestamp requested_at = 6;
+}
+
+message ServiceRegistrationAttemptStartedEvent {
+  ServiceIdentity identity = 1;
+  string desired_spec_hash = 2;
+  int32 attempt = 3;
+  google.protobuf.Timestamp started_at = 4;
+}
+
+message ServiceRegistrationSucceededEvent {
+  ServiceIdentity identity = 1;
+  string nyxid_service_id = 2;
+  string nyxid_slug = 3;
+  string desired_spec_hash = 4;
+  string registered_spec_hash = 5;
+  string credential_kid = 6;
+  int32 attempt = 7;
+  google.protobuf.Timestamp registered_at = 8;
+}
+
+message ServiceRegistrationFailedEvent {
+  ServiceIdentity identity = 1;
+  string desired_spec_hash = 2;
+  string last_error = 3;
+  int32 attempt = 4;
+  google.protobuf.Timestamp failed_at = 5;
+  google.protobuf.Timestamp next_attempt_at = 6;
+  string credential_kid = 7;
+}
+
+message ServiceRegistrationRetiredEvent {
+  ServiceIdentity identity = 1;
+  string nyxid_service_id = 2;
+  string nyxid_slug = 3;
+  string desired_spec_hash = 4;
+  int32 attempt = 5;
+  google.protobuf.Timestamp retired_at = 6;
 }
 
 message DefaultServingRevisionChangedEvent {

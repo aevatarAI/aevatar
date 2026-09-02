@@ -1,15 +1,22 @@
 using System.Collections.Immutable;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.LLMProviders.NyxId;
 
 public sealed class NyxIdLLMProviderFactory : ILLMProviderFactory
 {
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
     private ImmutableDictionary<string, NyxIdLLMProvider> _providers =
         ImmutableDictionary<string, NyxIdLLMProvider>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
 
     private string _defaultName = string.Empty;
+
+    public NyxIdLLMProviderFactory(IAgentToolExecutionPort? toolExecutionPort = null)
+    {
+        _toolExecutionPort = toolExecutionPort;
+    }
 
     public NyxIdLLMProviderFactory RegisterGateway(
         string name,
@@ -20,7 +27,7 @@ public sealed class NyxIdLLMProviderFactory : ILLMProviderFactory
         ILogger? logger = null)
     {
         var provider = new NyxIdLLMProvider(
-            name, defaultModel, gatewayEndpoint, accessTokenAccessor, defaultRoutePreference, logger);
+            name, defaultModel, gatewayEndpoint, accessTokenAccessor, defaultRoutePreference, logger, _toolExecutionPort);
         ImmutableInterlocked.AddOrUpdate(ref _providers, provider.Name, provider, (_, _) => provider);
         if (string.IsNullOrWhiteSpace(Volatile.Read(ref _defaultName)))
             Volatile.Write(ref _defaultName, provider.Name);

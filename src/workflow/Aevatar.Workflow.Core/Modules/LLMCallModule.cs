@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
@@ -23,10 +24,14 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     private const string ModuleStateKey = "llm_call";
 
     private readonly WorkflowStepTargetAgentResolver? _targetAgentResolver;
+    private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
 
-    public LLMCallModule(WorkflowStepTargetAgentResolver? targetAgentResolver = null)
+    public LLMCallModule(
+        WorkflowStepTargetAgentResolver? targetAgentResolver = null,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         _targetAgentResolver = targetAgentResolver;
+        _callerAccessTokenProvider = callerAccessTokenProvider;
     }
 
     public string Name => "llm_call";
@@ -104,7 +109,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                     stepType: request.StepType),
                 RequestDispatched = false,
                 WatchdogCallbackId = BuildWatchdogCallbackId(sessionId),
-                DispatchDedupId = BuildDispatchDedupId(sessionId),
+                DispatchOperationId = BuildDispatchOperationId(sessionId),
             };
             runtimeState.PendingBySessionId[sessionId] = pendingState;
             await SaveStateAsync(runtimeState, ctx, ct);
@@ -112,7 +117,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
         await EnsureWatchdogScheduledAsync(sessionId, pendingState, timeoutMs, ctx, ct);
         pendingState = GetRequiredPending(sessionId, ctx);
-        pendingState = await EnsureDispatchDedupIdAsync(sessionId, pendingState, ctx, ct);
+        pendingState = await EnsureDispatchOperationIdAsync(sessionId, pendingState, ctx, ct);
         if (pendingState.RequestDispatched)
             return;
 
@@ -134,7 +139,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 request,
                 target,
                 sessionId,
-                pendingState.DispatchDedupId,
+                pendingState.DispatchOperationId,
                 prompt,
                 timeoutMs,
                 stepId,
@@ -372,7 +377,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         StepRequestEvent request,
         WorkflowStepTargetAgentResolution target,
         string sessionId,
-        string dispatchDedupId,
+        string dispatchOperationId,
         string prompt,
         int timeoutMs,
         string stepId,
@@ -386,6 +391,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             TimeoutMs = timeoutMs,
             RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
             StepId = stepId,
+            // Carry the owning run's authoritative scope to the role actor so its tool caller
+            // context can be scope-scoped on the channel-less Direct/studio path (no inbound
+            // channel stamps the caller scope there). Empty stays empty; the role actor only
+            // fills a caller scope that is otherwise unset.
+            ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
+            ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
         };
         intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
@@ -409,14 +420,18 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
-        intent.CallerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var callerCredential)
-            ? callerCredential
+        var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
+        intent.CallerCredential = callerCredential.Found
+            ? await WorkflowCallerAccessTokenResolver.ResolveAsync(
+                callerCredential.Credential,
+                _callerAccessTokenProvider,
+                ct)
             : new WorkflowCallerCredential();
         WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);
         CopyParametersToChatRequest(request, intent, timeoutMs);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
-        var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
+        var dispatchOptions = BuildDispatchOptions(dispatchOperationId);
 
         if (!target.UseSelf)
         {
@@ -479,7 +494,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     private static string BuildWatchdogCallbackId(string sessionId) =>
         RuntimeCallbackKeyComposer.BuildCallbackId(LlmWatchdogCallbackPrefix, sessionId);
 
-    private static string BuildDispatchDedupId(string sessionId) =>
+    private static string BuildDispatchOperationId(string sessionId) =>
         RuntimeCallbackKeyComposer.BuildCallbackId("workflow-llm-dispatch", sessionId);
 
     private static string BuildAttemptKey(string runId, string stepId) =>
@@ -490,12 +505,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             ? WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, $"{stepId}:a{attempt}")
             : WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepId, attempt);
 
-    private static EventEnvelopePublishOptions BuildDispatchOptions(string dispatchDedupId) =>
+    private static EventEnvelopePublishOptions BuildDispatchOptions(string dispatchOperationId) =>
         new()
         {
             Delivery = new EventEnvelopeDeliveryOptions
             {
-                DeduplicationOperationId = dispatchDedupId,
+                OperationId = dispatchOperationId,
             },
         };
 
@@ -509,12 +524,22 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         if (source == null)
             return;
 
-        intent.AgentToolScope = new WorkflowAgentToolScope();
+        intent.AgentToolScope = new WorkflowAgentToolScope
+        {
+            RestrictAllowedToolNames = source.RestrictAllowedToolNames || source.AllowedToolNames.Count > 0,
+            RestrictToolSets = source.RestrictToolSets || source.ToolSetRefs.Count > 0,
+        };
         foreach (var toolName in source.AllowedToolNames)
         {
             var normalized = Normalize(toolName);
             if (normalized is not null)
                 intent.AgentToolScope.AllowedToolNames.Add(normalized);
+        }
+        foreach (var toolSetRef in source.ToolSetRefs)
+        {
+            var normalized = Normalize(toolSetRef);
+            if (normalized is not null)
+                intent.AgentToolScope.ToolSetRefs.Add(normalized);
         }
     }
 
@@ -565,20 +590,20 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         await SaveStateAsync(runtimeState, ctx, ct);
     }
 
-    private static async Task<PendingLlmCallState> EnsureDispatchDedupIdAsync(
+    private static async Task<PendingLlmCallState> EnsureDispatchOperationIdAsync(
         string sessionId,
         PendingLlmCallState pendingState,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(pendingState.DispatchDedupId))
+        if (!string.IsNullOrWhiteSpace(pendingState.DispatchOperationId))
             return pendingState;
 
         var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
         if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out pendingState))
             throw new InvalidOperationException($"Missing pending LLM call state for session {sessionId}.");
 
-        pendingState.DispatchDedupId = BuildDispatchDedupId(sessionId);
+        pendingState.DispatchOperationId = BuildDispatchOperationId(sessionId);
         runtimeState.PendingBySessionId[sessionId] = pendingState;
         await SaveStateAsync(runtimeState, ctx, ct);
         return pendingState;

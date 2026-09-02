@@ -84,6 +84,7 @@ public class NyxTelegramProvisioningServiceTests
     [InlineData("", "bot-token", "https://aevatar.example.com", "scope-1", "missing_access_token")]
     [InlineData("user-token", "", "https://aevatar.example.com", "scope-1", "missing_bot_token")]
     [InlineData("user-token", "bot-token", "", "scope-1", "missing_webhook_base_url")]
+    [InlineData("user-token", "bot-token", "http://aevatar.example.com", "scope-1", "insecure_webhook_base_url")]
     [InlineData("user-token", "bot-token", "https://aevatar.example.com", "", "missing_scope_id")]
     public async Task ProvisionAsync_rejects_invalid_requests_before_calling_nyx(
         string accessToken,
@@ -223,6 +224,11 @@ public class NyxTelegramProvisioningServiceTests
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         return new NyxTelegramProvisioningService(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },

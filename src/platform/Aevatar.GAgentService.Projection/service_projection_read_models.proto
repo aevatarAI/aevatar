@@ -7,8 +7,51 @@ option csharp_namespace = "Aevatar.GAgentService.Projection.ReadModels";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
 import "llm_sessions.proto";
+import "service_definition.proto";
 import "service_invocation_catalog.proto";
 import "service_revision.proto";
+import "content_artifact_messages.proto";
+import "agent_profiles.proto";
+
+message AgentProfileCatalogReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.AgentProfileOwner owner = 6;
+  repeated aevatar.gagentservice.AgentProfileCatalogEntry profiles = 7;
+  repeated aevatar.gagentservice.AgentProfileDefaultBinding default_bindings = 8;
+  aevatar.gagentservice.AgentProfileMutationOutcome last_mutation = 9;
+}
+
+message AgentProfileManagementReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.AgentProfileIdentity identity = 6;
+  aevatar.gagentservice.AgentProfileDraft draft = 7;
+  int64 draft_revision = 8;
+  bytes draft_sha256 = 9;
+  string published_display_name = 10;
+  string published_purpose = 11;
+  int64 published_revision = 12;
+  bytes published_snapshot_sha256 = 13;
+  google.protobuf.Timestamp published_at = 14;
+  aevatar.gagentservice.AgentProfileMutationOutcome last_mutation = 15;
+}
+
+message AgentProfileExecutionReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.AgentProfileIdentity identity = 6;
+  aevatar.gagentservice.AgentProfilePublishedSnapshot snapshot = 7;
+}
 
 // --- ServiceCatalogReadModel ---
 
@@ -42,6 +85,15 @@ message ServiceCatalogEndpointReadModel {
 message ServiceCatalogExternalExposureReadModel {
   string nyxid_slug = 1;
   google.protobuf.Timestamp registered_at_utc_value = 2;
+  aevatar.gagentservice.ServiceRegistrationStatus status = 3;
+  string nyxid_service_id = 4;
+  string desired_spec_hash = 5;
+  string registered_spec_hash = 6;
+  string last_error = 7;
+  int32 attempt = 8;
+  google.protobuf.Timestamp next_attempt_at_utc_value = 9;
+  string credential_kid = 10;
+  bool exposure_desired = 11;
 }
 
 // --- ServiceDeploymentCatalogReadModel ---
@@ -242,6 +294,8 @@ message ServiceRunCurrentStateReadModel {
   google.protobuf.Timestamp updated_at_utc_value = 21;
   string last_output = 22;
   string last_error = 23;
+  string schedule_id = 24;
+  repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 25;
 }
 // --- GAgentRunTerminalReadModel ---
 
@@ -414,6 +468,60 @@ message ScheduledDispatchDocument {
   string schedule_kind = 30;
   bool deleted = 31;
   google.protobuf.Timestamp deleted_at_utc_value = 32;
+  string prompt = 33;
+  int32 overdue_fire_detected_count = 34;
+  google.protobuf.Timestamp last_overdue_fire_at_utc_value = 35;
+  string credential_requirement_target_kind = 36;
+  string credential_source_kind = 37;
+  string schedule_mode = 38;
+  google.protobuf.Timestamp one_shot_fire_at_utc_value = 39;
+  bool completed = 40;
+  google.protobuf.Timestamp completed_at_utc_value = 41;
+  bool team_owned = 42;
+  TeamMemberAutomationOwnerDocument team_automation_owner = 43;
+  TeamAutomationLifecycleStatusDocument team_automation_lifecycle_status = 44;
+  google.protobuf.Timestamp credential_expires_at_utc_value = 45;
+  string team_automation_operation_id = 46;
+  int64 credential_generation = 47;
+  string nyxid_revocation_status = 48;
+  string vault_revocation_status = 49;
+  bool revocation_pending = 50;
+  string last_authorization_error_code = 51;
+  string permission_digest = 52;
+  string policy_version = 53;
+  string team_automation_idempotency_key = 54;
+  ScheduledInvocationAuthorizationOwnerDocument active_credential_owner = 55;
+  reserved 56 to 57;
+  string team_id = 58;
+  string owner_llm_route_kind = 59;
+  string owner_llm_route = 60;
+  string owner_llm_user_service_id = 61;
+  string owner_llm_service_slug = 62;
+  string owner_llm_model = 63;
+  string last_error_code = 64;
+}
+
+enum TeamAutomationLifecycleStatusDocument {
+  TEAM_AUTOMATION_LIFECYCLE_STATUS_DOCUMENT_UNSPECIFIED = 0;
+  TEAM_AUTOMATION_LIFECYCLE_STATUS_DOCUMENT_PROVISIONING_PENDING = 1;
+  TEAM_AUTOMATION_LIFECYCLE_STATUS_DOCUMENT_ACTIVE = 2;
+  TEAM_AUTOMATION_LIFECYCLE_STATUS_DOCUMENT_NEEDS_AUTHORIZATION = 3;
+  TEAM_AUTOMATION_LIFECYCLE_STATUS_DOCUMENT_REPLACEMENT_PENDING = 4;
+  TEAM_AUTOMATION_LIFECYCLE_STATUS_DOCUMENT_DELETING = 5;
+  TEAM_AUTOMATION_LIFECYCLE_STATUS_DOCUMENT_REVOCATION_PENDING = 6;
+  TEAM_AUTOMATION_LIFECYCLE_STATUS_DOCUMENT_FAILED = 7;
+}
+
+message TeamMemberAutomationOwnerDocument {
+  string scope_id = 1;
+  string member_id = 2;
+  reserved 3;
+}
+
+message ScheduledInvocationAuthorizationOwnerDocument {
+  string authority = 1;
+  string owner_kind = 2;
+  string owner_subject = 3;
 }
 
 message ScheduledDispatchFireRecordDocument {
@@ -425,4 +533,5 @@ message ScheduledDispatchFireRecordDocument {
   string correlation_id = 6;
   string error = 7;
   bool manual = 8;
+  string error_code = 9;
 }

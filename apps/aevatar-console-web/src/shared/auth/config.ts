@@ -7,9 +7,6 @@ export interface NyxIDRuntimeConfig {
   readonly configurationError?: string;
 }
 
-const DEFAULT_NYXID_BASE_URL = 'https://nyx.chrono-ai.fun';
-const DEFAULT_NYXID_CLIENT_ID = '37a93189-2734-406e-bca1-7dbdf25c5a53';
-const DEFAULT_SCOPE = 'openid profile email proxy';
 const DEFAULT_REDIRECT_PATH = '/auth/callback';
 
 function trimOptional(value?: string): string | undefined {
@@ -38,10 +35,6 @@ function trimOptional(value?: string): string | undefined {
   }
 
   return normalized ? normalized : undefined;
-}
-
-function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, '');
 }
 
 function resolveWindowOrigin(): string {
@@ -78,7 +71,7 @@ function inferDefaultProtocol(value: string): 'http://' | 'https://' {
 
 function tryResolveHttpUrl(
   value: string,
-  options: { readonly allowRelative: boolean; readonly trimTrailingSlash: boolean },
+  options: { readonly allowRelative: boolean },
 ): string | undefined {
   const normalized = trimOptional(value);
   if (!normalized || normalized.startsWith('//')) {
@@ -87,15 +80,13 @@ function tryResolveHttpUrl(
 
   if (options.allowRelative && normalized.startsWith('/')) {
     const relativeUrl = new URL(normalized, resolveWindowOrigin());
-    const resolved = relativeUrl.toString();
-    return options.trimTrailingSlash ? normalizeBaseUrl(resolved) : resolved;
+    return relativeUrl.toString();
   }
 
   try {
     const absoluteUrl = new URL(normalized);
     if (isHttpUrl(absoluteUrl)) {
-      const resolved = absoluteUrl.toString();
-      return options.trimTrailingSlash ? normalizeBaseUrl(resolved) : resolved;
+      return absoluteUrl.toString();
     }
   } catch {
     // Fall through to scheme inference for user-provided hostnames like localhost:3001.
@@ -111,47 +102,56 @@ function tryResolveHttpUrl(
       return undefined;
     }
 
-    const resolved = inferredUrl.toString();
-    return options.trimTrailingSlash ? normalizeBaseUrl(resolved) : resolved;
+    return inferredUrl.toString();
   } catch {
     return undefined;
   }
 }
 
-function buildConfigurationError(
-  variableName: 'NYXID_BASE_URL' | 'NYXID_REDIRECT_URI',
-  exampleValue: string,
-): string {
-  return `${variableName} must be a valid http(s) URL or a root-relative path such as ${exampleValue}.`;
-}
+const MISSING_CLIENT_ID_ERROR =
+  'NYXID_CLIENT_ID must be configured with a non-empty public OAuth client id.';
+
+const MISSING_BASE_URL_ERROR =
+  'NYXID_BASE_URL must be configured with the NyxID HTTP(S) authority.';
+
+const INVALID_BASE_URL_ERROR =
+  'NYXID_BASE_URL must be a valid HTTP(S) URL.';
+
+const MISSING_SCOPE_ERROR =
+  'NYXID_SCOPE must be configured with at least one OAuth scope.';
+
+const INVALID_REDIRECT_URI_ERROR =
+  'NYXID_REDIRECT_URI must be a valid http(s) URL or a root-relative path such as /auth/callback.';
 
 export function getNyxIDRuntimeConfig(): NyxIDRuntimeConfig {
-  const baseUrl = trimOptional(process.env.NYXID_BASE_URL) ?? DEFAULT_NYXID_BASE_URL;
-  const clientId =
-    trimOptional(process.env.NYXID_CLIENT_ID) ?? DEFAULT_NYXID_CLIENT_ID;
+  const baseUrl = trimOptional(process.env.NYXID_BASE_URL) ?? '';
+  const normalizedBaseUrl = baseUrl
+    ? tryResolveHttpUrl(baseUrl, { allowRelative: false })?.replace(/\/+$/, '')
+    : undefined;
+  const clientId = trimOptional(process.env.NYXID_CLIENT_ID) ?? '';
+  const scope =
+    trimOptional(process.env.NYXID_SCOPE)?.split(/\s+/).join(' ') ?? '';
   const redirectUri =
     trimOptional(process.env.NYXID_REDIRECT_URI) ?? resolveDefaultRedirectUri();
-  const scope = trimOptional(process.env.NYXID_SCOPE) ?? DEFAULT_SCOPE;
-  const normalizedBaseUrl = tryResolveHttpUrl(baseUrl, {
-    allowRelative: true,
-    trimTrailingSlash: true,
-  });
   const normalizedRedirectUri = tryResolveHttpUrl(redirectUri, {
     allowRelative: true,
-    trimTrailingSlash: false,
   });
-  const configurationError =
-    !normalizedBaseUrl
-      ? buildConfigurationError('NYXID_BASE_URL', '/nyxid')
-      : !normalizedRedirectUri
-        ? buildConfigurationError('NYXID_REDIRECT_URI', '/auth/callback')
-        : undefined;
+  const configurationError = !baseUrl
+    ? MISSING_BASE_URL_ERROR
+    : !normalizedBaseUrl
+      ? INVALID_BASE_URL_ERROR
+      : !clientId
+        ? MISSING_CLIENT_ID_ERROR
+        : !scope
+          ? MISSING_SCOPE_ERROR
+          : !normalizedRedirectUri
+            ? INVALID_REDIRECT_URI_ERROR
+            : undefined;
 
   return {
-    enabled:
-      clientId.length > 0 &&
-      Boolean(normalizedBaseUrl) &&
-      Boolean(normalizedRedirectUri),
+    enabled: Boolean(
+      normalizedBaseUrl && clientId && scope && normalizedRedirectUri,
+    ),
     baseUrl: normalizedBaseUrl ?? '',
     clientId,
     redirectUri: normalizedRedirectUri ?? '',

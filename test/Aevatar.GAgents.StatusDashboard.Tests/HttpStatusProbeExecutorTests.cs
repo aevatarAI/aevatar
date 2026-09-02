@@ -319,6 +319,99 @@ public sealed class HttpStatusProbeExecutorTests
         outcome.ObservedAt.ToDateTimeOffset().Should().Be(clock.GetUtcNow());
     }
 
+    [Fact]
+    public async Task ScopeServiceToken_ReturnsUnknown_WhenProviderUnavailable()
+    {
+        var executor = NewExecutor(
+            HttpStatusCode.OK,
+            new Dictionary<string, string?>(),
+            scopeTokenProvider: null);
+        var descriptor = NewDescriptor("orchestration", new()
+        {
+            ["Url"] = "https://example.test/api/scopes/s1/services",
+            ["Auth.Mode"] = "scope_service_token",
+            ["Auth.ScopeId"] = "s1",
+        });
+
+        var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
+
+        // No issuer configured → degrade to unknown, never a false down or an unauthenticated 401.
+        outcome.Status.Should().Be(HealthOutcomeStatus.Unknown);
+        outcome.Detail.Should().Be("credential_unavailable");
+    }
+
+    [Fact]
+    public async Task ScopeServiceToken_AttachesMintedBearer_WithoutHeaderParam()
+    {
+        string? capturedAuthorization = null;
+        var executor = NewExecutor(
+            HttpStatusCode.OK,
+            new Dictionary<string, string?>(),
+            scopeTokenProvider: new FakeScopeTokenProvider("minted-scope-token"),
+            captureRequest: req => capturedAuthorization = req.Headers.Authorization?.ToString());
+        var descriptor = NewDescriptor("orchestration", new()
+        {
+            ["Url"] = "https://example.test/api/scopes/s1/services",
+            ["ExpectedStatuses"] = "200",
+            ["Auth.Mode"] = "scope_service_token",
+            ["Auth.ScopeId"] = "s1",
+        });
+
+        var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
+
+        outcome.Status.Should().Be(HealthOutcomeStatus.Ok);
+        capturedAuthorization.Should().Be("Bearer minted-scope-token");
+    }
+
+    [Fact]
+    public async Task StaticBearer_AttachesConfiguredToken_WithoutHeaderParam()
+    {
+        string? capturedAuthorization = null;
+        var executor = NewExecutor(
+            HttpStatusCode.OK,
+            new Dictionary<string, string?> { ["Aevatar:Status:Probe:CanaryBearer"] = "canary-key" },
+            scopeTokenProvider: null,
+            captureRequest: req => capturedAuthorization = req.Headers.Authorization?.ToString());
+        var descriptor = NewDescriptor("llm-canary", new()
+        {
+            ["Url"] = "https://example.test/v1/models",
+            ["ExpectedStatuses"] = "200",
+            ["Auth.Mode"] = "static_bearer",
+            ["Auth.StaticBearerConfigurationKey"] = "Aevatar:Status:Probe:CanaryBearer",
+        });
+
+        var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
+
+        outcome.Status.Should().Be(HealthOutcomeStatus.Ok);
+        capturedAuthorization.Should().Be("Bearer canary-key");
+    }
+
+    private static HttpStatusProbeExecutor NewExecutor(
+        HttpStatusCode status,
+        Dictionary<string, string?> configuration,
+        IProbeServiceTokenProvider? scopeTokenProvider,
+        Action<HttpRequestMessage>? captureRequest = null)
+    {
+        var configRoot = new ConfigurationBuilder()
+            .AddInMemoryCollection(configuration)
+            .Build();
+        var factory = new TestHttpClientFactory(new StubHandler(status, captureRequest, null));
+        var providers = scopeTokenProvider is null
+            ? Array.Empty<IProbeServiceTokenProvider>()
+            : new[] { scopeTokenProvider };
+        return new HttpStatusProbeExecutor(
+            factory,
+            configRoot,
+            new StatusProbeAuthorizationResolver(factory, configRoot, providers),
+            TimeProvider.System);
+    }
+
+    private sealed class FakeScopeTokenProvider(string? token) : IProbeServiceTokenProvider
+    {
+        public Task<string?> GetScopeBearerAsync(string scopeId, CancellationToken ct) =>
+            Task.FromResult(token);
+    }
+
     private static HttpStatusProbeExecutor NewExecutor(
         HttpStatusCode status,
         Dictionary<string, string?> configuration,

@@ -13,7 +13,7 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// credentials.
 /// </summary>
 public sealed class ExternalIdentityBindingProjectionQueryPort
-    : IExternalIdentityBindingQueryPort
+    : IExternalIdentityBindingQueryPort, IOwnerScopeResolver
 {
     private readonly IProjectionDocumentReader<ExternalIdentityBindingDocument, string> _reader;
 
@@ -32,5 +32,17 @@ public sealed class ExternalIdentityBindingProjectionQueryPort
         if (document is null || !document.IsActive)
             return null;
         return new BindingId { Value = document.BindingId };
+    }
+
+    async Task<OwnerScopeId?> IOwnerScopeResolver.ResolveAsync(
+        ExternalSubjectRef externalSubject,
+        CancellationToken ct)
+    {
+        ExternalSubjectRefExtensions.EnsureValid(externalSubject);
+        var document = await _reader.GetAsync(externalSubject.ToActorId(), ct);
+        if (document is null || !document.IsActive || string.IsNullOrWhiteSpace(document.OwnerScopeId))
+            return null;
+
+        return new OwnerScopeId { Value = document.OwnerScopeId.Trim() };
     }
 }

@@ -62,6 +62,12 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     [EventHandler(EndpointName = "createMember")]
     public async Task HandleCreated(StudioMemberCreatedEvent evt)
     {
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException(
+                $"member '{State.MemberId}' has been deleted and cannot be recreated.");
+        }
+
         if (!string.IsNullOrEmpty(State.MemberId))
         {
             // First-write-wins on identity: a re-create with a different
@@ -100,6 +106,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         {
             throw new InvalidOperationException("member not yet created.");
         }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
+        }
 
         var renamed = evt.Clone();
         if (string.IsNullOrEmpty(renamed.Description))
@@ -116,6 +126,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
         }
 
         // ImplementationKind is locked at create. Reject mismatched kinds so
@@ -143,6 +157,11 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member not yet created.", failedAt));
+            return;
+        }
+        if (State.Deleted)
+        {
+            await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member has been deleted.", failedAt));
             return;
         }
 
@@ -215,6 +234,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         {
             throw new InvalidOperationException("member not yet created.");
         }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
+        }
 
         if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
         {
@@ -236,6 +259,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
         }
 
         if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded))
@@ -260,6 +287,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         {
             throw new InvalidOperationException("member not yet created.");
         }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
+        }
 
         if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Failed))
         {
@@ -274,6 +305,34 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 
         await PersistDomainEventAsync(evt);
         await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
+    }
+
+    [EventHandler(EndpointName = "recordPublishedBinding")]
+    public async Task HandlePublishedBindingRecorded(StudioMemberPublishedBindingRecordedEvent evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (!string.Equals(State.PublishedServiceId, evt.PublishedServiceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"publishedServiceId '{evt.PublishedServiceId}' does not match member '{State.MemberId}' publishedServiceId '{State.PublishedServiceId}'.");
+        }
+
+        if (evt.ImplementationKind != State.ImplementationKind)
+        {
+            throw new InvalidOperationException(
+                $"binding record kind '{evt.ImplementationKind}' does not match member kind '{State.ImplementationKind}'.");
+        }
+
+        if (!HasResolvedImplementationRef(evt.ImplementationRef, evt.ImplementationKind))
+        {
+            throw new InvalidOperationException("published binding record must include a resolved implementation reference for its implementation kind.");
+        }
+
+        await PersistDomainEventAsync(evt);
     }
 
     /// <summary>
@@ -292,6 +351,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
         }
 
         if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
@@ -353,6 +416,52 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     }
 
     /// <summary>
+    /// Tombstones the member authority and emits a committed removal fact for
+    /// any current team assignment. Published service artifacts and revisions
+    /// remain untouched; their lifecycle belongs to the platform service
+    /// authority, not this member resource delete path.
+    /// </summary>
+    [EventHandler(EndpointName = "deleteMember")]
+    public async Task HandleDeleteRequested(StudioMemberDeleteRequested evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal)
+            || !string.Equals(State.MemberId, evt.MemberId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "delete target does not match member authority state.");
+        }
+
+        if (State.Deleted)
+            return;
+
+        var deletedAt = evt.RequestedAtUtc
+            ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var deleted = new StudioMemberDeletedEvent
+        {
+            MemberId = State.MemberId,
+            ScopeId = State.ScopeId,
+            PublishedServiceId = State.PublishedServiceId ?? string.Empty,
+            DeletedAtUtc = deletedAt,
+        };
+        if (State.HasTeamId)
+            deleted.PreviousTeamId = State.TeamId;
+
+        if (TryBuildDeleteBindingFailure(State, deletedAt, out var bindingFailed))
+        {
+            await PersistDomainEventsAsync([bindingFailed, deleted]);
+            await SendTerminalAcknowledgementAsync(bindingFailed.BindingRunId, StudioMemberBindingRunStatus.Failed);
+            return;
+        }
+
+        await PersistDomainEventAsync(deleted);
+    }
+
+    /// <summary>
     /// Evaluates PATCH team-assignment intent inside the member authority
     /// boundary. Callers provide only the desired target; this actor derives
     /// the current source team from <see cref="State"/>, suppresses no-ops,
@@ -368,6 +477,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
         }
 
         if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal)
@@ -419,7 +532,9 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             .On<StudioMemberBindingPlatformPendingEvent>(ApplyBindingPlatformPending)
             .On<StudioMemberBindingCompletedEvent>(ApplyBindingCompleted)
             .On<StudioMemberBindingFailedEvent>(ApplyBindingFailed)
+            .On<StudioMemberPublishedBindingRecordedEvent>(ApplyPublishedBindingRecorded)
             .On<StudioMemberReassignedEvent>(ApplyReassigned)
+            .On<StudioMemberDeletedEvent>(ApplyDeleted)
             .OrCurrent();
     }
 
@@ -594,6 +709,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             RevisionId = evt.RevisionId,
             ImplementationKind = evt.ImplementationKind,
             BoundAtUtc = evt.CompletedAtUtc,
+            ExpectedActorId = ResolveExpectedActorId(evt),
         };
         if (HasResolvedImplementationRef(evt.ImplementationRef))
         {
@@ -633,6 +749,64 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return next;
     }
 
+    private static StudioMemberState ApplyPublishedBindingRecorded(
+        StudioMemberState state,
+        StudioMemberPublishedBindingRecordedEvent evt)
+    {
+        if (string.IsNullOrEmpty(state.MemberId))
+            return state;
+
+        var recordedAt = evt.RecordedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var next = state.Clone();
+        next.LastBinding = new StudioMemberBindingContract
+        {
+            PublishedServiceId = evt.PublishedServiceId,
+            RevisionId = evt.RevisionId,
+            ImplementationKind = evt.ImplementationKind,
+            BoundAtUtc = recordedAt,
+            ExpectedActorId = evt.ExpectedActorId ?? string.Empty,
+        };
+        next.ImplementationRef = evt.ImplementationRef?.Clone();
+        next.Binding = new StudioMemberBindingAuthorityState
+        {
+            CurrentBindingRunId = string.Empty,
+            CurrentStatus = StudioMemberBindingRunStatus.Unspecified,
+            LastTerminalBindingRunId = state.Binding?.LastTerminalBindingRunId ?? string.Empty,
+            LastFailure = null,
+            UpdatedAtUtc = recordedAt,
+        };
+        next.LifecycleStage = StudioMemberLifecycleStage.BindReady;
+        next.UpdatedAtUtc = recordedAt;
+        return next;
+    }
+
+    private static bool TryBuildDeleteBindingFailure(
+        StudioMemberState state,
+        Timestamp deletedAt,
+        out StudioMemberBindingFailedEvent bindingFailed)
+    {
+        bindingFailed = new StudioMemberBindingFailedEvent();
+        var binding = state.Binding;
+        if (binding == null
+            || string.IsNullOrEmpty(binding.CurrentBindingRunId)
+            || IsTerminalBindingStatus(binding.CurrentStatus))
+        {
+            return false;
+        }
+
+        bindingFailed = new StudioMemberBindingFailedEvent
+        {
+            BindingRunId = binding.CurrentBindingRunId,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "STUDIO_MEMBER_DELETED",
+                Message = "member was deleted before binding completed.",
+                FailedAtUtc = deletedAt,
+            },
+        };
+        return true;
+    }
+
     private static bool CanAcceptBindingRunProgress(StudioMemberState state, string bindingRunId)
     {
         var currentRun = state.Binding?.CurrentBindingRunId;
@@ -640,6 +814,9 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
                && string.Equals(currentRun, bindingRunId, StringComparison.Ordinal)
                && !IsCurrentBindingTerminal(state);
     }
+
+    private static string ResolveExpectedActorId(StudioMemberBindingCompletedEvent evt) =>
+        evt.ExpectedActorId ?? string.Empty;
 
     private static bool HasActiveBindingRun(StudioMemberState state, string incomingBindingRunId)
     {
@@ -785,6 +962,17 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return next;
     }
 
+    private static StudioMemberState ApplyDeleted(
+        StudioMemberState state, StudioMemberDeletedEvent evt)
+    {
+        var next = state.Clone();
+        next.Deleted = true;
+        next.DeletedAtUtc = evt.DeletedAtUtc;
+        next.UpdatedAtUtc = evt.DeletedAtUtc;
+        next.ClearTeamId();
+        return next;
+    }
+
     private static string NormalizeActorIdSegment(string? value, string fieldName)
     {
         var trimmed = value?.Trim();
@@ -795,19 +983,29 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return trimmed;
     }
 
-    private static bool HasResolvedImplementationRef(StudioMemberImplementationRef? implRef)
+    private static bool HasResolvedImplementationRef(StudioMemberImplementationRef? implRef) =>
+        implRef != null &&
+        (HasResolvedImplementationRef(implRef, StudioMemberImplementationKind.Workflow) ||
+         HasResolvedImplementationRef(implRef, StudioMemberImplementationKind.Script) ||
+         HasResolvedImplementationRef(implRef, StudioMemberImplementationKind.Gagent));
+
+    private static bool HasResolvedImplementationRef(
+        StudioMemberImplementationRef? implRef,
+        StudioMemberImplementationKind implementationKind)
     {
         if (implRef == null)
             return false;
 
-        if (implRef.Workflow != null && !string.IsNullOrEmpty(implRef.Workflow.WorkflowId))
-            return true;
-        if (implRef.Script != null && !string.IsNullOrEmpty(implRef.Script.ScriptId))
-            return true;
-        if (implRef.Gagent != null && !string.IsNullOrEmpty(implRef.Gagent.ActorTypeName))
-            return true;
-
-        return false;
+        return implementationKind switch
+        {
+            StudioMemberImplementationKind.Workflow =>
+                implRef.Workflow != null && !string.IsNullOrEmpty(implRef.Workflow.WorkflowId),
+            StudioMemberImplementationKind.Script =>
+                implRef.Script != null && !string.IsNullOrEmpty(implRef.Script.ScriptId),
+            StudioMemberImplementationKind.Gagent =>
+                implRef.Gagent != null && !string.IsNullOrEmpty(implRef.Gagent.ActorTypeName),
+            _ => false,
+        };
     }
 
     private static StudioMemberImplementationKind GetRequestImplementationKind(StudioMemberBindingRequest request) =>

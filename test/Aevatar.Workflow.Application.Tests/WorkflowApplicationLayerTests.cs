@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
@@ -34,7 +35,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -78,7 +79,7 @@ public sealed class WorkflowApplicationLayerTests
         var acceptedReceipts = new ConcurrentQueue<WorkflowChatRunAcceptedReceipt>();
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             (frame, _) =>
             {
                 emittedFrames.Enqueue(frame);
@@ -133,7 +134,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var executeTask = service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             (frame, _) =>
             {
                 emitted.Enqueue(frame);
@@ -168,8 +169,11 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task CommandInteractionService_ShouldThrow_WhenCleanupFailsAfterSuccess()
+    public async Task CommandInteractionService_ShouldSucceed_WhenDetachedReclaimDestroyFails()
     {
+        // 06-20-observatory-run-state-feed (R2): created-actor reclaim is detached from the interaction, so a
+        // reclaim/destroy failure must NOT fail the run. The interaction succeeds; the lease/sink are still
+        // released in-request; the destroy failure is confined to the detached reclaim task.
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort
         {
@@ -190,21 +194,16 @@ public sealed class WorkflowApplicationLayerTests
             new FakeFinalizeEmitter(),
             new FakeDurableCompletionResolver());
 
-        var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
-        var exception = await act.Should().ThrowAsync<AggregateException>();
-        exception.WithMessage("Workflow actor cleanup failed.*");
-        exception.Which.InnerExceptions.Should().HaveCount(2);
-        exception.Which.InnerExceptions.Should().AllSatisfy(ex =>
-        {
-            ex.Should().BeOfType<InvalidOperationException>();
-            ex.InnerException.Should().BeOfType<InvalidOperationException>()
-                .Which.Message.Should().Be("cleanup failed");
-        });
+        result.Succeeded.Should().BeTrue();
         projectionPort.DetachCalls.Should().ContainSingle();
+        // The detached reclaim attempted the destroy (which threw) without failing the interaction.
+        var reclaim = () => target.PendingReclaimTask;
+        await reclaim.Should().ThrowAsync<InvalidOperationException>();
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
 
@@ -232,7 +231,7 @@ public sealed class WorkflowApplicationLayerTests
                     WorkflowProjectionCompletionStatus.Completed)));
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -264,7 +263,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -287,7 +286,7 @@ public sealed class WorkflowApplicationLayerTests
         var service = CreateAcceptedOnlyDispatchService(
             pipeline);
 
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing")));
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing"), ExternalCapabilityExecutionMode.Interactive));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
@@ -305,7 +304,7 @@ public sealed class WorkflowApplicationLayerTests
         var service = CreateAcceptedOnlyDispatchService(
             new FakeAcceptedDispatchPipeline { Result = AcceptedSuccess(target, receipt) });
 
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")));
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive));
 
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be(receipt);
@@ -367,7 +366,10 @@ public sealed class WorkflowApplicationLayerTests
             createdActorIds ?? [],
             projectionPort,
             actorPort,
-            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()),
+            // 06-20-observatory-run-state-feed (R2): run the scheduled created-actor reclaim inline so the
+            // interaction-service tests observe the destroy deterministically (no fire-and-forget race).
+            detachedReclaimLauncher: reclaim => reclaim());
         var projectionLease = new FakeProjectionLease(actorId, commandId);
         target.BindLiveObservation(
             projectionLease,
@@ -718,6 +720,11 @@ public sealed class WorkflowApplicationLayerTests
             Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

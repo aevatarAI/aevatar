@@ -10,6 +10,7 @@ public sealed class StatusDashboardManifest
     private const string HttpStatusProbe = "http_status";
     private const string ReadmodelFreshnessProbe = "readmodel_freshness";
     private const string AevatarCoreLoopProbe = "aevatar_core_loop";
+    private const string AuditQueryIndexProbe = "audit_query_index";
     private const string NyxIdAuthorityPlaceholder = "${configuration:Aevatar:NyxId:Authority}";
 
     public StatusDashboardManifest(IReadOnlyList<HealthProbeTargetDescriptor> descriptors)
@@ -43,6 +44,7 @@ public sealed class StatusDashboardManifest
                 Slug = t.Slug.Trim(),
                 DisplayName = string.IsNullOrWhiteSpace(t.Name) ? t.Slug.Trim() : t.Name.Trim(),
                 Category = string.IsNullOrWhiteSpace(t.Category) ? "upstream" : t.Category.Trim().ToLowerInvariant(),
+                Severity = NormalizeSeverity(t.Severity),
                 ProbeKind = t.Probe.Trim(),
                 IntervalSeconds = (t.IntervalSeconds.HasValue && t.IntervalSeconds.Value > 0)
                     ? t.IntervalSeconds.Value
@@ -71,6 +73,16 @@ public sealed class StatusDashboardManifest
             : configuredTargets;
     }
 
+    private static string NormalizeSeverity(string? severity)
+    {
+        var normalized = severity?.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "critical" or "standard" or "canary" => normalized,
+            _ => "standard",
+        };
+    }
+
     private static string NormalizeSelfBaseUrl(string? selfBaseUrl) =>
         string.IsNullOrWhiteSpace(selfBaseUrl)
             ? "http://localhost:8080"
@@ -79,28 +91,50 @@ public sealed class StatusDashboardManifest
     private static List<StatusProbeTargetConfig> BuiltInTargets(StatusDashboardOptions options)
     {
         var selfBaseUrl = NormalizeSelfBaseUrl(options.SelfBaseUrl);
+        var probe = options.Probe ?? new StatusProbeOptions();
         var targets = new List<StatusProbeTargetConfig>
         {
+            // ── self ──
             HttpTarget(
-            slug: "self-liveness",
-            name: "HTTP API (liveness)",
-            category: "self",
-            url: $"{selfBaseUrl}/health/live"),
+                slug: "self-liveness",
+                name: "HTTP API · liveness",
+                category: "self",
+                severity: "standard",
+                url: $"{selfBaseUrl}/health/live"),
             HttpTarget(
-            slug: "self-readiness",
-            name: "HTTP API (readiness)",
-            category: "self",
-            url: $"{selfBaseUrl}/health/ready",
-            parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["ExpectedStatuses"] = "200",
-                ["DegradedOnNon2xx"] = "true",
-            }),
+                slug: "self-readiness",
+                name: "HTTP API · readiness",
+                category: "self",
+                severity: "critical",
+                url: $"{selfBaseUrl}/health/ready",
+                parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["DegradedOnNon2xx"] = "true",
+                }),
+
+            // ── studio / app (anonymous health surfaces) ──
+            // These endpoints return 200 to anonymous callers, so a 200 here is a real
+            // success signal (canon §9: never use an "expect 401" auth gate as a health check).
+            HttpTarget(
+                slug: "studio-health",
+                name: "Studio · /api/health",
+                category: "studio",
+                severity: "standard",
+                url: $"{selfBaseUrl}/api/health"),
+            HttpTarget(
+                slug: "app-context",
+                name: "App · /api/app/context",
+                category: "studio",
+                severity: "standard",
+                url: $"{selfBaseUrl}/api/app/context"),
+
+            // ── core features (in-process) ──
             new()
             {
                 Slug = "aevatar-core-loop-tools",
                 Name = "Aevatar Core Loop Tools",
                 Category = "feature",
+                Severity = "critical",
                 Probe = AevatarCoreLoopProbe,
                 IntervalSeconds = 60,
                 Parameters =
@@ -114,6 +148,7 @@ public sealed class StatusDashboardManifest
                 Slug = "channel-bot-runtime",
                 Name = "Channel Bot Registrations",
                 Category = "feature",
+                Severity = "standard",
                 Probe = ReadmodelFreshnessProbe,
                 IntervalSeconds = 60,
                 Parameters =
@@ -122,19 +157,113 @@ public sealed class StatusDashboardManifest
                     ["MinCount"] = "0",
                 },
             },
+            new()
+            {
+                Slug = "audit-query-index",
+                Name = "Audit Trail Query / Index",
+                Category = "feature",
+                Severity = "standard",
+                Probe = AuditQueryIndexProbe,
+                IntervalSeconds = 60,
+            },
+
+            // ── upstream ──
             HttpTarget(
-            slug: "nyxid-http-health",
-            name: "NyxID HTTP health",
-            category: "upstream",
-            url: $"{NyxIdAuthorityPlaceholder}/health",
-            intervalSeconds: 60),
+                slug: "nyxid-http-health",
+                name: "NyxID · health",
+                category: "upstream",
+                severity: "standard",
+                url: $"{NyxIdAuthorityPlaceholder}/health",
+                intervalSeconds: 60),
             HttpTarget(
-            slug: "nyxid-oidc-discovery",
-            name: "NyxID OIDC discovery",
-            category: "upstream",
-            url: $"{NyxIdAuthorityPlaceholder}/.well-known/openid-configuration",
-            intervalSeconds: 60),
+                slug: "nyxid-oidc-discovery",
+                name: "NyxID · OIDC discovery",
+                category: "upstream",
+                severity: "standard",
+                url: $"{NyxIdAuthorityPlaceholder}/.well-known/openid-configuration",
+                intervalSeconds: 60),
         };
+
+        // ── paid LLM canary (real end-to-end completion) ──
+        // Emitted only when a real NyxID-recognized credential is configured. Reuses the
+        // static_bearer auth mode — the executor reads the secret from the configuration key, so
+        // no new auth code is required. Absent the credential the canary is simply not probed
+        // (no false "down"); the canary severity means a failure degrades but never blacks out.
+        if (!string.IsNullOrWhiteSpace(probe.CanaryBearer))
+        {
+            // Credentialed catalog read: 200 + a valid list response proves the LLM ingress
+            // and NyxID catalog aggregation work end-to-end, with no model invocation cost.
+            targets.Add(HttpTarget(
+                slug: "llm-catalog",
+                name: "LLM ingress · model catalog",
+                category: "llm",
+                severity: "canary",
+                url: $"{selfBaseUrl}/v1/models",
+                expectedStatuses: "200",
+                parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["ExpectedBodyContains"] = "\"object\"",
+                    ["Auth.Mode"] = "static_bearer",
+                    ["Auth.StaticBearerConfigurationKey"] = StatusProbeOptions.CanaryBearerConfigurationKey,
+                }));
+
+            var model = string.IsNullOrWhiteSpace(probe.CanaryModel)
+                ? StatusProbeOptions.DefaultCanaryModel
+                : probe.CanaryModel.Trim();
+            var maxTokens = probe.CanaryMaxTokens > 0 ? probe.CanaryMaxTokens : 8;
+            var canaryInterval = probe.CanaryIntervalSeconds > 0 ? probe.CanaryIntervalSeconds : 900;
+            var body =
+                $$"""{"model":"{{model}}","messages":[{"role":"user","content":"ping"}],"max_tokens":{{maxTokens}},"temperature":0}""";
+
+            targets.Add(HttpTarget(
+                slug: "llm-completion-canary",
+                name: "LLM canary · chat completion",
+                category: "llm",
+                severity: "canary",
+                url: $"{selfBaseUrl}/v1/chat/completions",
+                method: "POST",
+                expectedStatuses: "200",
+                intervalSeconds: canaryInterval,
+                parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Body"] = body,
+                    ["ContentType"] = "application/json",
+                    ["ExpectedBodyContains"] = "choices",
+                    ["Auth.Mode"] = "static_bearer",
+                    ["Auth.StaticBearerConfigurationKey"] = StatusProbeOptions.CanaryBearerConfigurationKey,
+                }));
+        }
+
+        // ── credentialed orchestration / observatory reads ──
+        // Emitted when a probe scope is configured. Use a self-issued scope service token and assert
+        // real success (200) — never a 401 auth gate (canon §9.1). When scope service tokens are not
+        // enabled the executor degrades these to "unknown", never a false "down".
+        if (!string.IsNullOrWhiteSpace(probe.ScopeId))
+        {
+            var scopeId = probe.ScopeId.Trim();
+            targets.Add(HttpTarget(
+                slug: "orchestration-scope-read",
+                name: "Orchestration · scope services",
+                category: "orchestration",
+                severity: "standard",
+                url: $"{selfBaseUrl}/api/scopes/{scopeId}/services",
+                parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Auth.Mode"] = "scope_service_token",
+                    ["Auth.ScopeId"] = scopeId,
+                }));
+            targets.Add(HttpTarget(
+                slug: "observatory-read",
+                name: "Observatory · caller identity",
+                category: "orchestration",
+                severity: "standard",
+                url: $"{selfBaseUrl}/api/workflow/observatory/me",
+                parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Auth.Mode"] = "scope_service_token",
+                    ["Auth.ScopeId"] = scopeId,
+                }));
+        }
 
         return targets;
     }
@@ -144,6 +273,7 @@ public sealed class StatusDashboardManifest
         string name,
         string category,
         string url,
+        string severity = "standard",
         string method = "GET",
         string expectedStatuses = "200",
         int intervalSeconds = 60,
@@ -155,6 +285,7 @@ public sealed class StatusDashboardManifest
             Slug = slug,
             Name = name,
             Category = category,
+            Severity = severity,
             Probe = HttpStatusProbe,
             IntervalSeconds = intervalSeconds,
             TimeoutMs = timeoutMs,

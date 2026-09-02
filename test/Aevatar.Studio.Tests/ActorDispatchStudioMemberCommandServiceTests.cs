@@ -3,6 +3,7 @@ using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Projection.CommandServices;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -14,8 +15,8 @@ namespace Aevatar.Studio.Tests;
 ///
 /// - CreateAsync routes through the canonical actor id and seeds the
 ///   immutable publishedServiceId from the member id (rename-safe).
-/// - All three implementation kinds (workflow / script / gagent) build the
-///   typed implementation_ref the actor expects.
+/// - CreateAsync is shell-only; implementation_ref enters through
+///   UpdateImplementationAsync / binding, not through the created event.
 /// - Binding requests route through the run actor with a stable payload hash.
 /// - Dispatch always goes through IStudioActorBootstrap before
 ///   IActorDispatchPort, so actor provisioning happens before the command
@@ -59,6 +60,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         evt.PublishedServiceId.Should().Be("member-m-alpha");
         evt.DisplayName.Should().Be("Alpha");
         evt.Description.Should().Be("first member");
+        evt.ImplementationRef.Should().BeNull();
     }
 
     [Fact]
@@ -81,34 +83,31 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldDispatchInitialImplementationRef_WhenProvided()
+    public async Task CreateAsync_ShouldRejectImplementationRefBeforeDispatch()
     {
+        var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(),
+            bootstrap,
             CreateCommandDispatch(dispatch));
-        var implementationRef = new StudioMemberImplementationRefResponse(
-            ImplementationKind: MemberImplementationKindNames.Workflow,
-            WorkflowId: "wf-alpha",
-            WorkflowRevision: "rev-1");
 
-        var summary = await service.CreateAsync(
+        var act = () => service.CreateAsync(
             ScopeId,
             new CreateStudioMemberRequest(
                 DisplayName: "Alpha",
                 ImplementationKind: MemberImplementationKindNames.Workflow,
                 MemberId: "m-alpha",
-                ImplementationRef: implementationRef),
+                ImplementationRef: new StudioMemberImplementationRefResponse(
+                    ImplementationKind: MemberImplementationKindNames.Workflow,
+                    WorkflowId: "wf-alpha",
+                    WorkflowRevision: "rev-1")),
             CancellationToken.None);
 
-        summary.LifecycleStage.Should().Be(MemberLifecycleStageNames.BuildReady);
-        summary.ImplementationRef.Should().Be(implementationRef);
-
-        var evt = dispatch.Dispatches.Should().ContainSingle().Subject
-            .Envelope.Payload.Unpack<StudioMemberCreatedEvent>();
-        evt.ImplementationRef.Should().NotBeNull();
-        evt.ImplementationRef.Workflow.WorkflowId.Should().Be("wf-alpha");
-        evt.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-1");
+        var thrown = await act.Should().ThrowAsync<StudioMemberCreateImplementationRefNotAllowedException>();
+        thrown.Which.ScopeId.Should().Be(ScopeId);
+        thrown.Which.Field.Should().Be("implementationRef");
+        bootstrap.EnsuredActorIds.Should().BeEmpty();
+        dispatch.Dispatches.Should().BeEmpty();
     }
 
     // Note: input validation (length caps, slug pattern, empty display
@@ -183,6 +182,43 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
+    public async Task RecordPublishedBindingAsync_ShouldDispatchPublishedBindingRecordedEvent()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
+
+        await service.RecordPublishedBindingAsync(
+            ScopeId,
+            "m-1",
+            new StudioMemberPublishedBindingRecordRequest(
+                PublishedServiceId: "member-m-1",
+                RevisionId: "rev-updated",
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                ImplementationRef: new StudioMemberImplementationRefResponse(
+                    MemberImplementationKindNames.Workflow,
+                    WorkflowId: "workflow-1",
+                    WorkflowRevision: "rev-updated"),
+                ExpectedActorId: "workflow-definition:workflow-1"),
+            CancellationToken.None);
+
+        bootstrap.EnsuredActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-member:scope-1:m-1");
+        dispatch.Dispatches.Should().ContainSingle();
+        var dispatched = dispatch.Dispatches[0];
+        dispatched.ActorId.Should().Be("studio-member:scope-1:m-1");
+        dispatched.Envelope.Payload.Is(StudioMemberPublishedBindingRecordedEvent.Descriptor).Should().BeTrue();
+        var evt = dispatched.Envelope.Payload.Unpack<StudioMemberPublishedBindingRecordedEvent>();
+        evt.PublishedServiceId.Should().Be("member-m-1");
+        evt.RevisionId.Should().Be("rev-updated");
+        evt.ImplementationKind.Should().Be(StudioMemberImplementationKind.Workflow);
+        evt.ImplementationRef.Workflow.WorkflowId.Should().Be("workflow-1");
+        evt.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-updated");
+        evt.ExpectedActorId.Should().Be("workflow-definition:workflow-1");
+        evt.RecordedAtUtc.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task RenameAsync_ShouldDispatchRenamedEventToCanonicalActor()
     {
         var bootstrap = new RecordingBootstrap();
@@ -200,6 +236,27 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         var evt = dispatched.Envelope.Payload.Unpack<StudioMemberRenamedEvent>();
         evt.DisplayName.Should().Be("Renamed Workflow");
         evt.UpdatedAtUtc.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ShouldDispatchTypedDeleteRequestToCanonicalActor()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
+
+        await service.DeleteAsync(ScopeId, "m-1", CancellationToken.None);
+
+        bootstrap.EnsuredActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-member:scope-1:m-1");
+        dispatch.Dispatches.Should().ContainSingle();
+        var dispatched = dispatch.Dispatches[0];
+        dispatched.ActorId.Should().Be("studio-member:scope-1:m-1");
+        dispatched.Envelope.Payload.Is(StudioMemberDeleteRequested.Descriptor).Should().BeTrue();
+        var evt = dispatched.Envelope.Payload.Unpack<StudioMemberDeleteRequested>();
+        evt.ScopeId.Should().Be(ScopeId);
+        evt.MemberId.Should().Be("m-1");
+        evt.RequestedAtUtc.Should().NotBeNull();
     }
 
     [Fact]
@@ -244,6 +301,15 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
+        var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "workflow:\n  name: alpha_runtime",
+            new Dictionary<string, string>
+            {
+                ["beta"] = "workflow:\n  name: beta",
+            },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
 
         await service.StartBindingRunAsync(
             new StudioMemberBindingRunStartRequest(
@@ -258,7 +324,10 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                         [
                             "workflow:\n  name: alpha_runtime",
                             "workflow:\n  name: beta",
-                        ]))),
+                        ])
+                    {
+                        CapabilityAdmissionPlan = admissionPlan,
+                    })),
             CancellationToken.None);
 
         var evt = dispatch.Dispatches.Should().ContainSingle().Which
@@ -268,6 +337,8 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         evt.Request.Workflow.WorkflowYamls.Should().Equal(
             "workflow:\n  name: alpha_runtime",
             "workflow:\n  name: beta");
+        evt.Request.Workflow.CapabilityAdmissionPlan.AdmissionDigest.Should()
+            .Be(admissionPlan.AdmissionDigest);
     }
 
     [Fact]

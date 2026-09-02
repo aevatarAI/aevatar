@@ -23,6 +23,7 @@ public sealed class MainnetAuthenticationDisabledTests
         builder.Configuration["Aevatar:Authentication:Enabled"] = "false";
         builder.AddAevatarDefaultHost(options =>
         {
+            options.AllowLocalFileSecretsStore = false;
             options.EnableConnectorBootstrap = false;
             options.EnableCors = false;
             options.EnableHealthEndpoints = false;

@@ -1,9 +1,41 @@
 ﻿import { defaultConfig } from 'antd/lib/theme/internal';
+import { ReadableStream } from 'node:stream/web';
+import { TextDecoder, TextEncoder } from 'node:util';
 
 defaultConfig.hashed = false;
 
+// Browser auth tests run without deployment env injection in CI.
+process.env.NYXID_BASE_URL ??= 'https://nyx.test';
+process.env.NYXID_CLIENT_ID ??= 'console-test-client';
+process.env.NYXID_SCOPE ??=
+  'openid profile email offline_access urn:nyxid:scope:broker_binding proxy';
+
 // React 19 expects the test environment to opt into act-aware updates.
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+if (typeof global.TextEncoder === 'undefined') {
+  global.TextEncoder = TextEncoder;
+}
+
+if (typeof global.TextDecoder === 'undefined') {
+  global.TextDecoder = TextDecoder;
+}
+
+if (typeof global.ReadableStream === 'undefined') {
+  global.ReadableStream = ReadableStream;
+}
+
+if (typeof window !== 'undefined') {
+  if (typeof window.TextEncoder === 'undefined') {
+    window.TextEncoder = TextEncoder;
+  }
+  if (typeof window.TextDecoder === 'undefined') {
+    window.TextDecoder = TextDecoder;
+  }
+  if (typeof window.ReadableStream === 'undefined') {
+    window.ReadableStream = ReadableStream;
+  }
+}
 
 const localStorageState = new Map();
 
@@ -114,6 +146,42 @@ if (typeof window !== 'undefined') {
     });
   }
 }
+
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+const textareaAutosizeMetricFallbacks = new Map([
+  ['box-sizing', 'border-box'],
+  ['-moz-box-sizing', 'border-box'],
+  ['-webkit-box-sizing', 'border-box'],
+  ['padding-top', '0px'],
+  ['padding-bottom', '0px'],
+  ['border-top-width', '0px'],
+  ['border-bottom-width', '0px'],
+]);
+
+Object.defineProperty(window, 'getComputedStyle', {
+  configurable: true,
+  value: (element) => {
+    const computedStyle = realGetComputedStyle(element);
+
+    if (!(element instanceof HTMLTextAreaElement)) {
+      return computedStyle;
+    }
+
+    return new Proxy(computedStyle, {
+      get(target, property, receiver) {
+        if (property !== 'getPropertyValue') {
+          return Reflect.get(target, property, receiver);
+        }
+
+        return (name) => {
+          const value = target.getPropertyValue(name);
+          return value || textareaAutosizeMetricFallbacks.get(name) || value;
+        };
+      },
+    });
+  },
+});
+
 const ignoredConsoleErrors = [
   'Warning: An update to %s inside a test was not wrapped in act(...)',
   'inside a test was not wrapped in act(...)',
@@ -123,13 +191,30 @@ const ignoredConsoleErrors = [
   'Warning: [antd: Alert] `message` is deprecated. Please use `title` instead.',
 ];
 
+const isIgnoredConsoleError = (rest) => {
+  const logStr = rest.join('');
+  if (ignoredConsoleErrors.some((message) => logStr.includes(message))) {
+    return true;
+  }
+
+  const [error, details] = rest;
+  const cssDetails = details || error;
+
+  return (
+    error?.message === 'Could not parse CSS stylesheet' &&
+    cssDetails?.type === 'css parsing' &&
+    typeof cssDetails.detail === 'string' &&
+    cssDetails.detail.includes('.ant-steps') &&
+    cssDetails.detail.includes('@container style(--ant-steps-description-max-width)')
+  );
+};
+
 const errorLog = console.error;
 Object.defineProperty(global.window.console, 'error', {
   writable: true,
   configurable: true,
   value: (...rest) => {
-    const logStr = rest.join('');
-    if (ignoredConsoleErrors.some((message) => logStr.includes(message))) {
+    if (isIgnoredConsoleError(rest)) {
       return;
     }
     errorLog(...rest);

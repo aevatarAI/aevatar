@@ -30,7 +30,10 @@ internal sealed class WorkflowRunAcceptedCommandTargetResolver
         //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
         ArgumentNullException.ThrowIfNull(command);
 
-        if (WorkflowCallerCredentialTokens.ParseOptional(command.CallerCredential?.BearerToken).IsInvalid)
+        if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                command.CallerCredential?.BearerToken,
+                command.CallerCredential?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+                command.CallerCredential?.SourceReadableUserBearerToken))
             return CommandTargetResolution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>.Failure(
                 WorkflowChatRunStartError.InvalidCallerCredential);
 

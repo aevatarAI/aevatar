@@ -105,6 +105,23 @@ internal sealed class SubWorkflowOrchestrator
         var invocationId = string.IsNullOrWhiteSpace(request.InvocationId)
             ? WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId)
             : request.InvocationId.Trim();
+        // A child sub-workflow's run id is its invocation id; it must never equal the parent run id.
+        // The projection-root adopts a relayed terminal whose run id == its own run id (R1), so a child
+        // colliding on the parent's run id would let a genuine child terminal clobber the parent doc.
+        // Fail closed on collision to keep that discriminator provably safe.
+        if (string.Equals(
+                WorkflowRunIdNormalizer.Normalize(invocationId),
+                WorkflowRunIdNormalizer.Normalize(parentRunId),
+                StringComparison.Ordinal))
+        {
+            await PublishWorkflowCallFailureAsync(
+                parentStepId,
+                parentRunId,
+                "workflow_call invocation id must differ from the parent run id",
+                ct);
+            return;
+        }
+
         var rootRunId = ResolveRootRunId(request.RootRunId, state, parentRunId);
         var parentDepth = ResolveParentDepth(state, parentRunId);
         var requestedDepth = WorkflowCallLimitPolicy.ResolveChildDepth(request.RequestedDepth, parentDepth);
@@ -136,6 +153,7 @@ internal sealed class SubWorkflowOrchestrator
                     inlineSnapshot,
                     rootRunId,
                     requestedDepth,
+                    request.InputFileRefs,
                     state,
                     ct);
                 return;
@@ -179,6 +197,7 @@ internal sealed class SubWorkflowOrchestrator
                 TimeoutMs = timeoutMs,
                 RootRunId = rootRunId,
                 RequestedDepth = requestedDepth,
+                InputFileRefs = { CloneFileRefs(request.InputFileRefs) },
             }, ct);
 
             await _sendToAsync(
@@ -314,6 +333,7 @@ internal sealed class SubWorkflowOrchestrator
                 definition,
                 ResolveRootRunId(pending.RootRunId, state, pending.ParentRunId),
                 WorkflowCallLimitPolicy.ResolveChildDepth(pending.RequestedDepth, ResolveParentDepth(state, pending.ParentRunId)),
+                pending.InputFileRefs,
                 state,
                 ct);
             await TryCancelDefinitionResolutionTimeoutAsync(pending, CancellationToken.None);
@@ -381,6 +401,7 @@ internal sealed class SubWorkflowOrchestrator
         WorkflowDefinitionSnapshot definition,
         string rootRunId,
         int depth,
+        IReadOnlyList<WorkflowFileRef> inputFileRefs,
         WorkflowRunState state,
         CancellationToken ct)
     {
@@ -400,6 +421,7 @@ internal sealed class SubWorkflowOrchestrator
             definition,
             rootRunId,
             depth,
+            inputFileRefs,
             state);
 
         await _persistDomainEventAsync(new SubWorkflowInvocationRegisteredEvent
@@ -420,6 +442,7 @@ internal sealed class SubWorkflowOrchestrator
             RootRunId = registered.RootRunId,
             Depth = registered.Depth,
             InlineWorkflowYamls = { registered.InlineWorkflowYamls },
+            InputFileRefs = { CloneFileRefs(registered.InputFileRefs) },
         }, ct);
 
         await DrivePendingSubWorkflowInvocationHandoffAsync(registered, definition, state, ct);
@@ -672,6 +695,7 @@ internal sealed class SubWorkflowOrchestrator
             TimeoutMs = evt.TimeoutMs,
             RootRunId = ResolveRootRunId(evt.RootRunId, current, evt.ParentRunId),
             RequestedDepth = Math.Max(0, evt.RequestedDepth),
+            InputFileRefs = { CloneFileRefs(evt.InputFileRefs) },
         };
 
         RemovePendingDefinitionResolution(next, invocationId);
@@ -714,6 +738,7 @@ internal sealed class SubWorkflowOrchestrator
             RootRunId = ResolveRootRunId(evt.RootRunId, current, evt.ParentRunId),
             Depth = Math.Max(0, evt.Depth),
             InlineWorkflowYamls = { evt.InlineWorkflowYamls },
+            InputFileRefs = { CloneFileRefs(evt.InputFileRefs) },
         };
         RemovePendingDefinitionResolution(next, invocationId);
         RemovePendingInvocation(next, invocationId, childRunId);
@@ -773,6 +798,7 @@ internal sealed class SubWorkflowOrchestrator
         WorkflowDefinitionSnapshot definition,
         string rootRunId,
         int depth,
+        IReadOnlyList<WorkflowFileRef> inputFileRefs,
         WorkflowRunState state)
     {
         var normalizedLifecycle = WorkflowCallLifecycle.Normalize(lifecycle);
@@ -797,6 +823,7 @@ internal sealed class SubWorkflowOrchestrator
                 : definition.ScopeId,
             RootRunId = ResolveRootRunId(rootRunId, state, parentRunId),
             Depth = Math.Max(0, depth),
+            InputFileRefs = { CloneFileRefs(inputFileRefs) },
         };
 
         foreach (var (inlineWorkflowName, inlineWorkflowYaml) in definition.InlineWorkflowYamls.Count > 0
@@ -992,6 +1019,7 @@ internal sealed class SubWorkflowOrchestrator
                 Depth = Math.Max(0, pending.Depth),
             },
         };
+        start.InputFileRefs.Add(CloneFileRefs(pending.InputFileRefs));
         start.Parameters[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
         start.Parameters[WorkflowCallParentRunIdMetadataKey] = pending.ParentRunId;
         start.Parameters[WorkflowCallParentStepIdMetadataKey] = pending.ParentStepId;
@@ -1194,6 +1222,9 @@ internal sealed class SubWorkflowOrchestrator
             throw new InvalidOperationException($"workflow_call {sourceDescription} is invalid: {ex.Message}", ex);
         }
     }
+
+    private static IEnumerable<WorkflowFileRef> CloneFileRefs(IEnumerable<WorkflowFileRef>? fileRefs) =>
+        fileRefs?.Select(static fileRef => fileRef.Clone()) ?? [];
 
     private async Task PublishWorkflowCallFailureAsync(
         string parentStepId,
@@ -1460,6 +1491,7 @@ internal sealed class SubWorkflowOrchestrator
                 ? state.ScopeId ?? string.Empty
                 : definition.ScopeId,
             InlineWorkflowYamls = { inlineWorkflowYamls },
+            ExpectedExecutionMode = state.ExpectedExecutionMode,
         };
 
         return new EventEnvelope

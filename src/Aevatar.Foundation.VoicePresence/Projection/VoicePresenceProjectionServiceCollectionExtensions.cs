@@ -60,6 +60,9 @@ public static class VoicePresenceProjectionServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             VoicePresenceCapabilityMaterializationContext,
             VoicePresenceCapabilityReadModelProjector>();
+        services.TryAddSingleton<
+            IVoicePresenceCapabilityProjectionRecoveryPort,
+            VoicePresenceCapabilityProjectionRecoveryPort>();
         return services;
     }
 }

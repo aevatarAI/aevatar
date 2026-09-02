@@ -50,10 +50,10 @@ public sealed class ChatRouteResolver
                 continue;
             }
 
-            return ApplyDefaultToolSet(BuildDecision(rule.Action, matchedRuleId: rule.RuleId, usedFallback: false));
+            return ApplyDefaultToolSet(NewDecision(rule.Action, matchedRuleId: rule.RuleId, usedFallback: false));
         }
 
-        return ApplyDefaultToolSet(BuildDecision(snapshot.DefaultTarget, matchedRuleId: string.Empty, usedFallback: false));
+        return ApplyDefaultToolSet(NewDecision(snapshot.DefaultTarget, matchedRuleId: string.Empty, usedFallback: false));
     }
 
     private static bool HasAction(ChatRouteAction? action) =>
@@ -88,18 +88,11 @@ public sealed class ChatRouteResolver
         bool usedFallback) =>
         new()
         {
-            Action = ChatRouteActionTranslator.ToRuntimeDecisionAction(action),
-            OriginalAction = action.Clone(),
+            Action = action.Clone(),
             MatchedRuleId = matchedRuleId,
             UsedFallback = usedFallback,
             ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
-
-    private ChatRouteDecision BuildDecision(
-        ChatRouteAction action,
-        string matchedRuleId,
-        bool usedFallback)
-        => NewDecision(action, matchedRuleId, usedFallback);
 
     private ChatRouteDecision ApplyDefaultToolSet(ChatRouteDecision decision)
     {
@@ -108,7 +101,6 @@ public sealed class ChatRouteResolver
             return decision;
 
         ApplyDefaultToolSet(decision.Action?.ForwardToModel, toolSetName);
-        ApplyDefaultToolSet(decision.OriginalAction?.ForwardToModel, toolSetName);
         return decision;
     }
 
@@ -125,24 +117,6 @@ public sealed class ChatRouteResolver
 
         forwardToModel.ToolSetRef = new ChatRouteToolSetRef { Name = toolSetName.Trim() };
     }
-}
-
-internal static class ChatRouteActionTranslator
-{
-    public static ChatRouteAction ToRuntimeDecisionAction(ChatRouteAction action)
-    {
-        ArgumentNullException.ThrowIfNull(action);
-
-        return action.ActionCase switch
-        {
-            ChatRouteAction.ActionOneofCase.ForwardToModel => action.Clone(),
-            ChatRouteAction.ActionOneofCase.Reject => action.Clone(),
-            _ => action.Clone(),
-        };
-    }
-
-    public static ChatRouteAction ToCanonicalPolicyAction(ChatRouteAction action) =>
-        ToRuntimeDecisionAction(action);
 }
 
 /// <summary>

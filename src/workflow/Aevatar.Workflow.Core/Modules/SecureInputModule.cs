@@ -170,8 +170,14 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             pending.StepId,
             userInput.Length);
 
+        var valueReference = await SecureInputRuntimeContextAccess.StoreCapturedValueReferenceAsync(
+            ctx,
+            pending.RunId,
+            variableName,
+            userInput,
+            ct);
         stateForResume.Pending.Remove(pendingKey);
-        SecureInputStateAccess.SetCaptured(stateForResume, pending.RunId, variableName, userInput);
+        SecureInputStateAccess.SetCapturedReference(stateForResume, pending.RunId, variableName, valueReference);
         await SecureInputStateAccess.SaveAsync(stateForResume, ctx, ct);
 
         await ctx.PublishAsync(new SecureValueCapturedEvent
@@ -179,8 +185,9 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             RunId = pending.RunId,
             StepId = pending.StepId,
             Variable = variableName,
-            // Keep payload redacted. Raw value remains in typed actor state.
+            // Keep payload redacted. The typed reference is persisted in actor-owned module state.
             Value = string.Empty,
+            ValueReference = valueReference.Clone(),
         }, TopologyAudience.Self, ct);
 
         var stepCompleted = new StepCompletedEvent

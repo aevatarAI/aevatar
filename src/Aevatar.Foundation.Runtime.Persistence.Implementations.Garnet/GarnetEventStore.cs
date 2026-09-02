@@ -111,11 +111,13 @@ public sealed class GarnetEventStore : IEventStore, IEventStoreMaintenance
 
         var keys = BuildKeys(agentId);
         var scriptArgs = BuildAppendScriptArgs(expectedVersion, pendingEvents);
+        // Cancellation owns admission only. Once the Lua script is submitted, Garnet's
+        // atomic result is authoritative and must not be hidden by a late deadline.
+        ct.ThrowIfCancellationRequested();
         var rawResult = await _database.ScriptEvaluateAsync(
             AppendScript,
             [keys.VersionKey, keys.EventIndexKey, keys.EventDataKey],
             scriptArgs);
-        ct.ThrowIfCancellationRequested();
 
         var result = (RedisResult[])rawResult!;
         if (result.Length != 2)

@@ -1,5 +1,6 @@
 import { persistAuthSession } from "@/shared/auth/session";
 import {
+  configureScheduledDispatchRetryDelay,
   decodeScheduledDispatchSummary,
   scheduledDispatchApi,
   scheduledWorkflowPromptMaxLength,
@@ -8,6 +9,12 @@ import { encodeChatRequestEventBase64 } from "@/shared/runs/protobufPayload";
 
 describe("scheduledDispatchApi", () => {
   const originalFetch = global.fetch;
+  const studioMemberAutomationOwner = {
+    kind: "studio_member_automation",
+    scopeId: "scope-alpha",
+    teamId: "team-alpha",
+    memberId: "member-alpha",
+  } as const;
 
   beforeEach(() => {
     window.localStorage.clear();
@@ -77,6 +84,49 @@ describe("scheduledDispatchApi", () => {
     };
   }
 
+  function decodeChatRequestEventBase64(payloadBase64: string) {
+    const bytes = Uint8Array.from(Buffer.from(payloadBase64, "base64"));
+    const fields = new Map<number, string>();
+    let offset = 0;
+
+    const readVarint = () => {
+      let value = 0;
+      let shift = 0;
+      while (offset < bytes.length) {
+        const byte = bytes[offset++];
+        value |= (byte & 0x7f) << shift;
+        if ((byte & 0x80) === 0) {
+          return value;
+        }
+        shift += 7;
+      }
+      throw new Error("Invalid varint in ChatRequestEvent payload.");
+    };
+
+    while (offset < bytes.length) {
+      const tag = readVarint();
+      const fieldNumber = tag >> 3;
+      const wireType = tag & 0x7;
+      if (wireType !== 2) {
+        throw new Error(`Unsupported ChatRequestEvent wire type ${wireType}.`);
+      }
+
+      const length = readVarint();
+      const end = offset + length;
+      fields.set(
+        fieldNumber,
+        Buffer.from(bytes.slice(offset, end)).toString("utf8"),
+      );
+      offset = end;
+    }
+
+    return {
+      prompt: fields.get(1) ?? "",
+      sessionId: fields.get(2) ?? "",
+      scopeId: fields.get(5) ?? "",
+    };
+  }
+
   it("lists schedules through the backend schedules collection", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -98,6 +148,7 @@ describe("scheduledDispatchApi", () => {
     ).resolves.toEqual({
       items: [
         expect.objectContaining({
+          prompt: "",
           scheduleId: "sch-alpha",
           scheduleKind: "workflow",
           serviceId: "svc-alpha",
@@ -120,7 +171,37 @@ describe("scheduledDispatchApi", () => {
     );
   });
 
-  it("lists every schedule page when requested", async () => {
+  it("serializes typed owner schedule list filters without legacy query fields", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [],
+        nextCursor: null,
+        totalCount: 0,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.list({
+      includeTotalCount: true,
+      owner: {
+        kind: "studio_member_automation",
+        scopeId: "scope/alpha",
+        teamId: "team alpha",
+        memberId: "member+alpha",
+      },
+      take: 25,
+    });
+
+    const requestUrl = String(fetchMock.mock.calls[0]?.[0]);
+    expect(requestUrl).toBe(
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope%2Falpha&ownerTeamId=team+alpha&ownerMemberId=member%2Balpha&includeTotalCount=true&take=25",
+    );
+    expect(requestUrl).not.toMatch(/[?&](scopeId|teamId|memberId)=/);
+  });
+
+  it("preserves scoped schedule filters across every requested page", async () => {
     const fetchMock = jest
       .fn()
       .mockResolvedValueOnce({
@@ -146,6 +227,7 @@ describe("scheduledDispatchApi", () => {
     await expect(
       scheduledDispatchApi.listAll({
         includeTotalCount: true,
+        owner: studioMemberAutomationOwner,
         take: 200,
       }),
     ).resolves.toEqual({
@@ -158,9 +240,71 @@ describe("scheduledDispatchApi", () => {
     });
 
     expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
-      "/api/schedules?includeTotalCount=true&take=200",
-      "/api/schedules?cursor=cursor-2&includeTotalCount=true&take=200",
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=member-alpha&includeTotalCount=true&take=200",
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=member-alpha&cursor=cursor-2&includeTotalCount=true&take=200",
     ]);
+  });
+
+  it("gets owner schedule detail with the typed owner query", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        schedule: createSummary(),
+        recentFires: [],
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.get(" sch/alpha ", studioMemberAutomationOwner);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/schedules/sch%2Falpha?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=member-alpha",
+    );
+  });
+
+  it("keeps saved recurring prompts from schedule list responses", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          createSummary({
+            prompt: "Summarize escalations, blocked accounts, and follow-up owners.",
+          }),
+          createSummary({
+            prompt: null,
+            scheduleId: "sch-without-prompt",
+          }),
+          createSummary({
+            scheduleId: "sch-legacy",
+          }),
+        ],
+        nextCursor: null,
+        totalCount: 3,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(scheduledDispatchApi.list()).resolves.toEqual(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            prompt:
+              "Summarize escalations, blocked accounts, and follow-up owners.",
+            scheduleId: "sch-alpha",
+          }),
+          expect.objectContaining({
+            prompt: "",
+            scheduleId: "sch-without-prompt",
+          }),
+          expect.objectContaining({
+            prompt: "",
+            scheduleId: "sch-legacy",
+          }),
+        ],
+      }),
+    );
   });
 
   it("posts workflow chat as base64 service invocation when creating a schedule with a revision", async () => {
@@ -180,6 +324,7 @@ describe("scheduledDispatchApi", () => {
         headers: {
           source: "team-automations",
         },
+        owner: studioMemberAutomationOwner,
         workflowChatTarget: {
           identity: {
             tenantId: " scope-1 ",
@@ -210,6 +355,7 @@ describe("scheduledDispatchApi", () => {
       headers: {
         source: "team-automations",
       },
+      owner: studioMemberAutomationOwner,
       scheduleKind: "workflow",
       serviceInvocation: {
         identity: {
@@ -230,9 +376,42 @@ describe("scheduledDispatchApi", () => {
     });
     expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payload");
     expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payloadJson");
-    expect(String(init.body)).not.toContain("memberId");
     expect(String(init.body)).not.toContain("workflowId");
     expect(String(init.body)).not.toContain("workflowChatTarget");
+  });
+
+  it("keeps the entered recurring prompt in the final create payload", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => createReceipt(),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.create({
+      displayName: "Daily escalation digest",
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      enabled: true,
+      workflowChatTarget: {
+        identity: {
+          tenantId: "scope-1",
+          appId: "default",
+          namespace: "default",
+          serviceId: "svc-alpha",
+        },
+        prompt: " Summarize escalations, blocked accounts, and follow-up owners. ",
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(decodeChatRequestEventBase64(body.serviceInvocation.payloadBase64)).toEqual(
+      expect.objectContaining({
+        prompt: "Summarize escalations, blocked accounts, and follow-up owners.",
+        scopeId: "scope-1",
+      }),
+    );
   });
 
   it("posts workflow chat as base64 service invocation when creating without a revision", async () => {
@@ -283,6 +462,101 @@ describe("scheduledDispatchApi", () => {
     });
     expect(body.serviceInvocation).not.toHaveProperty("payloadJson");
     expect(body.serviceInvocation).not.toHaveProperty("revisionId");
+  });
+
+  it("retries schedule creation when the owner binding read model briefly lags after NyxID finalization", async () => {
+    const restoreRetryDelay = configureScheduledDispatchRetryDelay(async () => {});
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () =>
+          JSON.stringify({
+            error: "NyxID binding was not found for the scheduled subject.",
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+        json: async () => createReceipt(),
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    try {
+      await expect(
+        scheduledDispatchApi.create({
+          displayName: "Daily escalation digest",
+          cronExpression: "0 9 * * 1-5",
+          timezone: "Asia/Shanghai",
+          enabled: true,
+          workflowChatTarget: {
+            identity: {
+              tenantId: "scope-1",
+              appId: "default",
+              namespace: "default",
+              serviceId: "svc-alpha",
+            },
+            prompt: "Summarize escalations.",
+          },
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          accepted: true,
+          scheduleId: "sch-alpha",
+        }),
+      );
+    } finally {
+      restoreRetryDelay();
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+      "/api/schedules",
+      "/api/schedules",
+    ]);
+  });
+
+  it("stops retrying schedule creation after bounded owner binding read model attempts", async () => {
+    const retryDelays: number[] = [];
+    const restoreRetryDelay = configureScheduledDispatchRetryDelay(async (delayMs) => {
+      retryDelays.push(delayMs);
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: "Bad Request",
+      text: async () =>
+        JSON.stringify({
+          error: "NyxID binding was not found for the scheduled subject.",
+        }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    try {
+      await expect(
+        scheduledDispatchApi.create({
+          displayName: "Daily escalation digest",
+          cronExpression: "0 9 * * 1-5",
+          timezone: "Asia/Shanghai",
+          enabled: true,
+          workflowChatTarget: {
+            identity: {
+              tenantId: "scope-1",
+              appId: "default",
+              namespace: "default",
+              serviceId: "svc-alpha",
+            },
+          },
+        }),
+      ).rejects.toThrow("NyxID binding was not found for the scheduled subject.");
+    } finally {
+      restoreRetryDelay();
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(retryDelays).toEqual([400, 900]);
   });
 
   it("creates workflow schedules without requiring a recurring prompt", async () => {
@@ -342,6 +616,7 @@ describe("scheduledDispatchApi", () => {
         headers: {
           source: "team-automations",
         },
+        owner: studioMemberAutomationOwner,
         workflowChatTarget: {
           identity: {
             tenantId: " scope-1 ",
@@ -370,6 +645,7 @@ describe("scheduledDispatchApi", () => {
       headers: {
         source: "team-automations",
       },
+      owner: studioMemberAutomationOwner,
       scheduleKind: "workflow",
       serviceInvocation: {
         identity: {
@@ -389,9 +665,42 @@ describe("scheduledDispatchApi", () => {
     expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payload");
     expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payloadJson");
     expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("revisionId");
-    expect(String(init.body)).not.toContain("memberId");
     expect(String(init.body)).not.toContain("workflowId");
     expect(String(init.body)).not.toContain("workflowChatTarget");
+  });
+
+  it("keeps the entered recurring prompt in the final update payload", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => createReceipt(),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.update("sch-alpha", {
+      displayName: "Edited escalation digest",
+      cronExpression: "0 10 * * 1-5",
+      timezone: "Asia/Shanghai",
+      enabled: false,
+      workflowChatTarget: {
+        identity: {
+          tenantId: "scope-1",
+          appId: "default",
+          namespace: "default",
+          serviceId: "svc-alpha",
+        },
+        prompt: " Summarize changed escalations and follow-up owners. ",
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(decodeChatRequestEventBase64(body.serviceInvocation.payloadBase64)).toEqual(
+      expect.objectContaining({
+        prompt: "Summarize changed escalations and follow-up owners.",
+        scopeId: "scope-1",
+      }),
+    );
   });
 
   it("rejects oversized workflow prompts before storing the schedule payload", async () => {
@@ -472,9 +781,17 @@ describe("scheduledDispatchApi", () => {
       } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await scheduledDispatchApi.runNow(" sch-alpha ");
-    await scheduledDispatchApi.disable("sch-alpha", " pause for review ");
-    await scheduledDispatchApi.enable("sch-alpha", " resume ");
+    await scheduledDispatchApi.runNow(" sch-alpha ", studioMemberAutomationOwner);
+    await scheduledDispatchApi.disable(
+      "sch-alpha",
+      " pause for review ",
+      studioMemberAutomationOwner,
+    );
+    await scheduledDispatchApi.enable(
+      "sch-alpha",
+      " resume ",
+      studioMemberAutomationOwner,
+    );
 
     expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
       "/api/schedules/sch-alpha:run-now",
@@ -482,7 +799,15 @@ describe("scheduledDispatchApi", () => {
       "/api/schedules/sch-alpha:enable",
     ]);
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      owner: studioMemberAutomationOwner,
       reason: " pause for review ",
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      owner: studioMemberAutomationOwner,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
+      owner: studioMemberAutomationOwner,
+      reason: " resume ",
     });
   });
 
@@ -495,7 +820,11 @@ describe("scheduledDispatchApi", () => {
     global.fetch = fetchMock as typeof global.fetch;
 
     await expect(
-      scheduledDispatchApi.delete(" sch-alpha ", " remove obsolete cadence "),
+      scheduledDispatchApi.delete(
+        " sch-alpha ",
+        " remove obsolete cadence ",
+        studioMemberAutomationOwner,
+      ),
     ).resolves.toEqual(
       expect.objectContaining({
         accepted: true,
@@ -510,6 +839,7 @@ describe("scheduledDispatchApi", () => {
     );
     expect(init.method).toBe("DELETE");
     expect(JSON.parse(String(init.body))).toEqual({
+      owner: studioMemberAutomationOwner,
       reason: "remove obsolete cadence",
     });
   });
@@ -522,6 +852,7 @@ describe("scheduledDispatchApi", () => {
         TargetKind: 1,
         TargetActorId: "actor-pascal",
         PayloadTypeUrl: "type.googleapis.com/aevatar.ChatRequestEvent",
+        Prompt: "Summarize Pascal escalations.",
         ServiceKey: "scope-1:default:default:svc-pascal",
         ServiceId: "svc-pascal",
         ServiceEndpointId: "chat",
@@ -550,6 +881,7 @@ describe("scheduledDispatchApi", () => {
         targetKind: "service_invocation",
         scheduleKind: "workflow",
         deleted: false,
+        prompt: "Summarize Pascal escalations.",
       }),
     );
   });

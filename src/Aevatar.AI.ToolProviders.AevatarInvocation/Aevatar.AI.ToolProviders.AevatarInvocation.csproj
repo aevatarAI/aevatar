@@ -15,6 +15,7 @@
     <ProjectReference Include="..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
     <ProjectReference Include="..\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
+    <ProjectReference Include="..\platform\Aevatar.GAgentService.Governance.Abstractions\Aevatar.GAgentService.Governance.Abstractions.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
   </ItemGroup>
@@ -28,6 +29,6 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="aevatar_invocation_tools.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.AI.Abstractions;..\Aevatar.Foundation.VoicePresence.Abstractions" />
+    <Protobuf Include="aevatar_invocation_tools.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.AI.Abstractions;..\Aevatar.Foundation.VoicePresence.Abstractions;..\Aevatar.Foundation.Abstractions" />
   </ItemGroup>
 </Project>

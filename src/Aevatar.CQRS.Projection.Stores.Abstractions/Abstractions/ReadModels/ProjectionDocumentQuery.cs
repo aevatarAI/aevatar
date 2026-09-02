@@ -4,6 +4,8 @@ public sealed class ProjectionDocumentQuery
 {
     public IReadOnlyList<ProjectionDocumentFilter> Filters { get; init; } = [];
 
+    public IReadOnlyList<ProjectionDocumentFilter> AnyOfFilters { get; init; } = [];
+
     public IReadOnlyList<ProjectionDocumentSort> Sorts { get; init; } = [];
 
     public string? Cursor { get; init; }

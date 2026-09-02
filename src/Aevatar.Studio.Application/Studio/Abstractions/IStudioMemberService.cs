@@ -122,4 +122,16 @@ public interface IStudioMemberService
         string memberId,
         UpdateStudioMemberRequest request,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Physically deletes the Studio member authority by tombstoning the
+    /// member actor. The delete is idempotent for already-deleted members that
+    /// still have actor state; never-created / unknown members return
+    /// <see cref="StudioMemberNotFoundException"/>. Published service artifacts
+    /// and revisions are intentionally left untouched.
+    /// </summary>
+    Task<StudioMemberCommandResponse> DeleteAsync(
+        string scopeId,
+        string memberId,
+        CancellationToken ct = default);
 }

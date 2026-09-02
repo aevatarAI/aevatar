@@ -363,6 +363,7 @@ public sealed class ScopeServiceEndpointsStreamTests : ScopeServiceEndpointStrea
                 {
                     SessionId = "cmd-1",
                     Content = "[[AEVATAR_LLM_ERROR]] NyxID authentication required for provider 'nyxid'. Please sign in.",
+                    Outcome = RoleChatSessionOutcome.Unspecified,
                 },
                 correlationId: "cmd-1"),
             CancellationToken.None);
@@ -372,6 +373,75 @@ public sealed class ScopeServiceEndpointsStreamTests : ScopeServiceEndpointStrea
         published.SessionId.Should().Be("cmd-1");
         published.Event.RunError.Should().NotBeNull();
         published.Event.RunError!.Message.Should().Be("NyxID authentication required for provider 'nyxid'. Please sign in.");
+    }
+
+    [Theory]
+    [InlineData(RoleChatSessionOutcome.Failed, "SESSION_ORPHANED", "The interrupted session cannot be resumed.", "The interrupted session cannot be resumed.")]
+    [InlineData(RoleChatSessionOutcome.OutcomeUncertain, "SESSION_OUTCOME_UNCERTAIN", " ", "SESSION_OUTCOME_UNCERTAIN")]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishRunError_FromTypedFailureWithEmptyContent(
+        RoleChatSessionOutcome outcome,
+        string failureCode,
+        string safeMessage,
+        string expectedMessage)
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+        var context = new GAgentDraftRunProjectionContext
+        {
+            RootActorId = "actor-1",
+            SessionId = "cmd-1",
+            ProjectionKind = "service-draft-run-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            WrapCommittedCompletion(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "cmd-1",
+                    Content = string.Empty,
+                    Outcome = outcome,
+                    FailureCode = failureCode,
+                    SafeMessage = safeMessage,
+                },
+                correlationId: "cmd-1"),
+            CancellationToken.None);
+
+        var published = sessionHub.Published.Should().ContainSingle().Subject;
+        published.Event.RunError.Should().NotBeNull();
+        published.Event.RunError!.Message.Should().Be(expectedMessage);
+        published.Event.RunError.Code.Should().Be(failureCode);
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldNotInterpretLegacyFailureMarker_WhenOutcomeIsCompleted()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+        var context = new GAgentDraftRunProjectionContext
+        {
+            RootActorId = "actor-1",
+            SessionId = "cmd-1",
+            ProjectionKind = "service-draft-run-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            WrapCommittedCompletion(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "cmd-1",
+                    Content = "[[AEVATAR_LLM_ERROR]] preserved assistant text",
+                    ContentEmitted = true,
+                    Outcome = RoleChatSessionOutcome.Completed,
+                },
+                correlationId: "cmd-1"),
+            CancellationToken.None);
+
+        sessionHub.Published.Should().HaveCount(3);
+        sessionHub.Published.Should().NotContain(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.RunError);
+        sessionHub.Published[^1].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
     }
 
     [Fact]

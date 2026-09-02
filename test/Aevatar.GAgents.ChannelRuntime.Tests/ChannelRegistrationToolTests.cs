@@ -20,11 +20,18 @@ public sealed class ChannelRegistrationToolTests
         var tool = CreateTool();
 
         tool.Name.Should().Be("channel_registrations");
-        tool.Description.Should().Contain("register_lark_via_nyx");
+        tool.Description.Should().Contain("register_channel_via_nyx");
+        tool.Description.Should().Contain("platform=lark");
+        tool.Description.Should().Contain("platform=telegram");
+        tool.Description.Should().NotContain("register_lark_via_nyx");
         tool.Description.Should().NotContain("rebuild_projection");
         tool.Description.Should().NotContain("repair_lark_mirror");
         tool.ParametersSchema.Should().NotContain("rebuild_projection");
         tool.ParametersSchema.Should().NotContain("reason");
+        tool.ParametersSchema.Should().Contain("\"platform\"");
+        tool.ParametersSchema.Should().Contain("\"credentials\"");
+        tool.ParametersSchema.Should().Contain("\"lark\"");
+        tool.ParametersSchema.Should().Contain("\"telegram\"");
         JsonDocument.Parse(tool.ParametersSchema).RootElement
             .GetProperty("properties")
             .GetProperty("action")
@@ -32,7 +39,7 @@ public sealed class ChannelRegistrationToolTests
             .EnumerateArray()
             .Select(static value => value.GetString())
             .Should()
-            .Equal("list", "register_lark_via_nyx", "delete");
+            .Equal("list", "register_channel_via_nyx", "delete");
     }
 
     [Fact]
@@ -90,13 +97,15 @@ public sealed class ChannelRegistrationToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_RegisterLarkViaNyx_ReturnsProvisioningResult()
+    public async Task ExecuteAsync_RegisterChannelViaNyx_LarkReturnsProvisioningResult()
     {
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
-        provisioningService.ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxLarkProvisioningResult(
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
                 Succeeded: true,
                 Status: "accepted",
+                Platform: "lark",
                 RegistrationId: "reg-1",
                 NyxChannelBotId: "bot-1",
                 NyxAgentApiKeyId: "key-1",
@@ -105,43 +114,90 @@ public sealed class ChannelRegistrationToolTests
                 WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
 
         using var serviceProvider = new ServiceCollection()
-            .AddSingleton(provisioningService)
+            .AddSingleton(new ChannelRelayRegistrationFacade([provisioningService]))
             .BuildServiceProvider();
         var tool = CreateTool(serviceProvider);
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            """{"action":"register_lark_via_nyx","app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","webhook_base_url":"https://aevatar.example.com"}""");
+            """{"action":"register_channel_via_nyx","platform":"lark","lark":{"app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","encrypt_key":" encrypt-alpha "},"webhook_base_url":"https://aevatar.example.com","default_skill_name":"whatsapp-reply-draft"}""");
         using var doc = JsonDocument.Parse(json);
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        doc.RootElement.GetProperty("platform").GetString().Should().Be("lark");
         doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-1");
         await provisioningService.Received(1).ProvisionAsync(
-            Arg.Is<NyxLarkProvisioningRequest>(request =>
+            Arg.Is<NyxChannelBotProvisioningRequest>(request =>
+                request.Platform == "lark" &&
                 request.AccessToken == "test-token" &&
                 request.ScopeId == "scope-1" &&
-                request.AppId == "cli_123" &&
-                request.AppSecret == "secret" &&
-                request.VerificationToken == "verify-123" &&
+                request.Lark != null &&
+                request.Lark.AppId == "cli_123" &&
+                request.Lark.AppSecret == "secret" &&
+                request.Lark.VerificationToken == "verify-123" &&
+                request.Lark.EncryptKey == "encrypt-alpha" &&
+                request.WebhookBaseUrl == "https://aevatar.example.com" &&
+                request.DefaultSkillName == "whatsapp-reply-draft"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RegisterChannelViaNyx_TelegramReturnsProvisioningResult()
+    {
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("telegram");
+        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: true,
+                Status: "accepted",
+                Platform: "telegram",
+                RegistrationId: "reg-tg-1",
+                NyxChannelBotId: "bot-tg-1",
+                NyxAgentApiKeyId: "key-tg-1",
+                NyxConversationRouteId: "route-tg-1",
+                RelayCallbackUrl: "https://aevatar.example.com/api/webhooks/nyxid-relay",
+                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/telegram/bot-tg-1")));
+
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(new ChannelRelayRegistrationFacade([provisioningService]))
+            .BuildServiceProvider();
+        var tool = CreateTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync(
+            """{"action":"register_channel_via_nyx","platform":"telegram","telegram":{"bot_token":"123:abc"},"webhook_base_url":"https://aevatar.example.com"}""");
+        using var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        doc.RootElement.GetProperty("platform").GetString().Should().Be("telegram");
+        doc.RootElement.GetProperty("nyx_provider_slug").GetString().Should().Be("api-telegram-bot");
+        await provisioningService.Received(1).ProvisionAsync(
+            Arg.Is<NyxChannelBotProvisioningRequest>(request =>
+                request.Platform == "telegram" &&
+                request.AccessToken == "test-token" &&
+                request.ScopeId == "scope-1" &&
+                request.Credentials != null &&
+                request.Credentials["bot_token"] == "123:abc" &&
                 request.WebhookBaseUrl == "https://aevatar.example.com"),
             Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task ExecuteAsync_RegisterLarkViaNyx_RejectsMissingScopeContext()
+    public async Task ExecuteAsync_RegisterChannelViaNyx_RejectsMissingScopeContext()
     {
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
         using var serviceProvider = new ServiceCollection()
-            .AddSingleton(provisioningService)
+            .AddSingleton(new ChannelRelayRegistrationFacade([provisioningService]))
             .BuildServiceProvider();
         var tool = CreateTool(serviceProvider);
 
         using var scope = PushNyxToken(null);
         var json = await tool.ExecuteAsync(
-            """{"action":"register_lark_via_nyx","app_id":"cli_123","app_secret":"secret","webhook_base_url":"https://aevatar.example.com"}""");
+            """{"action":"register_channel_via_nyx","platform":"lark","lark":{"app_id":"cli_123","app_secret":"secret"},"webhook_base_url":"https://aevatar.example.com"}""");
 
         json.Should().Contain("scope_id is required");
-        await provisioningService.DidNotReceive().ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>());
+        await provisioningService.DidNotReceive().ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -173,6 +229,20 @@ public sealed class ChannelRegistrationToolTests
 
         doc.RootElement.GetProperty("error_code").GetString().Should().Be("retired_action");
         doc.RootElement.GetProperty("error").GetString().Should().Contain("update_token is retired");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RegisterLarkViaNyx_ReturnsRetiredError()
+    {
+        var tool = CreateTool();
+
+        using var scope = PushNyxToken();
+        var result = await tool.ExecuteAsync("""{"action":"register_lark_via_nyx"}""");
+        using var doc = JsonDocument.Parse(result);
+
+        doc.RootElement.GetProperty("error_code").GetString().Should().Be("retired_action");
+        doc.RootElement.GetProperty("error").GetString().Should().Contain("register_channel_via_nyx");
+        doc.RootElement.GetProperty("error").GetString().Should().Contain("platform=lark");
     }
 
     [Fact]
@@ -258,10 +328,11 @@ public sealed class ChannelRegistrationToolTests
 
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
         provisioningService.Platform.Returns("lark");
+        var registrationFacade = new ChannelRelayRegistrationFacade([provisioningService]);
 
-        var source = new ChannelRegistrationToolSource(queryPort, commandFacade, provisioningService);
+        var source = new ChannelRegistrationToolSource(queryPort, commandFacade, registrationFacade);
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().ContainSingle();
@@ -281,21 +352,21 @@ public sealed class ChannelRegistrationToolTests
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        var registrationFacade = new ChannelRelayRegistrationFacade([]);
 
-        var missingQuery = () => new ChannelRegistrationTool(null!, commandFacade, provisioningService);
-        var missingCommand = () => new ChannelRegistrationTool(queryPort, null!, provisioningService);
-        var missingProvisioning = () => new ChannelRegistrationTool(queryPort, commandFacade, null!);
-        var missingSourceQuery = () => new ChannelRegistrationToolSource(null!, commandFacade, provisioningService);
-        var missingSourceCommand = () => new ChannelRegistrationToolSource(queryPort, null!, provisioningService);
-        var missingSourceProvisioning = () => new ChannelRegistrationToolSource(queryPort, commandFacade, null!);
+        var missingQuery = () => new ChannelRegistrationTool(null!, commandFacade, registrationFacade);
+        var missingCommand = () => new ChannelRegistrationTool(queryPort, null!, registrationFacade);
+        var missingRegistrationFacade = () => new ChannelRegistrationTool(queryPort, commandFacade, null!);
+        var missingSourceQuery = () => new ChannelRegistrationToolSource(null!, commandFacade, registrationFacade);
+        var missingSourceCommand = () => new ChannelRegistrationToolSource(queryPort, null!, registrationFacade);
+        var missingSourceRegistrationFacade = () => new ChannelRegistrationToolSource(queryPort, commandFacade, null!);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandFacade");
-        missingProvisioning.Should().Throw<ArgumentNullException>().WithParameterName("provisioningService");
+        missingRegistrationFacade.Should().Throw<ArgumentNullException>().WithParameterName("registrationFacade");
         missingSourceQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingSourceCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandFacade");
-        missingSourceProvisioning.Should().Throw<ArgumentNullException>().WithParameterName("provisioningService");
+        missingSourceRegistrationFacade.Should().Throw<ArgumentNullException>().WithParameterName("registrationFacade");
     }
 
     [Fact]
@@ -333,7 +404,7 @@ public sealed class ChannelRegistrationToolTests
         return new ChannelRegistrationTool(
             provider.GetService<IChannelBotRegistrationQueryPort>() ?? Substitute.For<IChannelBotRegistrationQueryPort>(),
             provider.GetService<ChannelRegistrationCommandFacade>() ?? CreateDefaultCommandFacade(),
-            provider.GetService<INyxLarkProvisioningService>() ?? Substitute.For<INyxLarkProvisioningService>());
+            provider.GetService<ChannelRelayRegistrationFacade>() ?? new ChannelRelayRegistrationFacade([]));
     }
 
     private static IServiceCollection CreateDefaultServices()
@@ -341,7 +412,7 @@ public sealed class ChannelRegistrationToolTests
         return new ServiceCollection()
             .AddSingleton(Substitute.For<IChannelBotRegistrationQueryPort>())
             .AddSingleton(CreateDefaultCommandFacade())
-            .AddSingleton(Substitute.For<INyxLarkProvisioningService>());
+            .AddSingleton(new ChannelRelayRegistrationFacade([]));
     }
 
     private static ChannelRegistrationCommandFacade CreateDefaultCommandFacade()

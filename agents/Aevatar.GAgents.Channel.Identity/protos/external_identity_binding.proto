@@ -23,6 +23,13 @@ message ExternalIdentityBindingState {
   string binding_id = 2;
   google.protobuf.Timestamp bound_at = 3;
   google.protobuf.Timestamp revoked_at = 4;
+  // Superseded or unadopted NyxID bindings awaiting best-effort upstream
+  // revocation. Keeping this work in actor state makes cleanup recoverable
+  // after process failure without making an in-memory reconciler authoritative.
+  repeated string pending_retirement_binding_ids = 5;
+  // Canonical business-data owner scope resolved from the NyxID account bound
+  // by this external subject. Separate from registration/channel scope.
+  string owner_scope_id = 6;
 }
 
 // Issued by the OAuth callback handler after exchanging the authorization code
@@ -32,6 +39,7 @@ message ExternalIdentityBindingState {
 message CommitBindingCommand {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
   string binding_id = 2;
+  string owner_scope_id = 3;
 }
 
 // Issued by the /unbind handler after a successful NyxID DELETE call, or by
@@ -45,11 +53,61 @@ message RevokeBindingCommand {
   string reason = 2;
 }
 
+// Issued after a fresh authorization-code exchange returns a verified binding
+// that should replace the current binding. expected_previous_binding_id gives
+// the owning actor compare-and-swap semantics, so a stale callback cannot
+// overwrite a newer binding selected by another authorization flow.
+message ReplaceBindingCommand {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  string expected_previous_binding_id = 3;
+  string reason = 4;
+  string owner_scope_id = 5;
+}
+
+// Operator/maintenance command: re-materialize the current-state readmodel for
+// this binding from the surviving authoritative actor state — without minting or
+// changing any binding_id and without appending a new domain event. Recovers a
+// wiped/reset projection readmodel (disaster recovery) whose authoritative actor
+// state survived. When the actor holds no active binding_id it is a no-op.
+message RebuildBindingProjectionCommand {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+}
+
 // Persisted when CommitBindingCommand is accepted by the actor.
 message ExternalIdentityBoundEvent {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
   string binding_id = 2;
   google.protobuf.Timestamp bound_at = 3;
+  string owner_scope_id = 4;
+}
+
+// Persisted when an active binding is atomically replaced. Applying the event
+// makes binding_id current and queues previous_binding_id for upstream cleanup.
+message ExternalIdentityBindingReplacedEvent {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  string previous_binding_id = 2;
+  string binding_id = 3;
+  google.protobuf.Timestamp replaced_at = 4;
+  string reason = 5;
+  string owner_scope_id = 6;
+}
+
+// Persisted when a newly issued binding loses a compare-and-swap race and was
+// therefore never adopted. The actor retains it until NyxID revocation succeeds.
+message ExternalIdentityBindingRetirementQueuedEvent {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  google.protobuf.Timestamp queued_at = 3;
+  string reason = 4;
+}
+
+// Persisted only after NyxID confirms a superseded/unadopted binding is revoked
+// (404/410 are treated as already retired by the infrastructure adapter).
+message ExternalIdentityBindingRetiredEvent {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  google.protobuf.Timestamp retired_at = 3;
 }
 
 // Persisted when RevokeBindingCommand is accepted by the actor.
@@ -75,6 +133,9 @@ message StateTokenPayload {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 2;
   string pkce_verifier = 3;
   google.protobuf.Timestamp expires_at = 4;
+  // SHA-256 of the expected current binding_id for a grant-review flow. The
+  // raw opaque binding credential must never be placed in browser-visible state.
+  string expected_binding_hash = 5;
 }
 
 // Read model: one document per actor (= per ExternalSubjectRef). Backs
@@ -96,4 +157,5 @@ message ExternalIdentityBindingDocument {
   string binding_id = 6;
   google.protobuf.Timestamp bound_at_utc_value = 7;
   google.protobuf.Timestamp revoked_at_utc_value = 8;
+  string owner_scope_id = 9;
 }

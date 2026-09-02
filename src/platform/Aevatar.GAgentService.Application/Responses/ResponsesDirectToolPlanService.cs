@@ -15,7 +15,8 @@ public interface IResponsesDirectToolPlanService
 public sealed record ResponsesDirectToolPlan(
     IReadOnlyList<IResponsesToolProvider> AdditionalToolProviders,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
-    ResponsesCommandError? Error)
+    ResponsesCommandError? Error,
+    string ResolvedToolSetName = "")
 {
     public static ResponsesDirectToolPlan Empty { get; } = new(
         [],
@@ -27,8 +28,9 @@ public sealed record ResponsesDirectToolPlan(
 
     public static ResponsesDirectToolPlan Success(
         IReadOnlyList<IResponsesToolProvider> additionalToolProviders,
-        ResponsesToolChoiceHintPlan toolChoiceHintPlan) =>
-        new(additionalToolProviders, toolChoiceHintPlan, null);
+        ResponsesToolChoiceHintPlan toolChoiceHintPlan,
+        string resolvedToolSetName = "") =>
+        new(additionalToolProviders, toolChoiceHintPlan, null, resolvedToolSetName);
 }
 
 public sealed class ResponsesDirectToolPlanService(
@@ -44,10 +46,11 @@ public sealed class ResponsesDirectToolPlanService(
             return ResponsesDirectToolPlan.Empty;
 
         var additionalProviders = new List<IResponsesToolProvider>();
+        var resolvedToolSetName = string.Empty;
         if (forwardToModel.ToolSetRef is not null &&
             !string.IsNullOrWhiteSpace(forwardToModel.ToolSetRef.Name))
         {
-            var toolSet = toolSetRegistry.Resolve(forwardToModel.ToolSetRef);
+            var toolSet = toolSetRegistry.Resolve(forwardToModel.ToolSetRef.Name);
             if (!toolSet.IsSuccess)
             {
                 var error = toolSet.Error!;
@@ -57,6 +60,11 @@ public sealed class ResponsesDirectToolPlanService(
                     error.Message));
             }
 
+            // Canonical name the run executor will re-resolve against (SSOT for the persisted
+            // command's tool_set_name). Prefer the registry's resolved name so it matches whatever
+            // the registry canonicalized to; same value drives the provider built right below, so
+            // the facade's classification and the off-grain run materialize identical sources.
+            resolvedToolSetName = toolSet.Name ?? forwardToModel.ToolSetRef.Name.Trim();
             additionalProviders.Add(new ToolSetResponsesToolProvider(toolSet.Sources, _logger));
         }
 
@@ -64,53 +72,7 @@ public sealed class ResponsesDirectToolPlanService(
             additionalProviders,
             ResponsesToolChoiceHints.Create(
                 forwardToModel.ToolChoiceHint?.ToolName,
-                forwardToModel.ToolChoiceHint?.PrefilledArguments));
-    }
-
-    private sealed class ToolSetResponsesToolProvider : IResponsesToolProvider
-    {
-        private readonly IReadOnlyList<IAgentToolSource> _sources;
-        private readonly ILogger _logger;
-
-        public ToolSetResponsesToolProvider(
-            IReadOnlyList<IAgentToolSource> sources,
-            ILogger logger)
-        {
-            _sources = sources ?? throw new ArgumentNullException(nameof(sources));
-            _logger = logger ?? NullLogger.Instance;
-        }
-
-        public async ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
-            ResponsesToolProviderContext context,
-            CancellationToken ct = default)
-        {
-            // Discovery runs on behalf of this request's caller, so the request's typed tool
-            // context (NyxID access token, scope, channel) must be visible to context-aware
-            // sources. IAgentToolSource.DiscoverToolsAsync has no context parameter, so publish
-            // it through the AsyncLocal the tools already read at execution time.
-            using var _ = AgentToolContextScope.Push(context.ToolContext);
-
-            var tools = new List<IAgentTool>();
-            foreach (var source in _sources)
-            {
-                try
-                {
-                    tools.AddRange(await source.DiscoverToolsAsync(ct).ConfigureAwait(false));
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(
-                        ex,
-                        "Responses route tool source discovery failed for source {SourceType}; continuing without that source.",
-                        source.GetType().Name);
-                }
-            }
-
-            return tools;
-        }
+                forwardToModel.ToolChoiceHint?.PrefilledArguments),
+            resolvedToolSetName);
     }
 }

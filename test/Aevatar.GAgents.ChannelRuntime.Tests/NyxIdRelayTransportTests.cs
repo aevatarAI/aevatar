@@ -365,6 +365,57 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldDeduplicateLarkResourceUrlAndRawFileKeyAttachments()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-file-dedupe",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": {
+                "type": "file",
+                "text": "   ",
+                "attachments": [
+                  {
+                    "content_type": "file",
+                    "url": "https://open.larksuite.com/open-apis/im/v1/messages/om_file_1/resources/file_v3_abc?type=file",
+                    "filename": "report.pdf",
+                    "mime_type": "application/pdf"
+                  }
+                ]
+              },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_file_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "file",
+                    "content": {
+                      "file_key": "file_v3_abc",
+                      "file_name": "report.pdf",
+                      "mime_type": "application/pdf"
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Text.Should().BeEmpty();
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().Be("https://open.larksuite.com/open-apis/im/v1/messages/om_file_1/resources/file_v3_abc?type=file");
+        attachment.Kind.Should().Be(AttachmentKind.File);
+        attachment.ExternalUrl.Should().Be("https://open.larksuite.com/open-apis/im/v1/messages/om_file_1/resources/file_v3_abc?type=file");
+    }
+
+    [Fact]
     public void Parse_ShouldIgnorePayload_WhenAttachmentIdentifiersAreMissing()
     {
         var body = """
@@ -1003,6 +1054,10 @@ public sealed class NyxIdRelayTransportTests
         parsed.Success.Should().BeTrue();
         parsed.Activity!.TransportExtras.NyxLarkUnionId.Should().Be("on_user_1");
         parsed.Activity.TransportExtras.NyxLarkChatId.Should().Be("oc_dm_chat_1");
+        parsed.Activity.TransportExtras.DeliveryAddressId.Should().Be("oc_dm_chat_1");
+        parsed.Activity.TransportExtras.DeliveryAddressType.Should().Be("chat_id");
+        parsed.Activity.TransportExtras.DeliveryFallbackAddressId.Should().Be("on_user_1");
+        parsed.Activity.TransportExtras.DeliveryFallbackAddressType.Should().Be("union_id");
     }
 
     [Fact]
@@ -1050,6 +1105,10 @@ public sealed class NyxIdRelayTransportTests
         parsed.Success.Should().BeTrue();
         parsed.Activity!.TransportExtras.NyxLarkUnionId.Should().Be("on_user_2");
         parsed.Activity.TransportExtras.NyxLarkChatId.Should().Be("oc_dm_chat_2");
+        parsed.Activity.TransportExtras.DeliveryAddressId.Should().Be("oc_dm_chat_2");
+        parsed.Activity.TransportExtras.DeliveryAddressType.Should().Be("chat_id");
+        parsed.Activity.TransportExtras.DeliveryFallbackAddressId.Should().BeEmpty();
+        parsed.Activity.TransportExtras.DeliveryFallbackAddressType.Should().BeEmpty();
     }
 
     [Fact]
@@ -1147,6 +1206,38 @@ public sealed class NyxIdRelayTransportTests
         var attachment = parsed.Activity.Content.Attachments.Single();
         attachment.AttachmentId.Should().Be("img_v3_post_1");
         attachment.Kind.Should().Be(AttachmentKind.Image);
+    }
+
+    [Fact]
+    public void Parse_ShouldExtractText_FromLocaleWrappedLarkPostRichTextMessage()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-post-locale",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "unknown" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_post_locale_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "post",
+                    "content": "{\"zh_cn\":{\"title\":\"任务标题\",\"content\":[[{\"tag\":\"text\",\"text\":\"第一段\"}],[{\"tag\":\"at\",\"user_name\":\"小助手\"},{\"tag\":\"text\",\"text\":\" 第二段\"}]]}}"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Ignored.Should().BeFalse();
+        parsed.Activity!.Content.Text.Should().Be("任务标题\n第一段\n@小助手 第二段");
     }
 
     [Fact]
@@ -1286,6 +1377,44 @@ public sealed class NyxIdRelayTransportTests
 
         parsed.Success.Should().BeTrue();
         parsed.Activity!.Mentions.Should().ContainSingle();
+        var mention = parsed.Activity.Mentions.Single();
+        mention.CanonicalId.Should().Be("ou_bot_1");
+        mention.DisplayName.Should().Be("Aevatar");
+    }
+
+    [Fact]
+    public void Parse_ShouldPopulateMentions_FromLarkPostMessageRawPlatformData()
+    {
+        var body = """
+            {
+              "message_id": "msg-post-mention-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "unknown" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_post_mention_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "post",
+                    "content": "{\"content\":[[{\"tag\":\"at\",\"user_name\":\"Aevatar\"},{\"tag\":\"text\",\"text\":\" 处理一下\"}]]}",
+                    "mentions": [
+                      { "key": "@_user_1", "id": { "open_id": "ou_bot_1", "union_id": "on_bot_1" }, "name": "Aevatar" }
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Text.Should().Be("@Aevatar 处理一下");
+        parsed.Activity.Mentions.Should().ContainSingle();
         var mention = parsed.Activity.Mentions.Single();
         mention.CanonicalId.Should().Be("ou_bot_1");
         mention.DisplayName.Should().Be("Aevatar");

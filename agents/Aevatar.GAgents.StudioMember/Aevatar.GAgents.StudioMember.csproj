@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
@@ -19,6 +20,6 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="studio_member_messages.proto" GrpcServices="None" />
+    <Protobuf Include="studio_member_messages.proto" GrpcServices="None" AdditionalImportDirs="..\..\src\workflow\Aevatar.Workflow.Abstractions" />
   </ItemGroup>
 </Project>

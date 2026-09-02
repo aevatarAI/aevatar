@@ -1,97 +1,115 @@
+import {
+  DeleteOutlined,
+  HistoryOutlined,
+  MessageOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SendOutlined,
+} from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert } from "antd";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
-import { nyxIdChatApi } from "@/shared/api/nyxIdChatApi";
-import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
-import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { history } from "@/shared/navigation/history";
 import {
-  buildScopeConsoleServiceOptions,
-  createNyxIdChatBindingInput,
-  nyxIdChatServiceId,
-  scopeServiceAppId,
-  type ScopeConsoleServiceOption,
-} from "@/shared/runs/scopeConsole";
+  Alert,
+  Button,
+  Drawer,
+  Empty,
+  Modal,
+  Space,
+  Spin,
+  Tag,
+  Typography,
+  theme,
+} from "antd";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { studioApi } from "@/shared/studio/api";
-import { buildStudioWorkflowEditorRoute } from "@/shared/studio/navigation";
 import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
-import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
+import { useConsoleToast } from "@/shared/ui/ConsoleToast";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
-import { chatHistoryApi } from "./chatHistoryApi";
-import {
-  createConversationId,
-  hydrateChatMessages,
-  serializeChatMessages,
-} from "./chatHistory";
-import {
-  buildConversationHeaders,
-  buildConversationModelGroups,
-  buildConversationRouteOptions,
-  describeConversationRoute,
-  normalizeUserLlmRoute,
-  trimConversationValue,
-} from "./chatConversationConfig";
-import {
-  buildConversationSessionSnapshot,
-  readConversationPreferences,
-  resolveConversationRuntimeIdentity,
-} from "./chatSessionIdentity";
-import { ChatAdvancedConsole } from "./chatAdvancedConsole";
 import {
   applyRuntimeEvent,
   createRuntimeEventAccumulator,
   isRawObserved,
 } from "./chatEventAdapter";
-import { ChatOnboardingGuide } from "./chatOnboardingGuide";
 import {
-  ChatInput,
-  ConversationLlmConfigBar,
-  ChatToolsMenu,
-  ChatMetaStrip,
-  ChatMessageBubble,
-  ConversationSidebar,
-  DebugPanel,
-  EmptyChatState,
-  LoadingState,
-  ServiceSelector,
-} from "./chatPresentation";
-import {
-  buildOnboardingApiKeyErrorPrompt,
-  buildOnboardingApiKeyPrompt,
-  buildOnboardingCreatingMessage,
-  buildOnboardingCustomEndpointErrorPrompt,
-  buildOnboardingCustomEndpointPrompt,
-  buildOnboardingDonePrompt,
-  buildOnboardingEndpointModeErrorPrompt,
-  buildOnboardingEndpointModePrompt,
-  buildOnboardingProviderErrorPrompt,
-  buildOnboardingProviderPrompt,
-  buildOnboardingSaveSettingsInput,
-  buildOnboardingSuccessPrompt,
-  createOnboardingProviderSettings,
-  createOnboardingServiceOption,
-  getOnboardingComposerPlaceholder,
-  hasConfiguredProviders,
-  isValidOnboardingEndpoint,
-  onboardingServiceId,
-  resolveOnboardingEndpointMode,
-  resolveOnboardingProviderType,
-  redactOnboardingSecret,
-  type OnboardingState,
-} from "./onboarding";
+  chatRequestMayHaveBeenAccepted,
+  extractChatHistoryContext,
+  extractChatStreamArtifacts,
+  readChatStreamFrames,
+  startChatStreamWithHistoryRefreshRetry,
+} from "./chatApi";
+import { ChatHistoryApiError, chatHistoryApi } from "./chatHistoryApi";
+import { ChatInput, ChatMessageBubble } from "./chatPresentation";
 import type {
   ChatMessage,
   ChatSessionState,
+  ChatStudioTarget,
+  ChatUsageSummary,
+  ChatCreateRecovery,
   ConversationMeta,
-  PendingApprovalInfo,
-  PendingRunInterventionInfo,
+  LocalChatStatus,
   RuntimeEvent,
-  ServiceOption,
   StepInfo,
+  StoredChatMessage,
   ToolCallInfo,
 } from "./chatTypes";
+import { history } from "@/shared/navigation/history";
+import {
+  buildTeamDetailHref,
+  buildTeamMemberWorkflowStudioHref,
+} from "@/shared/navigation/teamRoutes";
 import { t } from "@/shared/i18n/messages";
+
+type ConversationState = {
+  clientId: string;
+  conversationId?: string;
+  createCommandId?: string;
+  createRequestPrompt?: string;
+  expectedTurnCount: number;
+  latestTurnId?: string;
+  messages: ChatMessage[];
+  sessionId: string;
+  stateVersion?: number;
+  status: LocalChatStatus;
+  target?: ChatStudioTarget;
+  title: string;
+  usage?: ChatUsageSummary;
+};
+
+const EMPTY_CONVERSATION_IDS: ReadonlySet<string> = new Set();
+
+type HistoryReconciliationState =
+  | { status: "pending" }
+  | { message: string; retryable: boolean; status: "failed" };
+
+type PendingConversation = {
+  conversation: ConversationState;
+  reconciliation: HistoryReconciliationState;
+};
+
+const EMPTY_PENDING_CONVERSATIONS: ReadonlyMap<string, PendingConversation> =
+  new Map();
+
+type ConversationListItem = ConversationMeta & {
+  historyReconciliation?: HistoryReconciliationState;
+  liveStatus?: LocalChatStatus;
+};
+
+type DetailLoadState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { message: string; status: "error" };
+
+type StudioJump = {
+  href: string;
+  label: string;
+};
 
 function readChatQueryValue(
   key: string,
@@ -104,6 +122,200 @@ function createClientId(): string {
   return globalThis.crypto?.randomUUID?.()
     ? globalThis.crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createDraftConversation(): ConversationState {
+  return {
+    clientId: createClientId(),
+    createCommandId: createClientId(),
+    expectedTurnCount: 0,
+    messages: [],
+    sessionId: createClientId(),
+    status: "draft",
+    title: t("pages.chat.index.newChat", "New chat"),
+  };
+}
+
+function isContinuationStateVersion(
+  value: number | undefined
+): value is number {
+  return Number.isSafeInteger(value) && (value ?? 0) > 0;
+}
+
+export function hydrateStoredMessages(
+  messages: readonly StoredChatMessage[]
+): ChatMessage[] {
+  return messages.map((message) => ({
+    authorId: message.authorId,
+    authorName: message.authorName,
+    content: message.content,
+    error: message.error || undefined,
+    id: message.id,
+    role: message.role,
+    status: message.error?.trim() ? "error" : message.status,
+    thinking: message.thinking || undefined,
+    timestamp: message.timestamp,
+  }));
+}
+
+function resolveStoredConversationStatus(
+  messages: readonly StoredChatMessage[]
+): LocalChatStatus {
+  const latestAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  const latestTerminalMessage = latestAssistantMessage ?? messages.at(-1);
+
+  return latestTerminalMessage?.status === "error" ||
+    Boolean(latestTerminalMessage?.error?.trim())
+    ? "error"
+    : "completed_text";
+}
+
+function ChatMessageEntry({ message }: { message: ChatMessage }): React.ReactElement {
+  const authorName = message.authorName?.trim() || "";
+  const isStandardRole = message.role === "user" || message.role === "assistant";
+
+  if (isStandardRole) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {authorName ? (
+          <Typography.Text
+            style={{
+              alignSelf: message.role === "user" ? "flex-end" : "flex-start",
+              color: "#6b7280",
+              fontSize: 11,
+              lineHeight: 1.3,
+              marginLeft: message.role === "assistant" ? 34 : 0,
+            }}
+          >
+            {authorName}
+          </Typography.Text>
+        ) : null}
+        <ChatMessageBubble message={message} />
+      </div>
+    );
+  }
+
+  const roleLabel =
+    message.role.trim() || t("pages.chat.index.unknownRole", "Message");
+  const displayName = authorName || roleLabel;
+
+  return (
+    <article
+      aria-label={`${displayName} ${roleLabel} message`}
+      style={{ display: "flex", gap: 10 }}
+    >
+      <MessageOutlined
+        style={{
+          background: "#f3f4f6",
+          border: "1px solid #e5e7eb",
+          borderRadius: 999,
+          color: "#4b5563",
+          flex: "0 0 auto",
+          fontSize: 12,
+          height: 24,
+          lineHeight: "22px",
+          marginTop: 3,
+          textAlign: "center",
+          width: 24,
+        }}
+      />
+      <div style={{ flex: 1, maxWidth: "82%", minWidth: 0 }}>
+        <Space align="center" size={6} wrap>
+          <Typography.Text strong style={{ fontSize: 12 }}>
+            {displayName}
+          </Typography.Text>
+          {authorName ? <Tag>{roleLabel}</Tag> : null}
+        </Space>
+        {message.thinking ? (
+          <Typography.Paragraph
+            style={{ color: "#6b7280", fontSize: 12, margin: "6px 0" }}
+          >
+            {message.thinking}
+          </Typography.Paragraph>
+        ) : null}
+        {message.content ? (
+          <div
+            style={{
+              color: "#1f2937",
+              fontSize: 14,
+              lineHeight: 1.65,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {message.content}
+          </div>
+        ) : null}
+        {message.status === "error" && message.error ? (
+          <Alert
+            description={message.error}
+            showIcon
+            style={{ marginTop: 8 }}
+            type="error"
+          />
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (delayMs <= 0) {
+    return signal.aborted
+      ? Promise.reject(new DOMException("Aborted", "AbortError"))
+      : Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, delayMs);
+    const handleAbort = () => {
+      window.clearTimeout(timeout);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+async function recoverCreateIdentity(
+  scopeId: string,
+  commandId: string,
+  signal: AbortSignal
+): Promise<ChatCreateRecovery | null> {
+  for (const delayMs of [0, 300, 900, 1_800]) {
+    await abortableDelay(delayMs, signal);
+    try {
+      return await chatHistoryApi.recoverCreate(scopeId, commandId, signal);
+    } catch (error) {
+      if (!(error instanceof ChatHistoryApiError) || error.status !== 404) {
+        throw error;
+      }
+    }
+  }
+
+  return null;
+}
+
+function bindCreateRecovery(
+  conversation: ConversationState,
+  recovery: ChatCreateRecovery
+): ConversationState {
+  return {
+    ...conversation,
+    conversationId: recovery.conversationId,
+    expectedTurnCount: conversation.expectedTurnCount + 1,
+    latestTurnId: recovery.turnId,
+    stateVersion: undefined,
+  };
 }
 
 function createChatMessage(
@@ -120,18 +332,7 @@ function createChatMessage(
   };
 }
 
-function mapChatServiceOption(service: ScopeConsoleServiceOption): ServiceOption {
-  return {
-    deploymentStatus: service.deploymentStatus,
-    endpoints: service.endpoints,
-    id: service.serviceId,
-    kind: service.kind,
-    label: service.displayName,
-    primaryActorId: service.primaryActorId,
-  };
-}
-
-function createIdleSession(scopeId = "", serviceId = ""): ChatSessionState {
+function createIdleSession(scopeId = ""): ChatSessionState {
   return {
     actorId: "",
     commandId: "",
@@ -139,83 +340,9 @@ function createIdleSession(scopeId = "", serviceId = ""): ChatSessionState {
     eventCount: 0,
     runId: "",
     scopeId,
-    serviceId,
+    serviceId: "chat",
     status: "idle",
     updatedAt: undefined,
-  };
-}
-
-function buildConversationMeta(
-  conversationId: string,
-  messages: readonly ChatMessage[],
-  session: ChatSessionState,
-  service: ServiceOption,
-  previousCreatedAt?: string,
-  options?: {
-    llmModel?: string;
-    llmRoute?: string;
-  }
-): ConversationMeta {
-  const firstUserMessage = messages.find((message) => message.role === "user");
-  const title = (firstUserMessage?.content || "Untitled").trim().slice(0, 60);
-  const existingMessages = messages.filter((message) => message.status !== "streaming");
-  const now = new Date(session.updatedAt || Date.now()).toISOString();
-  const sessionSnapshot = buildConversationSessionSnapshot(messages, session, {
-    llmModel: options?.llmModel,
-    llmRoute: options?.llmRoute,
-  });
-  const runtimeIdentity = sessionSnapshot?.runtime;
-  const preferences = sessionSnapshot?.preferences;
-
-  return {
-    actorId: runtimeIdentity?.actorId,
-    commandId: runtimeIdentity?.commandId,
-    createdAt: previousCreatedAt || now,
-    id: conversationId,
-    llmModel: preferences?.llmModel,
-    llmRoute: preferences?.llmRoute,
-    messageCount: existingMessages.length,
-    runId: runtimeIdentity?.runId,
-    session: sessionSnapshot,
-    serviceId: service.id,
-    serviceKind: service.kind,
-    title: title || "Untitled",
-    updatedAt: now,
-  };
-}
-
-function collectConversationEvents(messages: readonly ChatMessage[]): RuntimeEvent[] {
-  return messages.flatMap((message) => message.events ?? []);
-}
-
-function deriveConversationSession(
-  scopeId: string,
-  meta: ConversationMeta | undefined,
-  messages: readonly ChatMessage[]
-): ChatSessionState {
-  const events = collectConversationEvents(messages);
-  const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
-  const runtimeIdentity = resolveConversationRuntimeIdentity({
-    messages,
-    meta,
-  });
-
-  return {
-    actorId: runtimeIdentity.actorId || "",
-    commandId: runtimeIdentity.commandId || "",
-    endpointId: "chat",
-    error: lastAssistant?.status === "error" ? lastAssistant.error : undefined,
-    eventCount: events.length,
-    runId: runtimeIdentity.runId || "",
-    scopeId,
-    serviceId: meta?.serviceId || "",
-    status:
-      lastAssistant?.status === "error"
-        ? "error"
-        : messages.length > 0
-          ? "success"
-          : "idle",
-    updatedAt: meta?.updatedAt ? Date.parse(meta.updatedAt) : undefined,
   };
 }
 
@@ -227,50 +354,55 @@ function cloneToolCallInfo(toolCalls?: readonly ToolCallInfo[]): ToolCallInfo[] 
   return (toolCalls ?? []).map((toolCall) => ({ ...toolCall }));
 }
 
-function clonePendingApproval(
-  pendingApproval?: PendingApprovalInfo
-): PendingApprovalInfo | undefined {
-  return pendingApproval ? { ...pendingApproval } : undefined;
-}
+function hydrateAuthoritativeMessages(
+  storedMessages: readonly StoredChatMessage[],
+  localMessages: readonly ChatMessage[],
+  latestTurnId: string | undefined
+): ChatMessage[] {
+  const localMessagesById = new Map(
+    localMessages.map((message) => [message.id, message] as const)
+  );
+  const latestLocalAssistant = latestTurnId
+    ? [...localMessages]
+        .reverse()
+        .find((message) => message.role === "assistant")
+    : undefined;
 
-function clonePendingRunIntervention(
-  pendingRunIntervention?: PendingRunInterventionInfo
-): PendingRunInterventionInfo | undefined {
-  return pendingRunIntervention ? { ...pendingRunIntervention } : undefined;
-}
+  return storedMessages.map((storedMessage) => {
+    const authoritativeMessage = hydrateStoredMessages([storedMessage])[0];
+    const localMessage =
+      localMessagesById.get(storedMessage.id) ??
+      (storedMessage.role === "assistant" &&
+      storedMessage.turnId === latestTurnId
+        ? latestLocalAssistant
+        : undefined);
+    if (!localMessage) {
+      return authoritativeMessage;
+    }
 
-type RunInterventionActionRequest =
-  | { kind: "resume"; value?: string }
-  | { kind: "approve"; value?: string }
-  | { kind: "reject"; value?: string }
-  | { kind: "signal"; value?: string };
-
-function createAssistantStatusMessage(content: string): ChatMessage {
-  return createChatMessage("assistant", content, "complete");
-}
-
-function createAssistantErrorMessage(error: string): ChatMessage {
-  return {
-    ...createChatMessage("assistant", "", "error"),
-    error,
-  };
-}
-
-function buildRunInterventionFeedback(
-  intervention: PendingRunInterventionInfo,
-  action: RunInterventionActionRequest["kind"]
-): string {
-  if (action === "signal") {
-    return `Signal ${intervention.signalName || "continue"} accepted for ${intervention.stepId}.`;
-  }
-
-  if (intervention.kind === "human_approval") {
-    return action === "reject"
-      ? `Rejection submitted for ${intervention.stepId}.`
-      : `Approval submitted for ${intervention.stepId}.`;
-  }
-
-  return `Input submitted for ${intervention.stepId}.`;
+    return {
+      ...authoritativeMessage,
+      ...(localMessage.events
+        ? { events: [...localMessage.events] }
+        : {}),
+      ...(localMessage.pendingApproval
+        ? { pendingApproval: { ...localMessage.pendingApproval } }
+        : {}),
+      ...(localMessage.pendingRunIntervention
+        ? {
+            pendingRunIntervention: {
+              ...localMessage.pendingRunIntervention,
+            },
+          }
+        : {}),
+      ...(localMessage.steps
+        ? { steps: cloneStepInfo(localMessage.steps) }
+        : {}),
+      ...(localMessage.toolCalls
+        ? { toolCalls: cloneToolCallInfo(localMessage.toolCalls) }
+        : {}),
+    };
+  });
 }
 
 function resolveEventTimestamp(events: readonly RuntimeEvent[]): number {
@@ -285,13 +417,15 @@ function buildAssistantMessagePatch(
   status: ChatMessage["status"]
 ): Partial<ChatMessage> {
   return {
-    content: accumulator.assistantText,
+    content: accumulator.finalOutput || accumulator.assistantText,
     error: accumulator.errorText || undefined,
     events: [...accumulator.events],
-    pendingApproval: clonePendingApproval(accumulator.pendingApproval),
-    pendingRunIntervention: clonePendingRunIntervention(
-      accumulator.pendingRunIntervention
-    ),
+    pendingApproval: accumulator.pendingApproval
+      ? { ...accumulator.pendingApproval }
+      : undefined,
+    pendingRunIntervention: accumulator.pendingRunIntervention
+      ? { ...accumulator.pendingRunIntervention }
+      : undefined,
     status,
     steps: cloneStepInfo(accumulator.steps),
     thinking: accumulator.thinking,
@@ -301,58 +435,211 @@ function buildAssistantMessagePatch(
 
 function buildSessionFromAccumulator(
   scopeId: string,
-  serviceId: string,
   accumulator: ReturnType<typeof createRuntimeEventAccumulator>,
-  status: ChatSessionState["status"],
-  fallback?: Partial<Pick<ChatSessionState, "actorId" | "commandId" | "runId">>
+  status: ChatSessionState["status"]
 ): ChatSessionState {
   return {
-    actorId: accumulator.actorId || fallback?.actorId || "",
-    commandId: accumulator.commandId || fallback?.commandId || "",
+    actorId: accumulator.actorId,
+    commandId: accumulator.commandId,
     endpointId: "chat",
     error: accumulator.errorText || undefined,
     eventCount: accumulator.events.length,
-    runId: accumulator.runId || fallback?.runId || "",
+    runId: accumulator.runId || accumulator.actorId,
     scopeId,
-    serviceId,
+    serviceId: "chat",
     status,
     updatedAt: resolveEventTimestamp(accumulator.events),
   };
 }
 
-const ChatPage: React.FC = () => {
-  const queryClient = useQueryClient();
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const previousServiceIdRef = useRef("");
-  const restoringConversationRef = useRef(false);
-  const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
-  const nyxIdChatBoundRef = useRef(false);
-  const serviceSelectionSourceRef = useRef<"auto" | "manual" | "conversation">("auto");
+function trimTitle(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return t("pages.chat.index.newChat", "New chat");
+  }
 
-  const [selectedServiceId, setSelectedServiceId] = useState("");
+  return normalized.length > 60 ? `${normalized.slice(0, 57)}...` : normalized;
+}
+
+function formatStatusLabel(status: LocalChatStatus): string {
+  switch (status) {
+    case "draft":
+      return t("pages.chat.index.status.draft", "Draft");
+    case "streaming":
+      return t("pages.chat.index.status.streaming", "Streaming");
+    case "needs_confirmation":
+      return t("pages.chat.index.status.needsConfirmation", "Needs confirmation");
+    case "creating":
+      return t("pages.chat.index.status.creating", "Creating");
+    case "completed_with_studio_target":
+      return t("pages.chat.index.status.studioReady", "Studio ready");
+    case "completed_text":
+      return t("pages.chat.index.status.completed", "Completed");
+    case "error":
+      return t("pages.chat.index.status.error", "Error");
+    default:
+      return t("pages.chat.index.status.draft", "Draft");
+  }
+}
+
+function resolveStatusTone(
+  status: LocalChatStatus
+): "default" | "processing" | "success" | "warning" | "error" {
+  switch (status) {
+    case "streaming":
+    case "creating":
+      return "processing";
+    case "needs_confirmation":
+      return "warning";
+    case "completed_with_studio_target":
+    case "completed_text":
+      return "success";
+    case "error":
+      return "error";
+    default:
+      return "default";
+  }
+}
+
+function shouldAskForConfirmation(content: string): boolean {
+  const normalized = content.toLowerCase();
+  if (!normalized.trim()) {
+    return false;
+  }
+
+  return (
+    normalized.includes("confirm") ||
+    normalized.includes("approval") ||
+    normalized.includes("approve") ||
+    normalized.includes("确认") ||
+    normalized.includes("同意")
+  );
+}
+
+function resolveStudioJump(target: ChatStudioTarget | undefined): StudioJump | null {
+  if (!target) {
+    return null;
+  }
+
+  if (target.studioUrl) {
+    return {
+      href: target.studioUrl,
+      label: t("pages.chat.index.openWorkflowStudio", "Open Workflow Studio"),
+    };
+  }
+
+  if (target.scopeId && target.teamId && target.memberId) {
+    return {
+      href: buildTeamMemberWorkflowStudioHref({
+        memberId: target.memberId,
+        mode: "edit-member",
+        scopeId: target.scopeId,
+        teamId: target.teamId,
+        workflowId: target.workflowId,
+      }),
+      label: t("pages.chat.index.openWorkflowStudio", "Open Workflow Studio"),
+    };
+  }
+
+  if (target.scopeId && target.teamId) {
+    return {
+      href: buildTeamDetailHref({
+        scopeId: target.scopeId,
+        tab: "members",
+        teamId: target.teamId,
+      }),
+      label: t("pages.chat.index.openTeam", "Open Team"),
+    };
+  }
+
+  return null;
+}
+
+function hasUsage(usage: ChatUsageSummary | undefined): boolean {
+  return Boolean(
+    usage &&
+      (usage.totalTokens ||
+        usage.promptTokens ||
+        usage.completionTokens ||
+        usage.model ||
+        usage.cost ||
+        usage.latencyMs)
+  );
+}
+
+function isEmptyDraftConversation(
+  conversation: ConversationState | null | undefined
+): boolean {
+  return Boolean(
+    conversation &&
+      conversation.status === "draft" &&
+      conversation.messages.length === 0
+  );
+}
+
+function formatRelativeTime(isoString: string): string {
+  const timestamp = Date.parse(isoString);
+  if (!Number.isFinite(timestamp)) {
+    return "";
+  }
+
+  const minutes = Math.floor((Date.now() - timestamp) / 60_000);
+  if (minutes < 1) {
+    return t("pages.chat.index.time.justNow", "just now");
+  }
+  if (minutes < 60) {
+    return t("pages.chat.index.time.minutesAgo", "{count}m ago", {
+      count: minutes,
+    });
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return t("pages.chat.index.time.hoursAgo", "{count}h ago", {
+      count: hours,
+    });
+  }
+
+  return t("pages.chat.index.time.daysAgo", "{count}d ago", {
+    count: Math.floor(hours / 24),
+  });
+}
+
+function formatTurnCount(count: number): string {
+  return t("pages.chat.index.turnCount", "{count} turns", { count });
+}
+
+const ChatPage: React.FC = () => {
+  const toast = useConsoleToast();
+  const { token } = theme.useToken();
+  const queryClient = useQueryClient();
+  const activeConversationRef = useRef<ConversationState | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const createRecoveryControllerRef = useRef<AbortController | null>(null);
+  const detailRequestRef = useRef("");
+  const reconciliationControllersRef = useRef(
+    new Map<string, AbortController>()
+  );
+  const scopeEpochRef = useRef(0);
+  const scopeIdentityRef = useRef("");
+  const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const [storedActiveConversation, setActiveConversation] =
+    useState<ConversationState | null>(null);
+  const [conversationStateScopeId, setConversationStateScopeId] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<ConversationMeta | null>(null);
+  const [deletingConversation, setDeletingConversation] = useState(false);
+  const [deletedConversationIds, setDeletedConversationIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [pendingConversations, setPendingConversations] = useState<
+    ReadonlyMap<string, PendingConversation>
+  >(() => new Map());
+  const [detailLoadState, setDetailLoadState] = useState<DetailLoadState>({
+    status: "idle",
+  });
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [debugEvents, setDebugEvents] = useState<RuntimeEvent[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [activeApprovalRequestId, setActiveApprovalRequestId] = useState<string | null>(
-    null
-  );
-  const [activeRunInterventionKey, setActiveRunInterventionKey] = useState<
-    string | null
-  >(null);
-  const [conversations, setConversations] = useState<ConversationMeta[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const [session, setSession] = useState<ChatSessionState>(createIdleSession());
-  const [showDebug, setShowDebug] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
-  const [conversationRoute, setConversationRoute] = useState<string | undefined>(
-    undefined
-  );
-  const [conversationModel, setConversationModel] = useState<string | undefined>(
-    undefined
-  );
+  const [, setSession] = useState<ChatSessionState>(createIdleSession());
 
   const authSessionQuery = useQuery({
     queryKey: ["chat", "auth-session"],
@@ -360,1961 +647,1701 @@ const ChatPage: React.FC = () => {
     retry: false,
   });
   const routeSearch = typeof window === "undefined" ? "" : window.location.search;
-  const routeScopeId = useMemo(() => readChatQueryValue("scopeId", routeSearch), [routeSearch]);
-  const routeServiceId = useMemo(
-    () => readChatQueryValue("serviceId", routeSearch),
+  const routeScopeId = useMemo(
+    () => readChatQueryValue("scopeId", routeSearch),
     [routeSearch]
   );
   const resolvedScope = useMemo(
     () => resolveStudioScopeContext(authSessionQuery.data),
     [authSessionQuery.data]
   );
-  const scopeId = routeScopeId || resolvedScope?.scopeId || "";
-  const settingsQuery = useQuery({
-    enabled: authSessionQuery.isSuccess,
-    queryKey: ["studio-settings"],
-    queryFn: () => studioApi.getSettings(),
+  const authenticatedScopeId = resolvedScope?.scopeId.trim() || "";
+  const scopeMismatch = Boolean(
+    authSessionQuery.isSuccess &&
+      routeScopeId &&
+      authenticatedScopeId &&
+      routeScopeId !== authenticatedScopeId
+  );
+  const scopeId =
+    authSessionQuery.isSuccess && !scopeMismatch ? authenticatedScopeId : "";
+  const canStartChat = Boolean(
+    authSessionQuery.isSuccess &&
+      authSessionQuery.data?.enabled === true &&
+      authSessionQuery.data.authenticated === true &&
+      scopeId
+  );
+  const chatCreationUnavailable = Boolean(
+    authSessionQuery.isSuccess &&
+      authSessionQuery.data?.enabled === false &&
+      scopeId
+  );
+  const scopeLabelId = scopeMismatch ? routeScopeId : scopeId;
+  if (scopeIdentityRef.current !== scopeId) {
+    scopeIdentityRef.current = scopeId;
+    scopeEpochRef.current += 1;
+  }
+  const scopeStateIsCurrent = conversationStateScopeId === scopeId;
+  const activeConversation = scopeStateIsCurrent
+    ? storedActiveConversation
+    : null;
+  const scopedDeletedConversationIds = scopeStateIsCurrent
+    ? deletedConversationIds
+    : EMPTY_CONVERSATION_IDS;
+  const scopedPendingConversations = scopeStateIsCurrent
+    ? pendingConversations
+    : EMPTY_PENDING_CONVERSATIONS;
+  const conversationsQuery = useQuery({
+    enabled: Boolean(scopeId),
+    queryFn: () => chatHistoryApi.listConversationMetas(scopeId),
+    queryKey: ["chat-history", scopeId],
+    retry: false,
   });
-  const userLlmSettingsQuery = useQuery({
-    enabled: authSessionQuery.isSuccess,
-    queryKey: ["chat", "user-llm-settings"],
-    queryFn: () => studioApi.getUserLlmSettings(),
-  });
-
-  const defaultRouteTargetQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryKey: ["chat", "default-route-target", scopeId],
-    queryFn: () => studioApi.getDefaultRouteTarget(scopeId),
-  });
-  const servicesQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryKey: ["chat", "services", scopeId],
-    queryFn: () =>
-      scopeRuntimeApi.listServices(scopeId, {
-        appId: scopeServiceAppId,
-      }),
-  });
-
-  const services = useMemo(
-    () => [
-      createOnboardingServiceOption(),
-      ...buildScopeConsoleServiceOptions(
-        servicesQuery.data ?? [],
-        defaultRouteTargetQuery.data?.available
-          ? defaultRouteTargetQuery.data.serviceId
-          : undefined,
-        {
-          chatOnly: true,
+  const conversations = (conversationsQuery.data ?? []).filter(
+    (conversation) => !scopedDeletedConversationIds.has(conversation.id)
+  );
+  const isStreaming =
+    activeConversation?.status === "streaming" ||
+    activeConversation?.status === "creating";
+  const studioJump = resolveStudioJump(activeConversation?.target);
+  const visibleConversations = useMemo<ConversationListItem[]>(() => {
+    const activeConversationId = activeConversation?.conversationId;
+    const liveConversations = [
+      ...(activeConversationId && activeConversation
+        ? [activeConversation]
+        : []),
+      ...[...scopedPendingConversations.values()]
+        .map((pending) => pending.conversation)
+        .filter(
+          (conversation) =>
+            conversation.conversationId !== activeConversationId &&
+            !scopedDeletedConversationIds.has(conversation.conversationId ?? "")
+        ),
+    ];
+    const liveById = new Map(
+      liveConversations.flatMap((conversation) =>
+        conversation.conversationId
+          ? [[conversation.conversationId, conversation] as const]
+          : []
+      )
+    );
+    const serverIds = new Set(conversations.map((conversation) => conversation.id));
+    const serverItems = conversations.map((conversation) => {
+      const pending = scopedPendingConversations.get(conversation.id);
+      return {
+        ...conversation,
+        ...(pending ? { historyReconciliation: pending.reconciliation } : {}),
+        ...(liveById.has(conversation.id)
+          ? { liveStatus: liveById.get(conversation.id)?.status }
+          : {}),
+      };
+    });
+    const overlayItems = liveConversations.flatMap<ConversationListItem>(
+      (conversation) => {
+        const conversationId = conversation.conversationId;
+        if (!conversationId || serverIds.has(conversationId)) {
+          return [];
         }
-      ).map(mapChatServiceOption),
-    ],
-    [
-      defaultRouteTargetQuery.data?.available,
-      defaultRouteTargetQuery.data?.serviceId,
-      servicesQuery.data,
-    ]
-  );
-  const providerConfigured = useMemo(
-    () => hasConfiguredProviders(settingsQuery.data?.providers ?? []),
-    [settingsQuery.data?.providers]
-  );
 
-  const selectedService =
-    services.find((service) => service.id === selectedServiceId) ?? null;
-  const globalPreferredRoute = normalizeUserLlmRoute(
-    userLlmSettingsQuery.data?.effectiveRoute
-  );
-  const routeOptions = useMemo(
-    () => buildConversationRouteOptions(userLlmSettingsQuery.data),
-    [userLlmSettingsQuery.data]
-  );
-  const effectiveRoute =
-    conversationRoute !== undefined ? conversationRoute : globalPreferredRoute;
-  const backendEffectiveRouteLabel = trimConversationValue(
-    userLlmSettingsQuery.data?.effectiveRouteLabel
-  );
-  const effectiveRouteLabel = useMemo(
-    () =>
-      conversationRoute === undefined && backendEffectiveRouteLabel
-        ? backendEffectiveRouteLabel
-        : describeConversationRoute(effectiveRoute, routeOptions),
-    [backendEffectiveRouteLabel, conversationRoute, effectiveRoute, routeOptions]
-  );
-  const effectiveModel =
-    trimConversationValue(conversationModel) ||
-    trimConversationValue(userLlmSettingsQuery.data?.defaultModel) ||
-    "";
-  const modelGroups = useMemo(
-    () =>
-      buildConversationModelGroups({
-        effectiveRoute,
-        settings: userLlmSettingsQuery.data,
-      }),
-    [effectiveRoute, userLlmSettingsQuery.data]
-  );
-  const conversationHeaders = useMemo(
-    () => buildConversationHeaders(conversationRoute, conversationModel),
-    [conversationModel, conversationRoute]
-  );
+        const timestamps = conversation.messages.map((message) => message.timestamp);
+        return [
+          {
+            createdAt: new Date(timestamps[0] ?? Date.now()).toISOString(),
+            ...(scopedPendingConversations.has(conversationId)
+              ? {
+                  historyReconciliation:
+                    scopedPendingConversations.get(conversationId)
+                      ?.reconciliation,
+                }
+              : {}),
+            id: conversationId,
+            liveStatus: conversation.status,
+            messageCount: conversation.expectedTurnCount,
+            serviceId: "",
+            serviceKind: "",
+            title: conversation.title,
+            updatedAt: new Date(
+              timestamps[timestamps.length - 1] ?? Date.now()
+            ).toISOString(),
+          },
+        ];
+      }
+    );
+    return [...overlayItems, ...serverItems];
+  }, [
+    activeConversation,
+    conversations,
+    scopedDeletedConversationIds,
+    scopedPendingConversations,
+  ]);
+  const activeHistoryReconciliation = activeConversation?.conversationId
+    ? scopedPendingConversations.get(activeConversation.conversationId)
+        ?.reconciliation
+    : undefined;
+  const isConversationActionDisabled =
+    !canStartChat ||
+    detailLoadState.status === "loading" ||
+    Boolean(activeHistoryReconciliation);
+  const hasFailedHistoryReconciliation = [
+    ...scopedPendingConversations.values(),
+  ].some((pending) => pending.reconciliation.status === "failed");
+  const hasPendingHistoryReconciliation = [
+    ...scopedPendingConversations.values(),
+  ].some((pending) => pending.reconciliation.status === "pending");
+
+  useLayoutEffect(() => {
+    abortControllerRef.current?.abort();
+    createRecoveryControllerRef.current?.abort();
+    createRecoveryControllerRef.current = null;
+    for (const controller of reconciliationControllersRef.current.values()) {
+      controller.abort();
+    }
+    reconciliationControllersRef.current.clear();
+    detailRequestRef.current = createClientId();
+    activeConversationRef.current = null;
+    setConversationStateScopeId(scopeId);
+    setActiveConversation(null);
+    setDeleteTarget(null);
+    setDeletingConversation(false);
+    setDeletedConversationIds(new Set());
+    setPendingConversations(new Map());
+    setDetailLoadState({ status: "idle" });
+    setHistoryDrawerOpen(false);
+    setPrompt("");
+    setSession(createIdleSession(scopeId));
+  }, [scopeId]);
+
+  useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView?.({
-      behavior: messages.length > 1 ? "smooth" : "auto",
+      behavior: "smooth",
       block: "end",
     });
-  }, [messages]);
-
-  useEffect(() => {
-    const html = document.documentElement;
-    const body = document.body;
-    const previousHtmlOverflow = html.style.overflow;
-    const previousBodyOverflow = body.style.overflow;
-    const previousBodyOverscrollBehavior = body.style.overscrollBehavior;
-    const layoutElements = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        ".ant-layout-content, .ant-pro-layout-content, .ant-pro-basicLayout-content"
-      )
-    );
-    const previousLayoutStyles = layoutElements.map((element) => ({
-      overflow: element.style.overflow,
-      overscrollBehavior: element.style.overscrollBehavior,
-    }));
-
-    html.style.overflow = "hidden";
-    body.style.overflow = "hidden";
-    body.style.overscrollBehavior = "none";
-    try {
-      window.scrollTo({ top: 0, behavior: "auto" });
-    } catch {
-      // jsdom does not implement window.scrollTo.
-    }
-
-    layoutElements.forEach((element) => {
-      element.style.overflow = "hidden";
-      element.style.overscrollBehavior = "none";
-    });
-
-    return () => {
-      html.style.overflow = previousHtmlOverflow;
-      body.style.overflow = previousBodyOverflow;
-      body.style.overscrollBehavior = previousBodyOverscrollBehavior;
-      layoutElements.forEach((element, index) => {
-        const previousStyle = previousLayoutStyles[index];
-        if (!previousStyle) {
-          return;
-        }
-
-        element.style.overflow = previousStyle.overflow;
-        element.style.overscrollBehavior = previousStyle.overscrollBehavior;
-      });
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!scopeId) {
-      setActiveApprovalRequestId(null);
-      setActiveRunInterventionKey(null);
-      setActiveConversationId(null);
-      setConversationModel(undefined);
-      setConversationRoute(undefined);
-      setConversations([]);
-      setDebugEvents([]);
-      setMessages([]);
-      setOnboardingState(null);
-      setAdvancedOpen(false);
-      previousServiceIdRef.current = "";
-      setSession(createIdleSession());
-      return;
-    }
-
-    let cancelled = false;
-    setActiveApprovalRequestId(null);
-    setActiveRunInterventionKey(null);
-    setActiveConversationId(null);
-    setAdvancedOpen(false);
-    setConversationModel(undefined);
-    setConversationRoute(undefined);
-    setDebugEvents([]);
-    setMessages([]);
-    setOnboardingState(null);
-    setSession(createIdleSession(scopeId));
-    nyxIdChatBoundRef.current = false;
-    previousServiceIdRef.current = "";
-    restoringConversationRef.current = false;
-    serviceSelectionSourceRef.current = "auto";
-
-    void chatHistoryApi.listConversationMetas(scopeId).then((items) => {
-      if (!cancelled) {
-        setConversations(items);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [scopeId]);
-
-  useEffect(() => {
-    if (!services.length) {
-      serviceSelectionSourceRef.current = "auto";
-      setSelectedServiceId("");
-      return;
-    }
-
-    const routePreferredServiceId =
-      routeServiceId && services.some((service) => service.id === routeServiceId)
-        ? routeServiceId
-        : "";
-    const onboardingPreferredServiceId =
-      settingsQuery.isSuccess &&
-      !providerConfigured &&
-      !defaultRouteTargetQuery.data?.available &&
-      services.some((service) => service.id === onboardingServiceId)
-        ? onboardingServiceId
-        : "";
-    const preferredServiceId =
-      routePreferredServiceId ||
-      onboardingPreferredServiceId ||
-      (defaultRouteTargetQuery.data?.available
-        ? defaultRouteTargetQuery.data.serviceId
-        : "") ||
-      services.find((service) => service.id === nyxIdChatServiceId)?.id ||
-      services[0]?.id ||
-      "";
-
-    const hasSelectedService =
-      selectedServiceId &&
-      services.some((service) => service.id === selectedServiceId);
-    const canAutoReselect =
-      !activeConversationId && messages.length === 0 && !isStreaming;
-
-    if (!hasSelectedService) {
-      serviceSelectionSourceRef.current = "auto";
-      setSelectedServiceId(preferredServiceId);
-      return;
-    }
-
-    if (
-      serviceSelectionSourceRef.current === "auto" &&
-      canAutoReselect &&
-      preferredServiceId &&
-      selectedServiceId !== preferredServiceId
-    ) {
-      setSelectedServiceId(preferredServiceId);
-    }
-  }, [
-    activeConversationId,
-    defaultRouteTargetQuery.data?.available,
-    defaultRouteTargetQuery.data?.serviceId,
-    isStreaming,
-    messages.length,
-    providerConfigured,
-    routeServiceId,
-    selectedServiceId,
-    settingsQuery.isSuccess,
-    services,
-  ]);
-
-  useEffect(() => {
-    if (!selectedServiceId) {
-      return;
-    }
-
-    if (!previousServiceIdRef.current) {
-      previousServiceIdRef.current = selectedServiceId;
-      setSession((current) => ({
-        ...current,
-        scopeId,
-        serviceId: selectedServiceId,
-      }));
-      return;
-    }
-
-    if (previousServiceIdRef.current === selectedServiceId) {
-      return;
-    }
-
-    previousServiceIdRef.current = selectedServiceId;
-    if (restoringConversationRef.current) {
-      restoringConversationRef.current = false;
-      setSession((current) => ({
-        ...current,
-        serviceId: selectedServiceId,
-      }));
-      return;
-    }
-
-    abortControllerRef.current?.abort();
-    setActiveApprovalRequestId(null);
-    setActiveRunInterventionKey(null);
-    setActiveConversationId(null);
-    setConversationModel(undefined);
-    setConversationRoute(undefined);
-    setDebugEvents([]);
-    setMessages([]);
-    setSession(createIdleSession(scopeId, selectedServiceId));
-  }, [scopeId, selectedServiceId]);
-
-  useEffect(() => {
-    if (selectedService?.kind !== "onboarding") {
-      setOnboardingState(null);
-      return;
-    }
-
-    if (messages.length > 0 || onboardingState) {
-      return;
-    }
-
-    setOnboardingState({ step: "select_provider" });
-    setMessages([
-      createChatMessage(
-        "assistant",
-        buildOnboardingProviderPrompt(settingsQuery.data?.providerTypes ?? [])
-      ),
-    ]);
-    setSession(createIdleSession(scopeId, onboardingServiceId));
-  }, [
-    messages.length,
-    onboardingState,
-    scopeId,
-    selectedService?.kind,
-    settingsQuery.data?.providerTypes,
-  ]);
+  }, [activeConversation?.messages]);
 
   useEffect(
     () => () => {
+      scopeEpochRef.current += 1;
       abortControllerRef.current?.abort();
+      createRecoveryControllerRef.current?.abort();
+      for (const controller of reconciliationControllersRef.current.values()) {
+        controller.abort();
+      }
+      reconciliationControllersRef.current.clear();
     },
     []
   );
 
-  const updateAssistantMessage = useCallback(
-    (messageId: string, patch: Partial<ChatMessage>) => {
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === messageId ? { ...message, ...patch } : message
-        )
-      );
-    },
-    []
-  );
-
-  const ensureNyxIdChatBound = useCallback(async () => {
-    if (!scopeId || nyxIdChatBoundRef.current) {
-      return;
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return undefined;
     }
 
-    await studioApi.bindScopeGAgent(createNyxIdChatBindingInput(scopeId));
-    nyxIdChatBoundRef.current = true;
-  }, [scopeId]);
-
-  const persistConversationState = useCallback(
-    async (
-      conversationId: string,
-      nextMessages: ChatMessage[],
-      nextSession: ChatSessionState,
-      service: ServiceOption
-    ) => {
-      if (!scopeId || !conversationId) {
-        return;
-      }
-
-      const previousMeta = conversations.find((item) => item.id === conversationId);
-      const nextMeta = buildConversationMeta(
-        conversationId,
-        nextMessages,
-        nextSession,
-        service,
-        previousMeta?.createdAt,
-        {
-          llmModel: conversationModel,
-          llmRoute: conversationRoute,
-        }
-      );
-
-      setConversations((current) => {
-        const filtered = current.filter((item) => item.id !== conversationId);
-        return [nextMeta, ...filtered];
-      });
-
-      await chatHistoryApi.saveConversation(
-        scopeId,
-        nextMeta,
-        serializeChatMessages(nextMessages)
-      );
-    },
-    [conversationModel, conversationRoute, conversations, scopeId]
-  );
-
-  const handleNewChat = useCallback(() => {
-    abortControllerRef.current?.abort();
-    setPrompt("");
-    setAdvancedOpen(false);
-    setActiveApprovalRequestId(null);
-    setActiveRunInterventionKey(null);
-    setActiveConversationId(null);
-    setDebugEvents([]);
-    setMessages([]);
-    setIsStreaming(false);
-    setConversationModel(undefined);
-    setConversationRoute(undefined);
-    setOnboardingState(null);
-    setSession(createIdleSession(scopeId, selectedServiceId));
-    nyxIdChatBoundRef.current = false;
-  }, [scopeId, selectedServiceId]);
-
-  const handleStartOnboarding = useCallback(() => {
-    serviceSelectionSourceRef.current = "manual";
-    setSelectedServiceId(onboardingServiceId);
+    document.body.classList.add("aevatar-chat-page-host");
+    return () => {
+      document.body.classList.remove("aevatar-chat-page-host");
+    };
   }, []);
 
-  const persistConversationOverrides = useCallback(
-    async (nextRoute: string | undefined, nextModel: string | undefined) => {
-      if (
-        !scopeId ||
-        !activeConversationId ||
-        !selectedService ||
-        isStreaming ||
-        messages.length === 0
-      ) {
-        return;
-      }
-
-      const existingMeta = conversations.find(
-        (conversation) => conversation.id === activeConversationId
-      );
-      const nextMeta = buildConversationMeta(
-        activeConversationId,
-        messages,
-        {
-          ...session,
-          updatedAt: Date.now(),
-        },
-        selectedService,
-        existingMeta?.createdAt,
-        {
-          llmModel: nextModel,
-          llmRoute: nextRoute,
-        }
-      );
-
-      setConversations((current) => [
-        nextMeta,
-        ...current.filter((conversation) => conversation.id !== activeConversationId),
-      ]);
-
-      await chatHistoryApi.saveConversation(
-        scopeId,
-        nextMeta,
-        serializeChatMessages(messages)
-      );
-    },
-    [
-      activeConversationId,
-      conversations,
-      isStreaming,
-      messages,
-      scopeId,
-      selectedService,
-      session,
-    ]
-  );
-
-  const handleConversationRouteChange = useCallback(
-    (value: string | undefined) => {
-      setConversationRoute(value);
-      void persistConversationOverrides(value, conversationModel);
-    },
-    [conversationModel, persistConversationOverrides]
-  );
-
-  const handleConversationModelChange = useCallback(
-    (value: string | undefined) => {
-      const normalized = trimConversationValue(value);
-      setConversationModel(normalized);
-      void persistConversationOverrides(conversationRoute, normalized);
-    },
-    [conversationRoute, persistConversationOverrides]
-  );
-
-  const handleResetConversationLlm = useCallback(() => {
-    setConversationModel(undefined);
-    setConversationRoute(undefined);
-    void persistConversationOverrides(undefined, undefined);
-  }, [persistConversationOverrides]);
-
-  const handleCreate = useCallback(() => {
-    history.push(buildStudioWorkflowEditorRoute());
-  }, []);
-
-  const handleSelectConversation = useCallback(
+  const restoreConversation = useCallback(
     async (conversationId: string) => {
-      if (!scopeId) {
+      if (!scopeId || isStreaming) {
+        return;
+      }
+
+      abortControllerRef.current?.abort();
+      createRecoveryControllerRef.current?.abort();
+      createRecoveryControllerRef.current = null;
+      const pendingConversation = pendingConversations.get(conversationId);
+      if (pendingConversation) {
+        detailRequestRef.current = createClientId();
+        activeConversationRef.current = pendingConversation.conversation;
+        setActiveConversation(pendingConversation.conversation);
+        setDetailLoadState({ status: "idle" });
+        setPrompt("");
+        setSession(createIdleSession(scopeId));
         return;
       }
 
       const meta = conversations.find((item) => item.id === conversationId);
-      const restoredMessages = hydrateChatMessages(
-        await chatHistoryApi.loadConversation(scopeId, conversationId)
-      );
-      const restoredEvents = collectConversationEvents(restoredMessages);
+      const requestId = createClientId();
+      const placeholder: ConversationState = {
+        clientId: createClientId(),
+        conversationId,
+        expectedTurnCount: meta?.messageCount ?? 0,
+        messages: [],
+        sessionId: createClientId(),
+        status: "completed_text",
+        title: meta?.title || t("pages.chat.index.newChat", "New chat"),
+      };
+      detailRequestRef.current = requestId;
+      activeConversationRef.current = placeholder;
+      setActiveConversation(placeholder);
+      setDetailLoadState({ status: "loading" });
+      setPrompt("");
+      setSession(createIdleSession(scopeId));
 
-      if (meta?.serviceId && meta.serviceId !== selectedServiceId) {
-        restoringConversationRef.current = true;
-        serviceSelectionSourceRef.current = "conversation";
-        previousServiceIdRef.current = meta.serviceId;
-        setSelectedServiceId(meta.serviceId);
+      try {
+        const detail = await chatHistoryApi.loadConversation(
+          scopeId,
+          conversationId
+        );
+        if (detailRequestRef.current !== requestId) {
+          return;
+        }
+
+        const restoredConversation: ConversationState = {
+          ...placeholder,
+          messages: hydrateStoredMessages(detail.messages),
+          stateVersion: detail.stateVersion,
+          status: resolveStoredConversationStatus(detail.messages),
+        };
+        activeConversationRef.current = restoredConversation;
+        setActiveConversation(restoredConversation);
+        setDetailLoadState({ status: "idle" });
+        setSession({
+          ...createIdleSession(scopeId),
+          status: detail.messages.length > 0 ? "success" : "idle",
+          updatedAt: meta?.updatedAt ? Date.parse(meta.updatedAt) : undefined,
+        });
+      } catch (error) {
+        if (detailRequestRef.current !== requestId) {
+          return;
+        }
+
+        setDetailLoadState({ message: errorMessage(error), status: "error" });
       }
-      const preferences = readConversationPreferences(meta);
-
-      setActiveConversationId(conversationId);
-      setActiveApprovalRequestId(null);
-      setActiveRunInterventionKey(null);
-      setConversationModel(preferences.llmModel);
-      setConversationRoute(preferences.llmRoute);
-      setMessages(restoredMessages);
-      setDebugEvents(restoredEvents);
-      setSession(deriveConversationSession(scopeId, meta, restoredMessages));
     },
-    [conversations, scopeId, selectedServiceId]
+    [conversations, isStreaming, pendingConversations, scopeId]
   );
 
-  const handleDeleteConversation = useCallback(
+  const handleNewChat = useCallback(() => {
+    if (isStreaming) {
+      return;
+    }
+
+    const currentConversation = activeConversationRef.current;
+    if (isEmptyDraftConversation(currentConversation)) {
+      setHistoryDrawerOpen(false);
+      return;
+    }
+
+    abortControllerRef.current?.abort();
+    createRecoveryControllerRef.current?.abort();
+    createRecoveryControllerRef.current = null;
+    detailRequestRef.current = createClientId();
+    const conversation = createDraftConversation();
+    activeConversationRef.current = conversation;
+    setActiveConversation(conversation);
+    setDetailLoadState({ status: "idle" });
+    setHistoryDrawerOpen(false);
+    setPrompt("");
+    setSession(createIdleSession(scopeId));
+  }, [isStreaming, scopeId]);
+
+  const handleSelectConversation = useCallback(
     async (conversationId: string) => {
-      if (!scopeId) {
+      if (isStreaming) {
         return;
       }
 
-      setConversations((current) => current.filter((item) => item.id !== conversationId));
-      if (activeConversationId === conversationId) {
-        setActiveApprovalRequestId(null);
-        setActiveRunInterventionKey(null);
-        setActiveConversationId(null);
-        setConversationModel(undefined);
-        setConversationRoute(undefined);
-        setDebugEvents([]);
-        setMessages([]);
-        setSession(createIdleSession(scopeId, selectedServiceId));
+      setHistoryDrawerOpen(false);
+      if (
+        activeConversationRef.current?.conversationId === conversationId &&
+        detailLoadState.status !== "error"
+      ) {
+        return;
       }
 
-      await chatHistoryApi.deleteConversation(scopeId, conversationId);
+      await restoreConversation(conversationId);
     },
-    [activeConversationId, scopeId, selectedServiceId]
+    [detailLoadState.status, isStreaming, restoreConversation]
   );
 
-  const handleOnboardingSend = useCallback(
-    async (input: string) => {
-      if (!scopeId || !selectedService || selectedService.kind !== "onboarding") {
-        return false;
+  const handleDeleteConversation = useCallback(async () => {
+    if (!scopeId || !deleteTarget || deletingConversation || isStreaming) {
+      return;
+    }
+
+    setDeletingConversation(true);
+    const deleteScopeEpoch = scopeEpochRef.current;
+    try {
+      await chatHistoryApi.deleteConversation(scopeId, deleteTarget.id);
+      if (scopeEpochRef.current !== deleteScopeEpoch) {
+        return;
+      }
+      await queryClient.cancelQueries({ queryKey: ["chat-history", scopeId] });
+      setDeletedConversationIds((current) => {
+        const next = new Set(current);
+        next.add(deleteTarget.id);
+        return next;
+      });
+      setPendingConversations((current) => {
+        const next = new Map(current);
+        next.delete(deleteTarget.id);
+        return next;
+      });
+      reconciliationControllersRef.current.get(deleteTarget.id)?.abort();
+      reconciliationControllersRef.current.delete(deleteTarget.id);
+      if (activeConversationRef.current?.conversationId === deleteTarget.id) {
+        activeConversationRef.current = null;
+        setActiveConversation(null);
+        setDetailLoadState({ status: "idle" });
+        setSession(createIdleSession(scopeId));
+      }
+      setDeleteTarget(null);
+      await queryClient.invalidateQueries({ queryKey: ["chat-history", scopeId] });
+    } catch {
+      if (scopeEpochRef.current !== deleteScopeEpoch) {
+        return;
+      }
+      toast.error(
+        t(
+          "pages.chat.index.deleteChatFailed",
+          "Conversation could not be deleted",
+        ),
+      );
+    } finally {
+      if (scopeEpochRef.current === deleteScopeEpoch) {
+        setDeletingConversation(false);
+      }
+    }
+  }, [deleteTarget, deletingConversation, isStreaming, queryClient, scopeId, toast]);
+
+  const reconcileConversation = useCallback(
+    (conversation: ConversationState) => {
+      if (!scopeId || !conversation.conversationId) {
+        return;
       }
 
-      const conversationId = activeConversationId || createConversationId();
-      const providerTypes = settingsQuery.data?.providerTypes ?? [];
-      const currentState = onboardingState ?? { step: "select_provider" as const };
+      const conversationId = conversation.conversationId;
+      reconciliationControllersRef.current.get(conversationId)?.abort();
+      const controller = new AbortController();
+      reconciliationControllersRef.current.set(conversationId, controller);
+      setPendingConversations((current) => {
+        const next = new Map(current);
+        next.set(conversationId, {
+          conversation,
+          reconciliation: { status: "pending" },
+        });
+        return next;
+      });
+      const reconciliationScopeEpoch = scopeEpochRef.current;
+      const delaysMs = [0, 300, 900, 1_800];
+
+      void (async () => {
+        let lastError: unknown;
+        for (const delayMs of delaysMs) {
+          try {
+            await abortableDelay(delayMs, controller.signal);
+            const nextConversations =
+              await chatHistoryApi.listConversationMetas(
+                scopeId,
+                controller.signal
+              );
+            if (
+              controller.signal.aborted ||
+              scopeEpochRef.current !== reconciliationScopeEpoch
+            ) {
+              return;
+            }
+
+            queryClient.setQueryData(
+              ["chat-history", scopeId],
+              nextConversations
+            );
+            const serverMeta = nextConversations.find(
+              (item) => item.id === conversationId
+            );
+            if (!serverMeta) {
+              continue;
+            }
+
+            const detail = await chatHistoryApi.loadConversation(
+              scopeId,
+              conversationId,
+              controller.signal
+            );
+            if (
+              controller.signal.aborted ||
+              scopeEpochRef.current !== reconciliationScopeEpoch
+            ) {
+              return;
+            }
+            const observedExpectedTurn = conversation.latestTurnId
+              ? detail.messages.some(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.turnId === conversation.latestTurnId
+                )
+              : serverMeta.messageCount >= conversation.expectedTurnCount;
+            if (
+              !observedExpectedTurn ||
+              !isContinuationStateVersion(detail.stateVersion) ||
+              detail.stateVersion < (conversation.stateVersion ?? 0)
+            ) {
+              continue;
+            }
+
+            setPendingConversations((current) => {
+              const next = new Map(current);
+              next.delete(conversationId);
+              return next;
+            });
+            setActiveConversation((current) => {
+              if (current?.clientId !== conversation.clientId) {
+                return current;
+              }
+
+              const next = {
+                ...current,
+                expectedTurnCount: Math.max(
+                  serverMeta.messageCount,
+                  conversation.expectedTurnCount
+                ),
+                stateVersion: Math.max(
+                  current.stateVersion ?? 0,
+                  detail.stateVersion
+                ),
+                messages: hydrateAuthoritativeMessages(
+                  detail.messages,
+                  current.messages,
+                  conversation.latestTurnId
+                ),
+                title: serverMeta.title || current.title,
+              };
+              activeConversationRef.current = next;
+              return next;
+            });
+            return;
+          } catch (error) {
+            if (
+              controller.signal.aborted ||
+              scopeEpochRef.current !== reconciliationScopeEpoch
+            ) {
+              return;
+            }
+            lastError = error;
+          }
+        }
+
+        const failureMessage = lastError
+          ? errorMessage(lastError)
+          : t(
+              "pages.chat.index.historySaveNotObserved",
+              "History save was not observed by the server."
+            );
+        setPendingConversations((current) => {
+          const pending = current.get(conversationId);
+          if (pending?.conversation.clientId !== conversation.clientId) {
+            return current;
+          }
+
+          const next = new Map(current);
+          next.set(conversationId, {
+            conversation: pending.conversation,
+            reconciliation: {
+              message: failureMessage,
+              retryable: true,
+              status: "failed",
+            },
+          });
+          return next;
+        });
+      })().finally(() => {
+        if (
+          reconciliationControllersRef.current.get(conversationId) === controller
+        ) {
+          reconciliationControllersRef.current.delete(conversationId);
+        }
+      });
+    },
+    [queryClient, scopeId]
+  );
+
+  const handleRetryReconciliation = useCallback(
+    (conversationId: string) => {
+      const pending = pendingConversations.get(conversationId);
+      if (
+        !pending ||
+        pending.reconciliation.status !== "failed" ||
+        !pending.reconciliation.retryable
+      ) {
+        return;
+      }
+
+      reconcileConversation(pending.conversation);
+    },
+    [pendingConversations, reconcileConversation]
+  );
+
+  const runChat = useCallback(
+    async (conversation: ConversationState, input: string) => {
+      if (!canStartChat || !scopeId || isStreaming) {
+        return;
+      }
+
       const trimmedInput = input.trim();
-      const createOnboardingSession = (
-        status: ChatSessionState["status"] = "success"
-      ): ChatSessionState => ({
-        ...createIdleSession(scopeId, selectedService.id),
-        status,
+      if (!trimmedInput) {
+        return;
+      }
+
+      if (
+        conversation.conversationId &&
+        pendingConversations.has(conversation.conversationId)
+      ) {
+        return;
+      }
+      if (
+        conversation.conversationId &&
+        !isContinuationStateVersion(conversation.stateVersion)
+      ) {
+        setSession({
+          ...createIdleSession(scopeId),
+          error: t(
+            "pages.chat.index.historySynchronizing",
+            "Conversation history is still synchronizing. Try again shortly."
+          ),
+          status: "error",
+          updatedAt: Date.now(),
+        });
+        reconcileConversation(conversation);
+        return;
+      }
+
+      const runScopeEpoch = scopeEpochRef.current;
+      detailRequestRef.current = createClientId();
+      setDetailLoadState({ status: "idle" });
+      const userMessage = createChatMessage("user", trimmedInput);
+      const assistantMessageId = createClientId();
+      const assistantMessage: ChatMessage = {
+        content: "",
+        events: [],
+        id: assistantMessageId,
+        role: "assistant",
+        status: "streaming",
+        steps: [],
+        thinking: "",
+        timestamp: Date.now(),
+        toolCalls: [],
+      };
+      const title =
+        conversation.title === t("pages.chat.index.newChat", "New chat")
+          ? trimTitle(trimmedInput)
+          : conversation.title;
+      const nextStatus: LocalChatStatus =
+        conversation.status === "needs_confirmation" ? "creating" : "streaming";
+      const createCommandId = conversation.conversationId
+        ? undefined
+        : !conversation.createRequestPrompt ||
+            conversation.createRequestPrompt === trimmedInput
+          ? conversation.createCommandId ?? conversation.clientId
+          : createClientId();
+      const startedConversation: ConversationState = {
+        ...conversation,
+        createCommandId,
+        createRequestPrompt: conversation.conversationId
+          ? undefined
+          : trimmedInput,
+        latestTurnId: undefined,
+        messages: [...conversation.messages, userMessage, assistantMessage],
+        status: nextStatus,
+        title,
+      };
+      const rawFrames: unknown[] = [];
+      const accumulator = createRuntimeEventAccumulator();
+      let receivedChatHistoryContext = false;
+      let acceptedChatHistoryContext: ReturnType<
+        typeof extractChatHistoryContext
+      > = null;
+      let createRecoveryAttempted = false;
+      let latestRefreshedDetail:
+        | Awaited<ReturnType<typeof chatHistoryApi.loadConversation>>
+        | undefined;
+      let streamingConversation = startedConversation;
+
+      abortControllerRef.current?.abort();
+      createRecoveryControllerRef.current?.abort();
+      createRecoveryControllerRef.current = null;
+      if (conversation.conversationId) {
+        reconciliationControllersRef.current
+          .get(conversation.conversationId)
+          ?.abort();
+        reconciliationControllersRef.current.delete(conversation.conversationId);
+      }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      setPrompt("");
+      activeConversationRef.current = startedConversation;
+      setActiveConversation(startedConversation);
+      setSession({
+        ...createIdleSession(scopeId),
+        status: "running",
         updatedAt: Date.now(),
       });
-      const commitOnboardingMessages = async (
-        nextMessages: ChatMessage[],
-        nextSession: ChatSessionState = createOnboardingSession()
-      ) => {
-        setActiveConversationId(conversationId);
-        setMessages(nextMessages);
-        setSession(nextSession);
-        setDebugEvents([]);
-        setActiveApprovalRequestId(null);
-        await persistConversationState(
-          conversationId,
-          nextMessages,
-          nextSession,
-          selectedService
-        );
-      };
 
-      const selectedProviderType = currentState.providerTypeId
-        ? providerTypes.find(
-            (providerType) => providerType.id === currentState.providerTypeId
-          ) || null
-        : null;
-
-      const createAssistantReply = (content: string, status: ChatMessage["status"] = "complete") =>
-        createChatMessage("assistant", content, status);
-
-      if (currentState.step === "done") {
-        const shouldRestart = ["restart", "reset", "start over"].includes(
-          trimmedInput.toLowerCase()
-        );
-        const nextState = shouldRestart
-          ? { step: "select_provider" as const }
-          : currentState;
-        const nextMessages = [
-          ...messages,
-          createChatMessage("user", trimmedInput),
-          createAssistantReply(
-            shouldRestart
-              ? buildOnboardingProviderPrompt(providerTypes)
-              : buildOnboardingDonePrompt()
-          ),
-        ];
-        setOnboardingState(nextState);
-        await commitOnboardingMessages(nextMessages);
-        return true;
-      }
-
-      if (currentState.step === "select_provider") {
-        const providerType = resolveOnboardingProviderType(trimmedInput, providerTypes);
-        const nextMessages = [
-          ...messages,
-          createChatMessage("user", trimmedInput),
-          createAssistantReply(
-            providerType
-              ? providerType.defaultEndpoint.trim()
-                ? buildOnboardingEndpointModePrompt(providerType)
-                : buildOnboardingCustomEndpointPrompt(providerType.displayName)
-              : buildOnboardingProviderErrorPrompt(providerTypes)
-          ),
-        ];
-        setOnboardingState(
-          providerType
-            ? providerType.defaultEndpoint.trim()
+      try {
+        const response = await startChatStreamWithHistoryRefreshRetry(
+          {
+            commandId: createCommandId,
+            conversation: conversation.conversationId
               ? {
-                  providerTypeId: providerType.id,
-                  providerTypeLabel: providerType.displayName,
-                  step: "select_endpoint_mode",
+                  conversationId: conversation.conversationId,
+                  minimumStateVersion: conversation.stateVersion as number,
                 }
-              : {
-                  providerTypeId: providerType.id,
-                  providerTypeLabel: providerType.displayName,
-                  step: "ask_custom_endpoint",
-                }
-            : { step: "select_provider" }
-        );
-        await commitOnboardingMessages(nextMessages);
-        return true;
-      }
-
-      if (!selectedProviderType) {
-        const nextMessages = [
-          ...messages,
-          createChatMessage("user", trimmedInput),
-          createAssistantReply(buildOnboardingProviderPrompt(providerTypes)),
-        ];
-        setOnboardingState({ step: "select_provider" });
-        await commitOnboardingMessages(nextMessages);
-        return true;
-      }
-
-      if (currentState.step === "select_endpoint_mode") {
-        const endpointMode = resolveOnboardingEndpointMode(trimmedInput);
-        const nextState =
-          endpointMode === "default"
+              : { conversationId: null },
+            prompt: trimmedInput,
+            sessionId: conversation.sessionId,
+          },
+          controller.signal,
+          conversation.conversationId
             ? {
-                endpointUrl: selectedProviderType.defaultEndpoint,
-                providerTypeId: selectedProviderType.id,
-                providerTypeLabel: selectedProviderType.displayName,
-                step: "ask_api_key" as const,
+                refreshMinimumStateVersion: async (signal) => {
+                  const detail = await chatHistoryApi.loadConversation(
+                    scopeId,
+                    conversation.conversationId as string,
+                    signal
+                  );
+                  if (
+                    detail.stateVersion >= (conversation.stateVersion as number) &&
+                    (!latestRefreshedDetail ||
+                      detail.stateVersion > latestRefreshedDetail.stateVersion)
+                  ) {
+                    latestRefreshedDetail = detail;
+                  }
+                  return detail.stateVersion;
+                },
               }
-            : endpointMode === "custom"
-              ? {
-                  providerTypeId: selectedProviderType.id,
-                  providerTypeLabel: selectedProviderType.displayName,
-                  step: "ask_custom_endpoint" as const,
-                }
-              : currentState;
-        const nextMessages = [
-          ...messages,
-          createChatMessage("user", trimmedInput),
-          createAssistantReply(
-            endpointMode
-              ? endpointMode === "default"
-                ? buildOnboardingApiKeyPrompt(
-                    selectedProviderType.displayName,
-                    selectedProviderType.defaultEndpoint
-                  )
-                : buildOnboardingCustomEndpointPrompt(
-                    selectedProviderType.displayName
-                  )
-              : buildOnboardingEndpointModeErrorPrompt(selectedProviderType)
-          ),
-        ];
-        setOnboardingState(nextState);
-        await commitOnboardingMessages(nextMessages);
-        return true;
-      }
-
-      if (currentState.step === "ask_custom_endpoint") {
-        const nextMessages = [
-          ...messages,
-          createChatMessage("user", trimmedInput),
-          createAssistantReply(
-            isValidOnboardingEndpoint(trimmedInput)
-              ? buildOnboardingApiKeyPrompt(
-                  selectedProviderType.displayName,
-                  trimmedInput
-                )
-              : buildOnboardingCustomEndpointErrorPrompt(
-                  selectedProviderType.displayName
-                )
-          ),
-        ];
-        setOnboardingState(
-          isValidOnboardingEndpoint(trimmedInput)
-            ? {
-                endpointUrl: trimmedInput,
-                providerTypeId: selectedProviderType.id,
-                providerTypeLabel: selectedProviderType.displayName,
-                step: "ask_api_key",
-              }
-            : currentState
+            : undefined
         );
-        await commitOnboardingMessages(nextMessages);
-        return true;
-      }
 
-      if (currentState.step === "ask_api_key") {
-        if (!trimmedInput) {
-          const nextMessages = [
-            ...messages,
-            createChatMessage("user", "API key provided"),
-            createAssistantReply(
-              buildOnboardingApiKeyErrorPrompt(
-                currentState.providerTypeLabel || selectedProviderType.displayName,
-                currentState.endpointUrl || selectedProviderType.defaultEndpoint,
-                "The API key cannot be empty."
-              )
-            ),
-          ];
-          await commitOnboardingMessages(nextMessages);
-          return true;
-        }
+        for await (const frame of readChatStreamFrames(response, {
+          signal: controller.signal,
+        })) {
+          if (scopeEpochRef.current !== runScopeEpoch) {
+            controller.abort();
+            return;
+          }
+          rawFrames.push(frame.raw);
+          const chatHistoryContext = extractChatHistoryContext(frame.raw);
+          if (chatHistoryContext) {
+            if (chatHistoryContext.scopeId !== scopeId) {
+              throw new Error("Chat History context does not match the active scope.");
+            }
+            if (
+              conversation.conversationId &&
+              chatHistoryContext.conversationId !== conversation.conversationId
+            ) {
+              throw new Error("Chat History returned a different conversation identity.");
+            }
+            if (
+              acceptedChatHistoryContext &&
+              (chatHistoryContext.scopeId !==
+                acceptedChatHistoryContext.scopeId ||
+                chatHistoryContext.conversationId !==
+                  acceptedChatHistoryContext.conversationId ||
+                chatHistoryContext.turnId !==
+                  acceptedChatHistoryContext.turnId ||
+                chatHistoryContext.stateVersion !==
+                  acceptedChatHistoryContext.stateVersion)
+            ) {
+              throw new Error("Chat History context changed during the stream.");
+            }
+            if (!acceptedChatHistoryContext) {
+              acceptedChatHistoryContext = chatHistoryContext;
+              receivedChatHistoryContext = true;
+              const acceptedConversationStateVersion = conversation.conversationId
+                ? chatHistoryContext.stateVersion
+                : 0;
+              streamingConversation = {
+                ...streamingConversation,
+                conversationId: chatHistoryContext.conversationId,
+                expectedTurnCount: conversation.expectedTurnCount + 1,
+                latestTurnId: chatHistoryContext.turnId,
+                stateVersion: Math.max(
+                  streamingConversation.stateVersion ?? 0,
+                  latestRefreshedDetail?.stateVersion ?? 0,
+                  acceptedConversationStateVersion
+                ),
+              };
+              activeConversationRef.current = streamingConversation;
+              setActiveConversation((current) =>
+                current?.clientId === conversation.clientId
+                  ? streamingConversation
+                  : current
+              );
+            }
+          }
+          if (!frame.event) {
+            continue;
+          }
 
-        if (!settingsQuery.data) {
-          const nextMessages = [
-            ...messages,
-            createChatMessage("user", redactOnboardingSecret(trimmedInput)),
-            createAssistantReply(
-              buildOnboardingApiKeyErrorPrompt(
-                currentState.providerTypeLabel || selectedProviderType.displayName,
-                currentState.endpointUrl || selectedProviderType.defaultEndpoint,
-                "Studio Settings are still loading. Try again in a moment."
-              )
-            ),
-          ];
-          await commitOnboardingMessages(nextMessages);
-          return true;
-        }
+          applyRuntimeEvent(accumulator, frame.event);
+          if (isRawObserved(frame.event)) {
+            continue;
+          }
 
-        const creatingMessage = createAssistantReply(
-          buildOnboardingCreatingMessage(
-            currentState.providerTypeLabel || selectedProviderType.displayName
-          ),
-          "streaming"
-        );
-        const creatingMessages = [
-          ...messages,
-          createChatMessage("user", redactOnboardingSecret(trimmedInput)),
-          creatingMessage,
-        ];
-        const creatingSession = createOnboardingSession("running");
-        setOnboardingState({
-          ...currentState,
-          step: "creating",
-        });
-        setPrompt("");
-        setIsStreaming(true);
-        await commitOnboardingMessages(creatingMessages, creatingSession);
-
-        try {
-          const nextProvider = createOnboardingProviderSettings(
-            settingsQuery.data,
-            selectedProviderType.id,
-            trimmedInput,
-            currentState.endpointUrl || selectedProviderType.defaultEndpoint
-          );
-          const response = await studioApi.saveSettings(
-            buildOnboardingSaveSettingsInput(settingsQuery.data, nextProvider)
-          );
-          queryClient.setQueryData(["studio-settings"], response);
-          serviceSelectionSourceRef.current = "manual";
-          const completedMessages = creatingMessages.map((message) =>
-            message.id === creatingMessage.id
-              ? {
-                  ...message,
-                  content: buildOnboardingSuccessPrompt(
-                    nextProvider.providerName,
-                    currentState.providerTypeLabel || selectedProviderType.displayName
-                  ),
-                  status: "complete" as const,
-                }
-              : message
-          );
-          setOnboardingState({
-            endpointUrl:
-              currentState.endpointUrl || selectedProviderType.defaultEndpoint,
-            providerTypeId: selectedProviderType.id,
-            providerTypeLabel:
-              currentState.providerTypeLabel || selectedProviderType.displayName,
-            step: "done",
-          });
-          setIsStreaming(false);
-          await commitOnboardingMessages(
-            completedMessages,
-            createOnboardingSession("success")
-          );
-        } catch (error) {
-          const completedMessages = creatingMessages.map((message) =>
-            message.id === creatingMessage.id
-              ? {
-                  ...message,
-                  content: buildOnboardingApiKeyErrorPrompt(
-                    currentState.providerTypeLabel || selectedProviderType.displayName,
-                    currentState.endpointUrl || selectedProviderType.defaultEndpoint,
-                    error instanceof Error
-                      ? error.message
-                      : "Saving the provider failed."
-                  ),
-                  status: "complete" as const,
-                }
-              : message
-          );
-          setOnboardingState({
-            endpointUrl:
-              currentState.endpointUrl || selectedProviderType.defaultEndpoint,
-            providerTypeId: selectedProviderType.id,
-            providerTypeLabel:
-              currentState.providerTypeLabel || selectedProviderType.displayName,
-            step: "ask_api_key",
-          });
-          setIsStreaming(false);
-          await commitOnboardingMessages(
-            completedMessages,
-            createOnboardingSession("error")
-          );
-        }
-
-        return true;
-      }
-
-      return false;
-    },
-    [
-      activeConversationId,
-      messages,
-      onboardingState,
-      persistConversationState,
-      queryClient,
-      scopeId,
-      selectedService,
-      settingsQuery.data,
-    ]
-  );
-
-  const handleSend = useCallback(async () => {
-    const trimmedPrompt = prompt.trim();
-    if (!scopeId || !selectedService || !trimmedPrompt || isStreaming) {
-      return;
-    }
-
-    setPrompt("");
-
-    if (selectedService.kind === "onboarding") {
-      await handleOnboardingSend(trimmedPrompt);
-      return;
-    }
-
-    const conversationId = activeConversationId || createConversationId();
-    const userMessage = createChatMessage("user", trimmedPrompt);
-    const assistantMessageId = createClientId();
-    const assistantMessage: ChatMessage = {
-      content: "",
-      events: [],
-      id: assistantMessageId,
-      role: "assistant",
-      status: "streaming",
-      steps: [],
-      thinking: "",
-      timestamp: Date.now(),
-      toolCalls: [],
-    };
-
-    abortControllerRef.current?.abort();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    const nextMessages = [...messages, userMessage, assistantMessage];
-    setActiveConversationId(conversationId);
-    setMessages(nextMessages);
-    setDebugEvents([]);
-    setIsStreaming(true);
-    setActiveApprovalRequestId(null);
-    setActiveRunInterventionKey(null);
-    setSession({
-      ...createIdleSession(scopeId, selectedService.id),
-      status: "running",
-      updatedAt: Date.now(),
-    });
-    const accumulator = createRuntimeEventAccumulator();
-
-    try {
-      if (selectedService.kind === "nyxid-chat") {
-        await ensureNyxIdChatBound();
-      }
-
-      const response = await runtimeRunsApi.streamChat(
-        scopeId,
-        {
-          metadata: conversationHeaders,
-          prompt: trimmedPrompt,
-          sessionId: conversationId,
-        } as Parameters<typeof runtimeRunsApi.streamChat>[1],
-        controller.signal,
-        {
-          serviceId: selectedService.id,
-        }
-      );
-
-      for await (const event of parseBackendSSEStream(response, {
-        signal: controller.signal,
-      })) {
-        applyRuntimeEvent(accumulator, event);
-        setDebugEvents([...accumulator.events]);
-
-        if (isRawObserved(event)) {
-          continue;
-        }
-
-        updateAssistantMessage(
-          assistantMessageId,
-          buildAssistantMessagePatch(
+          const patch = buildAssistantMessagePatch(
             accumulator,
             accumulator.errorText ? "error" : "streaming"
-          )
-        );
+          );
+          const patchedConversation: ConversationState = {
+            ...streamingConversation,
+            messages: streamingConversation.messages.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, ...patch }
+                : message
+            ),
+          };
+          streamingConversation = patchedConversation;
+          activeConversationRef.current = patchedConversation;
+          setActiveConversation((current) => {
+            if (!current || current.clientId !== conversation.clientId) {
+              return current;
+            }
 
+            return patchedConversation;
+          });
+          setSession(
+            buildSessionFromAccumulator(
+              scopeId,
+              accumulator,
+              accumulator.errorText ? "error" : "running"
+            )
+          );
+        }
+
+        if (controller.signal.aborted) {
+          throw controller.signal.reason;
+        }
+        if (scopeEpochRef.current !== runScopeEpoch) {
+          return;
+        }
+        if (!receivedChatHistoryContext && createCommandId) {
+          createRecoveryAttempted = true;
+          const recovery = await recoverCreateIdentity(
+            scopeId,
+            createCommandId,
+            controller.signal
+          );
+          if (recovery) {
+            receivedChatHistoryContext = true;
+            streamingConversation = bindCreateRecovery(
+              streamingConversation,
+              recovery
+            );
+            activeConversationRef.current = streamingConversation;
+            setActiveConversation((current) =>
+              current?.clientId === conversation.clientId
+                ? streamingConversation
+                : current
+            );
+          }
+        }
+        if (!receivedChatHistoryContext) {
+          throw new Error(
+            t(
+              "pages.chat.index.missingChatHistoryContext",
+              "Chat completed without a conversation context."
+            )
+          );
+        }
+
+        const artifacts = extractChatStreamArtifacts(rawFrames);
+        const finalAssistantStatus: ChatMessage["status"] = accumulator.errorText
+          ? "error"
+          : "complete";
+        const finalTarget = artifacts.target || streamingConversation.target;
+        const finalUsage = artifacts.usage || streamingConversation.usage;
+        const finalContent = accumulator.finalOutput || accumulator.assistantText;
+        const finalStatus: LocalChatStatus = accumulator.errorText
+          ? "error"
+          : resolveStudioJump(finalTarget)
+            ? "completed_with_studio_target"
+            : shouldAskForConfirmation(finalContent)
+              ? "needs_confirmation"
+              : "completed_text";
+        const finalConversation: ConversationState = {
+          ...streamingConversation,
+          messages: streamingConversation.messages.map((message) =>
+            message.id === assistantMessageId
+              ? {
+                  ...message,
+                  ...buildAssistantMessagePatch(
+                    accumulator,
+                    finalAssistantStatus
+                  ),
+                }
+              : message
+          ),
+          status: finalStatus,
+          target: finalTarget,
+          usage: finalUsage,
+        };
+        activeConversationRef.current = finalConversation;
+        setActiveConversation((current) =>
+          current?.clientId === conversation.clientId ? finalConversation : current
+        );
         setSession(
           buildSessionFromAccumulator(
             scopeId,
-            selectedService.id,
             accumulator,
-            accumulator.errorText ? "error" : "running"
+            accumulator.errorText ? "error" : "success"
           )
         );
-      }
-
-      const finalAssistantStatus: ChatMessage["status"] = accumulator.errorText
-        ? "error"
-        : "complete";
-      const finalSession = buildSessionFromAccumulator(
-        scopeId,
-        selectedService.id,
-        accumulator,
-        accumulator.errorText ? "error" : "success"
-      );
-
-      setMessages((current) => {
-        const completedMessages = current.map((message) =>
-          message.id === assistantMessageId
-            ? {
-                ...message,
-                ...buildAssistantMessagePatch(
-                  accumulator,
-                  finalAssistantStatus
-                ),
-              }
-            : message
-        ) as ChatMessage[];
-        void persistConversationState(
-          conversationId,
-          completedMessages,
-          finalSession,
-          selectedService
+        reconcileConversation(finalConversation);
+      } catch (error) {
+        if (scopeEpochRef.current !== runScopeEpoch) {
+          return;
+        }
+        const shouldRecoverCreate = Boolean(
+          !conversation.conversationId &&
+            !receivedChatHistoryContext &&
+            !createRecoveryAttempted &&
+            createCommandId &&
+            chatRequestMayHaveBeenAccepted(error)
         );
-        return completedMessages;
-      });
-      setSession(finalSession);
-    } catch (error) {
-      const message =
-        controller.signal.aborted && !accumulator.errorText
-          ? "Chat stopped by operator."
-          : error instanceof Error
-            ? error.message
-            : String(error);
-      accumulator.errorText = message;
-      const finalSession = buildSessionFromAccumulator(
-        scopeId,
-        selectedService.id,
-        accumulator,
-        "error"
-      );
-      setMessages((current) => {
-        const erroredMessages = current.map((entry) =>
+        if (shouldRecoverCreate && !controller.signal.aborted) {
+          try {
+            const recovery = await recoverCreateIdentity(
+              scopeId,
+              createCommandId as string,
+              controller.signal
+            );
+            if (recovery) {
+              receivedChatHistoryContext = true;
+              streamingConversation = bindCreateRecovery(
+                streamingConversation,
+                recovery
+              );
+            }
+          } catch {
+            // Preserve the accepted request's original stream failure.
+          }
+        }
+        const isAmbiguousContinuation = Boolean(
+          conversation.conversationId &&
+            !receivedChatHistoryContext &&
+            chatRequestMayHaveBeenAccepted(error)
+        );
+        const message = isAmbiguousContinuation
+          ? t(
+              "pages.chat.index.continuationContextMissing",
+              "The continuation may have been accepted, but its turn identity was not received. Reload this page before continuing."
+            )
+          : controller.signal.aborted && !accumulator.errorText
+            ? t("pages.chat.index.chatStopped", "Chat stopped.")
+            : error instanceof Error
+              ? error.message
+              : String(error);
+        accumulator.errorText = message;
+        const failedMessages = streamingConversation.messages.map((entry) =>
           entry.id === assistantMessageId
             ? {
                 ...entry,
                 ...buildAssistantMessagePatch(accumulator, "error"),
               }
             : entry
-        ) as ChatMessage[];
-        void persistConversationState(
-          conversationId,
-          erroredMessages,
-          finalSession,
-          selectedService
         );
-        return erroredMessages;
-      });
-      setSession(finalSession);
-    } finally {
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-      }
-
-      setIsStreaming(false);
-    }
-  }, [
-    activeConversationId,
-    conversationHeaders,
-    handleOnboardingSend,
-    ensureNyxIdChatBound,
-    isStreaming,
-    messages,
-    persistConversationState,
-    prompt,
-    scopeId,
-    selectedService,
-    updateAssistantMessage,
-  ]);
-
-  const handleSelectOnboardingProvider = useCallback(
-    (providerTypeId: string) => {
-      void handleOnboardingSend(providerTypeId);
-    },
-    [handleOnboardingSend]
-  );
-
-  const handleSelectOnboardingEndpointMode = useCallback(
-    (mode: "custom" | "default") => {
-      void handleOnboardingSend(mode);
-    },
-    [handleOnboardingSend]
-  );
-
-  const handleSubmitOnboardingCustomEndpoint = useCallback(
-    (value: string) => {
-      void handleOnboardingSend(value);
-    },
-    [handleOnboardingSend]
-  );
-
-  const handleSubmitOnboardingApiKey = useCallback(
-    (value: string) => {
-      void handleOnboardingSend(value);
-    },
-    [handleOnboardingSend]
-  );
-
-  const handleRestartOnboarding = useCallback(() => {
-    void handleOnboardingSend("restart");
-  }, [handleOnboardingSend]);
-
-  const handleOpenNyxIdChat = useCallback(() => {
-    serviceSelectionSourceRef.current = "manual";
-    setSelectedServiceId(nyxIdChatServiceId);
-  }, []);
-
-  const handleApprovalDecision = useCallback(
-    async (requestId: string, approved: boolean) => {
-      if (
-        !scopeId ||
-        !selectedService ||
-        selectedService.kind !== "nyxid-chat" ||
-        !activeConversationId
-      ) {
-        return;
-      }
-
-      const targetMessage = messages.find(
-        (message) =>
-          message.role === "assistant" &&
-          message.pendingApproval?.requestId === requestId
-      );
-      if (!targetMessage) {
-        return;
-      }
-
-      const actorId =
-        resolveConversationRuntimeIdentity({
-          messages,
-          meta: conversations.find(
-            (conversation) => conversation.id === activeConversationId
-          ),
-          session,
-        }).actorId || "";
-
-      if (!actorId) {
-        const unavailableMessage =
-          "Unable to resume approval because the NyxID conversation actor is unavailable.";
-        const finalSession: ChatSessionState = {
-          ...session,
-          error: unavailableMessage,
-          status: "error",
-          updatedAt: Date.now(),
-        };
-        setMessages((current) => {
-          const updated = current.map((message) =>
-            message.id === targetMessage.id
-              ? {
-                  ...message,
-                  error: unavailableMessage,
-                  pendingApproval: undefined,
-                  status: "error" as const,
-                }
-              : message
-          ) as ChatMessage[];
-          void persistConversationState(
-            activeConversationId,
-            updated,
-            finalSession,
-            selectedService
-          );
-          return updated;
-        });
-        setSession(finalSession);
-        return;
-      }
-
-      abortControllerRef.current?.abort();
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-      setActiveApprovalRequestId(requestId);
-      setIsStreaming(true);
-
-      const accumulator = createRuntimeEventAccumulator({
-        actorId,
-      });
-      const approvalRuntimeIdentity = resolveConversationRuntimeIdentity({
-        messages,
-        meta: conversations.find(
-          (conversation) => conversation.id === activeConversationId
-        ),
-        session,
-      });
-      accumulator.assistantText = targetMessage.content;
-      accumulator.commandId =
-        approvalRuntimeIdentity.commandId || session.commandId;
-      accumulator.events = [...(targetMessage.events ?? [])];
-      accumulator.runId = approvalRuntimeIdentity.runId || session.runId;
-      accumulator.steps = cloneStepInfo(targetMessage.steps);
-      accumulator.thinking = targetMessage.thinking ?? "";
-      accumulator.toolCalls = cloneToolCallInfo(targetMessage.toolCalls);
-
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === targetMessage.id
+        const refreshedDetail = latestRefreshedDetail;
+        const authoritativeMessages = refreshedDetail
+          ? hydrateAuthoritativeMessages(
+              refreshedDetail.messages,
+              streamingConversation.messages,
+              undefined
+            )
+          : undefined;
+        const authoritativeMessageIds = new Set(
+          authoritativeMessages?.map((entry) => entry.id) ?? []
+        );
+        const failedAttemptMessages = failedMessages.filter(
+          (entry) =>
+            (entry.id === userMessage.id || entry.id === assistantMessageId) &&
+            !authoritativeMessageIds.has(entry.id)
+        );
+        const failedConversation: ConversationState = {
+          ...streamingConversation,
+          ...(refreshedDetail
             ? {
-                ...message,
-                error: undefined,
-                pendingApproval: undefined,
-                status: "streaming" as const,
+                ...(receivedChatHistoryContext
+                  ? {}
+                  : { latestTurnId: undefined }),
+                stateVersion: Math.max(
+                  streamingConversation.stateVersion ?? 0,
+                  refreshedDetail.stateVersion
+                ),
               }
-            : message
-        )
-      );
-      setSession((current) => ({
-        ...current,
-        error: undefined,
-        status: "running",
-        updatedAt: Date.now(),
-      }));
-
-      try {
-        const response = await nyxIdChatApi.approveToolCall(
-          scopeId,
-          actorId,
-          {
-            approved,
-            reason: approved ? undefined : "Rejected by console operator.",
-            requestId,
-            sessionId: activeConversationId,
-          },
-          controller.signal
+            : {}),
+          messages: authoritativeMessages
+            ? [...authoritativeMessages, ...failedAttemptMessages]
+            : failedMessages,
+          status: "error",
+        };
+        activeConversationRef.current = failedConversation;
+        setActiveConversation((current) =>
+          current?.clientId === conversation.clientId ? failedConversation : current
         );
+        setSession(buildSessionFromAccumulator(scopeId, accumulator, "error"));
+        if (
+          failedConversation.conversationId &&
+          receivedChatHistoryContext
+        ) {
+          reconcileConversation(failedConversation);
+        } else if (
+          failedConversation.conversationId &&
+          isAmbiguousContinuation
+        ) {
+          setPendingConversations((current) => {
+            const next = new Map(current);
+            next.set(failedConversation.conversationId as string, {
+              conversation: failedConversation,
+              reconciliation: {
+                message,
+                retryable: false,
+                status: "failed",
+              },
+            });
+            return next;
+          });
+        } else if (shouldRecoverCreate && controller.signal.aborted) {
+          const recoveryController = new AbortController();
+          createRecoveryControllerRef.current = recoveryController;
+          void recoverCreateIdentity(
+            scopeId,
+            createCommandId as string,
+            recoveryController.signal
+          )
+            .then((recovery) => {
+              if (
+                !recovery ||
+                recoveryController.signal.aborted ||
+                scopeEpochRef.current !== runScopeEpoch
+              ) {
+                return;
+              }
 
-        for await (const event of parseBackendSSEStream(response, {
-          signal: controller.signal,
-        })) {
-          applyRuntimeEvent(accumulator, event);
-          setDebugEvents([...accumulator.events]);
+              void queryClient.invalidateQueries({
+                queryKey: ["chat-history", scopeId],
+              });
+              const current = activeConversationRef.current;
+              if (
+                current?.clientId !== conversation.clientId ||
+                current.conversationId ||
+                current.createCommandId !== createCommandId
+              ) {
+                return;
+              }
 
-          if (isRawObserved(event)) {
-            continue;
-          }
-
-          updateAssistantMessage(
-            targetMessage.id,
-            buildAssistantMessagePatch(
-              accumulator,
-              accumulator.errorText ? "error" : "streaming"
-            )
-          );
-          setSession(
-            buildSessionFromAccumulator(
-              scopeId,
-              selectedService.id,
-              accumulator,
-              accumulator.errorText ? "error" : "running",
-              session
-            )
-          );
+              const recoveredConversation = bindCreateRecovery(current, recovery);
+              activeConversationRef.current = recoveredConversation;
+              setActiveConversation(recoveredConversation);
+              reconcileConversation(recoveredConversation);
+            })
+            .catch(() => undefined)
+            .finally(() => {
+              if (createRecoveryControllerRef.current === recoveryController) {
+                createRecoveryControllerRef.current = null;
+              }
+            });
         }
-
-        const finalStatus: ChatMessage["status"] = accumulator.errorText
-          ? "error"
-          : "complete";
-        const finalSession = buildSessionFromAccumulator(
-          scopeId,
-          selectedService.id,
-          accumulator,
-          accumulator.errorText ? "error" : "success",
-          session
-        );
-
-        setMessages((current) => {
-          const updated = current.map((message) =>
-            message.id === targetMessage.id
-              ? {
-                  ...message,
-                  ...buildAssistantMessagePatch(accumulator, finalStatus),
-                }
-              : message
-          ) as ChatMessage[];
-          void persistConversationState(
-            activeConversationId,
-            updated,
-            finalSession,
-            selectedService
-          );
-          return updated;
-        });
-        setSession(finalSession);
-      } catch (error) {
-        const message =
-          controller.signal.aborted && !accumulator.errorText
-            ? "Approval continuation stopped by operator."
-            : error instanceof Error
-              ? error.message
-              : String(error);
-        accumulator.errorText = message;
-        const finalSession = buildSessionFromAccumulator(
-          scopeId,
-          selectedService.id,
-          accumulator,
-          "error",
-          session
-        );
-        setMessages((current) => {
-          const updated = current.map((entry) =>
-            entry.id === targetMessage.id
-              ? {
-                  ...entry,
-                  ...buildAssistantMessagePatch(accumulator, "error"),
-                }
-              : entry
-          ) as ChatMessage[];
-          void persistConversationState(
-            activeConversationId,
-            updated,
-            finalSession,
-            selectedService
-          );
-          return updated;
-        });
-        setSession(finalSession);
       } finally {
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
         }
-
-        setActiveApprovalRequestId((current) =>
-          current === requestId ? null : current
-        );
-        setIsStreaming(false);
       }
     },
     [
-      activeConversationId,
-      conversations,
-      messages,
-      persistConversationState,
+      canStartChat,
+      isStreaming,
+      pendingConversations,
+      queryClient,
+      reconcileConversation,
       scopeId,
-      selectedService,
-      session,
-      updateAssistantMessage,
     ]
   );
 
-  const handleRunInterventionAction = useCallback(
-    async (
-      messageId: string,
-      intervention: PendingRunInterventionInfo,
-      action: RunInterventionActionRequest
-    ) => {
-      if (!scopeId || !selectedService) {
-        return;
-      }
+  const handleSend = useCallback(() => {
+    const conversation = activeConversation ?? createDraftConversation();
 
-      const conversationId = activeConversationId || createConversationId();
-      const actorId =
-        intervention.actorId ||
-        resolveConversationRuntimeIdentity({
-          messages,
-          meta: conversations.find(
-            (conversation) => conversation.id === conversationId
-          ),
-          session,
-        }).actorId ||
-        "";
-      const runId =
-        intervention.runId ||
-        resolveConversationRuntimeIdentity({
-          messages,
-          meta: conversations.find(
-            (conversation) => conversation.id === conversationId
-          ),
-          session,
-        }).runId ||
-        session.runId;
+    void runChat(conversation, prompt);
+  }, [activeConversation, prompt, runChat]);
 
-      if (intervention.kind === "human_input" && !trimConversationValue(action.value)) {
-        return;
-      }
+  const handleConfirmCreate = useCallback(() => {
+    if (!activeConversation) {
+      return;
+    }
 
-      if (!runId || !intervention.stepId || !actorId) {
-        const unavailableMessage =
-          "Unable to submit the runtime action because the run identity is incomplete.";
-        const errorNote = createAssistantErrorMessage(unavailableMessage);
-        const nextSession = {
-          ...session,
-          updatedAt: Date.now(),
-        };
-
-        setActiveConversationId(conversationId);
-        setMessages((current) => {
-          const updated = [...current, errorNote];
-          void persistConversationState(
-            conversationId,
-            updated,
-            nextSession,
-            selectedService
-          );
-          return updated;
-        });
-        setSession(nextSession);
-        return;
-      }
-
-      setActiveRunInterventionKey(intervention.key);
-
-      try {
-        if (action.kind === "signal") {
-          const result = await runtimeRunsApi.signal(
-            scopeId,
-            {
-              actorId,
-              payload: trimConversationValue(action.value),
-              runId,
-              signalName: intervention.signalName || "continue",
-              stepId: intervention.stepId,
-            },
-            {
-              serviceId: selectedService.id,
-            }
-          );
-
-          if (!result.accepted) {
-            throw new Error("Runtime did not accept the signal request.");
-          }
-
-          const nextSession: ChatSessionState = {
-            ...session,
-            actorId: result.actorId || actorId,
-            commandId: result.commandId || session.commandId,
-            error: undefined,
-            runId: result.runId || runId,
-            scopeId,
-            serviceId: selectedService.id,
-            status: "running",
-            updatedAt: Date.now(),
-          };
-          const note = createAssistantStatusMessage(
-            buildRunInterventionFeedback(intervention, action.kind)
-          );
-
-          setActiveConversationId(conversationId);
-          setMessages((current) => {
-            const updated = current.map((message) =>
-              message.id === messageId
-                ? {
-                    ...message,
-                    pendingRunIntervention: undefined,
-                  }
-                : message
-            ) as ChatMessage[];
-            updated.push(note);
-            void persistConversationState(
-              conversationId,
-              updated,
-              nextSession,
-              selectedService
-            );
-            return updated;
-          });
-          setSession(nextSession);
-          return;
-        }
-
-        const result = await runtimeRunsApi.resume(
-          scopeId,
-          {
-            actorId,
-            approved: action.kind !== "reject",
-            runId,
-            stepId: intervention.stepId,
-            userInput: trimConversationValue(action.value),
-          },
-          {
-            serviceId: selectedService.id,
-          }
-        );
-
-        if (!result.accepted) {
-          throw new Error("Runtime did not accept the resume request.");
-        }
-
-        const nextSession: ChatSessionState = {
-          ...session,
-          actorId: result.actorId || actorId,
-          commandId: result.commandId || session.commandId,
-          error: undefined,
-          runId: result.runId || runId,
-          scopeId,
-          serviceId: selectedService.id,
-          status: "running",
-          updatedAt: Date.now(),
-        };
-        const note = createAssistantStatusMessage(
-          buildRunInterventionFeedback(intervention, action.kind)
-        );
-
-        setActiveConversationId(conversationId);
-        setMessages((current) => {
-          const updated = current.map((message) =>
-            message.id === messageId
-              ? {
-                  ...message,
-                  pendingRunIntervention: undefined,
-                }
-              : message
-          ) as ChatMessage[];
-          updated.push(note);
-          void persistConversationState(
-            conversationId,
-            updated,
-            nextSession,
-            selectedService
-          );
-          return updated;
-        });
-        setSession(nextSession);
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error
-            ? error.message
-            : "Failed to submit the runtime action.";
-        const errorNote = createAssistantErrorMessage(errorMessage);
-        const nextSession = {
-          ...session,
-          updatedAt: Date.now(),
-        };
-
-        setActiveConversationId(conversationId);
-        setMessages((current) => {
-          const updated = [...current, errorNote];
-          void persistConversationState(
-            conversationId,
-            updated,
-            nextSession,
-            selectedService
-          );
-          return updated;
-        });
-        setSession(nextSession);
-      } finally {
-        setActiveRunInterventionKey((current) =>
-          current === intervention.key ? null : current
-        );
-      }
-    },
-    [
-      activeConversationId,
-      conversations,
-      persistConversationState,
-      scopeId,
-      selectedService,
-      session,
-    ]
-  );
-
-  const handleAdvancedTimelineActionResult = useCallback(
-    (result: {
-      action: "resume" | "approve" | "reject" | "signal";
-      actorId: string;
-      commandId?: string;
-      content: string;
-      error?: string;
-      kind: "human_input" | "human_approval" | "wait_signal";
-      runId: string;
-      serviceId: string;
-      signalName?: string;
-      stepId: string;
-      success: boolean;
-    }) => {
-      if (!scopeId) {
-        return;
-      }
-
-      const conversationId = activeConversationId || createConversationId();
-      const matchedService =
-        services.find((service) => service.id === result.serviceId) ||
-        (selectedService?.id === result.serviceId ? selectedService : undefined);
-      const targetService: ServiceOption =
-        matchedService ||
-        selectedService || {
-          endpoints: [],
-          id: result.serviceId,
-          kind: "service",
-          label: result.serviceId,
-        };
-      const nextSession: ChatSessionState = {
-        ...session,
-        actorId: result.actorId || session.actorId,
-        commandId: result.commandId || session.commandId,
-        error: result.success ? undefined : result.error || result.content,
-        runId: result.runId || session.runId,
-        scopeId,
-        serviceId: targetService.id,
-        status: result.success ? "running" : "error",
-        updatedAt: Date.now(),
-      };
-      const note = result.success
-        ? createAssistantStatusMessage(result.content)
-        : createAssistantErrorMessage(result.error || result.content);
-
-      setActiveConversationId(conversationId);
-      setActiveRunInterventionKey(null);
-      setMessages((current) => {
-        const updated = current.map((message) => {
-          const pending = message.pendingRunIntervention;
-          if (!pending) {
-            return message;
-          }
-
-          const sameSignal =
-            result.kind !== "wait_signal" ||
-            pending.signalName === result.signalName;
-          const sameIntervention =
-            pending.kind === result.kind &&
-            pending.runId === result.runId &&
-            pending.stepId === result.stepId &&
-            sameSignal;
-
-          return sameIntervention
-            ? {
-                ...message,
-                pendingRunIntervention: undefined,
-              }
-            : message;
-        }) as ChatMessage[];
-
-        updated.push(note);
-        void persistConversationState(
-          conversationId,
-          updated,
-          nextSession,
-          targetService
-        );
-        return updated;
-      });
-      setSession(nextSession);
-    },
-    [
-      activeConversationId,
-      persistConversationState,
-      scopeId,
-      selectedService,
-      services,
-      session,
-    ]
-  );
+    void runChat(
+      activeConversation,
+      t("pages.chat.index.confirmPrompt", "Confirm. Please create it now.")
+    );
+  }, [activeConversation, runChat]);
 
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
   }, []);
 
-  const isLoadingScope =
-    authSessionQuery.isLoading || (scopeId.length > 0 && servicesQuery.isLoading);
-  const isOnboardingSelected = selectedService?.kind === "onboarding";
-  const composerDisabled =
-    !scopeId ||
-    !selectedService ||
-    (isOnboardingSelected && onboardingState?.step === "creating");
-  const composerPlaceholder = isOnboardingSelected
-    ? getOnboardingComposerPlaceholder(onboardingState)
-    : undefined;
+  const handleOpenTarget = useCallback(() => {
+    if (!studioJump) {
+      return;
+    }
 
-  return (
-    <AevatarPageShell pageHeaderRender={false} title="Chat">
+    history.push(studioJump.href);
+  }, [studioJump]);
+
+  const messageCount = activeConversation?.messages.length ?? 0;
+  const historyRail = (
+    <>
       <div
         style={{
-          background: "#f2f1ee",
-          border: "1px solid #e7e5e4",
-          borderRadius: 18,
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
           display: "flex",
-          flex: 1,
           flexDirection: "column",
+          gap: 8,
+          padding: 12,
+        }}
+      >
+        <Button
+          block
+          disabled={isStreaming}
+          icon={<PlusOutlined />}
+          onClick={handleNewChat}
+          style={{ minHeight: 44 }}
+          type="primary"
+        >
+          {t("pages.chat.index.newChatAction", "New Chat")}
+        </Button>
+        <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 12 }}>
+          {hasFailedHistoryReconciliation
+            ? t(
+                "pages.chat.index.historySaveNeedsAttention",
+                "Some history changes are not confirmed."
+              )
+            : hasPendingHistoryReconciliation
+              ? t(
+                  "pages.chat.index.historySavePending",
+                  "Saving recent history..."
+                )
+              : t(
+                  "pages.chat.index.historyStoredInWorkspace",
+                  "History is saved to this workspace."
+                )}
+        </Typography.Text>
+      </div>
+
+      <div
+        aria-busy={conversationsQuery.isLoading}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: "auto",
+          padding: "8px 6px 10px",
+        }}
+      >
+        {conversationsQuery.isLoading ? (
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              justifyContent: "center",
+              minHeight: 120,
+            }}
+          >
+            <Spin
+              description={t(
+                "pages.chat.index.loadingHistory",
+                "Loading chat history"
+              )}
+              size="small"
+            />
+          </div>
+        ) : conversationsQuery.isError ? (
+          <Alert
+            action={
+              <Button
+                aria-label={t("pages.chat.index.retryHistory", "Retry chat history")}
+                icon={<ReloadOutlined />}
+                onClick={() => void conversationsQuery.refetch()}
+                size="small"
+                type="text"
+              />
+            }
+            description={errorMessage(conversationsQuery.error)}
+            message={t(
+              "pages.chat.index.failedToLoadHistory",
+              "Chat history could not be loaded"
+            )}
+            showIcon
+            type="error"
+          />
+        ) : visibleConversations.length === 0 ? (
+          <Empty
+            description={t("pages.chat.index.noChatHistory", "No chat history")}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            style={{ marginTop: 24 }}
+          />
+        ) : (
+          <Space direction="vertical" size={6} style={{ width: "100%" }}>
+            {visibleConversations.map((conversation) => {
+              const active =
+                conversation.id === activeConversation?.conversationId;
+              return (
+                <div
+                  className="aevatar-chat-history-item"
+                  key={conversation.id}
+                  style={{
+                    background: active ? token.colorPrimaryBg : "transparent",
+                    border: `1px solid ${
+                      active ? token.colorPrimaryBorder : "transparent"
+                    }`,
+                    borderRadius: token.borderRadius,
+                    boxShadow: active
+                      ? `inset 3px 0 0 ${token.colorPrimary}`
+                      : undefined,
+                    display: "flex",
+                    gap: 4,
+                    padding: 4,
+                    width: "100%",
+                  }}
+                >
+                  <button
+                    aria-current={active ? "page" : undefined}
+                    aria-label={conversation.title}
+                    className="aevatar-chat-history-select"
+                    disabled={isStreaming}
+                    onClick={() => void handleSelectConversation(conversation.id)}
+                    style={{
+                      alignItems: "flex-start",
+                      background: "transparent",
+                      border: 0,
+                      color: "inherit",
+                      cursor: isStreaming ? "not-allowed" : "pointer",
+                      display: "flex",
+                      flex: 1,
+                      gap: 8,
+                      minHeight: 40,
+                      minWidth: 0,
+                      padding: "5px 4px",
+                      textAlign: "left",
+                    }}
+                    type="button"
+                  >
+                    <MessageOutlined
+                      style={{
+                        color: active
+                          ? token.colorPrimary
+                          : token.colorTextTertiary,
+                        flex: "0 0 auto",
+                        fontSize: 14,
+                        marginTop: 2,
+                      }}
+                    />
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span
+                        style={{
+                          color: token.colorText,
+                          display: "block",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {conversation.title}
+                      </span>
+                      <span
+                        style={{
+                          color: token.colorTextTertiary,
+                          display: "flex",
+                          fontSize: 11,
+                          gap: 6,
+                          lineHeight: 1.35,
+                          marginTop: 3,
+                        }}
+                      >
+                        <span>
+                          {conversation.historyReconciliation?.status ===
+                          "failed"
+                            ? t(
+                                "pages.chat.index.historySaveFailed",
+                                "Save not confirmed"
+                              )
+                            : conversation.historyReconciliation?.status ===
+                              "pending"
+                            ? t(
+                                "pages.chat.index.historySavePendingShort",
+                                "Saving history"
+                              )
+                            : conversation.liveStatus === "streaming" ||
+                              conversation.liveStatus === "creating"
+                            ? formatStatusLabel(conversation.liveStatus)
+                            : formatTurnCount(conversation.messageCount)}
+                        </span>
+                        <span>{formatRelativeTime(conversation.updatedAt)}</span>
+                      </span>
+                    </span>
+                  </button>
+                  {conversation.historyReconciliation?.status === "failed" &&
+                  conversation.historyReconciliation.retryable ? (
+                    <AevatarTooltip
+                      title={t(
+                        "pages.chat.index.retryHistorySave",
+                        "Retry saving {title}",
+                        { title: conversation.title }
+                      )}
+                    >
+                      <Button
+                        aria-label={t(
+                          "pages.chat.index.retryHistorySave",
+                          "Retry saving {title}",
+                          { title: conversation.title }
+                        )}
+                        disabled={isStreaming}
+                        icon={<ReloadOutlined />}
+                        onClick={() =>
+                          handleRetryReconciliation(conversation.id)
+                        }
+                        style={{ minHeight: 40, minWidth: 40 }}
+                        type="text"
+                      />
+                    </AevatarTooltip>
+                  ) : null}
+                  <AevatarTooltip
+                    title={t("pages.chat.index.deleteChat", "Delete {title}", {
+                      title: conversation.title,
+                    })}
+                  >
+                    <Button
+                      aria-label={t("pages.chat.index.deleteChat", "Delete {title}", {
+                        title: conversation.title,
+                      })}
+                      danger
+                      disabled={isStreaming}
+                      icon={<DeleteOutlined />}
+                      onClick={() => {
+                        setDeleteTarget(conversation);
+                      }}
+                      style={{ minHeight: 40, minWidth: 40 }}
+                      type="text"
+                    />
+                  </AevatarTooltip>
+                </div>
+              );
+            })}
+          </Space>
+        )}
+      </div>
+    </>
+  );
+
+  return (
+    <AevatarPageShell
+      layoutMode="viewport"
+      pageHeaderRender={false}
+      title={t("pages.chat.index.title", "Chat")}
+    >
+      <div
+        className="aevatar-chat-page"
+        style={{
+          background: token.colorBgContainer,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: token.borderRadius,
+          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
+          display: "grid",
+          flex: 1,
           height: "100%",
           minHeight: 0,
           overflow: "hidden",
         }}
       >
-        <style>
-          {`
-            @keyframes pulse {
-              0%, 100% { opacity: 1; }
-              50% { opacity: 0.45; }
-            }
-            @keyframes blink {
-              50% { opacity: 0; }
-            }
-            @keyframes bounce {
-              0%, 80%, 100% { transform: translateY(0); opacity: 0.7; }
-              40% { transform: translateY(-3px); opacity: 1; }
-            }
-          `}
-        </style>
-
-        <header
+        <aside
+          className="aevatar-chat-history-desktop"
           style={{
-            background: "rgba(255,255,255,0.95)",
-            backdropFilter: "blur(10px)",
-            borderBottom: "1px solid #e7e5e4",
-            flexShrink: 0,
-            overflow: "visible",
-            padding: "0 20px",
-            position: "relative",
-            zIndex: 4,
+            background: token.colorBgContainer,
+            borderRight: `1px solid ${token.colorBorderSecondary}`,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+          }}
+        >
+          {historyRail}
+        </aside>
+
+        <main
+          className="aevatar-chat-main"
+          style={{
+            background: token.colorBgContainer,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
           }}
         >
           <div
+            className="aevatar-chat-main-header"
             style={{
               alignItems: "center",
+              borderBottom: `1px solid ${token.colorBorderSecondary}`,
               display: "flex",
               gap: 12,
-              height: 54,
               justifyContent: "space-between",
+              minHeight: 54,
+              padding: "10px 14px",
             }}
           >
-            <div
-              style={{
-                alignItems: "center",
-                display: "flex",
-                gap: 12,
-                minWidth: 0,
-              }}
+            <AevatarTooltip
+              title={t("pages.chat.index.openHistory", "Open chat history")}
             >
-              <div
-                style={{
-                  color: "#111827",
-                  fontSize: 14,
-                  fontWeight: 600,
-                }}
-              >
-                {t("pages.chat.index.console", "Console")}</div>
-              {scopeId && services.length > 0 ? (
-                <ServiceSelector
-                  onCreate={handleCreate}
-                  onSelect={(serviceId) => {
-                    serviceSelectionSourceRef.current = "manual";
-                    setSelectedServiceId(serviceId);
-                  }}
-                  selected={selectedServiceId}
-                  services={services}
-                />
-              ) : null}
-            </div>
-
-            <div
-              style={{
-                alignItems: "center",
-                display: "flex",
-                gap: 8,
-              }}
-            >
-              <button
-                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                onClick={handleNewChat}
-                style={{
-                  background: "#ffffff",
-                  border: "1px solid #e7e5e4",
-                  borderRadius: 10,
-                  color: "#6b7280",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  padding: "8px 12px",
-                }}
-                type="button"
-              >
-                {t("pages.chat.index.new.chat", "New Chat")}</button>
-              <ChatToolsMenu
-                advancedOpen={advancedOpen}
-                eventStreamOpen={showDebug}
-                onToggleAdvanced={() => setAdvancedOpen((value) => !value)}
-                onToggleEventStream={() => setShowDebug((value) => !value)}
+              <Button
+                aria-label={t("pages.chat.index.openHistory", "Open chat history")}
+                className="aevatar-chat-history-trigger"
+                icon={<HistoryOutlined />}
+                onClick={() => setHistoryDrawerOpen(true)}
+                style={{ minHeight: 44, minWidth: 44 }}
+                type="text"
               />
+            </AevatarTooltip>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Typography.Text
+                strong
+                style={{
+                  color: token.colorTextHeading,
+                  display: "block",
+                  fontSize: 18,
+                  lineHeight: 1.25,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {activeConversation?.title || t("pages.chat.index.title", "Chat")}
+              </Typography.Text>
+              <Typography.Text
+                style={{
+                  color: token.colorTextTertiary,
+                  display: "block",
+                  fontSize: 12,
+                  lineHeight: 1.4,
+                  marginTop: 3,
+                }}
+              >
+                {scopeLabelId
+                  ? t("pages.chat.index.scopeValue", "Scope {scopeId}", {
+                      scopeId: scopeLabelId,
+                    })
+                  : t("pages.chat.index.resolvingScope", "Resolving scope")}
+              </Typography.Text>
             </div>
+            <Space className="aevatar-chat-main-actions" wrap>
+              {activeConversation ? (
+                <Tag color={resolveStatusTone(activeConversation.status)}>
+                  {formatStatusLabel(activeConversation.status)}
+                </Tag>
+              ) : null}
+              {studioJump ? (
+                <Button onClick={handleOpenTarget} type="primary">
+                  {studioJump.label}
+                </Button>
+              ) : null}
+            </Space>
           </div>
 
-        </header>
+          {scopeMismatch ? (
+            <Alert
+              banner
+              message={t(
+                "pages.chat.index.scopeMismatch",
+                "Requested scope {requestedScopeId} does not match authenticated scope {authenticatedScopeId}. Open Chat from the active workspace or sign in again.",
+                {
+                  authenticatedScopeId,
+                  requestedScopeId: routeScopeId,
+                }
+              )}
+              type="error"
+            />
+          ) : chatCreationUnavailable ? (
+            <Alert
+              banner
+              message={t(
+                "pages.chat.index.chatRequiresAuthentication",
+                "Starting or continuing a chat requires a trusted authenticated scope. Existing chat history remains available to manage."
+              )}
+              type="info"
+            />
+          ) : !scopeId && !authSessionQuery.isLoading ? (
+            <Alert
+              banner
+              message={t(
+                "pages.chat.index.noScope",
+                "No usable scope was resolved for this account. Refresh and try again."
+              )}
+              type="warning"
+            />
+          ) : null}
 
-        <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-          <ConversationSidebar
-            activeId={activeConversationId}
-            conversations={conversations}
-            onDelete={handleDeleteConversation}
-            onNewChat={handleNewChat}
-            onSelect={(conversationId) => {
-              void handleSelectConversation(conversationId);
-            }}
-            onToggle={() => setSidebarOpen((value) => !value)}
-            open={sidebarOpen}
-          />
+          {activeHistoryReconciliation?.status === "pending" ? (
+            <Alert
+              banner
+              message={t(
+                "pages.chat.index.historySavePending",
+                "Saving recent history..."
+              )}
+              type="info"
+            />
+          ) : activeHistoryReconciliation?.status === "failed" &&
+            activeConversation?.conversationId ? (
+            <Alert
+              action={
+                activeHistoryReconciliation.retryable ? (
+                  <Button
+                    icon={<ReloadOutlined />}
+                    onClick={() =>
+                      handleRetryReconciliation(
+                        activeConversation.conversationId as string
+                      )
+                    }
+                    size="small"
+                  >
+                    {t("pages.chat.index.retry", "Retry")}
+                  </Button>
+                ) : undefined
+              }
+              banner
+              description={activeHistoryReconciliation.message}
+              message={t(
+                "pages.chat.index.historySaveFailedLong",
+                "History save was not confirmed"
+              )}
+              type="warning"
+            />
+          ) : null}
 
           <div
             style={{
+              background: token.colorBgLayout,
               display: "flex",
-              flex: 1,
               flexDirection: "column",
+              flex: 1,
               minHeight: 0,
-              minWidth: 0,
+              overflow: "auto",
+              padding: 16,
             }}
           >
-            <div
-              style={{
-                background: "#fafaf8",
-                flex: 1,
-                minHeight: 0,
-                overscrollBehavior: "contain",
-                overflow: "auto",
-              }}
-            >
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 20,
-                  margin: "0 auto",
-                  maxWidth: 840,
-                    padding: "24px 20px",
-                  }}
-                >
-                  {scopeId && selectedService?.kind === "onboarding" ? (
-                    <ChatOnboardingGuide
-                      loading={settingsQuery.isLoading}
-                      onChooseEndpointMode={handleSelectOnboardingEndpointMode}
-                      onRestart={handleRestartOnboarding}
-                      onSelectProvider={handleSelectOnboardingProvider}
-                      onSubmitApiKey={handleSubmitOnboardingApiKey}
-                      onSubmitCustomEndpoint={handleSubmitOnboardingCustomEndpoint}
-                      onSwitchToChat={handleOpenNyxIdChat}
-                      providerTypes={settingsQuery.data?.providerTypes ?? []}
-                      state={onboardingState}
-                    />
-                  ) : null}
-                  {isLoadingScope ? (
-                    <LoadingState />
-                  ) : !scopeId ? (
-                    <Alert
-                      showIcon
-                    title={t("pages.chat.index.no.project.scope.is.currently", "No project scope is currently available.")}
-                    type="warning"
-                  />
-                ) : !selectedService || !selectedServiceId ? (
-                  <Alert
-                    showIcon
-                    title={t("pages.chat.index.no.chat.capable.services.are", "No chat-capable services are currently available.")}
-                    type="info"
-                  />
-                ) : messages.length === 0 &&
-                  selectedService.kind !== "onboarding" ? (
-                  <EmptyChatState
-                    actionLabel={
-                      settingsQuery.isSuccess &&
-                      !providerConfigured &&
-                      selectedService.kind === "nyxid-chat"
-                        ? "Start onboarding"
-                        : undefined
-                    }
-                    description={
-                      selectedService.kind === "nyxid-chat"
-                        ? settingsQuery.isSuccess && !providerConfigured
-                          ? "Connect a provider and save it to Studio Settings before starting your first NyxID conversation."
-                          : "Chat with NyxID about services, credentials, and configuration."
-                        : `Invoke the "${selectedService.label}" service with a chat message.`
-                    }
-                    footnote={
-                      selectedService.kind === "nyxid-chat"
-                        ? "Use Tools when you need runtime evidence, timeline context, or low-level event inspection."
-                        : "Open Tools for deeper runtime inspection when a normal chat message is not enough."
-                    }
-                    highlights={
-                      selectedService.kind === "nyxid-chat"
-                        ? settingsQuery.isSuccess && !providerConfigured
-                          ? [
-                              "Connect a provider before starting the first NyxID conversation.",
-                              "Once configured, ask NyxID for help with services, credentials, or runtime setup.",
-                              "Open Tools only when you need audit evidence or protocol-level detail.",
-                            ]
-                          : [
-                              "Ask NyxID to inspect services, credentials, or default route targets.",
-                              "Use natural-language prompts first, then open Tools for deeper runtime evidence.",
-                              "Keep model and route overrides in the composer footer when you need a specific provider path.",
-                            ]
-                        : [
-                            `Start with a natural-language prompt for ${selectedService.label}.`,
-                            "Use Advanced Console when you need a specific endpoint, actor, or audit trail.",
-                            "Open Event Stream only when you need raw AGUI evidence for debugging.",
-                          ]
-                    }
-                    onAction={
-                      settingsQuery.isSuccess &&
-                      !providerConfigured &&
-                      selectedService.kind === "nyxid-chat"
-                        ? handleStartOnboarding
-                        : undefined
-                    }
-                    title={selectedService.label}
-                  />
-                ) : (
-                  messages.map((message) => (
-                    <ChatMessageBubble
-                      activeApprovalRequestId={activeApprovalRequestId}
-                      activeRunInterventionKey={activeRunInterventionKey}
-                      key={message.id}
-                      message={message}
-                      onApprovalDecision={(requestId, approved) => {
-                        void handleApprovalDecision(requestId, approved);
-                      }}
-                      onRunInterventionAction={(messageId, intervention, action) => {
-                        void handleRunInterventionAction(
-                          messageId,
-                          intervention,
-                          action
-                        );
-                      }}
-                    />
-                  ))
-                )}
-                <div ref={scrollAnchorRef} />
-              </div>
-            </div>
-
-            {showDebug && debugEvents.length > 0 ? (
+            {detailLoadState.status === "loading" ? (
               <div
+                aria-live="polite"
                 style={{
-                  background: "#fafaf8",
-                  borderTop: "1px solid #e7e5e4",
-                  flexShrink: 0,
-                  maxHeight: 280,
-                  overscrollBehavior: "contain",
-                  padding: "12px 20px",
+                  alignItems: "center",
+                  display: "flex",
+                  flex: 1,
+                  justifyContent: "center",
+                  minHeight: 180,
                 }}
               >
-                <div style={{ margin: "0 auto", maxWidth: 840 }}>
-                  <DebugPanel events={debugEvents} />
-                </div>
-              </div>
-            ) : null}
-
-            <div
-              style={{
-                background: "#ffffff",
-                borderTop: "1px solid #e7e5e4",
-                flexShrink: 0,
-                padding: "14px 20px",
-              }}
-            >
-              <div style={{ margin: "0 auto", maxWidth: 840 }}>
-                <ChatInput
-                  disabled={composerDisabled}
-                  footer={
-                    isOnboardingSelected ? undefined : (
-                      <ConversationLlmConfigBar
-                        disabled={isStreaming || !scopeId || !selectedService}
-                        effectiveModel={effectiveModel}
-                        effectiveRoute={effectiveRoute}
-                        effectiveRouteLabel={effectiveRouteLabel}
-                        modelGroups={modelGroups}
-                        modelValue={conversationModel}
-                        modelsLoading={
-                          userLlmSettingsQuery.isLoading ||
-                          Boolean(userLlmSettingsQuery.isFetching)
-                        }
-                        onModelChange={handleConversationModelChange}
-                        onReset={handleResetConversationLlm}
-                        onRouteChange={handleConversationRouteChange}
-                        routeOptions={routeOptions}
-                        routeValue={conversationRoute}
-                      />
-                    )
-                  }
-                  isStreaming={isOnboardingSelected ? false : isStreaming}
-                  onChange={setPrompt}
-                  onSend={() => void handleSend()}
-                  onStop={handleStop}
-                  placeholder={composerPlaceholder}
-                  value={prompt}
+                <Spin
+                  description={t(
+                    "pages.chat.index.loadingConversation",
+                    "Loading conversation"
+                  )}
                 />
-                {isOnboardingSelected ? null : (
-                  <ChatMetaStrip
-                    actorId={session.actorId}
-                    commandId={session.commandId}
-                    modelLabel={effectiveModel || "provider default"}
-                    runId={session.runId}
-                    routeLabel={effectiveRouteLabel}
-                    scopeId={scopeId}
-                    serviceId={selectedService?.id}
-                  />
-                )}
               </div>
-            </div>
+            ) : detailLoadState.status === "error" ? (
+              <Alert
+                action={
+                  activeConversation?.conversationId ? (
+                    <Button
+                      icon={<ReloadOutlined />}
+                      onClick={() =>
+                        void restoreConversation(
+                          activeConversation.conversationId as string
+                        )
+                      }
+                      size="small"
+                    >
+                      {t("pages.chat.index.retry", "Retry")}
+                    </Button>
+                  ) : null
+                }
+                description={detailLoadState.message}
+                message={t(
+                  "pages.chat.index.failedToLoadConversation",
+                  "Conversation could not be loaded"
+                )}
+                showIcon
+                type="error"
+              />
+            ) : messageCount === 0 ? (
+              <div
+                style={{
+                  alignItems: "center",
+                  background: token.colorBgContainer,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: token.borderRadius,
+                  color: token.colorTextTertiary,
+                  display: "flex",
+                  gap: 10,
+                  lineHeight: 1.55,
+                  margin: "8px 0 0",
+                  maxWidth: 720,
+                  padding: "14px 16px",
+                  width: "100%",
+                }}
+              >
+                <MessageOutlined
+                  style={{
+                    color: token.colorPrimary,
+                    flex: "0 0 auto",
+                    fontSize: 16,
+                  }}
+                />
+                <Typography.Text style={{ color: token.colorTextSecondary }}>
+                  {t(
+                    "pages.chat.index.emptyDescription",
+                    "Describe the Team, Member, or Workflow you want to create."
+                  )}
+                </Typography.Text>
+              </div>
+            ) : (
+              <Space
+                className="aevatar-chat-message-list"
+                direction="vertical"
+                size={14}
+                style={{
+                  marginInline: "auto",
+                  maxWidth: 1440,
+                  width: "100%",
+                }}
+              >
+                {activeConversation?.messages.map((message) => (
+                  <ChatMessageEntry key={message.id} message={message} />
+                ))}
+                {activeConversation?.status === "needs_confirmation" ? (
+                  <div
+                    style={{
+                      background: token.colorWarningBg,
+                      border: `1px solid ${token.colorWarningBorder}`,
+                      borderRadius: token.borderRadius,
+                      marginLeft: 34,
+                      maxWidth: 760,
+                      padding: 12,
+                    }}
+                  >
+                    <Space direction="vertical" size={10}>
+                      <Typography.Text strong>
+                        {t(
+                          "pages.chat.index.reviewPlan",
+                          "Review the plan before creating resources."
+                        )}
+                      </Typography.Text>
+                      <Button
+                        disabled={isConversationActionDisabled}
+                        icon={<SendOutlined />}
+                        onClick={handleConfirmCreate}
+                        type="primary"
+                      >
+                        {t("pages.chat.index.confirmAndCreate", "Confirm and create")}
+                      </Button>
+                    </Space>
+                  </div>
+                ) : null}
+              </Space>
+            )}
+            <div ref={scrollAnchorRef} />
           </div>
-        </div>
+
+          <div
+            style={{
+              background: token.colorBgContainer,
+              borderTop: `1px solid ${token.colorBorderSecondary}`,
+              padding: "10px 14px 12px",
+            }}
+          >
+            {hasUsage(activeConversation?.usage) ? (
+              <Space size={8} style={{ marginBottom: 10 }} wrap>
+                {activeConversation?.usage?.totalTokens !== undefined ? (
+                  <Tag>
+                    {t("pages.chat.index.totalTokens", "{count} tokens", {
+                      count: activeConversation.usage.totalTokens.toLocaleString(),
+                    })}
+                  </Tag>
+                ) : null}
+                {activeConversation?.usage?.promptTokens !== undefined ||
+                activeConversation?.usage?.completionTokens !== undefined ? (
+                  <Tag>
+                    {t("pages.chat.index.tokenSplit", "{input} in / {output} out", {
+                      input: activeConversation.usage?.promptTokens ?? 0,
+                      output: activeConversation?.usage?.completionTokens ?? 0,
+                    })}
+                  </Tag>
+                ) : null}
+                {activeConversation?.usage?.model ? (
+                  <Tag>{activeConversation.usage.model}</Tag>
+                ) : null}
+              </Space>
+            ) : null}
+            <ChatInput
+              disabled={isConversationActionDisabled}
+              isStreaming={isStreaming}
+              onChange={setPrompt}
+              onSend={handleSend}
+              onStop={handleStop}
+              placeholder={t(
+                "pages.chat.index.composerPlaceholder",
+                "Describe the workflow you want, or ask about the current setup..."
+              )}
+              value={prompt}
+            />
+          </div>
+        </main>
       </div>
-      <ChatAdvancedConsole
-        defaultServiceId={selectedServiceId}
-        onClose={() => setAdvancedOpen(false)}
-        onEnsureNyxIdBound={ensureNyxIdChatBound}
-        onTimelineActionResult={handleAdvancedTimelineActionResult}
-        open={advancedOpen}
-        scopeId={scopeId}
-        services={servicesQuery.data ?? []}
-        sessionActorId={session.actorId || undefined}
-      />
+
+      <Drawer
+        className="aevatar-chat-history-drawer"
+        destroyOnHidden
+        onClose={() => setHistoryDrawerOpen(false)}
+        open={historyDrawerOpen}
+        placement="left"
+        size="min(320px, calc(100vw - 48px))"
+        title={t("pages.chat.index.historyTitle", "Chat history")}
+      >
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            height: "100%",
+            minHeight: 0,
+          }}
+        >
+          {historyRail}
+        </div>
+      </Drawer>
+
+      <Modal
+        cancelButtonProps={{ disabled: deletingConversation }}
+        cancelText={t("pages.chat.index.cancel", "Cancel")}
+        confirmLoading={deletingConversation}
+        destroyOnHidden
+        okButtonProps={{ danger: true, disabled: isStreaming }}
+        onCancel={() => {
+          if (!deletingConversation) {
+            setDeleteTarget(null);
+          }
+        }}
+        onOk={() => void handleDeleteConversation()}
+        okText={t("pages.chat.index.delete", "Delete")}
+        open={Boolean(deleteTarget)}
+        title={t("pages.chat.index.deleteChatTitle", "Delete conversation?")}
+      >
+        <Typography.Paragraph>
+          {t(
+            "pages.chat.index.deleteChatDescription",
+            'Delete "{title}" permanently? This conversation cannot be recovered.',
+            { title: deleteTarget?.title || "" }
+          )}
+        </Typography.Paragraph>
+      </Modal>
     </AevatarPageShell>
   );
 };

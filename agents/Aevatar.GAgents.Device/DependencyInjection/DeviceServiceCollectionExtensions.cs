@@ -1,6 +1,9 @@
+using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.GAgents.Device.Audit;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -56,6 +59,17 @@ public static class DeviceServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             DeviceRegistrationMaterializationContext,
             DeviceRegistrationProjector>();
+
+        // ─── Committed-fact audit (platform governance trail) ───
+        // Device registration create/remove are credential-provisioning
+        // governance facts. The per-device HMAC signing key is excluded by the
+        // translator; only registration id + scope + label are recorded.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, DeviceRegisteredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, DeviceUnregisteredAuditTranslator>());
+        services.AddAuditCommittedFactMaterializer<DeviceRegistrationMaterializationContext>();
+
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DeviceRegistrationDocument>,
             DeviceRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IDeviceRegistrationQueryPort, DeviceRegistrationQueryPort>();

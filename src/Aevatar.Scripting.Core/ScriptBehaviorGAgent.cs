@@ -1,5 +1,8 @@
+using System.Globalization;
+using System.Runtime.ExceptionServices;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -9,12 +12,18 @@ using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Scripting.Core;
 
 [GAgent("scripting.behavior")]
 public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
 {
+    private const string RunOutcomeRetryCallbackPrefix = "script-run-terminal-retry";
+    private const int RunOutcomeRetryInitialDelayMs = 250;
+    private const int RunOutcomeRetryMaxDelayMs = 30_000;
+    private const int RunOutcomeTerminalHistoryLimit = 64;
+
     // Refactor (iter149/cluster-1133): Old pattern: script run completion was inferred from domain fact/readmodel side effects.  New principle: script run completion is an actor-owned committed outcome event observed through the projection session channel.
     // Refactor (issue1289): persist only committed fact data; derived readmodel/native/graph payloads belong to projection materialization.
     // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
@@ -27,18 +36,27 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     private readonly IScriptBehaviorRuntimeCapabilityFactory _capabilityFactory;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
     private readonly IProtobufMessageCodec _codec;
+    private readonly TimeProvider _timeProvider;
 
     public ScriptBehaviorGAgent(
         IScriptBehaviorDispatcher dispatcher,
         IScriptBehaviorRuntimeCapabilityFactory capabilityFactory,
         IScriptBehaviorArtifactResolver artifactResolver,
-        IProtobufMessageCodec codec)
+        IProtobufMessageCodec codec,
+        TimeProvider? timeProvider = null)
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _capabilityFactory = capabilityFactory ?? throw new ArgumentNullException(nameof(capabilityFactory));
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
+        _timeProvider = timeProvider ?? TimeProvider.System;
         InitializeId();
+    }
+
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct);
+        await DeliverPendingRunOutcomesAsync(ct);
     }
 
     [AllEventHandler(AllowSelfHandling = true)]
@@ -46,6 +64,11 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     {
         ArgumentNullException.ThrowIfNull(envelope);
         if (envelope.Payload == null)
+            return;
+
+        // The typed handler below is self-only. The all-event script dispatcher must not
+        // reinterpret retry continuations as script input, including when they arrive from outside.
+        if (envelope.Payload.Is(ScriptRunOutcomeNotificationRetryFiredEvent.Descriptor))
             return;
 
         if (envelope.Payload.Is(BindScriptBehaviorRequestedEvent.Descriptor))
@@ -63,7 +86,57 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             .On<ScriptBehaviorBoundEvent>(ApplyBound)
             .On<ScriptDomainFactCommitted>(ApplyCommittedFact)
             .On<ScriptRunOutcomeRecordedEvent>(ApplyOutcomeRecorded)
+            .On<ScriptRunOutcomeNotificationRetryScheduledEvent>(ApplyOutcomeNotificationRetryScheduled)
+            .On<ScriptRunOutcomeNotificationDispatchedEvent>(ApplyOutcomeNotificationDispatched)
+            .On<ScriptRunOutcomeNotificationExpiredEvent>(ApplyOutcomeNotificationExpired)
             .OrCurrent();
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleRunOutcomeRetryFiredAsync(
+        ScriptRunOutcomeNotificationRetryFiredEvent retry)
+    {
+        ArgumentNullException.ThrowIfNull(retry);
+        if (!TryResolveRunOutcomeDelivery(State, retry.ScriptRunId, retry.DeliveryId, out var delivery) ||
+            delivery == null)
+        {
+            return;
+        }
+
+        var matchesScheduledAttempt =
+            delivery.Status == ScriptRunOutcomeDeliveryStatus.RetryScheduled &&
+            retry.Attempt == delivery.Attempt;
+        var matchesScheduledNextAttemptRecovery =
+            delivery.Status == ScriptRunOutcomeDeliveryStatus.RetryScheduled &&
+            retry.Attempt == delivery.Attempt + 1;
+        var matchesScheduleBeforeCommitRecovery =
+            delivery.Status == ScriptRunOutcomeDeliveryStatus.Prepared &&
+            retry.Attempt == delivery.Attempt + 1;
+        if (!matchesScheduledAttempt &&
+            !matchesScheduledNextAttemptRecovery &&
+            !matchesScheduleBeforeCommitRecovery)
+        {
+            return;
+        }
+
+        if (matchesScheduledNextAttemptRecovery || matchesScheduleBeforeCommitRecovery)
+        {
+            await PersistDomainEventAsync(new ScriptRunOutcomeNotificationRetryScheduledEvent
+            {
+                ScriptRunId = retry.ScriptRunId,
+                DeliveryId = retry.DeliveryId,
+                Attempt = retry.Attempt,
+                RetryCallbackId = BuildRunOutcomeRetryCallbackId(retry.ScriptRunId, retry.DeliveryId),
+                RetryAtUnixTimeMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            });
+            delivery = State.RunOutcomes[retry.ScriptRunId].Clone();
+        }
+
+        await DeliverRunOutcomeAsync(
+            retry.ScriptRunId,
+            delivery,
+            CancellationToken.None,
+            retry.Attempt);
+    }
 
     private async Task HandleBindRequestedAsync(
         BindScriptBehaviorRequestedEvent evt,
@@ -108,6 +181,9 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         EnsureBound();
 
         var run = ResolveRunRequest(envelope);
+        if (await ReplayRecordedRunOutcomeAsync(run, envelope, ct))
+            return;
+
         try
         {
             ValidateRunTarget(run);
@@ -115,8 +191,9 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         catch (Exception ex) when (run != null && ex is InvalidOperationException)
         {
             var failedScopeId = ResolveScopeId(envelope, State.ScopeId);
-            await PersistDomainEventAsync(
+            var outcome =
                 BuildOutcomeRecordedEvent(
+                    run,
                     ResolveRunId(envelope),
                     ResolveCommandId(envelope),
                     ResolveCorrelationId(envelope),
@@ -125,8 +202,11 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                     ex.Message,
                     null,
                     0,
-                    State.LastAppliedEventVersion + 1),
+                    State.LastAppliedEventVersion + 1);
+            await PersistDomainEventAsync(
+                outcome,
                 ct);
+            await DeliverRunOutcomeByIdAsync(outcome.ScriptRunId, ct);
             throw;
         }
 
@@ -172,8 +252,9 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         }
         catch (Exception ex) when (run != null && ex is not OperationCanceledException)
         {
-            await PersistDomainEventAsync(
+            var outcome =
                 BuildOutcomeRecordedEvent(
+                    run,
                     runId,
                     commandId,
                     correlationId,
@@ -182,8 +263,11 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                     ex.Message,
                     null,
                     0,
-                    State.LastAppliedEventVersion + 1),
+                    State.LastAppliedEventVersion + 1);
+            await PersistDomainEventAsync(
+                outcome,
                 ct);
+            await DeliverRunOutcomeByIdAsync(outcome.ScriptRunId, ct);
             throw;
         }
 
@@ -201,6 +285,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         var outcomeStateVersion = currentVersion + facts.Count + 1;
         var outcomeEvent =
             BuildOutcomeRecordedEvent(
+                run,
                 runId,
                 commandId,
                 correlationId,
@@ -211,6 +296,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 facts.Count,
                 outcomeStateVersion);
         await PersistDomainEventsAsync(facts.Concat<IMessage>([outcomeEvent]).ToList(), ct);
+        await DeliverRunOutcomeByIdAsync(outcomeEvent.ScriptRunId, ct);
     }
 
     private void ValidateRunTarget(RunScriptRequestedEvent? run)
@@ -331,6 +417,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     }
 
     private ScriptRunOutcomeRecordedEvent BuildOutcomeRecordedEvent(
+        RunScriptRequestedEvent run,
         string runId,
         string commandId,
         string correlationId,
@@ -357,7 +444,13 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             ScopeId = scopeId ?? string.Empty,
             CommittedFactCount = committedFactCount,
             StateVersion = stateVersion,
-            OccurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            OccurredAtUnixTimeMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            CompletionNotificationActorId = run.CompletionNotificationActorId ?? string.Empty,
+            DeliveryId = ResolveRunOutcomeDeliveryId(
+                run,
+                runId ?? string.Empty,
+                commandId ?? string.Empty),
+            ExpiresAtUnixTimeMs = run.CompletionNotificationExpiresAtUnixMs,
         };
     }
 
@@ -365,17 +458,417 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         ScriptBehaviorState state,
         ScriptRunOutcomeRecordedEvent evt)
     {
-        // Refactor (iter149/cluster-1133): Old pattern: outcome observation depended on readmodel side effects.  New principle: outcome events are committed observations and do not mutate the script behavior state machine.
         var next = state.Clone();
         next.LastRunId = evt.ScriptRunId ?? string.Empty;
-        next.LastRunOutcome = evt.Clone();
-        next.LastAppliedEventVersion = evt.StateVersion <= 0
-            ? state.LastAppliedEventVersion + 1
-            : evt.StateVersion;
+        next.LastAppliedEventVersion = Math.Max(state.LastAppliedEventVersion + 1, evt.StateVersion);
         if (string.IsNullOrWhiteSpace(next.ScopeId) && !string.IsNullOrWhiteSpace(evt.ScopeId))
             next.ScopeId = evt.ScopeId;
+        if (string.IsNullOrWhiteSpace(evt.ScriptRunId) || next.RunOutcomes.ContainsKey(evt.ScriptRunId))
+            return next;
+
+        var deliveryId = ResolveRunOutcomeDeliveryId(evt);
+        next.RunOutcomes[evt.ScriptRunId] = new ScriptRunOutcomeDeliveryState
+        {
+            Outcome = evt.Clone(),
+            DeliveryId = deliveryId,
+            ExpiresAtUnixTimeMs = evt.ExpiresAtUnixTimeMs,
+            Status = string.IsNullOrWhiteSpace(evt.CompletionNotificationActorId)
+                ? ScriptRunOutcomeDeliveryStatus.Dispatched
+                : ScriptRunOutcomeDeliveryStatus.Prepared,
+        };
+        if (string.IsNullOrWhiteSpace(evt.CompletionNotificationActorId))
+            PruneTerminalRunOutcomes(next);
         return next;
     }
+
+    private static ScriptBehaviorState ApplyOutcomeNotificationRetryScheduled(
+        ScriptBehaviorState state,
+        ScriptRunOutcomeNotificationRetryScheduledEvent evt)
+    {
+        if (!TryResolveRunOutcomeDelivery(state, evt.ScriptRunId, evt.DeliveryId, out var delivery) ||
+            delivery == null ||
+            !IsPendingRunOutcomeDelivery(delivery) ||
+            evt.Attempt != delivery.Attempt + 1)
+        {
+            return state;
+        }
+
+        var next = AdvanceDeliveryState(
+            state,
+            $"{evt.ScriptRunId}:outcome-notification:retry-scheduled:{evt.Attempt}");
+        delivery = next.RunOutcomes[evt.ScriptRunId];
+        delivery.Status = ScriptRunOutcomeDeliveryStatus.RetryScheduled;
+        delivery.Attempt = evt.Attempt;
+        delivery.RetryCallbackId = evt.RetryCallbackId ?? string.Empty;
+        delivery.RetryAtUnixTimeMs = evt.RetryAtUnixTimeMs;
+        return next;
+    }
+
+    private static ScriptBehaviorState ApplyOutcomeNotificationDispatched(
+        ScriptBehaviorState state,
+        ScriptRunOutcomeNotificationDispatchedEvent evt)
+    {
+        if (!TryResolveRunOutcomeDelivery(state, evt.ScriptRunId, evt.DeliveryId, out var delivery) ||
+            delivery == null ||
+            !IsPendingRunOutcomeDelivery(delivery) ||
+            evt.Attempt != delivery.Attempt)
+        {
+            return state;
+        }
+
+        var next = AdvanceDeliveryState(state, $"{evt.ScriptRunId}:outcome-notification:dispatched");
+        delivery = next.RunOutcomes[evt.ScriptRunId];
+        delivery.Status = ScriptRunOutcomeDeliveryStatus.Dispatched;
+        delivery.RetryCallbackId = string.Empty;
+        delivery.RetryAtUnixTimeMs = 0;
+        PruneTerminalRunOutcomes(next);
+        return next;
+    }
+
+    private static ScriptBehaviorState ApplyOutcomeNotificationExpired(
+        ScriptBehaviorState state,
+        ScriptRunOutcomeNotificationExpiredEvent evt)
+    {
+        if (!TryResolveRunOutcomeDelivery(state, evt.ScriptRunId, evt.DeliveryId, out var delivery) ||
+            delivery == null ||
+            !IsPendingRunOutcomeDelivery(delivery) ||
+            evt.Attempt != delivery.Attempt)
+        {
+            return state;
+        }
+
+        var next = AdvanceDeliveryState(state, $"{evt.ScriptRunId}:outcome-notification:expired");
+        delivery = next.RunOutcomes[evt.ScriptRunId];
+        delivery.Status = ScriptRunOutcomeDeliveryStatus.Expired;
+        delivery.RetryCallbackId = string.Empty;
+        delivery.RetryAtUnixTimeMs = 0;
+        PruneTerminalRunOutcomes(next);
+        return next;
+    }
+
+    private async Task<bool> ReplayRecordedRunOutcomeAsync(
+        RunScriptRequestedEvent? run,
+        EventEnvelope envelope,
+        CancellationToken ct)
+    {
+        var runId = ResolveRunId(envelope);
+        if (run == null ||
+            !State.RunOutcomes.TryGetValue(runId, out var delivery) ||
+            delivery?.Outcome == null)
+        {
+            return false;
+        }
+
+        var recorded = delivery.Outcome;
+        if (!string.Equals(recorded.CommandId, ResolveCommandId(envelope), StringComparison.Ordinal) ||
+            !string.Equals(recorded.CorrelationId, ResolveCorrelationId(envelope), StringComparison.Ordinal) ||
+            !string.Equals(
+                recorded.CompletionNotificationActorId,
+                run.CompletionNotificationActorId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                delivery.DeliveryId,
+                ResolveRunOutcomeDeliveryId(run, runId, ResolveCommandId(envelope)),
+                StringComparison.Ordinal) ||
+            delivery.ExpiresAtUnixTimeMs != run.CompletionNotificationExpiresAtUnixMs)
+        {
+            throw new InvalidOperationException(
+                $"Script run '{recorded.ScriptRunId}' already completed with a different execution identity.");
+        }
+
+        await DeliverRunOutcomeAsync(runId, delivery.Clone(), ct);
+        return true;
+    }
+
+    private async Task DeliverPendingRunOutcomesAsync(CancellationToken ct)
+    {
+        var pending = State.RunOutcomes
+            .Where(static entry =>
+                IsPendingRunOutcomeDelivery(entry.Value) &&
+                !string.IsNullOrWhiteSpace(entry.Value.Outcome?.CompletionNotificationActorId))
+            .OrderBy(static entry => entry.Value.Outcome?.StateVersion ?? long.MaxValue)
+            .ThenBy(static entry => entry.Value.Outcome?.OccurredAtUnixTimeMs ?? long.MaxValue)
+            .ThenBy(static entry => entry.Key, StringComparer.Ordinal)
+            .Select(static entry => (entry.Key, Delivery: entry.Value.Clone()))
+            .ToList();
+        Exception? firstFailure = null;
+        foreach (var (runId, delivery) in pending)
+        {
+            try
+            {
+                await DeliverRunOutcomeAsync(runId, delivery, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                firstFailure ??= ex;
+            }
+        }
+
+        if (firstFailure != null)
+            ExceptionDispatchInfo.Capture(firstFailure).Throw();
+    }
+
+    private Task DeliverRunOutcomeByIdAsync(string runId, CancellationToken ct)
+    {
+        return State.RunOutcomes.TryGetValue(runId, out var delivery)
+            ? DeliverRunOutcomeAsync(runId, delivery.Clone(), ct)
+            : Task.CompletedTask;
+    }
+
+    private async Task DeliverRunOutcomeAsync(
+        string runId,
+        ScriptRunOutcomeDeliveryState requestedDelivery,
+        CancellationToken ct,
+        int? deliveryAttempt = null)
+    {
+        if (!TryResolveRunOutcomeDelivery(
+                State,
+                runId,
+                requestedDelivery.DeliveryId,
+                out var currentDelivery) ||
+            currentDelivery == null ||
+            !IsPendingRunOutcomeDelivery(currentDelivery))
+        {
+            return;
+        }
+
+        var delivery = currentDelivery.Clone();
+        var outcome = delivery.Outcome?.Clone();
+        if (outcome == null || string.IsNullOrWhiteSpace(outcome.CompletionNotificationActorId))
+            return;
+
+        var attempt = Math.Max(delivery.Attempt, deliveryAttempt ?? 0);
+        var now = _timeProvider.GetUtcNow();
+        if (HasElapsedRunOutcomeDeadline(delivery, now))
+        {
+            await PersistDomainEventAsync(new ScriptRunOutcomeNotificationExpiredEvent
+            {
+                ScriptRunId = runId,
+                DeliveryId = delivery.DeliveryId,
+                Attempt = attempt,
+                ExpiredAtUnixTimeMs = now.ToUnixTimeMilliseconds(),
+            }, ct);
+            return;
+        }
+
+        try
+        {
+            await SendToAsync(
+                outcome.CompletionNotificationActorId.Trim(),
+                outcome,
+                ct,
+                new EventEnvelopePublishOptions
+                {
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        OperationId = $"script-run-terminal:{delivery.DeliveryId}",
+                    },
+                });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await ScheduleRunOutcomeRetryAsync(runId, delivery, attempt, ct);
+            return;
+        }
+
+        try
+        {
+            await PersistDomainEventAsync(new ScriptRunOutcomeNotificationDispatchedEvent
+            {
+                ScriptRunId = runId,
+                CommandId = outcome.CommandId,
+                CompletionNotificationActorId = outcome.CompletionNotificationActorId,
+                DispatchedAtUnixTimeMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                DeliveryId = delivery.DeliveryId,
+                Attempt = attempt,
+            }, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await ScheduleRunOutcomeRetryAsync(runId, delivery, attempt, ct);
+            throw;
+        }
+    }
+
+    private async Task ScheduleRunOutcomeRetryAsync(
+        string runId,
+        ScriptRunOutcomeDeliveryState failedDelivery,
+        int failedAttempt,
+        CancellationToken ct)
+    {
+        if (!TryResolveRunOutcomeDelivery(
+                State,
+                runId,
+                failedDelivery.DeliveryId,
+                out var currentDelivery) ||
+            currentDelivery == null ||
+            !IsPendingRunOutcomeDelivery(currentDelivery))
+        {
+            return;
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        if (HasElapsedRunOutcomeDeadline(currentDelivery, now))
+        {
+            await PersistDomainEventAsync(new ScriptRunOutcomeNotificationExpiredEvent
+            {
+                ScriptRunId = runId,
+                DeliveryId = currentDelivery.DeliveryId,
+                Attempt = currentDelivery.Attempt,
+                ExpiredAtUnixTimeMs = now.ToUnixTimeMilliseconds(),
+            }, ct);
+            return;
+        }
+
+        var attempt = Math.Max(currentDelivery.Attempt, failedAttempt) + 1;
+        var retryDelayMs = CalculateRunOutcomeRetryDelayMs(attempt);
+        var dueTimeMs = currentDelivery.ExpiresAtUnixTimeMs > 0
+            ? Math.Min(
+                retryDelayMs,
+                currentDelivery.ExpiresAtUnixTimeMs - now.ToUnixTimeMilliseconds())
+            : retryDelayMs;
+        var dueTime = TimeSpan.FromMilliseconds(Math.Max(1, dueTimeMs));
+        var retryAt = now.Add(dueTime);
+        var callbackId = BuildRunOutcomeRetryCallbackId(runId, currentDelivery.DeliveryId);
+        var retryFired = new ScriptRunOutcomeNotificationRetryFiredEvent
+        {
+            ScriptRunId = runId,
+            DeliveryId = currentDelivery.DeliveryId,
+            Attempt = attempt,
+        };
+        var retryOptions = BuildRunOutcomeRetryOptions(callbackId, attempt);
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                dueTime,
+                retryFired,
+                retryOptions,
+                ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var canPublishImmediateRecovery =
+                currentDelivery.Status == ScriptRunOutcomeDeliveryStatus.Prepared &&
+                currentDelivery.Attempt == 0 &&
+                attempt == 1;
+            Logger.LogWarning(
+                ex,
+                canPublishImmediateRecovery
+                    ? "Script run outcome durable retry scheduling failed; publishing one immediate recovery continuation. actor={ActorId} run={RunId} delivery={DeliveryId} attempt={Attempt}"
+                    : "Script run outcome durable retry scheduling failed; preserving the outbox for activation recovery. actor={ActorId} run={RunId} delivery={DeliveryId} attempt={Attempt}",
+                Id,
+                runId,
+                currentDelivery.DeliveryId,
+                attempt);
+            if (canPublishImmediateRecovery)
+                await PublishAsync(retryFired, TopologyAudience.Self, ct, options: retryOptions);
+            throw;
+        }
+
+        await PersistDomainEventAsync(new ScriptRunOutcomeNotificationRetryScheduledEvent
+        {
+            ScriptRunId = runId,
+            DeliveryId = currentDelivery.DeliveryId,
+            Attempt = attempt,
+            RetryCallbackId = callbackId,
+            RetryAtUnixTimeMs = retryAt.ToUnixTimeMilliseconds(),
+        }, ct);
+    }
+
+    private static ScriptBehaviorState AdvanceDeliveryState(
+        ScriptBehaviorState state,
+        string eventId)
+    {
+        var next = state.Clone();
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = eventId;
+        return next;
+    }
+
+    private static bool TryResolveRunOutcomeDelivery(
+        ScriptBehaviorState state,
+        string runId,
+        string deliveryId,
+        out ScriptRunOutcomeDeliveryState? delivery)
+    {
+        delivery = null;
+        if (string.IsNullOrWhiteSpace(runId) ||
+            string.IsNullOrWhiteSpace(deliveryId) ||
+            !state.RunOutcomes.TryGetValue(runId, out var candidate) ||
+            candidate?.Outcome == null ||
+            !string.Equals(candidate.Outcome.ScriptRunId, runId, StringComparison.Ordinal) ||
+            !string.Equals(candidate.DeliveryId, deliveryId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        delivery = candidate;
+        return true;
+    }
+
+    private static bool IsPendingRunOutcomeDelivery(ScriptRunOutcomeDeliveryState delivery) =>
+        delivery.Status is ScriptRunOutcomeDeliveryStatus.Prepared or
+            ScriptRunOutcomeDeliveryStatus.RetryScheduled;
+
+    private static bool IsTerminalRunOutcomeDelivery(ScriptRunOutcomeDeliveryState delivery) =>
+        delivery.Status is ScriptRunOutcomeDeliveryStatus.Dispatched or
+            ScriptRunOutcomeDeliveryStatus.Expired;
+
+    private static void PruneTerminalRunOutcomes(ScriptBehaviorState state)
+    {
+        var terminal = state.RunOutcomes
+            .Where(static entry => IsTerminalRunOutcomeDelivery(entry.Value))
+            .OrderBy(static entry => entry.Value.Outcome?.StateVersion ?? long.MaxValue)
+            .ThenBy(static entry => entry.Value.Outcome?.OccurredAtUnixTimeMs ?? long.MaxValue)
+            .ThenBy(static entry => entry.Key, StringComparer.Ordinal)
+            .Select(static entry => entry.Key)
+            .ToList();
+        foreach (var runId in terminal.Take(Math.Max(0, terminal.Count - RunOutcomeTerminalHistoryLimit)))
+            state.RunOutcomes.Remove(runId);
+    }
+
+    private static string BuildRunOutcomeRetryCallbackId(string runId, string deliveryId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId(RunOutcomeRetryCallbackPrefix, runId, deliveryId);
+
+    private static EventEnvelopePublishOptions BuildRunOutcomeRetryOptions(
+        string callbackId,
+        int attempt) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    callbackId,
+                    attempt.ToString(CultureInfo.InvariantCulture)),
+            },
+        };
+
+    private static long CalculateRunOutcomeRetryDelayMs(int attempt)
+    {
+        var exponent = Math.Clamp(attempt - 1, 0, 7);
+        var delayMs = RunOutcomeRetryInitialDelayMs * (1L << exponent);
+        return Math.Min(delayMs, RunOutcomeRetryMaxDelayMs);
+    }
+
+    private static bool HasElapsedRunOutcomeDeadline(
+        ScriptRunOutcomeDeliveryState delivery,
+        DateTimeOffset now) =>
+        delivery.ExpiresAtUnixTimeMs > 0 &&
+        delivery.ExpiresAtUnixTimeMs <= now.ToUnixTimeMilliseconds();
+
+    private static string ResolveRunOutcomeDeliveryId(
+        RunScriptRequestedEvent run,
+        string runId,
+        string commandId) =>
+        !string.IsNullOrWhiteSpace(run.CompletionNotificationDeliveryId)
+            ? run.CompletionNotificationDeliveryId.Trim()
+            : $"{runId}:{commandId}";
+
+    private static string ResolveRunOutcomeDeliveryId(ScriptRunOutcomeRecordedEvent outcome) =>
+        !string.IsNullOrWhiteSpace(outcome.DeliveryId)
+            ? outcome.DeliveryId.Trim()
+            : $"{outcome.ScriptRunId}:{outcome.CommandId}";
 
     private bool IsSameBinding(BindScriptBehaviorRequestedEvent evt)
     {

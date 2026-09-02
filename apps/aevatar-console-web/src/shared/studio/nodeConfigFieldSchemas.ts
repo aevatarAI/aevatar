@@ -1453,6 +1453,27 @@ export function hasStudioNodeConfigurationSchema(stepType: string): boolean {
   return SCHEMAS_BY_STEP_TYPE[normalizeStepType(stepType)] !== undefined;
 }
 
+export function shouldShowRawStudioNodeConfiguration(
+  stepType: string,
+  parameters: Record<string, unknown> | null | undefined,
+): boolean {
+  const schema = SCHEMAS_BY_STEP_TYPE[normalizeStepType(stepType)];
+  if (!schema) {
+    return true;
+  }
+
+  const coveredParameters = new Set(
+    schema.fields.map((field) =>
+      resolveStepParameterName(stepType, field.parameterName),
+    ),
+  );
+
+  return Object.keys(parameters ?? {}).some(
+    (parameterName) =>
+      !coveredParameters.has(resolveStepParameterName(stepType, parameterName)),
+  );
+}
+
 export function readStudioNodeConfigurationValues(
   stepType: string,
   parameters: Record<string, unknown> | null | undefined,

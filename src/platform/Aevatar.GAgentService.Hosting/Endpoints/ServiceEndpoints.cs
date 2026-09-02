@@ -7,8 +7,12 @@ using Aevatar.GAgentService.Governance.Hosting.Endpoints;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Hosting.Serialization;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
@@ -21,7 +25,6 @@ public static partial class ServiceEndpoints
     {
         var group = app.MapGroup("/api/services");
         group.MapPost(string.Empty, HandleCreateServiceAsync);
-        group.MapPut("/{serviceId}/external-exposure", HandleUpdateServiceExternalExposureAsync);
         group.MapPost("/{serviceId}/revisions", HandleCreateRevisionAsync);
         group.MapPost("/{serviceId}/revisions/{revisionId}:prepare", HandlePrepareRevisionAsync);
         group.MapPost("/{serviceId}/revisions/{revisionId}:publish", HandlePublishRevisionAsync);
@@ -31,12 +34,16 @@ public static partial class ServiceEndpoints
         group.MapGet(string.Empty, HandleListServicesAsync);
         group.MapGet("/{serviceId}", HandleGetServiceAsync);
         group.MapGet("/{serviceId}/revisions", HandleGetRevisionsAsync);
+        group.MapGAgentServiceOpenApiEndpoints();
         group.MapPost("/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
         group.MapGAgentServiceServingEndpoints();
         group.MapGAgentServiceGovernanceEndpoints();
         app.MapScopeServiceEndpoints();
         app.MapScopeWorkflowCapabilityEndpoints();
-        app.MapScopeScriptCapabilityEndpoints();
+        // Scope script endpoints exist only when the host composed the scripting capability;
+        // without it the routes are absent entirely (404) instead of resolving to missing services.
+        if (app.ServiceProvider.GetService<IScopeScriptQueryPort>() is not null)
+            app.MapScopeScriptCapabilityEndpoints();
         app.MapScopeGAgentCapabilityEndpoints();
         app.MapScheduledDispatchEndpoints();
         return app;
@@ -83,39 +90,10 @@ public static partial class ServiceEndpoints
             Endpoints = { request.Endpoints.Select(ToEndpointSpec) },
             PolicyIds = { request.PolicyIds ?? [] },
         };
-        ApplyExternalExposure(spec, request.ExternalExposure);
 
         var receipt = await commandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
         {
             Spec = spec,
-        }, ct);
-        return Results.Accepted($"/api/services/{identity.ServiceId}", receipt);
-    }
-
-    private static async Task<IResult> HandleUpdateServiceExternalExposureAsync(
-        HttpContext http,
-        string serviceId,
-        UpdateServiceExternalExposureHttpRequest request,
-        [FromServices] IServiceIdentityContextResolver identityResolver,
-        [FromServices] IServiceCommandPort commandPort,
-        CancellationToken ct)
-    {
-        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
-                identityResolver,
-                request.TenantId,
-                request.AppId,
-                request.Namespace,
-                serviceId,
-                out var identity,
-                out var denied))
-        {
-            return denied;
-        }
-
-        var receipt = await commandPort.UpdateServiceExternalExposureAsync(new UpdateServiceExternalExposureCommand
-        {
-            Identity = identity,
-            ExternalExposure = ToExternalExposure(request),
         }, ct);
         return Results.Accepted($"/api/services/{identity.ServiceId}", receipt);
     }
@@ -126,6 +104,7 @@ public static partial class ServiceEndpoints
         CreateRevisionHttpRequest request,
         [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
+        [FromServices] IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         CancellationToken ct)
     {
         if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
@@ -167,18 +146,77 @@ public static partial class ServiceEndpoints
                 };
                 break;
             case ServiceImplementationKind.Workflow:
+                var workflowRequest = request.Workflow;
                 spec.WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
-                    WorkflowName = request.Workflow?.WorkflowName ?? string.Empty,
-                    WorkflowYaml = request.Workflow?.WorkflowYaml ?? string.Empty,
-                    DefinitionActorId = request.Workflow?.DefinitionActorId ?? string.Empty,
+                    WorkflowId = workflowRequest?.WorkflowId ?? string.Empty,
+                    WorkflowName = workflowRequest?.WorkflowName ?? string.Empty,
+                    WorkflowYaml = workflowRequest?.WorkflowYaml ?? string.Empty,
+                    DefinitionActorId = workflowRequest?.DefinitionActorId ?? string.Empty,
                 };
-                if (request.Workflow?.InlineWorkflowYamls != null)
+                if (workflowRequest?.InlineWorkflowYamls != null)
                 {
-                    foreach (var entry in request.Workflow.InlineWorkflowYamls)
+                    foreach (var entry in workflowRequest.InlineWorkflowYamls)
                     {
                         spec.WorkflowSpec.InlineWorkflowYamls.Add(entry.Key, entry.Value);
                     }
+                }
+
+                try
+                {
+                    var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(
+                        http,
+                        ExternalCapabilityExecutionMode.Durable,
+                        explicitRequestConfirmations: request.ExplicitRequestConfirmations);
+                    spec.WorkflowSpec.ExpectedExecutionMode = admissionContext.ExecutionMode;
+                    spec.WorkflowSpec.CapabilityAdmissionPlan = await capabilityAdmissionService.AdmitAsync(
+                        new WorkflowExternalCapabilityAdmissionRequest(
+                            new ExternalWorkflowCapabilityAccessContext(
+                                identity.TenantId,
+                                admissionContext.CallerId,
+                                admissionContext.NyxIdCallerCredential,
+                                admissionContext.NyxIdOrganizationBearerToken),
+                            spec.WorkflowSpec.WorkflowYaml,
+                            spec.WorkflowSpec.InlineWorkflowYamls,
+                            "service_revision",
+                            admissionContext.ExecutionMode,
+                            admissionContext.ExplicitRequestConfirmations,
+                            workflowRequest?.WorkflowId,
+                            request.RevisionId),
+                        ct);
+                }
+                catch (WorkflowCallerCredentialSelectionException)
+                {
+                    return Results.BadRequest(new
+                    {
+                        code = WorkflowCallerCredentialSelectionException.ErrorCode,
+                        message = WorkflowCallerCredentialSelectionException.SafeMessage,
+                    });
+                }
+                catch (WorkflowExternalCapabilityAdmissionException ex)
+                {
+                    return Results.BadRequest(new
+                    {
+                        code = "WORKFLOW_EXTERNAL_CAPABILITY_NOT_READY",
+                        message = "External workflow capability admission failed.",
+                        readiness = new
+                        {
+                            status = ex.Readiness.Status.ToString(),
+                            blockers = ex.Readiness.Blockers.Select(static blocker => new
+                            {
+                                code = blocker.Code,
+                                safeMessage = blocker.SafeMessage,
+                            }),
+                        },
+                    });
+                }
+                catch (NyxIdExplicitRequestConfirmationInputException ex)
+                {
+                    return Results.BadRequest(new
+                    {
+                        code = NyxIdExplicitRequestConfirmationInputException.ErrorCode,
+                        message = ex.Message,
+                    });
                 }
 
                 break;
@@ -647,37 +685,6 @@ public static partial class ServiceEndpoints
             Description = request.Description ?? string.Empty,
         };
 
-    private static void ApplyExternalExposure(
-        ServiceDefinitionSpec spec,
-        ExternalExposureHttpRequest? externalExposure)
-    {
-        var mapped = ToExternalExposure(externalExposure);
-        if (mapped != null)
-            spec.ExternalExposure = mapped;
-    }
-
-    private static ExternalExposure? ToExternalExposure(ExternalExposureHttpRequest? request)
-    {
-        if (request == null)
-            return null;
-
-        var slug = request.NyxidSlug?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(slug) && request.RegisteredAt == null)
-            return null;
-
-        return new ExternalExposure
-        {
-            NyxidSlug = slug,
-            RegisteredAt = request.RegisteredAt.HasValue
-                ? Timestamp.FromDateTimeOffset(request.RegisteredAt.Value)
-                : null,
-        };
-    }
-
-    private static ExternalExposure ToExternalExposure(UpdateServiceExternalExposureHttpRequest request) =>
-        ToExternalExposure(new ExternalExposureHttpRequest(request.NyxidSlug, request.RegisteredAt))
-        ?? new ExternalExposure();
-
     private static ExternalExposureHttpResponse? MapExternalExposure(
         ServiceExternalExposureSnapshot? externalExposure)
     {
@@ -685,14 +692,33 @@ public static partial class ServiceEndpoints
             return null;
 
         if (string.IsNullOrWhiteSpace(externalExposure.NyxidSlug) &&
-            externalExposure.RegisteredAt == null)
+            externalExposure.RegisteredAt == null &&
+            externalExposure.Status == ServiceRegistrationStatus.Unspecified &&
+            string.IsNullOrWhiteSpace(externalExposure.NyxidServiceId) &&
+            string.IsNullOrWhiteSpace(externalExposure.DesiredSpecHash) &&
+            string.IsNullOrWhiteSpace(externalExposure.RegisteredSpecHash) &&
+            string.IsNullOrWhiteSpace(externalExposure.LastError) &&
+            externalExposure.Attempt == 0 &&
+            externalExposure.NextAttemptAt == null &&
+            string.IsNullOrWhiteSpace(externalExposure.CredentialKid) &&
+            !externalExposure.ExposureDesired)
         {
             return null;
         }
 
         return new ExternalExposureHttpResponse(
             externalExposure.NyxidSlug ?? string.Empty,
-            externalExposure.RegisteredAt);
+            externalExposure.RegisteredAt,
+            externalExposure.Status.ToString(),
+            externalExposure.NyxidServiceId ?? string.Empty,
+            externalExposure.DesiredSpecHash ?? string.Empty,
+            externalExposure.RegisteredSpecHash ?? string.Empty,
+            externalExposure.LastError ?? string.Empty,
+            externalExposure.Attempt,
+            externalExposure.NextAttemptAt,
+            externalExposure.CredentialKid ?? string.Empty,
+            externalExposure.ExposureDesired,
+            externalExposure.SourceStateVersion);
     }
 
     private static ServiceImplementationKind ParseImplementationKind(string? rawValue)
@@ -755,13 +781,19 @@ public static partial class ServiceEndpoints
         string ResponseTypeUrl,
         string Description);
 
-    public sealed record ExternalExposureHttpRequest(
-        string? NyxidSlug,
-        DateTimeOffset? RegisteredAt = null);
-
     public sealed record ExternalExposureHttpResponse(
         string NyxidSlug,
-        DateTimeOffset? RegisteredAt);
+        DateTimeOffset? RegisteredAt,
+        string Status = "",
+        string NyxidServiceId = "",
+        string DesiredSpecHash = "",
+        string RegisteredSpecHash = "",
+        string LastError = "",
+        int Attempt = 0,
+        DateTimeOffset? NextAttemptAt = null,
+        string CredentialKid = "",
+        bool ExposureDesired = false,
+        long SourceStateVersion = 0);
 
     public sealed record CreateServiceHttpRequest(
         string TenantId,
@@ -770,15 +802,7 @@ public static partial class ServiceEndpoints
         string ServiceId,
         string DisplayName,
         IReadOnlyList<ServiceEndpointHttpRequest> Endpoints,
-        IReadOnlyList<string>? PolicyIds = null,
-        ExternalExposureHttpRequest? ExternalExposure = null);
-
-    public sealed record UpdateServiceExternalExposureHttpRequest(
-        string TenantId,
-        string AppId,
-        string Namespace,
-        string? NyxidSlug,
-        DateTimeOffset? RegisteredAt = null);
+        IReadOnlyList<string>? PolicyIds = null);
 
     public sealed record StaticRevisionHttpRequest(
         string ActorTypeName,
@@ -795,7 +819,8 @@ public static partial class ServiceEndpoints
         string WorkflowName,
         string WorkflowYaml,
         string? DefinitionActorId,
-        IReadOnlyDictionary<string, string>? InlineWorkflowYamls);
+        IReadOnlyDictionary<string, string>? InlineWorkflowYamls,
+        string? WorkflowId = null);
 
     public sealed record CreateRevisionHttpRequest(
         string TenantId,
@@ -805,7 +830,8 @@ public static partial class ServiceEndpoints
         string ImplementationKind,
         StaticRevisionHttpRequest? Static,
         ScriptingRevisionHttpRequest? Scripting,
-        WorkflowRevisionHttpRequest? Workflow);
+        WorkflowRevisionHttpRequest? Workflow,
+        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
 
     public sealed record SetDefaultServingRevisionHttpRequest(
         string TenantId,

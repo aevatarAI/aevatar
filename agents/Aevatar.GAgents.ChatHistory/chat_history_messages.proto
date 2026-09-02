@@ -2,6 +2,8 @@ syntax = "proto3";
 package aevatar.gagents.chathistory;
 option csharp_namespace = "Aevatar.GAgents.ChatHistory";
 
+import "google/protobuf/timestamp.proto";
+
 // ─── Shared Types ───
 
 message StoredChatMessageProto {
@@ -12,6 +14,7 @@ message StoredChatMessageProto {
   string status = 5;
   string error = 6;
   string thinking = 7;
+  string turn_id = 8;
 }
 
 message ConversationMetaProto {
@@ -26,39 +29,293 @@ message ConversationMetaProto {
   string llm_model = 9;
 }
 
+enum ChatTurnTerminalStatus {
+  CHAT_TURN_TERMINAL_STATUS_UNSPECIFIED = 0;
+  CHAT_TURN_TERMINAL_STATUS_COMPLETED = 1;
+  CHAT_TURN_TERMINAL_STATUS_FAILED = 2;
+  CHAT_TURN_TERMINAL_STATUS_STOPPED = 3;
+  CHAT_TURN_TERMINAL_STATUS_BLOCKED = 4;
+  CHAT_TURN_TERMINAL_STATUS_OUTCOME_UNCERTAIN = 5;
+}
+
+enum ChatTurnAppendRejectionReason {
+  CHAT_TURN_APPEND_REJECTION_REASON_UNSPECIFIED = 0;
+  CHAT_TURN_APPEND_REJECTION_REASON_CONFLICT = 1;
+  // Historical committed fact. New appends no longer enforce a turn limit.
+  CHAT_TURN_APPEND_REJECTION_REASON_MAX_TURNS_EXCEEDED = 2;
+  CHAT_TURN_APPEND_REJECTION_REASON_INVALID = 3;
+}
+
+message ChatTurn {
+  string turn_id = 1;
+  int32 sequence = 2;
+  string user_text = 3;
+  string assistant_text = 4;
+  ChatTurnTerminalStatus terminal_status = 5;
+  string sanitized_error = 6;
+  google.protobuf.Timestamp terminal_time = 7;
+  string llm_route = 8;
+  string llm_model = 9;
+}
+
+message ChatTurnAppendRejection {
+  string turn_id = 1;
+  ChatTurnAppendRejectionReason reason = 2;
+  google.protobuf.Timestamp rejected_at = 3;
+}
+
+message ChatConversationInitialization {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+}
+
 // ─── ChatConversationGAgent State ───
 
 message ChatConversationState {
-  repeated StoredChatMessageProto messages = 1;
-  ConversationMetaProto meta = 2;
+  reserved 1, 2;
+  reserved "messages", "meta";
+  string scope_id = 3;
+  string conversation_id = 4;
+  string title = 5;
+  string service_id = 6;
+  string service_kind = 7;
+  int64 created_at_ms = 8;
+  int64 updated_at_ms = 9;
+  repeated ChatTurn turns = 10;
+  bool deleted = 11;
+  ChatTurnAppendRejection last_rejected_append = 12;
+  ChatConversationInitialization initialization = 13;
+  int32 next_turn_sequence = 14;
 }
 
 // ─── ChatConversationGAgent Events ───
 
-message MessagesReplacedEvent {
-  repeated StoredChatMessageProto messages = 1;
-  ConversationMetaProto meta = 2;
-  string scope_id = 3;
+message InitializeChatConversationCommand {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+}
+
+message ChatConversationInitializedEvent {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+}
+
+message AppendChatTurnCommand {
+  string scope_id = 1;
+  string conversation_id = 2;
+  string title = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  ChatTurn turn = 6;
+  string delivery_actor_id = 7;
+}
+
+message ChatTurnAppendedEvent {
+  string scope_id = 1;
+  string conversation_id = 2;
+  string title = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  ChatTurn turn = 6;
+}
+
+message ChatTurnTerminalReconciledEvent {
+  string scope_id = 1;
+  string conversation_id = 2;
+  ChatTurnTerminalStatus previous_status = 3;
+  ChatTurn turn = 4;
+}
+
+message ChatTurnAppendRejectedEvent {
+  string scope_id = 1;
+  string conversation_id = 2;
+  string turn_id = 3;
+  ChatTurnAppendRejectionReason reason = 4;
+  google.protobuf.Timestamp rejected_at = 5;
+}
+
+message DeleteConversationCommand {
+  string conversation_id = 1;
+  string scope_id = 2;
 }
 
 message ConversationDeletedEvent {
   string conversation_id = 1;
   string scope_id = 2;
+  google.protobuf.Timestamp deleted_at = 3;
 }
 
-// ─── ChatHistoryIndexGAgent State ───
+// ─── ChatTurnHistoryDeliveryGAgent State ───
 
-message ChatHistoryIndexState {
-  repeated ConversationMetaProto conversations = 1;
+enum ChatTurnHistoryDeliveryStatus {
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_UNSPECIFIED = 0;
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_RESERVED = 1;
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_BOUND = 2;
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_APPEND_DISPATCHED = 3;
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_ABANDONED = 4;
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_FAILED = 5;
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_APPEND_COMMITTED = 6;
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_APPEND_REJECTED = 7;
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_TERMINAL_RECONCILIATION_PREPARED = 8;
 }
 
-// ─── ChatHistoryIndexGAgent Events ───
-
-message ConversationUpsertedEvent {
-  ConversationMetaProto meta = 1;
+message ChatTurnHistoryDeliveryState {
+  string delivery_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string turn_id = 4;
+  string user_text = 5;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
+  ChatTurnHistoryDeliveryStatus status = 9;
+  int64 reserved_at_unix_ms = 10;
+  int64 bound_at_unix_ms = 11;
+  int64 completed_at_unix_ms = 12;
+  int32 append_attempt = 13;
+  ChatTurnTerminalStatus terminal_status = 14;
+  string terminal_text = 15;
+  string terminal_error_code = 16;
+  int64 terminal_observed_at_unix_ms = 17;
+  string error_code = 18;
+  string error_summary = 19;
+  ChatTurnAppendRejectionReason append_rejection_reason = 20;
+  bool create_conversation_if_missing = 21;
+  string request_fingerprint = 22;
+  bool expose_create_recovery = 23;
 }
 
-message ConversationRemovedEvent {
-  string conversation_id = 1;
+message ChatTurnHistoryDeliveryReserveRequested {
+  string delivery_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string turn_id = 4;
+  string user_text = 5;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
+  bool create_conversation_if_missing = 9;
+  string request_fingerprint = 10;
+  bool expose_create_recovery = 11;
 }
 
+message ChatTurnHistoryDeliveryReservedEvent {
+  string delivery_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string turn_id = 4;
+  string user_text = 5;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
+  int64 reserved_at_unix_ms = 9;
+  bool create_conversation_if_missing = 10;
+  string request_fingerprint = 11;
+  bool expose_create_recovery = 12;
+}
+
+message ChatTurnHistoryDeliveryAcceptedBound {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  string source_correlation_id = 4;
+}
+
+message ChatTurnHistoryDeliveryBoundEvent {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  string source_correlation_id = 4;
+  int64 bound_at_unix_ms = 5;
+}
+
+message ChatTurnHistoryDeliveryTerminalFrameObserved {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  ChatTurnTerminalStatus status = 4;
+  string text = 5;
+  string error_code = 6;
+  int64 observed_at_unix_ms = 7;
+}
+
+message ChatTurnHistoryDeliveryTerminalReconciledEvent {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  ChatTurnTerminalStatus previous_status = 4;
+  ChatTurnTerminalStatus status = 5;
+  string text = 6;
+  string error_code = 7;
+  int64 observed_at_unix_ms = 8;
+}
+
+message ChatTurnHistoryDeliveryAppendDispatchedEvent {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  int32 append_attempt = 4;
+  ChatTurnTerminalStatus terminal_status = 5;
+  string terminal_text = 6;
+  string terminal_error_code = 7;
+  int64 terminal_observed_at_unix_ms = 8;
+  int64 dispatched_at_unix_ms = 9;
+}
+
+message ChatTurnHistoryDeliveryAppendResultObserved {
+  string delivery_actor_id = 1;
+  string conversation_id = 2;
+  string turn_id = 3;
+  bool accepted = 4;
+  ChatTurnAppendRejectionReason rejection_reason = 5;
+  int64 observed_at_unix_ms = 6;
+}
+
+message ChatTurnHistoryDeliveryAppendResultRecordedEvent {
+  string delivery_actor_id = 1;
+  string conversation_id = 2;
+  string turn_id = 3;
+  bool accepted = 4;
+  ChatTurnAppendRejectionReason rejection_reason = 5;
+  int64 observed_at_unix_ms = 6;
+}
+
+message ChatTurnHistoryDeliveryAbandonedEvent {
+  string delivery_id = 1;
+  string reason = 2;
+  int64 abandoned_at_unix_ms = 3;
+}
+
+message ChatTurnHistoryDeliveryFailedEvent {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int64 failed_at_unix_ms = 6;
+}
+
+message ChatTurnHistorySourceTerminalNotified {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  ChatTurnTerminalStatus status = 4;
+  string text = 5;
+  string error_code = 6;
+  int64 observed_at_unix_ms = 7;
+}

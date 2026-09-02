@@ -27,7 +27,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                 new UserAgentCatalogEntry
                 {
                     AgentId = "agent-compat-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = ScheduledWorkflowAgentDefaults.AgentType,
                     TemplateName = "summary",
                 },
             },
@@ -71,7 +71,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                 Entry = new UserAgentCatalogEntry
                 {
                     AgentId = "agent-compat-2",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = ScheduledWorkflowAgentDefaults.AgentType,
                     TemplateName = "legacy-template",
                 },
             });
@@ -106,7 +106,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                     Entry = new UserAgentCatalogEntry
                     {
                         AgentId = "agent-compat-3",
-                        AgentType = SkillRunnerDefaults.AgentType,
+                        AgentType = ScheduledWorkflowAgentDefaults.AgentType,
                         TemplateName = "summary",
                     },
                 }),
@@ -121,6 +121,45 @@ public sealed class UserAgentCatalogCompatibilityTests
         agent.State.Entries.Should().ContainSingle(x =>
             x.AgentId == "agent-compat-3" &&
             x.TemplateName == "summary");
+    }
+
+    [Fact]
+    public void UserAgentCatalogEntry_ShouldReadLegacyLarkAddressWireFields_AsChannelAddress()
+    {
+#pragma warning disable CS0612 // legacy fields simulate state serialized before channel_address existed
+        var legacyBytes = new UserAgentCatalogEntry
+        {
+            AgentId = "agent-legacy-address",
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            TargetPlatform = "lark",
+            LarkReceiveId = "oc_dm_chat_1",
+            LarkReceiveIdType = "chat_id",
+            LarkReceiveIdFallback = "on_user_1",
+            LarkReceiveIdTypeFallback = "union_id",
+        }.ToByteArray();
+
+        var parsed = UserAgentCatalogEntry.Parser.ParseFrom(legacyBytes);
+
+        var address = UserAgentCatalogChannelAddress.ToModel(
+            parsed.ChannelAddress,
+            parsed.TargetPlatform,
+            parsed.NyxProviderSlug,
+            parsed.ConversationId,
+            parsed.LarkReceiveId,
+            parsed.LarkReceiveIdType,
+            parsed.LarkReceiveIdFallback,
+            parsed.LarkReceiveIdTypeFallback);
+#pragma warning restore CS0612
+
+        address.Platform.Should().Be("lark");
+        address.ProviderSlug.Should().Be("api-lark-bot");
+        address.ConversationId.Should().Be("oc_dm_chat_1");
+        address.Primary.AddressId.Should().Be("oc_dm_chat_1");
+        address.Primary.AddressType.Should().Be("chat_id");
+        address.Fallback.Should().NotBeNull();
+        address.Fallback!.AddressId.Should().Be("on_user_1");
+        address.Fallback.AddressType.Should().Be("union_id");
     }
 
     private static Any CreateLegacyAny(string typeUrl, Google.Protobuf.IMessage message) =>

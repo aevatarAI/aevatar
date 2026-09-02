@@ -1,10 +1,11 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.GAgents.StatusDashboard;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -13,6 +14,13 @@ namespace Aevatar.Mainnet.Host.Api.Status;
 public static class StatusEndpoints
 {
     private const int HistorySampleCount = 120;
+
+    private static readonly BackendConsoleAsset PageAsset = new(
+        LogicalName: "status",
+        Assembly: typeof(StatusEndpoints).Assembly,
+        ResourceSuffix: "Status.status.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: false);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -37,12 +45,7 @@ public static class StatusEndpoints
         .WithSummary("Aggregated health snapshot for all configured probe targets.")
         .AllowAnonymous();
 
-        app.MapGet("/status", (HttpContext ctx) =>
-        {
-            ctx.Response.StatusCode = StatusCodes.Status200OK;
-            ctx.Response.ContentType = "text/html; charset=utf-8";
-            return ctx.Response.WriteAsync(StatusHtml.Page, Encoding.UTF8, ctx.RequestAborted);
-        })
+        app.MapGet("/status", GetStatusHtml)
         .WithTags("Status")
         .WithName("GetStatusHtml")
         .WithSummary("Sub2api-style HTML dashboard for service health.")
@@ -51,31 +54,75 @@ public static class StatusEndpoints
         return app;
     }
 
+    internal static IResult GetStatusHtml(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
+    }
+
     private sealed record StatusResponse(
         [property: JsonPropertyName("generated_at")] DateTimeOffset GeneratedAt,
         [property: JsonPropertyName("overall")] string Overall,
         [property: JsonPropertyName("counts")] StatusCounts Counts,
         [property: JsonPropertyName("targets")] IReadOnlyList<StatusTarget> Targets)
     {
-        public static StatusResponse Build(IReadOnlyList<HealthProbeTargetDocument> documents)
+        public static StatusResponse Build(IReadOnlyList<HealthProbeOperationalSnapshot> snapshots)
         {
-            var targets = documents
-                .OrderBy(d => d.Category, StringComparer.Ordinal)
-                .ThenBy(d => d.Slug, StringComparer.Ordinal)
+            var targets = snapshots
+                .OrderBy(d => d.Target?.Category, StringComparer.Ordinal)
+                .ThenBy(d => d.Target?.Slug, StringComparer.Ordinal)
                 .Select(StatusTarget.From)
                 .ToArray();
 
             var counts = StatusCounts.Tally(targets);
-            var overall = counts switch
-            {
-                { Total: 0 } => "unknown",
-                { Down: > 0 } => "down",
-                { Degraded: > 0 } => "degraded",
-                { Unknown: > 0, Ok: 0 } => "unknown",
-                _ => "ok",
-            };
+            var overall = ComputeOverall(targets);
 
             return new StatusResponse(DateTimeOffset.UtcNow, overall, counts, targets);
+        }
+
+        // Honest, severity-weighted roll-up. Only targets with a *known* status count, so an
+        // unconfigured canary (status "unknown") can never force the board red. A "critical"
+        // target being down is the only thing that blacks out the whole board; lesser-severity
+        // failures and critical degradations surface as "degraded" without masking a real outage.
+        private static string ComputeOverall(IReadOnlyList<StatusTarget> targets)
+        {
+            var anyKnown = false;
+            var anyOk = false;
+            var criticalDown = false;
+            var degraded = false;
+
+            foreach (var t in targets)
+            {
+                if (!t.Enabled) continue;
+                var isCritical = string.Equals(t.Severity, "critical", StringComparison.Ordinal);
+                switch (t.Status)
+                {
+                    case "ok":
+                        anyKnown = true;
+                        anyOk = true;
+                        break;
+                    case "degraded":
+                        anyKnown = true;
+                        degraded = true;
+                        break;
+                    case "down":
+                        anyKnown = true;
+                        if (isCritical) criticalDown = true;
+                        else degraded = true;
+                        break;
+                    default:
+                        // "unknown" — excluded from the verdict.
+                        break;
+                }
+            }
+
+            if (!anyKnown) return "unknown";
+            if (criticalDown) return "down";
+            if (degraded) return "degraded";
+            return anyOk ? "ok" : "unknown";
         }
     }
 
@@ -107,6 +154,7 @@ public static class StatusEndpoints
         [property: JsonPropertyName("slug")] string Slug,
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("category")] string Category,
+        [property: JsonPropertyName("severity")] string Severity,
         [property: JsonPropertyName("probe")] string Probe,
         [property: JsonPropertyName("status")] string Status,
         [property: JsonPropertyName("enabled")] bool Enabled,
@@ -120,46 +168,51 @@ public static class StatusEndpoints
         [property: JsonPropertyName("availability_percent")] double? AvailabilityPercent,
         [property: JsonPropertyName("history")] IReadOnlyList<StatusSample> History)
     {
-        public static StatusTarget From(HealthProbeTargetDocument d)
+        public static StatusTarget From(HealthProbeOperationalSnapshot snapshot)
         {
-            var history = BuildHistory(d);
+            var target = snapshot.Target ?? new HealthProbeTargetDescriptor();
+            var outcome = snapshot.LastOutcome;
+            var history = BuildHistory(snapshot);
             return new StatusTarget(
-                d.Slug,
-                string.IsNullOrWhiteSpace(d.DisplayName) ? d.Slug : d.DisplayName,
-                string.IsNullOrWhiteSpace(d.Category) ? "upstream" : d.Category,
-                d.ProbeKind,
-                MapStatus(d.Status),
-                d.Enabled,
-                d.IntervalSeconds,
-                d.LatencyMs,
-                NullIfBlank(d.Detail),
-                NullIfBlank(d.ErrorMessage),
-                d.ConsecutiveFailures,
-                ToDateTime(d.LastCheckAt),
-                ToDateTime(d.LastSuccessAt),
+                target.Slug,
+                string.IsNullOrWhiteSpace(target.DisplayName) ? target.Slug : target.DisplayName,
+                string.IsNullOrWhiteSpace(target.Category) ? "upstream" : target.Category,
+                string.IsNullOrWhiteSpace(target.Severity) ? "standard" : target.Severity,
+                target.ProbeKind,
+                MapStatus(outcome?.Status ?? HealthOutcomeStatus.Unknown),
+                target.Enabled,
+                target.IntervalSeconds,
+                outcome?.LatencyMs ?? 0,
+                NullIfBlank(outcome?.Detail),
+                NullIfBlank(outcome?.ErrorMessage),
+                snapshot.ConsecutiveFailures,
+                ToDateTime(snapshot.LastCheckAt),
+                ToDateTime(snapshot.LastSuccessAt),
                 CalculateAvailability(history),
                 history);
         }
 
-        private static IReadOnlyList<StatusSample> BuildHistory(HealthProbeTargetDocument d)
+        private static IReadOnlyList<StatusSample> BuildHistory(HealthProbeOperationalSnapshot snapshot)
         {
-            var history = d.RecentOutcomes
+            var history = snapshot.RecentOutcomes
                 .Select(StatusSample.From)
                 .TakeLast(HistorySampleCount)
                 .ToArray();
 
-            if (history.Length > 0 || ToDateTime(d.LastCheckAt) is not { } lastCheckAt)
+            if (history.Length > 0 || ToDateTime(snapshot.LastCheckAt) is not { } lastCheckAt)
             {
                 return history;
             }
 
+            var outcome = snapshot.LastOutcome;
+
             return
             [
                 new StatusSample(
-                    MapStatus(d.Status),
-                    d.LatencyMs,
-                    NullIfBlank(d.Detail),
-                    NullIfBlank(d.ErrorMessage),
+                    MapStatus(outcome?.Status ?? HealthOutcomeStatus.Unknown),
+                    outcome?.LatencyMs ?? 0,
+                    NullIfBlank(outcome?.Detail),
+                    NullIfBlank(outcome?.ErrorMessage),
                     lastCheckAt),
             ];
         }

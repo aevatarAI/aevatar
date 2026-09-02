@@ -91,14 +91,12 @@ public sealed class LocalActorRuntime : IActorRuntime
         var agentType = agent.GetType();
         var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
         var propagationPolicy = _services.GetService<IEnvelopePropagationPolicy>();
-        var deduplicator = _services.GetService<IEventDeduplicator>();
         var actor = new LocalActor(
             agent,
             actorId,
             _streams,
             logger,
-            _deactivationHookDispatcher,
-            deduplicator);
+            _deactivationHookDispatcher);
         var publisher = new LocalActorPublisher(
             actorId,
             () => actor.ParentId,

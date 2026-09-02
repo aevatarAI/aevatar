@@ -4,6 +4,8 @@ using Aevatar.AI.Core;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Core.Middleware;
+using Aevatar.AI.Core.Auditing;
+using Aevatar.AI.Core.DependencyInjection;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
@@ -49,11 +51,17 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Bootstrap.Extensions.AI;
 
 public sealed class AevatarAIFeatureOptions
 {
+    public int MaxTurnDeadlineMs { get; set; } = RoleChatExecutionOptions.DefaultMaxTurnDeadlineMs;
+    public int PostCommitConfigRefreshTimeoutMs { get; set; } =
+        RoleChatExecutionOptions.DefaultPostCommitConfigRefreshTimeoutMs;
+    public int PostTurnProcessingTimeoutMs { get; set; } =
+        RoleChatExecutionOptions.DefaultPostTurnProcessingTimeoutMs;
     public bool EnableMEAIProviders { get; set; } = true;
     public bool EnableMEAIToTornadoFailover { get; set; } = true;
     public bool EnableReloadableProviderFactory { get; set; }
@@ -69,6 +77,29 @@ public sealed class AevatarAIFeatureOptions
     /// NyxID catalog uses a different slug (e.g. organisations that re-registered the service).
     /// </summary>
     public string? OrnnNyxIdSlug { get; set; }
+    /// <summary>
+    /// Enables the host-bound system skill overlay scaffold. Mainnet-style hosts bind this from
+    /// <c>Aevatar:SystemSkills:Enabled</c>.
+    /// </summary>
+    public bool EnableSystemSkillOverlay { get; set; }
+    /// <summary>
+    /// Non-secret name of the public, org-owned Ornn skillset that sources the overlay (issue #2498).
+    /// Bound from <c>Aevatar:SystemSkills:SetName</c>. No organization service token is needed: set
+    /// ownership is the trust anchor and the set is read publicly through the existing ornn-api proxy.
+    /// </summary>
+    public string? SystemSkillOverlaySetName { get; set; }
+    /// <summary>
+    /// Bound from <c>Aevatar:SystemSkills:RefreshTtl</c>.
+    /// </summary>
+    public TimeSpan SystemSkillOverlayRefreshTtl { get; set; }
+    /// <summary>
+    /// Bound from <c>Aevatar:SystemSkills:MaxSkills</c>.
+    /// </summary>
+    public int SystemSkillOverlayMaxSkills { get; set; }
+    /// <summary>
+    /// Bound from <c>Aevatar:SystemSkills:MaxBytes</c>.
+    /// </summary>
+    public int SystemSkillOverlayMaxBytes { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
     public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
@@ -101,18 +132,32 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(configuration);
 
         var options = new AevatarAIFeatureOptions();
+        options.MaxTurnDeadlineMs = ReadPositiveInteger(
+            configuration,
+            "Aevatar:AI:MaxTurnDeadlineMs",
+            options.MaxTurnDeadlineMs);
+        options.PostCommitConfigRefreshTimeoutMs = ReadPositiveInteger(
+            configuration,
+            "Aevatar:AI:PostCommitConfigRefreshTimeoutMs",
+            options.PostCommitConfigRefreshTimeoutMs);
+        options.PostTurnProcessingTimeoutMs = ReadPositiveInteger(
+            configuration,
+            "Aevatar:AI:PostTurnProcessingTimeoutMs",
+            options.PostTurnProcessingTimeoutMs);
         configure?.Invoke(options);
+        services.TryAddSingleton(new RoleChatExecutionOptions(
+            options.MaxTurnDeadlineMs,
+            options.PostCommitConfigRefreshTimeoutMs,
+            options.PostTurnProcessingTimeoutMs));
 
         services.AddAevatarAgentKindRegistry(builder => builder
             .ScanAssemblies(typeof(RoleGAgent).Assembly)
             .Register<WorkflowRoleGAgent>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
-        // No container-level IToolApprovalHandler: a yielding handler is only valid on
-        // actors that implement the pending-approval continuation (RoleGAgent wires its
-        // own). Surfaces without that capability fall back to MissingApprovalHandler and
-        // fail closed instead of stranding a dead-letter approval (#2004).
+        services.AddAgentToolExecution();
         services.TryAddSingleton<IVoiceToolInvoker>(sp => new AgentToolVoiceInvoker(
             sp.GetServices<IAgentToolSource>(),
+            sp.GetRequiredService<IAgentToolExecutionPort>(),
             ResolveVoiceCredentialProviders(sp),
             sp.GetService<ILogger<AgentToolVoiceInvoker>>()));
         services.TryAddSingleton<IVoiceToolCatalog>(sp => new AgentToolVoiceCatalog(
@@ -120,6 +165,11 @@ public static class ServiceCollectionExtensions
             ResolveVoiceCredentialProviders(sp),
             sp.GetService<ILogger<AgentToolVoiceCatalog>>()));
         services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
+        // Zero-config /ws/voice: auto-provision a never-enabled default voice agent on first connect by
+        // committing the same enable voice-presence/enable issues. The attach path (ActorOwnedVoiceRealtimeSession)
+        // resolves this optionally and only invokes it when the capability is still null after the
+        // re-projection self-heal — i.e. a genuinely-unprovisioned default agent.
+        services.TryAddSingleton<IVoicePresenceCapabilityAutoEnablePort, VoicePresenceCapabilityAutoEnablePort>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
             new LocalWorkflowDefinitionCommandAdapter(
@@ -140,6 +190,9 @@ public static class ServiceCollectionExtensions
         if (options.EnableOrnnSkills)
             RegisterOrnnSkills(services, options);
 
+        if (options.EnableSystemSkillOverlay)
+            RegisterSystemSkillOverlay(services, options);
+
         if (options.EnableServiceInvokeTools)
             RegisterServiceInvokeTools(services, options);
 
@@ -158,6 +211,21 @@ public static class ServiceCollectionExtensions
         RegisterVoicePresenceModules(services, configuration, options);
 
         return services;
+    }
+
+    private static int ReadPositiveInteger(
+        IConfiguration configuration,
+        string key,
+        int defaultValue)
+    {
+        var configuredValue = configuration[key];
+        if (string.IsNullOrWhiteSpace(configuredValue))
+            return defaultValue;
+
+        if (!int.TryParse(configuredValue, out var value))
+            throw new InvalidOperationException($"{key} must be a positive integer.");
+
+        return value;
     }
 
     private static void RegisterVoicePresenceModules(
@@ -194,7 +262,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(sp => new VoiceVolatileToolCredentialPort(sp.GetService<TimeProvider>()));
         services.TryAddSingleton<IVoiceVolatileToolCredentialPort>(sp => sp.GetRequiredService<VoiceVolatileToolCredentialPort>());
         services.TryAddSingleton<IVoiceToolCredentialIssuer>(sp => sp.GetRequiredService<VoiceVolatileToolCredentialPort>());
+        services.AddOptions<VoiceWebSocketAttachOptions>();
         services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
+        services.TryAddSingleton<IValidateOptions<VoiceWebSocketAttachOptions>, VoiceWebSocketAttachOptionsValidator>();
+        services.TryAddSingleton<VoiceWebSocketAttachExecutor>();
+        services.AddVoiceWebRtcTransport();
         services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
         services.AddVoicePresenceCapabilityProjection();
         services.AddVoicePresenceCapabilityProjectionStore(configuration);
@@ -263,12 +335,19 @@ public static class ServiceCollectionExtensions
         var openAIProviderConfig = BuildOpenAIVoiceProviderConfig(configuration, options);
         var miniCpmProviderConfig = BuildMiniCpmVoiceProviderConfig(configuration, options);
         var nyxIdRealtimeBrokerEnabled = IsNyxIdRealtimeBrokerEnabled(configuration);
+        // The openai module registers below when EITHER a raw ApiKey OR the NyxID ephemeral broker is
+        // available (ADR-0033 forbids long-lived keys in production, so broker-only is the normal shape).
+        // Default-provider resolution must use the same availability, or broker-only deployments register
+        // the module solely as "voice_presence_openai" while the auto-enable/mount/read default path uses
+        // "voice_presence" — the module factory then never mounts a module for the enabled name, the
+        // session-lease signal is silently dropped, and /ws/voice loops on 503 voice_capability_not_ready.
+        var openAIVoiceAvailable = IsOpenAIVoiceConfigured(openAIProviderConfig) || nyxIdRealtimeBrokerEnabled;
         var resolvedDefaultProvider = ResolveVoicePresenceDefaultProvider(
             voiceOptions.DefaultProvider,
-            openAIProviderConfig,
+            openAIVoiceAvailable,
             miniCpmProviderConfig);
 
-        if (IsOpenAIVoiceConfigured(openAIProviderConfig) || nyxIdRealtimeBrokerEnabled)
+        if (openAIVoiceAvailable)
         {
             registrations.Add(new VoicePresenceModuleRegistration(
                 BuildVoicePresenceModuleNames(
@@ -384,12 +463,12 @@ public static class ServiceCollectionExtensions
 
     private static string? ResolveVoicePresenceDefaultProvider(
         string? requestedProvider,
-        VoiceProviderConfig openAIProviderConfig,
+        bool openAIVoiceAvailable,
         VoiceProviderConfig miniCpmProviderConfig)
     {
         var normalizedRequested = NormalizeVoicePresenceProviderName(requestedProvider);
         if (string.Equals(normalizedRequested, "openai", StringComparison.OrdinalIgnoreCase) &&
-            IsOpenAIVoiceConfigured(openAIProviderConfig))
+            openAIVoiceAvailable)
         {
             return "openai";
         }
@@ -400,7 +479,7 @@ public static class ServiceCollectionExtensions
             return "minicpm";
         }
 
-        if (IsOpenAIVoiceConfigured(openAIProviderConfig))
+        if (openAIVoiceAvailable)
             return "openai";
 
         if (IsMiniCpmVoiceConfigured(miniCpmProviderConfig))
@@ -600,8 +679,9 @@ public static class ServiceCollectionExtensions
                 var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
                 var logger = sp.GetService<ILogger<ReloadableLLMProviderFactory>>();
                 var loggerFactory = sp.GetService<ILoggerFactory>();
+                var toolExecutionPort = new ServiceProviderAgentToolExecutionPort(sp);
                 return new ReloadableLLMProviderFactory(
-                    () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, loggerFactory),
+                    () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, toolExecutionPort, loggerFactory),
                     versionProvider,
                     logger);
             });
@@ -611,7 +691,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILLMProviderFactory>(sp =>
         {
             var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
-            return BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, sp.GetService<ILoggerFactory>());
+            return BuildLlmProviderFactory(
+                configuration,
+                options,
+                secretsStoreAccessor,
+                new ServiceProviderAgentToolExecutionPort(sp),
+                sp.GetService<ILoggerFactory>());
         });
     }
 
@@ -619,6 +704,7 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration,
         AevatarAIFeatureOptions options,
         Func<IAevatarSecretsStore> secretsStoreAccessor,
+        IAgentToolExecutionPort toolExecutionPort,
         ILoggerFactory? loggerFactory = null)
     {
         var secrets = secretsStoreAccessor();
@@ -659,16 +745,16 @@ public static class ServiceCollectionExtensions
         }
 
         if (nyxIdProviders.Count == 0)
-            return BuildPrimaryFactory(configuredProviders, defaultName, options, loggerFactory);
+            return BuildPrimaryFactory(configuredProviders, defaultName, options, toolExecutionPort, loggerFactory);
 
         var standardProviders = configuredProviders
             .Where(provider => !IsNyxIdProviderType(provider.ProviderType))
             .ToList();
-        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName, loggerFactory);
+        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName, toolExecutionPort, loggerFactory);
         if (standardProviders.Count == 0)
             return nyxIdFactory;
 
-        var primaryFactory = BuildPrimaryFactory(standardProviders, defaultName, options, loggerFactory);
+        var primaryFactory = BuildPrimaryFactory(standardProviders, defaultName, options, toolExecutionPort, loggerFactory);
         var extraProviders = nyxIdFactory
             .GetAvailableProviders()
             .Select(nyxIdFactory.GetProvider)
@@ -680,10 +766,11 @@ public static class ServiceCollectionExtensions
         IReadOnlyList<ConfiguredProvider> configuredProviders,
         string defaultName,
         AevatarAIFeatureOptions options,
+        IAgentToolExecutionPort toolExecutionPort,
         ILoggerFactory? loggerFactory = null)
     {
         var primaryDefaultName = ResolveDefaultProviderName(configuredProviders, defaultName);
-        var meaiFactory = BuildMeaiFactory(configuredProviders, primaryDefaultName, loggerFactory);
+        var meaiFactory = BuildMeaiFactory(configuredProviders, primaryDefaultName, toolExecutionPort, loggerFactory);
         if (!options.EnableMEAIToTornadoFailover)
             return meaiFactory;
 
@@ -736,9 +823,10 @@ public static class ServiceCollectionExtensions
     private static MEAILLMProviderFactory BuildMeaiFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
         string defaultName,
+        IAgentToolExecutionPort toolExecutionPort,
         ILoggerFactory? loggerFactory = null)
     {
-        var factory = new MEAILLMProviderFactory();
+        var factory = new MEAILLMProviderFactory(toolExecutionPort);
         var providerLogger = loggerFactory?.CreateLogger<MEAILLMProvider>();
         foreach (var provider in configuredProviders)
         {
@@ -778,9 +866,10 @@ public static class ServiceCollectionExtensions
     private static NyxIdLLMProviderFactory BuildNyxIdFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
         string defaultName,
+        IAgentToolExecutionPort toolExecutionPort,
         ILoggerFactory? loggerFactory = null)
     {
-        var factory = new NyxIdLLMProviderFactory();
+        var factory = new NyxIdLLMProviderFactory(toolExecutionPort);
         // Without an explicit logger the provider chain (NyxIdLLMProvider and the
         // MEAILLMProvider it delegates to) falls back to NullLogger, which silences
         // upstream LLM error translations and the no-chunks streaming fallback in
@@ -1071,8 +1160,8 @@ public static class ServiceCollectionExtensions
     // source and cannot drift. Every nyxid registration path resolves its default through these
     // helpers, which apply per-deployment config overrides on top.
     private static string ResolveNyxIdDefaultRoute(IConfiguration configuration) =>
-        configuration["Aevatar:NyxId:DefaultRoute"] is { Length: > 0 } route
-            ? route
+        configuration["Aevatar:NyxId:DefaultRoute"] is { } route && !string.IsNullOrWhiteSpace(route)
+            ? route.Trim()
             : LlmDefaults.NyxIdRoute;
 
     private static string ResolveNyxIdDefaultModel(IConfiguration configuration, AevatarAIFeatureOptions options) =>
@@ -1151,10 +1240,33 @@ public static class ServiceCollectionExtensions
         services.AddOrnnSkills(o =>
         {
             if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
-                o.NyxIdSlug = options.OrnnNyxIdSlug;
+                o.NyxIdSlug = options.OrnnNyxIdSlug.Trim();
         });
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, WorkflowOrnnSkillPublishAssetValidator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, ScriptOrnnSkillPublishAssetValidator>());
+    }
+
+    private static void RegisterSystemSkillOverlay(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        if (!options.EnableSystemSkillOverlay || string.IsNullOrWhiteSpace(options.SystemSkillOverlaySetName))
+            return;
+
+        // Ensure the Ornn skill client (with the configured slug) is registered even when a host enables
+        // the overlay without the Ornn skill tools; the overlay reads the set through this client.
+        services.AddOrnnSkillClient(o =>
+        {
+            if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
+                o.NyxIdSlug = options.OrnnNyxIdSlug.Trim();
+        });
+
+        services.AddSystemSkillOverlay(o =>
+        {
+            o.Enabled = options.EnableSystemSkillOverlay;
+            o.SetName = options.SystemSkillOverlaySetName ?? string.Empty;
+            o.RefreshTtl = options.SystemSkillOverlayRefreshTtl;
+            o.MaxSkills = options.SystemSkillOverlayMaxSkills;
+            o.MaxBytes = options.SystemSkillOverlayMaxBytes;
+        });
     }
 
     private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)
@@ -1179,5 +1291,13 @@ public static class ServiceCollectionExtensions
     private static void RegisterBindingTools(IServiceCollection services)
     {
         services.AddBindingTools();
+    }
+
+    private sealed class ServiceProviderAgentToolExecutionPort(IServiceProvider serviceProvider) : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            serviceProvider.GetRequiredService<IAgentToolExecutionPort>().ExecuteAsync(request, ct);
     }
 }

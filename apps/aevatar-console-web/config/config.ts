@@ -157,7 +157,9 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
   define: {
     'process.env.CI': JSON.stringify(process.env.CI),
     'process.env.NYXID_BASE_URL': JSON.stringify(process.env.NYXID_BASE_URL),
-    'process.env.NYXID_CLIENT_ID': JSON.stringify(process.env.NYXID_CLIENT_ID),
+    'process.env.NYXID_CLIENT_ID': JSON.stringify(
+      process.env.NYXID_CLIENT_ID,
+    ),
     'process.env.NYXID_REDIRECT_URI': JSON.stringify(
       process.env.NYXID_REDIRECT_URI,
     ),

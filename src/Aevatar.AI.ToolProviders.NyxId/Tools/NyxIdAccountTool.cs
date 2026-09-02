@@ -4,8 +4,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to view current NyxID user profile and account status.</summary>
-public sealed class NyxIdAccountTool : IAgentTool
+public sealed class NyxIdAccountTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdAccountTool(NyxIdApiClient client) => _client = client;
@@ -16,6 +18,8 @@ public sealed class NyxIdAccountTool : IAgentTool
         "Get the current NyxID user's profile information including name, email, and account status.";
 
     public string ParametersSchema => """{"type":"object","properties":{}}""";
+
+    public bool IsReadOnly => true;
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

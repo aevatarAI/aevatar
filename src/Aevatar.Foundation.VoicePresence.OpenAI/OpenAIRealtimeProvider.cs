@@ -132,6 +132,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                     ProviderResponseId = functionCall.ProviderResponseId,
                 },
             },
+            OpenAIRealtimeErrorEvent error when IsBenignRealtimeRaceError(error.Code) => null,
             OpenAIRealtimeErrorEvent error => new VoiceProviderEvent
             {
                 Error = new VoiceProviderError
@@ -149,6 +150,16 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             },
             _ => null,
         };
+
+    // Benign idempotent realtime races that must NOT reach the client as fatal errors:
+    //   response_cancel_not_active               — an explicit response.cancel that lost the race to
+    //                                              OpenAI's server-side interrupt_response; the active
+    //                                              response is already gone.
+    //   conversation_already_has_active_response — a redundant response.create while one is active.
+    // Both mean the cancel/create post-condition already holds, so they are no-ops, not failures.
+    private static bool IsBenignRealtimeRaceError(string code) =>
+        string.Equals(code, "response_cancel_not_active", StringComparison.Ordinal) ||
+        string.Equals(code, "conversation_already_has_active_response", StringComparison.Ordinal);
 
     private BinaryData BuildSessionUpdateEvent(
         VoiceSessionConfig session,
@@ -523,14 +534,25 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                         continue;
                     }
 
-                    // Surface server-side rejections (e.g. response.create while a response is already
-                    // active -> conversation_already_has_active_response) at Warning so the live tool-result
-                    // round trip is observable without raising provider verbosity.
+                    // Genuine server-side rejections (rate_limit, auth, …) surface at Warning and reach
+                    // the client as an Error frame. Benign idempotent races
+                    // (response_cancel_not_active from losing to interrupt_response;
+                    // conversation_already_has_active_response from a redundant response.create) are
+                    // expected on every barge-in — log at Debug and let MapSessionEvent drop them so a
+                    // working voice session is never shown to the user as a fatal error.
                     if (sessionEvent is OpenAIRealtimeErrorEvent errorEvent)
-                        _logger.LogWarning(
-                            "OpenAI realtime error code={ErrorCode} message={ErrorMessage}",
-                            errorEvent.Code,
-                            errorEvent.Message);
+                    {
+                        if (IsBenignRealtimeRaceError(errorEvent.Code))
+                            _logger.LogDebug(
+                                "OpenAI realtime benign race error code={ErrorCode} message={ErrorMessage} (suppressed)",
+                                errorEvent.Code,
+                                errorEvent.Message);
+                        else
+                            _logger.LogWarning(
+                                "OpenAI realtime error code={ErrorCode} message={ErrorMessage}",
+                                errorEvent.Code,
+                                errorEvent.Message);
+                    }
 
                     var providerEvent = MapSessionEvent(sessionEvent);
                     if (providerEvent != null)

@@ -19,9 +19,8 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// Resolution rule:
 ///   1. If the StudioMember authority knows about (scope, member), return its
 ///      stable <c>publishedServiceId</c> — this is the Studio-bound case.
-///   2. Otherwise fall through to the deterministic legacy mapping
-///      (<c>publishedServiceId == memberId</c>) so direct platform binds
-///      keep working unchanged.
+///   2. Missing member authority or a blank published service identity is an
+///      invalid normal-business state and fails closed.
 ///
 /// Registered with <c>Replace</c> in Studio's capability so Studio-enabled
 /// hosts use the member authority instead of the platform's deterministic
@@ -55,15 +54,24 @@ public sealed class StudioAwareMemberPublishedServiceResolver : IMemberPublished
         var normalizedMemberId = NormalizeMemberId(request.MemberId);
 
         var detail = await _memberQueryPort.GetAsync(normalizedScopeId, normalizedMemberId, ct);
+        if (detail == null)
+        {
+            throw new InvalidOperationException(
+                $"Member '{normalizedMemberId}' was not found in scope '{normalizedScopeId}'.");
+        }
+
         var publishedServiceId = detail?.Summary.PublishedServiceId;
-        var resolvedServiceId = string.IsNullOrWhiteSpace(publishedServiceId)
-            ? normalizedMemberId  // legacy deterministic mapping for direct platform binds
-            : publishedServiceId;
+        if (string.IsNullOrWhiteSpace(publishedServiceId))
+        {
+            throw new InvalidOperationException(
+                $"Member '{normalizedMemberId}' has no published service in scope '{normalizedScopeId}'.");
+        }
 
         return new MemberPublishedServiceResolution(
             normalizedScopeId,
             normalizedMemberId,
-            resolvedServiceId);
+            publishedServiceId.Trim(),
+            IsMemberAuthorityBacked: true);
     }
 
     private static string NormalizeRequired(string? value, string fieldName)

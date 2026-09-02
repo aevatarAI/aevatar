@@ -7,6 +7,8 @@
     <RootNamespace>Aevatar.GAgentService.Projection</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Core\Aevatar.GAgentService.Core.csproj" />
     <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
@@ -25,6 +27,9 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="service_projection_read_models.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos;..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions" />
+    <Protobuf Include="service_projection_read_models.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos;..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions;..\..\Aevatar.Foundation.Abstractions;..\..\workflow\Aevatar.Workflow.Abstractions;..\..\Aevatar.ContentArtifacts.Abstractions" />
+    <Protobuf Include="Authorization/nyxid_authorization_catalog_read_model.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos;..\..\Aevatar.AI.Abstractions;..\..\workflow\Aevatar.Workflow.Abstractions" />
   </ItemGroup>
 </Project>

@@ -10,6 +10,37 @@ namespace Aevatar.GAgentService.Tests.Infrastructure;
 public sealed class SkillWorkflowMountAdapterTests
 {
     [Fact]
+    public void SkillWorkflowMountRequest_ToString_RedactsCredentialsAndWorkflows()
+    {
+        const string secretToken = "secret-token-sentinel-7f21c0";
+        const string secretWorkflowContents = "name: workflow-secret-sentinel-5a93de\nsteps: []";
+        var request = new SkillWorkflowMountRequest(
+            ScopeId: "scope-alpha",
+            NyxIdAccessToken: secretToken,
+            Workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "workflow-alpha",
+                    WorkflowYamls = [secretWorkflowContents],
+                },
+            ])
+        {
+            CallerId = "caller-alpha",
+        };
+
+        var rendered = request.ToString();
+
+        rendered.Should().Contain("ScopeId = scope-alpha");
+        rendered.Should().Contain("CallerId = caller-alpha");
+        rendered.Should().Contain("Credentials = [REDACTED]");
+        rendered.Should().Contain("Workflows = [REDACTED]");
+        rendered.Should().Contain("WorkflowCount = 1");
+        rendered.Should().NotContain(secretToken);
+        rendered.Should().NotContain(secretWorkflowContents);
+    }
+
+    [Fact]
     public void Constructor_NullDependencies_Throw()
     {
         var commandPort = new RecordingScopeWorkflowCommandPort();
@@ -67,7 +98,10 @@ public sealed class SkillWorkflowMountAdapterTests
                         "name: shared_child\nsteps: []",
                     ],
                 },
-            ]));
+            ])
+        {
+            CallerId = "caller-alpha",
+        });
 
         commandPort.Requests.Should().ContainSingle();
         commandPort.Requests[0].ScopeId.Should().Be("scope-1");
@@ -76,6 +110,8 @@ public sealed class SkillWorkflowMountAdapterTests
         commandPort.Requests[0].WorkflowYaml.Should().Be("name: talisman_review\nsteps: []");
         commandPort.Requests[0].InlineWorkflowYamls.Should().ContainSingle();
         commandPort.Requests[0].InlineWorkflowYamls!["shared_child"].Should().Be("name: shared_child\nsteps: []");
+        commandPort.Requests[0].CapabilityAdmission.Should().NotBeNull();
+        commandPort.Requests[0].CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
 
         result.Status.Should().Be("mounted");
         result.Mounted.Should().BeTrue();
@@ -83,6 +119,34 @@ public sealed class SkillWorkflowMountAdapterTests
         result.Workflows[0].WorkflowId.Should().Be("talisman_review");
         result.Workflows[0].ServiceId.Should().Be("talisman_review");
         result.Workflows[0].EndpointId.Should().Be("chat");
+    }
+
+    [Fact]
+    public async Task MountAsync_Throws_WhenAuthenticatedCallerIdentityIsMissing()
+    {
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                ["name: caller_required\nsteps: []"] = "caller_required",
+            }));
+
+        var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
+            ScopeId: "scope-alpha",
+            NyxIdAccessToken: "token-a",
+            Workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "caller_required",
+                    WorkflowYamls = ["name: caller_required\nsteps: []"],
+                },
+            ]));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*authenticated caller identity*");
+        commandPort.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -109,7 +173,10 @@ public sealed class SkillWorkflowMountAdapterTests
                         "name: duplicate\nsteps: []",
                     ],
                 },
-            ]));
+            ])
+        {
+            CallerId = "caller-alpha",
+        });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*duplicate workflow name*");
@@ -132,7 +199,10 @@ public sealed class SkillWorkflowMountAdapterTests
                     WorkflowId = "empty",
                     WorkflowYamls = [],
                 },
-            ]));
+            ])
+        {
+            CallerId = "caller-alpha",
+        });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Skill workflow 'empty' does not include any YAML documents.");
@@ -155,7 +225,10 @@ public sealed class SkillWorkflowMountAdapterTests
                     WorkflowId = "blank",
                     WorkflowYamls = ["  "],
                 },
-            ]));
+            ])
+        {
+            CallerId = "caller-alpha",
+        });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Skill workflow 'blank' contains an empty YAML document.");
@@ -184,7 +257,10 @@ public sealed class SkillWorkflowMountAdapterTests
                     WorkflowId = "bad",
                     WorkflowYamls = ["name: bad\nsteps: []"],
                 },
-            ]));
+            ])
+        {
+            CallerId = "caller-alpha",
+        });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("parse failed");
@@ -210,7 +286,10 @@ public sealed class SkillWorkflowMountAdapterTests
                     WorkflowId = "blank-name",
                     WorkflowYamls = ["name: blank\nsteps: []"],
                 },
-            ]));
+            ])
+        {
+            CallerId = "caller-alpha",
+        });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Skill workflow 'blank-name' must define a workflow name.");
@@ -261,6 +340,37 @@ public sealed class SkillWorkflowMountAdapterTests
                 return Task.FromResult(WorkflowYamlParseResult.Invalid(Failure));
 
             return Task.FromResult(WorkflowYamlParseResult.Success(workflowName));
+        }
+
+        public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default)
+        {
+            if (inlineWorkflowDocuments.Count == 0)
+                return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
+
+            var workflowYamlsByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string entryWorkflowName = string.Empty;
+            string entryWorkflowYaml = string.Empty;
+
+            for (var i = 0; i < inlineWorkflowDocuments.Count; i++)
+            {
+                var document = inlineWorkflowDocuments[i];
+                var parseResult = await ParseWorkflowYamlAsync(document.Yaml, ct);
+                if (!parseResult.Succeeded)
+                    return WorkflowInlineYamlBundleParseResult.Invalid(parseResult.Error, parseResult.ExternalCapabilityReadiness);
+
+                if (!workflowYamlsByName.TryAdd(parseResult.WorkflowName, document.Yaml))
+                    return WorkflowInlineYamlBundleParseResult.Invalid($"Duplicate workflow name '{parseResult.WorkflowName}' in workflowYamls.");
+
+                if (i == 0)
+                {
+                    entryWorkflowName = parseResult.WorkflowName;
+                    entryWorkflowYaml = document.Yaml;
+                }
+            }
+
+            return WorkflowInlineYamlBundleParseResult.Success(entryWorkflowName, entryWorkflowYaml, workflowYamlsByName);
         }
     }
 }

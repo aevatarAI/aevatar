@@ -35,7 +35,36 @@ public sealed class NyxIdDynamicClientRegistrationClientTests
         handler.Last.Should().NotBeNull();
         handler.Last!.RequestUri!.AbsoluteUri.Should().Be("https://nyxid.test/oauth/register");
         var request = await handler.Last.Content!.ReadFromJsonAsync<JsonElement>();
-        request.GetProperty("scope").GetString().Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+        var scope = request.GetProperty("scope").GetString();
+        scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+        scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
+        scope.Should().NotContain("llm:proxy", "capability scopes are not interactive OAuth scopes");
+    }
+
+    [Fact]
+    public async Task RegisterPublicClient_SendsAllNormalizedRedirectUris()
+    {
+        var handler = StubHandler.Json(HttpStatusCode.OK, new { client_id = "client-issued" });
+        var registrar = new NyxIdDynamicClientRegistrationClient(
+            new HttpClient(handler), NullLogger<NyxIdDynamicClientRegistrationClient>.Instance);
+
+        await registrar.RegisterPublicClientAsync(
+            "https://nyxid.test",
+            "aevatar",
+            [
+                " https://aevatar.test/api/oauth/nyxid-callback ",
+                "https://console.test/auth/callback",
+                "https://console.test/auth/callback",
+            ]);
+
+        var request = await handler.Last!.Content!.ReadFromJsonAsync<JsonElement>();
+        request.GetProperty("redirect_uris")
+            .EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should()
+            .Equal(
+                "https://aevatar.test/api/oauth/nyxid-callback",
+                "https://console.test/auth/callback");
     }
 
     [Fact]

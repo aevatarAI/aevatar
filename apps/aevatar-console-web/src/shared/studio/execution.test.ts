@@ -1,6 +1,7 @@
 import type { Node } from '@xyflow/react';
 import {
   buildExecutionTrace,
+  buildWorkflowExecutionNodeSnapshots,
   decorateNodesForExecution,
   type ExecutionTrace,
 } from './execution';
@@ -49,6 +50,47 @@ describe('buildExecutionTrace', () => {
     expect(outputLog?.clipboardText).toBe('Final answer');
     expect(outputLog?.previewText).toBe('Final answer');
     expect(outputLog?.payloadText).toContain('"stateVersion": 7');
+  });
+});
+
+describe('buildWorkflowExecutionNodeSnapshots', () => {
+  it('builds the submitted node snapshot directly from the workflow document', () => {
+    const snapshots = buildWorkflowExecutionNodeSnapshots({
+      name: 'Workflow Alpha',
+      steps: [
+        {
+          id: ' triage ',
+          type: 'llm_call',
+          targetRole: ' assistant ',
+        },
+        {
+          id: 'validate',
+          originalType: 'workflow_yaml_validate',
+          target_role: ' reviewer ',
+        },
+        {
+          id: '',
+          type: 'emit',
+        },
+      ],
+    });
+
+    expect(snapshots).toEqual([
+      {
+        stepId: 'triage',
+        stepType: 'llm_call',
+        subtitle: 'LLM call',
+        targetRole: 'assistant',
+        title: 'triage',
+      },
+      {
+        stepId: 'validate',
+        stepType: 'workflow_yaml_validate',
+        subtitle: 'Workflow YAML validation',
+        targetRole: 'reviewer',
+        title: 'validate',
+      },
+    ]);
   });
 });
 

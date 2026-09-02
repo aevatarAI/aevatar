@@ -111,6 +111,7 @@ public sealed class NyxIdRelayTransport
         var timestamp = ParseTimestamp(payload.Timestamp);
         var botId = payload.Agent?.ApiKeyId?.Trim();
         var platformMessageId = ResolvePlatformMessageId(payload, platform, larkFacts);
+        var deliveryTarget = ResolveDeliveryTarget(platform, scope, conversationIdentity, senderId, larkFacts, isCardAction);
         var correlationId = string.IsNullOrWhiteSpace(payload.CorrelationId)
             ? payload.MessageId.Trim()
             : payload.CorrelationId.Trim();
@@ -165,6 +166,10 @@ public sealed class NyxIdRelayTransport
                 NyxLarkOperatorUserId = NormalizeOptional(larkFacts.OperatorUserId) ?? string.Empty,
                 NyxLarkOperatorOpenId = NormalizeOptional(larkFacts.OperatorOpenId) ?? string.Empty,
                 NyxLarkOperatorUnionId = NormalizeOptional(larkFacts.OperatorUnionId) ?? string.Empty,
+                DeliveryAddressId = deliveryTarget.PrimaryAddressId,
+                DeliveryAddressType = deliveryTarget.PrimaryAddressType,
+                DeliveryFallbackAddressId = deliveryTarget.FallbackAddressId,
+                DeliveryFallbackAddressType = deliveryTarget.FallbackAddressType,
             },
         };
 
@@ -201,6 +206,14 @@ public sealed class NyxIdRelayTransport
         string? OperatorOpenId,
         string? OperatorUnionId);
 
+    private readonly record struct RelayDeliveryTarget(
+        string PrimaryAddressId,
+        string PrimaryAddressType,
+        string FallbackAddressId,
+        string FallbackAddressType);
+
+    private readonly record struct RelayDeliveryAddress(string AddressId, string AddressType);
+
     private static string NormalizeContentType(NyxIdRelayContentPayload? content)
     {
         var value = content?.ContentType;
@@ -220,14 +233,14 @@ public sealed class NyxIdRelayTransport
             {
                 var attachment = BuildAttachment(callbackAttachment);
                 if (attachment is not null)
-                    AddAttachment(attachments, seenAttachmentKeys, attachment);
+                    AddAttachment(attachments, seenAttachmentKeys, attachment, platform);
             }
         }
 
         if (IsLark(platform))
         {
             foreach (var candidate in EnumerateLarkRawAttachmentCandidates(payload))
-                AddAttachment(attachments, seenAttachmentKeys, BuildLarkAttachment(candidate));
+                AddAttachment(attachments, seenAttachmentKeys, BuildLarkAttachment(candidate), platform);
         }
 
         return attachments;
@@ -236,11 +249,20 @@ public sealed class NyxIdRelayTransport
     private static void AddAttachment(
         List<AttachmentRef> attachments,
         HashSet<string> seenAttachmentKeys,
-        AttachmentRef attachment)
+        AttachmentRef attachment,
+        string platform)
     {
-        var dedupeKey = $"{attachment.Kind}:{attachment.AttachmentId}";
+        var dedupeKey = BuildAttachmentDedupeKey(attachment, platform);
         if (seenAttachmentKeys.Add(dedupeKey))
             attachments.Add(attachment);
+    }
+
+    private static string BuildAttachmentDedupeKey(AttachmentRef attachment, string platform)
+    {
+        var attachmentId = IsLark(platform)
+            ? LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId) ?? attachment.AttachmentId
+            : attachment.AttachmentId;
+        return $"{attachment.Kind}:{attachmentId}";
     }
 
     private static AttachmentRef? BuildAttachment(NyxIdRelayAttachmentPayload attachment)
@@ -544,11 +566,37 @@ public sealed class NyxIdRelayTransport
 
         // Lark posts carry an optional title; surface it as the leading line so the model
         // sees the same heading the user typed.
-        var title = ReadOptionalStringProperty(content, "title");
+        var title = ReadLarkPostTitle(content);
         if (title is not null)
             lines.Insert(0, title);
 
         return lines.Count == 0 ? null : string.Join("\n", lines);
+    }
+
+    private static string? ReadLarkPostTitle(JsonElement content)
+    {
+        var title = ReadOptionalStringProperty(content, "title");
+        if (title is not null)
+            return title;
+
+        if (content.ValueKind != JsonValueKind.Object)
+            return null;
+
+        foreach (var property in content.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.Object ||
+                !property.Value.TryGetProperty("content", out var nested) ||
+                nested.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            title = ReadOptionalStringProperty(property.Value, "title");
+            if (title is not null)
+                return title;
+        }
+
+        return null;
     }
 
     private static void AppendLarkPostSegmentText(JsonElement segment, StringBuilder builder)
@@ -1006,6 +1054,74 @@ public sealed class NyxIdRelayTransport
         };
     }
 
+    private static RelayDeliveryTarget ResolveDeliveryTarget(
+        string platform,
+        ConversationScope scope,
+        string conversationIdentity,
+        string? senderId,
+        LarkRelayConversationFacts larkFacts,
+        bool isCardAction)
+    {
+        if (!IsLark(platform))
+            return EmptyDeliveryTarget();
+
+        var chatType = isCardAction ? "card_action" : ResolveChatType(scope);
+        var unionId = NormalizeOptional(larkFacts.SenderUnionId) ?? NormalizeOptional(larkFacts.OperatorUnionId);
+        var primary = ResolvePrimaryLarkDeliveryAddress(chatType, conversationIdentity, senderId, unionId, larkFacts.ChatId);
+        var fallback = ResolveFallbackLarkDeliveryAddress(chatType, primary.AddressType, unionId);
+        return new RelayDeliveryTarget(
+            primary.AddressId,
+            primary.AddressType,
+            fallback.AddressId,
+            fallback.AddressType);
+    }
+
+    private static RelayDeliveryTarget EmptyDeliveryTarget() =>
+        new(string.Empty, string.Empty, string.Empty, string.Empty);
+
+    private static RelayDeliveryAddress ResolvePrimaryLarkDeliveryAddress(
+        string chatType,
+        string conversationIdentity,
+        string? senderId,
+        string? unionId,
+        string? chatId)
+    {
+        var normalizedChatId = NormalizeOptional(chatId);
+        if (normalizedChatId is not null)
+            return new RelayDeliveryAddress(normalizedChatId, "chat_id");
+
+        if (string.Equals(chatType, "p2p", StringComparison.Ordinal))
+        {
+            if (unionId is not null)
+                return new RelayDeliveryAddress(unionId, "union_id");
+
+            var normalizedSenderId = NormalizeOptional(senderId);
+            if (normalizedSenderId is not null)
+                return new RelayDeliveryAddress(normalizedSenderId, "open_id");
+
+            return new RelayDeliveryAddress(string.Empty, string.Empty);
+        }
+
+        return new RelayDeliveryAddress(
+            NormalizeOptional(conversationIdentity) ?? string.Empty,
+            "chat_id");
+    }
+
+    private static RelayDeliveryAddress ResolveFallbackLarkDeliveryAddress(
+        string chatType,
+        string primaryAddressType,
+        string? unionId)
+    {
+        if (!string.Equals(chatType, "p2p", StringComparison.Ordinal) ||
+            !string.Equals(primaryAddressType, "chat_id", StringComparison.Ordinal) ||
+            unionId is null)
+        {
+            return new RelayDeliveryAddress(string.Empty, string.Empty);
+        }
+
+        return new RelayDeliveryAddress(unionId, "union_id");
+    }
+
     private static LarkRelayConversationFacts ResolveLarkRelayConversationFacts(
         string platform,
         NyxIdRelayCallbackPayload payload,
@@ -1114,6 +1230,16 @@ public sealed class NyxIdRelayTransport
             _ => null,
         };
     }
+
+    private static string ResolveChatType(ConversationScope scope) =>
+        scope switch
+        {
+            ConversationScope.DirectMessage => "p2p",
+            ConversationScope.Group => "group",
+            ConversationScope.Channel => "channel",
+            ConversationScope.Thread => "thread",
+            _ => "conversation",
+        };
 
     private static string? NormalizeOptional(string? value)
     {

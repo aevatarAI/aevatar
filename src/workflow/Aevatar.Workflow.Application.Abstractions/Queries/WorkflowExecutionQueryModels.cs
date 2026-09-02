@@ -193,6 +193,7 @@ public sealed class WorkflowRunStepTrace
     public string AssignedValue { get; set; } = string.Empty;
     public string SuspensionType { get; set; } = string.Empty;
     public string SuspensionPrompt { get; set; } = string.Empty;
+    public string SuspensionContent { get; set; } = string.Empty;
     public int? SuspensionTimeoutSeconds { get; set; }
     public string RequestedVariableName { get; set; } = string.Empty;
     public WorkflowRunUsageMetrics Usage { get; set; } = new();

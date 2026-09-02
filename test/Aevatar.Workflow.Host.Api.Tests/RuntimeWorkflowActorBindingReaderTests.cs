@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -8,6 +9,14 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class ProjectionWorkflowActorBindingReaderTests
 {
+    [Fact]
+    public void WorkflowActorBindingContract_ShouldExposeBoundWorkflowRevisionIdentity()
+    {
+        typeof(WorkflowActorBinding).GetProperty("WorkflowId").Should().NotBeNull();
+        typeof(WorkflowActorBinding).GetProperty("RevisionId").Should().NotBeNull();
+        typeof(WorkflowActorBinding).GetProperty("ExpectedExecutionMode").Should().NotBeNull();
+    }
+
     [Fact]
     public async Task GetAsync_ShouldThrow_WhenActorIdBlank()
     {
@@ -31,6 +40,12 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
     [Fact]
     public async Task GetAsync_ShouldMapRunBinding_FromProjectedDocument()
     {
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "yaml",
+            new Dictionary<string, string> { ["child"] = "yaml-child" },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
         var reader = CreateReader(
             getDocumentAsync: (_, _) => Task.FromResult<WorkflowActorBindingDocument?>(new WorkflowActorBindingDocument
             {
@@ -40,6 +55,11 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 RunId = "run-1",
                 WorkflowName = "direct",
                 WorkflowYaml = "yaml",
+                SourceKind = "service_revision",
+                WorkflowId = "wf-alpha",
+                RevisionId = "rev-alpha",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 InlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["child"] = "yaml-child",
@@ -56,6 +76,11 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
         result.WorkflowName.Should().Be("direct");
         result.WorkflowYaml.Should().Be("yaml");
         result.InlineWorkflowYamls.Should().ContainKey("child").WhoseValue.Should().Be("yaml-child");
+        result.SourceKind.Should().Be("service_revision");
+        result.WorkflowId.Should().Be("wf-alpha");
+        result.RevisionId.Should().Be("rev-alpha");
+        result.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        result.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
     }
 
     [Fact]
@@ -135,6 +160,9 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 query.Filters.Should().Contain(filter =>
                     filter.FieldPath == nameof(WorkflowActorBindingDocument.DefinitionActorId) &&
                     filter.Operator == ProjectionDocumentFilterOperator.In);
+                query.Filters.Should().Contain(filter =>
+                    filter.FieldPath == nameof(WorkflowActorBindingDocument.RunId) &&
+                    filter.Operator == ProjectionDocumentFilterOperator.In);
 
                 return Task.FromResult(new ProjectionDocumentQueryResult<WorkflowActorBindingDocument>
                 {
@@ -156,7 +184,8 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
             new WorkflowRunBindingQuery(
                 " scope-1 ",
                 ["definition-1", "definition-2", "definition-1", " "],
-                Take: 500),
+                Take: 500,
+                RunIds: ["run-2", "run-2", " "]),
             CancellationToken.None);
 
         result.Should().ContainSingle();

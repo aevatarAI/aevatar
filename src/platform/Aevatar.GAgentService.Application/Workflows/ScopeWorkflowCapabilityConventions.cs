@@ -32,18 +32,26 @@ internal static class ScopeWorkflowCapabilityConventions
         MapField<string, string> target,
         IReadOnlyDictionary<string, string>? source)
     {
+        foreach (var (key, value) in NormalizeInlineWorkflowYamls(source))
+            target[key] = value;
+    }
+
+    public static IReadOnlyDictionary<string, string> NormalizeInlineWorkflowYamls(
+        IReadOnlyDictionary<string, string>? source)
+    {
+        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
         if (source == null)
-            return;
+            return normalized;
 
         foreach (var (key, value) in source)
         {
             var normalizedKey = NormalizeOptional(key);
             var normalizedValue = NormalizeOptional(value);
-            if (string.IsNullOrWhiteSpace(normalizedKey) || string.IsNullOrWhiteSpace(normalizedValue))
-                continue;
-
-            target[normalizedKey] = normalizedValue;
+            if (!string.IsNullOrWhiteSpace(normalizedKey) && !string.IsNullOrWhiteSpace(normalizedValue))
+                normalized[normalizedKey] = normalizedValue;
         }
+
+        return normalized;
     }
 
     public static string NormalizeOptional(string? value) => value?.Trim() ?? string.Empty;

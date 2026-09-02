@@ -66,6 +66,8 @@ public sealed class UserConfigCurrentStateProjector
             GithubUsername = state.GithubUsername,
             MaxToolRounds = state.MaxToolRounds,
         };
+        if (state.LlmSelection is not null)
+            document.LlmSelection = state.LlmSelection.Clone();
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }

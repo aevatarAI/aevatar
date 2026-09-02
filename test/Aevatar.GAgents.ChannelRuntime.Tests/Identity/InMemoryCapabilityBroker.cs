@@ -54,7 +54,10 @@ internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker, IExtern
         CancellationToken ct = default)
     {
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
-        return Task.FromResult(_challengeFactory(externalSubject));
+        var challenge = _challengeFactory(externalSubject);
+        challenge.RenewsExistingBinding =
+            challenge.RenewsExistingBinding || _bindings.ContainsKey(externalSubject.ToActorId());
+        return Task.FromResult(challenge);
     }
 
     public Task<BindingId?> ResolveAsync(
@@ -91,6 +94,22 @@ internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker, IExtern
             throw new BindingRevokedException(externalSubject, "Binding revoked at NyxID.");
 
         return Task.FromResult(_handleFactory(externalSubject, bindingId, scope));
+    }
+
+    public Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
+        ExternalSubjectRef externalSubject,
+        string bindingId,
+        CapabilityScope scope,
+        CancellationToken ct = default)
+    {
+        ExternalSubjectRefExtensions.EnsureValid(externalSubject);
+        ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
+        ArgumentNullException.ThrowIfNull(scope);
+
+        if (_revokedBindings.ContainsKey(bindingId))
+            throw new BindingRevokedException(externalSubject, "Binding revoked at NyxID.");
+
+        return Task.FromResult(_handleFactory(externalSubject, new BindingId { Value = bindingId }, scope));
     }
 
     private static BindingChallenge DefaultChallenge(ExternalSubjectRef externalSubject) =>

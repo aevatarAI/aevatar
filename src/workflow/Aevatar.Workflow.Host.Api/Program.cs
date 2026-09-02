@@ -24,11 +24,19 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddAevatarPlatform();
+builder.AddWorkflowAgentToolAdmission();
+// NyxID-backed current-user resolver plus aevatar admin access policy.
+builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
 builder.Services.AddNyxIdTools(options =>
 {
-    options.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
-                      ?? builder.Configuration["Cli:App:NyxId:Authority"]
-                      ?? builder.Configuration["Aevatar:Authentication:Authority"];
+    // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
+    // non-empty value; an absent/empty config key must NOT clobber the default to null.
+    var nyxAuthority = builder.Configuration["Aevatar:NyxId:ApiBaseUrl"]
+                       ?? builder.Configuration["Aevatar:NyxId:Authority"]
+                       ?? builder.Configuration["Cli:App:NyxId:Authority"]
+                       ?? builder.Configuration["Aevatar:Authentication:Authority"];
+    if (!string.IsNullOrWhiteSpace(nyxAuthority))
+        options.BaseUrl = nyxAuthority;
     if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
         options.ProxyFileArtifactMaxBytes = maxBytes;
 });

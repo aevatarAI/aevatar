@@ -9,7 +9,7 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// points scope the read explicitly: <see cref="GetOwnerAsync"/> for the
 /// bot-owner ambient scope (Studio API, streaming proxy), and
 /// <see cref="GetForBindingAsync"/> for the sender's
-/// <c>user-config-&lt;binding-id&gt;</c> actor (channel inbound).
+/// <c>channel-user-config-&lt;binding-id&gt;</c> actor (channel inbound).
 /// </summary>
 internal sealed class ActorBackedNyxIdUserLlmPreferencesStore : INyxIdUserLlmPreferencesStore
 {
@@ -29,13 +29,18 @@ internal sealed class ActorBackedNyxIdUserLlmPreferencesStore : INyxIdUserLlmPre
     public async Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
-        var config = await _queryPort.GetAsync(bindingId.Trim(), cancellationToken);
+        var config = await _queryPort.GetAsync(
+            UserConfigResourceKey.ForChannelBinding(bindingId),
+            cancellationToken);
         return Project(config);
     }
 
     private static NyxIdUserLlmPreferences Project(UserConfig config)
         => new(
-            config.DefaultModel,
-            UserConfigLlmRoute.Normalize(config.PreferredLlmRoute),
+            config.LlmSelection?.Clone() ?? LLMSelectionPolicy.SystemDefaultSelection(),
+            LLMSelectionPolicy.ClassifyPersisted(
+                config.LlmSelection,
+                config.PreferredLlmRoute,
+                config.DefaultModel),
             config.MaxToolRounds);
 }

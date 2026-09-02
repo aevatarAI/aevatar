@@ -1,21 +1,46 @@
+import {
+  expectArray,
+  expectRecord,
+  expectString,
+  normalizeEnumValue,
+  readBoolean,
+  readNullableString,
+  readNumber,
+  readString,
+} from '@/shared/api/http/decoders';
+import { readResponseErrorDetails } from '@/shared/api/http/error';
+import type { WorkflowCatalogItemDetail } from '@/shared/api/models';
+import { decodeWorkflowCatalogItemDetailResponse } from '@/shared/api/runtimeDecoders';
+import { scopesApi } from '@/shared/api/scopesApi';
+import { authFetch } from '@/shared/auth/fetch';
+import { t } from '@/shared/i18n/messages';
+import type {
+  ScopeWorkflowDetail,
+  ScopeWorkflowSummary,
+} from '@/shared/models/scopes';
 import type {
   StudioAppContext,
   StudioAuthSession,
   StudioConnectorCatalog,
   StudioConnectorCatalogImportResult,
   StudioConnectorDraftResponse,
-  StudioScopeBindingActivationResult,
-  StudioScopeBindingImplementationKind,
-  StudioScopeBindingRetirementResult,
-  StudioScopeBindingRevision,
-  StudioScopeBindingTargetKind,
-  StudioScopeGAgentBindingInput,
-  StudioScopeBindingStatus,
   StudioExecutionDetail,
   StudioExecutionSummary,
-  StudioMemberBindingContract,
+  StudioExplicitRequestBodyMode,
+  StudioExplicitRequestMethod,
+  StudioExplicitRequestPreview,
+  StudioExplicitRequestPreviewInput,
+  StudioExplicitRequestPreviewItem,
+  StudioExplicitRequestResponseMode,
+  StudioExplicitRequestRisk,
+  StudioLlmModelCatalog,
+  StudioLlmModelCatalogCertainty,
+  StudioLlmModelCatalogDiagnostic,
+  StudioLlmModelSelection,
+  StudioLlmSelection,
   StudioMemberBindingAcceptedResponse,
   StudioMemberBindingAckStage,
+  StudioMemberBindingContract,
   StudioMemberBindingFailure,
   StudioMemberBindingRunResult,
   StudioMemberBindingRunRole,
@@ -31,82 +56,75 @@ import type {
   StudioMemberRoster,
   StudioMemberSummary,
   StudioMemberWorkflowBindingInput,
-  StudioParseYamlResult,
-  StudioRoleCatalogImportResult,
-  StudioRoleCatalog,
-  StudioRoleDraftResponse,
   StudioOrnnHealthResult,
   StudioOrnnSkillSearchResult,
+  StudioParseYamlResult,
+  StudioPublishWorkflowAcceptedResult,
+  StudioPublishWorkflowInput,
+  StudioRoleCatalog,
+  StudioRoleCatalogImportResult,
+  StudioRoleDraftResponse,
+  StudioSaveAndBindWorkflowAcceptedResult,
+  StudioSaveAndBindWorkflowInput,
+  StudioSaveUserLlmIntent,
+  StudioSaveWorkflowInput,
+  StudioScopeBindingActivationResult,
+  StudioScopeBindingImplementationKind,
+  StudioScopeBindingResult,
+  StudioScopeBindingRetirementResult,
+  StudioScopeBindingRevision,
+  StudioScopeBindingStatus,
+  StudioScopeBindingTargetKind,
+  StudioScopeGAgentBindingInput,
+  StudioScopeGAgentBindingResult,
   StudioScopeScriptBindingActivationResult,
   StudioScopeScriptBindingInput,
-  StudioScopeBindingResult,
-  StudioScopeGAgentBindingResult,
   StudioScopeScriptBindingResult,
   StudioScopeScriptBindingStatus,
-  StudioRuntimeTestResult,
-  StudioSaveSettingsInput,
-  StudioSaveWorkflowInput,
   StudioSerializeYamlResult,
-  StudioSettings,
   StudioStartExecutionInput,
-  StudioTeamCreateInput,
   StudioTeamCommandResponse,
   StudioTeamCommandStatus,
+  StudioTeamCreateInput,
   StudioTeamLifecycleStage,
   StudioTeamRoster,
   StudioTeamSummary,
   StudioTeamUpdateInput,
   StudioUserConfig,
-  StudioUserConfigSaveReceipt,
   StudioUserConfigRuntime,
+  StudioUserConfigSaveReceipt,
+  StudioUserLlmRemediation,
+  StudioUserLlmSelectionStatus,
   StudioUserLlmSettings,
+  StudioWorkflowBoardSnapshot,
+  StudioWorkflowBoardSnapshotRequest,
+  StudioWorkflowDocument,
   StudioWorkflowDraft,
   StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDraftSummary,
-  StudioWorkflowDocument,
   StudioWorkflowFile,
   StudioWorkflowSaveResult,
   StudioWorkflowSummary,
   StudioWorkspaceSettings,
-} from "./models";
+} from './models';
 import {
   normalizeStudioMemberLifecycleStage,
   normalizeStudioScopeBindingImplementationKind,
   normalizeStudioTeamLifecycleStage,
-} from "./models";
-import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
-import { scopesApi } from "@/shared/api/scopesApi";
-import {
-  expectArray,
-  expectRecord,
-  expectString,
-  normalizeEnumValue,
-  readBoolean,
-  readNullableString,
-  readNumber,
-  readString,
-} from "@/shared/api/http/decoders";
-import { readResponseErrorDetails } from "@/shared/api/http/error";
-import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
-import { authFetch } from "@/shared/auth/fetch";
-import type {
-  ScopeWorkflowDetail,
-  ScopeWorkflowSummary,
-} from "@/shared/models/scopes";
-import { getOrnnRuntimeConfig } from "./ornnConfig";
-import { t } from "@/shared/i18n/messages";
+} from './models';
+import { getOrnnRuntimeConfig } from './ornnConfig';
 
 const JSON_HEADERS = {
-  "Content-Type": "application/json",
-  Accept: "application/json",
+  'Content-Type': 'application/json',
+  Accept: 'application/json',
 };
 async function studioHostFetch(
   input: string,
-  init?: RequestInit
+  init?: RequestInit,
 ): Promise<Response> {
   const headers = new Headers(init?.headers);
   return authFetch(input, {
-    credentials: "same-origin",
+    credentials: 'same-origin',
     ...init,
     headers,
   });
@@ -114,11 +132,11 @@ async function studioHostFetch(
 
 async function externalFetch(
   input: string,
-  init?: RequestInit
+  init?: RequestInit,
 ): Promise<Response> {
   const headers = new Headers(init?.headers);
-  if (!headers.has("Accept")) {
-    headers.set("Accept", "application/json");
+  if (!headers.has('Accept')) {
+    headers.set('Accept', 'application/json');
   }
 
   return authFetch(input, {
@@ -133,7 +151,7 @@ export class StudioApiError extends Error {
 
   constructor(message: string, status: number, code?: string) {
     super(message);
-    this.name = "StudioApiError";
+    this.name = 'StudioApiError';
     this.code = code;
     this.status = status;
   }
@@ -143,19 +161,33 @@ export function isStudioApiStatus(error: unknown, status: number): boolean {
   return error instanceof StudioApiError && error.status === status;
 }
 
-async function createStudioApiError(response: Response): Promise<StudioApiError> {
+export function isStudioApiErrorCode(
+  error: unknown,
+  status: number,
+  code: string,
+): boolean {
+  return (
+    error instanceof StudioApiError &&
+    error.status === status &&
+    error.code === code
+  );
+}
+
+async function createStudioApiError(
+  response: Response,
+): Promise<StudioApiError> {
   const details = await readResponseErrorDetails(response);
   return new StudioApiError(details.message, response.status, details.code);
 }
 
 function isJsonContentType(contentType: string | null): boolean {
-  const value = String(contentType || "").toLowerCase();
-  return value.includes("application/json") || value.includes("+json");
+  const value = String(contentType || '').toLowerCase();
+  return value.includes('application/json') || value.includes('+json');
 }
 
 function readContentType(response: Response): string | null {
   const headers = (response as Response & { headers?: Headers }).headers;
-  return headers?.get?.("content-type") ?? null;
+  return headers?.get?.('content-type') ?? null;
 }
 
 function trimOptional(value: string | null | undefined): string | undefined {
@@ -165,8 +197,145 @@ function trimOptional(value: string | null | undefined): string | undefined {
 
 function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined)
+    Object.entries(value).filter(([, entry]) => entry !== undefined),
   ) as T;
+}
+
+function readExplicitRequestEnum<T extends string>(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+  allowedValues: readonly T[],
+): T {
+  const value = readString(record, key, label);
+  if (!allowedValues.includes(value as T)) {
+    throw new Error(`${label} is not supported.`);
+  }
+
+  return value as T;
+}
+
+function readNonBlankExplicitRequestString(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): string {
+  const value = readString(record, key, label);
+  if (!value.trim()) {
+    throw new Error(`${label} must not be blank.`);
+  }
+
+  return value;
+}
+
+function decodeStudioExplicitRequestPreviewItem(
+  value: unknown,
+  label = 'StudioExplicitRequestPreviewItem',
+): StudioExplicitRequestPreviewItem {
+  const record = expectRecord(value, label);
+  const allowedExecutionModes = expectArray(
+    record.allowedExecutionModes,
+    `${label}.allowedExecutionModes`,
+    (entry, entryLabel) => {
+      if (entry !== 'interactive' && entry !== 'durable') {
+        throw new Error(`${entryLabel} is not supported.`);
+      }
+
+      return entry;
+    },
+  );
+  if (allowedExecutionModes.length === 0) {
+    throw new Error(`${label}.allowedExecutionModes must not be empty.`);
+  }
+
+  return {
+    callSiteId: readNonBlankExplicitRequestString(
+      record,
+      'callSiteId',
+      `${label}.callSiteId`,
+    ),
+    requestContractDigest: readNonBlankExplicitRequestString(
+      record,
+      'requestContractDigest',
+      `${label}.requestContractDigest`,
+    ),
+    userServiceId: readNonBlankExplicitRequestString(
+      record,
+      'userServiceId',
+      `${label}.userServiceId`,
+    ),
+    method: readExplicitRequestEnum<StudioExplicitRequestMethod>(
+      record,
+      'method',
+      `${label}.method`,
+      ['get', 'head', 'options', 'post', 'put', 'patch', 'delete'],
+    ),
+    pathTemplate: readNonBlankExplicitRequestString(
+      record,
+      'pathTemplate',
+      `${label}.pathTemplate`,
+    ),
+    bodyMode: readExplicitRequestEnum<StudioExplicitRequestBodyMode>(
+      record,
+      'bodyMode',
+      `${label}.bodyMode`,
+      ['none', 'json'],
+    ),
+    bodyRequired: readBoolean(record, 'bodyRequired', `${label}.bodyRequired`),
+    responseMode: readExplicitRequestEnum<StudioExplicitRequestResponseMode>(
+      record,
+      'responseMode',
+      `${label}.responseMode`,
+      ['text', 'file_artifact'],
+    ),
+    effectiveRisk: readExplicitRequestEnum<StudioExplicitRequestRisk>(
+      record,
+      'effectiveRisk',
+      `${label}.effectiveRisk`,
+      ['read_only', 'write', 'destructive'],
+    ),
+    approvalRequired: readBoolean(
+      record,
+      'approvalRequired',
+      `${label}.approvalRequired`,
+    ),
+    allowedExecutionModes,
+  };
+}
+
+function decodeStudioExplicitRequestPreview(
+  value: unknown,
+): StudioExplicitRequestPreview {
+  const record = expectRecord(value, 'StudioExplicitRequestPreview');
+  const items = expectArray(
+    record.items,
+    'StudioExplicitRequestPreview.items',
+    decodeStudioExplicitRequestPreviewItem,
+  );
+  const callSiteIds = new Set<string>();
+  for (const item of items) {
+    if (callSiteIds.has(item.callSiteId)) {
+      throw new Error(
+        `StudioExplicitRequestPreview.items contains duplicate callSiteId '${item.callSiteId}'.`,
+      );
+    }
+
+    callSiteIds.add(item.callSiteId);
+  }
+
+  return {
+    workflowId: readNonBlankExplicitRequestString(
+      record,
+      'workflowId',
+      'StudioExplicitRequestPreview.workflowId',
+    ),
+    revisionId: readNonBlankExplicitRequestString(
+      record,
+      'revisionId',
+      'StudioExplicitRequestPreview.revisionId',
+    ),
+    items,
+  };
 }
 
 function toScopeWorkflowDirectoryId(scopeId: string): string {
@@ -178,19 +347,23 @@ function toScopeWorkflowPath(scopeId: string, workflowId: string): string {
 }
 
 function resolveScopeWorkflowName(workflow: ScopeWorkflowSummary): string {
-  return workflow.displayName?.trim() || workflow.workflowName?.trim() || workflow.workflowId;
+  return (
+    workflow.displayName?.trim() ||
+    workflow.workflowName?.trim() ||
+    workflow.workflowId
+  );
 }
 
 function toCommittedWorkflowSummary(
   scopeId: string,
-  workflow: ScopeWorkflowSummary
+  workflow: ScopeWorkflowSummary,
 ): StudioWorkflowSummary {
   return {
     activeRevisionId: trimOptional(workflow.activeRevisionId) ?? null,
     serviceKey: trimOptional(workflow.serviceKey) ?? null,
     workflowId: workflow.workflowId,
     name: resolveScopeWorkflowName(workflow),
-    description: "",
+    description: '',
     fileName: `${workflow.workflowId}.yaml`,
     filePath: toScopeWorkflowPath(scopeId, workflow.workflowId),
     directoryId: toScopeWorkflowDirectoryId(scopeId),
@@ -203,11 +376,11 @@ function toCommittedWorkflowSummary(
 
 function toCommittedWorkflowFile(
   scopeId: string,
-  detail: ScopeWorkflowDetail
+  detail: ScopeWorkflowDetail,
 ): StudioWorkflowFile {
   const workflow = detail.workflow;
   if (!workflow) {
-    throw new Error("Not Found");
+    throw new Error('Not Found');
   }
 
   return {
@@ -217,7 +390,7 @@ function toCommittedWorkflowFile(
     filePath: toScopeWorkflowPath(scopeId, workflow.workflowId),
     directoryId: toScopeWorkflowDirectoryId(scopeId),
     directoryLabel: scopeId,
-    yaml: detail.source?.workflowYaml ?? "",
+    yaml: detail.source?.workflowYaml ?? '',
     document: null,
     draftExists: false,
     findings: [],
@@ -227,7 +400,7 @@ function toCommittedWorkflowFile(
 
 function toWorkflowFile(
   draft: StudioWorkflowDraft,
-  draftExists: boolean
+  draftExists: boolean,
 ): StudioWorkflowFile {
   return {
     ...draft,
@@ -239,53 +412,57 @@ function toWorkflowFile(
 
 function decodeStudioWorkflowDraft(
   value: unknown,
-  label = "StudioWorkflowDraft"
+  label = 'StudioWorkflowDraft',
 ): StudioWorkflowDraft {
   const record = expectRecord(value, label);
   return {
-    workflowId: readString(record, "workflowId", `${label}.workflowId`),
-    name: readString(record, "name", `${label}.name`),
-    fileName: readString(record, "fileName", `${label}.fileName`),
-    filePath: readString(record, "filePath", `${label}.filePath`),
-    directoryId: readString(record, "directoryId", `${label}.directoryId`),
+    workflowId: readString(record, 'workflowId', `${label}.workflowId`),
+    name: readString(record, 'name', `${label}.name`),
+    fileName: readString(record, 'fileName', `${label}.fileName`),
+    filePath: readString(record, 'filePath', `${label}.filePath`),
+    directoryId: readString(record, 'directoryId', `${label}.directoryId`),
     directoryLabel: readString(
       record,
-      "directoryLabel",
-      `${label}.directoryLabel`
+      'directoryLabel',
+      `${label}.directoryLabel`,
     ),
-    yaml: readString(record, "yaml", `${label}.yaml`),
+    yaml: readString(record, 'yaml', `${label}.yaml`),
     layout: record.layout,
-    updatedAtUtc: readString(record, "updatedAtUtc", `${label}.updatedAtUtc`),
+    updatedAtUtc: readString(record, 'updatedAtUtc', `${label}.updatedAtUtc`),
   };
 }
 
 function decodeStudioWorkflowDraftCreateAcceptedReceipt(
   value: unknown,
-  label = "StudioWorkflowDraftCreateAcceptedReceipt"
+  label = 'StudioWorkflowDraftCreateAcceptedReceipt',
 ): StudioWorkflowDraftCreateAcceptedReceipt {
   const record = expectRecord(value, label);
   const readiness = expectRecord(record.readiness, `${label}.readiness`);
-  const accepted = readBoolean(record, "accepted", `${label}.accepted`);
+  const accepted = readBoolean(record, 'accepted', `${label}.accepted`);
   if (!accepted) {
     throw new Error(`${label}.accepted must be true.`);
   }
 
   return {
     accepted,
-    workflowId: readString(record, "workflowId", `${label}.workflowId`),
-    commandId: readString(record, "commandId", `${label}.commandId`),
-    ackStage: readString(record, "ackStage", `${label}.ackStage`),
-    actorId: readString(record, "actorId", `${label}.actorId`),
-    workspaceId: readString(record, "workspaceId", `${label}.workspaceId`),
+    workflowId: readString(record, 'workflowId', `${label}.workflowId`),
+    commandId: readString(record, 'commandId', `${label}.commandId`),
+    ackStage: readString(record, 'ackStage', `${label}.ackStage`),
+    actorId: readString(record, 'actorId', `${label}.actorId`),
+    workspaceId: readString(record, 'workspaceId', `${label}.workspaceId`),
     expectedVersion:
       record.expectedVersion === null || record.expectedVersion === undefined
         ? null
-        : readNumber(record, "expectedVersion", `${label}.expectedVersion`),
-    ackedAtUtc: readString(record, "ackedAtUtc", `${label}.ackedAtUtc`),
+        : readNumber(record, 'expectedVersion', `${label}.expectedVersion`),
+    ackedAtUtc: readString(record, 'ackedAtUtc', `${label}.ackedAtUtc`),
     readiness: {
-      readable: readBoolean(readiness, "readable", `${label}.readiness.readable`),
-      stage: readString(readiness, "stage", `${label}.readiness.stage`),
-      message: readString(readiness, "message", `${label}.readiness.message`),
+      readable: readBoolean(
+        readiness,
+        'readable',
+        `${label}.readiness.readable`,
+      ),
+      stage: readString(readiness, 'stage', `${label}.readiness.stage`),
+      message: readString(readiness, 'message', `${label}.readiness.message`),
     },
   };
 }
@@ -294,64 +471,65 @@ function selectLatestTimestamp(left: string, right: string): string {
   return Date.parse(left) >= Date.parse(right) ? left : right;
 }
 
-function withOptionalScopeId(
-  path: string,
-  scopeId?: string | null
-): string {
+function withOptionalScopeId(path: string, scopeId?: string | null): string {
   const normalizedScopeId = trimOptional(scopeId);
   if (!normalizedScopeId) {
     return path;
   }
 
-  const separator = path.includes("?") ? "&" : "?";
+  const separator = path.includes('?') ? '&' : '?';
   return `${path}${separator}scopeId=${encodeURIComponent(normalizedScopeId)}`;
 }
 
 function normalizeOrnnBaseUrl(baseUrl?: string | null): string {
-  return trimOptional(baseUrl)?.replace(/\/+$/, "") ?? "";
+  return trimOptional(baseUrl)?.replace(/\/+$/, '') ?? '';
 }
 
 function readOptionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && !Number.isNaN(value) ? value : undefined;
+  return typeof value === 'number' && !Number.isNaN(value) ? value : undefined;
 }
 
 function readOptionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 function decodeOrnnSkillSearchResult(
   value: unknown,
   baseUrl: string,
   fallbackPage: number,
-  fallbackPageSize: number
+  fallbackPageSize: number,
 ): StudioOrnnSkillSearchResult {
-  const record = expectRecord(value, "Ornn search response");
+  const record = expectRecord(value, 'Ornn search response');
   const payload =
     record.data === undefined
       ? record
-      : expectRecord(record.data, "Ornn search response.data");
+      : expectRecord(record.data, 'Ornn search response.data');
 
   const items = Array.isArray(payload.items)
     ? payload.items.map((entry, index) => {
-        const skill = expectRecord(entry, `Ornn search response.items[${index}]`);
+        const skill = expectRecord(
+          entry,
+          `Ornn search response.items[${index}]`,
+        );
         return {
-          guid: readNullableString(
-            skill,
-            "guid",
-            `Ornn search response.items[${index}].guid`
-          ) ?? "",
+          guid:
+            readNullableString(
+              skill,
+              'guid',
+              `Ornn search response.items[${index}].guid`,
+            ) ?? '',
           name:
             readNullableString(
               skill,
-              "name",
-              `Ornn search response.items[${index}].name`
-            ) ?? "Unnamed skill",
+              'name',
+              `Ornn search response.items[${index}].name`,
+            ) ?? 'Unnamed skill',
           description:
             readNullableString(
               skill,
-              "description",
-              `Ornn search response.items[${index}].description`
-            ) ?? "",
+              'description',
+              `Ornn search response.items[${index}].description`,
+            ) ?? '',
           isPrivate:
             readOptionalBoolean(skill.isPrivate) ??
             readOptionalBoolean(skill.private) ??
@@ -368,23 +546,236 @@ function decodeOrnnSkillSearchResult(
     pageSize: readOptionalNumber(payload.pageSize) ?? fallbackPageSize,
     items,
     message:
-      readNullableString(payload, "message", "Ornn search response.message") ??
+      readNullableString(payload, 'message', 'Ornn search response.message') ??
       undefined,
   };
 }
 
+function decodeStudioLlmModelCatalogDiagnostic(
+  value: unknown,
+  label: string,
+): StudioLlmModelCatalogDiagnostic {
+  const diagnostic = expectString(value, label);
+  switch (diagnostic) {
+    case 'unspecified':
+    case 'not_published':
+    case 'route_not_ready':
+    case 'access_denied':
+    case 'observation_unavailable':
+    case 'response_invalid':
+    case 'response_too_large':
+    case 'pattern_only':
+      return diagnostic;
+    default:
+      throw new Error(`${label} is not supported.`);
+  }
+}
+
+function decodeStudioLlmModelSelection(
+  value: unknown,
+  label: string,
+): StudioLlmModelSelection {
+  const record = expectRecord(value, label);
+  const kind = readString(record, 'kind', `${label}.kind`);
+  const modelId = readNullableString(record, 'modelId', `${label}.modelId`);
+  switch (kind) {
+    case 'unspecified':
+    case 'provider_default':
+      if (modelId !== null) {
+        throw new Error(`${label}.modelId must be null for ${kind}.`);
+      }
+      return { kind };
+    case 'explicit_model':
+      if (!modelId) {
+        throw new Error(`${label}.modelId must not be empty.`);
+      }
+      return { kind, modelId };
+    default:
+      throw new Error(`${label}.kind is not supported.`);
+  }
+}
+
+function decodeStudioLlmSelection(
+  value: unknown,
+  label: string,
+): StudioLlmSelection {
+  const record = expectRecord(value, label);
+  const routeKind = readString(record, 'routeKind', `${label}.routeKind`);
+  const modelSelection: StudioLlmModelSelection =
+    routeKind === 'unspecified' && record.modelSelection == null
+      ? { kind: 'unspecified' }
+      : decodeStudioLlmModelSelection(
+          record.modelSelection,
+          `${label}.modelSelection`,
+        );
+  switch (routeKind) {
+    case 'unspecified':
+      if (modelSelection.kind !== 'unspecified') {
+        throw new Error(`${label}.modelSelection must be unspecified.`);
+      }
+      return { routeKind, modelSelection };
+    case 'gateway': {
+      if (modelSelection.kind === 'unspecified') {
+        throw new Error(
+          `${label}.modelSelection must select a model behavior.`,
+        );
+      }
+      const routeValue = readString(
+        record,
+        'routeValue',
+        `${label}.routeValue`,
+      );
+      if (!routeValue) {
+        throw new Error(`${label}.routeValue must not be empty.`);
+      }
+      return { routeKind, routeValue, modelSelection };
+    }
+    case 'nyx_id_user_service': {
+      if (modelSelection.kind === 'unspecified') {
+        throw new Error(
+          `${label}.modelSelection must select a model behavior.`,
+        );
+      }
+      const routeValue = readString(
+        record,
+        'routeValue',
+        `${label}.routeValue`,
+      );
+      const nyxIdUserServiceId = readString(
+        record,
+        'nyxIdUserServiceId',
+        `${label}.nyxIdUserServiceId`,
+      );
+      const serviceSlugSnapshot = readString(
+        record,
+        'serviceSlugSnapshot',
+        `${label}.serviceSlugSnapshot`,
+      );
+      if (!routeValue || !nyxIdUserServiceId || !serviceSlugSnapshot) {
+        throw new Error(
+          `${label} must contain a complete user service identity.`,
+        );
+      }
+      return {
+        routeKind,
+        routeValue,
+        nyxIdUserServiceId,
+        serviceSlugSnapshot,
+        modelSelection,
+      };
+    }
+    default:
+      throw new Error(`${label}.routeKind is not supported.`);
+  }
+}
+
+function decodeStudioLlmModelCatalogCertainty(
+  value: unknown,
+  label: string,
+): StudioLlmModelCatalogCertainty {
+  const certainty = expectString(value, label);
+  switch (certainty) {
+    case 'enumerated':
+    case 'not_verifiable':
+    case 'unavailable':
+      return certainty;
+    default:
+      throw new Error(`${label} is not supported.`);
+  }
+}
+
+function decodeStudioLlmModelCatalog(
+  value: unknown,
+  label: string,
+): StudioLlmModelCatalog {
+  const record = expectRecord(value, label);
+  return {
+    certainty: decodeStudioLlmModelCatalogCertainty(
+      record.certainty,
+      `${label}.certainty`,
+    ),
+    modelIds: expectArray(
+      record.modelIds,
+      `${label}.modelIds`,
+      (entry, entryLabel) =>
+        expectString(entry, entryLabel ?? `${label}.modelIds[]`),
+    ),
+    defaultModelId: readNullableString(
+      record,
+      'defaultModelId',
+      `${label}.defaultModelId`,
+    ),
+    diagnostic: decodeStudioLlmModelCatalogDiagnostic(
+      record.diagnostic,
+      `${label}.diagnostic`,
+    ),
+  };
+}
+
+function decodeStudioUserLlmSelectionStatus(
+  value: unknown,
+  label: string,
+): StudioUserLlmSelectionStatus {
+  const status = expectString(value, label);
+  switch (status) {
+    case 'system_default':
+    case 'ready':
+    case 'verification_unavailable':
+    case 'needs_repair':
+    case 'legacy_repair_required':
+      return status;
+    default:
+      throw new Error(`${label} is not supported.`);
+  }
+}
+
+function decodeStudioUserLlmRemediation(
+  value: unknown,
+  label: string,
+): StudioUserLlmRemediation {
+  const remediation = expectString(value, label);
+  switch (remediation) {
+    case 'none':
+    case 'retry_catalog':
+    case 'connect_provider':
+    case 'choose_replacement':
+    case 'reselect':
+      return remediation;
+    default:
+      throw new Error(`${label} is not supported.`);
+  }
+}
+
 function decodeStudioUserLlmSettings(
   value: unknown,
-  label = "StudioUserLlmSettings"
+  label = 'StudioUserLlmSettings',
 ): StudioUserLlmSettings {
   const record = expectRecord(value, label);
   return {
-    savedRoute: readString(record, "savedRoute", `${label}.savedRoute`),
-    savedRouteLabel: readString(record, "savedRouteLabel", `${label}.savedRouteLabel`),
-    effectiveRoute: readString(record, "effectiveRoute", `${label}.effectiveRoute`),
-    effectiveRouteLabel: readString(record, "effectiveRouteLabel", `${label}.effectiveRouteLabel`),
-    routeFallbackActive: readBoolean(record, "routeFallbackActive", `${label}.routeFallbackActive`),
-    fallbackReason: readNullableString(record, "fallbackReason", `${label}.fallbackReason`),
+    savedSelection:
+      record.savedSelection == null
+        ? null
+        : decodeStudioLlmSelection(
+            record.savedSelection,
+            `${label}.savedSelection`,
+          ),
+    savedRouteLabel: readString(
+      record,
+      'savedRouteLabel',
+      `${label}.savedRouteLabel`,
+    ),
+    selectionStatus: decodeStudioUserLlmSelectionStatus(
+      record.selectionStatus,
+      `${label}.selectionStatus`,
+    ),
+    catalogDiagnostic: decodeStudioLlmModelCatalogDiagnostic(
+      record.catalogDiagnostic,
+      `${label}.catalogDiagnostic`,
+    ),
+    remediation: decodeStudioUserLlmRemediation(
+      record.remediation,
+      `${label}.remediation`,
+    ),
     routeOptions: expectArray(
       record.routeOptions ?? [],
       `${label}.routeOptions`,
@@ -392,107 +783,177 @@ function decodeStudioUserLlmSettings(
         const resolvedOptionLabel = optionLabel ?? `${label}.routeOptions[]`;
         const option = expectRecord(entry, resolvedOptionLabel);
         return {
-          routeValue: readString(option, "routeValue", `${resolvedOptionLabel}.routeValue`),
-          label: readString(option, "label", `${resolvedOptionLabel}.label`),
-          source: readString(option, "source", `${resolvedOptionLabel}.source`),
-          status: readString(option, "status", `${resolvedOptionLabel}.status`),
-          allowed: readBoolean(option, "allowed", `${resolvedOptionLabel}.allowed`),
-          ready: readBoolean(option, "ready", `${resolvedOptionLabel}.ready`),
-          serviceId: readNullableString(option, "serviceId", `${resolvedOptionLabel}.serviceId`),
-          serviceSlug: readNullableString(option, "serviceSlug", `${resolvedOptionLabel}.serviceSlug`),
-          description: readNullableString(option, "description", `${resolvedOptionLabel}.description`),
+          routeValue: readString(
+            option,
+            'routeValue',
+            `${resolvedOptionLabel}.routeValue`,
+          ),
+          label: readString(option, 'label', `${resolvedOptionLabel}.label`),
+          source: readString(option, 'source', `${resolvedOptionLabel}.source`),
+          status: readString(option, 'status', `${resolvedOptionLabel}.status`),
+          allowed: readBoolean(
+            option,
+            'allowed',
+            `${resolvedOptionLabel}.allowed`,
+          ),
+          ready: readBoolean(option, 'ready', `${resolvedOptionLabel}.ready`),
+          userServiceId: readNullableString(
+            option,
+            'userServiceId',
+            `${resolvedOptionLabel}.userServiceId`,
+          ),
+          serviceSlug: readNullableString(
+            option,
+            'serviceSlug',
+            `${resolvedOptionLabel}.serviceSlug`,
+          ),
+          modelCatalog: decodeStudioLlmModelCatalog(
+            option.modelCatalog,
+            `${resolvedOptionLabel}.modelCatalog`,
+          ),
+          description: readNullableString(
+            option,
+            'description',
+            `${resolvedOptionLabel}.description`,
+          ),
         };
-      }
+      },
     ),
     modelGroupsByRoute: expectArray(
       record.modelGroupsByRoute ?? [],
       `${label}.modelGroupsByRoute`,
       (entry, groupLabel) => {
-        const resolvedGroupLabel = groupLabel ?? `${label}.modelGroupsByRoute[]`;
+        const resolvedGroupLabel =
+          groupLabel ?? `${label}.modelGroupsByRoute[]`;
         const group = expectRecord(entry, resolvedGroupLabel);
         return {
-          routeValue: readString(group, "routeValue", `${resolvedGroupLabel}.routeValue`),
-          groupId: readString(group, "groupId", `${resolvedGroupLabel}.groupId`),
-          label: readString(group, "label", `${resolvedGroupLabel}.label`),
+          routeValue: readString(
+            group,
+            'routeValue',
+            `${resolvedGroupLabel}.routeValue`,
+          ),
+          groupId: readString(
+            group,
+            'groupId',
+            `${resolvedGroupLabel}.groupId`,
+          ),
+          label: readString(group, 'label', `${resolvedGroupLabel}.label`),
           models: expectArray(
             group.models ?? [],
             `${resolvedGroupLabel}.models`,
             (entryModel, modelLabel) =>
-              expectString(entryModel, modelLabel ?? `${resolvedGroupLabel}.models[]`)
+              expectString(
+                entryModel,
+                modelLabel ?? `${resolvedGroupLabel}.models[]`,
+              ),
           ),
         };
-      }
+      },
     ),
-    catalogStatus: readString(record, "catalogStatus", `${label}.catalogStatus`),
+    catalogStatus: readString(
+      record,
+      'catalogStatus',
+      `${label}.catalogStatus`,
+    ),
     capabilities: (() => {
-      const capabilities = expectRecord(record.capabilities, `${label}.capabilities`);
+      const capabilities = expectRecord(
+        record.capabilities,
+        `${label}.capabilities`,
+      );
       return {
-        canEditRoute: readBoolean(capabilities, "canEditRoute", `${label}.capabilities.canEditRoute`),
-        canEditModel: readBoolean(capabilities, "canEditModel", `${label}.capabilities.canEditModel`),
-        canSave: readBoolean(capabilities, "canSave", `${label}.capabilities.canSave`),
-        canRetryCatalog: readBoolean(capabilities, "canRetryCatalog", `${label}.capabilities.canRetryCatalog`),
+        canEditRoute: readBoolean(
+          capabilities,
+          'canEditRoute',
+          `${label}.capabilities.canEditRoute`,
+        ),
+        canEditModel: readBoolean(
+          capabilities,
+          'canEditModel',
+          `${label}.capabilities.canEditModel`,
+        ),
+        canSave: readBoolean(
+          capabilities,
+          'canSave',
+          `${label}.capabilities.canSave`,
+        ),
+        canRetryCatalog: readBoolean(
+          capabilities,
+          'canRetryCatalog',
+          `${label}.capabilities.canRetryCatalog`,
+        ),
       };
     })(),
-    defaultModel: readString(record, "defaultModel", `${label}.defaultModel`),
     setupHint: record.setupHint,
   };
 }
 
 function decodeStudioUserConfigRuntime(
   value: unknown,
-  label = "StudioUserConfigRuntime"
+  label = 'StudioUserConfigRuntime',
 ): StudioUserConfigRuntime {
   const record = expectRecord(value, label);
   const runtimeDefaults = expectRecord(
     record.runtimeDefaults,
-    `${label}.runtimeDefaults`
+    `${label}.runtimeDefaults`,
   );
   return {
-    runtimeMode: readString(record, "runtimeMode", `${label}.runtimeMode`),
+    runtimeMode: readString(record, 'runtimeMode', `${label}.runtimeMode`),
     activeRuntimeBaseUrl: readString(
       record,
-      "activeRuntimeBaseUrl",
-      `${label}.activeRuntimeBaseUrl`
+      'activeRuntimeBaseUrl',
+      `${label}.activeRuntimeBaseUrl`,
     ),
     localRuntimeBaseUrl: readString(
       record,
-      "localRuntimeBaseUrl",
-      `${label}.localRuntimeBaseUrl`
+      'localRuntimeBaseUrl',
+      `${label}.localRuntimeBaseUrl`,
     ),
     remoteRuntimeBaseUrl: readString(
       record,
-      "remoteRuntimeBaseUrl",
-      `${label}.remoteRuntimeBaseUrl`
+      'remoteRuntimeBaseUrl',
+      `${label}.remoteRuntimeBaseUrl`,
     ),
     runtimeDefaults: {
       localRuntimeBaseUrl: readString(
         runtimeDefaults,
-        "localRuntimeBaseUrl",
-        `${label}.runtimeDefaults.localRuntimeBaseUrl`
+        'localRuntimeBaseUrl',
+        `${label}.runtimeDefaults.localRuntimeBaseUrl`,
       ),
       remoteRuntimeBaseUrl: readString(
         runtimeDefaults,
-        "remoteRuntimeBaseUrl",
-        `${label}.runtimeDefaults.remoteRuntimeBaseUrl`
+        'remoteRuntimeBaseUrl',
+        `${label}.runtimeDefaults.remoteRuntimeBaseUrl`,
       ),
-      localMode: readString(runtimeDefaults, "localMode", `${label}.runtimeDefaults.localMode`),
-      remoteMode: readString(runtimeDefaults, "remoteMode", `${label}.runtimeDefaults.remoteMode`),
+      localMode: readString(
+        runtimeDefaults,
+        'localMode',
+        `${label}.runtimeDefaults.localMode`,
+      ),
+      remoteMode: readString(
+        runtimeDefaults,
+        'remoteMode',
+        `${label}.runtimeDefaults.remoteMode`,
+      ),
     },
   };
 }
 
 function decodeStudioUserConfigSaveReceipt(
   value: unknown,
-  label = "StudioUserConfigSaveReceipt"
+  label = 'StudioUserConfigSaveReceipt',
 ): StudioUserConfigSaveReceipt {
   const record = expectRecord(value, label);
   return {
-    accepted: readBoolean(record, "accepted", `${label}.accepted`),
-    commandId: readString(record, "commandId", `${label}.commandId`),
-    ackStage: readString(record, "ackStage", `${label}.ackStage`),
-    actorId: readString(record, "actorId", `${label}.actorId`),
-    correlationId: readString(record, "correlationId", `${label}.correlationId`),
-    ackedAtUtc: readString(record, "ackedAtUtc", `${label}.ackedAtUtc`),
+    accepted: readBoolean(record, 'accepted', `${label}.accepted`),
+    commandId: readString(record, 'commandId', `${label}.commandId`),
+    ackStage: readString(record, 'ackStage', `${label}.ackStage`),
+    actorId: readString(record, 'actorId', `${label}.actorId`),
+    correlationId: readString(
+      record,
+      'correlationId',
+      `${label}.correlationId`,
+    ),
+    ackedAtUtc: readString(record, 'ackedAtUtc', `${label}.ackedAtUtc`),
   };
 }
 
@@ -511,7 +972,7 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
 
 async function requestJsonOrNull<T>(
   input: string,
-  init?: RequestInit
+  init?: RequestInit,
 ): Promise<T | null> {
   const response = await studioHostFetch(input, init);
   if (response.status === 404) {
@@ -532,7 +993,7 @@ async function requestJsonOrNull<T>(
 async function requestDecodedJson<T>(
   input: string,
   decoder: (value: unknown) => T,
-  init?: RequestInit
+  init?: RequestInit,
 ): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
@@ -549,7 +1010,7 @@ async function requestDecodedJson<T>(
 async function requestDecodedJsonOrAccepted<T>(
   input: string,
   decoder: (value: unknown) => T,
-  init?: RequestInit
+  init?: RequestInit,
 ): Promise<T | undefined> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
@@ -573,12 +1034,12 @@ async function requestDecodedJsonOrAccepted<T>(
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   const isFormDataBody =
-    typeof FormData !== "undefined" && init?.body instanceof FormData;
-  if (!isFormDataBody && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
+    typeof FormData !== 'undefined' && init?.body instanceof FormData;
+  if (!isFormDataBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
   }
-  if (!headers.has("Accept")) {
-    headers.set("Accept", "application/json");
+  if (!headers.has('Accept')) {
+    headers.set('Accept', 'application/json');
   }
 
   const response = await studioHostFetch(input, {
@@ -594,30 +1055,23 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   }
 
   if (!isJsonContentType(readContentType(response))) {
-    throw new Error("Studio API returned an unexpected response format.");
+    throw new Error('Studio API returned an unexpected response format.');
   }
 
   return (await response.json()) as T;
-}
-
-async function requestAccepted(input: string, init?: RequestInit): Promise<void> {
-  const response = await studioHostFetch(input, init);
-  if (!response.ok) {
-    throw await createStudioApiError(response);
-  }
 }
 
 async function streamSse(
   input: string,
   body: unknown,
   onFrame: (frame: unknown) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await studioHostFetch(input, {
-    method: "POST",
+    method: 'POST',
     headers: {
-      Accept: "text/event-stream",
-      "Content-Type": "application/json",
+      Accept: 'text/event-stream',
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
     signal,
@@ -632,28 +1086,28 @@ async function streamSse(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  let buffer = '';
 
   while (true) {
     const { done, value } = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
 
-    let boundary = buffer.indexOf("\n\n");
+    let boundary = buffer.indexOf('\n\n');
     while (boundary >= 0) {
       const block = buffer.slice(0, boundary);
       buffer = buffer.slice(boundary + 2);
 
       const data = block
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
         .map((line) => line.slice(5).trim())
-        .join("\n");
+        .join('\n');
 
-      if (data && data !== "[DONE]") {
+      if (data && data !== '[DONE]') {
         onFrame(JSON.parse(data) as unknown);
       }
 
-      boundary = buffer.indexOf("\n\n");
+      boundary = buffer.indexOf('\n\n');
     }
 
     if (done) {
@@ -663,55 +1117,55 @@ async function streamSse(
 }
 
 function normalizeAssistantFrame(
-  frame: unknown
+  frame: unknown,
 ): { type: string; delta?: string; message?: string } | null {
-  if (!frame || typeof frame !== "object") {
+  if (!frame || typeof frame !== 'object') {
     return null;
   }
 
   const candidate = frame as Record<string, unknown>;
-  if (typeof candidate.type === "string") {
+  if (typeof candidate.type === 'string') {
     return {
       type: candidate.type,
-      delta: typeof candidate.delta === "string" ? candidate.delta : undefined,
+      delta: typeof candidate.delta === 'string' ? candidate.delta : undefined,
       message:
-        typeof candidate.message === "string" ? candidate.message : undefined,
+        typeof candidate.message === 'string' ? candidate.message : undefined,
     };
   }
 
   if (candidate.textMessageContent) {
     const payload = candidate.textMessageContent as Record<string, unknown>;
     return {
-      type: "TEXT_MESSAGE_CONTENT",
-      delta: typeof payload.delta === "string" ? payload.delta : "",
+      type: 'TEXT_MESSAGE_CONTENT',
+      delta: typeof payload.delta === 'string' ? payload.delta : '',
     };
   }
 
   if (candidate.textMessageReasoning) {
     const payload = candidate.textMessageReasoning as Record<string, unknown>;
     return {
-      type: "TEXT_MESSAGE_REASONING",
-      delta: typeof payload.delta === "string" ? payload.delta : "",
+      type: 'TEXT_MESSAGE_REASONING',
+      delta: typeof payload.delta === 'string' ? payload.delta : '',
     };
   }
 
   if (candidate.textMessageEnd) {
     const payload = candidate.textMessageEnd as Record<string, unknown>;
     return {
-      type: "TEXT_MESSAGE_END",
-      delta: typeof payload.delta === "string" ? payload.delta : "",
-      message: typeof payload.message === "string" ? payload.message : "",
+      type: 'TEXT_MESSAGE_END',
+      delta: typeof payload.delta === 'string' ? payload.delta : '',
+      message: typeof payload.message === 'string' ? payload.message : '',
     };
   }
 
   if (candidate.runError) {
     const payload = candidate.runError as Record<string, unknown>;
     return {
-      type: "RUN_ERROR",
+      type: 'RUN_ERROR',
       message:
-        typeof payload.message === "string"
+        typeof payload.message === 'string'
           ? payload.message
-          : "Assistant run failed.",
+          : 'Assistant run failed.',
     };
   }
 
@@ -720,133 +1174,130 @@ function normalizeAssistantFrame(
 
 function decodeStudioScopeBindingRevision(
   value: unknown,
-  label = "StudioScopeBindingRevision"
+  label = 'StudioScopeBindingRevision',
 ): StudioScopeBindingRevision {
   const record = expectRecord(value, label);
   const implementationKind = readScopeBindingImplementationKind(record, [
-    "implementationKind",
-    "ImplementationKind",
+    'implementationKind',
+    'ImplementationKind',
   ]);
   return {
     revisionId: readString(
       record,
-      ["revisionId", "RevisionId"],
-      `${label}.revisionId`
+      ['revisionId', 'RevisionId'],
+      `${label}.revisionId`,
     ),
     implementationKind,
-    status: readString(record, ["status", "Status"], `${label}.status`),
+    status: readString(record, ['status', 'Status'], `${label}.status`),
     artifactHash: readString(
       record,
-      ["artifactHash", "ArtifactHash"],
-      `${label}.artifactHash`
+      ['artifactHash', 'ArtifactHash'],
+      `${label}.artifactHash`,
     ),
     failureReason: readString(
       record,
-      ["failureReason", "FailureReason"],
-      `${label}.failureReason`
+      ['failureReason', 'FailureReason'],
+      `${label}.failureReason`,
     ),
     isDefaultServing: readBoolean(
       record,
-      ["isDefaultServing", "IsDefaultServing"],
-      `${label}.isDefaultServing`
+      ['isDefaultServing', 'IsDefaultServing'],
+      `${label}.isDefaultServing`,
     ),
     isActiveServing: readBoolean(
       record,
-      ["isActiveServing", "IsActiveServing"],
-      `${label}.isActiveServing`
+      ['isActiveServing', 'IsActiveServing'],
+      `${label}.isActiveServing`,
     ),
     isServingTarget: readBoolean(
       record,
-      ["isServingTarget", "IsServingTarget"],
-      `${label}.isServingTarget`
+      ['isServingTarget', 'IsServingTarget'],
+      `${label}.isServingTarget`,
     ),
     allocationWeight: readNumber(
       record,
-      ["allocationWeight", "AllocationWeight"],
-      `${label}.allocationWeight`
+      ['allocationWeight', 'AllocationWeight'],
+      `${label}.allocationWeight`,
     ),
     servingState: readString(
       record,
-      ["servingState", "ServingState"],
-      `${label}.servingState`
+      ['servingState', 'ServingState'],
+      `${label}.servingState`,
     ),
     deploymentId: readString(
       record,
-      ["deploymentId", "DeploymentId"],
-      `${label}.deploymentId`
+      ['deploymentId', 'DeploymentId'],
+      `${label}.deploymentId`,
     ),
     primaryActorId: readString(
       record,
-      ["primaryActorId", "PrimaryActorId"],
-      `${label}.primaryActorId`
+      ['primaryActorId', 'PrimaryActorId'],
+      `${label}.primaryActorId`,
     ),
     createdAt: readNullableString(
       record,
-      ["createdAt", "CreatedAt"],
-      `${label}.createdAt`
+      ['createdAt', 'CreatedAt'],
+      `${label}.createdAt`,
     ),
     preparedAt: readNullableString(
       record,
-      ["preparedAt", "PreparedAt"],
-      `${label}.preparedAt`
+      ['preparedAt', 'PreparedAt'],
+      `${label}.preparedAt`,
     ),
     publishedAt: readNullableString(
       record,
-      ["publishedAt", "PublishedAt"],
-      `${label}.publishedAt`
+      ['publishedAt', 'PublishedAt'],
+      `${label}.publishedAt`,
     ),
     retiredAt: readNullableString(
       record,
-      ["retiredAt", "RetiredAt"],
-      `${label}.retiredAt`
+      ['retiredAt', 'RetiredAt'],
+      `${label}.retiredAt`,
     ),
     workflowName:
-      readOptionalString(record, ["workflowName", "WorkflowName"]) || "",
+      readOptionalString(record, ['workflowName', 'WorkflowName']) || '',
     workflowDefinitionActorId:
       readOptionalString(record, [
-        "workflowDefinitionActorId",
-        "WorkflowDefinitionActorId",
-      ]) || "",
+        'workflowDefinitionActorId',
+        'WorkflowDefinitionActorId',
+      ]) || '',
     inlineWorkflowCount:
       record.inlineWorkflowCount === undefined &&
       record.InlineWorkflowCount === undefined
         ? 0
         : readNumber(
             record,
-            ["inlineWorkflowCount", "InlineWorkflowCount"],
-            `${label}.inlineWorkflowCount`
+            ['inlineWorkflowCount', 'InlineWorkflowCount'],
+            `${label}.inlineWorkflowCount`,
           ),
-    scriptId:
-      readOptionalString(record, ["scriptId", "ScriptId"]) || "",
+    scriptId: readOptionalString(record, ['scriptId', 'ScriptId']) || '',
     scriptRevision:
-      readOptionalString(record, ["scriptRevision", "ScriptRevision"]) || "",
+      readOptionalString(record, ['scriptRevision', 'ScriptRevision']) || '',
     scriptDefinitionActorId:
       readOptionalString(record, [
-        "scriptDefinitionActorId",
-        "ScriptDefinitionActorId",
-      ]) || "",
+        'scriptDefinitionActorId',
+        'ScriptDefinitionActorId',
+      ]) || '',
     scriptSourceHash:
-      readOptionalString(record, ["scriptSourceHash", "ScriptSourceHash"]) || "",
+      readOptionalString(record, ['scriptSourceHash', 'ScriptSourceHash']) ||
+      '',
     staticActorTypeName:
       readOptionalString(record, [
-        "staticActorTypeName",
-        "StaticActorTypeName",
-      ]) || "",
+        'staticActorTypeName',
+        'StaticActorTypeName',
+      ]) || '',
     staticAgentKind:
-      readOptionalString(record, [
-        "staticAgentKind",
-        "StaticAgentKind",
-      ]) || "",
+      readOptionalString(record, ['staticAgentKind', 'StaticAgentKind']) || '',
   };
 }
 
 function readOptionalString(
   record: Record<string, unknown>,
-  keys: string[]
+  keys: string[],
 ): string | undefined {
   for (const key of keys) {
     const rawValue = record[key];
-    if (typeof rawValue !== "string") {
+    if (typeof rawValue !== 'string') {
       continue;
     }
 
@@ -861,13 +1312,13 @@ function readOptionalString(
 
 function readOptionalScalar(
   record: Record<string, unknown>,
-  keys: string[]
+  keys: string[],
 ): string | number | undefined {
   for (const key of keys) {
     const rawValue = record[key];
     if (
-      typeof rawValue === "string" ||
-      (typeof rawValue === "number" && !Number.isNaN(rawValue))
+      typeof rawValue === 'string' ||
+      (typeof rawValue === 'number' && !Number.isNaN(rawValue))
     ) {
       return rawValue;
     }
@@ -876,122 +1327,503 @@ function readOptionalScalar(
   return undefined;
 }
 
+function readWorkflowBoardExecutionAvailability(
+  value: unknown,
+): StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['executionAvailability'] {
+  return normalizeEnumValue(value, 'executionAvailability', {
+    '0': 'unknown',
+    '1': 'available',
+    '2': 'unavailable',
+    '3': 'pending_backend_contract',
+    available: 'available',
+    pendingbackendcontract: 'pending_backend_contract',
+    pending_backend_contract: 'pending_backend_contract',
+    unavailable: 'unavailable',
+    unknown: 'unknown',
+    unspecified: 'unknown',
+  }) as StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['executionAvailability'];
+}
+
+function readWorkflowBoardExecutionStatus(
+  value: unknown,
+): StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['executionStatus'] {
+  return normalizeEnumValue(value, 'executionStatus', {
+    '0': 'unknown',
+    '1': 'running',
+    '2': 'waiting',
+    '3': 'failed',
+    '4': 'timed_out',
+    '5': 'retrying',
+    '6': 'completed',
+    '7': 'stopped',
+    active: 'running',
+    awaiting_input: 'waiting',
+    awaitinginput: 'waiting',
+    canceled: 'stopped',
+    cancelled: 'stopped',
+    completed: 'completed',
+    done: 'completed',
+    failed: 'failed',
+    human_input_required: 'waiting',
+    humaninputrequired: 'waiting',
+    retry_pending: 'retrying',
+    retrypending: 'retrying',
+    retrying: 'retrying',
+    running: 'running',
+    stopped: 'stopped',
+    succeeded: 'completed',
+    success: 'completed',
+    suspended: 'waiting',
+    timed_out: 'timed_out',
+    timedout: 'timed_out',
+    timeout: 'timed_out',
+    waiting: 'waiting',
+    unknown: 'unknown',
+    unspecified: 'unknown',
+  }) as StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['executionStatus'];
+}
+
+function readWorkflowBoardCurrentNodeStatus(
+  value: unknown,
+): NonNullable<
+  StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['currentNode']
+>['status'] {
+  return normalizeEnumValue(value, 'currentNode.status', {
+    '0': 'unknown',
+    '1': 'running',
+    '2': 'waiting',
+    '3': 'pending',
+    '4': 'failed',
+    '5': 'completed',
+    active: 'running',
+    completed: 'completed',
+    done: 'completed',
+    failed: 'failed',
+    in_progress: 'running',
+    inprogress: 'running',
+    pending: 'pending',
+    queued: 'pending',
+    running: 'running',
+    waiting: 'waiting',
+    unknown: 'unknown',
+    unspecified: 'unknown',
+  }) as NonNullable<
+    StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['currentNode']
+  >['status'];
+}
+
+function readWorkflowBoardPendingNodeStatus(
+  value: unknown,
+): StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['pendingNodes'][number]['status'] {
+  return normalizeEnumValue(value, 'pendingNode.status', {
+    '0': 'unknown',
+    '1': 'waiting',
+    '2': 'pending',
+    '3': 'queued',
+    pending: 'pending',
+    queued: 'queued',
+    waiting: 'waiting',
+    unknown: 'unknown',
+    unspecified: 'unknown',
+  }) as StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['pendingNodes'][number]['status'];
+}
+
+function decodeStudioWorkflowBoardCounts(
+  value: unknown,
+  label = 'StudioWorkflowBoardCounts',
+): StudioWorkflowBoardSnapshot['counts'] {
+  const record = expectRecord(value, label);
+  return {
+    completed: readNumber(
+      record,
+      ['completed', 'Completed'],
+      `${label}.completed`,
+    ),
+    failed: readNumber(record, ['failed', 'Failed'], `${label}.failed`),
+    retrying: readNumber(record, ['retrying', 'Retrying'], `${label}.retrying`),
+    running: readNumber(record, ['running', 'Running'], `${label}.running`),
+    waiting: readNumber(record, ['waiting', 'Waiting'], `${label}.waiting`),
+  };
+}
+
+function decodeStudioWorkflowBoardProgress(
+  value: unknown,
+  label = 'StudioWorkflowBoardProgress',
+): StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['progress'] {
+  const record = expectRecord(value, label);
+  return {
+    completedSteps: readNumber(
+      record,
+      ['completedSteps', 'CompletedSteps'],
+      `${label}.completedSteps`,
+    ),
+    totalSteps: readNumber(
+      record,
+      ['totalSteps', 'TotalSteps'],
+      `${label}.totalSteps`,
+    ),
+  };
+}
+
+function decodeStudioWorkflowBoardCurrentNode(
+  value: unknown,
+  label = 'StudioWorkflowBoardCurrentNode',
+): NonNullable<
+  StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['currentNode']
+> {
+  const record = expectRecord(value, label);
+  return {
+    nodeId: readString(record, ['nodeId', 'NodeId'], `${label}.nodeId`),
+    name: readString(record, ['name', 'Name'], `${label}.name`),
+    status: readWorkflowBoardCurrentNodeStatus(
+      record.status ?? record.Status ?? 'unknown',
+    ),
+    startedAt:
+      readNullableString(
+        record,
+        ['startedAt', 'StartedAt'],
+        `${label}.startedAt`,
+      ) ?? null,
+    updatedAt:
+      readNullableString(
+        record,
+        ['updatedAt', 'UpdatedAt'],
+        `${label}.updatedAt`,
+      ) ?? null,
+    durationMs:
+      readOptionalNumber(record.durationMs ?? record.DurationMs) ?? null,
+  };
+}
+
+function decodeStudioWorkflowBoardCompletedNode(
+  value: unknown,
+  label = 'StudioWorkflowBoardCompletedNode',
+): StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['completedNodes'][number] {
+  const record = expectRecord(value, label);
+  return {
+    nodeId: readString(record, ['nodeId', 'NodeId'], `${label}.nodeId`),
+    name: readString(record, ['name', 'Name'], `${label}.name`),
+    completedAt:
+      readNullableString(
+        record,
+        ['completedAt', 'CompletedAt'],
+        `${label}.completedAt`,
+      ) ?? null,
+    durationMs:
+      readOptionalNumber(record.durationMs ?? record.DurationMs) ?? null,
+  };
+}
+
+function decodeStudioWorkflowBoardPendingNode(
+  value: unknown,
+  label = 'StudioWorkflowBoardPendingNode',
+): StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['pendingNodes'][number] {
+  const record = expectRecord(value, label);
+  return {
+    nodeId: readString(record, ['nodeId', 'NodeId'], `${label}.nodeId`),
+    name: readString(record, ['name', 'Name'], `${label}.name`),
+    status: readWorkflowBoardPendingNodeStatus(
+      record.status ?? record.Status ?? 'unknown',
+    ),
+    reason:
+      readNullableString(record, ['reason', 'Reason'], `${label}.reason`) ??
+      null,
+  };
+}
+
+function decodeStudioWorkflowBoardFailedNode(
+  value: unknown,
+  label = 'StudioWorkflowBoardFailedNode',
+): StudioWorkflowBoardSnapshot['teams'][number]['members'][number]['failedNodes'][number] {
+  const record = expectRecord(value, label);
+  return {
+    nodeId: readString(record, ['nodeId', 'NodeId'], `${label}.nodeId`),
+    name: readString(record, ['name', 'Name'], `${label}.name`),
+    failedAt:
+      readNullableString(
+        record,
+        ['failedAt', 'FailedAt'],
+        `${label}.failedAt`,
+      ) ?? null,
+  };
+}
+
+function decodeStudioWorkflowBoardMemberSnapshot(
+  value: unknown,
+  label = 'StudioWorkflowBoardMemberSnapshot',
+): StudioWorkflowBoardSnapshot['teams'][number]['members'][number] {
+  const record = expectRecord(value, label);
+  const currentNode =
+    record.currentNode == null && record.CurrentNode == null
+      ? null
+      : decodeStudioWorkflowBoardCurrentNode(
+          record.currentNode ?? record.CurrentNode,
+          `${label}.currentNode`,
+        );
+  return {
+    actorId:
+      readNullableString(record, ['actorId', 'ActorId'], `${label}.actorId`) ??
+      null,
+    completedNodes: expectArray(
+      record.completedNodes ?? record.CompletedNodes ?? [],
+      `${label}.completedNodes`,
+      decodeStudioWorkflowBoardCompletedNode,
+    ),
+    currentExecutionId:
+      readNullableString(
+        record,
+        ['currentExecutionId', 'CurrentExecutionId'],
+        `${label}.currentExecutionId`,
+      ) ?? null,
+    currentNode,
+    displayName: readString(
+      record,
+      ['displayName', 'DisplayName'],
+      `${label}.displayName`,
+    ),
+    executionAvailability: readWorkflowBoardExecutionAvailability(
+      record.executionAvailability ?? record.ExecutionAvailability ?? 'unknown',
+    ),
+    executionStatus: readWorkflowBoardExecutionStatus(
+      record.executionStatus ?? record.ExecutionStatus ?? 'unknown',
+    ),
+    failedNodes: expectArray(
+      record.failedNodes ?? record.FailedNodes ?? [],
+      `${label}.failedNodes`,
+      decodeStudioWorkflowBoardFailedNode,
+    ),
+    lastNodeUpdatedAt:
+      readNullableString(
+        record,
+        ['lastNodeUpdatedAt', 'LastNodeUpdatedAt'],
+        `${label}.lastNodeUpdatedAt`,
+      ) ?? null,
+    memberId: readString(record, ['memberId', 'MemberId'], `${label}.memberId`),
+    pendingNodes: expectArray(
+      record.pendingNodes ?? record.PendingNodes ?? [],
+      `${label}.pendingNodes`,
+      decodeStudioWorkflowBoardPendingNode,
+    ),
+    progress: decodeStudioWorkflowBoardProgress(
+      record.progress ??
+        record.Progress ?? {
+          completedSteps: 0,
+          totalSteps: 0,
+        },
+      `${label}.progress`,
+    ),
+    publishedServiceId:
+      readNullableString(
+        record,
+        ['publishedServiceId', 'PublishedServiceId'],
+        `${label}.publishedServiceId`,
+      ) ?? null,
+    roleSummary:
+      readNullableString(
+        record,
+        ['roleSummary', 'RoleSummary'],
+        `${label}.roleSummary`,
+      ) ?? null,
+    workflowId:
+      readNullableString(
+        record,
+        ['workflowId', 'WorkflowId'],
+        `${label}.workflowId`,
+      ) ?? null,
+    workflowName:
+      readNullableString(
+        record,
+        ['workflowName', 'WorkflowName'],
+        `${label}.workflowName`,
+      ) ?? null,
+  };
+}
+
+function decodeStudioWorkflowBoardTeamSnapshot(
+  value: unknown,
+  label = 'StudioWorkflowBoardTeamSnapshot',
+): StudioWorkflowBoardSnapshot['teams'][number] {
+  const record = expectRecord(value, label);
+  const members = expectArray(
+    record.members ?? record.Members ?? [],
+    `${label}.members`,
+    decodeStudioWorkflowBoardMemberSnapshot,
+  );
+  return {
+    members,
+    teamId: readString(record, ['teamId', 'TeamId'], `${label}.teamId`),
+    teamName: readString(record, ['teamName', 'TeamName'], `${label}.teamName`),
+    totalMemberCount:
+      readOptionalNumber(record.totalMemberCount ?? record.TotalMemberCount) ??
+      null,
+  };
+}
+
+function decodeStudioWorkflowBoardSnapshot(
+  value: unknown,
+): StudioWorkflowBoardSnapshot {
+  const record = expectRecord(value, 'StudioWorkflowBoardSnapshot');
+  return {
+    counts: decodeStudioWorkflowBoardCounts(
+      record.counts ?? record.Counts ?? {},
+      'StudioWorkflowBoardSnapshot.counts',
+    ),
+    generatedAt: readString(
+      record,
+      ['generatedAt', 'GeneratedAt'],
+      'StudioWorkflowBoardSnapshot.generatedAt',
+    ),
+    lastNodeUpdatedAt:
+      readNullableString(
+        record,
+        ['lastNodeUpdatedAt', 'LastNodeUpdatedAt'],
+        'StudioWorkflowBoardSnapshot.lastNodeUpdatedAt',
+      ) ?? null,
+    scopeId: readString(
+      record,
+      ['scopeId', 'ScopeId'],
+      'StudioWorkflowBoardSnapshot.scopeId',
+    ),
+    teams: expectArray(
+      record.teams ?? record.Teams ?? [],
+      'StudioWorkflowBoardSnapshot.teams',
+      decodeStudioWorkflowBoardTeamSnapshot,
+    ),
+    watermark:
+      readNullableString(
+        record,
+        ['watermark', 'Watermark'],
+        'StudioWorkflowBoardSnapshot.watermark',
+      ) ?? null,
+  };
+}
+
+function compactWorkflowBoardSnapshotRequest(
+  request: StudioWorkflowBoardSnapshotRequest,
+): Record<string, unknown> {
+  return compactObject({
+    memberId: trimOptional(request.memberId),
+    take: request.take,
+    teamId: trimOptional(request.teamId),
+  });
+}
+
 function readScopeBindingImplementationKind(
   record: Record<string, unknown>,
   keys: string[],
-  fallback?: string | number
+  fallback?: string | number,
 ): StudioScopeBindingImplementationKind {
   const rawValue = readOptionalScalar(record, keys) ?? fallback;
   if (rawValue === undefined) {
-    return "unknown";
+    return 'unknown';
   }
 
   return normalizeStudioScopeBindingImplementationKind(
-    normalizeEnumValue(rawValue, "implementationKind", {
-      "0": "unknown",
-      "1": "workflow",
-      "2": "script",
-      "3": "gagent",
-      workflow: "workflow",
-      scripting: "script",
-      script: "script",
-      gagent: "gagent",
-      unspecified: "unknown",
-    })
+    normalizeEnumValue(rawValue, 'implementationKind', {
+      '0': 'unknown',
+      '1': 'workflow',
+      '2': 'script',
+      '3': 'gagent',
+      workflow: 'workflow',
+      scripting: 'script',
+      script: 'script',
+      gagent: 'gagent',
+      unspecified: 'unknown',
+    }),
   );
 }
 
 function decodeStudioScopeBindingResult(
-  value: unknown
+  value: unknown,
 ): StudioScopeBindingResult {
-  const record = expectRecord(value, "StudioScopeBindingResult");
+  const record = expectRecord(value, 'StudioScopeBindingResult');
   const displayName =
-    readOptionalString(record, ["displayName", "DisplayName"]) || "";
+    readOptionalString(record, ['displayName', 'DisplayName']) || '';
   const serviceId = readOptionalString(record, [
-    "serviceId",
-    "ServiceId",
-    "publishedServiceId",
-    "PublishedServiceId",
+    'serviceId',
+    'ServiceId',
+    'publishedServiceId',
+    'PublishedServiceId',
   ]);
   const workflowRecord =
-    record.workflow && typeof record.workflow === "object"
-      ? expectRecord(record.workflow, "StudioScopeBindingResult.workflow")
+    record.workflow && typeof record.workflow === 'object'
+      ? expectRecord(record.workflow, 'StudioScopeBindingResult.workflow')
       : null;
   const scriptRecord =
-    record.script && typeof record.script === "object"
-      ? expectRecord(record.script, "StudioScopeBindingResult.script")
+    record.script && typeof record.script === 'object'
+      ? expectRecord(record.script, 'StudioScopeBindingResult.script')
       : null;
   const gAgentRecord =
     (record.gAgent ?? record.gagent) &&
-    typeof (record.gAgent ?? record.gagent) === "object"
+    typeof (record.gAgent ?? record.gagent) === 'object'
       ? expectRecord(
           record.gAgent ?? record.gagent,
-          "StudioScopeBindingResult.gAgent"
+          'StudioScopeBindingResult.gAgent',
         )
       : null;
 
   const workflowName =
     workflowRecord == null
-      ? readOptionalString(record, ["workflowName", "WorkflowName"])
-      : readOptionalString(workflowRecord, ["workflowName", "WorkflowName"]) ||
-        readOptionalString(record, ["workflowName", "WorkflowName"]);
+      ? readOptionalString(record, ['workflowName', 'WorkflowName'])
+      : readOptionalString(workflowRecord, ['workflowName', 'WorkflowName']) ||
+        readOptionalString(record, ['workflowName', 'WorkflowName']);
   const definitionActorIdPrefix =
     workflowRecord == null
       ? readOptionalString(record, [
-          "definitionActorIdPrefix",
-          "DefinitionActorIdPrefix",
+          'definitionActorIdPrefix',
+          'DefinitionActorIdPrefix',
         ])
       : readOptionalString(workflowRecord, [
-          "definitionActorIdPrefix",
-          "DefinitionActorIdPrefix",
+          'definitionActorIdPrefix',
+          'DefinitionActorIdPrefix',
         ]) ||
         readOptionalString(record, [
-          "definitionActorIdPrefix",
-          "DefinitionActorIdPrefix",
+          'definitionActorIdPrefix',
+          'DefinitionActorIdPrefix',
         ]);
   const implementationKind = readScopeBindingImplementationKind(
     record,
-    ["implementationKind", "ImplementationKind"],
+    ['implementationKind', 'ImplementationKind'],
     scriptRecord
-      ? "script"
+      ? 'script'
       : gAgentRecord
-        ? "gagent"
+        ? 'gagent'
         : workflowRecord || workflowName
-          ? "workflow"
-          : "unknown"
+          ? 'workflow'
+          : 'unknown',
   );
   const targetKind: StudioScopeBindingTargetKind = implementationKind;
   const targetName =
-    (targetKind === "workflow"
+    (targetKind === 'workflow'
       ? workflowName
-      : targetKind === "script"
-        ? readOptionalString(scriptRecord ?? {}, ["scriptId", "ScriptId"])
-        : targetKind === "gagent"
-        ? readOptionalString(gAgentRecord ?? {}, [
-              "diagnosticClrTypeName",
-              "DiagnosticClrTypeName",
+      : targetKind === 'script'
+        ? readOptionalString(scriptRecord ?? {}, ['scriptId', 'ScriptId'])
+        : targetKind === 'gagent'
+          ? readOptionalString(gAgentRecord ?? {}, [
+              'diagnosticClrTypeName',
+              'DiagnosticClrTypeName',
             ])
           : undefined) ||
     displayName ||
     serviceId ||
     readString(
       record,
-      ["revisionId", "RevisionId"],
-      "StudioScopeBindingResult.revisionId"
+      ['revisionId', 'RevisionId'],
+      'StudioScopeBindingResult.revisionId',
     );
 
   return {
     scopeId: readString(
       record,
-      ["scopeId", "ScopeId"],
-      "StudioScopeBindingResult.scopeId"
+      ['scopeId', 'ScopeId'],
+      'StudioScopeBindingResult.scopeId',
     ),
     serviceId,
     displayName,
     revisionId: readString(
       record,
-      ["revisionId", "RevisionId"],
-      "StudioScopeBindingResult.revisionId"
+      ['revisionId', 'RevisionId'],
+      'StudioScopeBindingResult.revisionId',
     ),
     implementationKind,
     targetKind,
@@ -999,317 +1831,434 @@ function decodeStudioScopeBindingResult(
     workflowName,
     definitionActorIdPrefix,
     expectedActorId: readOptionalString(record, [
-      "expectedActorId",
-      "ExpectedActorId",
+      'expectedActorId',
+      'ExpectedActorId',
     ]),
     workflow:
-      targetKind === "workflow" && (workflowName || definitionActorIdPrefix)
+      targetKind === 'workflow' && (workflowName || definitionActorIdPrefix)
         ? {
             workflowName: workflowName || displayName || targetName,
-            definitionActorIdPrefix: definitionActorIdPrefix || "",
+            definitionActorIdPrefix: definitionActorIdPrefix || '',
           }
         : null,
     script: scriptRecord
       ? {
           scriptId:
-            readOptionalString(scriptRecord, ["scriptId", "ScriptId"]) || "",
+            readOptionalString(scriptRecord, ['scriptId', 'ScriptId']) || '',
           scriptRevision:
             readOptionalString(scriptRecord, [
-              "scriptRevision",
-              "ScriptRevision",
-            ]) || "",
+              'scriptRevision',
+              'ScriptRevision',
+            ]) || '',
           definitionActorId:
             readOptionalString(scriptRecord, [
-              "definitionActorId",
-              "DefinitionActorId",
-            ]) || "",
+              'definitionActorId',
+              'DefinitionActorId',
+            ]) || '',
         }
       : null,
     gAgent: gAgentRecord
       ? {
           diagnosticClrTypeName:
             readOptionalString(gAgentRecord, [
-              "diagnosticClrTypeName",
-              "DiagnosticClrTypeName",
-            ]) || "",
+              'diagnosticClrTypeName',
+              'DiagnosticClrTypeName',
+            ]) || '',
         }
       : null,
   };
 }
 
+function decodeStudioSaveAndBindWorkflowResult(
+  value: unknown,
+): StudioSaveAndBindWorkflowAcceptedResult {
+  const record = expectRecord(value, 'StudioSaveAndBindWorkflowAcceptedResult');
+  const workflowRecord =
+    record.workflow == null && record.Workflow == null
+      ? null
+      : expectRecord(
+          record.workflow ?? record.Workflow,
+          'StudioSaveAndBindWorkflowAcceptedResult.workflow',
+        );
+  const binding =
+    record.binding == null && record.Binding == null
+      ? undefined
+      : decodeStudioScopeBindingResult(record.binding ?? record.Binding);
+  const scopeId = readString(
+    record,
+    ['scopeId', 'ScopeId'],
+    'StudioSaveAndBindWorkflowAcceptedResult.scopeId',
+  );
+  const workflowId = readString(
+    record,
+    ['workflowId', 'WorkflowId'],
+    'StudioSaveAndBindWorkflowAcceptedResult.workflowId',
+  );
+  const revisionId = readString(
+    record,
+    ['revisionId', 'RevisionId'],
+    'StudioSaveAndBindWorkflowAcceptedResult.revisionId',
+  );
+
+  return {
+    scopeId,
+    workflowId,
+    revisionId,
+    workflow: workflowRecord
+      ? {
+          scopeId: readString(
+            workflowRecord,
+            ['scopeId', 'ScopeId'],
+            'StudioSaveAndBindWorkflowAcceptedResult.workflow.scopeId',
+          ),
+          workflowId: readString(
+            workflowRecord,
+            ['workflowId', 'WorkflowId'],
+            'StudioSaveAndBindWorkflowAcceptedResult.workflow.workflowId',
+          ),
+          serviceKey: readOptionalString(workflowRecord, [
+            'serviceKey',
+            'ServiceKey',
+          ]),
+          revisionId: readString(
+            workflowRecord,
+            ['revisionId', 'RevisionId'],
+            'StudioSaveAndBindWorkflowAcceptedResult.workflow.revisionId',
+          ),
+          readModelUrl: readOptionalString(workflowRecord, [
+            'readModelUrl',
+            'ReadModelUrl',
+          ]),
+          acceptanceStage: readOptionalString(workflowRecord, [
+            'acceptanceStage',
+            'AcceptanceStage',
+          ]),
+          propagationStage: readOptionalString(workflowRecord, [
+            'propagationStage',
+            'PropagationStage',
+          ]),
+          displayName: readOptionalString(workflowRecord, [
+            'displayName',
+            'DisplayName',
+          ]),
+          workflowName: readOptionalString(workflowRecord, [
+            'workflowName',
+            'WorkflowName',
+          ]),
+        }
+      : undefined,
+    binding,
+    acceptanceStage:
+      readOptionalString(record, ['acceptanceStage', 'AcceptanceStage']) ||
+      'accepted',
+    propagationStage:
+      readOptionalString(record, ['propagationStage', 'PropagationStage']) ||
+      'readmodel_propagating',
+  };
+}
+
+function decodeStudioPublishWorkflowResult(
+  value: unknown,
+): StudioPublishWorkflowAcceptedResult {
+  const record = expectRecord(value, 'StudioPublishWorkflowAcceptedResult');
+  return {
+    scopeId: readString(
+      record,
+      ['scopeId', 'ScopeId'],
+      'StudioPublishWorkflowAcceptedResult.scopeId',
+    ),
+    workflowId: readString(
+      record,
+      ['workflowId', 'WorkflowId'],
+      'StudioPublishWorkflowAcceptedResult.workflowId',
+    ),
+    serviceKey: readString(
+      record,
+      ['serviceKey', 'ServiceKey'],
+      'StudioPublishWorkflowAcceptedResult.serviceKey',
+    ),
+    revisionId: readString(
+      record,
+      ['revisionId', 'RevisionId'],
+      'StudioPublishWorkflowAcceptedResult.revisionId',
+    ),
+    acceptanceStage:
+      readOptionalString(record, ['acceptanceStage', 'AcceptanceStage']) ||
+      'accepted',
+    propagationStage:
+      readOptionalString(record, ['propagationStage', 'PropagationStage']) ||
+      'readmodel_propagating',
+  };
+}
+
 function decodeStudioScopeBindingStatus(
-  value: unknown
+  value: unknown,
 ): StudioScopeBindingStatus {
-  const record = expectRecord(value, "StudioScopeBindingStatus");
+  const record = expectRecord(value, 'StudioScopeBindingStatus');
   return {
     available: readBoolean(
       record,
-      ["available", "Available"],
-      "StudioScopeBindingStatus.available"
+      ['available', 'Available'],
+      'StudioScopeBindingStatus.available',
     ),
     scopeId: readString(
       record,
-      ["scopeId", "ScopeId"],
-      "StudioScopeBindingStatus.scopeId"
+      ['scopeId', 'ScopeId'],
+      'StudioScopeBindingStatus.scopeId',
     ),
     serviceId: readString(
       record,
-      [
-        "serviceId",
-        "ServiceId",
-        "publishedServiceId",
-        "PublishedServiceId",
-      ],
-      "StudioScopeBindingStatus.serviceId"
+      ['serviceId', 'ServiceId', 'publishedServiceId', 'PublishedServiceId'],
+      'StudioScopeBindingStatus.serviceId',
     ),
     displayName: readString(
       record,
-      ["displayName", "DisplayName"],
-      "StudioScopeBindingStatus.displayName"
+      ['displayName', 'DisplayName'],
+      'StudioScopeBindingStatus.displayName',
     ),
     serviceKey: readString(
       record,
       [
-        "serviceKey",
-        "ServiceKey",
-        "publishedServiceKey",
-        "PublishedServiceKey",
+        'serviceKey',
+        'ServiceKey',
+        'publishedServiceKey',
+        'PublishedServiceKey',
       ],
-      "StudioScopeBindingStatus.serviceKey"
+      'StudioScopeBindingStatus.serviceKey',
     ),
     defaultServingRevisionId: readString(
       record,
-      ["defaultServingRevisionId", "DefaultServingRevisionId"],
-      "StudioScopeBindingStatus.defaultServingRevisionId"
+      ['defaultServingRevisionId', 'DefaultServingRevisionId'],
+      'StudioScopeBindingStatus.defaultServingRevisionId',
     ),
     activeServingRevisionId: readString(
       record,
-      ["activeServingRevisionId", "ActiveServingRevisionId"],
-      "StudioScopeBindingStatus.activeServingRevisionId"
+      ['activeServingRevisionId', 'ActiveServingRevisionId'],
+      'StudioScopeBindingStatus.activeServingRevisionId',
     ),
     deploymentId: readString(
       record,
-      ["deploymentId", "DeploymentId"],
-      "StudioScopeBindingStatus.deploymentId"
+      ['deploymentId', 'DeploymentId'],
+      'StudioScopeBindingStatus.deploymentId',
     ),
     deploymentStatus: readString(
       record,
-      ["deploymentStatus", "DeploymentStatus"],
-      "StudioScopeBindingStatus.deploymentStatus"
+      ['deploymentStatus', 'DeploymentStatus'],
+      'StudioScopeBindingStatus.deploymentStatus',
     ),
     primaryActorId: readString(
       record,
-      ["primaryActorId", "PrimaryActorId"],
-      "StudioScopeBindingStatus.primaryActorId"
+      ['primaryActorId', 'PrimaryActorId'],
+      'StudioScopeBindingStatus.primaryActorId',
     ),
     updatedAt: readNullableString(
       record,
-      ["updatedAt", "UpdatedAt"],
-      "StudioScopeBindingStatus.updatedAt"
+      ['updatedAt', 'UpdatedAt'],
+      'StudioScopeBindingStatus.updatedAt',
     ),
     revisions: expectArray(
       record.revisions ?? record.Revisions,
-      "StudioScopeBindingStatus.revisions",
-      decodeStudioScopeBindingRevision
+      'StudioScopeBindingStatus.revisions',
+      decodeStudioScopeBindingRevision,
     ),
   };
 }
 
 function readStudioMemberImplementationKind(
   record: Record<string, unknown>,
-  keys: string | string[]
+  keys: string | string[],
 ): StudioMemberImplementationKind {
   return normalizeStudioScopeBindingImplementationKind(
-    readNullableString(record, keys, "StudioMemberSummary.implementationKind")
+    readNullableString(record, keys, 'StudioMemberSummary.implementationKind'),
   );
 }
 
 function readStudioMemberLifecycle(
   record: Record<string, unknown>,
-  keys: string | string[]
+  keys: string | string[],
 ): StudioMemberLifecycleStage {
   return normalizeStudioMemberLifecycleStage(
-    readNullableString(record, keys, "StudioMemberSummary.lifecycleStage")
+    readNullableString(record, keys, 'StudioMemberSummary.lifecycleStage'),
   );
 }
 
 function readStudioTeamLifecycle(
   record: Record<string, unknown>,
-  keys: string | string[]
+  keys: string | string[],
 ): StudioTeamLifecycleStage {
   return normalizeStudioTeamLifecycleStage(
-    readNullableString(record, keys, "StudioTeamSummary.lifecycleStage")
+    readNullableString(record, keys, 'StudioTeamSummary.lifecycleStage'),
   );
 }
 
 function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
-  const record = expectRecord(value, "StudioMemberSummary");
+  const record = expectRecord(value, 'StudioMemberSummary');
   return {
     memberId: readString(
       record,
-      ["memberId", "MemberId"],
-      "StudioMemberSummary.memberId"
+      ['memberId', 'MemberId'],
+      'StudioMemberSummary.memberId',
     ),
     scopeId: readString(
       record,
-      ["scopeId", "ScopeId"],
-      "StudioMemberSummary.scopeId"
+      ['scopeId', 'ScopeId'],
+      'StudioMemberSummary.scopeId',
     ),
     displayName: readString(
       record,
-      ["displayName", "DisplayName"],
-      "StudioMemberSummary.displayName"
+      ['displayName', 'DisplayName'],
+      'StudioMemberSummary.displayName',
     ),
     description:
       readNullableString(
         record,
-        ["description", "Description"],
-        "StudioMemberSummary.description"
-      ) ?? "",
+        ['description', 'Description'],
+        'StudioMemberSummary.description',
+      ) ?? '',
     implementationKind: readStudioMemberImplementationKind(record, [
-      "implementationKind",
-      "ImplementationKind",
+      'implementationKind',
+      'ImplementationKind',
     ]),
     ...(record.implementationRef == null && record.ImplementationRef == null
       ? {}
       : {
           implementationRef: decodeStudioMemberImplementationRef(
-            record.implementationRef ?? record.ImplementationRef
+            record.implementationRef ?? record.ImplementationRef,
           ),
         }),
     lifecycleStage: readStudioMemberLifecycle(record, [
-      "lifecycleStage",
-      "LifecycleStage",
+      'lifecycleStage',
+      'LifecycleStage',
     ]),
     publishedServiceId: readString(
       record,
-      ["publishedServiceId", "PublishedServiceId"],
-      "StudioMemberSummary.publishedServiceId"
+      ['publishedServiceId', 'PublishedServiceId'],
+      'StudioMemberSummary.publishedServiceId',
     ),
     lastBoundRevisionId:
       readNullableString(
         record,
-        ["lastBoundRevisionId", "LastBoundRevisionId"],
-        "StudioMemberSummary.lastBoundRevisionId"
+        ['lastBoundRevisionId', 'LastBoundRevisionId'],
+        'StudioMemberSummary.lastBoundRevisionId',
       ) ?? null,
     teamId:
       readNullableString(
         record,
-        ["teamId", "TeamId"],
-        "StudioMemberSummary.teamId"
+        ['teamId', 'TeamId'],
+        'StudioMemberSummary.teamId',
       ) ?? null,
     createdAt: readString(
       record,
-      ["createdAt", "CreatedAt"],
-      "StudioMemberSummary.createdAt"
+      ['createdAt', 'CreatedAt'],
+      'StudioMemberSummary.createdAt',
     ),
     updatedAt: readString(
       record,
-      ["updatedAt", "UpdatedAt"],
-      "StudioMemberSummary.updatedAt"
+      ['updatedAt', 'UpdatedAt'],
+      'StudioMemberSummary.updatedAt',
     ),
   };
 }
 
 function decodeStudioTeamSummary(value: unknown): StudioTeamSummary {
-  const record = expectRecord(value, "StudioTeamSummary");
+  const record = expectRecord(value, 'StudioTeamSummary');
   return {
     teamId: readString(
       record,
-      ["teamId", "TeamId"],
-      "StudioTeamSummary.teamId"
+      ['teamId', 'TeamId'],
+      'StudioTeamSummary.teamId',
     ),
     scopeId: readString(
       record,
-      ["scopeId", "ScopeId"],
-      "StudioTeamSummary.scopeId"
+      ['scopeId', 'ScopeId'],
+      'StudioTeamSummary.scopeId',
     ),
     displayName: readString(
       record,
-      ["displayName", "DisplayName"],
-      "StudioTeamSummary.displayName"
+      ['displayName', 'DisplayName'],
+      'StudioTeamSummary.displayName',
     ),
     description:
       readNullableString(
         record,
-        ["description", "Description"],
-        "StudioTeamSummary.description"
-      ) ?? "",
+        ['description', 'Description'],
+        'StudioTeamSummary.description',
+      ) ?? '',
     entryMemberId:
       readNullableString(
         record,
-        ["entryMemberId", "EntryMemberId"],
-        "StudioTeamSummary.entryMemberId"
+        ['entryMemberId', 'EntryMemberId'],
+        'StudioTeamSummary.entryMemberId',
       ) ?? null,
     lifecycleStage: readStudioTeamLifecycle(record, [
-      "lifecycleStage",
-      "LifecycleStage",
+      'lifecycleStage',
+      'LifecycleStage',
     ]),
     memberCount: readNumber(
       record,
-      ["memberCount", "MemberCount"],
-      "StudioTeamSummary.memberCount"
+      ['memberCount', 'MemberCount'],
+      'StudioTeamSummary.memberCount',
     ),
     createdAt: readString(
       record,
-      ["createdAt", "CreatedAt"],
-      "StudioTeamSummary.createdAt"
+      ['createdAt', 'CreatedAt'],
+      'StudioTeamSummary.createdAt',
     ),
     updatedAt: readString(
       record,
-      ["updatedAt", "UpdatedAt"],
-      "StudioTeamSummary.updatedAt"
+      ['updatedAt', 'UpdatedAt'],
+      'StudioTeamSummary.updatedAt',
     ),
   };
 }
 
 function decodeStudioTeamCommandResponse(
-  value: unknown
+  value: unknown,
 ): StudioTeamCommandResponse {
-  const record = expectRecord(value, "StudioTeamCommandResponse");
-  const status = readOptionalScalar(record, ["status", "Status"]);
+  const record = expectRecord(value, 'StudioTeamCommandResponse');
+  const status = readOptionalScalar(record, ['status', 'Status']);
   if (status === undefined) {
-    throw new Error("StudioTeamCommandResponse.status is required.");
+    throw new Error('StudioTeamCommandResponse.status is required.');
   }
 
   return {
     status: normalizeStudioTeamCommandStatus(status),
     scopeId: readString(
       record,
-      ["scopeId", "ScopeId"],
-      "StudioTeamCommandResponse.scopeId"
+      ['scopeId', 'ScopeId'],
+      'StudioTeamCommandResponse.scopeId',
     ),
     teamId: readString(
       record,
-      ["teamId", "TeamId"],
-      "StudioTeamCommandResponse.teamId"
+      ['teamId', 'TeamId'],
+      'StudioTeamCommandResponse.teamId',
     ),
     commandId:
       readNullableString(
         record,
-        ["commandId", "CommandId"],
-        "StudioTeamCommandResponse.commandId"
+        ['commandId', 'CommandId'],
+        'StudioTeamCommandResponse.commandId',
       ) ?? null,
     correlationId:
       readNullableString(
         record,
-        ["correlationId", "CorrelationId"],
-        "StudioTeamCommandResponse.correlationId"
+        ['correlationId', 'CorrelationId'],
+        'StudioTeamCommandResponse.correlationId',
       ) ?? null,
     ackedAt:
       readNullableString(
         record,
-        ["ackedAt", "AckedAt"],
-        "StudioTeamCommandResponse.ackedAt"
+        ['ackedAt', 'AckedAt'],
+        'StudioTeamCommandResponse.ackedAt',
       ) ?? null,
   };
 }
 
 function synthesizeStudioTeamCommandResponseFromSummary(
-  summary: StudioTeamSummary
+  summary: StudioTeamSummary,
 ): StudioTeamCommandResponse {
   return {
-    status: "accepted",
+    status: 'accepted',
     scopeId: summary.scopeId,
     teamId: summary.teamId,
     commandId: null,
@@ -1319,14 +2268,14 @@ function synthesizeStudioTeamCommandResponseFromSummary(
 }
 
 function decodeCompatibleStudioTeamCommandResponse(
-  value: unknown
+  value: unknown,
 ): StudioTeamCommandResponse {
   try {
     return decodeStudioTeamCommandResponse(value);
   } catch (commandResponseError) {
     try {
       return synthesizeStudioTeamCommandResponseFromSummary(
-        decodeStudioTeamSummary(value)
+        decodeStudioTeamSummary(value),
       );
     } catch {
       throw commandResponseError;
@@ -1335,315 +2284,341 @@ function decodeCompatibleStudioTeamCommandResponse(
 }
 
 function decodeStudioTeamRoster(value: unknown): StudioTeamRoster {
-  const record = expectRecord(value, "StudioTeamRoster");
+  const record = expectRecord(value, 'StudioTeamRoster');
   return {
     scopeId: readString(
       record,
-      ["scopeId", "ScopeId"],
-      "StudioTeamRoster.scopeId"
+      ['scopeId', 'ScopeId'],
+      'StudioTeamRoster.scopeId',
     ),
     teams: expectArray(
       record.teams ?? record.Teams,
-      "StudioTeamRoster.teams",
-      decodeStudioTeamSummary
+      'StudioTeamRoster.teams',
+      decodeStudioTeamSummary,
     ),
     nextPageToken:
       readNullableString(
         record,
-        ["nextPageToken", "NextPageToken"],
-        "StudioTeamRoster.nextPageToken"
+        ['nextPageToken', 'NextPageToken'],
+        'StudioTeamRoster.nextPageToken',
       ) ?? null,
   };
 }
 
 function decodeStudioMemberRoster(value: unknown): StudioMemberRoster {
-  const record = expectRecord(value, "StudioMemberRoster");
+  const record = expectRecord(value, 'StudioMemberRoster');
   return {
     scopeId: readString(
       record,
-      ["scopeId", "ScopeId"],
-      "StudioMemberRoster.scopeId"
+      ['scopeId', 'ScopeId'],
+      'StudioMemberRoster.scopeId',
     ),
     members: expectArray(
       record.members ?? record.Members,
-      "StudioMemberRoster.members",
-      decodeStudioMemberSummary
+      'StudioMemberRoster.members',
+      decodeStudioMemberSummary,
     ),
     nextPageToken:
       readNullableString(
         record,
-        ["nextPageToken", "NextPageToken"],
-        "StudioMemberRoster.nextPageToken"
+        ['nextPageToken', 'NextPageToken'],
+        'StudioMemberRoster.nextPageToken',
       ) ?? null,
   };
 }
 
 function decodeStudioMemberImplementationRef(
-  value: unknown
+  value: unknown,
 ): StudioMemberImplementationRef {
-  const record = expectRecord(value, "StudioMemberImplementationRef");
+  const record = expectRecord(value, 'StudioMemberImplementationRef');
   return {
     implementationKind: readStudioMemberImplementationKind(record, [
-      "implementationKind",
-      "ImplementationKind",
+      'implementationKind',
+      'ImplementationKind',
     ]),
     workflowId:
       readNullableString(
         record,
-        ["workflowId", "WorkflowId"],
-        "StudioMemberImplementationRef.workflowId"
+        ['workflowId', 'WorkflowId'],
+        'StudioMemberImplementationRef.workflowId',
       ) ?? null,
     workflowRevision:
       readNullableString(
         record,
-        ["workflowRevision", "WorkflowRevision"],
-        "StudioMemberImplementationRef.workflowRevision"
+        ['workflowRevision', 'WorkflowRevision'],
+        'StudioMemberImplementationRef.workflowRevision',
       ) ?? null,
     scriptId:
       readNullableString(
         record,
-        ["scriptId", "ScriptId"],
-        "StudioMemberImplementationRef.scriptId"
+        ['scriptId', 'ScriptId'],
+        'StudioMemberImplementationRef.scriptId',
       ) ?? null,
     scriptRevision:
       readNullableString(
         record,
-        ["scriptRevision", "ScriptRevision"],
-        "StudioMemberImplementationRef.scriptRevision"
+        ['scriptRevision', 'ScriptRevision'],
+        'StudioMemberImplementationRef.scriptRevision',
       ) ?? null,
     agentKind:
       readNullableString(
         record,
-        ["agentKind", "AgentKind"],
-        "StudioMemberImplementationRef.agentKind"
+        ['agentKind', 'AgentKind'],
+        'StudioMemberImplementationRef.agentKind',
       ) ?? null,
     diagnosticActorTypeName:
       readNullableString(
         record,
-        ["diagnosticActorTypeName", "DiagnosticActorTypeName"],
-        "StudioMemberImplementationRef.diagnosticActorTypeName"
+        ['diagnosticActorTypeName', 'DiagnosticActorTypeName'],
+        'StudioMemberImplementationRef.diagnosticActorTypeName',
       ) ?? null,
   };
 }
 
 function decodeStudioMemberBindingContract(
-  value: unknown
+  value: unknown,
 ): StudioMemberBindingContract {
-  const record = expectRecord(value, "StudioMemberBindingContract");
+  const record = expectRecord(value, 'StudioMemberBindingContract');
   return {
     publishedServiceId: readString(
       record,
-      ["publishedServiceId", "PublishedServiceId"],
-      "StudioMemberBindingContract.publishedServiceId"
+      ['publishedServiceId', 'PublishedServiceId'],
+      'StudioMemberBindingContract.publishedServiceId',
     ),
     revisionId: readString(
       record,
-      ["revisionId", "RevisionId"],
-      "StudioMemberBindingContract.revisionId"
+      ['revisionId', 'RevisionId'],
+      'StudioMemberBindingContract.revisionId',
     ),
     implementationKind: readStudioMemberImplementationKind(record, [
-      "implementationKind",
-      "ImplementationKind",
+      'implementationKind',
+      'ImplementationKind',
     ]),
     boundAt: readString(
       record,
-      ["boundAt", "BoundAt"],
-      "StudioMemberBindingContract.boundAt"
+      ['boundAt', 'BoundAt'],
+      'StudioMemberBindingContract.boundAt',
     ),
   };
 }
 
 function decodeStudioMemberBindingRunResult(
-  value: unknown
+  value: unknown,
 ): StudioMemberBindingRunResult {
-  const record = expectRecord(value, "StudioMemberBindingRunResult");
+  const record = expectRecord(value, 'StudioMemberBindingRunResult');
   return {
     publishedServiceId: readString(
       record,
-      ["publishedServiceId", "PublishedServiceId"],
-      "StudioMemberBindingRunResult.publishedServiceId"
+      ['publishedServiceId', 'PublishedServiceId'],
+      'StudioMemberBindingRunResult.publishedServiceId',
     ),
     revisionId: readString(
       record,
-      ["revisionId", "RevisionId"],
-      "StudioMemberBindingRunResult.revisionId"
+      ['revisionId', 'RevisionId'],
+      'StudioMemberBindingRunResult.revisionId',
     ),
     implementationKind: readStudioMemberImplementationKind(record, [
-      "implementationKind",
-      "ImplementationKind",
+      'implementationKind',
+      'ImplementationKind',
     ]),
     expectedActorId:
       readNullableString(
         record,
-        ["expectedActorId", "ExpectedActorId"],
-        "StudioMemberBindingRunResult.expectedActorId"
+        ['expectedActorId', 'ExpectedActorId'],
+        'StudioMemberBindingRunResult.expectedActorId',
       ) ?? null,
   };
 }
 
 function normalizeStudioMemberBindingRunStatus(
-  value: string | number | null | undefined
+  value: string | number | null | undefined,
 ): StudioMemberBindingRunStatus {
   if (value == null) {
-    return "unknown";
+    return 'unknown';
   }
 
-  return normalizeEnumValue(value, "status", {
-    "0": "unknown",
-    "1": "accepted",
-    "2": "admission_pending",
-    "3": "admitted",
-    "4": "platform_binding_pending",
-    "5": "succeeded",
-    "6": "failed",
-    "7": "rejected",
-    "8": "member_notification_pending",
-    accepted: "accepted",
-    admission_pending: "admission_pending",
-    admissionpending: "admission_pending",
-    admitted: "admitted",
-    platform_binding_pending: "platform_binding_pending",
-    platformbindingpending: "platform_binding_pending",
-    platform_pending: "platform_binding_pending",
-    platformpending: "platform_binding_pending",
-    member_notification_pending: "member_notification_pending",
-    membernotificationpending: "member_notification_pending",
-    notification_pending: "member_notification_pending",
-    notificationpending: "member_notification_pending",
-    succeeded: "succeeded",
-    completed: "succeeded",
-    failed: "failed",
-    rejected: "rejected",
-    unspecified: "unknown",
-    unknown: "unknown",
+  return normalizeEnumValue(value, 'status', {
+    '0': 'unknown',
+    '1': 'accepted',
+    '2': 'admission_pending',
+    '3': 'admitted',
+    '4': 'platform_binding_pending',
+    '5': 'succeeded',
+    '6': 'failed',
+    '7': 'rejected',
+    '8': 'member_notification_pending',
+    accepted: 'accepted',
+    admission_pending: 'admission_pending',
+    admissionpending: 'admission_pending',
+    admitted: 'admitted',
+    platform_binding_pending: 'platform_binding_pending',
+    platformbindingpending: 'platform_binding_pending',
+    platform_pending: 'platform_binding_pending',
+    platformpending: 'platform_binding_pending',
+    member_notification_pending: 'member_notification_pending',
+    membernotificationpending: 'member_notification_pending',
+    notification_pending: 'member_notification_pending',
+    notificationpending: 'member_notification_pending',
+    succeeded: 'succeeded',
+    completed: 'succeeded',
+    failed: 'failed',
+    rejected: 'rejected',
+    unspecified: 'unknown',
+    unknown: 'unknown',
   }) as StudioMemberBindingRunStatus;
 }
 
 function normalizeStudioMemberBindingAckStage(
-  value: string | number | null | undefined
+  value: string | number | null | undefined,
 ): StudioMemberBindingAckStage {
   if (value == null) {
-    return "unknown";
+    return 'unknown';
   }
 
-  const normalized = normalizeEnumValue(value, "ackStage", {
-    "0": "unknown",
-    "1": "dispatch_accepted",
-    dispatch_accepted: "dispatch_accepted",
-    dispatchaccepted: "dispatch_accepted",
-    unknown: "unknown",
+  const normalized = normalizeEnumValue(value, 'ackStage', {
+    '0': 'unknown',
+    '1': 'dispatch_accepted',
+    dispatch_accepted: 'dispatch_accepted',
+    dispatchaccepted: 'dispatch_accepted',
+    unknown: 'unknown',
   });
 
-  return normalized === "dispatch_accepted" ? normalized : "unknown";
+  return normalized === 'dispatch_accepted' ? normalized : 'unknown';
 }
 
 function normalizeStudioMemberBindingRunRole(
-  value: string | number | null | undefined
+  value: string | number | null | undefined,
 ): StudioMemberBindingRunRole {
   if (value == null) {
-    return "unknown";
+    return 'unknown';
   }
 
-  const normalized = normalizeEnumValue(value, "bindingRunRole", {
-    "0": "unknown",
-    "1": "candidate",
-    candidate: "candidate",
-    unknown: "unknown",
+  const normalized = normalizeEnumValue(value, 'bindingRunRole', {
+    '0': 'unknown',
+    '1': 'candidate',
+    candidate: 'candidate',
+    unknown: 'unknown',
   });
 
-  return normalized === "candidate" ? normalized : "unknown";
+  return normalized === 'candidate' ? normalized : 'unknown';
 }
 
 function normalizeStudioMemberCommandStatus(
-  value: string | number | null | undefined
+  value: string | number | null | undefined,
 ): StudioMemberCommandStatus {
-  return normalizeCommandReceiptStatus(value);
+  if (value == null) {
+    return 'unknown';
+  }
+
+  const normalized = normalizeEnumValue(value, 'status', {
+    '0': 'unknown',
+    '1': 'accepted',
+    '2': 'no_change',
+    '3': 'delete_accepted',
+    accepted: 'accepted',
+    delete_accepted: 'delete_accepted',
+    deleteaccepted: 'delete_accepted',
+    no_change: 'no_change',
+    nochange: 'no_change',
+    unchanged: 'no_change',
+    unknown: 'unknown',
+  });
+
+  return normalized === 'accepted' ||
+    normalized === 'delete_accepted' ||
+    normalized === 'no_change'
+    ? normalized
+    : 'unknown';
 }
 
 function normalizeCommandReceiptStatus(
-  value: string | number | null | undefined
-): StudioMemberCommandStatus | StudioTeamCommandStatus {
+  value: string | number | null | undefined,
+): StudioTeamCommandStatus {
   if (value == null) {
-    return "unknown";
+    return 'unknown';
   }
 
-  const normalized = normalizeEnumValue(value, "status", {
-    "0": "unknown",
-    "1": "accepted",
-    "2": "no_change",
-    accepted: "accepted",
-    no_change: "no_change",
-    nochange: "no_change",
-    unchanged: "no_change",
-    unknown: "unknown",
+  const normalized = normalizeEnumValue(value, 'status', {
+    '0': 'unknown',
+    '1': 'accepted',
+    '2': 'no_change',
+    accepted: 'accepted',
+    no_change: 'no_change',
+    nochange: 'no_change',
+    unchanged: 'no_change',
+    unknown: 'unknown',
   });
 
-  return normalized === "accepted" || normalized === "no_change"
+  return normalized === 'accepted' || normalized === 'no_change'
     ? normalized
-    : "unknown";
+    : 'unknown';
 }
 
 function normalizeStudioTeamCommandStatus(
-  value: string | number | null | undefined
+  value: string | number | null | undefined,
 ): StudioTeamCommandStatus {
   return normalizeCommandReceiptStatus(value);
 }
 
 function decodeStudioMemberBindingFailure(
-  value: unknown
+  value: unknown,
 ): StudioMemberBindingFailure {
-  const record = expectRecord(value, "StudioMemberBindingFailure");
+  const record = expectRecord(value, 'StudioMemberBindingFailure');
   return {
-    code: readString(record, ["code", "Code"], "StudioMemberBindingFailure.code"),
+    code: readString(
+      record,
+      ['code', 'Code'],
+      'StudioMemberBindingFailure.code',
+    ),
     message:
       readNullableString(
         record,
-        ["message", "Message"],
-        "StudioMemberBindingFailure.message"
+        ['message', 'Message'],
+        'StudioMemberBindingFailure.message',
       ) ?? null,
     failedAt:
       readNullableString(
         record,
-        ["failedAt", "FailedAt", "failedAtUtc", "FailedAtUtc"],
-        "StudioMemberBindingFailure.failedAt"
+        ['failedAt', 'FailedAt', 'failedAtUtc', 'FailedAtUtc'],
+        'StudioMemberBindingFailure.failedAt',
       ) ?? null,
   };
 }
 
 function decodeStudioMemberBindingRunStatusResponse(
-  value: unknown
+  value: unknown,
 ): StudioMemberBindingRunStatusResponse {
-  const record = expectRecord(value, "StudioMemberBindingRunStatusResponse");
+  const record = expectRecord(value, 'StudioMemberBindingRunStatusResponse');
   const result =
     record.result == null && record.Result == null
       ? undefined
       : decodeStudioMemberBindingRunResult(record.result ?? record.Result);
   return {
     status: normalizeStudioMemberBindingRunStatus(
-      readOptionalScalar(record, ["status", "Status"])
+      readOptionalScalar(record, ['status', 'Status']),
     ),
     bindingRunId: readString(
       record,
-      ["bindingRunId", "BindingRunId"],
-      "StudioMemberBindingRunStatusResponse.bindingRunId"
+      ['bindingRunId', 'BindingRunId'],
+      'StudioMemberBindingRunStatusResponse.bindingRunId',
     ),
     scopeId: readString(
       record,
-      ["scopeId", "ScopeId"],
-      "StudioMemberBindingRunStatusResponse.scopeId"
+      ['scopeId', 'ScopeId'],
+      'StudioMemberBindingRunStatusResponse.scopeId',
     ),
     memberId: readString(
       record,
-      ["memberId", "MemberId"],
-      "StudioMemberBindingRunStatusResponse.memberId"
+      ['memberId', 'MemberId'],
+      'StudioMemberBindingRunStatusResponse.memberId',
     ),
     stateVersion:
       readOptionalNumber(record.stateVersion ?? record.StateVersion) ?? null,
     platformBindingCommandId:
       readNullableString(
         record,
-        ["platformBindingCommandId", "PlatformBindingCommandId"],
-        "StudioMemberBindingRunStatusResponse.platformBindingCommandId"
+        ['platformBindingCommandId', 'PlatformBindingCommandId'],
+        'StudioMemberBindingRunStatusResponse.platformBindingCommandId',
       ) ?? null,
     ...(result === undefined ? {} : { result }),
     failure:
@@ -1653,125 +2628,128 @@ function decodeStudioMemberBindingRunStatusResponse(
     updatedAt:
       readNullableString(
         record,
-        ["updatedAt", "UpdatedAt", "updatedAtUtc", "UpdatedAtUtc"],
-        "StudioMemberBindingRunStatusResponse.updatedAt"
+        ['updatedAt', 'UpdatedAt', 'updatedAtUtc', 'UpdatedAtUtc'],
+        'StudioMemberBindingRunStatusResponse.updatedAt',
       ) ?? null,
   };
 }
 
 function decodeStudioMemberBindingAcceptedResponse(
-  value: unknown
+  value: unknown,
 ): StudioMemberBindingAcceptedResponse {
-  const record = expectRecord(value, "StudioMemberBindingAcceptedResponse");
+  const record = expectRecord(value, 'StudioMemberBindingAcceptedResponse');
   return {
     status: normalizeStudioMemberBindingRunStatus(
-      readOptionalScalar(record, ["status", "Status"])
+      readOptionalScalar(record, ['status', 'Status']),
     ),
     bindingRunId: readString(
       record,
-      ["bindingRunId", "BindingRunId"],
-      "StudioMemberBindingAcceptedResponse.bindingRunId"
+      ['bindingRunId', 'BindingRunId'],
+      'StudioMemberBindingAcceptedResponse.bindingRunId',
     ),
     scopeId: readString(
       record,
-      ["scopeId", "ScopeId"],
-      "StudioMemberBindingAcceptedResponse.scopeId"
+      ['scopeId', 'ScopeId'],
+      'StudioMemberBindingAcceptedResponse.scopeId',
     ),
     memberId: readString(
       record,
-      ["memberId", "MemberId"],
-      "StudioMemberBindingAcceptedResponse.memberId"
+      ['memberId', 'MemberId'],
+      'StudioMemberBindingAcceptedResponse.memberId',
     ),
     ackStage: normalizeStudioMemberBindingAckStage(
-      readOptionalScalar(record, ["ackStage", "AckStage"])
+      readOptionalScalar(record, ['ackStage', 'AckStage']),
     ),
     bindingRunRole: normalizeStudioMemberBindingRunRole(
-      readOptionalScalar(record, ["bindingRunRole", "BindingRunRole"])
+      readOptionalScalar(record, ['bindingRunRole', 'BindingRunRole']),
     ),
   };
 }
 
 function decodeStudioMemberCommandResponse(
-  value: unknown
+  value: unknown,
 ): StudioMemberCommandResponse {
-  const record = expectRecord(value, "StudioMemberCommandResponse");
+  const record = expectRecord(value, 'StudioMemberCommandResponse');
   return {
     status: normalizeStudioMemberCommandStatus(
-      readOptionalScalar(record, ["status", "Status"])
+      readOptionalScalar(record, ['status', 'Status']),
     ),
     scopeId: readString(
       record,
-      ["scopeId", "ScopeId"],
-      "StudioMemberCommandResponse.scopeId"
+      ['scopeId', 'ScopeId'],
+      'StudioMemberCommandResponse.scopeId',
     ),
     memberId: readString(
       record,
-      ["memberId", "MemberId"],
-      "StudioMemberCommandResponse.memberId"
+      ['memberId', 'MemberId'],
+      'StudioMemberCommandResponse.memberId',
     ),
     ackedAt:
       readNullableString(
         record,
-        ["ackedAt", "AckedAt"],
-        "StudioMemberCommandResponse.ackedAt"
+        ['ackedAt', 'AckedAt'],
+        'StudioMemberCommandResponse.ackedAt',
       ) ?? null,
   };
 }
 
 function decodeStudioMemberBindingViewResponse(
-  value: unknown
+  value: unknown,
 ): StudioMemberBindingViewResponse {
-  const record = expectRecord(value, "StudioMemberBindingViewResponse");
+  const record = expectRecord(value, 'StudioMemberBindingViewResponse');
   const currentBindingRun =
     record.currentBindingRun == null && record.CurrentBindingRun == null
       ? undefined
       : decodeStudioMemberBindingRunStatusResponse(
-          record.currentBindingRun ?? record.CurrentBindingRun
+          record.currentBindingRun ?? record.CurrentBindingRun,
         );
   return {
     lastBinding:
       record.lastBinding == null && record.LastBinding == null
         ? null
         : decodeStudioMemberBindingContract(
-            record.lastBinding ?? record.LastBinding
+            record.lastBinding ?? record.LastBinding,
           ),
     ...(currentBindingRun === undefined ? {} : { currentBindingRun }),
   };
 }
 
 function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
-  const record = expectRecord(value, "StudioMemberDetail");
+  const record = expectRecord(value, 'StudioMemberDetail');
   const currentBindingRun =
     record.currentBindingRun == null && record.CurrentBindingRun == null
       ? undefined
       : decodeStudioMemberBindingRunStatusResponse(
-          record.currentBindingRun ?? record.CurrentBindingRun
+          record.currentBindingRun ?? record.CurrentBindingRun,
         );
   return {
     summary: decodeStudioMemberSummary(
-      expectRecord(record.summary ?? record.Summary, "StudioMemberDetail.summary")
+      expectRecord(
+        record.summary ?? record.Summary,
+        'StudioMemberDetail.summary',
+      ),
     ),
     implementationRef:
       record.implementationRef == null && record.ImplementationRef == null
         ? null
         : decodeStudioMemberImplementationRef(
-            record.implementationRef ?? record.ImplementationRef
+            record.implementationRef ?? record.ImplementationRef,
           ),
     lastBinding:
       record.lastBinding == null && record.LastBinding == null
         ? null
         : decodeStudioMemberBindingContract(
-            record.lastBinding ?? record.LastBinding
+            record.lastBinding ?? record.LastBinding,
           ),
     ...(currentBindingRun === undefined ? {} : { currentBindingRun }),
   };
 }
 
 function synthesizeStudioMemberCommandResponseFromDetail(
-  detail: StudioMemberDetail
+  detail: StudioMemberDetail,
 ): StudioMemberCommandResponse {
   return {
-    status: "accepted",
+    status: 'accepted',
     scopeId: detail.summary.scopeId,
     memberId: detail.summary.memberId,
     ackedAt: null,
@@ -1779,14 +2757,14 @@ function synthesizeStudioMemberCommandResponseFromDetail(
 }
 
 function decodeCompatibleStudioMemberPatchResponse(
-  value: unknown
+  value: unknown,
 ): StudioMemberCommandResponse {
   try {
     return decodeStudioMemberCommandResponse(value);
   } catch (commandResponseError) {
     try {
       return synthesizeStudioMemberCommandResponseFromDetail(
-        decodeStudioMemberDetail(value)
+        decodeStudioMemberDetail(value),
       );
     } catch {
       throw commandResponseError;
@@ -1796,28 +2774,45 @@ function decodeCompatibleStudioMemberPatchResponse(
 
 export const studioApi = {
   getAppContext(): Promise<StudioAppContext> {
-    return requestJson("/api/studio/context");
+    return requestJson('/api/studio/context');
   },
 
   getAuthSession(): Promise<StudioAuthSession> {
-    return requestJson("/api/auth/me");
+    return requestJson('/api/auth/me');
   },
 
-  getWorkspaceSettings(scopeId?: string | null): Promise<StudioWorkspaceSettings> {
-    return requestJson(withOptionalScopeId("/api/workspace/", scopeId));
+  getWorkspaceSettings(
+    scopeId?: string | null,
+  ): Promise<StudioWorkspaceSettings> {
+    return requestJson(withOptionalScopeId('/api/workspace/', scopeId));
+  },
+
+  getWorkflowBoardSnapshot(
+    scopeId: string,
+    request: StudioWorkflowBoardSnapshotRequest,
+  ): Promise<StudioWorkflowBoardSnapshot> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/workflow-board/snapshot`,
+      decodeStudioWorkflowBoardSnapshot,
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(compactWorkflowBoardSnapshotRequest(request)),
+      },
+    );
   },
 
   listTeams(scopeId: string): Promise<StudioTeamRoster> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams`,
-      decodeStudioTeamRoster
+      decodeStudioTeamRoster,
     );
   },
 
   getTeam(scopeId: string, teamId: string): Promise<StudioTeamSummary> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}`,
-      decodeStudioTeamSummary
+      decodeStudioTeamSummary,
     );
   },
 
@@ -1826,104 +2821,111 @@ export const studioApi = {
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/teams`,
       decodeStudioTeamSummary,
       {
-        method: "POST",
+        method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
             displayName: input.displayName.trim(),
             description: trimOptional(input.description),
             teamId: trimOptional(input.teamId),
-          })
+          }),
         ),
-      }
+      },
     );
   },
 
   updateTeam(
-    input: StudioTeamUpdateInput
+    input: StudioTeamUpdateInput,
   ): Promise<StudioTeamCommandResponse | undefined> {
     return requestDecodedJsonOrAccepted(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/teams/${encodeURIComponent(input.teamId.trim())}`,
       decodeCompatibleStudioTeamCommandResponse,
       {
-        method: "PATCH",
+        method: 'PATCH',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
             displayName:
-              input.displayName === null ? null : trimOptional(input.displayName),
+              input.displayName === null
+                ? null
+                : trimOptional(input.displayName),
             description:
-              input.description === null ? null : trimOptional(input.description),
-          })
+              input.description === null
+                ? null
+                : trimOptional(input.description),
+          }),
         ),
-      }
+      },
     );
   },
 
   archiveTeam(
     scopeId: string,
-    teamId: string
+    teamId: string,
   ): Promise<StudioTeamCommandResponse | undefined> {
     return requestDecodedJsonOrAccepted(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/archive`,
       decodeCompatibleStudioTeamCommandResponse,
       {
-        method: "POST",
+        method: 'POST',
         headers: JSON_HEADERS,
-      }
+      },
     );
   },
 
   setTeamEntryMember(
     scopeId: string,
     teamId: string,
-    memberId: string
+    memberId: string,
   ): Promise<StudioTeamSummary | undefined> {
     return requestDecodedJsonOrAccepted(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/entry-member`,
       decodeStudioTeamSummary,
       {
-        method: "PUT",
+        method: 'PUT',
         headers: JSON_HEADERS,
         body: JSON.stringify({
           memberId: memberId.trim(),
         }),
-      }
+      },
     );
   },
 
   clearTeamEntryMember(
     scopeId: string,
-    teamId: string
+    teamId: string,
   ): Promise<StudioTeamSummary | undefined> {
     return requestDecodedJsonOrAccepted(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/entry-member`,
       decodeStudioTeamSummary,
       {
-        method: "DELETE",
+        method: 'DELETE',
         headers: JSON_HEADERS,
-      }
+      },
     );
   },
 
-  listTeamMembers(scopeId: string, teamId: string): Promise<StudioMemberRoster> {
+  listTeamMembers(
+    scopeId: string,
+    teamId: string,
+  ): Promise<StudioMemberRoster> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/members`,
-      decodeStudioMemberRoster
+      decodeStudioMemberRoster,
     );
   },
 
   listMembers(scopeId: string): Promise<StudioMemberRoster> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/members`,
-      decodeStudioMemberRoster
+      decodeStudioMemberRoster,
     );
   },
 
   getMember(scopeId: string, memberId: string): Promise<StudioMemberDetail> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}`,
-      decodeStudioMemberDetail
+      decodeStudioMemberDetail,
     );
   },
 
@@ -1938,7 +2940,7 @@ export const studioApi = {
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members`,
       decodeStudioMemberSummary,
       {
-        method: "POST",
+        method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
@@ -1946,9 +2948,9 @@ export const studioApi = {
             implementationKind: input.implementationKind,
             description: trimOptional(input.description),
             teamId: trimOptional(input.teamId),
-          })
+          }),
         ),
-      }
+      },
     );
   },
 
@@ -1964,7 +2966,7 @@ export const studioApi = {
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members`,
       decodeStudioMemberSummary,
       {
-        method: "POST",
+        method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
@@ -1973,9 +2975,9 @@ export const studioApi = {
             description: trimOptional(input.description),
             memberId: input.memberId.trim(),
             teamId: trimOptional(input.teamId),
-          })
+          }),
         ),
-      }
+      },
     );
   },
 
@@ -1988,12 +2990,12 @@ export const studioApi = {
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
       decodeCompatibleStudioMemberPatchResponse,
       {
-        method: "PATCH",
+        method: 'PATCH',
         headers: JSON_HEADERS,
         body: JSON.stringify({
           teamId: input.teamId === null ? null : input.teamId.trim(),
         }),
-      }
+      },
     );
   },
 
@@ -2007,12 +3009,12 @@ export const studioApi = {
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
       decodeCompatibleStudioMemberPatchResponse,
       {
-        method: "PATCH",
+        method: 'PATCH',
         headers: JSON_HEADERS,
         body: JSON.stringify({
           displayName,
         }),
-      }
+      },
     );
   },
 
@@ -2025,100 +3027,84 @@ export const studioApi = {
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
       decodeCompatibleStudioMemberPatchResponse,
       {
-        method: "PATCH",
+        method: 'PATCH',
         headers: JSON_HEADERS,
         body: JSON.stringify({
           implementationRef: compactObject({
             implementationKind: input.implementationRef.implementationKind,
             workflowId: trimOptional(input.implementationRef.workflowId),
-            workflowRevision: trimOptional(input.implementationRef.workflowRevision),
+            workflowRevision: trimOptional(
+              input.implementationRef.workflowRevision,
+            ),
             scriptId: trimOptional(input.implementationRef.scriptId),
-            scriptRevision: trimOptional(input.implementationRef.scriptRevision),
+            scriptRevision: trimOptional(
+              input.implementationRef.scriptRevision,
+            ),
             agentKind: trimOptional(input.implementationRef.agentKind),
           }),
         }),
-      }
+      },
     );
   },
 
-  listWorkflowDrafts(scopeId?: string | null): Promise<StudioWorkflowDraftSummary[]> {
-    return requestJson(withOptionalScopeId("/api/workspace/workflow-drafts", scopeId));
+  deleteMember(input: {
+    scopeId: string;
+    memberId: string;
+  }): Promise<StudioMemberCommandResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeStudioMemberCommandResponse,
+      {
+        method: 'DELETE',
+        headers: JSON_HEADERS,
+      },
+    );
+  },
+
+  listWorkflowDrafts(
+    scopeId?: string | null,
+  ): Promise<StudioWorkflowDraftSummary[]> {
+    return requestJson(
+      withOptionalScopeId('/api/workspace/workflow-drafts', scopeId),
+    );
   },
 
   getTemplateWorkflow(
-    workflowName: string
+    workflowName: string,
   ): Promise<WorkflowCatalogItemDetail> {
     return requestDecodedJson(
       `/api/workflows/${encodeURIComponent(workflowName)}`,
-      decodeWorkflowCatalogItemDetailResponse
+      decodeWorkflowCatalogItemDetailResponse,
     );
   },
 
   getWorkflowDraft(
     workflowId: string,
-    scopeId?: string | null
+    scopeId?: string | null,
   ): Promise<StudioWorkflowDraft> {
     return requestJson(
       withOptionalScopeId(
         `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
-        scopeId
-      )
+        scopeId,
+      ),
     );
   },
 
   async getWorkflowDraftFile(
     workflowId: string,
-    scopeId?: string | null
+    scopeId?: string | null,
   ): Promise<StudioWorkflowFile> {
     const draft = await this.getWorkflowDraft(workflowId, scopeId);
     return toWorkflowFile(draft, true);
   },
 
   createWorkflowDraft(
-    input: Omit<StudioSaveWorkflowInput, "workflowId">
+    input: Omit<StudioSaveWorkflowInput, 'workflowId'>,
   ): Promise<StudioWorkflowSaveResult> {
-    return studioHostFetch(withOptionalScopeId("/api/workspace/workflow-drafts", input.scopeId), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify(
-        compactObject({
-          directoryId: input.directoryId,
-          workflowName: input.workflowName.trim(),
-          fileName: trimOptional(input.fileName),
-          yaml: input.yaml,
-          layout: input.layout,
-        })
-      ),
-    }).then(async (response) => {
-      if (!response.ok) {
-        throw await createStudioApiError(response);
-      }
-
-      const payload = await response.json();
-      if (response.status === 202) {
-        return {
-          kind: "accepted",
-          receipt: decodeStudioWorkflowDraftCreateAcceptedReceipt(payload),
-        };
-      }
-
-      return {
-        kind: "materialized",
-        workflow: toWorkflowFile(decodeStudioWorkflowDraft(payload), true),
-      };
-    });
-  },
-
-  updateWorkflowDraft(
-    input: StudioSaveWorkflowInput & { workflowId: string }
-  ): Promise<StudioWorkflowDraft> {
-    return requestJson(
-      withOptionalScopeId(
-        `/api/workspace/workflow-drafts/${encodeURIComponent(input.workflowId)}`,
-        input.scopeId
-      ),
+    return studioHostFetch(
+      withOptionalScopeId('/api/workspace/workflow-drafts', input.scopeId),
       {
-        method: "PUT",
+        method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
@@ -2127,24 +3113,83 @@ export const studioApi = {
             fileName: trimOptional(input.fileName),
             yaml: input.yaml,
             layout: input.layout,
-          })
+          }),
         ),
+      },
+    ).then(async (response) => {
+      if (!response.ok) {
+        throw await createStudioApiError(response);
       }
+
+      const payload = await response.json();
+      if (response.status === 202) {
+        return {
+          kind: 'accepted',
+          receipt: decodeStudioWorkflowDraftCreateAcceptedReceipt(payload),
+        };
+      }
+
+      return {
+        kind: 'materialized',
+        workflow: toWorkflowFile(decodeStudioWorkflowDraft(payload), true),
+      };
+    });
+  },
+
+  instantiateWorkflowTemplate(input: {
+    scopeId: string;
+    templateId: string;
+    expectedAuthorityStateVersion: number;
+  }): Promise<StudioWorkflowDraftCreateAcceptedReceipt> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/workflow-templates/${encodeURIComponent(input.templateId.trim())}:instantiate`,
+      decodeStudioWorkflowDraftCreateAcceptedReceipt,
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          expectedAuthorityStateVersion: input.expectedAuthorityStateVersion,
+        }),
+      },
+    );
+  },
+
+  updateWorkflowDraft(
+    input: StudioSaveWorkflowInput & { workflowId: string },
+  ): Promise<StudioWorkflowDraft> {
+    return requestJson(
+      withOptionalScopeId(
+        `/api/workspace/workflow-drafts/${encodeURIComponent(input.workflowId)}`,
+        input.scopeId,
+      ),
+      {
+        method: 'PUT',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            directoryId: input.directoryId,
+            workflowName: input.workflowName.trim(),
+            fileName: trimOptional(input.fileName),
+            yaml: input.yaml,
+            layout: input.layout,
+          }),
+        ),
+      },
     );
   },
 
   deleteWorkflowDraft(
     workflowId: string,
-    scopeId?: string | null
+    scopeId?: string | null,
   ): Promise<void> {
     return requestJson(
       withOptionalScopeId(
         `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
-        scopeId
+        scopeId,
       ),
       {
-        method: "DELETE",
-      }
+        method: 'DELETE',
+      },
     );
   },
 
@@ -2163,7 +3208,7 @@ export const studioApi = {
       for (const workflow of committed) {
         merged.set(
           workflow.workflowId,
-          toCommittedWorkflowSummary(normalizedScopeId, workflow)
+          toCommittedWorkflowSummary(normalizedScopeId, workflow),
         );
       }
 
@@ -2178,23 +3223,23 @@ export const studioApi = {
                 serviceKey: existing.serviceKey ?? null,
                 updatedAtUtc: selectLatestTimestamp(
                   draft.updatedAtUtc,
-                  existing.updatedAtUtc
+                  existing.updatedAtUtc,
                 ),
               }
-            : draft
+            : draft,
         );
       }
 
       return Array.from(merged.values()).sort(
         (left, right) =>
-          Date.parse(right.updatedAtUtc) - Date.parse(left.updatedAtUtc)
+          Date.parse(right.updatedAtUtc) - Date.parse(left.updatedAtUtc),
       );
     });
   },
 
   async getWorkflow(
     workflowId: string,
-    scopeId?: string | null
+    scopeId?: string | null,
   ): Promise<StudioWorkflowFile> {
     const normalizedScopeId = trimOptional(scopeId);
     if (!normalizedScopeId) {
@@ -2205,20 +3250,62 @@ export const studioApi = {
     const draft = await requestJsonOrNull<StudioWorkflowDraft>(
       withOptionalScopeId(
         `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
-        normalizedScopeId
-      )
+        normalizedScopeId,
+      ),
     );
     if (draft) {
       return toWorkflowFile(draft, true);
     }
 
+    const committed = (
+      await scopesApi.listWorkflowDetails(normalizedScopeId)
+    ).find((detail) => detail.workflow?.workflowId === workflowId);
+    if (!committed) {
+      throw new Error('Not Found');
+    }
+
+    return toCommittedWorkflowFile(normalizedScopeId, committed);
+  },
+
+  async getPublishedWorkflow(
+    workflowId: string,
+    scopeId: string,
+  ): Promise<StudioWorkflowFile> {
     return toCommittedWorkflowFile(
-      normalizedScopeId,
-      await scopesApi.getWorkflowDetail(normalizedScopeId, workflowId)
+      scopeId.trim(),
+      await scopesApi.getWorkflowDetail(scopeId.trim(), workflowId),
     );
   },
 
-  async saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowSaveResult> {
+  previewExplicitRequests(
+    input: StudioExplicitRequestPreviewInput,
+  ): Promise<StudioExplicitRequestPreview> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/workflows:explicit-request-preview`,
+      decodeStudioExplicitRequestPreview,
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            workflowYaml: input.workflowYaml,
+            executionMode: input.executionMode,
+            inlineWorkflowYamls:
+              input.inlineWorkflowYamls &&
+              Object.keys(input.inlineWorkflowYamls).length > 0
+                ? input.inlineWorkflowYamls
+                : undefined,
+            workflowId: input.workflowId.trim(),
+            revisionId: trimOptional(input.revisionId),
+          }),
+        ),
+      },
+    );
+  },
+
+  async saveWorkflow(
+    input: StudioSaveWorkflowInput,
+  ): Promise<StudioWorkflowSaveResult> {
     const normalizedWorkflowId = trimOptional(input.workflowId);
     const shouldUpdate =
       Boolean(normalizedWorkflowId) &&
@@ -2229,7 +3316,7 @@ export const studioApi = {
         workflowId: normalizedWorkflowId,
       });
       return {
-        kind: "materialized",
+        kind: 'materialized',
         workflow: toWorkflowFile(draft, true),
       };
     }
@@ -2244,10 +3331,87 @@ export const studioApi = {
     });
   },
 
-  deleteWorkflow(
-    workflowId: string,
-    scopeId?: string | null
-  ): Promise<void> {
+  saveAndBindWorkflow(
+    input: StudioSaveAndBindWorkflowInput,
+  ): Promise<StudioSaveAndBindWorkflowAcceptedResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/workflows:save-and-bind`,
+      decodeStudioSaveAndBindWorkflowResult,
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            workflowId: trimOptional(input.workflowId),
+            revisionId: input.revisionId.trim(),
+            workflowYaml: input.workflowYaml,
+            workflowName: trimOptional(input.workflowName),
+            displayName: trimOptional(input.displayName),
+            inlineWorkflowYamls:
+              input.inlineWorkflowYamls &&
+              Object.keys(input.inlineWorkflowYamls).length > 0
+                ? input.inlineWorkflowYamls
+                : undefined,
+            appId: trimOptional(input.appId),
+            serviceId: trimOptional(input.serviceId),
+            exposureDesired: input.exposureDesired ?? undefined,
+            explicitRequestConfirmations:
+              input.explicitRequestConfirmations &&
+              input.explicitRequestConfirmations.length > 0
+                ? input.explicitRequestConfirmations.map((confirmation) => ({
+                    workflowId: confirmation.workflowId,
+                    revisionId: confirmation.revisionId,
+                    callSiteId: confirmation.callSiteId,
+                    requestContractDigest: confirmation.requestContractDigest,
+                    attestedRisk: confirmation.attestedRisk,
+                  }))
+                : undefined,
+          }),
+        ),
+      },
+    );
+  },
+
+  publishWorkflow(
+    input: StudioPublishWorkflowInput,
+  ): Promise<StudioPublishWorkflowAcceptedResult> {
+    const scopeId = input.scopeId.trim();
+    const workflowId = input.workflowId.trim();
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId)}/workflows/${encodeURIComponent(workflowId)}`,
+      decodeStudioPublishWorkflowResult,
+      {
+        method: 'PUT',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            revisionId: input.revisionId.trim(),
+            workflowYaml: input.workflowYaml,
+            workflowName: trimOptional(input.workflowName),
+            displayName: trimOptional(input.displayName),
+            inlineWorkflowYamls:
+              input.inlineWorkflowYamls &&
+              Object.keys(input.inlineWorkflowYamls).length > 0
+                ? input.inlineWorkflowYamls
+                : undefined,
+            explicitRequestConfirmations:
+              input.explicitRequestConfirmations &&
+              input.explicitRequestConfirmations.length > 0
+                ? input.explicitRequestConfirmations.map((confirmation) => ({
+                    workflowId: confirmation.workflowId,
+                    revisionId: confirmation.revisionId,
+                    callSiteId: confirmation.callSiteId,
+                    requestContractDigest: confirmation.requestContractDigest,
+                    attestedRisk: confirmation.attestedRisk,
+                  }))
+                : undefined,
+          }),
+        ),
+      },
+    );
+  },
+
+  deleteWorkflow(workflowId: string, scopeId?: string | null): Promise<void> {
     return this.deleteWorkflowDraft(workflowId, scopeId);
   },
 
@@ -2256,8 +3420,8 @@ export const studioApi = {
     availableWorkflowNames?: string[];
     availableStepTypes?: string[];
   }): Promise<StudioParseYamlResult> {
-    return requestJson("/api/editor/parse-yaml", {
-      method: "POST",
+    return requestJson('/api/editor/parse-yaml', {
+      method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({
         yaml: input.yaml,
@@ -2272,8 +3436,8 @@ export const studioApi = {
     availableWorkflowNames?: string[];
     availableStepTypes?: string[];
   }): Promise<StudioSerializeYamlResult> {
-    return requestJson("/api/editor/serialize-yaml", {
-      method: "POST",
+    return requestJson('/api/editor/serialize-yaml', {
+      method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({
         document: input.document,
@@ -2284,7 +3448,7 @@ export const studioApi = {
   },
 
   listExecutions(): Promise<StudioExecutionSummary[]> {
-    return requestJson("/api/executions/");
+    return requestJson('/api/executions/');
   },
 
   getExecution(executionId: string): Promise<StudioExecutionDetail> {
@@ -2292,10 +3456,10 @@ export const studioApi = {
   },
 
   startExecution(
-    input: StudioStartExecutionInput
+    input: StudioStartExecutionInput,
   ): Promise<StudioExecutionDetail> {
-    return requestJson("/api/executions/", {
-      method: "POST",
+    return requestJson('/api/executions/', {
+      method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(
         compactObject({
@@ -2306,7 +3470,7 @@ export const studioApi = {
           scopeId: trimOptional(input.scopeId),
           workflowId: trimOptional(input.workflowId),
           eventFormat: trimOptional(input.eventFormat),
-        })
+        }),
       ),
     });
   },
@@ -2321,57 +3485,57 @@ export const studioApi = {
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
       decodeStudioScopeBindingResult,
       {
-        method: "PUT",
+        method: 'PUT',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
-            implementationKind: "workflow",
+            implementationKind: 'workflow',
             displayName: trimOptional(input.displayName),
             workflowYamls:
               input.workflowYamls.length > 0 ? input.workflowYamls : undefined,
             revisionId: trimOptional(input.revisionId),
-          })
+          }),
         ),
-      }
+      },
     );
   },
 
   bindScopeScript(
-    input: StudioScopeScriptBindingInput
+    input: StudioScopeScriptBindingInput,
   ): Promise<StudioScopeScriptBindingResult> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
       decodeStudioScopeBindingResult,
       {
-        method: "PUT",
+        method: 'PUT',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
-            implementationKind: "script",
+            implementationKind: 'script',
             displayName: trimOptional(input.displayName),
             serviceId: trimOptional(input.serviceId),
             script: compactObject({
               scriptId: input.scriptId.trim(),
               scriptRevision: input.scriptRevision.trim(),
             }),
-          })
+          }),
         ),
-      }
+      },
     );
   },
 
   bindScopeGAgent(
-    input: StudioScopeGAgentBindingInput
+    input: StudioScopeGAgentBindingInput,
   ): Promise<StudioScopeGAgentBindingResult> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
       decodeStudioScopeBindingResult,
       {
-        method: "PUT",
+        method: 'PUT',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
-            implementationKind: "gagent",
+            implementationKind: 'gagent',
             serviceId: trimOptional(input.serviceId),
             displayName: trimOptional(input.displayName),
             gagent: compactObject({
@@ -2382,53 +3546,64 @@ export const studioApi = {
                   displayName:
                     trimOptional(endpoint.displayName) ||
                     endpoint.endpointId.trim(),
-                  kind: trimOptional(endpoint.kind)?.toLowerCase() || "command",
+                  kind: trimOptional(endpoint.kind)?.toLowerCase() || 'command',
                   requestTypeUrl: trimOptional(endpoint.requestTypeUrl),
                   responseTypeUrl: trimOptional(endpoint.responseTypeUrl),
                   description: trimOptional(endpoint.description),
-                })
+                }),
               ),
             }),
             revisionId: trimOptional(input.revisionId),
-          })
+          }),
         ),
-      }
+      },
     );
   },
 
   getScopeBinding(scopeId: string): Promise<StudioScopeBindingStatus> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/binding`,
-      decodeStudioScopeBindingStatus
+      decodeStudioScopeBindingStatus,
     );
   },
 
   bindMemberWorkflow(
-    input: StudioMemberWorkflowBindingInput
+    input: StudioMemberWorkflowBindingInput,
   ): Promise<StudioMemberBindingAcceptedResponse> {
     const workflowId = trimOptional(input.workflowId);
     if (!workflowId) {
-      throw new Error("Workflow member binding requires a stable workflow id.");
+      throw new Error('Workflow member binding requires a stable workflow id.');
     }
 
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
       decodeStudioMemberBindingAcceptedResponse,
       {
-        method: "PUT",
+        method: 'PUT',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
-            implementationKind: "workflow",
+            implementationKind: 'workflow',
             displayName: trimOptional(input.displayName),
             workflow: {
               workflowId,
               workflowYamls: input.workflowYamls,
             },
             revisionId: trimOptional(input.revisionId),
-          })
+            explicitRequestConfirmations:
+              input.explicitRequestConfirmations &&
+              input.explicitRequestConfirmations.length > 0
+                ? input.explicitRequestConfirmations.map((confirmation) => ({
+                    workflowId: confirmation.workflowId,
+                    revisionId: confirmation.revisionId,
+                    callSiteId: confirmation.callSiteId,
+                    requestContractDigest: confirmation.requestContractDigest,
+                    attestedRisk: confirmation.attestedRisk,
+                  }))
+                : undefined,
+          }),
         ),
-      }
+      },
     );
   },
 
@@ -2444,20 +3619,20 @@ export const studioApi = {
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
       decodeStudioMemberBindingAcceptedResponse,
       {
-        method: "PUT",
+        method: 'PUT',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
-            implementationKind: "script",
+            implementationKind: 'script',
             displayName: trimOptional(input.displayName),
             script: compactObject({
               scriptId: input.scriptId.trim(),
               scriptRevision: input.scriptRevision.trim(),
             }),
             revisionId: trimOptional(input.revisionId),
-          })
+          }),
         ),
-      }
+      },
     );
   },
 
@@ -2466,18 +3641,18 @@ export const studioApi = {
     memberId: string;
     displayName?: string | null;
     agentKind: string;
-    endpoints: StudioScopeGAgentBindingInput["endpoints"];
+    endpoints: StudioScopeGAgentBindingInput['endpoints'];
     revisionId?: string | null;
   }): Promise<StudioMemberBindingAcceptedResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
       decodeStudioMemberBindingAcceptedResponse,
       {
-        method: "PUT",
+        method: 'PUT',
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
-            implementationKind: "gagent",
+            implementationKind: 'gagent',
             displayName: trimOptional(input.displayName),
             gagent: compactObject({
               agentKind: input.agentKind.trim(),
@@ -2487,38 +3662,38 @@ export const studioApi = {
                   displayName:
                     trimOptional(endpoint.displayName) ||
                     endpoint.endpointId.trim(),
-                  kind: trimOptional(endpoint.kind)?.toLowerCase() || "command",
+                  kind: trimOptional(endpoint.kind)?.toLowerCase() || 'command',
                   requestTypeUrl: trimOptional(endpoint.requestTypeUrl),
                   responseTypeUrl: trimOptional(endpoint.responseTypeUrl),
                   description: trimOptional(endpoint.description),
-                })
+                }),
               ),
             }),
             revisionId: trimOptional(input.revisionId),
-          })
+          }),
         ),
-      }
+      },
     );
   },
 
   getMemberBinding(
     scopeId: string,
-    memberId: string
+    memberId: string,
   ): Promise<StudioMemberBindingViewResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding`,
-      decodeStudioMemberBindingViewResponse
+      decodeStudioMemberBindingViewResponse,
     );
   },
 
   getMemberBindingRun(
     scopeId: string,
     memberId: string,
-    bindingRunId: string
+    bindingRunId: string,
   ): Promise<StudioMemberBindingRunStatusResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding-runs/${encodeURIComponent(bindingRunId.trim())}`,
-      decodeStudioMemberBindingRunStatusResponse
+      decodeStudioMemberBindingRunStatusResponse,
     );
   },
 
@@ -2527,11 +3702,11 @@ export const studioApi = {
   },
 
   getScopeScriptBinding(
-    scopeId: string
+    scopeId: string,
   ): Promise<StudioScopeScriptBindingStatus> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/binding`,
-      decodeStudioScopeBindingStatus
+      decodeStudioScopeBindingStatus,
     );
   },
 
@@ -2541,15 +3716,15 @@ export const studioApi = {
   }): Promise<StudioScopeBindingActivationResult> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(
-        input.scopeId.trim()
+        input.scopeId.trim(),
       )}/binding/revisions/${encodeURIComponent(
-        input.revisionId.trim()
+        input.revisionId.trim(),
       )}:activate`,
       {
-        method: "POST",
+        method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({}),
-      }
+      },
     );
   },
 
@@ -2559,15 +3734,15 @@ export const studioApi = {
   }): Promise<StudioScopeScriptBindingActivationResult> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(
-        input.scopeId.trim()
+        input.scopeId.trim(),
       )}/binding/revisions/${encodeURIComponent(
-        input.revisionId.trim()
+        input.revisionId.trim(),
       )}:activate`,
       {
-        method: "POST",
+        method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({}),
-      }
+      },
     );
   },
 
@@ -2577,31 +3752,31 @@ export const studioApi = {
   }): Promise<StudioScopeBindingRetirementResult> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(
-        input.scopeId.trim()
+        input.scopeId.trim(),
       )}/binding/revisions/${encodeURIComponent(
-        input.revisionId.trim()
+        input.revisionId.trim(),
       )}:retire`,
       {
-        method: "POST",
+        method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({}),
-      }
+      },
     );
   },
 
   stopExecution(
     executionId: string,
-    input: { reason?: string | null }
+    input: { reason?: string | null },
   ): Promise<StudioExecutionDetail> {
     return requestJson(
       `/api/executions/${encodeURIComponent(executionId)}/stop`,
       {
-        method: "POST",
+        method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
           reason: trimOptional(input.reason),
         }),
-      }
+      },
     );
   },
 
@@ -2612,13 +3787,13 @@ export const studioApi = {
       stepId: string;
       approved: boolean;
       userInput?: string | null;
-      suspensionType: "human_input" | "human_approval";
-    }
+      suspensionType: 'human_input' | 'human_approval';
+    },
   ): Promise<StudioExecutionDetail> {
     return requestJson(
       `/api/executions/${encodeURIComponent(executionId)}/resume`,
       {
-        method: "POST",
+        method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
           runId: input.runId,
@@ -2627,23 +3802,23 @@ export const studioApi = {
           userInput: trimOptional(input.userInput),
           suspensionType: input.suspensionType,
         }),
-      }
+      },
     );
   },
 
   getConnectorCatalog(): Promise<StudioConnectorCatalog> {
-    return requestJson("/api/connectors/");
+    return requestJson('/api/connectors/');
   },
 
   getConnectorDraft(): Promise<StudioConnectorDraftResponse> {
-    return requestJson("/api/connectors/draft");
+    return requestJson('/api/connectors/draft');
   },
 
   saveConnectorCatalog(input: {
-    connectors: StudioConnectorCatalog["connectors"];
+    connectors: StudioConnectorCatalog['connectors'];
   }): Promise<StudioConnectorCatalog> {
-    return requestJson("/api/connectors/", {
-      method: "PUT",
+    return requestJson('/api/connectors/', {
+      method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify({
         connectors: input.connectors,
@@ -2652,10 +3827,10 @@ export const studioApi = {
   },
 
   saveConnectorDraft(input: {
-    draft: StudioConnectorDraftResponse["draft"];
+    draft: StudioConnectorDraftResponse['draft'];
   }): Promise<StudioConnectorDraftResponse> {
-    return requestJson("/api/connectors/draft", {
-      method: "PUT",
+    return requestJson('/api/connectors/draft', {
+      method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify({
         draft: input.draft,
@@ -2664,35 +3839,35 @@ export const studioApi = {
   },
 
   deleteConnectorDraft(): Promise<void> {
-    return request<void>("/api/connectors/draft", {
-      method: "DELETE",
+    return request<void>('/api/connectors/draft', {
+      method: 'DELETE',
     });
   },
 
   importConnectorCatalog(
-    file: File
+    file: File,
   ): Promise<StudioConnectorCatalogImportResult> {
     const form = new FormData();
-    form.set("file", file, file.name);
-    return request("/api/connectors/import", {
-      method: "POST",
+    form.set('file', file, file.name);
+    return request('/api/connectors/import', {
+      method: 'POST',
       body: form,
     });
   },
 
   getRoleCatalog(): Promise<StudioRoleCatalog> {
-    return requestJson("/api/roles/");
+    return requestJson('/api/roles/');
   },
 
   getRoleDraft(): Promise<StudioRoleDraftResponse> {
-    return requestJson("/api/roles/draft");
+    return requestJson('/api/roles/draft');
   },
 
   saveRoleCatalog(input: {
-    roles: StudioRoleCatalog["roles"];
+    roles: StudioRoleCatalog['roles'];
   }): Promise<StudioRoleCatalog> {
-    return requestJson("/api/roles/", {
-      method: "PUT",
+    return requestJson('/api/roles/', {
+      method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify({
         roles: input.roles,
@@ -2701,10 +3876,10 @@ export const studioApi = {
   },
 
   saveRoleDraft(input: {
-    draft: StudioRoleDraftResponse["draft"];
+    draft: StudioRoleDraftResponse['draft'];
   }): Promise<StudioRoleDraftResponse> {
-    return requestJson("/api/roles/draft", {
-      method: "PUT",
+    return requestJson('/api/roles/draft', {
+      method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify({
         draft: input.draft,
@@ -2713,74 +3888,38 @@ export const studioApi = {
   },
 
   deleteRoleDraft(): Promise<void> {
-    return request<void>("/api/roles/draft", {
-      method: "DELETE",
+    return request<void>('/api/roles/draft', {
+      method: 'DELETE',
     });
   },
 
   importRoleCatalog(file: File): Promise<StudioRoleCatalogImportResult> {
     const form = new FormData();
-    form.set("file", file, file.name);
-    return request("/api/roles/import", {
-      method: "POST",
+    form.set('file', file, file.name);
+    return request('/api/roles/import', {
+      method: 'POST',
       body: form,
     });
   },
 
-  getSettings(): Promise<StudioSettings> {
-    return requestJson("/api/settings/");
-  },
-
-  saveSettings(input: StudioSaveSettingsInput): Promise<StudioSettings> {
-    return requestJson("/api/settings/", {
-      method: "PUT",
-      headers: JSON_HEADERS,
-      body: JSON.stringify(
-        compactObject({
-          runtimeBaseUrl: trimOptional(input.runtimeBaseUrl),
-          defaultProviderName: trimOptional(input.defaultProviderName),
-          providers: input.providers?.map((provider) =>
-            compactObject({
-              providerName: provider.providerName.trim(),
-              providerType: provider.providerType.trim(),
-              model: provider.model.trim(),
-              endpoint: trimOptional(provider.endpoint),
-              apiKey: trimOptional(provider.apiKey),
-              clearApiKey: provider.clearApiKey ? true : undefined,
-            })
-          ),
-        })
-      ),
-    });
-  },
-
-  testRuntimeConnection(input: {
-    runtimeBaseUrl?: string | null;
-  }): Promise<StudioRuntimeTestResult> {
-    return requestJson("/api/settings/runtime/test", {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        runtimeBaseUrl: trimOptional(input.runtimeBaseUrl),
-      }),
-    });
-  },
-
   getUserConfig(): Promise<StudioUserConfig> {
-    return requestJson("/api/user-config");
+    return requestJson('/api/user-config');
   },
 
-  saveUserConfig(input: StudioUserConfig): Promise<StudioUserConfigSaveReceipt> {
+  saveUserConfig(
+    input: StudioUserConfig,
+  ): Promise<StudioUserConfigSaveReceipt> {
     return requestDecodedJson(
-      "/api/user-config",
+      '/api/user-config',
       decodeStudioUserConfigSaveReceipt,
       {
-        method: "PUT",
+        method: 'PUT',
         headers: JSON_HEADERS,
         body: JSON.stringify({
           defaultModel: input.defaultModel.trim(),
           preferredLlmRoute:
-            input.preferredLlmRoute === undefined || input.preferredLlmRoute === null
+            input.preferredLlmRoute === undefined ||
+            input.preferredLlmRoute === null
               ? undefined
               : input.preferredLlmRoute.trim(),
           runtimeMode: trimOptional(input.runtimeMode),
@@ -2788,39 +3927,36 @@ export const studioApi = {
           remoteRuntimeBaseUrl: trimOptional(input.remoteRuntimeBaseUrl),
           maxToolRounds: input.maxToolRounds ?? null,
         }),
-      }
+      },
     );
   },
 
-  getUserLlmSettings(): Promise<StudioUserLlmSettings> {
+  getUserLlmSettings(signal?: AbortSignal): Promise<StudioUserLlmSettings> {
     return requestDecodedJson(
-      "/api/user-config/llm",
-      decodeStudioUserLlmSettings
+      '/api/user-config/llm',
+      decodeStudioUserLlmSettings,
+      signal ? { signal } : undefined,
     );
   },
 
-  saveUserLlmSettings(input: {
-    routeValue: string;
-    model?: string | null;
-  }): Promise<StudioUserConfigSaveReceipt> {
+  saveUserLlmSettings(
+    input: StudioSaveUserLlmIntent,
+  ): Promise<StudioUserConfigSaveReceipt> {
     return requestDecodedJson(
-      "/api/user-config/llm",
+      '/api/user-config/llm',
       decodeStudioUserConfigSaveReceipt,
       {
-        method: "PUT",
+        method: 'PUT',
         headers: JSON_HEADERS,
-        body: JSON.stringify({
-          routeValue: input.routeValue.trim(),
-          model: input.model?.trim() ?? "",
-        }),
-      }
+        body: JSON.stringify(input),
+      },
     );
   },
 
   getUserConfigRuntime(): Promise<StudioUserConfigRuntime> {
     return requestDecodedJson(
-      "/api/user-config/runtime",
-      decodeStudioUserConfigRuntime
+      '/api/user-config/runtime',
+      decodeStudioUserConfigRuntime,
     );
   },
 
@@ -2832,7 +3968,7 @@ export const studioApi = {
         baseUrl,
         reachable: false,
         message:
-          ornnConfig.configurationError ?? "Ornn base URL is not configured.",
+          ornnConfig.configurationError ?? 'Ornn base URL is not configured.',
       };
     }
 
@@ -2844,16 +3980,20 @@ export const studioApi = {
         return {
           baseUrl,
           reachable: false,
-          message: t("shared.studio.api.cannot.reach.ornn.status", "Cannot reach Ornn ({status}).", {
-            status: response.status,
-          }),
+          message: t(
+            'shared.studio.api.cannot.reach.ornn.status',
+            'Cannot reach Ornn ({status}).',
+            {
+              status: response.status,
+            },
+          ),
         };
       }
 
       return {
         baseUrl,
         reachable: true,
-        message: t("shared.studio.api.connected.to.ornn", "Connected to Ornn."),
+        message: t('shared.studio.api.connected.to.ornn', 'Connected to Ornn.'),
       };
     } catch (error) {
       return {
@@ -2862,7 +4002,7 @@ export const studioApi = {
         message:
           error instanceof Error && error.message
             ? error.message
-            : "Cannot reach Ornn.",
+            : 'Cannot reach Ornn.',
       };
     }
   },
@@ -2875,10 +4015,11 @@ export const studioApi = {
   }): Promise<StudioOrnnSkillSearchResult> {
     const ornnConfig = getOrnnRuntimeConfig();
     const baseUrl = normalizeOrnnBaseUrl(ornnConfig.baseUrl);
-    const query = trimOptional(input?.query) ?? "";
-    const scope = trimOptional(input?.scope) ?? "mixed";
+    const query = trimOptional(input?.query) ?? '';
+    const scope = trimOptional(input?.scope) ?? 'mixed';
     const page = input?.page && input.page > 0 ? input.page : 1;
-    const pageSize = input?.pageSize && input.pageSize > 0 ? input.pageSize : 50;
+    const pageSize =
+      input?.pageSize && input.pageSize > 0 ? input.pageSize : 50;
     if (ornnConfig.configurationError || !baseUrl) {
       return {
         baseUrl,
@@ -2888,35 +4029,35 @@ export const studioApi = {
         pageSize,
         items: [],
         message:
-          ornnConfig.configurationError ?? "Ornn base URL is not configured.",
+          ornnConfig.configurationError ?? 'Ornn base URL is not configured.',
       };
     }
 
     const params = new URLSearchParams({
       query,
-      mode: "keyword",
+      mode: 'keyword',
       scope,
       page: String(page),
       pageSize: String(pageSize),
     });
 
     const response = await externalFetch(
-      `${baseUrl}/api/web/skill-search?${params.toString()}`
+      `${baseUrl}/api/web/skill-search?${params.toString()}`,
     );
     if (!response.ok) {
       throw await createStudioApiError(response);
     }
 
-    const contentType = response.headers?.get?.("content-type") ?? null;
+    const contentType = response.headers?.get?.('content-type') ?? null;
     if (contentType !== null && !isJsonContentType(contentType)) {
-      throw new Error("Ornn API returned an unexpected response format.");
+      throw new Error('Ornn API returned an unexpected response format.');
     }
 
     return decodeOrnnSkillSearchResult(
       await response.json(),
       baseUrl,
       page,
-      pageSize
+      pageSize,
     );
   },
 
@@ -2924,14 +4065,14 @@ export const studioApi = {
     path: string;
     label?: string | null;
   }): Promise<StudioWorkspaceSettings> {
-    return requestJson("/api/workspace/directories", {
-      method: "POST",
+    return requestJson('/api/workspace/directories', {
+      method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(
         compactObject({
           path: input.path.trim(),
           label: trimOptional(input.label),
-        })
+        }),
       ),
     });
   },
@@ -2940,8 +4081,8 @@ export const studioApi = {
     return request<void>(
       `/api/workspace/directories/${encodeURIComponent(directoryId)}`,
       {
-        method: "DELETE",
-      }
+        method: 'DELETE',
+      },
     );
   },
 
@@ -2956,13 +4097,13 @@ export const studioApi = {
       signal?: AbortSignal;
       onText?: (text: string) => void;
       onReasoning?: (text: string) => void;
-    }
+    },
   ): Promise<string> {
-    let generatedText = "";
-    let reasoningText = "";
+    let generatedText = '';
+    let reasoningText = '';
 
     await streamSse(
-      "/api/workflows/generator",
+      '/api/workflows/generator',
       {
         prompt: input.prompt.trim(),
         currentYaml: input.currentYaml,
@@ -2975,30 +4116,30 @@ export const studioApi = {
           return;
         }
 
-        if (normalized.type === "TEXT_MESSAGE_CONTENT") {
-          generatedText += normalized.delta || "";
+        if (normalized.type === 'TEXT_MESSAGE_CONTENT') {
+          generatedText += normalized.delta || '';
           options?.onText?.(generatedText);
           return;
         }
 
-        if (normalized.type === "TEXT_MESSAGE_REASONING") {
-          reasoningText += normalized.delta || "";
+        if (normalized.type === 'TEXT_MESSAGE_REASONING') {
+          reasoningText += normalized.delta || '';
           options?.onReasoning?.(reasoningText);
           return;
         }
 
-        if (normalized.type === "TEXT_MESSAGE_END") {
+        if (normalized.type === 'TEXT_MESSAGE_END') {
           generatedText =
-            generatedText || normalized.message || normalized.delta || "";
+            generatedText || normalized.message || normalized.delta || '';
           options?.onText?.(generatedText);
           return;
         }
 
-        if (normalized.type === "RUN_ERROR") {
-          throw new Error(normalized.message || "Assistant run failed.");
+        if (normalized.type === 'RUN_ERROR') {
+          throw new Error(normalized.message || 'Assistant run failed.');
         }
       },
-      options?.signal
+      options?.signal,
     );
 
     return generatedText;

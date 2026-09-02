@@ -5,6 +5,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
 
@@ -22,7 +23,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider);
 
         var output = new StringBuilder();
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 output.Append(chunk.DeltaContent);
@@ -63,7 +64,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaToolCall != null);
@@ -102,7 +103,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var captureMiddleware = new CaptureLLMResponseMiddleware();
         var runtime = CreateRuntime(provider, llmMiddlewares: [captureMiddleware]);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -130,7 +131,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaReasoningContent == "thinking step");
@@ -145,6 +146,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(tool);
         var baseToolContext = AgentToolExecutionContext.Empty with
         {
+            Request = new AgentToolRequestIdentity(null, null, null, 1_785_484_800_000),
             Caller = new AgentToolCallerContext("scope-base", "owner-base", "resp-base"),
             ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -154,7 +156,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(
             provider,
             tools,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = [ChatMessage.System("system")],
                 RequestId = "base-request",
@@ -172,7 +174,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                 ToolContext = baseToolContext,
                 Tools = [tool],
             });
-        var executor = runtime.CreateStepExecutor();
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [LLMRequestMetadataKeys.CallId] = "strip-call",
@@ -246,6 +248,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                            requestId: "req-123",
                            llmControl,
                            toolContext: null,
+                           turnCatalog: null,
                            metadata,
                            CancellationToken.None))
         {
@@ -284,7 +287,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         var provider = new RecordingStepProvider();
         var runtime = CreateRuntime(provider);
-        var executor = runtime.CreateStepExecutor();
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
         var messages = new List<ChatMessage>
         {
             ChatMessage.System("system"),
@@ -311,7 +314,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         var provider = new RecordingStepProvider();
         var runtime = CreateRuntime(provider);
-        var executor = runtime.CreateStepExecutor();
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
         var messages = new List<ChatMessage>
         {
             ChatMessage.System("system"),
@@ -346,7 +349,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var tools = new ToolManager();
         tools.Register(tool);
         var runtime = CreateRuntime(provider, tools);
-        var executor = runtime.CreateStepExecutor();
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
@@ -362,7 +365,12 @@ public sealed class ChatRuntimeStreamingBufferTests
             CancellationToken.None);
 
         toolResults.Should().ContainSingle();
-        tool.CapturedContext.Should().BeNull();
+        tool.CapturedContext.Should().NotBeNull();
+        tool.CapturedContext!.Request.CallId.Should().Be("tool-1");
+        tool.CapturedContext.Request.OperationId.Should().NotBeNullOrWhiteSpace();
+        tool.CapturedContext.Credentials.Should().Be(AgentToolCredentials.Empty);
+        tool.CapturedContext.Routing.Should().Be(LLMRequestRoutingContext.Empty);
+        tool.CapturedContext.ExternalMetadata.Should().BeEmpty();
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -372,7 +380,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new RecordingStepProvider();
         var runtime = CreateRuntime(
             provider,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = [],
                 RequestId = "base-request",
@@ -384,7 +392,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                     [LLMRequestMetadataKeys.ModelOverride] = "base-model",
                 },
             });
-        var executor = runtime.CreateStepExecutor();
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
 
         var request = executor.BuildBaseRequest(
             " request-1 ",
@@ -406,6 +414,90 @@ public sealed class ChatRuntimeStreamingBufferTests
             ["safe"] = "base",
             ["override"] = "override",
         });
+    }
+
+    [Fact]
+    public void CreateStepExecutor_BuildBaseRequest_WhenIssuedAtMissing_ShouldSetCurrentTimestamp()
+    {
+        var provider = new RecordingStepProvider();
+        var runtime = CreateRuntime(
+            provider,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    Request = new AgentToolRequestIdentity(null, null, null, 0),
+                },
+            });
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
+        var earliestIssuedAt = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
+
+        var request = executor.BuildBaseRequest(
+            requestId: "request-missing-issued-at",
+            metadata: null,
+            toolContext: null,
+            llmControl: null);
+
+        var latestIssuedAt = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
+        request.ToolContext!.Request.IssuedAtUnixMs.Should().BeInRange(earliestIssuedAt, latestIssuedAt);
+        request.ToolContext.Request.IssuedAtUnixMs.Should().BePositive();
+    }
+
+    [Fact]
+    public void CreateStepExecutor_BuildBaseRequest_WhenIssuedAtExists_ShouldPreserveTimestamp()
+    {
+        const long issuedAtUnixMs = 1_700_000_000_123;
+        var provider = new RecordingStepProvider();
+        var runtime = CreateRuntime(
+            provider,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    Request = new AgentToolRequestIdentity(null, null, null, issuedAtUnixMs),
+                },
+            });
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
+
+        var request = executor.BuildBaseRequest(
+            requestId: "request-existing-issued-at",
+            metadata: null,
+            toolContext: null,
+            llmControl: null);
+
+        request.ToolContext!.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
+    }
+
+    [Fact]
+    public void CreateStepExecutor_BuildBaseRequest_WhenExternalOwnerConflicts_ShouldKeepBaseOwner()
+    {
+        var provider = new RecordingStepProvider();
+        var runtime = CreateRuntime(
+            provider,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    ExecutionOwner = AgentToolExecutionOwners.Actor("actor-server-owned"),
+                },
+            });
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
+        var externalToolContext = AgentToolExecutionContext.Empty with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.HostService("external-host-owner"),
+        };
+
+        var request = executor.BuildBaseRequest(
+            requestId: "request-owner-precedence",
+            metadata: null,
+            toolContext: externalToolContext,
+            llmControl: null);
+
+        request.ToolContext!.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
+        request.ToolContext.ExecutionOwner.OwnerId.Should().Be("actor-server-owned");
     }
 
     [Fact]
@@ -433,7 +525,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider, tools: tools);
         var output = new StringBuilder();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 output.Append(chunk.DeltaContent);
@@ -445,11 +537,124 @@ public sealed class ChatRuntimeStreamingBufferTests
             m.Role == "assistant" &&
             m.ToolCalls != null &&
             m.ToolCalls.Count == 1 &&
-            m.ToolCalls[0].Id == "tc-follow-up").Should().BeTrue();
+            m.ToolCalls[0].Id == "tc-follow-up" &&
+            m.ToolCalls[0].Name == "lookup" &&
+            m.ToolCalls[0].ArgumentsJson == "{\"q\":\"lark\"}").Should().BeTrue();
         provider.StreamRequests[1].Messages.Any(m =>
             m.Role == "tool" &&
             m.ToolCallId == "tc-follow-up" &&
             m.Content == "RESULT:{\"q\":\"lark\"}").Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(AgentToolReceiptStatus.Error)]
+    [InlineData(AgentToolReceiptStatus.Denied)]
+    public async Task ChatStreamAsync_WhenToolReceiptFails_ShouldRedactArgumentsBeforeFollowUpRound(
+        AgentToolReceiptStatus receiptStatus)
+    {
+        const string secretArguments =
+            "{\"slug\":\"api-github\",\"path\":\"/repos/private?access_token=query-secret\",\"headers\":{\"X-Credential\":\"header-secret\"}}";
+        var providerToolCall = new ToolCall
+        {
+            Id = "tc-sensitive",
+            Name = "secure_lookup",
+            ArgumentsJson = secretArguments,
+        };
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk { DeltaContent = "checking access" },
+                new LLMStreamChunk { DeltaToolCall = providerToolCall },
+            ],
+            [new LLMStreamChunk { DeltaContent = "safe follow-up" }],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new ReceiptTool("secure_lookup", receiptStatus));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(2);
+        var followUpMessages = provider.StreamRequests[1].Messages;
+        var assistant = followUpMessages.Should().ContainSingle(message =>
+            message.Role == "assistant" && message.ToolCalls != null && message.ToolCalls.Count == 1).Which;
+        assistant.Content.Should().Be("checking access");
+        assistant.ToolCalls![0].Id.Should().Be("tc-sensitive");
+        assistant.ToolCalls[0].Name.Should().Be("secure_lookup");
+        assistant.ToolCalls[0].ArgumentsJson.Should()
+            .NotContain("query-secret")
+            .And.NotContain("header-secret");
+        assistant.ToolCalls[0].ArgumentsJson.Should().Be("{}");
+        followUpMessages.Should().ContainSingle(message =>
+            message.Role == "tool" &&
+            message.ToolCallId == "tc-sensitive" &&
+            message.Content == "{\"error\":\"safe tool failure\"}");
+        followUpMessages
+            .SelectMany(message => message.ToolCalls ?? [])
+            .Select(call => call.ArgumentsJson)
+            .Should().NotContain(arguments =>
+                arguments.Contains("query-secret", StringComparison.Ordinal) ||
+                arguments.Contains("header-secret", StringComparison.Ordinal));
+        providerToolCall.ArgumentsJson.Should().Be(secretArguments);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenAuthorizationBlocksFirstOfMultipleCalls_ShouldReconcileSafeTranscript()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-auth",
+                        Name = "authorization_tool",
+                        ArgumentsJson = "{\"token\":\"authorization-secret\"}",
+                    },
+                },
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-after-auth",
+                        Name = "queued_tool",
+                        ArgumentsJson = "{\"token\":\"queued-secret\"}",
+                    },
+                },
+            ],
+            [new LLMStreamChunk { DeltaContent = "later answer" }],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new ReceiptTool("authorization_tool", AgentToolReceiptStatus.AuthorizationRequired));
+        tools.Register(new DelegateTool("queued_tool", _ => "should-not-run"));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("blocked turn", maxToolRounds: 2, turnCatalog: null))
+        {
+        }
+
+        await foreach (var _ in runtime.ChatStreamAsync("later turn", maxToolRounds: 1, turnCatalog: null))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(2);
+        var laterMessages = provider.StreamRequests[1].Messages;
+        var assistant = laterMessages.Should().ContainSingle(message =>
+            message.Role == "assistant" && message.ToolCalls != null && message.ToolCalls.Count == 2).Which;
+        assistant.ToolCalls!.Select(call => (call.Id, call.Name)).Should().Equal(
+            ("tc-auth", "authorization_tool"),
+            ("tc-after-auth", "queued_tool"));
+        assistant.ToolCalls!.Select(call => call.ArgumentsJson).Should().OnlyContain(arguments => arguments == "{}");
+        laterMessages.Where(message => message.Role == "tool")
+            .Select(message => message.ToolCallId)
+            .Should().Equal("tc-auth", "tc-after-auth");
+        laterMessages
+            .SelectMany(message => message.ToolCalls ?? [])
+            .Select(call => call.ArgumentsJson)
+            .Should().NotContain(arguments => arguments.Contains("secret", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -478,7 +683,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null))
         {
         }
 
@@ -518,7 +723,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null))
         {
         }
 
@@ -535,7 +740,45 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldIncludeToolResultInSummaryRequest()
+    public async Task ChatStreamAsync_WhenTextToolReceiptFails_ShouldRedactArgumentsBeforeFollowUpRound()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [new LLMStreamChunk
+            {
+                DeltaContent = """
+                    <function_calls>
+                    <invoke name="secure_lookup">
+                    <parameter name="path">/repos/private?access_token=text-secret</parameter>
+                    </invoke>
+                    </function_calls>
+                    """,
+            }],
+            [new LLMStreamChunk { DeltaContent = "safe follow-up" }],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new ReceiptTool("secure_lookup", AgentToolReceiptStatus.Error));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null))
+        {
+        }
+
+        var followUpMessages = provider.StreamRequests.Should().HaveCount(2).And.Subject.Last().Messages;
+        var assistant = followUpMessages.Should().ContainSingle(message =>
+            message.Role == "assistant" && message.ToolCalls != null && message.ToolCalls.Count == 1).Which;
+        assistant.ToolCalls![0].Name.Should().Be("secure_lookup");
+        assistant.ToolCalls[0].ArgumentsJson.Should().Be("{}");
+        followUpMessages.Should().ContainSingle(message =>
+            message.Role == "tool" && message.ToolCallId == assistant.ToolCalls[0].Id);
+        followUpMessages
+            .SelectMany(message => message.ToolCalls ?? [])
+            .Select(call => call.ArgumentsJson)
+            .Should().NotContain(arguments => arguments.Contains("text-secret", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldRejectToolAbsentFromFinalRequest()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -572,7 +815,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider, tools: tools);
 
         var output = new StringBuilder();
-        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 output.Append(chunk.DeltaContent);
@@ -580,15 +823,67 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         output.ToString().Should().Contain("summary-ready");
         provider.StreamRequests.Should().HaveCount(3);
-        provider.StreamRequests[2].Messages.Any(m =>
+        provider.StreamRequests[2].Messages.Should().Contain(m =>
+            IsSafeRejectedToolFailure(m, "lookup"));
+        provider.StreamRequests[2].Messages.Should().NotContain(m =>
             m.Role == "tool" &&
-            m.Content == "RESULT:{\"q\":\"final\"}").Should().BeTrue();
+            m.Content == "RESULT:{\"q\":\"final\"}");
         var assistantToolCallMessage = provider.StreamRequests[2].Messages.Single(m =>
             m.Role == "assistant" &&
             m.ToolCalls is { Count: 1 } &&
             m.ToolCalls[0].Name == "lookup" &&
             m.ReasoningContent == "thinking-before-final-text-tool");
         assistantToolCallMessage.ReasoningContent.Should().Be("thinking-before-final-text-tool");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenFinalTextToolReceiptFails_ShouldRedactArgumentsBeforeSummaryRequest()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "tc-initial-success",
+                    Name = "lookup",
+                    ArgumentsJson = "{\"q\":\"initial\"}",
+                },
+            }],
+            [new LLMStreamChunk
+            {
+                DeltaContent = """
+                    <function_calls>
+                    <invoke name="secure_lookup">
+                    <parameter name="path">/repos/private?access_token=final-text-secret</parameter>
+                    </invoke>
+                    </function_calls>
+                    """,
+            }],
+            [new LLMStreamChunk { DeltaContent = "summary-ready" }],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", _ => "initial-result"));
+        tools.Register(new ReceiptTool("secure_lookup", AgentToolReceiptStatus.Error));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
+        {
+        }
+
+        var summaryMessages = provider.StreamRequests.Should().HaveCount(3).And.Subject.Last().Messages;
+        var assistant = summaryMessages.Should().ContainSingle(message =>
+            message.Role == "assistant" &&
+            message.ToolCalls != null &&
+            message.ToolCalls.Count == 1 &&
+            message.ToolCalls[0].Name == "secure_lookup").Which;
+        assistant.ToolCalls![0].ArgumentsJson.Should().Be("{}");
+        summaryMessages.Should().ContainSingle(message =>
+            message.Role == "tool" && message.ToolCallId == assistant.ToolCalls[0].Id);
+        summaryMessages
+            .SelectMany(message => message.ToolCalls ?? [])
+            .Select(call => call.ArgumentsJson)
+            .Should().NotContain(arguments => arguments.Contains("final-text-secret", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -627,7 +922,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}", isReadOnly: true));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -639,7 +934,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenFinalTextToolHasMutatingSuccess_ShouldNotInjectSummaryConstraint()
+    public async Task ChatStreamAsync_WhenFinalTextToolIsAbsentFromFinalRequest_ShouldInjectSummaryConstraint()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -675,7 +970,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("write_config", args => $"RESULT:{args}"));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -683,7 +978,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.StreamRequests[2].Messages
             .Where(message => message.Role == "system" &&
                               message.Content?.Contains("no successful mutating tool execution") == true)
-            .Should().BeEmpty();
+            .Should().ContainSingle();
     }
 
     [Fact]
@@ -713,7 +1008,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}", isReadOnly: true));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -723,7 +1018,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                               message.Content?.Contains("no successful mutating tool execution") == true)
             .Should().ContainSingle();
 
-        await foreach (var _ in runtime.ChatStreamAsync("next", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("next", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -758,7 +1053,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("write_config", args => $"RESULT:{args}"));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -769,8 +1064,74 @@ public sealed class ChatRuntimeStreamingBufferTests
             .Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    public async Task ChatStreamAsync_WhenOutcomeToolsShareName_ShouldClassifyRequestLocalTool(
+        bool globalIsReadOnly,
+        bool requestIsReadOnly,
+        bool expectNoMutationConstraint)
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-shared",
+                        Name = "shared_tool",
+                        ArgumentsJson = "{}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "final" },
+            ],
+        ]);
+        var globalExecutionCount = 0;
+        var requestExecutionCount = 0;
+        var globalTools = new ToolManager();
+        globalTools.Register(new DelegateTool(
+            "shared_tool",
+            _ =>
+            {
+                globalExecutionCount++;
+                return "global";
+            },
+            isReadOnly: globalIsReadOnly));
+        var requestTool = new DelegateTool(
+            "shared_tool",
+            _ =>
+            {
+                requestExecutionCount++;
+                return "request-local";
+            },
+            isReadOnly: requestIsReadOnly);
+        var runtime = CreateRuntime(
+            provider,
+            globalTools,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Tools = [requestTool],
+            });
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
+        {
+        }
+
+        globalExecutionCount.Should().Be(0);
+        requestExecutionCount.Should().Be(1);
+        provider.StreamRequests.Should().HaveCount(2);
+        var constraints = provider.StreamRequests[1].Messages.Where(message =>
+            message.Role == "system" &&
+            message.Content?.Contains("no successful mutating tool execution") == true);
+        constraints.Should().HaveCount(expectNoMutationConstraint ? 1 : 0);
+    }
+
     [Fact]
-    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldExposeTypedToolContext()
+    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldUseOnlyFinalRequestCapabilities()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -811,9 +1172,10 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(
             provider,
             tools: tools,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = [],
+                Tools = tools.GetAll(),
                 ToolContext = AgentToolExecutionContext.Empty with
                 {
                     Credentials = new AgentToolCredentials("typed-access", null, null),
@@ -822,7 +1184,11 @@ public sealed class ChatRuntimeStreamingBufferTests
                 },
             });
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, requestId: "request-typed"))
+        await foreach (var _ in runtime.ChatStreamAsync(
+                           "hello",
+                           maxToolRounds: 1,
+                           requestId: "request-typed",
+                           turnCatalog: null))
         {
         }
 
@@ -832,8 +1198,12 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.StreamRequests[2].Messages.Should().Contain(m =>
             m.Role == "tool" &&
             m.Content != null &&
-            m.Content.StartsWith("typed-access|typed-scope|text-tc-", StringComparison.Ordinal) &&
+            m.Content.StartsWith("typed-access|typed-scope|tc-initial", StringComparison.Ordinal) &&
             m.Content.EndsWith("|typed-message", StringComparison.Ordinal));
+        provider.StreamRequests[2].Messages.Should().Contain(m =>
+            m.ToolCallId != null &&
+            m.ToolCallId.StartsWith("text-tc-", StringComparison.Ordinal) &&
+            IsSafeRejectedToolFailure(m, "lookup"));
     }
 
     [Fact]
@@ -842,7 +1212,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["A"]);
         var runtime = CreateRuntime(
             provider,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = [],
                 RequestId = "base-request",
@@ -859,7 +1229,11 @@ public sealed class ChatRuntimeStreamingBufferTests
             ["workflow.run_id"] = "run-1",
         };
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-42", providerMetadata))
+        await foreach (var _ in runtime.ChatStreamAsync(
+                           "hello",
+                           "session-42",
+                           turnCatalog: null,
+                           metadata: providerMetadata))
         {
         }
 
@@ -883,7 +1257,11 @@ public sealed class ChatRuntimeStreamingBufferTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
         };
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-metadata-only", metadata))
+        await foreach (var _ in runtime.ChatStreamAsync(
+                           "hello",
+                           "session-metadata-only",
+                           turnCatalog: null,
+                           metadata: metadata))
         {
         }
 
@@ -900,7 +1278,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["A"]);
         var runtime = CreateRuntime(
             provider,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = [],
                 RoutingContext = new LLMRequestRoutingContext(
@@ -918,7 +1296,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                 },
             });
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", turnCatalog: null))
         {
         }
 
@@ -949,7 +1327,8 @@ public sealed class ChatRuntimeStreamingBufferTests
                            maxToolRounds: 2,
                            requestId: "session-control",
                            llmControl: control,
-                           toolContext: null))
+                           toolContext: null,
+                           turnCatalog: null))
         {
         }
 
@@ -969,7 +1348,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             provider,
             llmMiddlewares: [captureMiddleware]);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-77"))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-77", turnCatalog: null))
         {
         }
 
@@ -992,7 +1371,8 @@ public sealed class ChatRuntimeStreamingBufferTests
                 }),
             ]);
 
-        var result = await ChatStreamContentAggregator.AggregateContentAsync(runtime.ChatStreamAsync("hello"));
+        var result = await ChatStreamContentAggregator.AggregateContentAsync(
+            runtime.ChatStreamAsync("hello", turnCatalog: null));
 
         result.Should().Be("short-circuit");
         provider.StreamCallCount.Should().Be(0);
@@ -1016,7 +1396,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             ]);
         var output = new StringBuilder();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 output.Append(chunk.DeltaContent);
@@ -1036,7 +1416,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["stream-", "answer"]);
         var runtime = CreateRuntime(provider);
 
-        var result = await ChatStreamContentAggregator.AggregateContentAsync(runtime.ChatStreamAsync("hello"));
+        var result = await ChatStreamContentAggregator.AggregateContentAsync(
+            runtime.ChatStreamAsync("hello", turnCatalog: null));
 
         result.Should().Be("stream-answer");
         provider.StreamCallCount.Should().Be(1);
@@ -1128,7 +1509,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             ]);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().ContainSingle();
@@ -1165,7 +1546,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             ]);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaContent == "middleware-content");
@@ -1195,7 +1576,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             ]);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaReasoningContent == "thinking-step");
@@ -1216,28 +1597,49 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().BeEmpty();
     }
+
+    private static bool IsSafeRejectedToolFailure(ChatMessage message, string toolName) =>
+        message.Role == "tool" &&
+        message.Content == "{\"error\":\"The tool request failed.\"}" &&
+        message.ToolResultView is
+        {
+            ToolName: var actualToolName,
+            Failure:
+            {
+                Status: AgentToolReceiptStatus.Error,
+                ErrorCode: "tool_execution_exception",
+            },
+        } &&
+        string.Equals(actualToolName, toolName, StringComparison.Ordinal);
 
     private static ChatRuntime CreateRuntime(
         ILLMProvider provider,
         ToolManager? tools = null,
         IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
-        Func<LLMRequest>? requestBuilder = null)
+        Func<AgentProfileTurnCatalog?, LLMRequest>? requestBuilder = null)
     {
         var history = new ChatHistory();
-        var toolLoop = new ToolCallLoop(tools ?? new ToolManager());
+        var effectiveTools = tools ?? new ToolManager();
+        var toolLoop = new ToolCallLoop(
+            effectiveTools,
+            toolExecutionPort: new TestAgentToolExecutionPort());
 
         return new ChatRuntime(
             providerFactory: () => provider,
             history: history,
             toolLoop: toolLoop,
             hooks: null,
-            requestBuilder: requestBuilder ?? (() => new LLMRequest { Messages = [] }),
+            requestBuilder: requestBuilder ?? (_ => new LLMRequest
+            {
+                Messages = [],
+                Tools = effectiveTools.GetAll(),
+            }),
             agentMiddlewares: agentMiddlewares,
             llmMiddlewares: llmMiddlewares);
     }
@@ -1296,6 +1698,10 @@ public sealed class ChatRuntimeStreamingBufferTests
         public string Description => "capture context";
         public string ParametersSchema => "{}";
         public AgentToolExecutionContext? CapturedContext { get; private set; }
+        public AgentToolReceipt? CreateSuccessReceipt(
+            string callId,
+            string toolName,
+            string resultJson) => SuccessReceipt(callId, toolName, resultJson);
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
@@ -1411,11 +1817,108 @@ public sealed class ChatRuntimeStreamingBufferTests
         public bool IsReadOnly => isReadOnly;
         public bool IsDestructive => isDestructive;
         public string SideEffectKind => sideEffectKind;
+        public AgentToolReceipt? CreateSuccessReceipt(
+            string callId,
+            string toolName,
+            string resultJson) => SuccessReceipt(callId, toolName, resultJson);
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(execute(argumentsJson));
         }
+    }
+
+    private sealed class TestAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            var safety = request.Tool.GetCallSafety(request.ArgumentsJson);
+            try
+            {
+                var resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+                return new AgentToolExecutionOutcome(
+                    AgentToolExecutionOutcomeKind.Executed,
+                    resultJson,
+                    AgentToolReceiptFactory.CreateResult(
+                        request.Tool,
+                        request.ExecutionContext.Request.CallId ?? string.Empty,
+                        request.Tool.Name,
+                        safety,
+                        resultJson,
+                        request.ArgumentsJson),
+                    IsMutation: !safety.IsReadOnly,
+                    FailureCode: string.Empty,
+                    SafeMessage: string.Empty,
+                    AgentToolExecutionFailureStage.None,
+                    TerminalInvoked: true,
+                    Retryable: false,
+                    AuditCompleted: true);
+            }
+            catch (Exception ex)
+            {
+                var resultJson = ToolManager.BuildErrorJson("The tool request failed.");
+                return new AgentToolExecutionOutcome(
+                    AgentToolExecutionOutcomeKind.Failed,
+                    resultJson,
+                    AgentToolReceiptFactory.CreateError(
+                        request.Tool,
+                        request.ExecutionContext.Request.CallId ?? string.Empty,
+                        request.Tool.Name,
+                        safety,
+                        resultJson,
+                        "tool_execution_exception",
+                        ex.GetType().Name),
+                    IsMutation: !safety.IsReadOnly,
+                    FailureCode: "tool_execution_exception",
+                    SafeMessage: ex.GetType().Name,
+                    AgentToolExecutionFailureStage.TerminalExecution,
+                    TerminalInvoked: true,
+                    Retryable: false,
+                    AuditCompleted: true);
+            }
+        }
+    }
+
+    private static AgentToolReceipt SuccessReceipt(
+        string callId,
+        string toolName,
+        string resultJson) =>
+        new()
+        {
+            CallId = callId,
+            ToolName = toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ResultJson = resultJson,
+        };
+
+    private sealed class ReceiptTool(string name, AgentToolReceiptStatus status) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => "returns a typed failed receipt";
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult("{\"error\":\"unsafe tool-secret\"}");
+        }
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = status,
+                ErrorCode = "SAFE_TOOL_FAILURE",
+                ErrorMessage = "The tool request failed.",
+                ResultJson = "{\"error\":\"safe tool failure\"}",
+            };
     }
 }

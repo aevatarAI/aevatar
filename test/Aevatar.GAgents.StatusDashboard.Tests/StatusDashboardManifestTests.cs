@@ -23,17 +23,27 @@ public sealed class StatusDashboardManifestTests
         {
             "self-liveness",
             "self-readiness",
+            "studio-health",
+            "app-context",
             "aevatar-core-loop-tools",
+            "audit-query-index",
             "channel-bot-runtime",
             "nyxid-http-health",
             "nyxid-oidc-discovery",
         });
         var nyxIdHealth = manifest.Descriptors.Single(d => d.Slug == "nyxid-http-health");
-        nyxIdHealth.DisplayName.Should().Be("NyxID HTTP health");
+        nyxIdHealth.DisplayName.Should().Be("NyxID · health");
         nyxIdHealth.Category.Should().Be("upstream");
+        nyxIdHealth.Severity.Should().Be("standard");
         nyxIdHealth.ProbeKind.Should().Be("http_status");
         nyxIdHealth.Parameters["Url"].Should().Be("${configuration:Aevatar:NyxId:Authority}/health");
         nyxIdHealth.Parameters["ExpectedStatuses"].Should().Be("200");
+        // Canon §9/§9.1: critical surfaces carry the "critical" weight; default set has no
+        // credentialed canary targets until a canary bearer is configured.
+        manifest.Descriptors.Single(d => d.Slug == "self-readiness").Severity.Should().Be("critical");
+        manifest.Descriptors.Single(d => d.Slug == "aevatar-core-loop-tools").Severity.Should().Be("critical");
+        manifest.Descriptors.Select(d => d.Slug).Should().NotContain("llm-completion-canary");
+        manifest.Descriptors.Select(d => d.Slug).Should().NotContain("llm-catalog");
         manifest.Descriptors.Select(d => d.Slug).Should().NotContain(new[]
         {
             "chat-completion-api-singular-route",
@@ -58,7 +68,77 @@ public sealed class StatusDashboardManifestTests
         coreLoop.ProbeKind.Should().Be("aevatar_core_loop");
         coreLoop.Parameters["ToolSet"].Should().Be("workspace.default");
         coreLoop.Parameters["RequireWorkspaceSources"].Should().Be("true");
+        var audit = manifest.Descriptors.Single(d => d.Slug == "audit-query-index");
+        audit.DisplayName.Should().Be("Audit Trail Query / Index");
+        audit.Category.Should().Be("feature");
+        audit.Severity.Should().Be("standard");
+        audit.ProbeKind.Should().Be("audit_query_index");
         manifest.Descriptors.Should().OnlyContain(d => d.IntervalSeconds == 60);
+    }
+
+    [Fact]
+    public void FromOptions_EmitsLlmCanary_OnlyWhenCanaryBearerConfigured()
+    {
+        var manifest = StatusDashboardManifest.FromOptions(new StatusDashboardOptions
+        {
+            SelfBaseUrl = "http://127.0.0.1:9999/",
+            Probe = new StatusProbeOptions
+            {
+                CanaryBearer = "nyxid-canary-key",
+                CanaryModel = "deepseek/deepseek-v4-flash",
+                CanaryMaxTokens = 8,
+                CanaryIntervalSeconds = 900,
+            },
+        });
+
+        var completion = manifest.Descriptors.Single(d => d.Slug == "llm-completion-canary");
+        completion.Category.Should().Be("llm");
+        completion.Severity.Should().Be("canary");
+        completion.IntervalSeconds.Should().Be(900);
+        completion.Parameters["Method"].Should().Be("POST");
+        completion.Parameters["ExpectedStatuses"].Should().Be("200");
+        completion.Parameters["ExpectedBodyContains"].Should().Be("choices");
+        completion.Parameters["Auth.Mode"].Should().Be("static_bearer");
+        completion.Parameters["Auth.StaticBearerConfigurationKey"]
+            .Should().Be(StatusProbeOptions.CanaryBearerConfigurationKey);
+        completion.Parameters["Body"].Should().Contain("deepseek/deepseek-v4-flash").And.Contain("\"max_tokens\":8");
+
+        var catalog = manifest.Descriptors.Single(d => d.Slug == "llm-catalog");
+        catalog.Parameters["Auth.Mode"].Should().Be("static_bearer");
+        catalog.Parameters["ExpectedStatuses"].Should().Be("200");
+
+        // Canon §9.1: never an expect-401 auth gate, even for credentialed targets.
+        manifest.Descriptors
+            .Select(static d => d.Parameters.TryGetValue("ExpectedStatuses", out var v) ? v : string.Empty)
+            .Should()
+            .NotContain(static v => v.Split(',', StringSplitOptions.TrimEntries).Contains("401"));
+    }
+
+    [Fact]
+    public void FromOptions_EmitsOrchestrationProbes_OnlyWhenScopeConfigured()
+    {
+        var without = StatusDashboardManifest.FromOptions(new StatusDashboardOptions
+        {
+            SelfBaseUrl = "http://127.0.0.1:9999/",
+        });
+        without.Descriptors.Select(d => d.Slug)
+            .Should().NotContain(new[] { "orchestration-scope-read", "observatory-read" });
+
+        var withScope = StatusDashboardManifest.FromOptions(new StatusDashboardOptions
+        {
+            SelfBaseUrl = "http://127.0.0.1:9999/",
+            Probe = new StatusProbeOptions { ScopeId = "scope-123" },
+        });
+        var orchestration = withScope.Descriptors.Single(d => d.Slug == "orchestration-scope-read");
+        orchestration.Category.Should().Be("orchestration");
+        orchestration.Parameters["Url"].Should().Be("http://127.0.0.1:9999/api/scopes/scope-123/services");
+        orchestration.Parameters["ExpectedStatuses"].Should().Be("200");
+        orchestration.Parameters["Auth.Mode"].Should().Be("scope_service_token");
+        orchestration.Parameters["Auth.ScopeId"].Should().Be("scope-123");
+
+        var observatory = withScope.Descriptors.Single(d => d.Slug == "observatory-read");
+        observatory.Parameters["Url"].Should().Be("http://127.0.0.1:9999/api/workflow/observatory/me");
+        observatory.Parameters["Auth.Mode"].Should().Be("scope_service_token");
     }
 
     [Fact]

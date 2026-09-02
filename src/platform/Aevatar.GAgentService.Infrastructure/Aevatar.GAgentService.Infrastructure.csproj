@@ -9,9 +9,13 @@
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Core\Aevatar.GAgentService.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.GAgentService.Projection\Aevatar.GAgentService.Projection.csproj" />
+    <ProjectReference Include="..\..\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
     <ProjectReference Include="..\..\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
+    <ProjectReference Include="..\..\Aevatar.CQRS.Projection.Providers.Elasticsearch\Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
     <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Authentication.ScopeServiceTokens\Aevatar.Authentication.ScopeServiceTokens.csproj" />
     <ProjectReference Include="..\..\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
@@ -22,5 +26,7 @@
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
   </ItemGroup>
 </Project>

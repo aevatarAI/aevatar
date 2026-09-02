@@ -107,4 +107,38 @@ public sealed class SkillInvocationTriggerParserTests
         trigger.Name.Should().Be("chrono-ai-daily");
         trigger.Arguments.Should().Be("alice");
     }
+
+    [Fact]
+    public void TryParse_WhenSlashCommandHasMultiLineBody_ShouldKeepEntireBodyAsArguments()
+    {
+        var text = "/whatsapp-reply-draft Hi Everyone!\n\nBelow is a quick recap.\nHave a great summer!";
+
+        SkillInvocationTriggerParser.TryParse(text, "lark", out var trigger).Should().BeTrue();
+
+        trigger.Name.Should().Be("whatsapp-reply-draft");
+        trigger.Arguments.Should().Be("Hi Everyone!\n\nBelow is a quick recap.\nHave a great summer!");
+        trigger.TriggerToken.Should().Be("/");
+    }
+
+    [Fact]
+    public void TryParse_WhenCanonicalCommandHasMultiLineBody_ShouldKeepEntireBodyAsArguments()
+    {
+        var text = "::goal first line\nsecond line\nthird line";
+
+        SkillInvocationTriggerParser.TryParse(text, "cli", out var trigger).Should().BeTrue();
+
+        trigger.Name.Should().Be("goal");
+        trigger.Arguments.Should().Be("first line\nsecond line\nthird line");
+    }
+
+    [Fact]
+    public void TryParse_WhenMultiLineBodyPrecedesAnotherTrigger_ShouldStopArgumentsAtNextTrigger()
+    {
+        var text = "::alpha body line one\nbody line two\n::beta second";
+
+        SkillInvocationTriggerParser.TryParse(text, "cli", out var trigger).Should().BeTrue();
+
+        trigger.Name.Should().Be("alpha");
+        trigger.Arguments.Should().Be("body line one\nbody line two");
+    }
 }

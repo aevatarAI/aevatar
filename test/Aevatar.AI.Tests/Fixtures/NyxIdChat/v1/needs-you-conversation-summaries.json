@@ -1,0 +1,38 @@
+[
+  {
+    "scenario": "input-request",
+    "id": "conversation-alpha",
+    "taskStatus": "active",
+    "attentionKind": "input",
+    "attentionSince": "2026-08-01T12:00:00+00:00",
+    "activeStepSummary": "Select the deployment regions.",
+    "stateVersion": 23
+  },
+  {
+    "scenario": "input-changed",
+    "id": "conversation-alpha",
+    "taskStatus": "active",
+    "attentionKind": "none",
+    "attentionSince": null,
+    "activeStepSummary": "Continue the assistant response with the selected user input.",
+    "stateVersion": 24
+  },
+  {
+    "scenario": "approval-request",
+    "id": "conversation-alpha",
+    "taskStatus": "active",
+    "attentionKind": "approval",
+    "attentionSince": "2026-08-01T12:05:00+00:00",
+    "activeStepSummary": "Delete repository.",
+    "stateVersion": 31
+  },
+  {
+    "scenario": "approval-changed",
+    "id": "conversation-alpha",
+    "taskStatus": "active",
+    "attentionKind": "none",
+    "attentionSince": null,
+    "activeStepSummary": "Delete repository.",
+    "stateVersion": 32
+  }
+]

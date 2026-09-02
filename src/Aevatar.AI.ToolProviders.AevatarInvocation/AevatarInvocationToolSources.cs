@@ -32,6 +32,19 @@ public sealed class InvokeTeamToolSource : IAgentToolSource
         Task.FromResult<IReadOnlyList<IAgentTool>>([new InvokeTeamTool(_dispatcher)]);
 }
 
+public sealed class InvokeMemberToolSource : IAgentToolSource
+{
+    private readonly AevatarInvocationDispatcher _dispatcher;
+
+    public InvokeMemberToolSource(AevatarInvocationDispatcher dispatcher)
+    {
+        _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<IAgentTool>>([new InvokeMemberTool(_dispatcher)]);
+}
+
 public sealed class StartWorkflowToolSource : IAgentToolSource
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
@@ -115,6 +128,26 @@ internal sealed class InvokeTeamTool : IAevatarInvocationTool
         _dispatcher.InvokeTeamAsync(argumentsJson, ct);
 }
 
+internal sealed class InvokeMemberTool : IAevatarInvocationTool
+{
+    private readonly AevatarInvocationDispatcher _dispatcher;
+
+    public InvokeMemberTool(AevatarInvocationDispatcher dispatcher)
+    {
+        _dispatcher = dispatcher;
+    }
+
+    public string Name => "aevatar_invoke_member";
+
+    public string Description =>
+        "Invoke a Studio member by member_id with a typed chat payload. endpoint_id is optional and defaults to chat, which is the standard Studio workflow member endpoint; pass endpoint_id only when a different published endpoint is explicitly known.";
+
+    public string ParametersSchema => AevatarInvocationToolSchemas.InvokeMember;
+
+    public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+        _dispatcher.InvokeMemberAsync(argumentsJson, ct);
+}
+
 internal sealed class StartWorkflowTool : IAevatarInvocationTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
@@ -127,9 +160,9 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
     public string Name => "aevatar_start_workflow";
 
     public string Description =>
-        "Start an Aevatar workflow by workflow_id with typed inputs. " +
-        "When use_skill returns inline workflow_yamls, pass that bundle in workflow_yamls instead of treating the YAMLs as ordinary text. " +
-        "Use wait=stream for channel conversations so terminal completion can be delivered asynchronously to the same reply target.";
+        "Start a mounted/imported Aevatar Scope Workflow by workflow_id with typed inputs. " +
+        "Use inline workflow_yamls only as an explicit fallback when Scope Workflow mounting/import is unavailable; Ornn workflow YAMLs from use_skill are templates/import sources, not page-visible runnable workflow authority by themselves. " +
+        "Use wait=stream only when the current surface can deliver or observe the workflow terminal result; channel bots without workflow result delivery should not start background-only runs.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.StartWorkflow;
 
@@ -152,6 +185,8 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
             Status = AgentToolReceiptStatus.Success,
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
             SideEffectKind = SideEffectKind,
+            SubjectKind = AevatarInvocationReceiptJson.InvocationRunSubjectKind,
+            SubjectId = invocation.RunId,
             ResultJson = resultJson ?? string.Empty,
         };
         if (workflowRuntime.HasManagedParent && IsAcceptedManagedWorkflowStart(invocation))
@@ -227,7 +262,6 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
             ReplyMessageId = ReadString(value, "reply_message_id"),
             PlatformMessageId = ReadString(value, "platform_message_id"),
             RegistrationScopeId = ReadString(value, "registration_scope_id"),
-            DurableReplyCredentialRef = ReadString(value, "durable_reply_credential_ref"),
         };
     }
 
@@ -249,7 +283,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         WorkflowRunBackgroundDeliveryReceipt? WorkflowRunDelivery);
 }
 
-internal sealed class ObserveRunTool : IAevatarInvocationTool
+internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -267,11 +301,19 @@ internal sealed class ObserveRunTool : IAevatarInvocationTool
 
     public bool IsReadOnly => true;
 
+    public string ReadOnlySubjectIdPropertyName => "run_id";
+
+    public IReadOnlyList<AevatarInvocationReceiptJson.ResultPropertyRequirement> ReadOnlyResultRequirements { get; } = new[]
+    {
+        AevatarInvocationReceiptJson.StringProperty("run_id"),
+        AevatarInvocationReceiptJson.StringProperty("status"),
+    };
+
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.ObserveRunAsync(argumentsJson, ct);
 }
 
-internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
+internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTool
 {
     private const int DefaultTimelineTake = 50;
     private const int DefaultGraphTake = 200;
@@ -342,6 +384,14 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
         """;
 
     public bool IsReadOnly => true;
+
+    public string ReadOnlySubjectIdPropertyName => "workflow_run_id";
+
+    public IReadOnlyList<AevatarInvocationReceiptJson.ResultPropertyRequirement> ReadOnlyResultRequirements { get; } = new[]
+    {
+        AevatarInvocationReceiptJson.StringProperty("workflow_run_id"),
+        AevatarInvocationReceiptJson.StringProperty("artifact"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

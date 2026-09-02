@@ -62,10 +62,16 @@ public sealed class ServiceCommandApplicationServiceTests
         {
             Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
         });
-        var externalExposureReceipt = await service.UpdateServiceExternalExposureAsync(new UpdateServiceExternalExposureCommand
+        var reconcileExposureReceipt = await service.ReconcileExternalExposureAsync(new ReconcileExternalExposureCommand
         {
             Identity = identity.Clone(),
-            ExternalExposure = new ExternalExposure { NyxidSlug = "aevatar-orders" },
+            OpenapiUrl = "https://api.test/api/services/svc/openapi.json",
+            DesiredSpecHash = "hash-1",
+            CredentialKid = "kid-1",
+        });
+        var retireExposureReceipt = await service.RetireExternalExposureAsync(new RetireExternalExposureCommand
+        {
+            Identity = identity.Clone(),
         });
         var defaultReceipt = await service.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
         {
@@ -75,17 +81,19 @@ public sealed class ServiceCommandApplicationServiceTests
 
         createReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         updateReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
-        externalExposureReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        reconcileExposureReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        retireExposureReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         defaultReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         defaultReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rev-1");
-        provisioner.DefinitionRequests.Should().HaveCount(4);
-        provisioner.InvocationCatalogRequests.Should().HaveCount(4);
+        provisioner.DefinitionRequests.Should().HaveCount(5);
+        provisioner.InvocationCatalogRequests.Should().HaveCount(5);
         provisioner.InvocationCatalogRequests.Should().OnlyContain(x =>
             ServiceKeys.Build(x) == ServiceKeys.Build(identity));
         dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
             AnyTypeUrl<CreateServiceDefinitionCommand>(),
             AnyTypeUrl<UpdateServiceDefinitionCommand>(),
-            AnyTypeUrl<UpdateServiceExternalExposureCommand>(),
+            AnyTypeUrl<ReconcileExternalExposureCommand>(),
+            AnyTypeUrl<RetireExternalExposureCommand>(),
             AnyTypeUrl<SetDefaultServingRevisionCommand>(),
         ]);
     }

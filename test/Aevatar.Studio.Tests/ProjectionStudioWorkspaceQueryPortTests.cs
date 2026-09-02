@@ -159,19 +159,38 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
         var act = () => port.GetAsync();
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Authenticated caller has no resolvable scope*");
+            .WithMessage("HTTP request has no resolvable scope*");
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldThrowBeforeDocumentRead_WhenUnauthenticatedRequestHasNoScope()
+    {
+        var reader = new StubDocumentReader();
+        var port = new ProjectionStudioWorkspaceQueryPort(
+            reader,
+            new StubScopeResolver { HttpRequestContextPresent = true });
+
+        var act = () => port.GetAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("HTTP request has no resolvable scope*");
+        reader.ReadKeys.Should().BeEmpty();
     }
 
     private sealed class StubScopeResolver : IAppScopeResolver
     {
         public string? ScopeId { get; init; }
         public bool AuthenticatedWithoutScope { get; init; }
+        public bool HttpRequestContextPresent { get; init; }
 
         public AppScopeContext? Resolve(HttpContext? httpContext = null) =>
             string.IsNullOrWhiteSpace(ScopeId) ? null : new AppScopeContext(ScopeId, "test");
 
         public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) =>
             AuthenticatedWithoutScope;
+
+        public bool HasHttpRequestContext(HttpContext? httpContext = null) =>
+            HttpRequestContextPresent || AuthenticatedWithoutScope;
     }
 
     private sealed class StubDocumentReader

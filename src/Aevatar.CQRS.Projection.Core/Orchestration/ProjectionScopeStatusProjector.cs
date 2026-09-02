@@ -65,10 +65,41 @@ public sealed class ProjectionScopeStatusProjector
             Active = state.Active,
             ObservationAttached = state.ObservationAttached,
             Released = state.Released,
-            LastObservedVersion = state.LastObservedVersion,
+            HighestSeenVersion = state.HighestSeenVersion,
             LastSuccessfulVersion = state.LastSuccessfulVersion,
-            FailureCount = state.Failures.Count,
+            UnresolvedFailureCount = state.Failures.Count,
+            ReceivedEnvelopeTotal = state.ReceivedEnvelopeTotal,
+            AttemptedEnvelopeTotal = state.AttemptedEnvelopeTotal,
+            SuccessfulMaterializationTotal = state.SuccessfulMaterializationTotal,
+            FailedAttemptTotal = state.FailedAttemptTotal,
+            RetryExhaustedTotal = state.RetryExhaustedTotal,
+            RetryExhaustedFailureCount = state.Failures.Count(failure => failure.RetryExhausted),
+            FailureDiagnosticDroppedTotal = state.FailureDiagnosticDroppedTotal,
         };
+        var oldestFailure = state.Failures
+            .Where(failure => failure.OccurredAtUtc != null)
+            .OrderBy(failure => failure.OccurredAtUtc)
+            .FirstOrDefault();
+        document.OldestUnresolvedFailureAtUtc = oldestFailure?.OccurredAtUtc?.Clone();
+        document.RecentObservedEnvelopes.Add(state.RecentObservedEnvelopes);
+        foreach (var sourceActorId in state.HighestSeenVersionsByActor.Keys
+                     .Union(state.LastSuccessfulVersionsByActor.Keys, StringComparer.Ordinal)
+                     .OrderBy(sourceActorId => sourceActorId, StringComparer.Ordinal))
+        {
+            var highestSeen = state.HighestSeenVersionsByActor.TryGetValue(sourceActorId, out var seen)
+                ? seen
+                : 0;
+            var lastSuccessful = state.LastSuccessfulVersionsByActor.TryGetValue(sourceActorId, out var successful)
+                ? successful
+                : 0;
+            document.SourceVersions.Add(new ProjectionSourceVersionStatus
+            {
+                SourceActorId = sourceActorId,
+                HighestSeenVersion = highestSeen,
+                LastSuccessfulVersion = lastSuccessful,
+                VersionGap = Math.Max(0, highestSeen - lastSuccessful),
+            });
+        }
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }

@@ -1,6 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Household;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -17,6 +20,26 @@ public sealed class DeviceEventOptions
     public bool SkipHmacVerification { get; set; }
 
     public TimeSpan CallbackFreshnessWindow { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Minimum accepted HMAC signing key length (in characters) at registration ingress.
+    /// Enforced only when <see cref="SkipHmacVerification"/> is false.
+    /// </summary>
+    public int MinHmacKeyLength { get; set; } = 32;
+
+    /// <summary>
+    /// Fail-fast guard: device HMAC verification must never be disabled in production.
+    /// The host calls this at build time so a misconfigured deployment cannot silently
+    /// accept unsigned device callbacks.
+    /// </summary>
+    public void EnsureNotSkippingHmacInProduction(bool isProduction)
+    {
+        if (SkipHmacVerification && isProduction)
+        {
+            throw new InvalidOperationException(
+                "Aevatar:DeviceEvents:SkipHmacVerification must not be enabled in a production environment.");
+        }
+    }
 }
 
 public static class DeviceEventEndpoints
@@ -28,10 +51,31 @@ public static class DeviceEventEndpoints
         // Device callback from NyxID relay. Authentication is HMAC-based (X-NyxID-Signature),
         // not JWT — the endpoint must stay anonymous so the fallback policy does not reject
         // legitimate device events before we can verify them.
-        group.MapPost("/{registrationId}", HandleDeviceCallbackAsync).AllowAnonymous();
-        group.MapPost("/registrations", HandleRegisterDeviceAsync).RequireAuthorization();
+        group.MapPost("/{registrationId}", HandleDeviceCallbackAsync)
+            .WithEndpointAudit(
+                "device.callback.inbound",
+                AuditSensitivityLevel.Confidential,
+                "device_registration",
+                EndpointAuditTargetResolvers.FromRouteValue("device_registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"),
+                captureUnauthenticated: true)
+            .AllowAnonymous();
+        group.MapPost("/registrations", HandleRegisterDeviceAsync)
+            .WithEndpointAudit(
+                "device.registration.create",
+                AuditSensitivityLevel.Confidential,
+                "device_registration",
+                EndpointAuditTargetResolvers.Static("device_registration", "new"))
+            .RequireAuthorization();
         group.MapGet("/registrations", HandleListDeviceRegistrationsAsync).RequireAuthorization();
-        group.MapDelete("/registrations/{registrationId}", HandleDeleteDeviceRegistrationAsync).RequireAuthorization();
+        group.MapDelete("/registrations/{registrationId}", HandleDeleteDeviceRegistrationAsync)
+            .WithEndpointAudit(
+                "device.registration.delete",
+                AuditSensitivityLevel.Restricted,
+                "device_registration",
+                EndpointAuditTargetResolvers.FromRouteValue("device_registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
 
         return app;
     }
@@ -57,6 +101,7 @@ public static class DeviceEventEndpoints
         string registrationId,
         [FromServices] IDeviceRegistrationQueryPort queryPort,
         [FromServices] IDeviceCallbackCommandService callbackCommandService,
+        [FromServices] ISecretVault secretVault,
         [FromServices] IOptions<DeviceEventOptions> options,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -78,7 +123,7 @@ public static class DeviceEventEndpoints
         }
 
         var now = DateTimeOffset.UtcNow;
-        var admissionResult = AdmitCallback(http, bodyBytes, registration, options.Value, now);
+        var admissionResult = await AdmitCallback(http, bodyBytes, registration, options.Value, now, secretVault, ct);
         if (!admissionResult.Succeeded)
         {
             logger.LogWarning(
@@ -147,17 +192,27 @@ public static class DeviceEventEndpoints
         }
     }
 
-    internal static DeviceCallbackAdmissionResult AdmitCallback(
+    /// <summary>
+    /// Vault subject helper shared by Put (ingress) and Resolve (verify) so the two always agree:
+    /// the conversation id when present, otherwise the scope id. Owner scope key is always the scope id.
+    /// </summary>
+    internal static string DeviceSecretSubject(string scopeId, string nyxConversationId) =>
+        string.IsNullOrWhiteSpace(nyxConversationId) ? scopeId : nyxConversationId;
+
+    internal static async Task<DeviceCallbackAdmissionResult> AdmitCallback(
         HttpContext http,
         byte[] bodyBytes,
         DeviceRegistrationEntry registration,
         DeviceEventOptions options,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        ISecretVault secretVault,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(bodyBytes);
         ArgumentNullException.ThrowIfNull(registration);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(secretVault);
 
         try
         {
@@ -171,7 +226,7 @@ public static class DeviceEventEndpoints
             }
 
             var admitted = admission!;
-            if (!VerifyHmacSignature(http, bodyBytes, registration, options, admitted))
+            if (!await VerifyHmacSignature(http, bodyBytes, registration, options, secretVault, ct, admitted))
                 return DeviceCallbackAdmissionResult.Failure(DeviceCallbackAdmissionError.SignatureRejected);
 
             if (!admitted.IsFreshAt(now, options.CallbackFreshnessWindow))
@@ -185,11 +240,13 @@ public static class DeviceEventEndpoints
         }
     }
 
-    internal static bool VerifyHmacSignature(
+    internal static async Task<bool> VerifyHmacSignature(
         HttpContext http,
         byte[] bodyBytes,
         DeviceRegistrationEntry registration,
         DeviceEventOptions options,
+        ISecretVault secretVault,
+        CancellationToken ct,
         DeviceCallbackAdmission? admission = null)
     {
         if (options.SkipHmacVerification)
@@ -199,7 +256,8 @@ public static class DeviceEventEndpoints
             || string.IsNullOrWhiteSpace(signatureHeader))
             return false;
 
-        if (string.IsNullOrEmpty(registration.HmacKey))
+        var keyBytes = await ResolveDeviceKeyAsync(secretVault, registration, ct);
+        if (keyBytes is null)
             return false;
 
         if (admission is null)
@@ -221,7 +279,6 @@ public static class DeviceEventEndpoints
             }
         }
 
-        var keyBytes = Encoding.UTF8.GetBytes(registration.HmacKey);
         using var hmac = new HMACSHA256(keyBytes);
         var computedHash = hmac.ComputeHash(BuildSignaturePayload(bodyBytes));
         var computedSignature = Convert.ToHexStringLower(computedHash);
@@ -229,6 +286,34 @@ public static class DeviceEventEndpoints
         return CryptographicOperations.FixedTimeEquals(
             Encoding.UTF8.GetBytes(computedSignature),
             Encoding.UTF8.GetBytes(signatureHeader.ToString().Trim()));
+    }
+
+    /// <summary>
+    /// Dual-read resolution of the device HMAC key: prefer the secret-vault reference, fall back to the
+    /// legacy plaintext <see cref="DeviceRegistrationEntry.HmacKey"/>. Returns null (fail closed) when the
+    /// reference cannot be resolved and no legacy key is present.
+    /// </summary>
+    internal static async Task<byte[]?> ResolveDeviceKeyAsync(
+        ISecretVault secretVault,
+        DeviceRegistrationEntry registration,
+        CancellationToken ct)
+    {
+        if (registration.HmacKeyRef is not null && !string.IsNullOrEmpty(registration.HmacKeyRef.Ref))
+        {
+            var resolved = await secretVault.ResolveAsync(
+                new ResolveSecretRequest(
+                    registration.HmacKeyRef.Ref,
+                    CredentialSecretPurposes.DeviceHmacSigningKey,
+                    registration.ScopeId ?? string.Empty,
+                    DeviceSecretSubject(registration.ScopeId ?? string.Empty, registration.NyxConversationId ?? string.Empty),
+                    "device.verify-callback"),
+                ct);
+            return resolved.Resolved ? Encoding.UTF8.GetBytes(resolved.Secret!) : null;
+        }
+
+        return string.IsNullOrEmpty(registration.HmacKey)
+            ? null
+            : Encoding.UTF8.GetBytes(registration.HmacKey);
     }
 
     internal static byte[] BuildSignaturePayload(byte[] bodyBytes) => bodyBytes;
@@ -517,6 +602,8 @@ public static class DeviceEventEndpoints
     private static async Task<IResult> HandleRegisterDeviceAsync(
         HttpContext http,
         [FromServices] DeviceRegistrationCommandFacade registrationCommandFacade,
+        [FromServices] ISecretVault secretVault,
+        [FromServices] IOptions<DeviceEventOptions> options,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -545,15 +632,40 @@ public static class DeviceEventEndpoints
 
         var scopeId = request.ScopeId.Trim();
         var targetActorId = request.DeviceEventTargetActorId.Trim();
+        var nyxConversationId = request.NyxConversationId?.Trim() ?? string.Empty;
+        var trimmedKey = request.HmacKey?.Trim() ?? string.Empty;
+
+        var deviceEventOptions = options.Value;
+        if (!deviceEventOptions.SkipHmacVerification && trimmedKey.Length < deviceEventOptions.MinHmacKeyLength)
+        {
+            return Results.BadRequest(new
+            {
+                error = $"hmac_key must be at least {deviceEventOptions.MinHmacKeyLength} characters",
+            });
+        }
 
         var cmd = new DeviceRegisterCommand
         {
             ScopeId = scopeId,
-            HmacKey = request.HmacKey?.Trim() ?? string.Empty,
-            NyxConversationId = request.NyxConversationId?.Trim() ?? string.Empty,
+            NyxConversationId = nyxConversationId,
             Description = request.Description?.Trim() ?? string.Empty,
             DeviceEventTargetActorId = targetActorId,
         };
+
+        // Encrypt-on-ingress: store the plaintext key in the secret vault and carry only the reference.
+        // The legacy cmd.HmacKey stays empty for new writes (dual-read migration).
+        if (trimmedKey.Length > 0)
+        {
+            var stored = await secretVault.PutAsync(
+                new StoreSecretRequest(
+                    CredentialSecretPurposes.DeviceHmacSigningKey,
+                    scopeId,
+                    DeviceSecretSubject(scopeId, nyxConversationId),
+                    trimmedKey,
+                    "device.register"),
+                ct);
+            cmd.HmacKeyRef = stored.Reference;
+        }
 
         var receipt = await registrationCommandFacade.RegisterAsync(cmd, ct);
 

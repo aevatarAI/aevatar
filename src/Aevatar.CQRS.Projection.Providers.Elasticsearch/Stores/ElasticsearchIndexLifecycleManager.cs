@@ -35,7 +35,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 /// safety relies on ES idempotency (create-index conflict on an
 /// already-existing physical is treated as success, alias swap is atomic).
 /// </summary>
-internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
+public sealed class ElasticsearchIndexLifecycleManager : IDisposable
 {
     private static readonly TimeSpan ReindexCompletionBudget = TimeSpan.FromMinutes(2);
     private readonly SemaphoreSlim _initLock = new(1, 1);
@@ -263,6 +263,152 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         await CreateFreshAliasedAsync(aliasName, expectedPhysical, metadata, ct);
     }
 
+    /// <summary>
+    /// Provisions a non-readmodel artifact behind a versioned alias even when request-path
+    /// auto-create is disabled. A pre-alias legacy index is copied into the new physical and
+    /// retained unchanged; only the new alias is added after a complete reindex.
+    /// </summary>
+    public async Task ReconcileArtifactWithReindexAsync(
+        string aliasName,
+        string legacyIndexName,
+        DocumentIndexMetadata metadata,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(aliasName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(legacyIndexName);
+        ArgumentNullException.ThrowIfNull(metadata);
+
+        lock (_stateGate)
+        {
+            if (_initializedAliases.Contains(aliasName))
+                return;
+        }
+
+        await _initLock.WaitAsync(ct);
+        try
+        {
+            lock (_stateGate)
+            {
+                if (_initializedAliases.Contains(aliasName))
+                    return;
+            }
+
+            try
+            {
+                await ReconcileArtifactCoreAsync(aliasName, legacyIndexName, metadata, ct);
+                MarkInitialized(aliasName);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(
+                    "Elasticsearch artifact index reconcile failed. alias={Alias} errorType={ErrorType}",
+                    aliasName,
+                    exception.GetType().Name);
+                throw new InvalidOperationException(
+                    $"Elasticsearch artifact index reconcile failed for alias '{aliasName}'. " +
+                    $"errorType={exception.GetType().Name}");
+            }
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    private async Task ReconcileArtifactCoreAsync(
+        string aliasName,
+        string legacyIndexName,
+        DocumentIndexMetadata metadata,
+        CancellationToken ct)
+    {
+
+        var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
+        var expectedPhysical = $"{aliasName}-v{fingerprint}";
+        var aliasResolution = await ResolveAliasAsync(aliasName, ct);
+        if (aliasResolution.Targets.Count == 1)
+        {
+            var currentAliasTarget = aliasResolution.Targets[0];
+            if (string.Equals(currentAliasTarget, expectedPhysical, StringComparison.Ordinal))
+                return;
+
+            var expectedExists = await IndexExistsAsync(expectedPhysical, ct);
+            if (!expectedExists)
+                await CreatePhysicalAsync(expectedPhysical, metadata, ct);
+            await ReindexAsync(currentAliasTarget, expectedPhysical, ct, allowExistingDocuments: true);
+
+            await ExecuteAliasActionsAsync(
+                new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["add"] = new Dictionary<string, object?>
+                        {
+                            ["index"] = expectedPhysical,
+                            ["alias"] = aliasName,
+                        },
+                    },
+                    RemoveAliasAction(currentAliasTarget, aliasName),
+                },
+                $"reindex artifact schema drift for alias '{aliasName}'",
+                ct);
+
+            _logger.LogInformation(
+                "Elasticsearch artifact index reconcile completed. alias={Alias} result={Result}",
+                aliasName,
+                "schema_reindexed");
+            return;
+        }
+
+        if (aliasResolution.Targets.Count > 1)
+        {
+            throw new ProjectionIndexSchemaDriftException(
+                "Elasticsearch",
+                aliasName,
+                string.Join(",", aliasResolution.Targets),
+                expectedPhysical,
+                "Elasticsearch artifact index schema drift detected: alias points to multiple physical indices.");
+        }
+
+        if (await IndexExistsAsync(aliasName, ct))
+        {
+            throw new InvalidOperationException(
+                $"Elasticsearch artifact alias '{aliasName}' is blocked by a bare index. " +
+                "Automatic reconciliation will not delete or replace it.");
+        }
+
+        if (await IndexExistsAsync(legacyIndexName, ct))
+        {
+            await CreatePhysicalAsync(expectedPhysical, metadata, ct);
+            await ReindexAsync(legacyIndexName, expectedPhysical, ct, allowExistingDocuments: true);
+            await ExecuteAliasActionsAsync(
+                new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["add"] = new Dictionary<string, object?>
+                        {
+                            ["index"] = expectedPhysical,
+                            ["alias"] = aliasName,
+                        },
+                    },
+                },
+                $"attach artifact alias '{aliasName}' after legacy reindex",
+                ct);
+
+            _logger.LogInformation(
+                "Elasticsearch artifact index reconcile completed. alias={Alias} result={Result}",
+                aliasName,
+                "legacy_reindexed");
+            return;
+        }
+
+        await CreateFreshAliasedAsync(aliasName, expectedPhysical, metadata, ct);
+    }
+
     private static Dictionary<string, object?> RemoveAliasAction(string physical, string alias) =>
         new() { ["remove"] = new Dictionary<string, object?> { ["index"] = physical, ["alias"] = alias } };
 
@@ -375,13 +521,20 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
             $"Elasticsearch physical index creation failed for '{physical}': {(int)response.StatusCode} {response.ReasonPhrase}. body={body}");
     }
 
-    private async Task ReindexAsync(string sourceIndex, string destIndex, CancellationToken ct)
+    private async Task ReindexAsync(
+        string sourceIndex,
+        string destIndex,
+        CancellationToken ct,
+        bool allowExistingDocuments = false)
     {
-        var payload = JsonSerializer.Serialize(new Dictionary<string, object?>
+        var payloadProperties = new Dictionary<string, object?>
         {
             ["source"] = new Dictionary<string, object?> { ["index"] = sourceIndex },
             ["dest"] = new Dictionary<string, object?> { ["index"] = destIndex, ["op_type"] = "create" },
-        });
+        };
+        if (allowExistingDocuments)
+            payloadProperties["conflicts"] = "proceed";
+        var payload = JsonSerializer.Serialize(payloadProperties);
 
         var timeoutSeconds = (int)Math.Max(1, ReindexCompletionBudget.TotalSeconds);
         using var request = new HttpRequestMessage(
@@ -408,6 +561,17 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         {
             throw new InvalidOperationException(
                 $"Elasticsearch reindex from '{sourceIndex}' to '{destIndex}' timed out within {ReindexCompletionBudget}.");
+        }
+
+        if (allowExistingDocuments &&
+            doc.RootElement.TryGetProperty("total", out var totalNode) && totalNode.TryGetInt64(out var total) &&
+            doc.RootElement.TryGetProperty("created", out var createdNode) && createdNode.TryGetInt64(out var created) &&
+            doc.RootElement.TryGetProperty("version_conflicts", out var conflictsNode) &&
+            conflictsNode.TryGetInt64(out var versionConflicts) &&
+            created + versionConflicts != total)
+        {
+            throw new InvalidOperationException(
+                $"Elasticsearch reindex from '{sourceIndex}' to '{destIndex}' did not account for every source document.");
         }
     }
 

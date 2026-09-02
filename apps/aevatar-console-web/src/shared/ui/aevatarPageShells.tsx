@@ -7,11 +7,11 @@ import {
   Grid,
   Space,
   Tag,
-  Tooltip,
   Typography,
   theme,
 } from 'antd';
 import React from 'react';
+import AevatarTooltip from './AevatarTooltip';
 import {
   AEVATAR_GLOBAL_UI_SPEC,
   aevatarDrawerBodyStyle,
@@ -416,7 +416,7 @@ export const AevatarBackButton: React.FC<AevatarBackButtonProps> = ({
   const label = ariaLabel ?? t("shared.ui.aevatarpageshells.back", "Back");
 
   return (
-    <Tooltip title={title ?? label}>
+    <AevatarTooltip title={title ?? label}>
       <Button
         aria-label={label}
         className={className}
@@ -427,7 +427,7 @@ export const AevatarBackButton: React.FC<AevatarBackButtonProps> = ({
         style={{ ...backButtonStyle, ...style }}
         type="text"
       />
-    </Tooltip>
+    </AevatarTooltip>
   );
 };
 
@@ -472,7 +472,7 @@ export const AevatarHelpTooltip: React.FC<{
   const { token } = theme.useToken();
 
   return (
-    <Tooltip
+    <AevatarTooltip
       placement="topLeft"
       styles={{ container: helpTooltipContentStyle }}
       title={<div>{content}</div>}
@@ -485,7 +485,7 @@ export const AevatarHelpTooltip: React.FC<{
       >
         <InfoCircleOutlined />
       </button>
-    </Tooltip>
+    </AevatarTooltip>
   );
 };
 

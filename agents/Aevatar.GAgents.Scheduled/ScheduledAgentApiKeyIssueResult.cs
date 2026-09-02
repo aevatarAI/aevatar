@@ -1,26 +1,71 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.GAgents.Scheduled;
 
-public sealed record ScheduledAgentApiKeyIssueResult(
-    bool Success,
-    string? ApiKeyId,
-    string? FullKey,
-    string? Error,
-    string? Detail = null,
-    string? Hint = null,
-    int? HttpStatus = null,
-    string? ServiceSlug = null,
-    string? SkillRef = null)
+public sealed class ScheduledAgentApiKeyIssueResult
 {
     private static readonly JsonSerializerOptions ErrorJsonOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public static ScheduledAgentApiKeyIssueResult Succeeded(string apiKeyId, string fullKey) =>
-        new(true, apiKeyId, fullKey, null);
+    private ScheduledAgentApiKeyIssueResult(
+        bool success,
+        string? apiKeyId,
+        ScheduledAgentOpaqueSecret? secret,
+        string? error,
+        string? detail,
+        string? hint,
+        int? httpStatus,
+        string? serviceSlug,
+        string? skillRef,
+        long keyExpiresAtUnixMs,
+        ScheduledAuthorizationPlanMismatchReason authorizationPlanMismatchReason)
+    {
+        Success = success;
+        ApiKeyId = apiKeyId;
+        _secret = secret;
+        Error = error;
+        Detail = detail;
+        Hint = hint;
+        HttpStatus = httpStatus;
+        ServiceSlug = serviceSlug;
+        SkillRef = skillRef;
+        KeyExpiresAtUnixMs = keyExpiresAtUnixMs;
+        AuthorizationPlanMismatchReason = authorizationPlanMismatchReason;
+    }
+
+    private readonly ScheduledAgentOpaqueSecret? _secret;
+
+    public bool Success { get; }
+    public string? ApiKeyId { get; }
+    public string? Error { get; }
+    public string? Detail { get; }
+    public string? Hint { get; }
+    public int? HttpStatus { get; }
+    public string? ServiceSlug { get; }
+    public string? SkillRef { get; }
+    public long KeyExpiresAtUnixMs { get; }
+    public ScheduledAuthorizationPlanMismatchReason AuthorizationPlanMismatchReason { get; }
+
+    public static ScheduledAgentApiKeyIssueResult Succeeded(
+        string apiKeyId,
+        string fullKey,
+        long keyExpiresAtUnixMs = 0) =>
+        new(
+            true,
+            apiKeyId,
+            new ScheduledAgentOpaqueSecret(fullKey),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            keyExpiresAtUnixMs,
+            ScheduledAuthorizationPlanMismatchReason.Unspecified);
 
     public static ScheduledAgentApiKeyIssueResult Failed(
         string error,
@@ -28,8 +73,55 @@ public sealed record ScheduledAgentApiKeyIssueResult(
         string? hint = null,
         int? httpStatus = null,
         string? serviceSlug = null,
-        string? skillRef = null) =>
-        new(false, null, null, error, detail, hint, httpStatus, serviceSlug, skillRef);
+        string? skillRef = null,
+        ScheduledAuthorizationPlanMismatchReason authorizationPlanMismatchReason =
+            ScheduledAuthorizationPlanMismatchReason.Unspecified) =>
+        new(
+            false,
+            null,
+            null,
+            error,
+            detail,
+            hint,
+            httpStatus,
+            serviceSlug,
+            skillRef,
+            0,
+            authorizationPlanMismatchReason);
+
+    public static ScheduledAgentApiKeyIssueResult FailedAfterIssue(
+        string apiKeyId,
+        string error,
+        string? detail = null,
+        string? hint = null,
+        int? httpStatus = null,
+        string? serviceSlug = null,
+        string? skillRef = null,
+        ScheduledAuthorizationPlanMismatchReason authorizationPlanMismatchReason =
+            ScheduledAuthorizationPlanMismatchReason.Unspecified) =>
+        new(
+            false,
+            apiKeyId,
+            null,
+            error,
+            detail,
+            hint,
+            httpStatus,
+            serviceSlug,
+            skillRef,
+            0,
+            authorizationPlanMismatchReason);
+
+    public Task<Aevatar.Foundation.Abstractions.Credentials.StoreSecretResult> StoreSecretAsync(
+        Aevatar.Foundation.Abstractions.Credentials.ISecretVault secretVault,
+        Aevatar.Foundation.Abstractions.Credentials.StoreSecretRequest request,
+        CancellationToken ct = default)
+    {
+        if (!Success || _secret is null)
+            throw new InvalidOperationException("A successful issued credential is required before storing its secret.");
+
+        return _secret.StoreAsync(secretVault, request, ct);
+    }
 
     public string ToErrorJson() =>
         JsonSerializer.Serialize(new
@@ -40,5 +132,10 @@ public sealed record ScheduledAgentApiKeyIssueResult(
             http_status = HttpStatus,
             service_slug = ServiceSlug,
             skill_ref = SkillRef,
+            authorization_plan_mismatch_reason = ScheduledAuthorizationPlanMismatchReasons.ToWireValue(
+                AuthorizationPlanMismatchReason),
         }, ErrorJsonOptions);
+
+    public override string ToString() =>
+        $"{nameof(ScheduledAgentApiKeyIssueResult)} {{ Success = {Success}, ApiKeyId = {ApiKeyId}, Secret = {(_secret is null ? "null" : "[redacted]")}, Error = {Error}, KeyExpiresAtUnixMs = {KeyExpiresAtUnixMs} }}";
 }

@@ -51,6 +51,7 @@ import {
   truncateMiddle,
 } from "@/shared/ui/compactText";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
+import AevatarContentSkeleton from "@/shared/ui/AevatarContentSkeleton";
 import {
   buildAevatarPanelStyle,
   buildAevatarTagStyle,
@@ -1220,7 +1221,7 @@ export const TopologyExplorerPage: React.FC<{
   );
 
   const actorUnavailableNotice = (
-    actorId: string,
+    _actorId: string,
     options?: {
       action?: React.ReactNode;
       compact?: boolean;
@@ -1241,9 +1242,6 @@ export const TopologyExplorerPage: React.FC<{
               gridTemplateColumns: "96px minmax(0, 1fr)",
             }}
           >
-            <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12, fontWeight: 600 }}>
-              {t("pages.actors.index.actor.id.2", "Actor ID")}</Typography.Text>
-            <TopologyInlineToken head={4} maxWidth="100%" monospace tail={4} value={actorId} />
             {options?.contextLabel ? (
               <>
                 <Typography.Text
@@ -1489,7 +1487,15 @@ export const TopologyExplorerPage: React.FC<{
             title={t("pages.actors.index.traceable.objects.2", "Traceable objects")}
             extra={<Tag color="default">{t("pages.actors.index.real.time", "real time")}</Tag>}
           >
-            {displayActors.length > 0 ? (
+            {actorsQuery.isLoading ? (
+              <AevatarContentSkeleton
+                ariaLabel={t("pages.actors.index.reading", "Reading traceable objects")}
+                columnWidths={["1.4fr", "1fr", "1fr", "1.2fr", 160]}
+                rows={4}
+                tableMinWidth={actorTableMinWidth}
+                variant="table"
+              />
+            ) : displayActors.length > 0 ? (
               <div className="topology-actor-table-shell" style={actorTableShellStyle}>
                 <Table<DisplayActorRecord>
                   className="topology-actor-table"
@@ -1562,14 +1568,6 @@ export const TopologyExplorerPage: React.FC<{
                     previewDisplayActor?.subtitle ||
                     "Actor"
                   }
-                />
-                <TopologyInlineToken
-                  head={4}
-                  maxWidth="100%"
-                  monospace
-                  strong
-                  tail={4}
-                  value={previewSnapshot.actorId}
                 />
                 <TopologyCompactLabelText
                   color={token.colorTextSecondary}
@@ -1851,14 +1849,18 @@ export const TopologyExplorerPage: React.FC<{
                               gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
                             }}
                           >
-                            <TopologyMetricCard
-                              label={t("pages.actors.index.actor.id.5", "Actor ID")}
-                              value={<TopologyInlineToken monospace value={selectedSnapshot.actorId} />}
-                            />
-                            <TopologyMetricCard
-                              label={t("pages.actors.index.last.command", "Last command")}
-                              value={<TopologyInlineToken monospace value={selectedSnapshot.lastCommandId || "n/a"} />}
-                            />
+	                            <TopologyMetricCard
+	                              label={t("pages.actors.index.actor", "Actor")}
+	                              value={t("pages.actors.index.snapshot.available", "Snapshot available")}
+	                            />
+	                            <TopologyMetricCard
+	                              label={t("pages.actors.index.last.command", "Last command")}
+	                              value={
+                                  selectedSnapshot.lastCommandId
+                                    ? t("pages.actors.index.command.recorded", "Command recorded")
+                                    : "n/a"
+                                }
+	                            />
                             <TopologyMetricCard
                               label={t("pages.actors.index.last.event", "Last event")}
                               value={<TopologyInlineToken monospace value={selectedSnapshot.lastEventId || "n/a"} />}

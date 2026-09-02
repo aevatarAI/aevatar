@@ -13,6 +13,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
+    <ProjectReference Include="..\..\..\src\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
+    <ProjectReference Include="..\..\..\src\Aevatar.BackendConsole.Hosting\Aevatar.BackendConsole.Hosting.csproj" />
     <ProjectReference Include="..\..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\src\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
@@ -22,6 +24,7 @@
     <ProjectReference Include="..\..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
+    <ProjectReference Include="..\..\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
@@ -33,5 +36,8 @@
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="channels.html" />
   </ItemGroup>
 </Project>

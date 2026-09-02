@@ -69,6 +69,7 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             {
                 Take = boundedTake,
                 Filters = BuildFilters(query),
+                Sorts = RecencyDescendingSort,
             },
             ct);
         var snapshots = new List<WorkflowActorSnapshot>(currentStates.Items.Count);
@@ -90,6 +91,19 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
         var currentState = await _currentStateReader.GetAsync(actorId, ct);
         return currentState == null ? null : _mapper.ToActorProjectionState(currentState);
     }
+
+    // Current-state lists (observatory own-scope + cross-scope overview, query service, tools) order by
+    // most-recent activity. Without an explicit sort the Elasticsearch store falls back to a non-existent
+    // default sort field ("CreatedAt") and degrades to the actor-id tiebreak order, so a bounded Take
+    // returns an arbitrary subset and recent runs are dropped from cross-scope pages (06-23 observatory bug).
+    private static readonly IReadOnlyList<ProjectionDocumentSort> RecencyDescendingSort =
+    [
+        new ProjectionDocumentSort
+        {
+            FieldPath = nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue),
+            Direction = ProjectionDocumentSortDirection.Desc,
+        },
+    ];
 
     private static IReadOnlyList<ProjectionDocumentFilter> BuildFilters(WorkflowActorCurrentStateListQuery query)
     {
@@ -135,6 +149,84 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
                 FieldPath = nameof(WorkflowExecutionCurrentStateDocument.DefinitionActorId),
                 Operator = ProjectionDocumentFilterOperator.In,
                 Value = ProjectionDocumentValue.FromStrings(definitionActorIds),
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Status))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.Status),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.Status.Trim()),
+            });
+        }
+
+        var runOrigins = query.RunOrigins
+            .Select(static value => value?.Trim() ?? string.Empty)
+            .Where(static value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (runOrigins.Length == 1)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.RunOrigin),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(runOrigins[0]),
+            });
+        }
+        else if (runOrigins.Length > 1)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.RunOrigin),
+                Operator = ProjectionDocumentFilterOperator.In,
+                Value = ProjectionDocumentValue.FromStrings(runOrigins),
+            });
+        }
+
+        var scheduleIds = query.ScheduleIds
+            .Select(static value => value?.Trim() ?? string.Empty)
+            .Where(static value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (scheduleIds.Length == 1)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.ScheduleId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(scheduleIds[0]),
+            });
+        }
+        else if (scheduleIds.Length > 1)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.ScheduleId),
+                Operator = ProjectionDocumentFilterOperator.In,
+                Value = ProjectionDocumentValue.FromStrings(scheduleIds),
+            });
+        }
+
+        if (query.UpdatedFromUtc is { } updatedFrom)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue),
+                Operator = ProjectionDocumentFilterOperator.Gte,
+                Value = ProjectionDocumentValue.FromString(updatedFrom.UtcDateTime.ToString("O")),
+            });
+        }
+
+        if (query.UpdatedToUtc is { } updatedTo)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue),
+                Operator = ProjectionDocumentFilterOperator.Lte,
+                Value = ProjectionDocumentValue.FromString(updatedTo.UtcDateTime.ToString("O")),
             });
         }
 

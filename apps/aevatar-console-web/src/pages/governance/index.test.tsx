@@ -151,6 +151,39 @@ describe('GovernanceIndexPage', () => {
     expect(screen.getByRole('button', { name: '打开部署' })).toBeTruthy();
   });
 
+  it.each([
+    ['policies', 'getPolicies', '新建策略', '正在加载策略...'],
+    ['bindings', 'getBindings', '新建绑定', '正在加载绑定...'],
+    ['endpoints', 'getEndpointCatalog', '新建入口', '正在加载入口目录...'],
+  ])(
+    'renders a table skeleton while the %s catalog is loading',
+    async (view, queryName, actionName, loadingLabel) => {
+      (
+        (governanceApi as unknown as Record<string, jest.Mock>)[queryName]
+      ).mockImplementationOnce(
+        () => new Promise(() => {}),
+      );
+      window.history.replaceState(
+        {},
+        '',
+        `/governance?tenantId=tenant-a&appId=app-a&namespace=default&serviceId=service-alpha&view=${view}`,
+      );
+
+      renderWithQueryClient(React.createElement(GovernanceIndexPage));
+
+      expect(
+        await screen.findByRole('button', { name: actionName }),
+      ).toBeInTheDocument();
+      expect(await screen.findByRole('status')).toHaveAttribute(
+        'data-variant',
+        'table',
+      );
+      expect(screen.getByText(loadingLabel)).toHaveClass(
+        'aevatar-loading-visually-hidden',
+      );
+    },
+  );
+
   it('does not auto-select the first service when service context is missing', async () => {
     window.history.replaceState(
       {},
@@ -207,8 +240,8 @@ describe('GovernanceIndexPage', () => {
       expect(governanceApi.updateEndpointCatalog).toHaveBeenCalled();
     });
     expect(await screen.findByText('治理命令已接收')).toBeInTheDocument();
-    expect(
-      screen.getByText(/Endpoint invoke was accepted for update.*暂不能当作已观察/),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Endpoint was accepted for update.')).toBeInTheDocument();
+    expect(screen.getByText(/Endpoint catalog/)).toBeInTheDocument();
+    expect(screen.queryByText('已观察')).toBeNull();
   });
 });

@@ -68,6 +68,30 @@ public class DeviceRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleRegister_CopiesHmacKeyRefAndLeavesLegacyKeyEmptyForNewWrites()
+    {
+        var reference = new Aevatar.Foundation.Abstractions.Credentials.SecretReference
+        {
+            Ref = "sec_0000000000000001",
+            Purpose = "device.hmac-signing-key",
+            OwnerScopeKey = "scope-ref",
+        };
+        var cmd = new DeviceRegisterCommand
+        {
+            ScopeId = "scope-ref",
+            HmacKeyRef = reference,
+            DeviceEventTargetActorId = "household-scope-ref",
+        };
+
+        await _agent.HandleRegister(cmd);
+
+        var entry = _agent.State.Registrations.Single();
+        entry.HmacKey.Should().BeEmpty();
+        entry.HmacKeyRef.Should().NotBeNull();
+        entry.HmacKeyRef!.Ref.Should().Be("sec_0000000000000001");
+    }
+
+    [Fact]
     public async Task HandleRegister_GeneratesUniqueId()
     {
         var cmd1 = new DeviceRegisterCommand { ScopeId = "scope-a", HmacKey = "k1" };

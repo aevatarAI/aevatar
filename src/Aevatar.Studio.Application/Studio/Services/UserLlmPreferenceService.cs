@@ -26,17 +26,14 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
     public async Task<UserLlmSettingsView> GetSettingsAsync(string? bearerToken, CancellationToken ct)
     {
         var config = await _queryPort.GetAsync(ct).ConfigureAwait(false);
-        var savedRoute = UserConfigLlmRoute.Normalize(config.PreferredLlmRoute);
-        var defaultModel = config.DefaultModel?.Trim() ?? string.Empty;
 
         if (string.IsNullOrWhiteSpace(bearerToken))
-            return _viewBuilder.BuildUnavailable(savedRoute, defaultModel);
+            return _viewBuilder.BuildVerificationUnavailable(config);
 
         try
         {
             var result = await _catalogPort.GetServicesAsync(bearerToken, ct).ConfigureAwait(false);
-            (savedRoute, defaultModel) = ResolveLegacyPrefixedModel(result, savedRoute, defaultModel);
-            return _viewBuilder.BuildAvailable(result, savedRoute, defaultModel);
+            return _viewBuilder.BuildAvailable(result, config);
         }
         catch (OperationCanceledException)
         {
@@ -44,26 +41,7 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         }
         catch
         {
-            return _viewBuilder.BuildUnavailable(savedRoute, defaultModel);
+            return _viewBuilder.BuildVerificationUnavailable(config);
         }
-    }
-
-    private static (string SavedRoute, string DefaultModel) ResolveLegacyPrefixedModel(
-        NyxIdLlmServicesResult result,
-        string savedRoute,
-        string defaultModel)
-    {
-        if (!string.IsNullOrWhiteSpace(savedRoute) ||
-            UserConfigLlmModel.TryParseRouteModel(defaultModel) is not { } prefixed)
-        {
-            return (savedRoute, defaultModel);
-        }
-
-        var prefixedOption = result.Services
-            .Select(NyxIdLlmServiceMapping.ToOption)
-            .FirstOrDefault(option => UserLlmPreferenceWriteCore.IsSameOption(option, prefixed.RouteSlug));
-        return prefixedOption is null
-            ? (savedRoute, defaultModel)
-            : (UserConfigLlmRoute.Normalize(prefixedOption.RouteValue), prefixed.Model);
     }
 }

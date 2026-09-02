@@ -1,9 +1,11 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Capabilities;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -176,15 +178,19 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
     private readonly IActorRuntime _actorRuntime;
     private readonly IChatRoutePolicyQueryPort _routeQueryPort;
     private readonly ChatRouteResolver _routeResolver;
+    private readonly INyxIdChatAgentProfileResolver _agentProfileResolver;
 
     public NyxIdChatConversationCreateCommandTargetResolver(
         IActorRuntime actorRuntime,
         IChatRoutePolicyQueryPort routeQueryPort,
-        ChatRouteResolver routeResolver)
+        ChatRouteResolver routeResolver,
+        INyxIdChatAgentProfileResolver agentProfileResolver)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _routeQueryPort = routeQueryPort ?? throw new ArgumentNullException(nameof(routeQueryPort));
         _routeResolver = routeResolver ?? throw new ArgumentNullException(nameof(routeResolver));
+        _agentProfileResolver = agentProfileResolver ??
+                                throw new ArgumentNullException(nameof(agentProfileResolver));
     }
 
     public async Task<CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>> ResolveAsync(
@@ -209,11 +215,44 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
             return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
                 NyxIdChatLifecycleCommandStartError.RouteRejected);
 
+        var actorId = string.IsNullOrWhiteSpace(command.RequestedActorId)
+            ? NyxIdChatServiceDefaults.GenerateActorId()
+            : command.RequestedActorId.Trim();
+        var profileResolution = await _agentProfileResolver.ResolveAsync(
+            new NyxIdChatAgentProfileSelectionRequest(
+                command.ScopeId.Trim(),
+                actorId,
+                command.AgentProfileReference?.Clone()),
+            ct);
+        if (profileResolution.IsFailure)
+        {
+            return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+        }
+
+        var agentProfile = profileResolution.Profile;
+        if (profileResolution.IsSelected)
+        {
+            if (agentProfile is null || !AgentProfileSnapshotCodec.Verify(agentProfile))
+            {
+                return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                    NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+            }
+
+            var routeToolSetName = decision.Action.ForwardToModel?.ToolSetRef?.Name;
+            if (!string.Equals(routeToolSetName, agentProfile.RouteToolSetRef, StringComparison.Ordinal))
+            {
+                return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                    NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+            }
+
+            command.AgentProfile = agentProfile.Clone();
+        }
+
         // Refactor (issue1321-first): ForwardToModel.tool_choice_hint is tool prefill only,
         // so conversation creation never treats hint arguments as actor addressing.
 
-        var actorId = NyxIdChatServiceDefaults.GenerateActorId();
-        var createdActor = await _actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
+        var createdActor = await _actorRuntime.CreateAsync<NyxIdChatConversationGAgent>(actorId, ct);
         command.CreatedLocally = true;
         return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Success(
             new NyxIdChatConversationCreateCommandTarget(

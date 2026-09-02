@@ -20,7 +20,7 @@ public sealed class ScopeServiceDraftRunMultipartTests : ScopeServiceEndpointTes
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
 
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
                     WorkflowProjectionCompletionStatus.Completed,
                     true));
@@ -46,7 +46,7 @@ public sealed class ScopeServiceDraftRunMultipartTests : ScopeServiceEndpointTes
         body.Should().Contain("aevatar.run.context");
         host.WorkflowFileIngressPort.Requests.Should().ContainSingle();
         var ingressRequest = host.WorkflowFileIngressPort.Requests[0];
-        ingressRequest.SourceKind.Should().Be(WorkflowFileSourceKind.FormUpload);
+        ingressRequest.SourceKind.Should().Be(FileArtifactSourceKind.FormUpload);
         ingressRequest.OwnerScopeId.Should().Be("scope-a");
         ingressRequest.FileName.Should().Be("cat.png");
         ingressRequest.MediaType.Should().Be("image/png");
@@ -58,7 +58,7 @@ public sealed class ScopeServiceDraftRunMultipartTests : ScopeServiceEndpointTes
         part.DataBase64.Should().BeNull();
         part.FileRef.Should().NotBeNull();
         part.FileRef!.ArtifactId.Should().Be("workflow-file://file-1");
-        part.FileRef.SourceKind.Should().Be(WorkflowFileSourceKind.FormUpload);
+        part.FileRef.SourceKind.Should().Be(FileArtifactSourceKind.FormUpload);
         part.FileRef.OwnerScopeId.Should().Be("scope-a");
     }
 
@@ -72,7 +72,7 @@ public sealed class ScopeServiceDraftRunMultipartTests : ScopeServiceEndpointTes
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
 
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
                     WorkflowProjectionCompletionStatus.Completed,
                     true));
@@ -109,7 +109,7 @@ public sealed class ScopeServiceDraftRunMultipartTests : ScopeServiceEndpointTes
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
 
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
                     WorkflowProjectionCompletionStatus.Completed,
                     true));

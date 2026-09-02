@@ -114,7 +114,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
 
         // Render available action labels as a bullet list so the user can still see what
         // the agent intended to offer if the inline keyboard is unavailable downstream.
-        var buttonActions = GetInlineKeyboardActions(intent)
+        var buttonActions = GetInlineKeyboardActionCandidates(intent)
             .Select(static action =>
             {
                 var label = action.Label!.Trim();
@@ -148,7 +148,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
     private static ActionElement[] GetInlineKeyboardActionCandidates(MessageContent intent) =>
         intent.Actions
             .Where(static action =>
-                action.Kind is ActionElementKind.Button or ActionElementKind.Link &&
+                (action.Kind is ActionElementKind.Button or ActionElementKind.FormSubmit or ActionElementKind.Link) &&
                 !string.IsNullOrWhiteSpace(action.Label))
             .ToArray();
 
@@ -208,9 +208,12 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         // Arguments can be dropped only when action id plus submitted value still
         // round-trip. Dropping the submitted value would create a clickable no-op.
         payload.Remove("v");
-        callbackData = JsonSerializer.Serialize(payload);
-        if (FitsCallbackDataLimit(callbackData))
-            return true;
+        if (!string.IsNullOrWhiteSpace(submittedValue))
+        {
+            callbackData = JsonSerializer.Serialize(payload);
+            if (FitsCallbackDataLimit(callbackData))
+                return true;
+        }
 
         if (!string.IsNullOrWhiteSpace(submittedValue))
             return false;
@@ -250,6 +253,24 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
                 arguments["page"] = llmSelection.Page.ToString(CultureInfo.InvariantCulture);
             if (!string.IsNullOrWhiteSpace(llmSelection.DisplayMode))
                 arguments["display_mode"] = llmSelection.DisplayMode;
+        }
+
+        if (action.WorkflowResume is { } workflowResume)
+        {
+            if (!string.IsNullOrWhiteSpace(workflowResume.ActorId))
+                arguments["actor_id"] = workflowResume.ActorId;
+            if (!string.IsNullOrWhiteSpace(workflowResume.RunId))
+                arguments["run_id"] = workflowResume.RunId;
+            if (!string.IsNullOrWhiteSpace(workflowResume.StepId))
+                arguments["step_id"] = workflowResume.StepId;
+            if (workflowResume.HasApproved)
+                arguments["approved"] = workflowResume.Approved.ToString().ToLowerInvariant();
+            if (!string.IsNullOrWhiteSpace(workflowResume.UserInput))
+                arguments["user_input"] = workflowResume.UserInput;
+            if (!string.IsNullOrWhiteSpace(workflowResume.EditedContent))
+                arguments["edited_content"] = workflowResume.EditedContent;
+            if (!string.IsNullOrWhiteSpace(workflowResume.Feedback))
+                arguments["feedback"] = workflowResume.Feedback;
         }
 
         return arguments;

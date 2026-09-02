@@ -121,20 +121,43 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
                 .ToList(),
             [.. readModel.PolicyIds],
             readModel.UpdatedAt,
-            MapExternalExposure(readModel.ExternalExposure));
+            MapExternalExposure(readModel.ExternalExposure, readModel.StateVersion));
     }
 
     private static ServiceExternalExposureSnapshot? MapExternalExposure(
-        ServiceCatalogExternalExposureReadModel? externalExposure)
+        ServiceCatalogExternalExposureReadModel? externalExposure,
+        long sourceStateVersion)
     {
         if (externalExposure == null)
             return null;
 
         var nyxidSlug = externalExposure.NyxidSlug ?? string.Empty;
         var registeredAt = externalExposure.RegisteredAt;
-        if (string.IsNullOrWhiteSpace(nyxidSlug) && registeredAt == null)
+        if (string.IsNullOrWhiteSpace(nyxidSlug) &&
+            registeredAt == null &&
+            externalExposure.Status == ServiceRegistrationStatus.Unspecified &&
+            string.IsNullOrWhiteSpace(externalExposure.NyxidServiceId) &&
+            string.IsNullOrWhiteSpace(externalExposure.DesiredSpecHash) &&
+            string.IsNullOrWhiteSpace(externalExposure.LastError) &&
+            externalExposure.Attempt == 0 &&
+            externalExposure.NextAttemptAt == null &&
+            !externalExposure.ExposureDesired)
+        {
             return null;
+        }
 
-        return new ServiceExternalExposureSnapshot(nyxidSlug, registeredAt);
+        return new ServiceExternalExposureSnapshot(
+            nyxidSlug,
+            registeredAt,
+            externalExposure.Status,
+            externalExposure.NyxidServiceId ?? string.Empty,
+            externalExposure.DesiredSpecHash ?? string.Empty,
+            externalExposure.RegisteredSpecHash ?? string.Empty,
+            externalExposure.LastError ?? string.Empty,
+            externalExposure.Attempt,
+            externalExposure.NextAttemptAt,
+            externalExposure.CredentialKid ?? string.Empty,
+            externalExposure.ExposureDesired,
+            sourceStateVersion);
     }
 }

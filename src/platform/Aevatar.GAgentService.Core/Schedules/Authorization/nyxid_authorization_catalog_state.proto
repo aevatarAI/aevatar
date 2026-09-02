@@ -1,0 +1,184 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.schedules.authorization.state;
+option csharp_namespace = "Aevatar.GAgentService.Core.Schedules.Authorization";
+
+import "google/protobuf/timestamp.proto";
+import "scheduled_invocation_authorization_evidence.proto";
+
+message NyxIdAuthorizationCatalogState {
+  reserved 5, 23 to 24;
+  reserved "external_revision", "newest_refresh_id", "newest_refresh_started_at";
+
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  repeated aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationServiceEvidence services = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  google.protobuf.Timestamp fresh_until = 4;
+  string content_digest = 6;
+  bool invalidated = 7;
+  string invalidation_reason = 8;
+  google.protobuf.Timestamp invalidated_at = 9;
+  google.protobuf.Timestamp last_refresh_failed_at = 10;
+  string last_refresh_failure_code = 11;
+  int64 lifecycle_fence = 12;
+  bool activated = 13;
+  google.protobuf.Timestamp activated_at = 14;
+  bool cleaned = 15;
+  google.protobuf.Timestamp cleaned_at = 16;
+  string cleanup_reason = 17;
+  string contract_version = 18;
+  string policy_version = 19;
+  google.protobuf.Timestamp evaluated_at = 20;
+  string active_refresh_id = 21;
+  google.protobuf.Timestamp active_refresh_started_at = 22;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 25;
+  aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationLLMTargetEvidence gateway_llm_target = 26;
+}
+
+enum NyxIdAuthorizationCatalogObservationCoverageKind {
+  NYX_ID_AUTHORIZATION_CATALOG_OBSERVATION_COVERAGE_KIND_UNSPECIFIED = 0;
+  NYX_ID_AUTHORIZATION_CATALOG_OBSERVATION_COVERAGE_KIND_FULL_OWNER = 1;
+  NYX_ID_AUTHORIZATION_CATALOG_OBSERVATION_COVERAGE_KIND_REQUIRED_SERVICE_SUBSET = 2;
+}
+
+message ObserveNyxIdAuthorizationCatalogCommand {
+  reserved 5, 7;
+  reserved "external_revision", "expected_lifecycle_fence";
+
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  repeated aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationServiceEvidence services = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  google.protobuf.Timestamp fresh_until = 4;
+  string content_digest = 6;
+  string contract_version = 8;
+  string policy_version = 9;
+  google.protobuf.Timestamp evaluated_at = 10;
+  string refresh_id = 11;
+  NyxIdAuthorizationCatalogObservationCoverageKind coverage_kind = 12;
+  repeated string covered_user_service_ids = 13;
+  aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationLLMTargetEvidence gateway_llm_target = 14;
+}
+
+message BeginNyxIdAuthorizationCatalogRefreshCommand {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  string refresh_id = 2;
+  google.protobuf.Timestamp started_at = 3;
+  int64 expected_lifecycle_fence = 4;
+}
+
+message BeginNyxIdAuthorizationCatalogRepairRefreshCommand {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  string refresh_id = 2;
+  google.protobuf.Timestamp started_at = 3;
+  int64 minimum_source_state_version = 4;
+  string repair_request_id = 5;
+}
+
+message RecordNyxIdAuthorizationCatalogRefreshFailureCommand {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string failure_code = 3;
+  string refresh_id = 4;
+  NyxIdAuthorizationCatalogRefreshOutcomeStatusState outcome_status = 5;
+}
+
+message InvalidateNyxIdAuthorizationCatalogCommand {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  google.protobuf.Timestamp invalidated_at = 2;
+  string reason = 3;
+  string refresh_id = 4;
+  NyxIdAuthorizationCatalogRefreshOutcomeStatusState outcome_status = 5;
+}
+
+message CleanupNyxIdAuthorizationCatalogCommand {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  google.protobuf.Timestamp cleaned_at = 2;
+  string reason = 3;
+}
+
+message NyxIdAuthorizationCatalogActivatedEvent {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  google.protobuf.Timestamp activated_at = 2;
+  int64 lifecycle_fence = 3;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 4;
+}
+
+message NyxIdAuthorizationCatalogRefreshBeganEvent {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  string refresh_id = 2;
+  google.protobuf.Timestamp started_at = 3;
+}
+
+message NyxIdAuthorizationCatalogObservedEvent {
+  reserved 5;
+  reserved "external_revision";
+
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  repeated aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationServiceEvidence services = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  google.protobuf.Timestamp fresh_until = 4;
+  string content_digest = 6;
+  int64 lifecycle_fence = 7;
+  string contract_version = 8;
+  string policy_version = 9;
+  google.protobuf.Timestamp evaluated_at = 10;
+  string refresh_id = 11;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 12;
+  NyxIdAuthorizationCatalogObservationCoverageKind coverage_kind = 13;
+  repeated string covered_user_service_ids = 14;
+  aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationLLMTargetEvidence gateway_llm_target = 15;
+}
+
+message NyxIdAuthorizationCatalogRefreshFailedEvent {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string failure_code = 3;
+  string refresh_id = 4;
+  optional int64 lifecycle_fence = 5;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 6;
+}
+
+message NyxIdAuthorizationCatalogInvalidatedEvent {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  google.protobuf.Timestamp invalidated_at = 2;
+  string reason = 3;
+  int64 lifecycle_fence = 4;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 5;
+}
+
+message NyxIdAuthorizationCatalogCleanedEvent {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  google.protobuf.Timestamp cleaned_at = 2;
+  string reason = 3;
+  int64 lifecycle_fence = 4;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 5;
+}
+
+enum NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion {
+  NYX_ID_AUTHORIZATION_CATALOG_LIFECYCLE_FENCE_SEMANTICS_VERSION_UNSPECIFIED = 0;
+  NYX_ID_AUTHORIZATION_CATALOG_LIFECYCLE_FENCE_SEMANTICS_VERSION_TERMINAL_FACTS_ADVANCE_FENCE = 1;
+}
+
+message NyxIdAuthorizationCatalogLifecycleFenceSemanticsMigratedEvent {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion semantics_version = 2;
+  int64 lifecycle_fence = 3;
+}
+
+enum NyxIdAuthorizationCatalogRefreshOutcomeStatusState {
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_UNSPECIFIED = 0;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_STARTED = 1;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_OBSERVED = 2;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_FAILED = 3;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_ACCESS_DENIED = 4;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_CATALOG_UNSTABLE = 5;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_SUPERSEDED = 6;
+}
+
+message NyxIdAuthorizationCatalogRefreshOutcomeEvent {
+  string refresh_id = 1;
+  NyxIdAuthorizationCatalogRefreshOutcomeStatusState status = 2;
+  int64 state_version = 3;
+  string failure_code = 4;
+  google.protobuf.Timestamp observed_at_utc = 5;
+}

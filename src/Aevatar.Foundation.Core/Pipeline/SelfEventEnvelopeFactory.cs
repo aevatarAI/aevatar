@@ -33,8 +33,8 @@ internal static class SelfEventEnvelopeFactory
         if (options?.Propagation != null)
             ApplyPropagationOverrides(envelope.EnsurePropagation(), options.Propagation);
 
-        if (!string.IsNullOrWhiteSpace(options?.Delivery?.DeduplicationOperationId))
-            envelope.EnsureRuntime().EnsureDeduplication().OperationId = options.Delivery.DeduplicationOperationId;
+        if (!string.IsNullOrWhiteSpace(options?.Delivery?.OperationId))
+            envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = options.Delivery.OperationId;
 
         return envelope;
     }

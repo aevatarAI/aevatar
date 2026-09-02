@@ -1,5 +1,7 @@
 using System.Globalization;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions.Execution;
@@ -39,6 +41,17 @@ internal sealed class TestEventHandlerContext :
     public IServiceProvider Services { get; }
     public ILogger Logger { get; }
     public string RunId => Agent is IWorkflowExecutionStateHost host ? host.RunId : Agent.Id;
+    public string ScopeId => StateHost.ScopeId;
+    public WorkflowCallerNyxIdAuthority? CallerNyxIdAuthority
+    {
+        get
+        {
+            var source = StateHost.ExecutionContextSnapshot.CallerCredential?.NyxIdAuthority;
+            return WorkflowRunExecutionContextStateAccess.TryNormalizeCallerNyxIdAuthority(source, out var authority)
+                ? authority
+                : null;
+        }
+    }
     public WorkflowExecutionRuntimeContext RuntimeContext => Agent is IWorkflowExecutionStateHost host
         ? host.RuntimeContext
         : _fallbackRuntimeContext;
@@ -197,8 +210,8 @@ internal sealed class TestEventHandlerContext :
         if (callback.Options?.Propagation != null)
             ApplyPropagationOverrides(envelope.EnsurePropagation(), callback.Options.Propagation);
 
-        if (!string.IsNullOrWhiteSpace(callback.Options?.Delivery?.DeduplicationOperationId))
-            envelope.EnsureRuntime().EnsureDeduplication().OperationId = callback.Options.Delivery.DeduplicationOperationId;
+        if (!string.IsNullOrWhiteSpace(callback.Options?.Delivery?.OperationId))
+            envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = callback.Options.Delivery.OperationId;
 
         envelope.EnsureRuntime().Callback = new EnvelopeCallbackContext
         {
@@ -271,19 +284,31 @@ internal sealed record CanceledCallback(
     public long ExpectedGeneration => Lease.Generation;
 }
 
-internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWorkflowExecutionStateHost
+internal sealed class TestAgent(
+    string id,
+    string? runId = null,
+    string? scopeId = null,
+    IRuntimeSecretStore? runtimeSecretStore = null) :
+    IAgent,
+    IWorkflowExecutionStateHost,
+    IRuntimeSecretStoreAccessor
 {
     private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
+    private readonly IRuntimeSecretStore _runtimeSecretStore = runtimeSecretStore ?? new InMemoryRuntimeSecretStore();
 
     public string Id { get; } = id;
 
     public string RunId { get; } = string.IsNullOrWhiteSpace(runId) ? id : runId;
+
+    public string ScopeId { get; } = string.IsNullOrWhiteSpace(scopeId) ? string.Empty : scopeId.Trim();
 
     public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
     public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
     public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+    public IRuntimeSecretStore RuntimeSecretStore => _runtimeSecretStore;
 
     public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
     {
@@ -384,9 +409,13 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
     public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
-internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowExecutionStateHost
+internal sealed class TestWorkflowRunAgent(string id, string runId) :
+    IAgent,
+    IWorkflowExecutionStateHost,
+    IRuntimeSecretStoreAccessor
 {
     private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
+    private readonly IRuntimeSecretStore _runtimeSecretStore = new InMemoryRuntimeSecretStore();
 
     public string Id { get; } = id;
 
@@ -397,6 +426,8 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
     public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
     public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+    public IRuntimeSecretStore RuntimeSecretStore => _runtimeSecretStore;
 
     public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
     {
@@ -523,6 +554,9 @@ internal static class WorkflowExecutionContextTestState
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
+                RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
+                DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
+                NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
             };
         }
     }

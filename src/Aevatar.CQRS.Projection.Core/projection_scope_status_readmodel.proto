@@ -18,7 +18,24 @@ message ProjectionScopeStatusDocument {
   bool active = 10;
   bool observation_attached = 11;
   bool released = 12;
-  int64 last_observed_version = 13;
+  int64 highest_seen_version = 13;
   int64 last_successful_version = 14;
-  int32 failure_count = 15;
+  int32 unresolved_failure_count = 15;
+  repeated ProjectionObservedEnvelopeMetadata recent_observed_envelopes = 16;
+  int64 received_envelope_total = 17;
+  int64 attempted_envelope_total = 18;
+  int64 successful_materialization_total = 19;
+  int64 failed_attempt_total = 20;
+  int64 retry_exhausted_total = 21;
+  google.protobuf.Timestamp oldest_unresolved_failure_at_utc = 22;
+  int64 failure_diagnostic_dropped_total = 23;
+  repeated ProjectionSourceVersionStatus source_versions = 24;
+  int32 retry_exhausted_failure_count = 25;
+}
+
+message ProjectionSourceVersionStatus {
+  string source_actor_id = 1;
+  int64 highest_seen_version = 2;
+  int64 last_successful_version = 3;
+  int64 version_gap = 4;
 }

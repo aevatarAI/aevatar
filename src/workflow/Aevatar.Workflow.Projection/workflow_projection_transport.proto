@@ -5,6 +5,8 @@ option csharp_namespace = "Aevatar.Workflow.Projection.ReadModels";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
 import "workflow_execution_messages.proto";
+import "workflow_external_action.proto";
+import "workflow_capability_admission.proto";
 
 message WorkflowRunInsightReportDocument {
   string id = 1;
@@ -64,6 +66,16 @@ message WorkflowExecutionCurrentStateDocument {
   string dead_letter_failed_compensation_step_id = 27;
   int32 dead_letter_remaining_uncompensated = 28;
   string dead_letter_error = 29;
+  google.protobuf.Timestamp started_at_utc_value = 30;
+  // Canonical run origin/type carried from the committed WorkflowRunState. Observatory filter
+  // dimension; empty for legacy/unstamped runs.
+  string run_origin = 31;
+  // Per-schedule correlation id carried from the committed WorkflowRunState. Observatory filter
+  // dimension for "this schedule's runs"; empty for non-scheduled/legacy runs.
+  string schedule_id = 32;
+  repeated aevatar.workflow.WorkflowExternalActionApprovalSnapshot connector_approval_entries = 33;
+  aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 34;
+  aevatar.workflow.ExternalCapabilityExecutionMode expected_execution_mode = 35;
 }
 
 message WorkflowExternalApprovalContinuationDocument {
@@ -132,6 +144,7 @@ message WorkflowExecutionStepTrace {
   int32 suspension_timeout_seconds_value = 18;
   string requested_variable_name = 19;
   WorkflowUsageMetricsReadModel usage_value = 20;
+  string suspension_content = 21;
 }
 
 message WorkflowUsageMetricsReadModel {
@@ -195,6 +208,7 @@ message WorkflowCatalogCurrentStateDocument {
   repeated WorkflowCatalogEdgeReadModel edge_entries = 22;
   repeated string required_connector_entries = 23;
   repeated string workflow_call_entries = 24;
+  aevatar.workflow.WorkflowAuthorizationDependencies authorization_dependencies = 25;
 }
 
 message WorkflowCatalogRoleReadModel {

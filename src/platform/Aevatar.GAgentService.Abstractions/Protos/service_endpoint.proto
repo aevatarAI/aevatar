@@ -45,6 +45,30 @@ message ServiceInvocationRequest {
   string correlation_id = 5;
   ServiceInvocationCaller caller = 6;
   string revision_id = 7;
+  // Canonical run origin/type for observatory attribution. Empty = registered-service invoke
+  // (the dispatcher defaults it to "service-invoke"); scheduled dispatch sets "provisioned".
+  string run_origin = 8;
+  string schedule_id = 9;
+  WorkflowServiceCompletionNotificationTarget workflow_completion_notification_target = 10;
+  // Optional stable Run identity supplied by a durable coordinator such as
+  // WorkOrder. When present, dispatch must reuse this exact logical Run.
+  string requested_run_id = 11;
+  // Implementation-neutral terminal callback. Static and scripting runs use
+  // the ServiceRun outbox; workflow callers may also provide the workflow
+  // callback above so the workflow Run remains the terminal fact source.
+  ServiceRunCompletionNotificationTarget service_run_completion_notification_target = 12;
+}
+
+message WorkflowServiceCompletionNotificationTarget {
+  string actor_id = 1;
+  string delivery_id = 2;
+  int64 expires_at_unix_ms = 3;
+}
+
+message ServiceRunCompletionNotificationTarget {
+  string actor_id = 1;
+  string delivery_id = 2;
+  int64 expires_at_unix_ms = 3;
 }
 
 message ServiceInvocationAcceptedReceipt {

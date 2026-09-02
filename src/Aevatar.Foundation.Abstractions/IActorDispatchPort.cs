@@ -1,20 +1,6 @@
 namespace Aevatar.Foundation.Abstractions;
 
 /// <summary>
-/// Optional observation phase for dispatch admission follow-up events.
-/// </summary>
-/// <remarks>
-/// 为 iter96+ 预留.
-/// </remarks>
-internal enum DispatchAdmissionFollowUpStage
-{
-    Unspecified = 0,
-    Handled = 1,
-    Committed = 2,
-    ReadModelObserved = 3,
-}
-
-/// <summary>
 /// Runtime-neutral admission receipt for an envelope accepted by an actor runtime/inbox boundary.
 /// </summary>
 public sealed record DispatchAdmission(
@@ -23,6 +9,17 @@ public sealed record DispatchAdmission(
     DateTimeOffset AckedAt,
     string ActorId,
     string CorrelationId);
+
+public sealed class ActorNotFoundException : InvalidOperationException
+{
+    public ActorNotFoundException(string actorId)
+        : base($"Actor '{actorId}' was not found.")
+    {
+        ActorId = actorId;
+    }
+
+    public string ActorId { get; }
+}
 
 public static class DispatchAdmissionFactory
 {
@@ -46,20 +43,6 @@ public static class DispatchAdmissionFactory
             correlationId.Trim());
     }
 }
-
-/// <summary>
-/// Optional observation event for phases that happen after dispatch admission.
-/// </summary>
-/// <remarks>
-/// 为 iter96+ 预留.
-/// </remarks>
-internal sealed record DispatchAdmissionFollowUp(
-    string CommandId,
-    string ActorId,
-    DispatchAdmissionFollowUpStage Stage,
-    DateTimeOffset ObservedAt,
-    string? CorrelationId = null,
-    long? StateVersion = null);
 
 /// <summary>
 /// Actor envelope dispatch contract.

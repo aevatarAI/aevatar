@@ -22,6 +22,7 @@ using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 using Any = Google.Protobuf.WellKnownTypes.Any;
@@ -36,9 +37,9 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         public async Task WorkflowGAgent_WhenSwitchingWorkflowName_ShouldThrow()
         {
             var agent = CreateDefinitionAgent();
-            await agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_a");
+            await BindInteractiveWorkflowDefinitionAsync(agent, BuildValidWorkflowYaml("role_a", "RoleA"), "wf_a");
 
-            var act = () => agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_b");
+            var act = () => BindInteractiveWorkflowDefinitionAsync(agent, BuildValidWorkflowYaml("role_a", "RoleA"), "wf_b");
 
             await act.Should().ThrowAsync<InvalidOperationException>()
                 .WithMessage("*cannot switch*");
@@ -49,7 +50,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         {
             var agent = CreateDefinitionAgent();
 
-            await agent.BindWorkflowDefinitionAsync("", "wf_invalid");
+            await BindInteractiveWorkflowDefinitionAsync(agent, "", "wf_invalid");
             var description = await agent.GetDescriptionAsync();
 
             agent.State.Compiled.Should().BeFalse();
@@ -65,7 +66,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             var runtime = new RecordingActorRuntime();
             var agent = CreateRunAgent(runtime: runtime);
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowRunDefinitionAsync("definition-1", "", "wf_invalid", runId: "run-invalid");
+            await BindInteractiveWorkflowRunDefinitionAsync(agent, "definition-1", "", "wf_invalid", runId: "run-invalid");
 
             await agent.HandleChatRequest(new WorkflowChatRequestEvent
             {
@@ -89,7 +90,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 runtime: runtime,
                 eventStore: eventStore);
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -125,6 +126,90 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRunGAgent_ShouldRenderConversationContextIntoExecutionInput()
+        {
+            var publisher = new RecordingEventPublisher();
+            var runtime = new RecordingActorRuntime();
+            var agent = CreateRunAgent(runtime: runtime);
+            agent.EventPublisher = publisher;
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
+                "definition-1",
+                BuildValidWorkflowYaml("role_a", "RoleA"),
+                "wf_valid",
+                runId: "run-1");
+
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = "team01",
+                SessionId = "s1",
+                ConversationContext = new WorkflowConversationContext
+                {
+                    ScopeId = "scope-a",
+                    ConversationId = "conversation-alpha",
+                    StateVersion = 3,
+                    MaxMessageCount = 24,
+                    Messages =
+                    {
+                        new WorkflowConversationMessage
+                        {
+                            Sequence = 1,
+                            TurnId = "turn-previous",
+                            Role = WorkflowConversationRole.User,
+                            Content = "Create a workflow that generates fund analysis reports.",
+                        },
+                        new WorkflowConversationMessage
+                        {
+                            Sequence = 2,
+                            TurnId = "turn-previous",
+                            Role = WorkflowConversationRole.Assistant,
+                            Content = "Choose a Team: team01 or team02.",
+                        },
+                    },
+                },
+            });
+
+            var start = publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
+            start.Input.Should().Contain("[user] Create a workflow that generates fund analysis reports.");
+            start.Input.Should().Contain("[assistant] Choose a Team: team01 or team02.");
+            start.Input.Should().Contain("<current_user_message>\nteam01\n</current_user_message>");
+            start.Input.Should().Contain("team01");
+            start.Input.Split("team01", StringSplitOptions.None).Should().HaveCount(3);
+        }
+
+        [Fact]
+        public async Task WorkflowRunGAgent_ShouldRenderTypedConversationEnvelope_WhenConversationContextHasNoMessages()
+        {
+            var publisher = new RecordingEventPublisher();
+            var runtime = new RecordingActorRuntime();
+            var agent = CreateRunAgent(runtime: runtime);
+            agent.EventPublisher = publisher;
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
+                "definition-1",
+                BuildValidWorkflowYaml("role_a", "RoleA"),
+                "wf_valid",
+                runId: "run-1");
+
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = "team01",
+                SessionId = "s1",
+                ConversationContext = new WorkflowConversationContext
+                {
+                    ScopeId = "scope-a",
+                    ConversationId = "conversation-alpha",
+                    StateVersion = 7,
+                    MaxMessageCount = 24,
+                },
+            });
+
+            var start = publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
+            start.Input.Should().Contain("<conversation_context>");
+            start.Input.Should().Contain("</conversation_context>");
+            start.Input.Should().Contain("<current_user_message>\nteam01\n</current_user_message>");
+            start.Input.Should().NotBe("team01");
+        }
+
+        [Fact]
         public async Task WorkflowRunGAgent_WhenRebindingDefinition_ShouldResetExecutionStateAndDestroyOldChildren()
         {
             var publisher = new RecordingEventPublisher();
@@ -133,7 +218,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 runtime: runtime);
             SetAgentId(agent, "workflow-run-rebind");
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -152,7 +237,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             await SeedRuntimeContextAsync(agent);
             runtime.ThrowOnGetAsyncActorId = agent.Id;
 
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_b", "RoleB"),
                 "wf_valid",
@@ -184,7 +269,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             agent.CommittedStateEventPublisher = publisher;
 
             await agent.ActivateAsync();
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_redaction",
@@ -206,27 +291,23 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 });
 
             await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
-            await agent.UpsertExecutionStateAsync(
-                SecureInputStateAccess.ModuleStateKey,
-                Any.Pack(new SecureInputModuleState
-                {
-                    Captured =
-                    {
-                        ["run-redaction::api_key"] = new CapturedSecureInputState
-                        {
-                            RunId = "run-redaction",
-                            VariableName = "api_key",
-                            Value = "sk-secret",
-                        },
-                    },
-                }));
+            var captureCtx = new TestEventHandlerContext(agent.Services, agent, NullLogger.Instance);
+            await SecureInputRuntimeContextAccess.SetCapturedValueAsync(
+                captureCtx,
+                "run-redaction",
+                "api_key",
+                "sk-secret",
+                CancellationToken.None);
 
             agent.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model");
-            agent.State.ExecutionContext.CallerCredential!.BearerToken.Should().Be("secret");
+            agent.State.ExecutionContext.CallerCredential!.BearerToken.Should().BeEmpty();
+            var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(agent);
+            credential.Found.Should().BeTrue();
+            credential.Credential.BearerToken.Should().Be("secret");
             agent.State.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
                 .Unpack<SecureInputModuleState>()
                 .Captured["run-redaction::api_key"]
-                .Value.Should().Be("sk-secret");
+                .ValueReference.Should().NotBeNull();
 
             var observedState = publisher.Published
                 .Select(x => x.evt)
@@ -275,7 +356,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             var publisher = new RecordingEventPublisher();
             var agent = CreateRunAgent();
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -328,7 +409,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             var agent = CreateRunAgent(eventStore: eventStore);
             agent.EventPublisher = publisher;
             var originalYaml = BuildValidWorkflowYaml("role_a", "RoleA");
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 originalYaml,
                 "wf_valid",
@@ -362,7 +443,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 runtime: runtime);
             SetAgentId(agent, "workflow-run-replace");
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -403,7 +484,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             var agent = CreateRunAgent(
                 runtime: runtime);
 
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -435,7 +516,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
 
             agent.RunId.Should().Be("workflow-run-command");
 
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -470,7 +551,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             var agent = CreateRunAgent();
             SetAgentId(agent, "workflow-run-inline");
 
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -511,7 +592,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             var publisher = new RecordingEventPublisher();
             var agent = CreateRunAgent();
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -557,7 +638,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 runtime: runtime,
                 eventStore: eventStore);
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -599,7 +680,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             var runtime = new RecordingActorRuntime();
             var agent = CreateRunAgent(runtime: runtime, eventStore: eventStore);
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -791,7 +872,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
 
             (await agent.GetDescriptionAsync()).Should().Contain("invalid");
 
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -828,7 +909,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             var publisher = new RecordingEventPublisher();
             var agent = CreateRunAgent();
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",

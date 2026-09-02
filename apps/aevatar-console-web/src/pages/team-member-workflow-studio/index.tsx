@@ -1,217 +1,33 @@
-import { Alert, Spin } from "antd";
-import React from "react";
-import WorkflowStudioCanvas from "./components/WorkflowStudioCanvas";
-import WorkflowStudioExecutionPanel from "./components/WorkflowStudioExecutionPanel";
-import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
-import WorkflowStudioNodeDetailPanel from "./components/WorkflowStudioNodeDetailPanel";
-import WorkflowStudioNodeLibrary from "./components/WorkflowStudioNodeLibrary";
-import WorkflowStudioPasteYamlPanel from "./components/WorkflowStudioPasteYamlPanel";
-import WorkflowStudioDraftRunPanel from "./components/WorkflowStudioDraftRunPanel";
-import WorkflowStudioYamlPanel from "./components/WorkflowStudioYamlPanel";
-import { useTeamMemberWorkflowStudio } from "./hooks/useTeamMemberWorkflowStudio";
-import { t } from "@/shared/i18n/messages";
-
-const SIDE_PANEL_DEFAULT_WIDTH = 420;
-const SIDE_PANEL_MIN_WIDTH = 320;
-const SIDE_PANEL_MAX_WIDTH = 640;
-const WORKFLOW_CANVAS_MIN_WIDTH = 360;
-const EXECUTION_PANEL_DEFAULT_HEIGHT = 210;
-const EXECUTION_PANEL_MIN_HEIGHT = 160;
-const EXECUTION_PANEL_MAX_HEIGHT = 520;
-const RESIZE_KEYBOARD_STEP = 24;
-
-function clampDimension(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function resolveSidePanelMaxWidth(container: HTMLElement | null) {
-  if (!container?.clientWidth) {
-    return SIDE_PANEL_MAX_WIDTH;
-  }
-
-  return Math.max(
-    SIDE_PANEL_MIN_WIDTH,
-    Math.min(SIDE_PANEL_MAX_WIDTH, container.clientWidth - WORKFLOW_CANVAS_MIN_WIDTH),
-  );
-}
-
-function resolveExecutionPanelMaxHeight(container: HTMLElement | null) {
-  if (!container?.clientHeight) {
-    return EXECUTION_PANEL_MAX_HEIGHT;
-  }
-
-  return Math.max(
-    EXECUTION_PANEL_MIN_HEIGHT,
-    Math.min(EXECUTION_PANEL_MAX_HEIGHT, Math.floor(container.clientHeight * 0.6)),
-  );
-}
+import { Alert, Spin } from 'antd';
+import React from 'react';
+import { t } from '@/shared/i18n/messages';
+import { useWorkflowPanelResize } from '@/shared/workflows/useWorkflowPanelResize';
+import WorkflowPanelResizeHandle from '@/shared/workflows/WorkflowPanelResizeHandle';
+import WorkflowStudioDraftRunPanel from './components/WorkflowStudioDraftRunPanel';
+import WorkflowStudioEditorSurface from './components/WorkflowStudioEditorSurface';
+import WorkflowStudioExecutionPanel from './components/WorkflowStudioExecutionPanel';
+import WorkflowStudioHeader from './components/WorkflowStudioHeader';
+import WorkflowStudioNodeDetailPanel from './components/WorkflowStudioNodeDetailPanel';
+import WorkflowStudioYamlPanel from './components/WorkflowStudioYamlPanel';
+import { useTeamMemberWorkflowStudio } from './hooks/useTeamMemberWorkflowStudio';
 
 const TeamMemberWorkflowStudioPage: React.FC = () => {
   const studio = useTeamMemberWorkflowStudio();
   const mainRef = React.useRef<HTMLElement | null>(null);
   const editorRegionRef = React.useRef<HTMLElement | null>(null);
-  const resizeCleanupRef = React.useRef<(() => void) | null>(null);
-  const [sidePanelWidth, setSidePanelWidth] = React.useState(
-    SIDE_PANEL_DEFAULT_WIDTH,
-  );
-  const [executionPanelHeight, setExecutionPanelHeight] = React.useState(
-    EXECUTION_PANEL_DEFAULT_HEIGHT,
-  );
-  const sidePanelOpen =
-    studio.draftRunPanelOpen || studio.yamlImportPanelOpen || studio.yamlPanelOpen;
-  const executionPanelOpen = Boolean(studio.executionDetail || studio.executionError);
-
-  React.useEffect(
-    () => () => {
-      resizeCleanupRef.current?.();
-    },
-    [],
-  );
-
-  const attachResizeListeners = React.useCallback(
-    (cursor: "col-resize" | "row-resize", onMouseMove: (event: MouseEvent) => void) => {
-      resizeCleanupRef.current?.();
-
-      const previousCursor = document.body.style.cursor;
-      const previousUserSelect = document.body.style.userSelect;
-      document.body.style.cursor = cursor;
-      document.body.style.userSelect = "none";
-
-      const cleanup = () => {
-        window.removeEventListener("mousemove", onMouseMove);
-        window.removeEventListener("mouseup", cleanup);
-        document.body.style.cursor = previousCursor;
-        document.body.style.userSelect = previousUserSelect;
-        if (resizeCleanupRef.current === cleanup) {
-          resizeCleanupRef.current = null;
-        }
-      };
-
-      resizeCleanupRef.current = cleanup;
-      window.addEventListener("mousemove", onMouseMove);
-      window.addEventListener("mouseup", cleanup);
-    },
-    [],
-  );
-
-  const updateSidePanelWidth = React.useCallback((nextWidth: number) => {
-    setSidePanelWidth(
-      clampDimension(
-        nextWidth,
-        SIDE_PANEL_MIN_WIDTH,
-        resolveSidePanelMaxWidth(editorRegionRef.current),
-      ),
-    );
-  }, []);
-
-  const updateExecutionPanelHeight = React.useCallback((nextHeight: number) => {
-    setExecutionPanelHeight(
-      clampDimension(
-        nextHeight,
-        EXECUTION_PANEL_MIN_HEIGHT,
-        resolveExecutionPanelMaxHeight(mainRef.current),
-      ),
-    );
-  }, []);
-
-  const startSidePanelResize = React.useCallback(
-    (event: React.MouseEvent<HTMLHRElement>) => {
-      event.preventDefault();
-      event.currentTarget.focus();
-
-      const startX = event.clientX;
-      const startWidth = sidePanelWidth;
-      const maxWidth = resolveSidePanelMaxWidth(editorRegionRef.current);
-
-      attachResizeListeners("col-resize", (moveEvent) => {
-        setSidePanelWidth(
-          clampDimension(
-            startWidth + (startX - moveEvent.clientX),
-            SIDE_PANEL_MIN_WIDTH,
-            maxWidth,
-          ),
-        );
-      });
-    },
-    [attachResizeListeners, sidePanelWidth],
-  );
-
-  const startExecutionPanelResize = React.useCallback(
-    (event: React.MouseEvent<HTMLHRElement>) => {
-      event.preventDefault();
-      event.currentTarget.focus();
-
-      const startY = event.clientY;
-      const startHeight = executionPanelHeight;
-      const maxHeight = resolveExecutionPanelMaxHeight(mainRef.current);
-
-      attachResizeListeners("row-resize", (moveEvent) => {
-        setExecutionPanelHeight(
-          clampDimension(
-            startHeight + (startY - moveEvent.clientY),
-            EXECUTION_PANEL_MIN_HEIGHT,
-            maxHeight,
-          ),
-        );
-      });
-    },
-    [attachResizeListeners, executionPanelHeight],
-  );
-
-  const handleSidePanelResizeKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLHRElement>) => {
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        updateSidePanelWidth(sidePanelWidth + RESIZE_KEYBOARD_STEP);
-        return;
-      }
-
-      if (event.key === "ArrowRight") {
-        event.preventDefault();
-        updateSidePanelWidth(sidePanelWidth - RESIZE_KEYBOARD_STEP);
-        return;
-      }
-
-      if (event.key === "Home") {
-        event.preventDefault();
-        updateSidePanelWidth(SIDE_PANEL_MIN_WIDTH);
-        return;
-      }
-
-      if (event.key === "End") {
-        event.preventDefault();
-        updateSidePanelWidth(resolveSidePanelMaxWidth(editorRegionRef.current));
-      }
-    },
-    [sidePanelWidth, updateSidePanelWidth],
-  );
-
-  const handleExecutionPanelResizeKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLHRElement>) => {
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        updateExecutionPanelHeight(executionPanelHeight + RESIZE_KEYBOARD_STEP);
-        return;
-      }
-
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        updateExecutionPanelHeight(executionPanelHeight - RESIZE_KEYBOARD_STEP);
-        return;
-      }
-
-      if (event.key === "Home") {
-        event.preventDefault();
-        updateExecutionPanelHeight(EXECUTION_PANEL_MIN_HEIGHT);
-        return;
-      }
-
-      if (event.key === "End") {
-        event.preventDefault();
-        updateExecutionPanelHeight(resolveExecutionPanelMaxHeight(mainRef.current));
-      }
-    },
-    [executionPanelHeight, updateExecutionPanelHeight],
+  const {
+    executionPanelHandleProps,
+    executionPanelHeight,
+    sidePanelHandleProps,
+    sidePanelWidth,
+  } = useWorkflowPanelResize({
+    editorRegionRef,
+    initialExecutionPanelHeight: 210,
+    mainRef,
+  });
+  const sidePanelOpen = studio.draftRunPanelOpen || studio.yamlPanelOpen;
+  const executionPanelOpen = Boolean(
+    studio.executionDetail || studio.executionError,
   );
 
   return (
@@ -219,19 +35,22 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
       data-testid="team-member-workflow-studio"
       ref={mainRef}
       style={{
-        background: "#f3f4f6",
-        display: "flex",
-        flexDirection: "column",
-        height: "100vh",
+        background: '#f3f4f6',
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
         minHeight: 0,
-        width: "100%",
+        width: '100%',
       }}
     >
       <WorkflowStudioHeader
         automationsHref={studio.automationsHref}
         automationsPlaceholderReason={studio.automationsPlaceholderReason}
         canOpenAutomations={studio.canOpenAutomations}
+        canOpenInvoke={studio.canOpenInvoke}
         canOpenPublishedRuns={studio.canOpenPublishedRuns}
+        invokeHref={studio.invokeHref}
+        invokePlaceholderReason={studio.invokePlaceholderReason}
         memberPublished={studio.memberPublished}
         publishedRunsHref={studio.publishedRunsHref}
         publishedRunsPlaceholderReason={studio.publishedRunsPlaceholderReason}
@@ -244,10 +63,13 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         showRefreshPublishStatus={studio.showRefreshPublishStatus}
         canOpenDraftRunPanel={studio.canOpenDraftRunPanel}
         canSave={studio.canSave}
-        canViewYaml={studio.canViewYaml}
+        canEditYaml={studio.canEditYaml}
         dirty={studio.dirty}
-        currentDraftRunPlaceholderReason={studio.currentDraftRunPlaceholderReason}
+        currentDraftRunPlaceholderReason={
+          studio.currentDraftRunPlaceholderReason
+        }
         onOpenAutomations={studio.navigateToAutomations}
+        onOpenInvoke={studio.navigateToInvoke}
         onOpenPublishedRuns={studio.navigateToPublishedRuns}
         onPublishMember={studio.publishMember}
         onRefreshPublishStatus={studio.refreshPublishStatus}
@@ -255,14 +77,12 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         onDeleteConnection={studio.deleteSelectedConnection}
         onDeleteNode={studio.deleteSelectedNode}
         onOpenDraftRunPanel={studio.openDraftRunPanel}
-        onOpenPasteYaml={studio.openYamlImportPanel}
-        onViewYaml={studio.openYamlPanel}
+        onEditYaml={studio.openYamlPanel}
         onNavigateBack={studio.navigateBack}
         onNavigateToTeam={studio.navigateToTeam}
         onNavigateToTeams={studio.navigateToTeams}
         onSave={studio.save}
         onTitleChange={studio.setWorkflowTitle}
-        pasteYamlPending={studio.pasteYamlPending}
         savePending={studio.savePending}
         savePlaceholderReason={studio.savePlaceholderReason}
         selectedEdgeId={studio.selectedEdgeId}
@@ -276,48 +96,59 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         <Alert
           banner
           message={t(
-            "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title",
-            "No workflow draft is linked to this member yet.",
+            'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title',
+            'No workflow draft is linked to this member yet.',
           )}
-          description={t(
-            "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description",
-            "You can build or paste the workflow here. Saving creates a reusable workflow draft until the member link is materialized.",
-          )}
+          description={studio.linkedWorkflowMissingDescription}
           type="warning"
+        />
+      ) : null}
+      {studio.linkedWorkflowLoadFailed ? (
+        <Alert
+          banner
+          message={t(
+            'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title',
+            'Workflow draft could not be loaded.',
+          )}
+          description={studio.linkedWorkflowLoadFailureDescription}
+          type="error"
         />
       ) : null}
       <section
         ref={editorRegionRef}
         style={{
-          display: "flex",
+          display: 'flex',
           flex: 1,
           minHeight: 0,
-          overflow: "hidden",
-          position: "relative",
+          overflow: 'hidden',
+          position: 'relative',
         }}
       >
         {studio.loading ? (
           <div
             style={{
-              alignItems: "center",
-              display: "flex",
+              alignItems: 'center',
+              display: 'flex',
               flex: 1,
-              justifyContent: "center",
+              justifyContent: 'center',
             }}
           >
             <Spin />
           </div>
         ) : (
-          <WorkflowStudioCanvas
+          <WorkflowStudioEditorSurface
             edges={studio.graph.edges}
             emptyDescription={studio.emptyDescription}
+            nodeLibraryOpen={studio.nodeLibraryOpen}
             nodes={studio.graph.nodes}
             onAddFirstStep={studio.openNodeLibrary}
             onCanvasSelect={studio.selectCanvas}
+            onCloseNodeLibrary={studio.closeNodeLibrary}
             onConnectNodes={studio.connectNodes}
             onDeleteEdges={(edgeIds) => {
-              if (edgeIds.includes(studio.selectedEdgeId)) {
-                studio.deleteSelectedConnection();
+              const [edgeId] = edgeIds;
+              if (edgeId) {
+                studio.deleteSelectedConnection(edgeId);
               }
             }}
             onDeleteNodes={(nodeIds) => {
@@ -326,48 +157,33 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
               }
             }}
             onEdgeSelect={studio.selectEdge}
+            onInsertNode={studio.insertNode}
             onNodeLayoutChange={studio.moveNodes}
             onNodeSelect={studio.selectNode}
             selectedEdgeId={studio.selectedEdgeId}
             selectedNodeId={studio.selectedNodeId}
-          />
-        )}
-        <WorkflowStudioNodeLibrary
-          onClose={studio.closeNodeLibrary}
-          onInsertNode={studio.insertNode}
-          open={studio.nodeLibraryOpen}
-        />
-        {sidePanelOpen ? (
-          <hr
-            aria-label={t(
-              "teamMemberWorkflowStudio.resize.sidePanel",
-              "Resize side panel",
+          >
+            {studio.draftRunPanelOpen || studio.yamlPanelOpen ? null : (
+              <WorkflowStudioNodeDetailPanel
+                error={studio.selectedStepConfigurationError}
+                onClose={studio.selectCanvas}
+                onConfigurationChange={studio.updateSelectedStepConfiguration}
+                onConfigurationErrorChange={
+                  studio.setSelectedStepConfigurationError
+                }
+                stepDraft={studio.selectedStepDraft}
+              />
             )}
-            aria-orientation="vertical"
-            aria-valuemax={resolveSidePanelMaxWidth(editorRegionRef.current)}
-            aria-valuemin={SIDE_PANEL_MIN_WIDTH}
-            aria-valuenow={sidePanelWidth}
-            onKeyDown={handleSidePanelResizeKeyDown}
-            onMouseDown={startSidePanelResize}
-            style={{
-              alignItems: "center",
-              background: "#cbd5e1",
-              borderBottom: 0,
-              borderLeft: "3px solid #ffffff",
-              borderRight: "3px solid #ffffff",
-              borderTop: 0,
-              boxSizing: "border-box",
-              cursor: "col-resize",
-              display: "flex",
-              flex: "0 0 10px",
-              height: "100%",
-              justifyContent: "center",
-              margin: 0,
-              minHeight: 0,
-              position: "relative",
-              zIndex: 2,
-            }}
-            tabIndex={0}
+          </WorkflowStudioEditorSurface>
+        )}
+        {sidePanelOpen ? (
+          <WorkflowPanelResizeHandle
+            ariaLabel={t(
+              'teamMemberWorkflowStudio.resize.sidePanel',
+              'Resize side panel',
+            )}
+            orientation="vertical"
+            {...sidePanelHandleProps}
           />
         ) : null}
         <WorkflowStudioDraftRunPanel
@@ -384,65 +200,31 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           runMessage={studio.executionRunMessage}
           width={sidePanelWidth}
         />
-        <WorkflowStudioPasteYamlPanel
-          error={studio.yamlImportError}
-          onClose={studio.closeYamlImportPanel}
-          onImport={studio.pasteYaml}
-          open={studio.yamlImportPanelOpen}
-          pending={studio.pasteYamlPending}
-          width={sidePanelWidth}
-        />
         <WorkflowStudioYamlPanel
-          error={studio.currentYamlError}
-          loading={studio.currentYamlPending}
+          applying={studio.yamlEditApplying}
+          buffer={studio.yamlEditBuffer}
+          diagnostics={studio.yamlEditDiagnostics}
+          error={studio.yamlEditError}
+          hasBlockingFindings={studio.yamlEditHasBlockingFindings}
+          hasConflict={studio.yamlEditHasConflict}
+          hasUnappliedChanges={studio.yamlEditHasUnappliedChanges}
+          editorLoading={studio.yamlEditOpening}
+          loading={studio.yamlEditOpening || studio.yamlEditPending}
+          onApply={studio.applyYamlEdit}
+          onBufferChange={studio.setYamlEditBuffer}
           onClose={studio.closeYamlPanel}
-          onRetry={studio.retryYaml}
           open={studio.yamlPanelOpen}
           width={sidePanelWidth}
-          yaml={studio.currentYaml}
         />
-        {studio.draftRunPanelOpen ||
-        studio.yamlImportPanelOpen ||
-        studio.yamlPanelOpen ? null : (
-          <WorkflowStudioNodeDetailPanel
-            error={studio.selectedStepConfigurationError}
-            onClose={studio.selectCanvas}
-            onConfigurationChange={studio.updateSelectedStepConfiguration}
-            onConfigurationErrorChange={studio.setSelectedStepConfigurationError}
-            stepDraft={studio.selectedStepDraft}
-          />
-        )}
       </section>
       {executionPanelOpen ? (
-        <hr
-          aria-label={t(
-            "teamMemberWorkflowStudio.resize.executionPanel",
-            "Resize run console",
+        <WorkflowPanelResizeHandle
+          ariaLabel={t(
+            'teamMemberWorkflowStudio.resize.executionPanel',
+            'Resize run console',
           )}
-          aria-orientation="horizontal"
-          aria-valuemax={resolveExecutionPanelMaxHeight(mainRef.current)}
-          aria-valuemin={EXECUTION_PANEL_MIN_HEIGHT}
-          aria-valuenow={executionPanelHeight}
-          onKeyDown={handleExecutionPanelResizeKeyDown}
-          onMouseDown={startExecutionPanelResize}
-          style={{
-            alignItems: "flex-start",
-            background: "#cbd5e1",
-            borderBottom: "4px solid #ffffff",
-            borderLeft: 0,
-            borderRight: 0,
-            borderTop: "4px solid #ffffff",
-            boxSizing: "border-box",
-            cursor: "row-resize",
-            display: "flex",
-            flex: "0 0 12px",
-            height: 12,
-            justifyContent: "center",
-            margin: 0,
-            position: "relative",
-            zIndex: 3,
-          }}
-          tabIndex={0}
+          orientation="horizontal"
+          {...executionPanelHandleProps}
         />
       ) : null}
       <WorkflowStudioExecutionPanel
@@ -452,6 +234,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         height={executionPanelHeight}
         onClear={studio.clearExecutionLogs}
         onSelectLog={studio.selectExecutionLog}
+        workflowNodes={studio.executionWorkflowNodes}
       />
     </main>
   );

@@ -1,12 +1,13 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 
 namespace Aevatar.AI.ToolProviders.Binding.Tools;
 
 /// <summary>
 /// Get a workflow summary from the current scope.
-/// Delegates to IScopeWorkflowQueryPort.GetByWorkflowIdAsync.
+/// Delegates to IScopeWorkflowQueryPort.LookupByWorkflowIdAsync.
 /// </summary>
 public sealed class ScopeWorkflowsGetTool : IAgentTool
 {
@@ -38,6 +39,14 @@ public sealed class ScopeWorkflowsGetTool : IAgentTool
 
     public bool IsReadOnly => true;
 
+    private static string BuildUnavailableMessage(
+        string scopeId,
+        string workflowId,
+        ScopeWorkflowLookupStatus status) =>
+        status == ScopeWorkflowLookupStatus.NotFound
+            ? $"Workflow '{workflowId}' was not found in scope '{scopeId}'."
+            : $"Workflow '{workflowId}' is not ready to run in scope '{scopeId}'.";
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         try
@@ -50,22 +59,20 @@ public sealed class ScopeWorkflowsGetTool : IAgentTool
             if (string.IsNullOrWhiteSpace(workflowId))
                 return JsonDefaults.Error("'workflow_id' is required");
 
-            var scopeId = AgentToolRequestContext.ScopeId;
+            var scopeId = ToolOwnerScopeResolver.Resolve();
             if (string.IsNullOrWhiteSpace(scopeId))
-                return JsonDefaults.Error("scope_id not available in request context");
+                return JsonDefaults.Error(ToolOwnerScopeResolver.MissingMessage);
 
-            // Refactor (iter97/cluster-598): Old/New
-            //   Old pattern: LLM callers had no workflow-id specific adapter over scope workflow queries.
-            //   New principle: keep get semantics on the typed query port and return an honest not-found result.
-            var workflow = await _queryPort.GetByWorkflowIdAsync(scopeId.Trim(), workflowId.Trim(), ct);
-            if (workflow is null)
+            var lookup = await _queryPort.LookupByWorkflowIdAsync(scopeId.Trim(), workflowId.Trim(), ct);
+            if (!lookup.IsRunnable)
             {
                 return JsonSerializer.Serialize(new
                 {
                     available = false,
                     scope_id = scopeId.Trim(),
                     workflow_id = workflowId.Trim(),
-                    error = $"Workflow '{workflowId.Trim()}' was not found in scope '{scopeId.Trim()}'.",
+                    status = lookup.Status.ToString(),
+                    error = BuildUnavailableMessage(scopeId.Trim(), workflowId.Trim(), lookup.Status),
                 }, JsonDefaults.SnakeCase);
             }
 
@@ -73,7 +80,8 @@ public sealed class ScopeWorkflowsGetTool : IAgentTool
             {
                 available = true,
                 scope_id = scopeId.Trim(),
-                workflow,
+                status = lookup.Status.ToString(),
+                workflow = lookup.Workflow,
             }, JsonDefaults.SnakeCase);
         }
         catch (OperationCanceledException) { throw; }

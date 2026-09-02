@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.Testing;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
@@ -17,17 +18,29 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
     {
         var provider = new ChannelIdentityCommittedStateProjectionActivationPlanProvider();
 
-        var plans = provider.GetPlans(BuildCommittedStateContext(
-            typeof(ExternalIdentityBindingGAgent),
+        IMessage[] stateEvents =
+        [
             new ExternalIdentityBoundEvent(),
-            "external-identity-binding:lark:t:u")).ToArray();
+            new ExternalIdentityBindingReplacedEvent(),
+            new ExternalIdentityBindingRetirementQueuedEvent(),
+            new ExternalIdentityBindingRetiredEvent(),
+            new ExternalIdentityBindingRevokedEvent(),
+        ];
 
-        plans.Should().ContainSingle();
-        AssertDurablePlan(
-            plans[0],
-            typeof(ExternalIdentityBindingMaterializationRuntimeLease),
-            "external-identity-binding:lark:t:u",
-            "external-identity-binding");
+        foreach (var stateEvent in stateEvents)
+        {
+            var plans = provider.GetPlans(BuildCommittedStateContext(
+                typeof(ExternalIdentityBindingGAgent),
+                stateEvent,
+                "external-identity-binding:lark:t:u")).ToArray();
+
+            plans.Should().ContainSingle();
+            AssertDurablePlan(
+                plans[0],
+                typeof(ExternalIdentityBindingMaterializationRuntimeLease),
+                "external-identity-binding:lark:t:u",
+                "external-identity-binding");
+        }
     }
 
     [Fact]
@@ -46,6 +59,37 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
             typeof(AevatarOAuthClientMaterializationRuntimeLease),
             AevatarOAuthClientGAgent.WellKnownId,
             "aevatar-oauth-client");
+    }
+
+    [Fact]
+    public void GetPlans_ShouldMapManagedCodexCredentialActor()
+    {
+        var provider = new ChannelIdentityCommittedStateProjectionActivationPlanProvider();
+        IMessage[] stateEvents =
+        [
+            new ManagedCodexCredentialProvisionedEvent(),
+            new ManagedCodexCredentialRotatedEvent(),
+            new ManagedCodexCredentialPolicyReconciledEvent(),
+            new ManagedCodexCredentialReadinessConfirmedEvent(),
+            new ManagedCodexCredentialRevokedEvent(),
+            new ManagedCodexCredentialCleanupQueuedEvent(),
+            new ManagedCodexCredentialCleanupTrackCompletedEvent(),
+        ];
+
+        foreach (var stateEvent in stateEvents)
+        {
+            var plans = provider.GetPlans(BuildCommittedStateContext(
+                typeof(ManagedCodexCredentialGAgent),
+                stateEvent,
+                "managed-codex-credential:nyxid:tenant-a:user-a")).ToArray();
+
+            plans.Should().ContainSingle();
+            AssertDurablePlan(
+                plans[0],
+                typeof(ManagedCodexCredentialMaterializationRuntimeLease),
+                "managed-codex-credential:nyxid:tenant-a:user-a",
+                "managed-codex-credential");
+        }
     }
 
     [Fact]

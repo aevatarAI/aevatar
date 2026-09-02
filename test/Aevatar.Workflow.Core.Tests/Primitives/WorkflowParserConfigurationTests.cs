@@ -98,13 +98,16 @@ public class WorkflowParserConfigurationTests
             roles:
               - id: planner
                 allowed_tools: [search, calendar]
+                tool_sets: [nyxid.connected_services, nyxid.connected_services]
             steps:
               - id: scoped
                 type: llm_call
                 target_role: planner
                 allowed_tools: [calendar]
+                tool_sets: [nyxid.connected_services]
                 parameters:
                   allowed_tools: [search]
+                  tool_sets: [ignored.parameter.set]
                   prompt_prefix: "Use scoped tool"
               - id: no_tools
                 type: llm_call
@@ -116,11 +119,21 @@ public class WorkflowParserConfigurationTests
 
         workflow.Roles.Should().ContainSingle().Subject.AgentToolScope.Should().NotBeNull();
         workflow.Roles[0].AgentToolScope!.AllowedToolNames.Should().Equal("search", "calendar");
+        workflow.Roles[0].AgentToolScope!.ToolSetRefs.Should().Equal("nyxid.connected_services");
+        workflow.Roles[0].AgentToolScope!.RestrictAllowedToolNames.Should().BeTrue();
+        workflow.Roles[0].AgentToolScope!.RestrictToolSets.Should().BeTrue();
+        workflow.Roles[0].AgentToolScope!.AllowedToolNames.Should().NotContain("nyxid.connected_services");
         workflow.Steps[0].AgentToolScope.Should().NotBeNull();
         workflow.Steps[0].AgentToolScope!.AllowedToolNames.Should().Equal("calendar");
+        workflow.Steps[0].AgentToolScope!.ToolSetRefs.Should().Equal("nyxid.connected_services");
+        workflow.Steps[0].AgentToolScope!.RestrictAllowedToolNames.Should().BeTrue();
+        workflow.Steps[0].AgentToolScope!.RestrictToolSets.Should().BeTrue();
         workflow.Steps[0].Parameters.Should().NotContainKey("allowed_tools");
+        workflow.Steps[0].Parameters.Should().NotContainKey("tool_sets");
         workflow.Steps[1].AgentToolScope.Should().NotBeNull();
         workflow.Steps[1].AgentToolScope!.AllowedToolNames.Should().BeEmpty();
+        workflow.Steps[1].AgentToolScope!.RestrictAllowedToolNames.Should().BeTrue();
+        workflow.Steps[1].AgentToolScope!.RestrictToolSets.Should().BeFalse();
     }
 
     [Fact]

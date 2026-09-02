@@ -7,6 +7,7 @@ option csharp_namespace = "Aevatar.Workflow.Application.Abstractions.Queries";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
 import "workflow_execution_messages.proto";
+import "workflow_external_action.proto";
 
 message WorkflowActorSnapshot {
   string actor_id = 1;
@@ -28,6 +29,10 @@ message WorkflowActorSnapshot {
   string dead_letter_failed_compensation_step_id = 17;
   int32 dead_letter_remaining_uncompensated = 18;
   string dead_letter_error = 19;
+  google.protobuf.Timestamp started_at_utc = 20;
+  string scope_id = 21;
+  string run_origin = 22;
+  repeated aevatar.workflow.WorkflowExternalActionApprovalSnapshot connector_approvals = 23;
 }
 
 message WorkflowRunFileRef {

@@ -16,14 +16,14 @@ namespace Aevatar.GAgents.Scheduled;
 ///   <item><c>channel.sender_id</c> → <see cref="OwnerScope.SenderId"/> (per-sender, not per-conversation; aligns with #436)</item>
 /// </list>
 ///
-/// The <c>nyx_user_id</c> is delegated to the inner <see cref="INyxIdCurrentUserResolver"/>
-/// (which queries NyxID `/me`) so a channel-bound caller can be linked back to the NyxID
-/// account that registered the bot.
+/// The <c>nyx_user_id</c> field is populated from typed sender binding context when
+/// available, then from <c>Caller.OwnerScopeId</c>. NyxID <c>/me</c> is only a legacy
+/// enrichment fallback for channel requests that predate those typed fields.
 ///
 /// Returns <c>null</c> when the request context has no channel platform metadata (the
 /// composite resolver tries the next strategy). Throws
 /// <see cref="CallerScopeUnavailableException"/> when channel metadata is present but
-/// incomplete (missing sender_id / NyxID `/me` failure etc.) — that fails closed rather
+/// incomplete (missing sender_id / owner subject failure etc.) — that fails closed rather
 /// than falling through to "all agents".
 /// </summary>
 public sealed class ChannelMetadataCallerScopeResolver : ICallerScopeResolver
@@ -61,18 +61,23 @@ public sealed class ChannelMetadataCallerScopeResolver : ICallerScopeResolver
                 $"Channel platform metadata is present (platform=\"{platform}\") but scope_id is missing. Cannot scope agent operations safely.");
         }
 
-        var token = AgentToolRequestContext.NyxIdAccessToken;
-        if (string.IsNullOrWhiteSpace(token))
-        {
-            throw new CallerScopeUnavailableException(
-                "No NyxID access token available; cannot resolve caller's NyxID user identity for ownership scope.");
-        }
-
-        var nyxUserId = await _nyxIdCurrentUserResolver.ResolveCurrentUserIdAsync(token, ct);
+        var nyxUserId = NormalizeOptional(AgentToolRequestContext.SenderNyxUserId) ??
+                        NormalizeOptional(AgentToolRequestContext.OwnerScopeId);
         if (string.IsNullOrWhiteSpace(nyxUserId))
         {
-            throw new CallerScopeUnavailableException(
-                "Could not resolve current NyxID user id (NyxID `/me` returned an error envelope or malformed payload). Refusing to fall through to permissive scope.");
+            var token = AgentToolRequestContext.NyxIdAccessToken;
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                throw new CallerScopeUnavailableException(
+                    "No typed sender owner context or NyxID access token available; cannot resolve caller ownership scope.");
+            }
+
+            nyxUserId = await _nyxIdCurrentUserResolver.ResolveCurrentUserIdAsync(token, ct);
+            if (string.IsNullOrWhiteSpace(nyxUserId))
+            {
+                throw new CallerScopeUnavailableException(
+                    "Could not resolve current NyxID user id (NyxID `/me` returned an error envelope or malformed payload) and no typed sender owner context was available. Refusing to fall through to permissive scope.");
+            }
         }
 
         return OwnerScope.ForChannel(nyxUserId.Trim(), platform, registrationScopeId, senderId);

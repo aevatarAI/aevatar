@@ -33,7 +33,8 @@ household event
 Use deployment-specific values for the placeholders below:
 
 - `AEVATAR_BASE_URL`: public aevatar Mainnet Host URL.
-- `NYXID_BASE_URL`: NyxID API base URL.
+- `NYXID_OIDC_AUTHORITY`: NyxID browser OAuth authority.
+- `NYXID_API_BASE_URL`: NyxID backend API and RFC 8707 resource-server base URL.
 - `NYXID_WS_URL`: NyxID node WebSocket URL, normally
   `wss://<nyxid-host>/api/v1/nodes/ws`.
 - `NYXID_API_KEY`: caller key or token with `proxy` access to the aevatar
@@ -63,8 +64,10 @@ environment variables. These are the voice-specific values for the existing
 OpenAI realtime broker path:
 
 ```bash
-export AEVATAR_Aevatar__NyxId__Authority="$NYXID_BASE_URL"
-export AEVATAR_Aevatar__Authentication__Authority="$NYXID_BASE_URL"
+export AEVATAR_Aevatar__NyxId__Authority="$NYXID_OIDC_AUTHORITY"
+export AEVATAR_Aevatar__NyxId__ApiBaseUrl="$NYXID_API_BASE_URL"
+export AEVATAR_Aevatar__Authentication__Authority="$NYXID_OIDC_AUTHORITY"
+export AEVATAR_Aevatar__Authentication__Audience="urn:aevatar:api"
 
 export AEVATAR_Aevatar__VoicePresence__OpenAI__Nyxid__ServiceSlug="openai-realtime"
 export AEVATAR_Aevatar__VoicePresence__OpenAI__Nyxid__MintPath="v1/realtime/client_secrets"
@@ -74,6 +77,10 @@ export AEVATAR_Aevatar__VoicePresence__OpenAI__Model="gpt-realtime"
 export AEVATAR_Aevatar__VoicePresence__OpenAI__Voice="alloy"
 export AEVATAR_Aevatar__VoicePresence__OpenAI__Instructions="你是一个简短自然的语音助手。"
 ```
+
+Every non-Development host with authentication enabled must set the external
+JWT audience. Startup fails when this value is empty; the scope-service-token
+audience is a separate setting and does not satisfy this requirement.
 
 `ServiceSlug` defaults to `openai-realtime` in code, but set it explicitly in
 production so redeploys are easy to audit. The NyxID service endpoint for that
@@ -157,7 +164,7 @@ discovery; do not create a local service catalog in aevatar.
 Verify node routing from outside the LAN:
 
 ```bash
-curl -sf "$NYXID_BASE_URL/api/v1/proxy/s/$EDGE_SERVICE_SLUG/edge-tools/openapi.json" \
+curl -sf "$NYXID_API_BASE_URL/api/v1/proxy/s/$EDGE_SERVICE_SLUG/edge-tools/openapi.json" \
   -H "Authorization: Bearer $NYXID_API_KEY" \
   | jq '.openapi, .paths'
 ```
@@ -300,6 +307,8 @@ Common failure signatures:
 | `404` or `not_initialized` | target actor/module is not enabled or read model is not observed yet | `voice-presence/enable` receipt and capability read model |
 | `409` | a transport lease is already attached | close stale edge session and wait for detach |
 | `503 voice_credential_unavailable` | host could not issue the volatile voice tool credential | `IVoiceToolCredentialIssuer` registration and caller bearer |
+| `503 voice_capability_not_ready` | the enable/lease event committed but its capability read model has not caught up | retry after `Retry-After`; the browser console retries a newly provisioned first connect once |
+| WebSocket close `1008 voice_provider_credential_unavailable` | NyxID could not mint the per-session OpenAI Realtime credential | reauthorize Voice so its feature token includes the configured realtime resource; if it already does, verify the service holds a valid OpenAI credential |
 | no LAN tools | connected-service tool set is not exposed to the actor/session | NyxID service OpenAPI `x-aevatar-tool`, route/actor tool configuration |
 | device event `401` | HMAC signature rejected | shared key and raw-body signature bytes |
 | device event `400` | stale timestamp, missing delivery id, or unsupported event type | body timestamp, `event_id`/`correlation_key`, allowlisted `event_type` |

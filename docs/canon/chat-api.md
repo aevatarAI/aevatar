@@ -1,13 +1,16 @@
 ---
-title: "Workflow Chat API 能力说明（框架层）"
+title: "Chat API 能力说明（Mainnet 与 Workflow）"
 status: active
 owner: eanzhao
 ---
 
-# Workflow Chat API 能力说明（框架层）
+# Chat API 能力说明（Mainnet 与 Workflow）
 
-> 单一事实源（Single Source of Truth）：`/api/chat`、`/api/ws/chat` 相关能力说明以本文为准。  
+> 单一事实源（Single Source of Truth）：Mainnet `/api/chat` 的组合与 Workflow Chat 能力说明以本文为准；NyxID Assistant 的 actor/task 细节见 `docs/canon/nyxid-chat-api.md`。
 > Host 侧入口文档：`src/workflow/Aevatar.Workflow.Host.Api/README.md`、`src/workflow/Aevatar.Workflow.Host.Api/CHAT_API_CAPABILITIES.md`。
+
+Transcript、execution state、prompt context 与 user memory 的跨能力语义以
+[conversation-context-and-memory.md](conversation-context-and-memory.md) 为准。
 
 本文档面向框架使用者，说明当前 `POST /api/chat` 与 `GET /api/ws/chat` 可以做什么，尤其是：
 
@@ -16,17 +19,63 @@ owner: eanzhao
 - 支持多轮“反馈 -> 重新生成 -> 再审批”
 - 审批通过后自动执行（`auto`）或只定稿不执行（`auto_review`）
 
+## Mainnet 统一 `/api/chat` facade
+
+Mainnet 只映射一个 `POST /api/chat`。该 Host-owned facade 在 HTTP 边界做确定性协议分流；它不从 prompt、模型输出、tool 名或错误文本推断产品 surface。
+
+| Request | Mainnet owner | Result |
+|---|---|---|
+| `multipart/form-data` | Workflow Chat | 继续使用既有 multipart parser、artifact ingress 与 Workflow command 主链。 |
+| JSON object without `type` | Workflow Chat | 保持既有 `HttpChatInput` 行为。 |
+| JSON with `type=text` | NyxID Assistant | 创建或复用现有 NyxIdChat conversation actor，并返回 AGUI SSE。 |
+| JSON with one of the other six recognized Assistant types | NyxID Assistant | 复用现有 action、approval 或 task-control application port。 |
+| JSON with malformed or unknown explicit `type` | none | `400 INVALID_CHAT_INPUT`; never falls through to Workflow. |
+| Other content type or malformed/non-object JSON | none | `400 INVALID_CHAT_INPUT`. |
+
+The seven closed Assistant discriminators are `text`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. Assistant JSON is strict: unknown fields are rejected, `scopeId` is not a request field, and scope is derived only from one unambiguous authenticated `scope_id` or `workflow.scope_id` claim.
+
+Mainnet also exposes the authenticated Assistant resource family:
+
+| Endpoint | Meaning |
+|---|---|
+| `GET /api/chat/conversations?pageSize={n}&cursor={cursor}` | List the caller's NyxIdChat transcript index; the response carries `nextCursor`. |
+| `GET /api/chat/conversations/{conversationId}` | Read the durable transcript and transcript `stateVersion`. |
+| `GET /api/chat/conversations/{conversationId}/state?afterStateVersion={v}&turnId={turnId}` | Read the conditional actor current-state replica. |
+| `DELETE /api/chat/conversations/{conversationId}` | Submit the existing authoritative retirement/deletion workflow. |
+
+The transcript endpoint returns every committed terminal turn while the conversation is active. The current contract has no per-turn TTL or silent rolling eviction: the 251st and later turns remain appendable, and only explicit whole-conversation deletion removes query availability. LLM continuation context is independently bounded to the latest 24 nonblank messages; that prompt selection never prunes the durable transcript.
+
+Standalone Workflow Host behavior is unchanged: its own `POST /api/chat` remains Workflow JSON/multipart, and `GET /api/ws/chat` remains the Workflow WebSocket surface. Mainnet's WebSocket route is likewise not selected by the Assistant JSON discriminators. New NyxID clients use only the HTTP facade and `/api/chat/conversations/**`; scoped NyxIdChat routes are compatibility adapters, not a second evolving contract.
+
+## Chat Activity audit surface
+
+Mainnet exposes `GET /api/audit/chat-activity` as a sanitized Audit Trail view of tool calls
+from both `POST /api/chat` branches and committed NyxID browser-action facts. It stores and
+returns only typed tool/action identities, safe outcome/correlation fields, and typed chat
+provenance such as surface, conversation, turn, task, step, and action-request IDs.
+
+It does not store or return prompts, assistant text, reasoning, input parts, attachments, tool
+arguments/results, action parameters/resources, raw subjects, or credentials. It does not fetch
+conversation history or transcripts. An authenticated user is fixed to their own scope and every
+HMAC identity retained for the 30-day window. An Aevatar platform admin may explicitly request
+`scope=__all__`; admin reads remain personal by default.
+
+Tool capture reuses the existing tool-execution audit middleware. Browser-action capture consumes
+committed actor facts through the existing unified Projection Pipeline. Neither path creates a
+ChatLog store, Chat Activity actor/read model, or second projection rail. The default 30-day TTL
+applies only to Audit Trail artifacts with typed chat provenance.
+
 ## 1. 端点与职责
 
 | Endpoint | 协议 | 作用 |
 |---|---|---|
-| `POST /api/chat` | HTTP + SSE | 发起一次 run，并持续接收运行时 envelope 投影流 |
+| `POST /api/chat` | HTTP + SSE | Mainnet 先按上表分流；Workflow Host 直接发起 Workflow run |
 | `GET /api/ws/chat` | WebSocket | 与 `/api/chat` 同能力，使用 WS 封装 |
 | `POST /api/workflow-webhooks/{routeKey}` | HTTP JSON | 认证外部 webhook，并按 Host binding 启动新 run |
 | `POST /api/workflows/resume` | HTTP JSON | 恢复 `human_input/human_approval` 挂起步骤 |
 | `POST /api/workflows/signal` | HTTP JSON | 向等待信号的步骤发送 signal |
 
-说明：`/api/chat` 与 `/api/ws/chat` 走同一套执行链路，差别只有传输协议。
+说明：对于 Workflow 请求，`/api/chat` 与 `/api/ws/chat` 走同一套执行链路，差别只有传输协议。NyxID Assistant discriminator 只属于 Mainnet HTTP facade。
 
 口径补充：
 
@@ -69,20 +118,21 @@ owner: eanzhao
 
 ### HTTP 请求 producer
 
-`POST /api/chat` 支持两种 Host/API 边界 producer；两者最终都会被规范化为同一个 `WorkflowChatRunRequest`，并进入同一条 CQRS command skeleton。Host 不直接编排 workflow run，也不因为表单上传创建第二套执行链路。
+Workflow 所拥有的 `POST /api/chat` 请求支持两种 Host/API 边界 producer；两者最终都会被规范化为同一个 `WorkflowChatRunRequest`，并进入同一条 CQRS command skeleton。Host 不直接编排 workflow run，也不因为表单上传创建第二套执行链路。Mainnet 在此之前只执行上面的确定性 surface 分类。
 
 #### JSON Chat Input
 
-`application/json` body 是 `ChatInput`：
+`application/json` body is `HttpChatInput`:
 
 ```json
 {
   "prompt": "describe the release plan",
   "workflow": "direct",
-  "sessionId": "session-1",
-  "scopeId": "scope-1"
+  "sessionId": "session-1"
 }
 ```
+
+`scopeId` is resolved from the authenticated principal and must not be provided in the request body.
 
 常用 source 字段：
 
@@ -107,11 +157,10 @@ owner: eanzhao
 
 | Field | Meaning |
 |---|---|
-| `payload` | 可选 `ChatInput` JSON；不得包含 `inputParts[].inlineFile`、`inputParts[].fileRef` 或 `inputParts[].dataBase64`。 |
+| `payload` | Optional `HttpChatInput` JSON; must not contain `inputParts[].inlineFile`, `inputParts[].fileRef`, or `inputParts[].dataBase64`. |
 | `prompt` | 覆盖或补充 payload 中的 prompt。 |
 | `workflow` | 覆盖或补充 payload 中的 workflow name。 |
 | `sessionId` | 覆盖或补充 payload 中的 session id。 |
-| `scopeId` | 覆盖或补充 payload 中的 workflow scope id，同时传给 file ingress owner scope。 |
 | `workflowYaml` | legacy single inline YAML field。 |
 | `workflowYamls` | inline YAML bundle；同名 form field 可重复。 |
 
@@ -187,7 +236,7 @@ Scope service stream 入口（如 `/api/scopes/{scopeId}/invoke/chat:stream`、m
 - `document_extract` 只能读取 workflow artifact store 中的文件引用；显式 arguments `fileRef` 优先，未传 `fileRef` 时只允许从当前 step 的 typed input file refs 中选择唯一一项，0 个或多个输入文件都 fail closed。`extraction_kind` 可省略或设为 `text`，此时返回既有 descriptor + bounded extracted text JSON shape；支持 UTF-8 text/json/markdown/csv、PDF text、DOCX text，以及 `image/png` / `image/jpeg` 图片文字抽取。图片路径默认最多读取 5 MiB，只通过已配置且支持 image input 的 `ILLMProvider.ChatStreamAsync` 聚合文本 delta；未配置或不支持时返回 `image_provider_unavailable`，图片超限返回 `image_too_large`，provider 异常返回 `image_extraction_failed`。`image/webp` 当前仍不属于 `document_extract` 支持类型。结果不返回 bytes/base64。
 - `document_extract` 也支持 `extraction_kind=schema_bound_json`，但仍是同一个公开 tool，不新增第二个 OCR/tool surface。该模式必须提供 `schema_contract`，形如 `{ "name": "invoice_summary", "description": "...", "schema": { ... } }`；v1 schema guard 只允许收敛 JSON Schema 子集（`type/properties/required/additionalProperties/items/enum/description/title/$schema`），并对 provider 结果做 fail-closed 校验。成功输出为 canonical JSON envelope：`extraction_kind=schema_bound_json`、`media_type`、sanitized `file` descriptor、`schema_name`、`schema_hash`、`structured_result`；不会回显 provider raw body、base64/data URI、prompt 或 extracted text。缺少 provider 返回 `schema_bound_provider_unavailable`，provider 异常返回 `schema_bound_extraction_failed`，provider JSON 无效或不符合 schema 返回 `schema_bound_validation_failed`。
 - `schema_bound_json` v1 的结构化结果仍只通过既有 `WorkflowToolCallCompletedEvent.result_json` / `StepCompletedEvent.output` string 通道传播，不修改 `workflow_execution_messages.proto`。一旦 schema-bound output 成为 actor state、domain event payload、readmodel/projection transport、SDK DTO/response、跨模块 command/query contract，或 workflow engine 开始解释 `structured_result` 内业务字段，必须新增 `.proto` typed contract，并把 string output 只视为兼容序列化。
-- `workflow_file_submit` 是 workflow-only tool source。Lark adapter 提供固定目标：`lark_drive_media` 返回 `file_token`，`lark_approval_file` 返回审批附件 `file_code`；generic connected-service submit 目标只通过 Host 拥有的 `WorkflowConnectedServiceFileSubmit:Targets` 配置进入同一个 tool source。Host 启动时会校验 generic target 的 endpoint policy；service/path/method/header/body/file-field 等策略不能由 workflow 参数覆盖。真实非 Lark 目标值必须来自部署配置、ConfigMap 或 secret；provider adapter 不持有 generic target registry，`.refactor-loop/host.env` 也不是生产配置来源。文件内容只在 adapter 边界从 artifact store 流式读出，不进入 actor state/readmodel/prompt/result JSON。
+- `workflow_file_submit` 是 workflow-only、policy-bound 的 NyxID multipart upload primitive。tool 参数只表达候选上传请求：`file_ref`、`slug`、`path`、`method`、`file_field_name`、字符串 `form` 字段、`output.kind`、`output.selector` 与可收窄的 `max_file_bytes`；执行前必须由 `IWorkflowFileMultipartUploadPolicyResolver` 解析为 Host/provider-owned safety policy decision，无 policy、policy 不可用或被拒绝都 fail closed。Mainnet resolver 不维护静态 destination allowlist，也不决定用户能上传到哪个 NyxID service；它只限制通用安全上限（当前允许 `POST/PUT/PATCH` 这类上传/替换/局部更新方法，并使用 Mainnet 文件大小上限，用户 `max_file_bytes` 只能进一步收窄）。Workflow runtime 继续负责候选 destination 的通用校验：相对 `path`、非空 `slug/file_field_name`、安全 `output.selector`、禁止 `target/headers/body/raw_body/bytes/base64/data_uri` 等；resolved policy 中的 `slug/path/file_field_name/form/output.kind/output.selector` 从 candidate 透传，不包含 destination-level media type allowlist。Workflow runtime 只依赖 `IWorkflowFileArtifactReadPort`、`IWorkflowFileMultipartUploadPolicyResolver` 与 `IWorkflowFileMultipartUploadPort`，不直接依赖 `NyxIdApiClient`、connected-service submit target registry 或 Lark upload adapter。public `file_ref` 只携带 identity/ownership，文件名、媒体类型、大小与 hash 只能来自 artifact descriptor；结果固定为 `success/error/detail/output_code/output_kind/http_status/provider_code/destination/file`，不生成 `file_token`、`file_code` 等 provider alias，也不回显 provider raw body、bytes/base64/data URI。文件内容只在 artifact read port 与 NyxID multipart upload port 边界流式传递，不进入 actor state/readmodel/prompt/result JSON。
 - workflow file artifact backend 由 Host 组合显式选择。`FileSystem` backend 是本地/测试默认；生产环境必须使用 `WorkflowFileArtifacts:Backend=External`，并由部署显式注册 ingress/read/ownership/cleanup 四个 artifact ports。缺少任一端口时启动 fail closed，不能静默回落到 filesystem。
 - artifact descriptor manifest 是文件可读性的提交记录；workflow run 归属仍是 actor-owned fact。Host 只通过后台 `IWorkflowFileArtifactCleanupPort` 触发 provider-owned cleanup；provider 基于 durable descriptor/index state 清理过期 descriptor-committed artifacts 与未完成 staged content，不使用进程内 run/artifact registry。
 

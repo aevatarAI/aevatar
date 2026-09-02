@@ -9,6 +9,9 @@
     <RootNamespace>Aevatar.GAgents.ChannelRuntime.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.BackendConsole.Hosting\Aevatar.BackendConsole.Hosting.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Identity\Aevatar.GAgents.Channel.Identity.csproj" />
@@ -16,7 +19,6 @@
     <ProjectReference Include="..\..\agents\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
     <ProjectReference Include="..\..\agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <ProjectReference Include="..\..\agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
-    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Device\Aevatar.GAgents.Device.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />
@@ -24,6 +26,8 @@
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Channel\Aevatar.AI.ToolProviders.Channel.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.ChannelAdmin\Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.AevatarInvocation\Aevatar.AI.ToolProviders.AevatarInvocation.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Integration.AI\Aevatar.Workflow.Integration.AI.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
@@ -34,6 +38,9 @@
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Orleans\Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Abstractions\Aevatar.GAgentService.Governance.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Application\Aevatar.GAgentService.Application.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
@@ -46,6 +53,7 @@
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="NSubstitute" />
+    <PackageReference Include="UglyToad.PdfPig" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>

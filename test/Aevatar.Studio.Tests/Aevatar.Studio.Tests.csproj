@@ -8,6 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../src/Aevatar.Audit.Abstractions/Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Audit.Core/Aevatar.Audit.Core.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="FluentAssertions" />
@@ -19,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Aevatar.Studio.Domain/Aevatar.Studio.Domain.csproj" />
+    <ProjectReference Include="../../src/Aevatar.ContentArtifacts.Abstractions/Aevatar.ContentArtifacts.Abstractions.csproj" />
     <ProjectReference Include="../../src/Aevatar.Studio.Application.Abstractions/Aevatar.Studio.Application.Abstractions.csproj" />
     <ProjectReference Include="../../src/Aevatar.Studio.Application/Aevatar.Studio.Application.csproj" />
     <ProjectReference Include="../../src/Aevatar.AI.ToolProviders.NyxId/Aevatar.AI.ToolProviders.NyxId.csproj" />
@@ -27,8 +30,14 @@
     <ProjectReference Include="../../src/Aevatar.Authentication.Providers.NyxId/Aevatar.Authentication.Providers.NyxId.csproj" />
     <ProjectReference Include="../../src/Aevatar.Studio.Projection/Aevatar.Studio.Projection.csproj" />
     <ProjectReference Include="../../src/Aevatar.Studio.Hosting/Aevatar.Studio.Hosting.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Foundation.Runtime/Aevatar.Foundation.Runtime.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Foundation.Runtime.Implementations.Local/Aevatar.Foundation.Runtime.Implementations.Local.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.UserConfig/Aevatar.GAgents.UserConfig.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.WorkOrder/Aevatar.GAgents.WorkOrder.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.NyxidChat/Aevatar.GAgents.NyxidChat.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.ContentArtifacts/Aevatar.GAgents.ContentArtifacts.csproj" />
     <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Studio/Aevatar.Workflow.Studio.csproj" />
   </ItemGroup>
 

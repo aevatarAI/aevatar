@@ -71,10 +71,10 @@ public sealed class OrnnSkillPackageBuilderTests
         validation.IsValid.Should().BeTrue();
         package!.Files.Keys.Should().Equal(
             "plain-skill/SKILL.md",
-            "plain-skill/assets/approval-flow.yaml",
             "plain-skill/assets/images/icon.txt",
             "plain-skill/references/docs/usage.md",
-            "plain-skill/scripts/src/Approve.cs");
+            "plain-skill/scripts/src/Approve.cs",
+            "plain-skill/workflows/approval-flow.yaml");
     }
 
     [Theory]

@@ -258,6 +258,10 @@ public sealed class StudioMemberPRReviewFixesTests
         public Task<StudioMemberCommandResponse> UpdateAsync(
             string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default)
                 => throw _ex;
+
+        public Task<StudioMemberCommandResponse> DeleteAsync(
+            string scopeId, string memberId, CancellationToken ct = default)
+                => throw _ex;
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

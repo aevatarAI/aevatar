@@ -67,6 +67,27 @@ public sealed class CommittedStatePublicationHookTests
         publisher.Publications[0].published.StateRoot.Unpack<CounterState>().Count.Should().Be(2);
     }
 
+    [Fact]
+    public async Task PostCommitStateChangeFailure_ShouldNotSkipCommittedPublication()
+    {
+        var publisher = new RecordingCommittedPublisher();
+        var agent = CreateFailingPostCommitAgent(publisher);
+        agent.SetId("post-commit-failure-agent");
+        await agent.ActivateAsync();
+
+        var act = () => agent.HandleEventAsync(
+            TestHelper.Envelope(new IncrementEvent { Amount = 5 }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("post-commit refresh failed");
+        agent.State.Count.Should().Be(5);
+        publisher.Publications.Should().ContainSingle();
+        publisher.Publications[0].published.StateEvent.EventData
+            .Unpack<IncrementEvent>().Amount.Should().Be(5);
+        publisher.Publications[0].published.StateRoot
+            .Unpack<CounterState>().Count.Should().Be(5);
+    }
+
     private static HookCounterAgent CreateAgent(
         RecordingPublicationHook hook,
         RecordingCommittedPublisher publisher)
@@ -106,10 +127,40 @@ public sealed class CommittedStatePublicationHookTests
         };
     }
 
+    private static FailingPostCommitHookCounterAgent CreateFailingPostCommitAgent(
+        RecordingCommittedPublisher publisher)
+    {
+        var services = new ServiceCollection()
+            .AddRuntimeScheduler()
+            .AddSingleton<IEventStore, InMemoryEventStore>()
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .AddSingleton<IStateEventApplier<CounterState>, CounterIncrementApplier>()
+            .BuildServiceProvider();
+
+        return new FailingPostCommitHookCounterAgent
+        {
+            Services = services,
+            CommittedStateEventPublisher = publisher,
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<CounterState>>(),
+        };
+    }
+
     private sealed class HookCounterAgent : TestGAgentBase<CounterState>
     {
         [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
         public Task HandleIncrement(IncrementEvent evt) => PersistDomainEventAsync(evt);
+    }
+
+    private sealed class FailingPostCommitHookCounterAgent : TestGAgentBase<CounterState>
+    {
+        [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
+        public Task HandleIncrement(IncrementEvent evt) => PersistDomainEventAsync(evt);
+
+        protected override Task OnCommittedStateChangedAsync(
+            CounterState state,
+            CancellationToken ct) =>
+            Task.FromException(new InvalidOperationException("post-commit refresh failed"));
     }
 
     private sealed class CounterIncrementApplier

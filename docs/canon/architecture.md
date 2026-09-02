@@ -112,8 +112,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 - `InMemoryStream` / `InMemoryStreamProvider`：内存流与订阅分发
 - `InMemoryStateStore` / `InMemoryEventStore`：默认内存持久化
-- `MemoryCacheDeduplicator`：事件去重
-- `IActorDeactivationHook*` / `EventStoreCompactionDeactivationHook`：停用钩子与裁剪触发
+- `RuntimeEnvelopeDeliveryIdentity`：从 typed `EnvelopeRuntime.delivery_identity.operation_id` / retry contract 解析稳定 delivery lineage 与 attempt；不记录完成事实，也不抑制 redelivery
+- `IActorDeactivationHook*`：通用停用扩展点；EventStore 快照后裁剪由 `EventSourcingBehavior` 在 actor turn 内完成，不依赖停用钩子
 
 `Aevatar.Foundation.Runtime.Implementations.Local`（本地实现层）包含：
 
@@ -149,6 +149,12 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 1. Local runtime：`LocalActor` 内存态持有 `parent/children`
 2. Orleans runtime：`RuntimeActorGrainState` 持久态持有 `ParentId/Children`
 3. `LinkAsync/UnlinkAsync` 同时更新拓扑状态和 stream relay binding
+
+Orleans 的 `LinkAsync(parentId, childId)` 必须区分当前 grain 与其他 parent：
+
+1. 当调用发生在 `parentId` 自己的 grain turn 内，`IRuntimeActorStateBindingAccessor` 已绑定该 parent 的 `RuntimeActorGrainState`。Runtime 直接在当前串行 turn 内幂等追加 `Children` 并持久化；不得再通过 hosted client 调用同一个 parent 的 `AddChildAsync`，否则非重入 grain 会等待自己的下一次 turn 而自锁。
+2. 当当前绑定状态不属于 `parentId` 时，仍通过 parent grain proxy 的 `AddChildAsync` 更新权威拓扑，不能用本地对象结构猜测 parent 状态。
+3. 两条路径都继续执行 child 的 `SetParentAsync`，并同时保留 parent-to-child hierarchy relay 与 child-to-parent committed-observation relay。当前 parent 快路径只消除 self-call，不改变拓扑、传播或投影语义。
 
 实际消息行为已经收敛为：
 
@@ -206,6 +212,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 - `WorkflowExecutionRunEventProjector` 优先使用 projection session command id，并在缺失时回退到 `EventEnvelope.Propagation.CorrelationId`，按 `workflow-run:{actorId}:{commandId}` 事件流路由。
 - 各 workflow readmodel projector 都只记录 committed `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
 - Projection 消费的是 Actor 运行时 envelope 流；EventStore 仍只用于写侧事实持久化与重放。
+- StatusDashboard health sampling 是明确的 operational telemetry 例外：只有 `HealthProbeConfigured` 进入 EventStore；周期结果保留在 actor-owned runtime state，并覆盖写入独立 `HealthProbeOperationalSnapshot`。该 snapshot 不是 readmodel/业务事实，没有 projection scope、watermark 或 `StateVersion`，actor/backend 重启后历史可清空；旧 health projection scopes 与 durable callbacks 只在启动迁移路径中被幂等释放。
 - 编排层守卫：
   - `tools/ci/architecture_guards.sh` 强制关键编排类保持轻量（行数与依赖数上限），防止职责反弹。
 

@@ -52,7 +52,25 @@ public sealed class StudioMemberServiceTeamTests
     }
 
     [Fact]
-    public async Task CreateAsync_WithoutTeamId_ShouldNotQueryTeam()
+    public async Task CreateAsync_WorkflowWithoutTeamId_ShouldRejectAfterKindNormalizationBeforeCommandDispatch()
+    {
+        var teamQueryPort = new ThrowingTeamQueryPort();
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(commandPort: commandPort, teamQueryPort: teamQueryPort);
+
+        var act = () => service.CreateAsync(
+            ScopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: "Alpha",
+                ImplementationKind: " Workflow "));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("teamId is required for workflow members.");
+        commandPort.CreateCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ScriptWithoutTeamId_ShouldNotQueryTeam()
     {
         var teamQueryPort = new ThrowingTeamQueryPort();
         var service = NewService(teamQueryPort: teamQueryPort);
@@ -61,7 +79,7 @@ public sealed class StudioMemberServiceTeamTests
             ScopeId,
             new CreateStudioMemberRequest(
                 DisplayName: "Alpha",
-                ImplementationKind: MemberImplementationKindNames.Workflow));
+                ImplementationKind: MemberImplementationKindNames.Script));
 
         result.Should().NotBeNull();
     }
@@ -163,7 +181,8 @@ public sealed class StudioMemberServiceTeamTests
             teamQueryPort ?? new InMemoryTeamQueryPort(NewTeamSummary()),
             new ThrowingServiceLifecycleQueryPort(),
             new ReadyScopeBindingReadinessQueryPort(),
-            new ThrowingServiceCommandPort());
+            new ThrowingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
 
     private static StudioMemberDetailResponse NewDetail(string? currentTeamId = null)
     {
@@ -276,6 +295,13 @@ public sealed class StudioMemberServiceTeamTests
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
             Task.CompletedTask;
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
         public Task RenameAsync(
             string scopeId,
             string memberId,
@@ -296,6 +322,12 @@ public sealed class StudioMemberServiceTeamTests
             LastTargetTeamId = targetTeamId;
             return Task.CompletedTask;
         }
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete should not be called in team tests.");
     }
 
     private sealed class ThrowingScopeBindingPort : IScopeBindingCommandPort

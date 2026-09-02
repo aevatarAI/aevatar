@@ -60,6 +60,7 @@ public class ExternalIdentityBindingProjectorTests
         {
             ExternalSubject = subject,
             BindingId = "bnd_active",
+            OwnerScopeId = "owner-user-1",
             BoundAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-29T09:30:00Z")),
         };
         var envelope = TestEnvelopeBuilder.BuildCommittedEnvelope(state, version: 1, eventId: "ev-1");
@@ -70,6 +71,7 @@ public class ExternalIdentityBindingProjectorTests
         var doc = dispatcher.Upserts[0];
         doc.Id.Should().Be(subject.ToActorId());
         doc.BindingId.Should().Be("bnd_active");
+        doc.OwnerScopeId.Should().Be("owner-user-1");
         doc.IsActive.Should().BeTrue();
         doc.RevokedAtUtcValue.Should().BeNull();
     }

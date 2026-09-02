@@ -2,10 +2,12 @@ using System.IO;
 using System.Reflection;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.ChatbotClassifier;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -92,6 +94,57 @@ public class ChatbotClassifierGAgentTests
     }
 
     [Fact]
+    public async Task HostDeadline_ShouldCommitTimeoutAndReleaseClassifierForNextMessage()
+    {
+        const string actorId = "chatbot-classifier-deadline";
+        const string timedOutSessionId = "classifier-timeout";
+        using var services = AgentCoverageTestSupport.BuildServiceProvider();
+        var timeProvider = new ManualDeadlineTimeProvider();
+        var llmProvider = new HangingThenSuccessfulProviderFactory();
+        var agent = CreateAgent(
+            services,
+            actorId,
+            llmProvider,
+            timeProvider,
+            new RoleChatExecutionOptions(1_000));
+        var publisher = new TestRecordingEventPublisher();
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+
+        var timedOutTurn = agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "classify hanging request",
+            SessionId = timedOutSessionId,
+            TimeoutMs = 0,
+        });
+        await llmProvider.FirstStreamStarted;
+        timeProvider.Advance(TimeSpan.FromMilliseconds(1_000));
+        await timedOutTurn;
+
+        var completion = (await services.GetRequiredService<IEventStore>().GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Where(completed => completed.SessionId == timedOutSessionId)
+            .Should().ContainSingle().Which;
+        completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+        completion.FailureCode.Should().Be("LLM_TIMEOUT");
+        completion.Content.Should().NotContain("intent\":\"unknown");
+        publisher.Published.OfType<TextMessageContentEvent>()
+            .Should().NotContain(content => content.SessionId == timedOutSessionId &&
+                                          content.Delta.Contains("intent\":\"unknown", StringComparison.Ordinal));
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "classify next request",
+            SessionId = "classifier-next",
+        });
+
+        llmProvider.StreamCallCount.Should().Be(2);
+        agent.State.Sessions["classifier-next"].Completed.Should().BeTrue();
+        agent.State.Sessions["classifier-next"].FinalContent.Should().Contain("intent\":\"faq");
+    }
+
+    [Fact]
     public void AddChatbotClassifier_ShouldReturnSameCollection_AndLoadEmbeddedPrompt()
     {
         var services = new ServiceCollection();
@@ -109,9 +162,15 @@ public class ChatbotClassifierGAgentTests
     private static ChatbotClassifierGAgent CreateAgent(
         IServiceProvider provider,
         string actorId,
-        ILLMProviderFactory? llmProviderFactory = null)
+        ILLMProviderFactory? llmProviderFactory = null,
+        TimeProvider? timeProvider = null,
+        RoleChatExecutionOptions? chatExecutionOptions = null)
     {
-        var agent = new ChatbotClassifierGAgent(llmProviderFactory)
+        var agent = new ChatbotClassifierGAgent(
+            TestAgentToolExecutionPort.Instance,
+            llmProviderFactory,
+            timeProvider: timeProvider,
+            chatExecutionOptions: chatExecutionOptions)
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -150,6 +209,42 @@ public class ChatbotClassifierGAgentTests
                 IsLast = true,
                 Usage = response.Usage,
                 FinishReason = response.FinishReason,
+            };
+        }
+    }
+
+    private sealed class HangingThenSuccessfulProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        private readonly TaskCompletionSource _firstStreamStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _neverCompletes =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _streamCallCount;
+
+        public string Name => "classifier-hanging-then-successful";
+        public Task FirstStreamStarted => _firstStreamStarted.Task;
+        public int StreamCallCount => _streamCallCount;
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            if (Interlocked.Increment(ref _streamCallCount) == 1)
+            {
+                _firstStreamStarted.TrySetResult();
+                await _neverCompletes.Task.WaitAsync(ct);
+                yield break;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk
+            {
+                DeltaContent =
+                    """{"intent":"faq","intent_type":"faq","reply":"next","context_summary":"next","params":{}}""",
             };
         }
     }

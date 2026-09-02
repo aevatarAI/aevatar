@@ -28,7 +28,7 @@ public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPo
 
     public async Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default)
     {
-        var scopeId = ResolveScopeIdOrDefault();
+        var scopeId = _scopeResolver.ResolveScopeIdOrDefault();
         return await GetAsync(scopeId, ct);
     }
 
@@ -57,19 +57,6 @@ public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPo
             Drafts: state.Drafts.Values.Select(ToApplicationDraft).ToList(),
             StateVersion: document?.StateVersion ?? state.LastAppliedEventVersion,
             UpdatedAtUtc: document?.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
-    }
-
-    private string ResolveScopeIdOrDefault()
-    {
-        var scope = _scopeResolver.Resolve()?.ScopeId;
-        if (!string.IsNullOrWhiteSpace(scope))
-            return scope;
-
-        if (_scopeResolver.HasAuthenticatedRequestWithoutScope())
-            throw new InvalidOperationException(
-                "Authenticated caller has no resolvable scope; refusing to route to the shared default workspace.");
-
-        return "default";
     }
 
     private static Application.Studio.Abstractions.StudioWorkspaceSettings ToApplicationSettings(
