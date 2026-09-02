@@ -53,6 +53,7 @@ function createBaseProps<const Overrides extends object>(
 ) {
   const nodeInspectorDraft = {
     kind: 'step' as const,
+    capability: null,
     id: 'review_step',
     type: 'connector_call',
     targetRole: 'assistant',
@@ -149,6 +150,7 @@ describe('StudioInspectorPane', () => {
           selectedGraphStep: workflowStep,
           nodeInspectorDraft: {
             kind: 'step',
+            capability: null,
             id: 'review_step',
             type: 'connector_call',
             targetRole: 'assistant',
@@ -191,6 +193,7 @@ describe('StudioInspectorPane', () => {
           selectedGraphStep: workflowStep,
           nodeInspectorDraft: {
             kind: 'step',
+            capability: null,
             id: 'review_step',
             type: 'connector_call',
             targetRole: 'assistant',

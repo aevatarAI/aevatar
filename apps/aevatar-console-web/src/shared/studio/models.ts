@@ -47,12 +47,18 @@ export function normalizeStudioWorkflowCapability(
     return null;
   }
 
-  const userServiceId = String(
-    (operation as Record<string, unknown>).user_service_id ?? '',
-  ).trim();
-  const endpointId = String(
-    (operation as Record<string, unknown>).endpoint_id ?? '',
-  ).trim();
+  const userServiceIdValue = (operation as Record<string, unknown>)
+    .user_service_id;
+  const endpointIdValue = (operation as Record<string, unknown>).endpoint_id;
+  if (
+    typeof userServiceIdValue !== 'string' ||
+    typeof endpointIdValue !== 'string'
+  ) {
+    return null;
+  }
+
+  const userServiceId = userServiceIdValue.trim();
+  const endpointId = endpointIdValue.trim();
   if (!userServiceId || !endpointId) {
     return null;
   }

@@ -302,6 +302,8 @@ jest.mock('@/shared/studio/api', () => ({
     getWorkflowDraft: jest.fn(),
     getWorkflowDraftFile: jest.fn(),
     instantiateWorkflowTemplate: jest.fn(),
+    inspectWorkflowCapabilityReadiness: jest.fn(),
+    listWorkflowCapabilities: jest.fn(),
     listWorkflowDrafts: jest.fn(),
     parseYaml: jest.fn(),
     previewExplicitRequests: jest.fn(),
@@ -482,6 +484,8 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   getWorkflowDraft: jest.Mock;
   getWorkflowDraftFile: jest.Mock;
   instantiateWorkflowTemplate: jest.Mock;
+  inspectWorkflowCapabilityReadiness: jest.Mock;
+  listWorkflowCapabilities: jest.Mock;
   listWorkflowDrafts: jest.Mock;
   parseYaml: jest.Mock;
   previewExplicitRequests: jest.Mock;
@@ -2227,6 +2231,10 @@ describe('Workflow Activity vNext editor', () => {
       document: { name: 'committed_source', roles: [], steps: [] },
       findings: [],
     });
+    mockStudioApi.listWorkflowCapabilities.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      capabilities: [],
+    });
     mockStudioApi.serializeYaml.mockResolvedValue({
       yaml: 'name: committed_source\nroles: []\nsteps: []\n',
       document: { name: 'committed_source', roles: [], steps: [] },
@@ -3850,12 +3858,12 @@ describe('Workflow Activity vNext editor', () => {
     expect(
       within(inspector).queryByLabelText('Raw configuration'),
     ).not.toBeInTheDocument();
-    expect(within(inspector).getByText('Advanced options')).toBeVisible();
+    expect(within(inspector).getByText('Advanced JSON')).toBeVisible();
     fireEvent.change(within(inspector).getByLabelText('Instruction'), {
       target: { value: 'Updated prompt' },
     });
     fireEvent.click(
-      within(inspector).getByRole('button', { name: 'Apply changes' }),
+      within(inspector).getByRole('button', { name: 'Apply step' }),
     );
 
     await waitFor(() =>
@@ -3889,7 +3897,7 @@ describe('Workflow Activity vNext editor', () => {
     const inspector = await screen.findByRole('complementary', {
       name: 'Configure step-root',
     });
-    fireEvent.click(within(inspector).getByText('Advanced options'));
+    fireEvent.click(within(inspector).getByText('Advanced JSON'));
     const rawConfiguration =
       await within(inspector).findByLabelText('Raw configuration');
 
@@ -3902,10 +3910,11 @@ describe('Workflow Activity vNext editor', () => {
         'Configuration must be a JSON object.',
       ),
     ).toBeVisible();
-    expect(within(inspector).getByText('Technical details')).toBeVisible();
+    const errorDetails = within(inspector).getByText('Error details');
+    expect(errorDetails).toBeVisible();
     expect(within(inspector).getByText(parserError)).not.toBeVisible();
 
-    fireEvent.click(within(inspector).getByText('Technical details'));
+    fireEvent.click(errorDetails);
 
     expect(within(inspector).getByText(parserError)).toBeVisible();
   });
@@ -3924,7 +3933,9 @@ describe('Workflow Activity vNext editor', () => {
     });
 
     expect(
-      within(inspector).getByText('Apply changes before saving this workflow.'),
+      within(inspector).getByText(
+        'Apply this step before saving the workflow.',
+      ),
     ).toBeVisible();
     expect(
       screen.getByRole('button', { name: 'Save workflow' }),
@@ -4091,6 +4102,36 @@ describe('Workflow Activity vNext editor', () => {
         screen.getByRole('button', { name: 'Save workflow' }),
       ).toBeEnabled(),
     );
+  });
+
+  it('starts a new Tool call with the guided action selector', async () => {
+    mockStudioApi.serializeYaml.mockImplementation(
+      async ({ document: submittedDocument }) => ({
+        yaml: 'serialized',
+        document: submittedDocument,
+        findings: [],
+      }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add node' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Insert Tool call node' }),
+    );
+
+    expect(await screen.findByLabelText('Action')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Configure Action' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Tool')).not.toBeInTheDocument();
+    expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+      document: expect.objectContaining({
+        steps: expect.arrayContaining([
+          expect.objectContaining({ type: 'tool_call', parameters: {} }),
+        ]),
+      }),
+    });
   });
 
   it('adds a node after the final step and materializes the existing implicit chain', async () => {
@@ -4337,7 +4378,7 @@ describe('Workflow Activity vNext editor', () => {
     const instruction = within(inspector).getByLabelText('Instruction');
     fireEvent.change(instruction, { target: { value: 'Updated prompt' } });
     fireEvent.click(
-      within(inspector).getByRole('button', { name: 'Apply changes' }),
+      within(inspector).getByRole('button', { name: 'Apply step' }),
     );
 
     await waitFor(() =>
@@ -5556,7 +5597,7 @@ describe('Workflow Activity vNext editor', () => {
       target: { value: 'Updated prompt' },
     });
     fireEvent.click(
-      within(inspector).getByRole('button', { name: 'Apply changes' }),
+      within(inspector).getByRole('button', { name: 'Apply step' }),
     );
 
     expect(
@@ -5567,18 +5608,18 @@ describe('Workflow Activity vNext editor', () => {
       'Updated prompt',
     );
     expect(
-      within(inspector).getByRole('button', { name: 'Apply changes' }),
+      within(inspector).getByRole('button', { name: 'Apply step' }),
     ).toBeEnabled();
 
     fireEvent.click(
-      within(inspector).getByRole('button', { name: 'Apply changes' }),
+      within(inspector).getByRole('button', { name: 'Apply step' }),
     );
     await waitFor(() =>
       expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(2),
     );
     await waitFor(() =>
       expect(
-        within(inspector).getByRole('button', { name: 'Apply changes' }),
+        within(inspector).getByRole('button', { name: 'Apply step' }),
       ).toBeDisabled(),
     );
   });

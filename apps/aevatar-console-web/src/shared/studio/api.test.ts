@@ -1606,19 +1606,59 @@ describe('studioApi host-session requests', () => {
     ).rejects.toThrow('selector.kind is not supported.');
   });
 
-  it('rejects readiness when the returned selector does not match the request', async () => {
+  it.each([
+    {
+      caseName: 'selected selector',
+      executionMode: 'interactive',
+      selectedSelector: {
+        kind: 'nyxid_operation',
+        userServiceId: 'us-posthog-alpha',
+        endpointId: 'different-operation',
+      },
+      selectedOperation: null,
+      expectedMessage: 'returned a different selectedSelector',
+    },
+    {
+      caseName: 'selected operation',
+      executionMode: 'interactive',
+      selectedSelector: {
+        kind: 'nyxid_operation',
+        userServiceId: 'us-posthog-alpha',
+        endpointId: 'update-dashboard',
+      },
+      selectedOperation: {
+        userServiceId: 'us-posthog-alpha',
+        endpointId: 'different-operation',
+        serviceSlug: 'posthog',
+        httpMethod: 'PATCH',
+        pathTemplate: '/api/dashboards/{dashboard_id}',
+        parameters: [],
+        requestBody: null,
+        responsePolicy: null,
+        executionPolicy: null,
+      },
+      expectedMessage: 'returned a different selectedOperation',
+    },
+    {
+      caseName: 'execution mode',
+      executionMode: 'durable',
+      selectedSelector: {
+        kind: 'nyxid_operation',
+        userServiceId: 'us-posthog-alpha',
+        endpointId: 'update-dashboard',
+      },
+      selectedOperation: null,
+      expectedMessage: 'returned a different executionMode',
+    },
+  ])('rejects readiness with a mismatched $caseName', async (response) => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => ({
-        executionMode: 'interactive',
+        executionMode: response.executionMode,
         status: 'ready',
-        selectedSelector: {
-          kind: 'nyxid_operation',
-          userServiceId: 'us-posthog-alpha',
-          endpointId: 'different-operation',
-        },
-        selectedOperation: null,
+        selectedSelector: response.selectedSelector,
+        selectedOperation: response.selectedOperation,
         blockers: [],
         remediations: [],
         sources: [],
@@ -1635,7 +1675,54 @@ describe('studioApi host-session requests', () => {
           endpointId: 'update-dashboard',
         },
       }),
-    ).rejects.toThrow('returned a different selectedSelector');
+    ).rejects.toThrow(response.expectedMessage);
+  });
+
+  it.each([
+    {
+      caseName: 'missing selected selector',
+      status: 'credential_connection_required',
+      selectedSelector: null,
+      selectedOperation: null,
+      expectedMessage: 'requires the requested selectedSelector',
+    },
+    {
+      caseName: 'ready without an operation contract',
+      status: 'ready',
+      selectedSelector: {
+        kind: 'nyxid_operation',
+        userServiceId: 'us-posthog-alpha',
+        endpointId: 'update-dashboard',
+      },
+      selectedOperation: null,
+      expectedMessage: 'ready without a selectedOperation',
+    },
+  ])('rejects readiness with a $caseName', async (response) => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        executionMode: 'interactive',
+        status: response.status,
+        selectedSelector: response.selectedSelector,
+        selectedOperation: response.selectedOperation,
+        blockers: [],
+        remediations: [],
+        sources: [],
+      }),
+    } as Response) as typeof global.fetch;
+
+    await expect(
+      studioApi.inspectWorkflowCapabilityReadiness({
+        scopeId: 'scope-alpha',
+        executionMode: 'interactive',
+        selector: {
+          kind: 'nyxid_operation',
+          userServiceId: 'us-posthog-alpha',
+          endpointId: 'update-dashboard',
+        },
+      }),
+    ).rejects.toThrow(response.expectedMessage);
   });
 
   it('rejects member workflow binding without a stable workflow id', async () => {

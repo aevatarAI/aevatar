@@ -13,9 +13,23 @@ import {
   removeSteps,
   suggestBranchLabelForStep,
 } from './document';
-import type { StudioWorkflowDocument } from './models';
+import {
+  normalizeStudioWorkflowCapability,
+  type StudioWorkflowDocument,
+} from './models';
 
 describe('studio document helpers', () => {
+  it('rejects non-string external operation identities', () => {
+    expect(
+      normalizeStudioWorkflowCapability({
+        nyxid_operation: {
+          user_service_id: 7,
+          endpoint_id: 'list-dashboards',
+        },
+      }),
+    ).toBeNull();
+  });
+
   it('round-trips an exact external operation capability independently from parameters', () => {
     const draft = createStepInspectorDraft({
       id: 'posthog_step',
@@ -606,11 +620,7 @@ describe('studio document helpers', () => {
       ],
     };
 
-    const result = removeStepConnection(
-      document,
-      'draft_step',
-      'approve_step',
-    );
+    const result = removeStepConnection(document, 'draft_step', 'approve_step');
 
     expect(result.nodeId).toBe('step:draft_step');
     expect(result.document.steps).toEqual([
@@ -708,11 +718,7 @@ describe('studio document helpers', () => {
       ],
     };
 
-    const result = connectStepToTarget(
-      document,
-      'draft_step',
-      'publish_step',
-    );
+    const result = connectStepToTarget(document, 'draft_step', 'publish_step');
 
     expect(result.nodeId).toBe('step:draft_step');
     expect(result.document.steps?.[0]).toEqual(

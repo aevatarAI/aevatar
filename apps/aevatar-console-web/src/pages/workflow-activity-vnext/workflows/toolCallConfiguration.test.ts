@@ -1,3 +1,4 @@
+import { setLocale } from '@umijs/max';
 import type {
   StudioWorkflowCapabilityOperation,
   StudioWorkflowCapabilitySelector,
@@ -6,8 +7,10 @@ import {
   capabilitySelectorKey,
   formatToolArguments,
   listOperationInputFields,
+  type OperationInputField,
   parseToolArguments,
   readOperationInputValue,
+  reconcileOperationResponseMode,
   toDocumentCapability,
   writeOperationInputValue,
 } from './toolCallConfiguration';
@@ -110,7 +113,17 @@ const operation: StudioWorkflowCapabilityOperation = {
   },
 };
 
+function requireField(
+  field: OperationInputField | undefined,
+): OperationInputField {
+  expect(field).toBeDefined();
+  if (!field) throw new Error('Expected operation input field.');
+  return field;
+}
+
 describe('guided tool call configuration', () => {
+  afterEach(() => setLocale('en-US', false));
+
   it('uses exact selector identities without depending on display names', () => {
     expect(capabilitySelectorKey(selector)).toBe(
       'nyxid_operation\u0000us-posthog-alpha\u0000update-dashboard',
@@ -159,6 +172,84 @@ describe('guided tool call configuration', () => {
     ]);
   });
 
+  it.each([
+    {
+      name: 'text-only',
+      responsePolicy: {
+        textAllowed: true,
+        fileArtifactAllowed: false,
+        mediaTypes: ['application/json'],
+      },
+      initial: { future_envelope: { version: 2 } },
+      expected: {
+        future_envelope: { version: 2 },
+        response_mode: 'text',
+      },
+      changed: true,
+    },
+    {
+      name: 'file-only',
+      responsePolicy: {
+        textAllowed: false,
+        fileArtifactAllowed: true,
+        mediaTypes: ['application/pdf'],
+      },
+      initial: { response_mode: 'text', future_envelope: { version: 2 } },
+      expected: {
+        response_mode: 'file_artifact',
+        future_envelope: { version: 2 },
+      },
+      changed: true,
+    },
+    {
+      name: 'dual-mode with a valid saved choice',
+      responsePolicy: {
+        textAllowed: true,
+        fileArtifactAllowed: true,
+        mediaTypes: ['application/json', 'application/pdf'],
+      },
+      initial: {
+        response_mode: 'file_artifact',
+        future_envelope: { version: 2 },
+      },
+      expected: {
+        response_mode: 'file_artifact',
+        future_envelope: { version: 2 },
+      },
+      changed: false,
+    },
+  ])('derives response mode for a $name operation without dropping unknown arguments', ({
+    responsePolicy,
+    initial,
+    expected,
+    changed,
+  }) => {
+    const result = reconcileOperationResponseMode(initial, {
+      ...operation,
+      responsePolicy,
+    });
+
+    expect(result).toEqual({ arguments: expected, changed });
+  });
+
+  it('renders a required response-format choice only when both modes are allowed', () => {
+    const dualModeOperation = {
+      ...operation,
+      responsePolicy: {
+        textAllowed: true,
+        fileArtifactAllowed: true,
+        mediaTypes: ['application/json', 'application/pdf'],
+      },
+    };
+
+    expect(
+      listOperationInputFields(dualModeOperation).map((field) => field.key),
+    ).toContain('response:response_mode');
+    expect(
+      listOperationInputFields(operation).map((field) => field.key),
+    ).not.toContain('response:response_mode');
+  });
+
   it('preserves unknown argument keys while updating one declared input', () => {
     const parsed = parseToolArguments(
       JSON.stringify({
@@ -168,14 +259,15 @@ describe('guided tool call configuration', () => {
       }),
     );
     expect(parsed.error).toBeNull();
-    const queryField = listOperationInputFields(operation).find(
-      (field) => field.key === 'query:include_archived',
+    const queryField = requireField(
+      listOperationInputFields(operation).find(
+        (field) => field.key === 'query:include_archived',
+      ),
     );
-    expect(queryField).toBeDefined();
 
     const updated = writeOperationInputValue(
       parsed.arguments,
-      queryField!,
+      queryField,
       true,
     );
 
@@ -191,47 +283,48 @@ describe('guided tool call configuration', () => {
   });
 
   it('keeps workflow expressions as strings even for numeric inputs', () => {
-    const workflowExpression = '$' + '{steps.lookup.output}';
-    const pathField = listOperationInputFields(operation).find(
-      (field) => field.key === 'path:dashboard_id',
+    const workflowExpression = `\${steps.lookup.output}`;
+    const pathField = requireField(
+      listOperationInputFields(operation).find(
+        (field) => field.key === 'path:dashboard_id',
+      ),
     );
-    const updated = writeOperationInputValue(
-      {},
-      pathField!,
-      workflowExpression,
-    );
+    const updated = writeOperationInputValue({}, pathField, workflowExpression);
 
     expect(updated.error).toBeNull();
-    expect(readOperationInputValue(updated.arguments, pathField!)).toBe(
+    expect(readOperationInputValue(updated.arguments, pathField)).toBe(
       workflowExpression,
     );
   });
 
   it.each([
     ['integer', '42', 42],
-    ['array', '[\"one\",\"two\"]', ['one', 'two']],
+    ['array', '["one","two"]', ['one', 'two']],
   ])('coerces valid %s literals', (kind, rawValue, expectedValue) => {
-    const field = listOperationInputFields(operation).find(
-      (entry) => entry.schema.valueKind === kind,
+    const field = requireField(
+      listOperationInputFields(operation).find(
+        (entry) => entry.schema.valueKind === kind,
+      ),
     );
-    expect(field).toBeDefined();
 
-    const updated = writeOperationInputValue({}, field!, rawValue);
+    const updated = writeOperationInputValue({}, field, rawValue);
 
     expect(updated.error).toBeNull();
-    expect(readOperationInputValue(updated.arguments, field!)).toEqual(
+    expect(readOperationInputValue(updated.arguments, field)).toEqual(
       expectedValue,
     );
   });
 
   it('coerces a boolean literal', () => {
-    const field = listOperationInputFields(operation).find(
-      (entry) => entry.schema.valueKind === 'boolean',
+    const field = requireField(
+      listOperationInputFields(operation).find(
+        (entry) => entry.schema.valueKind === 'boolean',
+      ),
     );
-    const updated = writeOperationInputValue({}, field!, 'true');
+    const updated = writeOperationInputValue({}, field, 'true');
 
     expect(updated.error).toBeNull();
-    expect(readOperationInputValue(updated.arguments, field!)).toBe(true);
+    expect(readOperationInputValue(updated.arguments, field)).toBe(true);
   });
 
   it('reports invalid JSON without replacing the original argument text', () => {
@@ -245,31 +338,51 @@ describe('guided tool call configuration', () => {
   });
 
   it('removes an empty optional value and reports an empty required value', () => {
-    const [requiredField, , optionalField] =
+    const [requiredFieldCandidate, , optionalFieldCandidate] =
       listOperationInputFields(operation);
+    const requiredField = requireField(requiredFieldCandidate);
+    const optionalField = requireField(optionalFieldCandidate);
     const initial = {
       path_params: { dashboard_id: 42 },
       query: { include_archived: true },
     };
 
-    const optionalResult = writeOperationInputValue(
-      initial,
-      optionalField!,
-      '',
-    );
+    const optionalResult = writeOperationInputValue(initial, optionalField, '');
     expect(optionalResult.error).toBeNull();
     expect(optionalResult.arguments).toEqual({
       path_params: { dashboard_id: 42 },
     });
 
-    const requiredResult = writeOperationInputValue(
-      initial,
-      requiredField!,
-      '',
-    );
+    const requiredResult = writeOperationInputValue(initial, requiredField, '');
     expect(requiredResult.error).toBe('Dashboard id is required.');
     expect(requiredResult.arguments).toEqual({
       query: { include_archived: true },
     });
+  });
+
+  it('localizes generated labels and validation guidance', () => {
+    setLocale('zh-CN', false);
+    const dualModeFields = listOperationInputFields({
+      ...operation,
+      responsePolicy: {
+        textAllowed: true,
+        fileArtifactAllowed: true,
+        mediaTypes: ['application/json', 'application/pdf'],
+      },
+    });
+    const requiredField = requireField(
+      dualModeFields.find((field) => field.key === 'path:dashboard_id'),
+    );
+
+    expect(
+      dualModeFields.find((field) => field.key === 'response:response_mode')
+        ?.label,
+    ).toBe('结果格式');
+    expect(parseToolArguments('{not-json').error).toBe(
+      '操作输入必须是 JSON 对象。',
+    );
+    expect(writeOperationInputValue({}, requiredField, '').error).toBe(
+      'Dashboard id 为必填项。',
+    );
   });
 });

@@ -751,18 +751,43 @@ export const workflowActivityVNextCss = `
   min-width: 0;
 }
 .wa-vnext-run-detail__inspector-body--loading { gap: 10px; }
-.wa-vnext__node-inspector { background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); bottom: 16px; box-shadow: 0 16px 36px rgba(16, 24, 40, .16); display: flex; flex-direction: column; max-width: calc(100% - 32px); min-height: 0; overflow: hidden; position: absolute; right: 16px; top: 16px; width: min(400px, calc(100% - 32px)); z-index: 20; }
+.wa-vnext__node-inspector { background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); bottom: 16px; box-shadow: 0 16px 36px rgba(16, 24, 40, .16); display: flex; flex-direction: column; max-width: calc(100% - 32px); min-height: 0; overflow: hidden; position: absolute; right: 16px; top: 16px; width: min(440px, calc(100% - 32px)); z-index: 20; }
 .wa-vnext__node-inspector-header { align-items: flex-start; border-bottom: 1px solid var(--wa-line); display: flex; gap: 12px; justify-content: space-between; padding: 16px 16px 14px; }
-.wa-vnext__node-inspector-title.ant-typography { font-size: 15px; line-height: 1.35; margin: 0; }
-.wa-vnext__node-inspector-subtitle { color: var(--wa-muted); display: block; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 4px; overflow-wrap: anywhere; }
-.wa-vnext__node-inspector-body { display: grid; gap: 14px; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px; }
+.wa-vnext__node-inspector-header > div { min-width: 0; }
+.wa-vnext__node-inspector-title.ant-typography { font-size: 15px; line-height: 1.35; margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__node-inspector-subtitle { color: var(--wa-muted); display: block; font-size: 12px; line-height: 1.45; margin-top: 4px; }
+.wa-vnext__node-inspector-body { display: grid; gap: 18px; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px; }
+.wa-vnext__node-inspector-purpose.ant-typography { border-bottom: 1px solid var(--wa-line); color: var(--wa-muted); font-size: 12px; line-height: 1.55; margin: 0; padding-bottom: 14px; text-wrap: pretty; }
+.wa-vnext__node-inspector-body > section { display: grid; gap: 12px; }
 .wa-vnext__node-inspector-section-title.ant-typography { font-size: 14px; line-height: 1.4; margin: 0; }
 .wa-vnext__node-inspector-description.ant-typography { color: var(--wa-muted); font-size: 12px; line-height: 1.5; margin: 5px 0 14px; text-wrap: pretty; }
 .wa-vnext__node-inspector-fields { display: grid; gap: 14px; }
 .wa-vnext__node-inspector-field { display: grid; gap: 6px; min-width: 0; }
-.wa-vnext__node-inspector-field > span { color: var(--wa-ink); font-size: 12px; font-weight: 650; }
+.wa-vnext__node-inspector-field > label, .wa-vnext__node-inspector-field > span { color: var(--wa-ink); font-size: 12px; font-weight: 650; }
+.wa-vnext__node-inspector-field > .wa-vnext__node-inspector-help { color: var(--wa-muted); font-size: 11px; font-weight: 400; line-height: 1.45; }
+.wa-vnext__node-inspector-field > .ant-select { min-width: 0; width: 100%; }
 .wa-vnext__node-inspector-field small { color: var(--wa-muted); font-size: 11px; line-height: 1.45; }
 .wa-vnext__node-inspector-error { margin-top: 14px; }
+.wa-vnext__tool-config { display: grid; gap: 12px; min-width: 0; }
+.wa-vnext__tool-config .ant-alert { min-width: 0; }
+.wa-vnext__tool-config-option { align-items: center; display: flex; gap: 10px; justify-content: space-between; min-width: 0; }
+.wa-vnext__tool-config-option > span { min-width: 0; overflow-wrap: anywhere; }
+.wa-vnext__tool-config-option > small { color: var(--wa-muted); flex: 0 0 auto; font-size: 11px; }
+.wa-vnext__tool-config-summary { align-items: flex-start; background: var(--wa-subtle); border-block: 1px solid var(--wa-line); display: flex; gap: 10px; justify-content: space-between; margin-inline: -16px; padding: 10px 16px; }
+.wa-vnext__tool-config-summary > span { font-size: 12px; font-weight: 650; line-height: 1.5; min-width: 0; overflow-wrap: anywhere; }
+.wa-vnext__tool-config-badges { align-items: center; display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.wa-vnext__tool-config-badges .ant-tag { margin: 0; }
+.wa-vnext__tool-config-status { align-items: center; border-left: 3px solid var(--wa-blue); color: var(--wa-blue); display: flex; font-size: 12px; font-weight: 650; gap: 8px; min-height: 36px; padding: 8px 10px; }
+.wa-vnext__tool-config-status.is-pending { background: var(--wa-blue-bg); }
+.wa-vnext__tool-config-status.is-ready { background: var(--wa-green-bg); border-left-color: var(--wa-green); color: var(--wa-green); }
+.wa-vnext__tool-config-status.is-warning { background: var(--wa-amber-bg); border-left-color: var(--wa-amber); color: var(--wa-amber); }
+.wa-vnext__tool-config-readiness { display: grid; gap: 8px; min-width: 0; }
+.wa-vnext__tool-config-readiness .ant-typography { margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__tool-config-readiness > a { font-size: 12px; font-weight: 650; justify-self: start; }
+.wa-vnext__tool-config-diagnostics { display: grid; gap: 4px; }
+.wa-vnext__tool-config-diagnostics .ant-typography { font-size: 12px; line-height: 1.5; }
+.wa-vnext__tool-config-inputs { border-top: 1px solid var(--wa-line); display: grid; gap: 14px; margin-top: 2px; padding-top: 14px; }
+.wa-vnext__tool-config-inputs > h5.ant-typography { font-size: 12px; line-height: 1.5; margin: 0; }
 .wa-vnext__node-inspector-disclosure.ant-collapse { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: 4px; }
 .wa-vnext__node-inspector-disclosure .ant-collapse-header { align-items: center; color: var(--wa-ink); font-size: 12px; font-weight: 650; min-height: 42px; }
 .wa-vnext__node-inspector-disclosure .ant-collapse-content { border-top-color: var(--wa-line); }
@@ -770,7 +795,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__node-inspector-details { display: grid; gap: 12px; margin: 0; }
 .wa-vnext__node-inspector-details div { display: grid; gap: 3px; min-width: 0; }
 .wa-vnext__node-inspector-details dt { color: var(--wa-muted); font-size: 11px; font-weight: 650; }
-.wa-vnext__node-inspector-details dd { color: var(--wa-ink); font-size: 12px; margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__node-inspector-details dd { color: var(--wa-ink); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; overflow-wrap: anywhere; }
 .wa-vnext__node-inspector-advanced { display: grid; gap: 10px; }
 .wa-vnext__node-inspector-advanced .ant-input { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wa-vnext__node-inspector-actions { align-items: center; border-top: 1px solid var(--wa-line); display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
@@ -994,6 +1019,10 @@ export const workflowActivityVNextCss = `
   .wa-vnext__settings-savebar .ant-btn { width: 100%; }
   .wa-vnext__account-profile, .wa-vnext__account-section-heading { align-items: stretch; flex-direction: column; }
   .wa-vnext__account-profile > .ant-btn, .wa-vnext__account-section-heading > .ant-btn { width: 100%; }
+  .wa-vnext__tool-config-summary { align-items: stretch; flex-direction: column; }
+  .wa-vnext__tool-config-badges { justify-content: flex-start; }
+  .wa-vnext__node-inspector { bottom: calc(56px + env(safe-area-inset-bottom)); left: 12px; max-height: none; position: fixed; right: 12px; top: 64px; }
+  .wa-vnext__node-inspector-actions > .ant-btn { flex: 1 1 0; min-width: 0; }
   .wa-vnext__state--compact { padding: 18px; }
   .wa-vnext__schedule-toolbar, .wa-vnext__schedule-row { align-items: stretch; flex-direction: column; }
   .wa-vnext__schedule-toolbar--actions { align-items: flex-end; flex-direction: row; }

@@ -359,19 +359,19 @@ function decodeStudioWorkflowCapabilitySelector(
   label = 'StudioWorkflowCapabilityDescriptor.selector',
 ): StudioWorkflowCapabilitySelector {
   const record = expectRecord(value, label);
-  const kind = readString(record, 'kind', label + '.kind');
+  const kind = readString(record, 'kind', `${label}.kind`);
   if (kind === 'nyxid_operation') {
     return {
       kind,
       userServiceId: readNonBlankExplicitRequestString(
         record,
         'userServiceId',
-        label + '.userServiceId',
+        `${label}.userServiceId`,
       ),
       endpointId: readNonBlankExplicitRequestString(
         record,
         'endpointId',
-        label + '.endpointId',
+        `${label}.endpointId`,
       ),
     };
   }
@@ -381,17 +381,17 @@ function decodeStudioWorkflowCapabilitySelector(
       connectorCapabilityRef: readNonBlankExplicitRequestString(
         record,
         'connectorCapabilityRef',
-        label + '.connectorCapabilityRef',
+        `${label}.connectorCapabilityRef`,
       ),
       operationId: readNonBlankExplicitRequestString(
         record,
         'operationId',
-        label + '.operationId',
+        `${label}.operationId`,
       ),
       contractDigest: readNonBlankExplicitRequestString(
         record,
         'contractDigest',
-        label + '.contractDigest',
+        `${label}.contractDigest`,
       ),
     };
   }
@@ -401,61 +401,62 @@ function decodeStudioWorkflowCapabilitySelector(
       userServiceId: readNonBlankExplicitRequestString(
         record,
         'userServiceId',
-        label + '.userServiceId',
+        `${label}.userServiceId`,
       ),
-      method: readExplicitRequestEnum(
-        record,
-        'method',
-        label + '.method',
-        ['get', 'head', 'options', 'post', 'put', 'patch', 'delete'],
-      ),
+      method: readExplicitRequestEnum(record, 'method', `${label}.method`, [
+        'get',
+        'head',
+        'options',
+        'post',
+        'put',
+        'patch',
+        'delete',
+      ]),
       pathTemplate: readNonBlankExplicitRequestString(
         record,
         'pathTemplate',
-        label + '.pathTemplate',
+        `${label}.pathTemplate`,
       ),
       queryParameters: expectArray(
         record.queryParameters,
-        label + '.queryParameters',
+        `${label}.queryParameters`,
         expectString,
       ),
       headerParameters: expectArray(
         record.headerParameters,
-        label + '.headerParameters',
+        `${label}.headerParameters`,
         expectString,
       ),
       bodyMode: readExplicitRequestEnum(
         record,
         'bodyMode',
-        label + '.bodyMode',
+        `${label}.bodyMode`,
         ['none', 'json'],
       ),
       responseMode: readExplicitRequestEnum(
         record,
         'responseMode',
-        label + '.responseMode',
+        `${label}.responseMode`,
         ['text', 'file_artifact'],
       ),
       bodyRequired: readBoolean(
         record,
         'bodyRequired',
-        label + '.bodyRequired',
+        `${label}.bodyRequired`,
       ),
     };
   }
 
-  throw new Error(label + '.kind is not supported.');
+  throw new Error(`${label}.kind is not supported.`);
 }
 
 function workflowCapabilitySelectorKey(
   selector: StudioWorkflowCapabilitySelector,
 ): string {
   if (selector.kind === 'nyxid_operation') {
-    return [
-      selector.kind,
-      selector.userServiceId,
-      selector.endpointId,
-    ].join('\u0000');
+    return [selector.kind, selector.userServiceId, selector.endpointId].join(
+      '\u0000',
+    );
   }
   if (selector.kind === 'host_connector') {
     return [
@@ -482,7 +483,7 @@ function decodeStudioWorkflowCapabilitySource(
     kind: readExplicitRequestEnum<StudioWorkflowCapabilitySourceKind>(
       record,
       'kind',
-      label + '.kind',
+      `${label}.kind`,
       [
         'connector_catalog',
         'nyxid_user_services',
@@ -494,19 +495,15 @@ function decodeStudioWorkflowCapabilitySource(
     sourceId: readNonBlankExplicitRequestString(
       record,
       'sourceId',
-      label + '.sourceId',
+      `${label}.sourceId`,
     ),
     sourceVersion: readNumber(
       record,
       'sourceVersion',
-      label + '.sourceVersion',
+      `${label}.sourceVersion`,
     ),
-    observedAt: readNullableString(record, 'observedAt', label + '.observedAt'),
-    freshUntil: readNullableString(
-      record,
-      'freshUntil',
-      label + '.freshUntil',
-    ),
+    observedAt: readNullableString(record, 'observedAt', `${label}.observedAt`),
+    freshUntil: readNullableString(record, 'freshUntil', `${label}.freshUntil`),
   };
 }
 
@@ -528,21 +525,17 @@ function decodeStudioWorkflowCapabilityDescriptor(
     displayName: readNonBlankExplicitRequestString(
       record,
       'displayName',
-      label + '.displayName',
+      `${label}.displayName`,
     ),
-    readOnly: readBoolean(record, 'readOnly', label + '.readOnly'),
-    destructive: readBoolean(
-      record,
-      'destructive',
-      label + '.destructive',
-    ),
+    readOnly: readBoolean(record, 'readOnly', `${label}.readOnly`),
+    destructive: readBoolean(record, 'destructive', `${label}.destructive`),
     selector: decodeStudioWorkflowCapabilitySelector(
       record.selector,
-      label + '.selector',
+      `${label}.selector`,
     ),
     source: decodeNullableWorkflowCapabilitySource(
       record.source,
-      label + '.source',
+      `${label}.source`,
     ),
   };
 }
@@ -556,7 +549,7 @@ function decodeStudioWorkflowCapabilityDiagnostic(
     code: readExplicitRequestEnum<StudioWorkflowCapabilityDiagnosticCode>(
       record,
       'code',
-      label + '.code',
+      `${label}.code`,
       [
         'source_unavailable',
         'no_exact_user_service',
@@ -571,11 +564,11 @@ function decodeStudioWorkflowCapabilityDiagnostic(
         'unsupported_response',
       ],
     ),
-    safeMessage: readString(record, 'safeMessage', label + '.safeMessage'),
-    count: readNumber(record, 'count', label + '.count'),
+    safeMessage: readString(record, 'safeMessage', `${label}.safeMessage`),
+    count: readNumber(record, 'count', `${label}.count`),
     source: decodeNullableWorkflowCapabilitySource(
       record.source,
-      label + '.source',
+      `${label}.source`,
     ),
   };
 }
@@ -629,48 +622,45 @@ function decodeStudioWorkflowCapabilitySchema(
     valueKind: readExplicitRequestEnum<StudioWorkflowCapabilityValueKind>(
       record,
       'valueKind',
-      label + '.valueKind',
+      `${label}.valueKind`,
       ['string', 'integer', 'number', 'boolean', 'object', 'array'],
     ),
     properties: expectArray(
       record.properties,
-      label + '.properties',
-      (entry, entryLabel = label + '.properties[]') => {
+      `${label}.properties`,
+      (entry, entryLabel = `${label}.properties[]`) => {
         const property = expectRecord(entry, entryLabel);
         return {
           name: readNonBlankExplicitRequestString(
             property,
             'name',
-            entryLabel + '.name',
+            `${entryLabel}.name`,
           ),
           schema: decodeStudioWorkflowCapabilitySchema(
             property.schema,
-            entryLabel + '.schema',
+            `${entryLabel}.schema`,
           ),
         };
       },
     ),
     requiredProperties: expectArray(
       record.requiredProperties,
-      label + '.requiredProperties',
+      `${label}.requiredProperties`,
       expectString,
     ),
     items:
       record.items == null
         ? null
-        : decodeStudioWorkflowCapabilitySchema(
-            record.items,
-            label + '.items',
-          ),
+        : decodeStudioWorkflowCapabilitySchema(record.items, `${label}.items`),
     allowedValues: expectArray(
       record.allowedValues,
-      label + '.allowedValues',
+      `${label}.allowedValues`,
       expectString,
     ),
     additionalPropertiesAllowed: readBoolean(
       record,
       'additionalPropertiesAllowed',
-      label + '.additionalPropertiesAllowed',
+      `${label}.additionalPropertiesAllowed`,
     ),
   };
 }
@@ -681,22 +671,18 @@ function decodeStudioWorkflowCapabilityParameter(
 ): StudioWorkflowCapabilityParameter {
   const record = expectRecord(value, label);
   return {
-    name: readNonBlankExplicitRequestString(
-      record,
-      'name',
-      label + '.name',
-    ),
+    name: readNonBlankExplicitRequestString(record, 'name', `${label}.name`),
     location:
       readExplicitRequestEnum<StudioWorkflowCapabilityParameterLocation>(
         record,
         'location',
-        label + '.location',
+        `${label}.location`,
         ['path', 'query', 'header'],
       ),
-    required: readBoolean(record, 'required', label + '.required'),
+    required: readBoolean(record, 'required', `${label}.required`),
     schema: decodeStudioWorkflowCapabilitySchema(
       record.schema,
-      label + '.schema',
+      `${label}.schema`,
     ),
   };
 }
@@ -709,41 +695,41 @@ function decodeStudioWorkflowCapabilityOperation(
   const requestBody =
     record.requestBody == null
       ? null
-      : expectRecord(record.requestBody, label + '.requestBody');
+      : expectRecord(record.requestBody, `${label}.requestBody`);
   const responsePolicy =
     record.responsePolicy == null
       ? null
-      : expectRecord(record.responsePolicy, label + '.responsePolicy');
+      : expectRecord(record.responsePolicy, `${label}.responsePolicy`);
   const executionPolicy =
     record.executionPolicy == null
       ? null
-      : expectRecord(record.executionPolicy, label + '.executionPolicy');
+      : expectRecord(record.executionPolicy, `${label}.executionPolicy`);
 
   return {
     userServiceId: readNonBlankExplicitRequestString(
       record,
       'userServiceId',
-      label + '.userServiceId',
+      `${label}.userServiceId`,
     ),
     endpointId: readNonBlankExplicitRequestString(
       record,
       'endpointId',
-      label + '.endpointId',
+      `${label}.endpointId`,
     ),
-    serviceSlug: readString(record, 'serviceSlug', label + '.serviceSlug'),
+    serviceSlug: readString(record, 'serviceSlug', `${label}.serviceSlug`),
     httpMethod: readNonBlankExplicitRequestString(
       record,
       'httpMethod',
-      label + '.httpMethod',
+      `${label}.httpMethod`,
     ),
     pathTemplate: readNonBlankExplicitRequestString(
       record,
       'pathTemplate',
-      label + '.pathTemplate',
+      `${label}.pathTemplate`,
     ),
     parameters: expectArray(
       record.parameters,
-      label + '.parameters',
+      `${label}.parameters`,
       decodeStudioWorkflowCapabilityParameter,
     ),
     requestBody: requestBody
@@ -751,16 +737,16 @@ function decodeStudioWorkflowCapabilityOperation(
           required: readBoolean(
             requestBody,
             'required',
-            label + '.requestBody.required',
+            `${label}.requestBody.required`,
           ),
           mediaType: readString(
             requestBody,
             'mediaType',
-            label + '.requestBody.mediaType',
+            `${label}.requestBody.mediaType`,
           ),
           schema: decodeStudioWorkflowCapabilitySchema(
             requestBody.schema,
-            label + '.requestBody.schema',
+            `${label}.requestBody.schema`,
           ),
         }
       : null,
@@ -769,16 +755,16 @@ function decodeStudioWorkflowCapabilityOperation(
           textAllowed: readBoolean(
             responsePolicy,
             'textAllowed',
-            label + '.responsePolicy.textAllowed',
+            `${label}.responsePolicy.textAllowed`,
           ),
           fileArtifactAllowed: readBoolean(
             responsePolicy,
             'fileArtifactAllowed',
-            label + '.responsePolicy.fileArtifactAllowed',
+            `${label}.responsePolicy.fileArtifactAllowed`,
           ),
           mediaTypes: expectArray(
             responsePolicy.mediaTypes,
-            label + '.responsePolicy.mediaTypes',
+            `${label}.responsePolicy.mediaTypes`,
             expectString,
           ),
         }
@@ -788,27 +774,30 @@ function decodeStudioWorkflowCapabilityOperation(
           risk: readExplicitRequestEnum(
             executionPolicy,
             'risk',
-            label + '.executionPolicy.risk',
+            `${label}.executionPolicy.risk`,
             ['read_only', 'write', 'destructive'],
           ),
           approval: readExplicitRequestEnum(
             executionPolicy,
             'approval',
-            label + '.executionPolicy.approval',
+            `${label}.executionPolicy.approval`,
             ['none', 'required'],
           ),
           enforcementOwner: readExplicitRequestEnum(
             executionPolicy,
             'enforcementOwner',
-            label + '.executionPolicy.enforcementOwner',
+            `${label}.executionPolicy.enforcementOwner`,
             ['aevatar', 'nyxid'],
           ),
           allowedExecutionModes: expectArray(
             executionPolicy.allowedExecutionModes,
-            label + '.executionPolicy.allowedExecutionModes',
-            (entry, entryLabel = label + '.executionPolicy.allowedExecutionModes[]') => {
+            `${label}.executionPolicy.allowedExecutionModes`,
+            (
+              entry,
+              entryLabel = `${label}.executionPolicy.allowedExecutionModes[]`,
+            ) => {
               if (entry !== 'interactive' && entry !== 'durable') {
-                throw new Error(entryLabel + ' is not supported.');
+                throw new Error(`${entryLabel} is not supported.`);
               }
               return entry;
             },
@@ -838,6 +827,7 @@ const workflowCapabilityReadinessStatuses = [
 function decodeStudioWorkflowCapabilityReadiness(
   value: unknown,
   expectedSelector: StudioWorkflowCapabilityReadinessInput['selector'],
+  expectedExecutionMode: StudioWorkflowCapabilityReadinessInput['executionMode'],
 ): StudioWorkflowCapabilityReadiness {
   const label = 'StudioWorkflowCapabilityReadiness';
   const record = expectRecord(value, label);
@@ -846,72 +836,101 @@ function decodeStudioWorkflowCapabilityReadiness(
       ? null
       : decodeStudioWorkflowCapabilitySelector(
           record.selectedSelector,
-          label + '.selectedSelector',
+          `${label}.selectedSelector`,
         );
+  if (!selectedSelector) {
+    throw new Error(
+      'StudioWorkflowCapabilityReadiness requires the requested selectedSelector.',
+    );
+  }
   if (
-    selectedSelector &&
     workflowCapabilitySelectorKey(selectedSelector) !==
-      workflowCapabilitySelectorKey(expectedSelector)
+    workflowCapabilitySelectorKey(expectedSelector)
   ) {
     throw new Error(
       'StudioWorkflowCapabilityReadiness returned a different selectedSelector.',
     );
   }
 
-  return {
-    executionMode: readExplicitRequestEnum(
-      record,
-      'executionMode',
-      label + '.executionMode',
-      ['interactive', 'durable'],
-    ),
-    status: readExplicitRequestEnum<StudioWorkflowCapabilityReadinessStatus>(
+  const executionMode = readExplicitRequestEnum(
+    record,
+    'executionMode',
+    `${label}.executionMode`,
+    ['interactive', 'durable'],
+  );
+  if (executionMode !== expectedExecutionMode) {
+    throw new Error(
+      'StudioWorkflowCapabilityReadiness returned a different executionMode.',
+    );
+  }
+
+  const selectedOperation =
+    record.selectedOperation == null
+      ? null
+      : decodeStudioWorkflowCapabilityOperation(
+          record.selectedOperation,
+          `${label}.selectedOperation`,
+        );
+  if (
+    selectedOperation &&
+    (selectedOperation.userServiceId !== expectedSelector.userServiceId ||
+      selectedOperation.endpointId !== expectedSelector.endpointId)
+  ) {
+    throw new Error(
+      'StudioWorkflowCapabilityReadiness returned a different selectedOperation.',
+    );
+  }
+  const status =
+    readExplicitRequestEnum<StudioWorkflowCapabilityReadinessStatus>(
       record,
       'status',
-      label + '.status',
+      `${label}.status`,
       workflowCapabilityReadinessStatuses,
-    ),
+    );
+  if (status === 'ready' && !selectedOperation) {
+    throw new Error(
+      'StudioWorkflowCapabilityReadiness returned ready without a selectedOperation.',
+    );
+  }
+
+  return {
+    executionMode,
+    status,
     selectedSelector,
-    selectedOperation:
-      record.selectedOperation == null
-        ? null
-        : decodeStudioWorkflowCapabilityOperation(
-            record.selectedOperation,
-            label + '.selectedOperation',
-          ),
+    selectedOperation,
     blockers: expectArray(
       record.blockers,
-      label + '.blockers',
-      (entry, entryLabel = label + '.blockers[]') => {
+      `${label}.blockers`,
+      (entry, entryLabel = `${label}.blockers[]`) => {
         const blocker = expectRecord(entry, entryLabel);
         return {
           status:
             readExplicitRequestEnum<StudioWorkflowCapabilityReadinessStatus>(
               blocker,
               'status',
-              entryLabel + '.status',
+              `${entryLabel}.status`,
               workflowCapabilityReadinessStatuses,
             ),
-          code: readString(blocker, 'code', entryLabel + '.code'),
+          code: readString(blocker, 'code', `${entryLabel}.code`),
           safeMessage: readString(
             blocker,
             'safeMessage',
-            entryLabel + '.safeMessage',
+            `${entryLabel}.safeMessage`,
           ),
         };
       },
     ),
     remediations: expectArray(
       record.remediations,
-      label + '.remediations',
-      (entry, entryLabel = label + '.remediations[]') => {
+      `${label}.remediations`,
+      (entry, entryLabel = `${label}.remediations[]`) => {
         const remediation = expectRecord(entry, entryLabel);
         return {
           actionKind:
             readExplicitRequestEnum<StudioWorkflowCapabilityRemediationAction>(
               remediation,
               'actionKind',
-              entryLabel + '.actionKind',
+              `${entryLabel}.actionKind`,
               [
                 'select_capability',
                 'configure_connector',
@@ -927,18 +946,18 @@ function decodeStudioWorkflowCapabilityReadiness(
                 'rebind_workflow',
               ],
             ),
-          label: readString(remediation, 'label', entryLabel + '.label'),
+          label: readString(remediation, 'label', `${entryLabel}.label`),
           trustedLocator: readString(
             remediation,
             'trustedLocator',
-            entryLabel + '.trustedLocator',
+            `${entryLabel}.trustedLocator`,
           ),
         };
       },
     ),
     sources: expectArray(
       record.sources,
-      label + '.sources',
+      `${label}.sources`,
       decodeStudioWorkflowCapabilitySource,
     ),
   };
@@ -3902,7 +3921,11 @@ export const studioApi = {
         encodeURIComponent(input.scopeId.trim()) +
         '/workflow-capabilities:readiness',
       (value) =>
-        decodeStudioWorkflowCapabilityReadiness(value, input.selector),
+        decodeStudioWorkflowCapabilityReadiness(
+          value,
+          input.selector,
+          input.executionMode,
+        ),
       {
         method: 'POST',
         headers: JSON_HEADERS,

@@ -233,12 +233,12 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.yaml': 'YAML',
   'workflowActivityVNext.editor.yamlReadFailed':
     'Workflow YAML could not be read.',
-  'workflowActivityVNext.nodeInspector.advanced': 'Advanced options',
+  'workflowActivityVNext.nodeInspector.advanced': 'Advanced JSON',
   'workflowActivityVNext.nodeInspector.advancedDescription':
-    'Use JSON only when the setting is not available above.',
-  'workflowActivityVNext.nodeInspector.applyChanges': 'Apply changes',
+    "Edit this step's runtime parameters as JSON.",
+  'workflowActivityVNext.nodeInspector.applyChanges': 'Apply step',
   'workflowActivityVNext.nodeInspector.applyBeforeSave':
-    'Apply changes before saving this workflow.',
+    'Apply this step before saving the workflow.',
   'workflowActivityVNext.nodeInspector.applyFailed':
     "Couldn't apply configuration",
   'workflowActivityVNext.nodeInspector.applyJson': 'Apply JSON',
@@ -247,25 +247,128 @@ const workflowActivityVNextMessages = {
     'Branches unavailable',
   'workflowActivityVNext.nodeInspector.close': 'Close configuration',
   'workflowActivityVNext.nodeInspector.closeAria': 'Close node configuration',
-  'workflowActivityVNext.nodeInspector.configuration': 'Configuration',
+  'workflowActivityVNext.nodeInspector.configuration': 'Settings',
   'workflowActivityVNext.nodeInspector.configurationDescription':
     'Set what this step needs before the workflow runs.',
   'workflowActivityVNext.nodeInspector.discard': 'Discard changes',
   'workflowActivityVNext.nodeInspector.discardDescription':
     'Your unapplied changes to this step will be lost.',
   'workflowActivityVNext.nodeInspector.discardTitle': 'Discard node changes?',
+  'workflowActivityVNext.nodeInspector.endpointId': 'Endpoint ID',
+  'workflowActivityVNext.nodeInspector.errorDetails': 'Error details',
   'workflowActivityVNext.nodeInspector.nextStep': 'Next step',
   'workflowActivityVNext.nodeInspector.noBranches': 'No branches',
   'workflowActivityVNext.nodeInspector.notSet': 'Not set',
+  'workflowActivityVNext.nodeInspector.purpose.assign':
+    'Store a value for later steps in this workflow.',
+  'workflowActivityVNext.nodeInspector.purpose.conditional':
+    'Choose the next path by evaluating a condition.',
+  'workflowActivityVNext.nodeInspector.purpose.connectorCall':
+    'Call an operation provided by a configured connector.',
+  'workflowActivityVNext.nodeInspector.purpose.default':
+    'Configure how this step behaves when the workflow runs.',
+  'workflowActivityVNext.nodeInspector.purpose.delay':
+    'Pause this workflow before the next step continues.',
+  'workflowActivityVNext.nodeInspector.purpose.emit':
+    'Publish an event for another part of the workflow or system.',
+  'workflowActivityVNext.nodeInspector.purpose.humanApproval':
+    'Pause the workflow until a person approves or rejects it.',
+  'workflowActivityVNext.nodeInspector.purpose.humanInput':
+    'Pause the workflow and collect input from a person.',
+  'workflowActivityVNext.nodeInspector.purpose.llmCall':
+    'Send an instruction and workflow input to an AI model.',
+  'workflowActivityVNext.nodeInspector.purpose.switch':
+    'Choose a branch by matching the current workflow value.',
+  'workflowActivityVNext.nodeInspector.purpose.toolCall':
+    'Run an action from a connected service or registered tool.',
+  'workflowActivityVNext.nodeInspector.purpose.transform':
+    'Transform the current workflow value into the next value.',
+  'workflowActivityVNext.nodeInspector.purpose.waitSignal':
+    'Pause the workflow until the expected signal arrives.',
+  'workflowActivityVNext.nodeInspector.purpose.workflowCall':
+    'Run another workflow and use its result here.',
   'workflowActivityVNext.nodeInspector.rawConfigurationAria':
     'Raw configuration',
   'workflowActivityVNext.nodeInspector.rawConfigurationError':
     'Configuration must be a JSON object.',
   'workflowActivityVNext.nodeInspector.sectionAria': 'Configure {name}',
-  'workflowActivityVNext.nodeInspector.stepDetails': 'Step details',
+  'workflowActivityVNext.nodeInspector.runtimeTool': 'Runtime tool',
+  'workflowActivityVNext.nodeInspector.stepDetails': 'Technical details',
+  'workflowActivityVNext.nodeInspector.stepId': 'Step ID',
   'workflowActivityVNext.nodeInspector.targetRole': 'Target role',
   'workflowActivityVNext.nodeInspector.title': 'Configure {name}',
+  'workflowActivityVNext.nodeInspector.tool.action': 'Action',
+  'workflowActivityVNext.nodeInspector.tool.actionHelp':
+    'Choose what external service action this step should run.',
+  'workflowActivityVNext.nodeInspector.tool.actionPlaceholder':
+    'Choose what this step should do',
+  'workflowActivityVNext.nodeInspector.tool.approvalRequired':
+    'Approval required',
+  'workflowActivityVNext.nodeInspector.tool.argumentsRecovery':
+    'Open Advanced JSON to repair the existing action inputs, or change a guided field to replace them.',
+  'workflowActivityVNext.nodeInspector.tool.bodyValue': 'Request body value',
+  'workflowActivityVNext.nodeInspector.tool.checking': 'Checking availability',
+  'workflowActivityVNext.nodeInspector.tool.chooseAction': 'Choose an action',
+  'workflowActivityVNext.nodeInspector.tool.chooseValue': 'Choose a value',
+  'workflowActivityVNext.nodeInspector.tool.discoveryFailed':
+    'Connected actions could not be loaded.',
+  'workflowActivityVNext.nodeInspector.tool.empty':
+    'No connected actions are available yet.',
+  'workflowActivityVNext.nodeInspector.tool.inputs': 'Action inputs',
+  'workflowActivityVNext.nodeInspector.tool.input.requestBody': 'Request body',
+  'workflowActivityVNext.nodeInspector.tool.input.resultFormat':
+    'Result format',
+  'workflowActivityVNext.nodeInspector.tool.input.value': 'Value',
+  'workflowActivityVNext.nodeInspector.tool.incompleteGuidance':
+    'Complete the required inputs before this step can run. You can still apply this draft.',
+  'workflowActivityVNext.nodeInspector.tool.loadingActions':
+    'Loading connected actions',
+  'workflowActivityVNext.nodeInspector.tool.response.file': 'File',
+  'workflowActivityVNext.nodeInspector.tool.response.text': 'Text',
+  'workflowActivityVNext.nodeInspector.tool.responseHelp':
+    'Choose how this action should return its result',
+  'workflowActivityVNext.nodeInspector.tool.validation.allowedValue':
+    '{label} must be one of the available values.',
+  'workflowActivityVNext.nodeInspector.tool.validation.argumentsObject':
+    'Action inputs must be a JSON object.',
+  'workflowActivityVNext.nodeInspector.tool.validation.array':
+    '{label} must be a JSON array.',
+  'workflowActivityVNext.nodeInspector.tool.validation.boolean':
+    '{label} must be true or false.',
+  'workflowActivityVNext.nodeInspector.tool.validation.integer':
+    '{label} must be a whole number.',
+  'workflowActivityVNext.nodeInspector.tool.validation.json':
+    '{label} must be valid JSON.',
+  'workflowActivityVNext.nodeInspector.tool.validation.number':
+    '{label} must be a number.',
+  'workflowActivityVNext.nodeInspector.tool.validation.object':
+    '{label} must be a JSON object.',
+  'workflowActivityVNext.nodeInspector.tool.validation.required':
+    '{label} is required.',
+  'workflowActivityVNext.nodeInspector.tool.location.header': 'Header',
+  'workflowActivityVNext.nodeInspector.tool.location.path': 'Path',
+  'workflowActivityVNext.nodeInspector.tool.location.query': 'Query',
+  'workflowActivityVNext.nodeInspector.tool.needsSetup': 'Needs setup',
+  'workflowActivityVNext.nodeInspector.tool.numberPlaceholder':
+    'Enter a number or workflow expression',
+  'workflowActivityVNext.nodeInspector.tool.optionalSuffix': ' · Optional',
+  'workflowActivityVNext.nodeInspector.tool.parameterLocation':
+    '{location} parameter',
+  'workflowActivityVNext.nodeInspector.tool.readinessFailed':
+    'This action could not be checked.',
+  'workflowActivityVNext.nodeInspector.tool.ready': 'Ready',
+  'workflowActivityVNext.nodeInspector.tool.requiredSuffix': ' · Required',
+  'workflowActivityVNext.nodeInspector.tool.risk.destructive': 'Destructive',
+  'workflowActivityVNext.nodeInspector.tool.risk.readOnly': 'Read only',
+  'workflowActivityVNext.nodeInspector.tool.risk.write': 'Writes data',
+  'workflowActivityVNext.nodeInspector.tool.savedAction': 'Saved action',
+  'workflowActivityVNext.nodeInspector.tool.savedUnavailable':
+    'This saved action is no longer available.',
+  'workflowActivityVNext.nodeInspector.tool.unavailable': 'Unavailable',
+  'workflowActivityVNext.nodeInspector.tool.valuePlaceholder':
+    'Enter a value or workflow expression',
   'workflowActivityVNext.nodeInspector.type': 'Type',
+  'workflowActivityVNext.nodeInspector.userServiceId': 'User service ID',
   'workflowActivityVNext.failure.accessDenied':
     'You do not have access to use this service or model.',
   'workflowActivityVNext.failure.accessDeniedGuidance':

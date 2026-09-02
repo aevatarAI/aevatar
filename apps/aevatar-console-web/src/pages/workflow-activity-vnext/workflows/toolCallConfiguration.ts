@@ -1,3 +1,4 @@
+import { t } from '@/shared/i18n/messages';
 import type {
   StudioWorkflowCapability,
   StudioWorkflowCapabilityOperation,
@@ -14,7 +15,7 @@ export type OperationInputField = {
   readonly key: string;
   readonly name: string;
   readonly label: string;
-  readonly group: 'path' | 'query' | 'header' | 'body';
+  readonly group: 'path' | 'query' | 'header' | 'body' | 'response';
   readonly path: readonly string[];
   readonly required: boolean;
   readonly schema: StudioWorkflowCapabilitySchema;
@@ -31,12 +32,17 @@ export type ToolArgumentWriteResult = {
   readonly error: string | null;
 };
 
-export function capabilitySelectorKey(selector: NyxIdOperationSelector): string {
-  return [
-    selector.kind,
-    selector.userServiceId,
-    selector.endpointId,
-  ].join('\u0000');
+export type OperationResponseModeResult = {
+  readonly arguments: Record<string, unknown>;
+  readonly changed: boolean;
+};
+
+export function capabilitySelectorKey(
+  selector: NyxIdOperationSelector,
+): string {
+  return [selector.kind, selector.userServiceId, selector.endpointId].join(
+    '\u0000',
+  );
 }
 
 export function toDocumentCapability(
@@ -52,7 +58,9 @@ export function toDocumentCapability(
 
 function humanizeInputName(name: string): string {
   const words = name.trim().replace(/[_-]+/g, ' ');
-  return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Value';
+  return words
+    ? words.charAt(0).toUpperCase() + words.slice(1)
+    : t('workflowActivityVNext.nodeInspector.tool.input.value', 'Value');
 }
 
 function parameterPath(
@@ -68,7 +76,7 @@ export function listOperationInputFields(
   operation: StudioWorkflowCapabilityOperation,
 ): readonly OperationInputField[] {
   const parameterFields = operation.parameters.map((parameter) => ({
-    key: parameter.location + ':' + parameter.name,
+    key: `${parameter.location}:${parameter.name}`,
     name: parameter.name,
     label: humanizeInputName(parameter.name),
     group: parameter.location,
@@ -79,11 +87,14 @@ export function listOperationInputFields(
   const body = operation.requestBody;
   const bodyFields: OperationInputField[] = [];
   if (body) {
-    if (body.schema.valueKind === 'object' && body.schema.properties.length > 0) {
+    if (
+      body.schema.valueKind === 'object' &&
+      body.schema.properties.length > 0
+    ) {
       const requiredProperties = new Set(body.schema.requiredProperties);
       for (const property of body.schema.properties) {
         bodyFields.push({
-          key: 'body:' + property.name,
+          key: `body:${property.name}`,
           name: property.name,
           label: humanizeInputName(property.name),
           group: 'body',
@@ -96,7 +107,10 @@ export function listOperationInputFields(
       bodyFields.push({
         key: 'body:body',
         name: 'body',
-        label: 'Request body',
+        label: t(
+          'workflowActivityVNext.nodeInspector.tool.input.requestBody',
+          'Request body',
+        ),
         group: 'body',
         path: ['body'],
         required: body.required,
@@ -105,9 +119,63 @@ export function listOperationInputFields(
     }
   }
 
-  return [...parameterFields, ...bodyFields].sort(
+  const responseModes = listAllowedResponseModes(operation);
+  const responseFields: OperationInputField[] =
+    responseModes.length === 2
+      ? [
+          {
+            key: 'response:response_mode',
+            name: 'response_mode',
+            label: t(
+              'workflowActivityVNext.nodeInspector.tool.input.resultFormat',
+              'Result format',
+            ),
+            group: 'response',
+            path: ['response_mode'],
+            required: true,
+            schema: {
+              valueKind: 'string',
+              properties: [],
+              requiredProperties: [],
+              items: null,
+              allowedValues: responseModes,
+              additionalPropertiesAllowed: false,
+            },
+          },
+        ]
+      : [];
+
+  return [...parameterFields, ...bodyFields, ...responseFields].sort(
     (left, right) => Number(right.required) - Number(left.required),
   );
+}
+
+function listAllowedResponseModes(
+  operation: StudioWorkflowCapabilityOperation,
+): Array<'text' | 'file_artifact'> {
+  const modes: Array<'text' | 'file_artifact'> = [];
+  if (operation.responsePolicy?.textAllowed) modes.push('text');
+  if (operation.responsePolicy?.fileArtifactAllowed) {
+    modes.push('file_artifact');
+  }
+  return modes;
+}
+
+export function reconcileOperationResponseMode(
+  argumentsValue: Record<string, unknown>,
+  operation: StudioWorkflowCapabilityOperation,
+): OperationResponseModeResult {
+  const responseModes = listAllowedResponseModes(operation);
+  if (
+    responseModes.length !== 1 ||
+    argumentsValue.response_mode === responseModes[0]
+  ) {
+    return { arguments: argumentsValue, changed: false };
+  }
+  return {
+    arguments: { ...argumentsValue, response_mode: responseModes[0] },
+    changed: true,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -137,7 +205,10 @@ export function parseToolArguments(value: unknown): ToolArgumentParseResult {
   } catch {
     return {
       arguments: {},
-      error: 'Action inputs must be a JSON object.',
+      error: t(
+        'workflowActivityVNext.nodeInspector.tool.validation.argumentsObject',
+        'Action inputs must be a JSON object.',
+      ),
       originalText,
     };
   }
@@ -177,7 +248,11 @@ function coerceInputValue(
     const normalized = String(value);
     if (!field.schema.allowedValues.includes(normalized)) {
       return {
-        error: field.label + ' must be one of the available values.',
+        error: t(
+          'workflowActivityVNext.nodeInspector.tool.validation.allowedValue',
+          '{label} must be one of the available values.',
+          { label: field.label },
+        ),
       };
     }
     return { value: normalized, error: null };
@@ -190,7 +265,13 @@ function coerceInputValue(
     if (typeof value === 'boolean') return { value, error: null };
     if (value === 'true') return { value: true, error: null };
     if (value === 'false') return { value: false, error: null };
-    return { error: field.label + ' must be true or false.' };
+    return {
+      error: t(
+        'workflowActivityVNext.nodeInspector.tool.validation.boolean',
+        '{label} must be true or false.',
+        { label: field.label },
+      ),
+    };
   }
   if (
     field.schema.valueKind === 'integer' ||
@@ -204,11 +285,15 @@ function coerceInputValue(
     return valid
       ? { value: numberValue, error: null }
       : {
-          error:
-            field.label +
-            (field.schema.valueKind === 'integer'
-              ? ' must be a whole number.'
-              : ' must be a number.'),
+          error: t(
+            field.schema.valueKind === 'integer'
+              ? 'workflowActivityVNext.nodeInspector.tool.validation.integer'
+              : 'workflowActivityVNext.nodeInspector.tool.validation.number',
+            field.schema.valueKind === 'integer'
+              ? '{label} must be a whole number.'
+              : '{label} must be a number.',
+            { label: field.label },
+          ),
         };
   }
 
@@ -217,7 +302,13 @@ function coerceInputValue(
     try {
       structuredValue = JSON.parse(value);
     } catch {
-      return { error: field.label + ' must be valid JSON.' };
+      return {
+        error: t(
+          'workflowActivityVNext.nodeInspector.tool.validation.json',
+          '{label} must be valid JSON.',
+          { label: field.label },
+        ),
+      };
     }
   }
   const valid =
@@ -227,11 +318,15 @@ function coerceInputValue(
   return valid
     ? { value: structuredValue, error: null }
     : {
-        error:
-          field.label +
-          (field.schema.valueKind === 'array'
-            ? ' must be a JSON array.'
-            : ' must be a JSON object.'),
+        error: t(
+          field.schema.valueKind === 'array'
+            ? 'workflowActivityVNext.nodeInspector.tool.validation.array'
+            : 'workflowActivityVNext.nodeInspector.tool.validation.object',
+          field.schema.valueKind === 'array'
+            ? '{label} must be a JSON array.'
+            : '{label} must be a JSON object.',
+          { label: field.label },
+        ),
       };
 }
 
@@ -285,7 +380,13 @@ export function writeOperationInputValue(
   if (empty) {
     return {
       arguments: deletePath(argumentsValue, field.path),
-      error: field.required ? field.label + ' is required.' : null,
+      error: field.required
+        ? t(
+            'workflowActivityVNext.nodeInspector.tool.validation.required',
+            '{label} is required.',
+            { label: field.label },
+          )
+        : null,
     };
   }
 

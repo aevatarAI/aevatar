@@ -1,8 +1,8 @@
 import {
-  MarkerType,
-  Position,
   type Edge,
+  MarkerType,
   type Node,
+  Position,
   type XYPosition,
 } from '@xyflow/react';
 import { t } from '@/shared/i18n/messages';
@@ -49,7 +49,12 @@ export type StudioGraphNodeData = {
   readonly targetRole: string;
   readonly parametersSummary: string;
   readonly branchCount: number;
-  readonly executionStatus?: 'idle' | 'active' | 'waiting' | 'completed' | 'failed';
+  readonly executionStatus?:
+    | 'idle'
+    | 'active'
+    | 'waiting'
+    | 'completed'
+    | 'failed';
   readonly executionFocused?: boolean;
 };
 
@@ -102,50 +107,67 @@ type WorkflowDocumentLike = {
   readonly steps?: unknown[];
 };
 
-export const STUDIO_GRAPH_CATEGORIES: readonly StudioGraphPrimitiveCategory[] = [
-  {
-    key: 'data',
-    label: 'Data',
-    color: '#3B82F6',
-    items: ['transform', 'assign', 'retrieve_facts', 'cache'],
-  },
-  {
-    key: 'control',
-    label: 'Control',
-    color: '#8B5CF6',
-    items: ['guard', 'conditional', 'switch', 'while', 'delay', 'wait_signal', 'checkpoint'],
-  },
-  {
-    key: 'ai',
-    label: 'AI',
-    color: '#EC4899',
-    items: ['llm_call', 'tool_call', 'evaluate', 'reflect'],
-  },
-  {
-    key: 'composition',
-    label: 'Composition',
-    color: '#F59E0B',
-    items: ['foreach', 'parallel', 'race', 'map_reduce', 'workflow_call', 'dynamic_workflow', 'vote'],
-  },
-  {
-    key: 'integration',
-    label: 'Integration',
-    color: '#10B981',
-    items: ['connector_call', 'emit'],
-  },
-  {
-    key: 'human',
-    label: 'Human',
-    color: '#06B6D4',
-    items: ['human_input', 'human_approval'],
-  },
-  {
-    key: 'validation',
-    label: 'Validation',
-    color: '#64748B',
-    items: ['workflow_yaml_validate'],
-  },
-];
+export const STUDIO_GRAPH_CATEGORIES: readonly StudioGraphPrimitiveCategory[] =
+  [
+    {
+      key: 'data',
+      label: 'Data',
+      color: '#3B82F6',
+      items: ['transform', 'assign', 'retrieve_facts', 'cache'],
+    },
+    {
+      key: 'control',
+      label: 'Control',
+      color: '#8B5CF6',
+      items: [
+        'guard',
+        'conditional',
+        'switch',
+        'while',
+        'delay',
+        'wait_signal',
+        'checkpoint',
+      ],
+    },
+    {
+      key: 'ai',
+      label: 'AI',
+      color: '#EC4899',
+      items: ['llm_call', 'tool_call', 'evaluate', 'reflect'],
+    },
+    {
+      key: 'composition',
+      label: 'Composition',
+      color: '#F59E0B',
+      items: [
+        'foreach',
+        'parallel',
+        'race',
+        'map_reduce',
+        'workflow_call',
+        'dynamic_workflow',
+        'vote',
+      ],
+    },
+    {
+      key: 'integration',
+      label: 'Integration',
+      color: '#10B981',
+      items: ['connector_call', 'emit'],
+    },
+    {
+      key: 'human',
+      label: 'Human',
+      color: '#06B6D4',
+      items: ['human_input', 'human_approval'],
+    },
+    {
+      key: 'validation',
+      label: 'Validation',
+      color: '#64748B',
+      items: ['workflow_yaml_validate'],
+    },
+  ];
 
 const STEP_TYPE_ACRONYM_LABELS: Record<string, string> = {
   ai: 'AI',
@@ -193,9 +215,7 @@ function normalizeString(value: unknown): string {
 
 function normalizeConnectors(value: unknown): string[] {
   return Array.isArray(value)
-    ? value
-        .map((item) => normalizeString(item))
-        .filter(Boolean)
+    ? value.map((item) => normalizeString(item)).filter(Boolean)
     : [];
 }
 
@@ -214,7 +234,10 @@ function normalizeBranches(value: unknown): Record<string, string> {
 
   return Object.fromEntries(
     Object.entries(value)
-      .map(([label, target]) => [normalizeString(label), normalizeString(target)])
+      .map(([label, target]) => [
+        normalizeString(label),
+        normalizeString(target),
+      ])
       .filter(([label, target]) => Boolean(label) && Boolean(target)),
   );
 }
@@ -397,7 +420,9 @@ function extractSavedLayoutPositions(
 
         return [stepId, { x, y }] as const;
       })
-      .filter((entry): entry is readonly [string, XYPosition] => Boolean(entry)),
+      .filter((entry): entry is readonly [string, XYPosition] =>
+        Boolean(entry),
+      ),
   );
 }
 
@@ -542,7 +567,9 @@ export function getStudioGraphCategory(
   type: string,
 ): StudioGraphPrimitiveCategory {
   return (
-    STUDIO_GRAPH_CATEGORIES.find((category) => category.items.includes(type)) ?? {
+    STUDIO_GRAPH_CATEGORIES.find((category) =>
+      category.items.includes(type),
+    ) ?? {
       key: 'custom',
       label: 'Custom',
       color: '#6B7280',
@@ -624,7 +651,8 @@ export function buildStudioGraphElements(
   const autoLayoutPositions = buildAutoLayoutPositions(steps);
 
   const nodes: Node<StudioGraphNodeData>[] = steps.map((step, index) => {
-    const position = savedLayoutPositions[step.id] ?? autoLayoutPositions[step.id];
+    const position =
+      savedLayoutPositions[step.id] ?? autoLayoutPositions[step.id];
     return {
       id: `step:${step.id}`,
       type: 'studioWorkflowNode',
@@ -702,11 +730,7 @@ export function buildStudioGraphElements(
         }
 
         edges.push({
-          id: buildStudioGraphBranchEdgeId(
-            step.id,
-            targetStepId,
-            branchLabel,
-          ),
+          id: buildStudioGraphBranchEdgeId(step.id, targetStepId, branchLabel),
           source: sourceNode.id,
           target: targetNode.id,
           type: 'smoothstep',
