@@ -845,6 +845,101 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
+    public async Task RevisionSourceProjector_ShouldNotDeleteExistingServiceSource_WhenDeploymentCatalogIsNotObservedYet()
+    {
+        var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-1");
+        var serviceKey = ServiceKeys.Build(identity);
+        var existingSource = ExistingServiceSource("scope-1", "wf-published", identity.ServiceId);
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([existingSource], sourceWriter);
+        var serviceProjector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([]),
+            new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([]),
+            new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceReader,
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T02:00:00Z")));
+        var revisionProjector = new ScopeWorkflowCatalogueRevisionSourceProjector(serviceProjector);
+        var revisionCatalog = WorkflowRevisionCatalog(serviceKey, "rev-live", "wf-published", "Published Workflow");
+        var revisionState = ToRevisionCatalogState(identity, revisionCatalog);
+
+        await revisionProjector.ProjectAsync(
+            new ServiceRevisionCatalogProjectionContext
+            {
+                RootActorId = "service-revisions:svc-key",
+                ProjectionKind = "service-revisions",
+            },
+            BuildRevisionEnvelope(
+                new ServiceRevisionPublishedEvent
+                {
+                    Identity = revisionState.Identity.Clone(),
+                    RevisionId = "rev-live",
+                    PublishedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T00:30:00Z")),
+                },
+                revisionState,
+                "evt-revision"));
+
+        sourceWriter.Upserts.Should().BeEmpty();
+        sourceWriter.DeleteMarkers.Should().BeEmpty();
+        rowWriter.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ServiceSourceProjector_ShouldNotDeleteExistingServiceSource_WhenVisibleRevisionIsNotObservedYet()
+    {
+        var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-1");
+        var serviceKey = ServiceKeys.Build(identity);
+        var staleRevisionCatalog = WorkflowRevisionCatalog(serviceKey, "rev-old", "wf-published", "Published Workflow");
+        var deploymentState = new ServiceDeploymentState
+        {
+            Identity = identity.Clone(),
+        };
+        deploymentState.Deployments["dep-live"] = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-live",
+            RevisionId = "rev-live",
+            PrimaryActorId = "workflow-actor-live",
+            Status = ServiceDeploymentStatus.Active,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T01:00:00Z")),
+        };
+        var existingSource = ExistingServiceSource("scope-1", "wf-published", identity.ServiceId);
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([existingSource], sourceWriter);
+        var projector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([]),
+            new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([staleRevisionCatalog]),
+            new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceReader,
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T02:00:00Z")));
+
+        await projector.ProjectAsync(
+            new ServiceDeploymentCatalogProjectionContext
+            {
+                RootActorId = "service-deployment:svc-key",
+                ProjectionKind = "service-deployments",
+            },
+            BuildDeploymentEnvelope(
+                new ServiceDeploymentActivatedEvent
+                {
+                    Identity = identity.Clone(),
+                    DeploymentId = "dep-live",
+                    RevisionId = "rev-live",
+                    PrimaryActorId = "workflow-actor-live",
+                },
+                deploymentState,
+                "evt-deployment"));
+
+        sourceWriter.Upserts.Should().BeEmpty();
+        sourceWriter.DeleteMarkers.Should().BeEmpty();
+        rowWriter.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ServiceSourceProjector_ShouldUsePublishedServiceId_WhenWorkflowPlanHasNoExplicitBindingIdentity()
     {
         var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-1");

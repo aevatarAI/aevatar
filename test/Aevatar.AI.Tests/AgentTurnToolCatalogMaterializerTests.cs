@@ -698,6 +698,74 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task PrepareNyxIdChatAsync_EmptyMembersDinnerRequest_ShouldKeepManagedWorkflowExecutionTools()
+    {
+        var tools = NewTools(
+            "ask_user",
+            "aevatar_start_workflow",
+            "aevatar_observe_run",
+            "aevatar_read_workflow_run_artifact",
+            "nyxid_services");
+        var profile = BuildProfile();
+        profile.Instructions = "For dinner reservation requests, start workflow_id dinner_date.";
+        profile.Members.Clear();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add([
+            "ask_user",
+            "aevatar_start_workflow",
+            "aevatar_observe_run",
+            "aevatar_read_workflow_run_artifact",
+            "nyxid_services",
+        ]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Add([
+            "ask_user",
+            "aevatar_observe_run",
+            "aevatar_read_workflow_run_artifact",
+        ]);
+        var sealedProfile = SealProfile(profile);
+        var materializer = NewMaterializer(
+            RegistryWithRoute(tools),
+            new SequencedClassifier(
+                AgentProfileTurnClassificationResult.Matched(
+                    AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+                AgentProfileTurnClassificationResult.Failed("classifier_not_configured")),
+            fetcher: null);
+
+        var preparation = await materializer.PrepareNyxIdChatAsync(
+            sealedProfile,
+            "session-dinner-empty-members",
+            "帮我订周五 19:30 Keong Saik 附近两个人的晚餐",
+            tools,
+            ToolContext(),
+            llmControl: null,
+            CancellationToken.None);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            sealedProfile,
+            preparation.Authority,
+            accessToken: null,
+            tools,
+            ToolContext(),
+            CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Recovery);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
+            "ask_user",
+            "aevatar_start_workflow",
+            "aevatar_observe_run",
+            "aevatar_read_workflow_run_artifact",
+            "nyxid_services");
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            preparation.Authority.AuthorityCeilingToolNames);
+        materialization.Catalog.ExactTools.Keys.Should().BeEquivalentTo(
+            preparation.Authority.AuthorityCeilingToolNames);
+        materialization.Catalog.ProfilePromptLayer.Should().NotBeNull();
+        materialization.Catalog.ProfilePromptLayer!.Content.Should()
+            .Contain("Profile instructions:")
+            .And.Contain("For dinner reservation requests, start workflow_id dinner_date.");
+    }
+
+    [Fact]
     public async Task PrepareNyxIdChatAsync_ProfileMemberNoMatch_ShouldSelectRelevantReadOnlyConnectedOperation()
     {
         IAgentTool[] tools =

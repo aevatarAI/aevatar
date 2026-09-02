@@ -13,7 +13,7 @@ public sealed class DinnerDateMockWorkflowFixtureTests
     {
         var yaml = File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
-            "workflows",
+            "workflow-templates",
             "dinner_date_mock.yaml"));
 
         var workflow = new WorkflowParser().Parse(yaml);
@@ -41,7 +41,7 @@ public sealed class DinnerDateMockWorkflowFixtureTests
     {
         var yaml = File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
-            "workflows",
+            "workflow-templates",
             "dinner_date_mock.yaml"));
 
         var workflow = new WorkflowParser().Parse(yaml);
@@ -91,7 +91,7 @@ public sealed class DinnerDateMockWorkflowFixtureTests
     {
         var workflow = new WorkflowParser().Parse(File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
-            "workflows",
+            "workflow-templates",
             "dinner_date_mock.yaml")));
         var variables = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -134,7 +134,7 @@ public sealed class DinnerDateMockWorkflowFixtureTests
     {
         var workflow = new WorkflowParser().Parse(File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
-            "workflows",
+            "workflow-templates",
             "dinner_date_mock.yaml")));
         var variables = new Dictionary<string, string>(StringComparer.Ordinal)
         {

@@ -2209,7 +2209,10 @@ public sealed class AevatarInvocationToolSourceTests
             "workflow_template_missing");
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
 
-        using var _ = PushContext(callId: "call-configured-scope-workflow");
+        using var _ = PushContext(
+            callId: "call-configured-scope-workflow",
+            accessToken: "source-token",
+            nyxIdCredentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
         var output = await tool.ExecuteAsync("""
             {
               "workflow_id": "wf-configured",
@@ -2219,8 +2222,14 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.ScopeWorkflowTemplateEnsure.Requests.Should().ContainSingle()
-            .Which.Should().Be(new ScopeWorkflowTemplateEnsureRequest("scope-1", "wf-configured"));
+        var ensureRequest = harness.ScopeWorkflowTemplateEnsure.Requests.Should().ContainSingle().Subject;
+        ensureRequest.ScopeId.Should().Be("scope-1");
+        ensureRequest.WorkflowId.Should().Be("wf-configured");
+        ensureRequest.CapabilityAdmission.Should().NotBeNull();
+        ensureRequest.CapabilityAdmission!.CallerId.Should().Be("owner-1");
+        ensureRequest.CapabilityAdmission.NyxIdCallerCredential.Should().NotBeNull();
+        ensureRequest.CapabilityAdmission.NyxIdCallerCredential!.SourceReadableUserBearerToken.Should()
+            .Be("source-token");
         harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
             .Which.Should().Be(("scope-1", "wf-configured"));
         harness.WorkflowDispatch.Command.Should().NotBeNull();

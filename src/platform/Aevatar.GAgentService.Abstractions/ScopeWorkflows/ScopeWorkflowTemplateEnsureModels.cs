@@ -1,8 +1,14 @@
+using System.Text.Json.Serialization;
+
 namespace Aevatar.GAgentService.Abstractions;
 
 public sealed record ScopeWorkflowTemplateEnsureRequest(
     string ScopeId,
-    string WorkflowId);
+    string WorkflowId)
+{
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+}
 
 public enum ScopeWorkflowTemplateEnsureStatus
 {

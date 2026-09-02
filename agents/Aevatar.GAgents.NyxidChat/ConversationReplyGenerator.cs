@@ -403,6 +403,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             externalMetadata,
             tools,
             input.AttachmentVisibilityInstruction,
+            effectiveTurnCatalog,
             conversationLayer);
 
         // The unbound-sender gate (issue #1318) detaches the entire tool surface while
@@ -2043,6 +2044,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyDictionary<string, string> externalMetadata,
         ToolManager tools,
         string? attachmentVisibilityInstruction,
+        AgentTurnToolCatalog? turnCatalog = null,
         ConversationContextPromptLayer? conversationLayer = null)
     {
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
@@ -2067,6 +2069,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                         externalMetadata,
                         toolContext,
                         attachmentVisibilityInstruction,
+                        turnCatalog: turnCatalog,
                         conversation: conversationLayer)),
                 ],
                 Metadata = externalMetadata,

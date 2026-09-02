@@ -57,7 +57,7 @@ internal static class AevatarInvocationToolSchemas
         fieldDescriptions: new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["workflow_id"] =
-                "Exact workflow id, resolved beforehand (for example via scope_workflows_get). Never guess.",
+                "Exact workflow id, resolved beforehand (for example via scope_workflows_get or the active sealed Agent Profile instructions naming a configured managed workflow). Never guess.",
             ["inputs.prompt"] =
                 "The workflow's run input. Typed workflows require a NON-EMPTY serialized JSON string " +
                 "matching the workflow's input contract, for example {\"period_label\":\"2026年8月\",\"submit\":false}. " +

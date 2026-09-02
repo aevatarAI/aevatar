@@ -542,8 +542,10 @@ public sealed class AevatarInvocationDispatcher
         var metadata = BuildPayloadHeaders(inputs.Headers);
         var sourceResolution = await ResolveWorkflowStartSourceAsync(
                 scope.ScopeId,
+                scope.OwnerSubject,
                 workflowName,
                 workflowYamls,
+                callerCredential.Value,
                 ct)
             .ConfigureAwait(false);
         if (sourceResolution.Error != null)
@@ -571,15 +573,23 @@ public sealed class AevatarInvocationDispatcher
 
     private async ValueTask<WorkflowStartSourceResolution> ResolveWorkflowStartSourceAsync(
         string scopeId,
+        string callerId,
         string workflowName,
         string[]? workflowYamls,
+        WorkflowRunCallerCredential? callerCredential,
         CancellationToken ct)
     {
         if (workflowYamls is { Length: > 0 })
             return WorkflowStartSourceResolution.Success(
                 WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName));
 
-        var templateEnsure = await TryEnsureScopeWorkflowTemplateAsync(scopeId, workflowName, ct).ConfigureAwait(false);
+        var templateEnsure = await TryEnsureScopeWorkflowTemplateAsync(
+                scopeId,
+                callerId,
+                workflowName,
+                callerCredential,
+                ct)
+            .ConfigureAwait(false);
         if (templateEnsure.Error != null)
             return templateEnsure;
 
@@ -601,7 +611,9 @@ public sealed class AevatarInvocationDispatcher
 
     private async ValueTask<WorkflowStartSourceResolution> TryEnsureScopeWorkflowTemplateAsync(
         string scopeId,
+        string callerId,
         string workflowId,
+        WorkflowRunCallerCredential? callerCredential,
         CancellationToken ct)
     {
         if (_scopeWorkflowTemplateEnsurePort is null)
@@ -610,9 +622,19 @@ public sealed class AevatarInvocationDispatcher
         try
         {
             var result = await _scopeWorkflowTemplateEnsurePort.EnsureAsync(
-                    new ScopeWorkflowTemplateEnsureRequest(scopeId, workflowId),
+                    new ScopeWorkflowTemplateEnsureRequest(scopeId, workflowId)
+                    {
+                        CapabilityAdmission = ToTemplateEnsureAdmissionContext(callerId, callerCredential),
+                    },
                     ct)
                 .ConfigureAwait(false);
+            _logger.LogInformation(
+                "Scope workflow template ensure completed before workflow start: scopeId={ScopeId} workflowId={WorkflowId} status={Status} revisionId={RevisionId} reason={Reason}",
+                scopeId,
+                workflowId,
+                result.Status,
+                result.RevisionId,
+                result.Reason);
             return result.Succeeded
                 ? WorkflowStartSourceResolution.NotResolved()
                 : WorkflowStartSourceResolution.Failed(ScopeWorkflowTemplateEnsureFailedError(result));
@@ -628,6 +650,22 @@ public sealed class AevatarInvocationDispatcher
         }
     }
 
+    private static WorkflowCapabilityAdmissionContext? ToTemplateEnsureAdmissionContext(
+        string callerId,
+        WorkflowRunCallerCredential? callerCredential)
+    {
+        var sourceReadableBearerToken = callerCredential?.Kind == NyxIdCallerCredentialKind.SourceReadableUserBearer
+            ? callerCredential.BearerToken
+            : callerCredential?.SourceReadableUserBearerToken;
+        if (string.IsNullOrWhiteSpace(sourceReadableBearerToken))
+            return null;
+
+        return new WorkflowCapabilityAdmissionContext(
+            callerId,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(sourceReadableBearerToken),
+            executionMode: ExternalCapabilityExecutionMode.Interactive);
+    }
+
     private async ValueTask<WorkflowStartSourceResolution> TryResolveScopeWorkflowAsync(
         string scopeId,
         string workflowId,
@@ -640,6 +678,13 @@ public sealed class AevatarInvocationDispatcher
         {
             var lookup = await _scopeWorkflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct)
                 .ConfigureAwait(false);
+            _logger.LogInformation(
+                "Scope workflow lookup completed before workflow start: scopeId={ScopeId} workflowId={WorkflowId} status={Status} reason={Reason} actorIdPresent={ActorIdPresent}",
+                scopeId,
+                workflowId,
+                lookup.Status,
+                lookup.Reason,
+                !string.IsNullOrWhiteSpace(lookup.Workflow?.ActorId));
             if (lookup.IsRunnable && !string.IsNullOrWhiteSpace(lookup.Workflow!.ActorId))
                 return WorkflowStartSourceResolution.Resolved(lookup.Workflow);
 

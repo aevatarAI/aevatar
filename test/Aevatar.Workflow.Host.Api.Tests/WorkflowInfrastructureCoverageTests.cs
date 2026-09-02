@@ -315,7 +315,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().NotContain(x =>
             x.ServiceType == typeof(IWorkflowWebhookReplayStore) &&
             x.ImplementationType == typeof(RedisWorkflowWebhookReplayStore));
-        services.Should().Contain(x =>
+        services.Should().NotContain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
     }
@@ -999,7 +999,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void AddWorkflowCapabilityServices_ShouldSetFileSourceDuplicatePolicyToOverride()
+    public void AddWorkflowCapabilityServices_ShouldNotRegisterStartupWorkflowFileSourceByDefault()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -1010,10 +1010,10 @@ public sealed class WorkflowInfrastructureCoverageTests
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<IOptions<WorkflowDefinitionFileSourceOptions>>().Value;
 
-        options.DuplicatePolicy.Should().Be(WorkflowDefinitionDuplicatePolicy.Override);
-        options.WorkflowDirectories.Should().Contain(AevatarPaths.RepoRootWorkflows);
-        options.WorkflowDirectories.Should().NotContain(AevatarPaths.RepoRootWorkflowTemplates);
-        options.WorkflowDirectories.Should().NotContain(Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
+        options.WorkflowDirectories.Should().BeEmpty();
+        services.Should().NotContain(x => x.ServiceType == typeof(WorkflowDefinitionFileLoader));
+        services.Should().NotContain(x => x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
     }
 
     [Fact]

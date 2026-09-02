@@ -13,7 +13,7 @@ public sealed class DinnerSearchThenCallWorkflowFixtureTests
     {
         var yaml = File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
-            "workflows",
+            "workflow-templates",
             "dinner_search_then_call.yaml"));
 
         var workflow = new WorkflowParser().Parse(yaml);
@@ -46,7 +46,7 @@ public sealed class DinnerSearchThenCallWorkflowFixtureTests
     {
         var yaml = File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
-            "workflows",
+            "workflow-templates",
             "dinner_search_then_call.yaml"));
 
         var workflow = new WorkflowParser().Parse(yaml);
@@ -75,7 +75,7 @@ public sealed class DinnerSearchThenCallWorkflowFixtureTests
     {
         var workflow = new WorkflowParser().Parse(File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
-            "workflows",
+            "workflow-templates",
             "dinner_search_then_call.yaml")));
         var variables = new Dictionary<string, string>(StringComparer.Ordinal)
         {

@@ -339,6 +339,44 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
     }
 
     [Fact]
+    public async Task LookupByWorkflowIdAsync_ShouldResolveDescriptor_WhenBindingUsesPublishedServiceId()
+    {
+        const string workflowId = "dinner_date";
+        const string publishedServiceId = "default";
+        var snapshot = CreateServiceSnapshot(
+            publishedServiceId,
+            "Dinner Date Mock",
+            activeRevisionId: "dinner-date-mock-v2",
+            deploymentId: "dep-dinner",
+            primaryActorId: "actor-dinner");
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            getResult: snapshot,
+            deploymentResult: CreateDeploymentCatalog(snapshot));
+        var bindingReader = new FakeWorkflowActorBindingReader(
+            CreateBinding("actor-dinner", "dinner_date_mock", publishedServiceId));
+        var descriptorSource = new FakePublishedServiceDescriptorSource(
+            new ScopeWorkflowPublishedServiceDescriptor(
+                ScopeId,
+                workflowId,
+                DefaultOptions.ServiceAppId,
+                DefaultOptions.ServiceNamespace,
+                publishedServiceId,
+                "Dinner Date Mock",
+                DateTimeOffset.UtcNow));
+        var service = CreateService(lifecyclePort, bindingReader, descriptorSource);
+
+        var result = await service.LookupByWorkflowIdAsync(ScopeId, workflowId);
+
+        result.Status.Should().Be(ScopeWorkflowLookupStatus.Runnable);
+        result.Workflow.Should().NotBeNull();
+        result.Workflow!.WorkflowId.Should().Be(workflowId);
+        result.Workflow.PublishedServiceId.Should().Be(publishedServiceId);
+        result.Workflow.WorkflowName.Should().Be("dinner_date_mock");
+        lifecyclePort.LastGetRequest.Should().NotBeNull();
+        lifecyclePort.LastGetRequest!.ServiceId.Should().Be(publishedServiceId);
+    }
+
+    [Fact]
     public async Task LookupCatalogueByWorkflowIdAsync_ShouldReturnCommittedServiceWithoutRunnableDeployment()
     {
         const string workflowId = "wf-alpha";

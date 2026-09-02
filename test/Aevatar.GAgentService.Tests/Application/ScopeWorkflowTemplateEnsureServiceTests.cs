@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
 
@@ -70,6 +71,32 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
         request.ServiceId.Should().Be("svc-default");
         request.AppId.Should().Be("app-default");
         request.ExposureDesired.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task EnsureAsync_ShouldPassCapabilityAdmissionContextToSaveAndBind()
+    {
+        var queryPort = new RecordingScopeWorkflowQueryPort(
+            new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.NotFound,
+                null,
+                "service_catalog_missing"),
+            new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.Runnable,
+                BuildWorkflow("scope-1", "wf-default", "rev-expected"),
+                "runnable"));
+        var saveAndBindPort = new RecordingScopeWorkflowSaveAndBindPort();
+        var service = CreateService(queryPort, saveAndBindPort, BuildTemplate());
+        var admission = new WorkflowCapabilityAdmissionContext(
+            "caller-1",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer("source-token"));
+
+        await service.EnsureAsync(new ScopeWorkflowTemplateEnsureRequest("scope-1", "wf-default")
+        {
+            CapabilityAdmission = admission,
+        });
+
+        saveAndBindPort.Requests.Should().ContainSingle().Which.CapabilityAdmission.Should().BeSameAs(admission);
     }
 
     [Fact]

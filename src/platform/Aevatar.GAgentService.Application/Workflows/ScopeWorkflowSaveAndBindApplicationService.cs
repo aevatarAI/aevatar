@@ -108,7 +108,7 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
                 DisplayName: request.DisplayName,
                 RevisionId: revisionId,
                 AppId: request.AppId,
-                ServiceId: ResolveBindingServiceId(request.ServiceId),
+                ServiceId: ResolveBindingServiceId(request.ServiceId, normalizedWorkflowId),
                 ExposureDesired: request.ExposureDesired,
                 AllowExistingRevisionReplay: true,
                 ReplayRevisionId: revisionId)
@@ -142,11 +142,11 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
             : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(normalized);
     }
 
-    private static string? ResolveBindingServiceId(string? serviceId)
+    private static string ResolveBindingServiceId(string? serviceId, string workflowId)
     {
         var normalized = ScopeWorkflowCapabilityConventions.NormalizeOptional(serviceId);
         return string.IsNullOrWhiteSpace(normalized)
-            ? null
+            ? ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(workflowId)
             : ScopeWorkflowCapabilityOptions.NormalizeRequired(normalized, nameof(serviceId));
     }
 

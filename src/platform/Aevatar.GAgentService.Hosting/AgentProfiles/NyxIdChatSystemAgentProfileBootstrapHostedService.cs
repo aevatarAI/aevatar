@@ -35,10 +35,10 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
         if (!options.Enabled)
             return;
 
-        if (options.Members.Count == 0)
+        if (options.Members.Count == 0 && !HasAnyToolPolicy(options))
         {
             _logger.LogWarning(
-                "System NyxID chat Agent Profile bootstrap is enabled but no exact Ornn skill members are configured; skipping profile publish.");
+                "System NyxID chat Agent Profile bootstrap is enabled but no exact Ornn skill members or tool policy are configured; skipping profile publish.");
             return;
         }
 
@@ -238,6 +238,15 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
     private static bool PublishedExists(AgentProfileManagementSnapshot snapshot) =>
         snapshot.PublishedRevision > 0 &&
         snapshot.PublishedSnapshotSha256.Length == 32;
+
+    private static bool HasAnyToolPolicy(NyxIdChatSystemAgentProfileBootstrapOptions options) =>
+        HasAnyToolPolicy(options.MaximumToolPolicy) ||
+        HasAnyToolPolicy(options.RecoveryToolPolicy);
+
+    private static bool HasAnyToolPolicy(AgentProfileToolPolicyOptions policy) =>
+        policy.ToolNames.Count > 0 ||
+        policy.ToolSetRefs.Count > 0 ||
+        policy.ConnectedServiceSelectors.Count > 0;
 
     private static bool BindingTargetsPublishedSnapshot(
         AgentProfileDefaultBinding? binding,

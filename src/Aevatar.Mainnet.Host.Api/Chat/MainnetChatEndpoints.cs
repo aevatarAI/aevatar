@@ -59,7 +59,7 @@ public static class MainnetChatEndpoints
 
             var body = document.RootElement.Clone();
             if (ExternalWorkflowChatCompatibilityAdapter.AcceptsJson(body))
-                return new MainnetChatRequestClassification(MainnetChatRequestKind.ExternalWorkflowCompatibility);
+                return new MainnetChatRequestClassification(MainnetChatRequestKind.ExternalWorkflowCompatibility, body);
             if (!body.TryGetProperty("type", out var type))
                 return new MainnetChatRequestClassification(MainnetChatRequestKind.Unsupported);
 
@@ -88,7 +88,7 @@ public static class MainnetChatEndpoints
         switch (classification.Kind)
         {
             case MainnetChatRequestKind.ExternalWorkflowCompatibility:
-                await ExternalWorkflowChatCompatibilityAdapter.HandleAsync(http, ct);
+                await ExternalWorkflowChatCompatibilityAdapter.HandleAsync(http, classification.Body, ct);
                 return;
             case MainnetChatRequestKind.Assistant:
                 await NyxIdChatEndpoints.HandlePublicChatAsync(http, classification.Body!.Value, ct);

@@ -81,6 +81,14 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             "preview_workflow_explicit_requests",
         };
 
+    private static readonly IReadOnlySet<string> ManagedWorkflowExecutionToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "aevatar_start_workflow",
+            "aevatar_observe_run",
+            "aevatar_read_workflow_run_artifact",
+        };
+
     private readonly IToolSetRegistry _toolSetRegistry;
     private readonly IAgentProfileTurnClassifier _classifier;
     private readonly IExactRemoteSkillFetcher? _exactRemoteSkillFetcher;
@@ -2278,7 +2286,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         var names = new HashSet<string>(recoveryToolNames, StringComparer.OrdinalIgnoreCase);
         foreach (var name in eligibleToolNames)
         {
-            if (UnprofiledBaselineToolNames.Contains(name))
+            if (UnprofiledBaselineToolNames.Contains(name) ||
+                ManagedWorkflowExecutionToolNames.Contains(name))
                 names.Add(name);
         }
 

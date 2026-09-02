@@ -40,7 +40,7 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
         bindingPort.Request.Workflow.WorkflowYamls.Should().Equal(
             "name: main\nsteps: []",
             "name: child\nsteps: []");
-        bindingPort.Request.ServiceId.Should().BeNull();
+        bindingPort.Request.ServiceId.Should().Be("wf-alpha");
         bindingPort.Request.AppId.Should().Be("studio");
         bindingPort.Request.ExposureDesired.Should().BeTrue();
         admission.Requests.Should().ContainSingle();
@@ -68,6 +68,27 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
         result.WorkflowId.Should().StartWith("wf-");
         workflowPort.Request!.WorkflowId.Should().Be(result.WorkflowId);
         bindingPort.Request!.Workflow!.WorkflowId.Should().Be(result.WorkflowId);
+    }
+
+    [Fact]
+    public async Task SaveAndBindAsync_WhenServiceIdIsExplicit_ShouldUseRequestedBindingServiceId()
+    {
+        var workflowPort = new RecordingScopeWorkflowCommandPort();
+        var bindingPort = new RecordingScopeBindingCommandPort();
+        var service = new ScopeWorkflowSaveAndBindApplicationService(
+            workflowPort,
+            bindingPort,
+            new RecordingAdmissionService());
+
+        await service.SaveAndBindAsync(new ScopeWorkflowSaveAndBindRequest(
+            "scope-a",
+            "wf-alpha",
+            "name: main\nsteps: []\n",
+            ServiceId: "svc-explicit"));
+
+        workflowPort.Request!.WorkflowId.Should().Be("wf-alpha");
+        bindingPort.Request!.Workflow!.WorkflowId.Should().Be("wf-alpha");
+        bindingPort.Request.ServiceId.Should().Be("svc-explicit");
     }
 
     [Fact]
