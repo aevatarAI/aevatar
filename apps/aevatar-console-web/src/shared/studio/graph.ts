@@ -75,6 +75,13 @@ export type StudioWorkflowLayoutDocument = {
   readonly entryWorkflow?: string;
 };
 
+const STUDIO_AUTO_LAYOUT_ORIGIN_X = 240;
+const STUDIO_AUTO_LAYOUT_ORIGIN_Y = 180;
+const STUDIO_AUTO_LAYOUT_COLUMN_PITCH = 330;
+const STUDIO_AUTO_LAYOUT_ROW_PITCH = 200;
+const STUDIO_AUTO_LAYOUT_NODE_WIDTH = 268;
+const STUDIO_AUTO_LAYOUT_NODE_HEIGHT = 120;
+
 function buildStudioGraphNextEdgeId(
   sourceStepId: string,
   targetStepId: string,
@@ -397,7 +404,75 @@ export function needsStudioAutoLayout(
   steps: readonly StudioGraphStep[],
   savedPositions: Readonly<Record<string, XYPosition>>,
 ): boolean {
-  return steps.some((step) => savedPositions[step.id] === undefined);
+  return steps.some(
+    (step) =>
+      !Object.hasOwn(savedPositions, step.id) ||
+      savedPositions[step.id] === undefined,
+  );
+}
+
+function getStudioSavedPosition(
+  savedPositions: Readonly<Record<string, XYPosition>>,
+  stepId: string,
+): XYPosition | undefined {
+  return Object.hasOwn(savedPositions, stepId)
+    ? savedPositions[stepId]
+    : undefined;
+}
+
+function studioGraphPositionsOverlap(
+  left: XYPosition,
+  right: XYPosition,
+): boolean {
+  return (
+    left.x < right.x + STUDIO_AUTO_LAYOUT_NODE_WIDTH &&
+    right.x < left.x + STUDIO_AUTO_LAYOUT_NODE_WIDTH &&
+    left.y < right.y + STUDIO_AUTO_LAYOUT_NODE_HEIGHT &&
+    right.y < left.y + STUDIO_AUTO_LAYOUT_NODE_HEIGHT
+  );
+}
+
+function buildStudioGraphNodePositions(
+  steps: readonly StudioGraphStep[],
+  savedPositions: Readonly<Record<string, XYPosition>>,
+  autoLayoutPositions: Readonly<Record<string, XYPosition>>,
+): XYPosition[] {
+  const savedPositionsByStep = steps.map((step) =>
+    getStudioSavedPosition(savedPositions, step.id),
+  );
+  if (savedPositionsByStep.every((position) => position === undefined)) {
+    return steps.map((step) => autoLayoutPositions[step.id]);
+  }
+
+  const occupiedPositions = savedPositionsByStep.filter(
+    (position): position is XYPosition => position !== undefined,
+  );
+
+  return steps.map((step, index) => {
+    const savedPosition = savedPositionsByStep[index];
+    if (savedPosition) {
+      return savedPosition;
+    }
+
+    const autoLayoutPosition = autoLayoutPositions[step.id];
+    if (!autoLayoutPosition) {
+      return {
+        x: STUDIO_AUTO_LAYOUT_ORIGIN_X + index * STUDIO_AUTO_LAYOUT_COLUMN_PITCH,
+        y: STUDIO_AUTO_LAYOUT_ORIGIN_Y,
+      };
+    }
+
+    let position = autoLayoutPosition;
+    while (occupiedPositions.some((occupied) => studioGraphPositionsOverlap(position, occupied))) {
+      position = {
+        ...position,
+        y: position.y + STUDIO_AUTO_LAYOUT_ROW_PITCH,
+      };
+    }
+
+    occupiedPositions.push(position);
+    return position;
+  });
 }
 
 function buildAutoLayoutPositions(
@@ -513,8 +588,8 @@ function buildAutoLayoutPositions(
     const depth = depths.get(stepId) ?? 0;
     const centerRow = startRow + (size - 1) / 2;
     positions[stepId] = {
-      x: 240 + depth * 330,
-      y: 180 + centerRow * 200,
+      x: STUDIO_AUTO_LAYOUT_ORIGIN_X + depth * STUDIO_AUTO_LAYOUT_COLUMN_PITCH,
+      y: STUDIO_AUTO_LAYOUT_ORIGIN_Y + centerRow * STUDIO_AUTO_LAYOUT_ROW_PITCH,
     };
 
     let nextRow = startRow;
@@ -626,9 +701,14 @@ export function buildStudioGraphElements(
   )
     ? buildAutoLayoutPositions(steps)
     : {};
+  const nodePositions = buildStudioGraphNodePositions(
+    steps,
+    savedLayoutPositions,
+    autoLayoutPositions,
+  );
 
   const nodes: Node<StudioGraphNodeData>[] = steps.map((step, index) => {
-    const position = savedLayoutPositions[step.id] ?? autoLayoutPositions[step.id];
+    const position = nodePositions[index];
     return {
       id: `step:${step.id}`,
       type: 'studioWorkflowNode',
@@ -636,11 +716,12 @@ export function buildStudioGraphElements(
         x:
           typeof position?.x === 'number' && Number.isFinite(position.x)
             ? position.x
-            : 240 + index * 330,
+            : STUDIO_AUTO_LAYOUT_ORIGIN_X +
+              index * STUDIO_AUTO_LAYOUT_COLUMN_PITCH,
         y:
           typeof position?.y === 'number' && Number.isFinite(position.y)
             ? position.y
-            : 180,
+            : STUDIO_AUTO_LAYOUT_ORIGIN_Y,
       },
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
