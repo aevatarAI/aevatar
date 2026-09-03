@@ -27,12 +27,15 @@ import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useWorkflowActivityAccount } from '../account/useWorkflowActivityAccount';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
+import {
+  buildWorkflowActivitySettingsHref,
+  type WorkflowActivitySettingsSection,
+} from '../navigation';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import AccountPanel from './AccountPanel';
 import { buildAccountIdentity } from './accountIdentity';
 
-type SettingsSection = 'ai' | 'account' | 'advanced';
 type SavePhase =
   | 'idle'
   | 'saving'
@@ -45,16 +48,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function readSection(search: string): SettingsSection {
+function readSection(search: string): WorkflowActivitySettingsSection {
   const value = new URLSearchParams(search).get('section');
   return value === 'account' || value === 'advanced' ? value : 'ai';
-}
-
-function settingsSectionHref(
-  pathname: string,
-  section: SettingsSection,
-): string {
-  return section === 'ai' ? pathname : `${pathname}?section=${section}`;
 }
 
 function SettingsLoadingState({ message }: { readonly message: string }) {
@@ -100,8 +96,8 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
   const queryClient = useQueryClient();
   const toast = useConsoleToast();
-  const [section, setSection] = React.useState<SettingsSection>(() =>
-    readSection(location.search),
+  const [section, setSection] = React.useState<WorkflowActivitySettingsSection>(
+    () => readSection(location.search),
   );
   const llm = useQuery({
     queryKey: ['workflow-activity-vnext', 'settings', 'llm'],
@@ -535,8 +531,11 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     />
   ) : resolvedAuth && accountIdentity ? (
     <AccountPanel
+      accountSettingsHref={buildWorkflowActivitySettingsHref(
+        scopeId,
+        'account',
+      )}
       identity={accountIdentity}
-      returnTo={`${location.pathname}?section=account`}
     />
   ) : null;
 
@@ -710,7 +709,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             <a
               aria-current={item.key === section ? 'page' : undefined}
               className="wa-vnext__settings-nav-link"
-              href={settingsSectionHref(location.pathname, item.key)}
+              href={buildWorkflowActivitySettingsHref(scopeId, item.key)}
               key={item.key}
               onClick={(event) => {
                 if (
@@ -723,7 +722,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   return;
                 event.preventDefault();
                 requestNavigation(
-                  settingsSectionHref(location.pathname, item.key),
+                  buildWorkflowActivitySettingsHref(scopeId, item.key),
                 );
               }}
             >
