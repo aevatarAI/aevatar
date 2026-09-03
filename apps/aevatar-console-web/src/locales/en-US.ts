@@ -721,7 +721,7 @@ const enUSMessages = {
     'Use the property names documented by this tool. The value is passed as JSON text.',
   'shared.studio.nodeConfiguration.toolCall.arguments.label': 'Arguments JSON',
   'shared.studio.nodeConfiguration.toolCall.arguments.placeholder':
-    '{"query":"$input"}',
+    '\'{\'"query":"$input"\'}\'',
   'shared.studio.nodeConfiguration.toolCall.tool.description':
     "Use the exact name from the workflow template or target role's tool setup, for example web_search.",
   'shared.studio.nodeConfiguration.toolCall.tool.label': 'Tool name',

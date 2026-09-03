@@ -3850,12 +3850,12 @@ describe('Workflow Activity vNext editor', () => {
     expect(
       within(inspector).queryByLabelText('Raw configuration'),
     ).not.toBeInTheDocument();
-    expect(within(inspector).getByText('Advanced options')).toBeVisible();
+    expect(within(inspector).getByText('Advanced JSON')).toBeVisible();
     fireEvent.change(within(inspector).getByLabelText('Instruction'), {
       target: { value: 'Updated prompt' },
     });
     fireEvent.click(
-      within(inspector).getByRole('button', { name: 'Apply changes' }),
+      within(inspector).getByRole('button', { name: 'Apply step' }),
     );
 
     await waitFor(() =>
@@ -3889,7 +3889,7 @@ describe('Workflow Activity vNext editor', () => {
     const inspector = await screen.findByRole('complementary', {
       name: 'Configure step-root',
     });
-    fireEvent.click(within(inspector).getByText('Advanced options'));
+    fireEvent.click(within(inspector).getByText('Advanced JSON'));
     const rawConfiguration =
       await within(inspector).findByLabelText('Raw configuration');
 
@@ -3902,10 +3902,10 @@ describe('Workflow Activity vNext editor', () => {
         'Configuration must be a JSON object.',
       ),
     ).toBeVisible();
-    expect(within(inspector).getByText('Technical details')).toBeVisible();
+    expect(within(inspector).getByText('Error details')).toBeVisible();
     expect(within(inspector).getByText(parserError)).not.toBeVisible();
 
-    fireEvent.click(within(inspector).getByText('Technical details'));
+    fireEvent.click(within(inspector).getByText('Error details'));
 
     expect(within(inspector).getByText(parserError)).toBeVisible();
   });
@@ -3924,7 +3924,9 @@ describe('Workflow Activity vNext editor', () => {
     });
 
     expect(
-      within(inspector).getByText('Apply changes before saving this workflow.'),
+      within(inspector).getByText(
+        'Apply this step before saving the workflow.',
+      ),
     ).toBeVisible();
     expect(
       screen.getByRole('button', { name: 'Save workflow' }),
@@ -4337,7 +4339,7 @@ describe('Workflow Activity vNext editor', () => {
     const instruction = within(inspector).getByLabelText('Instruction');
     fireEvent.change(instruction, { target: { value: 'Updated prompt' } });
     fireEvent.click(
-      within(inspector).getByRole('button', { name: 'Apply changes' }),
+      within(inspector).getByRole('button', { name: 'Apply step' }),
     );
 
     await waitFor(() =>
@@ -5556,7 +5558,7 @@ describe('Workflow Activity vNext editor', () => {
       target: { value: 'Updated prompt' },
     });
     fireEvent.click(
-      within(inspector).getByRole('button', { name: 'Apply changes' }),
+      within(inspector).getByRole('button', { name: 'Apply step' }),
     );
 
     expect(
@@ -5567,18 +5569,18 @@ describe('Workflow Activity vNext editor', () => {
       'Updated prompt',
     );
     expect(
-      within(inspector).getByRole('button', { name: 'Apply changes' }),
+      within(inspector).getByRole('button', { name: 'Apply step' }),
     ).toBeEnabled();
 
     fireEvent.click(
-      within(inspector).getByRole('button', { name: 'Apply changes' }),
+      within(inspector).getByRole('button', { name: 'Apply step' }),
     );
     await waitFor(() =>
       expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(2),
     );
     await waitFor(() =>
       expect(
-        within(inspector).getByRole('button', { name: 'Apply changes' }),
+        within(inspector).getByRole('button', { name: 'Apply step' }),
       ).toBeDisabled(),
     );
   });

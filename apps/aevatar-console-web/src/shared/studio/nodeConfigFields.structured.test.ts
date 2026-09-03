@@ -74,18 +74,18 @@ describe('studio node configuration semantics', () => {
       applyStudioNodeConfigurationValues(
         'while',
         {
-          condition: '${lt(iteration, 5)}',
+          condition: '${' + 'lt(iteration, 5)}',
           max_iterations: '5',
           step: 'llm_call',
         },
         {
-          condition: '${lt(iteration, 3)}',
+          condition: '${' + 'lt(iteration, 3)}',
           maxIterations: '3',
           step: 'transform',
         },
       ),
     ).toEqual({
-      condition: '${lt(iteration, 3)}',
+      condition: '${' + 'lt(iteration, 3)}',
       max_iterations: '3',
       step: 'transform',
     });

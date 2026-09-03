@@ -960,7 +960,7 @@ export const workflowActivityVNextCss = `
   .wa-vnext__workflow-actions .ant-btn { min-height: 44px; }
   .wa-vnext__workflow-actions .ant-btn-icon-only { min-width: 44px; width: 44px; }
   .wa-vnext__settings-layout { max-width: none; }
-  .wa-vnext__node-inspector { bottom: 12px; left: 12px; max-height: calc(100% - 24px); max-width: none; right: 12px; top: auto; width: auto; }
+  .wa-vnext__node-inspector { bottom: 56px; left: 12px; max-height: calc(100dvh - 120px); max-width: none; position: fixed; right: 12px; top: auto; width: auto; }
 }
 @media (max-width: 600px) {
   .wa-vnext__header { flex-direction: column; }

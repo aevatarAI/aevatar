@@ -41,7 +41,7 @@ This hierarchy improves comprehension without inventing server-owned facts.
 ```yaml
 parameters:
   tool: nyxid_proxy
-  arguments: '{"query":{"request":"${input}"}}'
+  arguments: '{"query":{"request":"$input"}}'
 ```
 
 The Settings surface exposes:

@@ -6,7 +6,12 @@ import {
   within,
 } from '@testing-library/react';
 import React from 'react';
+import { createIntl } from 'react-intl';
+import enUSMessages from '@/locales/en-US';
+import zhCNMessages from '@/locales/zh-CN';
 import type { StudioStepInspectorDraft } from '@/shared/studio/document';
+import { getStudioNodeConfigurationSchema } from '@/shared/studio/nodeConfigFieldSchemas';
+import { workflowActivityVNextCss } from '../styles';
 import WorkflowNodeInspector from './WorkflowNodeInspector';
 
 const llmDraft: StudioStepInspectorDraft = {
@@ -121,5 +126,40 @@ describe('WorkflowNodeInspector', () => {
     expect(
       screen.getByText('No settings are needed for this step.'),
     ).toBeVisible();
+  });
+
+  it('keeps the mobile inspector between the top bar and logs dock', () => {
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__node-inspector { bottom: 56px; left: 12px; max-height: calc(100dvh - 120px); max-width: none; position: fixed; right: 12px; top: auto; width: auto; }',
+    );
+  });
+
+  it('formats the JSON arguments example without ICU errors', () => {
+    const argumentsPlaceholder = getStudioNodeConfigurationSchema(
+      'tool_call',
+      {},
+    ).fields.find((field) => field.name === 'arguments')?.placeholder;
+
+    expect(argumentsPlaceholder).toBeDefined();
+    if (!argumentsPlaceholder) throw new Error('Arguments placeholder missing');
+
+    for (const [locale, messages] of [
+      [
+        'en-US',
+        {
+          [argumentsPlaceholder.id]: argumentsPlaceholder.defaultMessage,
+        },
+      ],
+      ['en-US', enUSMessages],
+      ['zh-CN', zhCNMessages],
+    ] as const) {
+      const onError = jest.fn();
+      const intl = createIntl({ locale, messages, onError });
+
+      expect(intl.formatMessage(argumentsPlaceholder)).toBe(
+        '{"query":"$input"}',
+      );
+      expect(onError).not.toHaveBeenCalled();
+    }
   });
 });

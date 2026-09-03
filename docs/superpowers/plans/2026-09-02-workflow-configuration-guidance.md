@@ -69,7 +69,7 @@ The test renders a `tool_call` draft with these existing parameters:
 ```ts
 {
   tool: 'nyxid_proxy',
-  arguments: '{"query":{"request":"${input}"}}',
+  arguments: '{"query":{"request":"$input"}}',
 }
 ```
 

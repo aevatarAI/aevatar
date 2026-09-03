@@ -1130,7 +1130,7 @@ const SCHEMAS_BY_STEP_TYPE: Record<
         parameterName: 'arguments',
         placeholder: message(
           'shared.studio.nodeConfiguration.toolCall.arguments.placeholder',
-          '{"query":"$input"}',
+          '\'{\'"query":"$input"\'}\'',
         ),
         required: false,
       },
