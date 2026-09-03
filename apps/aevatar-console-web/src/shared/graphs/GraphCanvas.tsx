@@ -25,7 +25,9 @@ import {
   type ReactFlowInstance,
   type ReactFlowProps,
   useEdgesState,
+  useNodesInitialized,
   useNodesState,
+  useReactFlow,
   useStore,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -472,9 +474,129 @@ const STUDIO_NODE_TYPES = {
   studioWorkflowNode: React.memo(StudioWorkflowNode),
 };
 
-type StudioViewportFitRequest = {
-  focusNodeId?: string;
+type StudioViewportControl = {
+  cancelOrdinaryFit?: () => void;
+  manuallyNavigated: boolean;
 };
+
+type StudioViewportControllerProps = {
+  autoFitKey?: string;
+  navigationControlRef: React.RefObject<StudioViewportControl>;
+  nodeIds: readonly string[];
+  nodeIdsKey: string;
+  selectedNodeId?: string;
+};
+
+function StudioViewportController({
+  autoFitKey,
+  navigationControlRef,
+  nodeIds,
+  nodeIdsKey,
+  selectedNodeId,
+}: StudioViewportControllerProps) {
+  const nodesInitialized = useNodesInitialized();
+  const flowInstance = useReactFlow();
+  const previousNodeIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const latestNodeIdsRef = useRef(nodeIds);
+  const latestSelectedNodeIdRef = useRef(selectedNodeId);
+  const lastFittedRef = useRef<{
+    flowInstance: ReactFlowInstance;
+    reason: string;
+  }>(undefined);
+
+  latestNodeIdsRef.current = nodeIds;
+  latestSelectedNodeIdRef.current = selectedNodeId;
+
+  useLayoutEffect(() => {
+    const currentNodeIds = new Set(latestNodeIdsRef.current);
+    if (!autoFitKey || currentNodeIds.size === 0) {
+      previousNodeIdsRef.current = currentNodeIds;
+      lastFittedRef.current = undefined;
+      return;
+    }
+    if (!nodesInitialized) {
+      return;
+    }
+
+    const fitReason = JSON.stringify([autoFitKey, nodeIdsKey]);
+    if (
+      lastFittedRef.current?.reason === fitReason &&
+      lastFittedRef.current.flowInstance === flowInstance
+    ) {
+      previousNodeIdsRef.current = currentNodeIds;
+      return;
+    }
+
+    const selectedNodeId = latestSelectedNodeIdRef.current;
+    const addedSelectedNode =
+      selectedNodeId !== undefined &&
+      currentNodeIds.has(selectedNodeId) &&
+      !previousNodeIdsRef.current.has(selectedNodeId);
+    previousNodeIdsRef.current = currentNodeIds;
+
+    if (navigationControlRef.current.manuallyNavigated && !addedSelectedNode) {
+      return;
+    }
+
+    const focusNodeId = navigationControlRef.current.manuallyNavigated
+      ? selectedNodeId
+      : undefined;
+    let active = true;
+    let animationFrameId: number | undefined;
+    const cancelFit = () => {
+      active = false;
+      if (
+        animationFrameId !== undefined &&
+        typeof window !== 'undefined' &&
+        typeof window.cancelAnimationFrame === 'function'
+      ) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+      if (navigationControlRef.current.cancelOrdinaryFit === cancelFit) {
+        navigationControlRef.current.cancelOrdinaryFit = undefined;
+      }
+    };
+    navigationControlRef.current.cancelOrdinaryFit = focusNodeId
+      ? undefined
+      : cancelFit;
+
+    const applyViewport = () => {
+      if (!active) {
+        return;
+      }
+      animationFrameId = undefined;
+      navigationControlRef.current.cancelOrdinaryFit = undefined;
+      lastFittedRef.current = { flowInstance, reason: fitReason };
+      void flowInstance.fitView(
+        focusNodeId
+          ? {
+              ...STUDIO_FIT_VIEW_OPTIONS,
+              nodes: [{ id: focusNodeId }],
+            }
+          : STUDIO_FIT_VIEW_OPTIONS,
+      );
+    };
+
+    if (
+      typeof window !== 'undefined' &&
+      typeof window.requestAnimationFrame === 'function'
+    ) {
+      animationFrameId = window.requestAnimationFrame(applyViewport);
+    } else {
+      applyViewport();
+    }
+
+    return cancelFit;
+  }, [
+    autoFitKey,
+    flowInstance,
+    navigationControlRef,
+    nodeIdsKey,
+    nodesInitialized,
+  ]);
+
+  return null;
+}
 
 function decorateGraphEdge(edge: Edge, selectedEdgeId?: string): Edge {
   const isSelected = edge.id === selectedEdgeId;
@@ -527,131 +649,65 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   const [localEdges, setLocalEdges] = useEdgesState([...edges]);
   const [flowInstance, setFlowInstance] =
     React.useState<ReactFlowInstance | null>(null);
-  const manuallyNavigatedRef = useRef(false);
-  const previousAutoFitKeyRef = useRef<string>(undefined);
-  const previousNodeIdsRef = useRef<ReadonlySet<string>>(new Set());
-  const pendingViewportFitRef = useRef<StudioViewportFitRequest>(undefined);
-  const scheduledViewportFitRef = useRef<StudioViewportFitRequest>(undefined);
-  const animationFrameIdRef = useRef<number>(undefined);
+  const navigationControlRef = useRef<StudioViewportControl>({
+    manuallyNavigated: false,
+  });
+  const incomingStudioNodesRef = useRef<readonly Node[]>([]);
+  const incomingStudioEdgesRef = useRef<readonly Edge[]>([]);
+  const studioTopology = useMemo(() => {
+    const nodeIds = nodes.map((node) => node.id);
+    return {
+      nodeIds,
+      nodeIdsKey: JSON.stringify(nodeIds),
+    };
+  }, [nodes]);
 
   useEffect(() => {
+    if (!isStudioVariant) {
+      incomingStudioNodesRef.current = [];
+      setLocalNodes([...nodes]);
+      return;
+    }
+
+    const reconciledIncomingNodes = reconcileGraphNodes(
+      incomingStudioNodesRef.current,
+      nodes,
+      selectedNodeId,
+    );
+    if (reconciledIncomingNodes === incomingStudioNodesRef.current) {
+      return;
+    }
+
+    incomingStudioNodesRef.current = reconciledIncomingNodes;
     setLocalNodes((currentNodes) =>
-      isStudioVariant
-        ? reconcileGraphNodes(currentNodes, nodes, selectedNodeId)
-        : [...nodes],
+      reconcileGraphNodes(
+        currentNodes,
+        reconciledIncomingNodes,
+        selectedNodeId,
+      ),
     );
   }, [isStudioVariant, nodes, selectedNodeId, setLocalNodes]);
 
   useEffect(() => {
-    setLocalEdges((currentEdges) => {
-      if (!isStudioVariant) {
-        return [...edges];
-      }
+    if (!isStudioVariant) {
+      incomingStudioEdgesRef.current = [];
+      setLocalEdges([...edges]);
+      return;
+    }
 
-      return reconcileGraphEdges(
-        currentEdges,
-        edges.map((edge) => decorateGraphEdge(edge, selectedEdgeId)),
-      );
-    });
+    const reconciledIncomingEdges = reconcileGraphEdges(
+      incomingStudioEdgesRef.current,
+      edges.map((edge) => decorateGraphEdge(edge, selectedEdgeId)),
+    );
+    if (reconciledIncomingEdges === incomingStudioEdgesRef.current) {
+      return;
+    }
+
+    incomingStudioEdgesRef.current = reconciledIncomingEdges;
+    setLocalEdges((currentEdges) =>
+      reconcileGraphEdges(currentEdges, reconciledIncomingEdges),
+    );
   }, [edges, isStudioVariant, selectedEdgeId, setLocalEdges]);
-
-  const cancelScheduledViewportFit = useCallback(() => {
-    if (
-      animationFrameIdRef.current !== undefined &&
-      typeof window !== 'undefined' &&
-      typeof window.cancelAnimationFrame === 'function'
-    ) {
-      window.cancelAnimationFrame(animationFrameIdRef.current);
-    }
-    animationFrameIdRef.current = undefined;
-    scheduledViewportFitRef.current = undefined;
-  }, []);
-
-  const scheduleViewportFit = useCallback(
-    (request: StudioViewportFitRequest) => {
-      pendingViewportFitRef.current = request;
-      if (!flowInstance) {
-        return;
-      }
-      if (manuallyNavigatedRef.current && !request.focusNodeId) {
-        pendingViewportFitRef.current = undefined;
-        return;
-      }
-
-      cancelScheduledViewportFit();
-      pendingViewportFitRef.current = undefined;
-      scheduledViewportFitRef.current = request;
-
-      const applyViewport = () => {
-        animationFrameIdRef.current = undefined;
-        scheduledViewportFitRef.current = undefined;
-        void flowInstance.fitView(
-          request.focusNodeId
-            ? {
-                ...STUDIO_FIT_VIEW_OPTIONS,
-                nodes: [{ id: request.focusNodeId }],
-              }
-            : STUDIO_FIT_VIEW_OPTIONS,
-        );
-      };
-
-      if (
-        typeof window !== 'undefined' &&
-        typeof window.requestAnimationFrame === 'function'
-      ) {
-        animationFrameIdRef.current =
-          window.requestAnimationFrame(applyViewport);
-        return;
-      }
-
-      applyViewport();
-    },
-    [cancelScheduledViewportFit, flowInstance],
-  );
-
-  useLayoutEffect(() => {
-    const nextNodeIds = new Set(nodes.map((node) => node.id));
-    const topologyChanged = previousAutoFitKeyRef.current !== autoFitKey;
-    const addedSelectedNode =
-      selectedNodeId !== undefined &&
-      nextNodeIds.has(selectedNodeId) &&
-      !previousNodeIdsRef.current.has(selectedNodeId);
-
-    previousAutoFitKeyRef.current = autoFitKey;
-    previousNodeIdsRef.current = nextNodeIds;
-
-    if (
-      !topologyChanged ||
-      !autoFitKey ||
-      !isStudioVariant ||
-      nodes.length === 0
-    ) {
-      return;
-    }
-
-    if (manuallyNavigatedRef.current && !addedSelectedNode) {
-      pendingViewportFitRef.current = undefined;
-      return;
-    }
-
-    scheduleViewportFit({
-      focusNodeId: manuallyNavigatedRef.current ? selectedNodeId : undefined,
-    });
-  }, [autoFitKey, isStudioVariant, nodes, scheduleViewportFit, selectedNodeId]);
-
-  useLayoutEffect(() => {
-    const pendingRequest = pendingViewportFitRef.current;
-    if (flowInstance && pendingRequest) {
-      scheduleViewportFit(pendingRequest);
-    }
-  }, [flowInstance, scheduleViewportFit]);
-
-  useEffect(
-    () => () => {
-      cancelScheduledViewportFit();
-    },
-    [cancelScheduledViewportFit],
-  );
 
   const decoratedNodes = useMemo(() => {
     if (isStudioVariant) {
@@ -806,22 +862,14 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   );
   const handleMoveStart = useCallback<
     NonNullable<ReactFlowProps['onMoveStart']>
-  >(
-    (event) => {
-      if (event === null) {
-        return;
-      }
+  >((event) => {
+    if (event === null) {
+      return;
+    }
 
-      manuallyNavigatedRef.current = true;
-      if (!pendingViewportFitRef.current?.focusNodeId) {
-        pendingViewportFitRef.current = undefined;
-      }
-      if (!scheduledViewportFitRef.current?.focusNodeId) {
-        cancelScheduledViewportFit();
-      }
-    },
-    [cancelScheduledViewportFit],
-  );
+    navigationControlRef.current.manuallyNavigated = true;
+    navigationControlRef.current.cancelOrdinaryFit?.();
+  }, []);
 
   return (
     <div style={canvasStyle}>
@@ -832,7 +880,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         onInit={setFlowInstance}
         nodes={decoratedNodes}
         edges={decoratedEdges}
-        fitView
+        fitView={!isStudioVariant}
         fitViewOptions={isStudioVariant ? STUDIO_FIT_VIEW_OPTIONS : undefined}
         minZoom={isStudioVariant ? STUDIO_CANVAS_MIN_ZOOM : undefined}
         maxZoom={isStudioVariant ? STUDIO_CANVAS_MAX_ZOOM : undefined}
@@ -860,6 +908,15 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         className={isStudioVariant ? 'studio-canvas' : undefined}
         proOptions={isStudioVariant ? STUDIO_PRO_OPTIONS : undefined}
       >
+        {isStudioVariant ? (
+          <StudioViewportController
+            autoFitKey={autoFitKey}
+            navigationControlRef={navigationControlRef}
+            nodeIds={studioTopology.nodeIds}
+            nodeIdsKey={studioTopology.nodeIdsKey}
+            selectedNodeId={selectedNodeId}
+          />
+        ) : null}
         <Background
           color={isStudioVariant ? '#cbd5e1' : undefined}
           variant={

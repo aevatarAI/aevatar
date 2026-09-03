@@ -8,7 +8,11 @@ const mockMiniMapRender = jest.fn();
 const mockReactFlowRender = jest.fn();
 const mockApplyNodeChanges = jest.fn();
 const mockUseStore = jest.fn();
+const mockFlowStoreListeners = new Set<() => void>();
+const mockNodesInitializedListeners = new Set<() => void>();
 let mockZoom = 1;
+let mockNodesInitialized = false;
+let mockReactFlowInstance: any;
 
 jest.mock('@xyflow/react', () => {
   const React = require('react');
@@ -50,11 +54,28 @@ jest.mock('@xyflow/react', () => {
       );
     },
     applyNodeChanges: (...args: unknown[]) => mockApplyNodeChanges(...args),
+    useNodesInitialized: () =>
+      React.useSyncExternalStore(
+        (listener: () => void) => {
+          mockNodesInitializedListeners.add(listener);
+          return () => mockNodesInitializedListeners.delete(listener);
+        },
+        () => mockNodesInitialized,
+        () => mockNodesInitialized,
+      ),
+    useReactFlow: () => mockReactFlowInstance,
     useEdgesState: (initialEdges: any[]) => React.useState(initialEdges),
     useNodesState: (initialNodes: any[]) => React.useState(initialNodes),
     useStore: (selector: any) => {
       mockUseStore(selector);
-      return selector({ transform: [0, 0, mockZoom] });
+      return React.useSyncExternalStore(
+        (listener: () => void) => {
+          mockFlowStoreListeners.add(listener);
+          return () => mockFlowStoreListeners.delete(listener);
+        },
+        () => selector({ transform: [0, 0, mockZoom] }),
+        () => selector({ transform: [0, 0, mockZoom] }),
+      );
     },
   };
 });
@@ -91,6 +112,10 @@ describe('GraphCanvas', () => {
 
   beforeEach(() => {
     mockZoom = 1;
+    mockNodesInitialized = false;
+    mockReactFlowInstance = createFlowInstance();
+    mockFlowStoreListeners.clear();
+    mockNodesInitializedListeners.clear();
     mockApplyNodeChanges.mockReset();
     mockApplyNodeChanges.mockImplementation((changes, currentNodes) =>
       currentNodes.map((node: any) => {
@@ -117,20 +142,24 @@ describe('GraphCanvas', () => {
     mockReactFlowRender.mock.calls.at(-1)?.[0] as any;
 
   const installAnimationFrameMock = () => {
-    const callbacks: FrameRequestCallback[] = [];
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let nextFrameId = 1;
     const requestAnimationFrame = jest
       .spyOn(window, 'requestAnimationFrame')
       .mockImplementation((callback) => {
-        callbacks.push(callback);
-        return callbacks.length;
+        const frameId = nextFrameId;
+        nextFrameId += 1;
+        callbacks.set(frameId, callback);
+        return frameId;
       });
-    jest
-      .spyOn(window, 'cancelAnimationFrame')
-      .mockImplementation(() => undefined);
+    jest.spyOn(window, 'cancelAnimationFrame').mockImplementation((frameId) => {
+      callbacks.delete(frameId);
+    });
 
     return {
       flush: () => {
-        const scheduled = callbacks.splice(0);
+        const scheduled = [...callbacks.values()];
+        callbacks.clear();
         act(() => {
           scheduled.forEach((callback) => {
             callback(0);
@@ -146,6 +175,24 @@ describe('GraphCanvas', () => {
     getNodes: jest.fn(() => nodes),
     screenToFlowPosition: jest.fn(({ x, y }) => ({ x, y })),
   });
+
+  const updateZoom = (zoom: number) => {
+    act(() => {
+      mockZoom = zoom;
+      mockFlowStoreListeners.forEach((listener) => {
+        listener();
+      });
+    });
+  };
+
+  const updateNodesInitialized = (initialized: boolean) => {
+    act(() => {
+      mockNodesInitialized = initialized;
+      mockNodesInitializedListeners.forEach((listener) => {
+        listener();
+      });
+    });
+  };
 
   it('routes studio node deletion through the parent callback before mutating the graph', async () => {
     const onDeleteNodes = jest.fn(async () => undefined);
@@ -242,7 +289,7 @@ describe('GraphCanvas', () => {
       },
     ];
 
-    render(
+    const { rerender } = render(
       <GraphCanvas
         edges={styledEdges}
         nodes={nodes}
@@ -277,6 +324,19 @@ describe('GraphCanvas', () => {
         style: styledEdges[1].style,
       }),
     );
+
+    rerender(
+      <GraphCanvas edges={styledEdges} nodes={nodes} variant="studio" />,
+    );
+    const restoredEdges = latestReactFlowProps().edges;
+    expect(restoredEdges[0]).toEqual(
+      expect.objectContaining({
+        markerEnd: styledEdges[0].markerEnd,
+        selected: false,
+        style: styledEdges[0].style,
+      }),
+    );
+    expect(restoredEdges[1]).toBe(unselectedEdge);
   });
 
   it('renders studio nodes with their product label instead of the backend step type id', () => {
@@ -315,7 +375,7 @@ describe('GraphCanvas', () => {
     const miniMapProps = mockMiniMapRender.mock.calls.at(-1)?.[0] as any;
     const backgroundProps = mockBackgroundRender.mock.calls.at(-1)?.[0] as any;
 
-    expect(reactFlowProps.fitView).toBe(true);
+    expect(reactFlowProps.fitView).toBe(false);
     expect(reactFlowProps.fitViewOptions).toEqual({
       duration: 0,
       maxZoom: 1.06,
@@ -531,7 +591,9 @@ describe('GraphCanvas', () => {
         position: { x: 320, y: 0 },
       },
     ];
-    render(<GraphCanvas edges={edges} nodes={studioNodes} variant="studio" />);
+    const { rerender } = render(
+      <GraphCanvas edges={edges} nodes={studioNodes} variant="studio" />,
+    );
     const beforeChange = latestReactFlowProps();
     const untouchedNode = beforeChange.nodes[1];
     const untouchedData = untouchedNode.data;
@@ -551,6 +613,22 @@ describe('GraphCanvas', () => {
     expect(afterChange.nodes[0].position).toEqual({ x: 48, y: 72 });
     expect(afterChange.nodes[1]).toBe(untouchedNode);
     expect(afterChange.nodes[1].data).toBe(untouchedData);
+
+    rerender(
+      <GraphCanvas
+        bottomInset={24}
+        edges={[...edges]}
+        nodes={[...studioNodes]}
+        variant="studio"
+      />,
+    );
+    const afterUnrelatedParentRender = latestReactFlowProps();
+    expect(afterUnrelatedParentRender.nodes[0]).toBe(afterChange.nodes[0]);
+    expect(afterUnrelatedParentRender.nodes[0].position).toEqual({
+      x: 48,
+      y: 72,
+    });
+    expect(afterUnrelatedParentRender.nodes[1]).toBe(untouchedNode);
   });
 
   it('replaces only the previous and next selected Studio nodes', () => {
@@ -595,8 +673,8 @@ describe('GraphCanvas', () => {
     expect(afterSelection[2].data).toBe(beforeSelection[2].data);
   });
 
-  it('memoizes Studio nodes and subscribes to a compact zoom band that removes body detail', () => {
-    mockZoom = 0.4;
+  it('rerenders Studio nodes only when their compact zoom band changes', () => {
+    mockZoom = 0.8;
     render(<GraphCanvas edges={edges} nodes={nodes} variant="studio" />);
     const StudioNode = latestReactFlowProps().nodeTypes.studioWorkflowNode;
 
@@ -612,11 +690,13 @@ describe('GraphCanvas', () => {
       />,
     );
 
-    const compactSelector = mockUseStore.mock.calls.at(-1)?.[0];
-    expect(compactSelector({ transform: [0, 0, 0.2] })).toBe(true);
-    expect(compactSelector({ transform: [0, 0, 0.47] })).toBe(true);
-    expect(compactSelector({ transform: [0, 0, 0.48] })).toBe(false);
-    expect(compactSelector({ transform: [0, 0, 0.9] })).toBe(false);
+    const initialRenderCount = mockUseStore.mock.calls.length;
+    updateZoom(0.75);
+    expect(mockUseStore).toHaveBeenCalledTimes(initialRenderCount);
+    updateZoom(0.4);
+    expect(mockUseStore).toHaveBeenCalledTimes(initialRenderCount + 1);
+    updateZoom(0.3);
+    expect(mockUseStore).toHaveBeenCalledTimes(initialRenderCount + 1);
     expect(screen.getByText('assert')).toBeTruthy();
     expect(screen.getByText('Guard')).toBeTruthy();
     expect(screen.getByText('waiting')).toBeTruthy();
@@ -627,9 +707,11 @@ describe('GraphCanvas', () => {
     expect(screen.getByTestId('handle-source')).toBeTruthy();
   });
 
-  it('fits each initial or replacement topology in exactly one animation frame', () => {
+  it('fits each ready Studio topology through one authoritative animation frame', () => {
     const animationFrame = installAnimationFrameMock();
     const flowInstance = createFlowInstance();
+    mockReactFlowInstance = flowInstance;
+    mockNodesInitialized = false;
     const { rerender } = render(
       <GraphCanvas
         autoFitKey="topology-alpha"
@@ -639,9 +721,21 @@ describe('GraphCanvas', () => {
       />,
     );
 
-    act(() => {
-      latestReactFlowProps().onInit(flowInstance);
-    });
+    expect(latestReactFlowProps().fitView).toBe(false);
+    expect(animationFrame.requestAnimationFrame).not.toHaveBeenCalled();
+    expect(flowInstance.fitView).not.toHaveBeenCalled();
+
+    updateNodesInitialized(true);
+    expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
+    rerender(
+      <GraphCanvas
+        autoFitKey="topology-alpha"
+        bottomInset={24}
+        edges={edges}
+        nodes={nodes}
+        variant="studio"
+      />,
+    );
     expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
     animationFrame.flush();
     expect(flowInstance.fitView).toHaveBeenCalledTimes(1);
@@ -674,9 +768,112 @@ describe('GraphCanvas', () => {
     expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
   });
 
+  it('retains built-in fitView only for the default variant', () => {
+    render(<GraphCanvas edges={edges} nodes={nodes} />);
+
+    expect(latestReactFlowProps().fitView).toBe(true);
+  });
+
+  it('fits when a same-key Studio topology first becomes non-empty', () => {
+    const animationFrame = installAnimationFrameMock();
+    const flowInstance = createFlowInstance();
+    mockReactFlowInstance = flowInstance;
+    mockNodesInitialized = true;
+    const { rerender } = render(
+      <GraphCanvas
+        autoFitKey="topology-alpha"
+        edges={[]}
+        nodes={[]}
+        variant="studio"
+      />,
+    );
+
+    expect(animationFrame.requestAnimationFrame).not.toHaveBeenCalled();
+    rerender(
+      <GraphCanvas
+        autoFitKey="topology-alpha"
+        edges={edges}
+        nodes={nodes}
+        variant="studio"
+      />,
+    );
+    expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
+    animationFrame.flush();
+    expect(flowInstance.fitView).toHaveBeenCalledTimes(1);
+  });
+
+  it('fits when a same-key non-empty canvas first switches to Studio', () => {
+    const animationFrame = installAnimationFrameMock();
+    const flowInstance = createFlowInstance();
+    mockReactFlowInstance = flowInstance;
+    mockNodesInitialized = true;
+    const { rerender } = render(
+      <GraphCanvas autoFitKey="topology-alpha" edges={edges} nodes={nodes} />,
+    );
+
+    expect(animationFrame.requestAnimationFrame).not.toHaveBeenCalled();
+    rerender(
+      <GraphCanvas
+        autoFitKey="topology-alpha"
+        edges={edges}
+        nodes={nodes}
+        variant="studio"
+      />,
+    );
+    expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
+    animationFrame.flush();
+    expect(flowInstance.fitView).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels pending fits for stale instances and unmounted canvases', () => {
+    const animationFrame = installAnimationFrameMock();
+    const staleFlowInstance = createFlowInstance();
+    mockReactFlowInstance = staleFlowInstance;
+    mockNodesInitialized = true;
+    const { rerender, unmount } = render(
+      <GraphCanvas
+        autoFitKey="topology-alpha"
+        edges={edges}
+        nodes={nodes}
+        variant="studio"
+      />,
+    );
+    expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
+
+    const activeFlowInstance = createFlowInstance();
+    mockReactFlowInstance = activeFlowInstance;
+    rerender(
+      <GraphCanvas
+        autoFitKey="topology-alpha"
+        edges={edges}
+        nodes={nodes}
+        variant="studio"
+      />,
+    );
+    expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(2);
+    animationFrame.flush();
+    expect(staleFlowInstance.fitView).not.toHaveBeenCalled();
+    expect(activeFlowInstance.fitView).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <GraphCanvas
+        autoFitKey="topology-beta"
+        edges={edges}
+        nodes={[{ ...nodes[0], id: 'step:replacement' }]}
+        variant="studio"
+      />,
+    );
+    expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(3);
+    unmount();
+    animationFrame.flush();
+    expect(activeFlowInstance.fitView).toHaveBeenCalledTimes(1);
+  });
+
   it('suppresses ordinary topology fitting after navigation but reveals an added selected node', () => {
     const animationFrame = installAnimationFrameMock();
     const flowInstance = createFlowInstance();
+    mockReactFlowInstance = flowInstance;
+    mockNodesInitialized = true;
     const { rerender } = render(
       <GraphCanvas
         autoFitKey="topology-alpha"
@@ -685,9 +882,6 @@ describe('GraphCanvas', () => {
         variant="studio"
       />,
     );
-    act(() => {
-      latestReactFlowProps().onInit(flowInstance);
-    });
     animationFrame.flush();
     animationFrame.requestAnimationFrame.mockClear();
     flowInstance.fitView.mockClear();
@@ -730,6 +924,8 @@ describe('GraphCanvas', () => {
   it('does not fit for selection, position, or execution-status-only changes', () => {
     const animationFrame = installAnimationFrameMock();
     const flowInstance = createFlowInstance();
+    mockReactFlowInstance = flowInstance;
+    mockNodesInitialized = true;
     const { rerender } = render(
       <GraphCanvas
         autoFitKey="topology-alpha"
@@ -738,9 +934,6 @@ describe('GraphCanvas', () => {
         variant="studio"
       />,
     );
-    act(() => {
-      latestReactFlowProps().onInit(flowInstance);
-    });
     animationFrame.flush();
     animationFrame.requestAnimationFrame.mockClear();
     flowInstance.fitView.mockClear();
