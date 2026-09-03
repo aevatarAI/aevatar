@@ -38,11 +38,14 @@ Each policy runs these scenarios:
 
 - `initial-load`: navigation, initial graph commit, node measurement, and the
   first stable Studio fit.
-- `drag`: a real pointer drag of a rendered Studio node.
-- `selection`: a real click that selects a rendered Studio node.
-- `pan`: a real pointer pan from an unobstructed canvas point.
-- `zoom-same-band`: a control zoom that stays on one side of the compact-node
-  threshold.
+- `drag`: a real pointer drag of a hit-tested Studio node, with its changed
+  on-screen position verified.
+- `selection`: real pointer clicks that select one hit-tested Studio node, then
+  move selection to a second node and clear the first.
+- `pan`: a real pointer pan from an unobstructed canvas point, with viewport
+  translation verified and zoom held constant.
+- `zoom-same-band`: a non-expanding control zoom that changes scale without
+  crossing the compact-node threshold.
 - `zoom-threshold`: control zooms that cross the compact-node threshold.
 - `status-update`: one immutable execution-status update.
 - `topology-add`: one node and two edges added with unaffected references

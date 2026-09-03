@@ -24,6 +24,19 @@ type ReactProfileArtifact = {
   readonly scenario: WorkflowCanvasBenchmarkScenario;
 };
 
+type InteractableNodeTarget = {
+  readonly id: string;
+  readonly point: {
+    readonly x: number;
+    readonly y: number;
+  };
+};
+
+type InteractableNodePair = readonly [
+  InteractableNodeTarget,
+  InteractableNodeTarget,
+];
+
 const BENCHMARK_POLICIES: readonly PolicyCase[] = [
   {
     id: 'full-graph-with-minimap',
@@ -46,6 +59,10 @@ const ARTIFACT_DIRECTORY = path.resolve(
   __dirname,
   '../artifacts/workflow-canvas-benchmark',
 );
+const COMPACT_ZOOM_THRESHOLD = 0.48;
+const CONTROL_ZOOM_FACTOR = 1.2;
+const POSITION_CHANGE_TOLERANCE = 1;
+const ZOOM_CHANGE_TOLERANCE = 0.0001;
 const EXPECTED_CHANGED_NODE_REFERENCES: Readonly<
   Record<WorkflowCanvasBenchmarkScenario, (graphNodes: number) => number>
 > = {
@@ -135,31 +152,183 @@ async function findPanePoint(page: Page): Promise<{ x: number; y: number }> {
   });
 }
 
-async function runSelection(page: Page) {
-  await page.locator('.react-flow__node').nth(1).click();
+async function findInteractableNodePair(
+  page: Page,
+): Promise<InteractableNodePair> {
+  return page.evaluate(() => {
+    const pane = document.querySelector<HTMLElement>('.react-flow__pane');
+    if (!pane) {
+      throw new Error('React Flow pane is unavailable');
+    }
+
+    const paneBounds = pane.getBoundingClientRect();
+    const seenIds = new Set<string>();
+    const targets: InteractableNodeTarget[] = [];
+    const nodes = document.querySelectorAll<HTMLElement>('.react-flow__node');
+    for (const node of nodes) {
+      const id = node.dataset.id;
+      if (!id || seenIds.has(id) || !pane.contains(node)) {
+        continue;
+      }
+
+      const nodeBounds = node.getBoundingClientRect();
+      const intersection = {
+        bottom: Math.min(nodeBounds.bottom, paneBounds.bottom),
+        left: Math.max(nodeBounds.left, paneBounds.left),
+        right: Math.min(nodeBounds.right, paneBounds.right),
+        top: Math.max(nodeBounds.top, paneBounds.top),
+      };
+      if (
+        intersection.right <= intersection.left ||
+        intersection.bottom <= intersection.top
+      ) {
+        continue;
+      }
+
+      const point = {
+        x: (intersection.left + intersection.right) / 2,
+        y: (intersection.top + intersection.bottom) / 2,
+      };
+      const hitTarget = document.elementFromPoint(point.x, point.y);
+      if (!hitTarget || !node.contains(hitTarget)) {
+        continue;
+      }
+
+      seenIds.add(id);
+      targets.push({ id, point });
+      if (targets.length === 2) {
+        return [targets[0], targets[1]] as InteractableNodePair;
+      }
+    }
+
+    throw new Error(
+      `Expected two distinct interactable workflow nodes, found ${targets.length}`,
+    );
+  });
+}
+
+async function readNodeScreenPosition(page: Page, nodeId: string) {
+  return page.evaluate((expectedNodeId) => {
+    const node = Array.from(
+      document.querySelectorAll<HTMLElement>('.react-flow__node'),
+    ).find((candidate) => candidate.dataset.id === expectedNodeId);
+    if (!node) {
+      throw new Error(`Workflow node ${expectedNodeId} is unavailable`);
+    }
+    const bounds = node.getBoundingClientRect();
+    return { x: bounds.left, y: bounds.top };
+  }, nodeId);
+}
+
+async function readNodeSelected(page: Page, nodeId: string) {
+  return page.evaluate((expectedNodeId) => {
+    const node = Array.from(
+      document.querySelectorAll<HTMLElement>('.react-flow__node'),
+    ).find((candidate) => candidate.dataset.id === expectedNodeId);
+    if (!node) {
+      throw new Error(`Workflow node ${expectedNodeId} is unavailable`);
+    }
+    return (
+      node.classList.contains('selected') ||
+      node.getAttribute('aria-selected') === 'true'
+    );
+  }, nodeId);
+}
+
+async function waitForSelectionState(
+  page: Page,
+  selectedNodeId: string,
+  clearedNodeIds: readonly string[] = [],
+) {
+  await page.waitForFunction(
+    ({ clearedIds, selectedId }) => {
+      const nodes = Array.from(
+        document.querySelectorAll<HTMLElement>('.react-flow__node'),
+      );
+      const isSelected = (nodeId: string) => {
+        const node = nodes.find((candidate) => candidate.dataset.id === nodeId);
+        return Boolean(
+          node &&
+            (node.classList.contains('selected') ||
+              node.getAttribute('aria-selected') === 'true'),
+        );
+      };
+      return (
+        isSelected(selectedId) && clearedIds.every((id) => !isSelected(id))
+      );
+    },
+    { clearedIds: clearedNodeIds, selectedId: selectedNodeId },
+  );
+  expect(await readNodeSelected(page, selectedNodeId)).toBe(true);
+  for (const clearedNodeId of clearedNodeIds) {
+    expect(await readNodeSelected(page, clearedNodeId)).toBe(false);
+  }
+}
+
+async function prepareSelectionScenario(
+  page: Page,
+): Promise<InteractableNodePair> {
+  const targets = await findInteractableNodePair(page);
+  const [initialTarget] = targets;
+  await page.mouse.click(initialTarget.point.x, initialTarget.point.y);
+  await waitForSelectionState(page, initialTarget.id);
+  return targets;
+}
+
+async function runSelection(page: Page, targets: InteractableNodePair) {
+  const [initialTarget, nextTarget] = targets;
+  await page.mouse.click(nextTarget.point.x, nextTarget.point.y);
+  await waitForSelectionState(page, nextTarget.id, [initialTarget.id]);
 }
 
 async function runDrag(page: Page) {
-  const bounds = await page.locator('.react-flow__node').first().boundingBox();
-  if (!bounds) {
-    throw new Error('No rendered workflow node is available to drag');
-  }
-  const start = {
-    x: bounds.x + bounds.width / 2,
-    y: bounds.y + bounds.height / 2,
-  };
-  await page.mouse.move(start.x, start.y);
+  const [target] = await findInteractableNodePair(page);
+  const before = await readNodeScreenPosition(page, target.id);
+  await page.mouse.move(target.point.x, target.point.y);
   await page.mouse.down();
-  await page.mouse.move(start.x + 48, start.y + 32, { steps: 8 });
+  await page.mouse.move(target.point.x + 48, target.point.y + 32, { steps: 8 });
   await page.mouse.up();
+  await page.waitForFunction(
+    ({ nodeId, position, tolerance }) => {
+      const node = Array.from(
+        document.querySelectorAll<HTMLElement>('.react-flow__node'),
+      ).find((candidate) => candidate.dataset.id === nodeId);
+      if (!node) {
+        return false;
+      }
+      const bounds = node.getBoundingClientRect();
+      return (
+        Math.abs(bounds.left - position.x) > tolerance ||
+        Math.abs(bounds.top - position.y) > tolerance
+      );
+    },
+    {
+      nodeId: target.id,
+      position: before,
+      tolerance: POSITION_CHANGE_TOLERANCE,
+    },
+  );
+  const after = await readNodeScreenPosition(page, target.id);
+  expect(
+    Math.max(Math.abs(after.x - before.x), Math.abs(after.y - before.y)),
+  ).toBeGreaterThan(POSITION_CHANGE_TOLERANCE);
 }
 
 async function runPan(page: Page) {
+  const before = await readViewport(page);
   const start = await findPanePoint(page);
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(start.x + 72, start.y + 48, { steps: 8 });
   await page.mouse.up();
+  await waitForAnimationFrames(page);
+  const after = await readViewport(page);
+  expect(
+    Math.max(Math.abs(after.x - before.x), Math.abs(after.y - before.y)),
+  ).toBeGreaterThan(POSITION_CHANGE_TOLERANCE);
+  expect(Math.abs(after.zoom - before.zoom)).toBeLessThanOrEqual(
+    ZOOM_CHANGE_TOLERANCE,
+  );
 }
 
 async function clickZoomControl(page: Page, direction: 'in' | 'out') {
@@ -185,18 +354,41 @@ async function clickZoomControl(page: Page, direction: 'in' | 'out') {
 
 async function runZoomSameBand(page: Page) {
   const before = await readViewport(page);
-  await clickZoomControl(page, before.zoom < 0.48 ? 'out' : 'in');
+  const candidates = [
+    { direction: 'in', projectedZoom: before.zoom * CONTROL_ZOOM_FACTOR },
+    { direction: 'out', projectedZoom: before.zoom / CONTROL_ZOOM_FACTOR },
+  ] as const;
+  const candidate = candidates.find(
+    ({ projectedZoom }) =>
+      projectedZoom > before.zoom + ZOOM_CHANGE_TOLERANCE &&
+      projectedZoom < COMPACT_ZOOM_THRESHOLD ===
+        before.zoom < COMPACT_ZOOM_THRESHOLD,
+  );
+  if (!candidate) {
+    throw new Error(
+      `No non-expanding control zoom remains in the current compact band from ${before.zoom}`,
+    );
+  }
+  await clickZoomControl(page, candidate.direction);
   const after = await readViewport(page);
-  expect(after.zoom < 0.48).toBe(before.zoom < 0.48);
+  expect(after.zoom).toBeGreaterThan(before.zoom + ZOOM_CHANGE_TOLERANCE);
+  expect(after.zoom < COMPACT_ZOOM_THRESHOLD).toBe(
+    before.zoom < COMPACT_ZOOM_THRESHOLD,
+  );
 }
 
 async function runZoomThreshold(page: Page) {
   const before = await readViewport(page);
-  const direction = before.zoom < 0.48 ? 'in' : 'out';
+  const direction = before.zoom < COMPACT_ZOOM_THRESHOLD ? 'in' : 'out';
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const current = await readViewport(page);
-    if (current.zoom < 0.48 !== before.zoom < 0.48) {
-      expect(current.zoom < 0.48).not.toBe(before.zoom < 0.48);
+    if (
+      current.zoom < COMPACT_ZOOM_THRESHOLD !==
+      before.zoom < COMPACT_ZOOM_THRESHOLD
+    ) {
+      expect(current.zoom < COMPACT_ZOOM_THRESHOLD).not.toBe(
+        before.zoom < COMPACT_ZOOM_THRESHOLD,
+      );
       return;
     }
     await clickZoomControl(page, direction);
@@ -207,11 +399,16 @@ async function runZoomThreshold(page: Page) {
 async function runScenarioAction(
   page: Page,
   scenario: Exclude<WorkflowCanvasBenchmarkScenario, 'initial-load'>,
+  selectionTargets?: InteractableNodePair,
 ) {
   switch (scenario) {
-    case 'selection':
-      await runSelection(page);
+    case 'selection': {
+      if (!selectionTargets) {
+        throw new Error('Selection scenario targets are unavailable');
+      }
+      await runSelection(page, selectionTargets);
       break;
+    }
     case 'drag':
       await runDrag(page);
       break;
@@ -430,8 +627,11 @@ test('records every workflow canvas scale scenario and policy', async ({
           if (scenario === 'initial-load') {
             continue;
           }
-          if (scenario === 'selection') {
-            await page.locator('.react-flow__node').first().click();
+          const selectionTargets =
+            scenario === 'selection'
+              ? await prepareSelectionScenario(page)
+              : undefined;
+          if (selectionTargets) {
             await waitForAnimationFrames(page);
           }
           const startedAt = await page.evaluate((nextScenario) => {
@@ -442,7 +642,7 @@ test('records every workflow canvas scale scenario and policy', async ({
             api.beginScenario(nextScenario);
             return performance.now();
           }, scenario);
-          await runScenarioAction(page, scenario);
+          await runScenarioAction(page, scenario, selectionTargets);
           const captured = await appendResult(page, scenario, startedAt);
           results.push(captured.result);
           if (captured.profile) profiles.push(captured.profile);
