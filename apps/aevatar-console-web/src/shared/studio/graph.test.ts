@@ -338,4 +338,19 @@ describe('studio graph helpers', () => {
       positions.every(({ x, y }) => Number.isFinite(x) && Number.isFinite(y)),
     ).toBe(true);
   });
+
+  it('preserves duplicate step ids at their shared automatic layout position without saved positions', () => {
+    const graph = buildStudioGraphElements({
+      name: 'workflow-demo',
+      steps: [
+        createStudioGraphStep('draft'),
+        createStudioGraphStep('draft', { type: 'conditional' }),
+      ],
+    });
+
+    expect(graph.nodes.map((node) => node.position)).toEqual([
+      { x: 240, y: 180 },
+      { x: 240, y: 180 },
+    ]);
+  });
 });

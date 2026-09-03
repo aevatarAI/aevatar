@@ -441,6 +441,18 @@ function buildStudioGraphNodePositions(
   const savedPositionsByStep = steps.map((step) =>
     getStudioGraphPosition(savedPositions, step.id),
   );
+  if (savedPositionsByStep.every((position) => position === undefined)) {
+    return steps.map(
+      (step, index) =>
+        getStudioGraphPosition(autoLayoutPositions, step.id) ?? {
+          x:
+            STUDIO_AUTO_LAYOUT_ORIGIN_X +
+            index * STUDIO_AUTO_LAYOUT_COLUMN_PITCH,
+          y: STUDIO_AUTO_LAYOUT_ORIGIN_Y,
+        },
+    );
+  }
+
   const occupiedPositions = savedPositionsByStep.filter(
     (position): position is XYPosition => position !== undefined,
   );
