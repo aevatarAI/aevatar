@@ -1,11 +1,9 @@
 import type {
   StudioConnectorDefinition,
-  StudioWorkflowCapability,
   StudioWorkflowDocument,
   StudioWorkflowRoleDocument,
   StudioWorkflowStepDocument,
 } from './models';
-import { normalizeStudioWorkflowCapability } from './models';
 
 export type StudioStepInspectorDraft = {
   readonly kind: 'step';
@@ -15,7 +13,6 @@ export type StudioStepInspectorDraft = {
   readonly next: string;
   readonly branchesText: string;
   readonly parametersText: string;
-  readonly capability: StudioWorkflowCapability | null;
 };
 
 export type StudioRoleInspectorDraft = {
@@ -43,18 +40,11 @@ const ROLE_COMPATIBLE_STEP_TYPES = new Set([
   'connector_call',
 ]);
 
-const DEFAULT_PARAMETERS_BY_STEP_TYPE: Record<
-  string,
-  Record<string, unknown>
-> = {
+const DEFAULT_PARAMETERS_BY_STEP_TYPE: Record<string, Record<string, unknown>> = {
   transform: { op: 'trim' },
   assign: { target: 'result', value: '$input' },
   retrieve_facts: { query: '', top_k: '3' },
-  cache: {
-    cache_key: '$input',
-    ttl_seconds: '600',
-    child_step_type: 'llm_call',
-  },
+  cache: { cache_key: '$input', ttl_seconds: '600', child_step_type: 'llm_call' },
   guard: { check: 'not_empty', on_fail: 'fail' },
   conditional: { condition: '${' + 'eq($input, "ok")' + '}' },
   switch: { on: '$input' },
@@ -71,11 +61,7 @@ const DEFAULT_PARAMETERS_BY_STEP_TYPE: Record<
   evaluate: { criteria: 'correctness', scale: '1-5', threshold: '4' },
   reflect: { max_rounds: '3', criteria: 'accuracy and conciseness' },
   foreach: { delimiter: '\\n---\\n', sub_step_type: 'llm_call' },
-  parallel: {
-    workers: 'assistant',
-    parallel_count: '3',
-    vote_step_type: 'vote',
-  },
+  parallel: { workers: 'assistant', parallel_count: '3', vote_step_type: 'vote' },
   race: { workers: 'assistant', count: '2' },
   map_reduce: {
     delimiter: '\\n---\\n',
@@ -148,10 +134,7 @@ export function readStepParameterValue(
   stepType: string,
   parameterName: string,
 ): unknown {
-  const resolvedParameterName = resolveStepParameterName(
-    stepType,
-    parameterName,
-  );
+  const resolvedParameterName = resolveStepParameterName(stepType, parameterName);
   const normalizedParameters =
     parameters && typeof parameters === 'object' ? parameters : {};
 
@@ -181,8 +164,7 @@ export function normalizeStepParametersForType(
     nextParameters[LLM_PROMPT_PREFIX_PARAMETER] === undefined &&
     nextParameters[LLM_PROMPT_PARAMETER] !== undefined
   ) {
-    nextParameters[LLM_PROMPT_PREFIX_PARAMETER] =
-      nextParameters[LLM_PROMPT_PARAMETER];
+    nextParameters[LLM_PROMPT_PREFIX_PARAMETER] = nextParameters[LLM_PROMPT_PARAMETER];
   }
   delete nextParameters[LLM_PROMPT_PARAMETER];
   return nextParameters;
@@ -212,8 +194,7 @@ export function cloneStudioWorkflowDocument(
 export function formatInspectorParameters(
   parameters: Record<string, unknown> | null | undefined,
 ): string {
-  const normalized =
-    parameters && typeof parameters === 'object' ? parameters : {};
+  const normalized = parameters && typeof parameters === 'object' ? parameters : {};
   return JSON.stringify(normalized, null, 2);
 }
 
@@ -256,17 +237,16 @@ export function parseInspectorBranches(value: string): Record<string, string> {
 
   return Object.fromEntries(
     Object.entries(parsed)
-      .map(([label, target]) => [
-        normalizeString(label),
-        normalizeString(target),
-      ])
+      .map(([label, target]) => [normalizeString(label), normalizeString(target)])
       .filter(([label, target]) => Boolean(label) && Boolean(target)),
   );
 }
 
 function listStepIds(document: StudioWorkflowDocument): string[] {
   return Array.isArray(document.steps)
-    ? document.steps.map((entry) => normalizeString(entry.id)).filter(Boolean)
+    ? document.steps
+        .map((entry) => normalizeString(entry.id))
+        .filter(Boolean)
     : [];
 }
 
@@ -290,15 +270,14 @@ function createUniqueStepId(
 
 function resolveDefaultStepIdBase(stepType: string): string {
   const normalizedStepType = normalizeStepType(stepType);
-  return (
-    DEFAULT_STEP_ID_BASE_BY_STEP_TYPE[normalizedStepType] ||
-    `${normalizedStepType}_step`
-  );
+  return DEFAULT_STEP_ID_BASE_BY_STEP_TYPE[normalizedStepType] || `${normalizedStepType}_step`;
 }
 
 function listRoleIds(document: StudioWorkflowDocument): string[] {
   return Array.isArray(document.roles)
-    ? document.roles.map((entry) => normalizeString(entry.id)).filter(Boolean)
+    ? document.roles
+        .map((entry) => normalizeString(entry.id))
+        .filter(Boolean)
     : [];
 }
 
@@ -317,8 +296,7 @@ function createUniqueRoleId(
   preferredBase: string,
 ): string {
   const existing = new Set(listRoleIds(document));
-  const base =
-    normalizeStepIdCandidate(preferredBase).replace(/_step$/, '') || 'role';
+  const base = normalizeStepIdCandidate(preferredBase).replace(/_step$/, '') || 'role';
   if (!existing.has(base)) {
     return base;
   }
@@ -331,9 +309,7 @@ function createUniqueRoleId(
   return `${base}_${suffix}`;
 }
 
-function createDefaultStepParameters(
-  stepType: string,
-): Record<string, unknown> {
+function createDefaultStepParameters(stepType: string): Record<string, unknown> {
   return cloneRecord(DEFAULT_PARAMETERS_BY_STEP_TYPE[stepType] ?? {});
 }
 
@@ -341,7 +317,6 @@ export function createStepInspectorDraft(step: {
   id: string;
   type: string;
   targetRole: string;
-  capability?: StudioWorkflowCapability | null;
   parameters: Record<string, unknown>;
   next: string | null;
   branches?: Record<string, string>;
@@ -354,7 +329,6 @@ export function createStepInspectorDraft(step: {
     next: step.next ?? '',
     branchesText: formatInspectorBranches(step.branches),
     parametersText: formatInspectorParameters(step.parameters),
-    capability: normalizeStudioWorkflowCapability(step.capability),
   };
 }
 
@@ -398,7 +372,7 @@ export function applyStepInspectorDraft(
     const stepId = normalizeString(step.id);
     if (stepId === currentStepId) {
       delete step.target_role;
-      const updatedStep = {
+      return {
         ...step,
         id: nextId,
         type: nextType,
@@ -408,15 +382,6 @@ export function applyStepInspectorDraft(
         next: nextStepId || null,
         branches: nextBranches,
       } satisfies StudioWorkflowStepDocument;
-      const nextCapability = normalizeStudioWorkflowCapability(
-        draft.capability,
-      );
-      if (nextCapability) {
-        updatedStep.capability = nextCapability;
-      } else {
-        delete updatedStep.capability;
-      }
-      return updatedStep;
     }
 
     const updatedBranches = Object.fromEntries(
@@ -428,7 +393,7 @@ export function applyStepInspectorDraft(
 
     return {
       ...step,
-      next: step.next === currentStepId ? nextId : (step.next ?? null),
+      next: step.next === currentStepId ? nextId : step.next ?? null,
       branches: updatedBranches,
     } satisfies StudioWorkflowStepDocument;
   });
@@ -452,9 +417,7 @@ export function insertStepAfter(
     (entry) => normalizeString(entry.id) === currentStepId,
   );
   const currentStep =
-    currentIndex >= 0
-      ? ({ ...steps[currentIndex] } as StudioWorkflowStepDocument)
-      : null;
+    currentIndex >= 0 ? ({ ...steps[currentIndex] } as StudioWorkflowStepDocument) : null;
   const fallbackRoleId = normalizeString(roles[0]?.id);
   const currentTargetRole = normalizeString(
     currentStep?.targetRole ?? currentStep?.target_role,
@@ -541,7 +504,6 @@ export function insertStepByType(
     readonly targetRoleId?: string | null;
     readonly connectorName?: string | null;
     readonly connectors?: readonly StudioConnectorDefinition[];
-    readonly initialParameters?: Readonly<Record<string, unknown>>;
   },
 ): { document: StudioWorkflowDocument; nodeId: string } {
   const roles = Array.isArray(document.roles) ? document.roles : [];
@@ -552,9 +514,7 @@ export function insertStepByType(
     ? steps.findIndex((entry) => normalizeString(entry.id) === sourceStepId)
     : -1;
   const sourceStep =
-    sourceIndex >= 0
-      ? ({ ...steps[sourceIndex] } as StudioWorkflowStepDocument)
-      : null;
+    sourceIndex >= 0 ? ({ ...steps[sourceIndex] } as StudioWorkflowStepDocument) : null;
   const preferredRoleId =
     normalizeString(options?.targetRoleId) ||
     normalizeString(sourceStep?.targetRole ?? sourceStep?.target_role) ||
@@ -563,14 +523,13 @@ export function insertStepByType(
     document,
     resolveDefaultStepIdBase(normalizedStepType),
   );
-  const parameters = options?.initialParameters
-    ? cloneRecord(options.initialParameters)
-    : createDefaultStepParameters(normalizedStepType);
+  const parameters = createDefaultStepParameters(normalizedStepType);
   const connectorName = normalizeString(options?.connectorName);
 
   if (normalizedStepType === 'connector_call') {
     const preferredConnector =
-      connectorName || normalizeString(options?.connectors?.[0]?.name);
+      connectorName ||
+      normalizeString(options?.connectors?.[0]?.name);
     if (preferredConnector) {
       parameters.connector = preferredConnector;
     }
@@ -650,13 +609,12 @@ export function removeStep(
 
       return {
         ...step,
-        next: next === currentStepId ? null : (step.next ?? null),
+        next: next === currentStepId ? null : step.next ?? null,
         branches,
       } satisfies StudioWorkflowStepDocument;
     });
 
-  const preferredStep =
-    nextSteps[currentIndex] ?? nextSteps[currentIndex - 1] ?? nextSteps[0];
+  const preferredStep = nextSteps[currentIndex] ?? nextSteps[currentIndex - 1] ?? nextSteps[0];
   const fallbackRoleId = normalizeString(roles[0]?.id);
 
   return {
@@ -687,9 +645,7 @@ export function removeSteps(
   }
 
   const stepIdSet = new Set(normalizedStepIds);
-  const orderedStepIds = listStepIds(document).filter((stepId) =>
-    stepIdSet.has(stepId),
-  );
+  const orderedStepIds = listStepIds(document).filter((stepId) => stepIdSet.has(stepId));
   if (orderedStepIds.length === 0) {
     return {
       document,
@@ -760,7 +716,7 @@ export function connectStepToTarget(
 
     return {
       ...step,
-      next: normalizedBranchLabel ? (step.next ?? null) : targetStepId,
+      next: normalizedBranchLabel ? step.next ?? null : targetStepId,
       branches: normalizedBranchLabel ? nextBranches : nextBranches,
     } satisfies StudioWorkflowStepDocument;
   });
@@ -803,7 +759,7 @@ export function removeStepConnection(
       ...step,
       next:
         normalizedBranchLabel || normalizeString(step.next) !== targetStepId
-          ? (step.next ?? null)
+          ? step.next ?? null
           : null,
       branches: nextBranches,
     } satisfies StudioWorkflowStepDocument;
@@ -873,10 +829,9 @@ export function applyRoleInspectorDraft(
   };
 }
 
-export function addWorkflowRole(document: StudioWorkflowDocument): {
-  document: StudioWorkflowDocument;
-  nodeId: string;
-} {
+export function addWorkflowRole(
+  document: StudioWorkflowDocument,
+): { document: StudioWorkflowDocument; nodeId: string } {
   const roles = Array.isArray(document.roles) ? document.roles : [];
   const nextRoleId = createUniqueRoleId(document, 'role');
   const nextRole: StudioWorkflowRoleDocument = {
@@ -940,15 +895,19 @@ export function updateWorkflowRole(
     readonly connectors: readonly string[];
   },
 ): { document: StudioWorkflowDocument; nodeId: string } {
-  return applyRoleInspectorDraft(document, currentRoleId, {
-    kind: 'role',
-    id: nextRole.id,
-    name: nextRole.name,
-    provider: nextRole.provider,
-    model: nextRole.model,
-    systemPrompt: nextRole.systemPrompt,
-    connectorsText: nextRole.connectors.join('\n'),
-  });
+  return applyRoleInspectorDraft(
+    document,
+    currentRoleId,
+    {
+      kind: 'role',
+      id: nextRole.id,
+      name: nextRole.name,
+      provider: nextRole.provider,
+      model: nextRole.model,
+      systemPrompt: nextRole.systemPrompt,
+      connectorsText: nextRole.connectors.join('\n'),
+    },
+  );
 }
 
 export function removeWorkflowRole(
@@ -980,10 +939,11 @@ export function removeWorkflowRole(
       roles: nextRoles,
       steps: nextSteps,
     },
-    nodeId: nextRoles[0]?.id
-      ? `role:${normalizeString(nextRoles[0].id)}`
-      : nextSteps[0]?.id
-        ? `step:${normalizeString(nextSteps[0].id)}`
-        : '',
+    nodeId:
+      nextRoles[0]?.id
+        ? `role:${normalizeString(nextRoles[0].id)}`
+        : nextSteps[0]?.id
+          ? `step:${normalizeString(nextSteps[0].id)}`
+          : '',
   };
 }

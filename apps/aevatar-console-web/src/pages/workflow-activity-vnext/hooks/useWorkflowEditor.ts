@@ -29,7 +29,6 @@ import type {
   StudioExecutionDetail,
   StudioExecutionFrame,
   StudioValidationFinding,
-  StudioWorkflowCapability,
   StudioWorkflowDocument,
   StudioWorkflowFile,
 } from '@/shared/studio/models';
@@ -579,8 +578,6 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
           .find(Boolean);
         const inserted = insertStepByType(explicitDocument, stepType, {
           afterStepId: selectedStepId || finalStepId || null,
-          initialParameters:
-            stepType.trim().toLowerCase() === 'tool_call' ? {} : undefined,
         });
         const serialized = await studioApi.serializeYaml({
           document: inserted.document,
@@ -751,10 +748,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   }, [graph.steps, selectedNodeId]);
 
   const updateSelectedStepConfiguration = React.useCallback(
-    async (change: {
-      readonly capability: StudioWorkflowCapability | null;
-      readonly parametersText: string;
-    }): Promise<boolean> => {
+    async (parametersText: string): Promise<boolean> => {
       if (
         savingRef.current ||
         structuralMutationPendingRef.current ||
@@ -767,7 +761,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         const updated = applyStepInspectorDraft(
           document,
           selectedStepDraft.id,
-          { ...selectedStepDraft, ...change },
+          { ...selectedStepDraft, parametersText },
         );
         const serialized = await studioApi.serializeYaml({
           document: updated.document,

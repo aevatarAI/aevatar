@@ -243,118 +243,79 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.nodeInspector.discardDescription':
       '此步骤中尚未应用的更改将丢失。',
     'workflowActivityVNext.nodeInspector.discardTitle': '放弃节点更改？',
-    'workflowActivityVNext.nodeInspector.endpointId': '端点 ID',
     'workflowActivityVNext.nodeInspector.errorDetails': '错误详情',
+    'workflowActivityVNext.nodeInspector.fieldExample': '示例：{value}',
+    'workflowActivityVNext.nodeInspector.fieldOptional': '选填',
+    'workflowActivityVNext.nodeInspector.fieldRequired': '必填',
     'workflowActivityVNext.nodeInspector.nextStep': '下一步骤',
     'workflowActivityVNext.nodeInspector.noBranches': '没有分支',
+    'workflowActivityVNext.nodeInspector.noSettings': '此步骤无需设置。',
     'workflowActivityVNext.nodeInspector.notSet': '未设置',
     'workflowActivityVNext.nodeInspector.purpose.assign':
       '保存一个值，供工作流后续步骤使用。',
+    'workflowActivityVNext.nodeInspector.purpose.cache':
+      '遇到相同缓存键时复用之前的结果。',
+    'workflowActivityVNext.nodeInspector.purpose.checkpoint':
+      '在工作流中记录一个具名恢复点。',
     'workflowActivityVNext.nodeInspector.purpose.conditional':
-      '根据条件判断工作流接下来进入哪条路径。',
+      '仅在配置的条件为真时继续。',
     'workflowActivityVNext.nodeInspector.purpose.connectorCall':
       '调用已配置连接器提供的操作。',
     'workflowActivityVNext.nodeInspector.purpose.default':
       '设置此步骤在工作流运行时的行为。',
     'workflowActivityVNext.nodeInspector.purpose.delay':
-      '暂停工作流一段时间，再继续下一步骤。',
+      '暂停工作流一段时间后再继续下一步。',
+    'workflowActivityVNext.nodeInspector.purpose.dynamicWorkflow':
+      '根据生成的 YAML 创建并运行工作流步骤。',
     'workflowActivityVNext.nodeInspector.purpose.emit':
-      '向工作流或系统的其他部分发布事件。',
+      '向其他工作流或系统监听器发布事件。',
+    'workflowActivityVNext.nodeInspector.purpose.evaluate':
+      '按照明确标准为当前结果评分。',
+    'workflowActivityVNext.nodeInspector.purpose.foreach':
+      '对每个输入项运行相同的子步骤。',
+    'workflowActivityVNext.nodeInspector.purpose.guard':
+      '在工作流继续前检查输入。',
     'workflowActivityVNext.nodeInspector.purpose.humanApproval':
-      '暂停工作流，等待人工批准或拒绝。',
+      '暂停并等待人工批准或拒绝下一操作。',
     'workflowActivityVNext.nodeInspector.purpose.humanInput':
-      '暂停工作流并收集人工输入。',
+      '暂停并向用户收集信息。',
     'workflowActivityVNext.nodeInspector.purpose.llmCall':
       '将指令和工作流输入发送给 AI 模型。',
+    'workflowActivityVNext.nodeInspector.purpose.mapReduce':
+      '分别处理输入分块，再合并所有结果。',
+    'workflowActivityVNext.nodeInspector.purpose.parallel':
+      '同时运行多个执行者并合并结果。',
+    'workflowActivityVNext.nodeInspector.purpose.race':
+      '同时运行多个执行者，并采用最先返回的结果。',
+    'workflowActivityVNext.nodeInspector.purpose.reflect':
+      '在限定轮次内检查并改进结果。',
+    'workflowActivityVNext.nodeInspector.purpose.retrieveFacts':
+      '查找后续工作流步骤需要的相关事实。',
     'workflowActivityVNext.nodeInspector.purpose.switch':
-      '根据当前工作流值匹配并选择分支。',
+      '根据当前值选择下一分支。',
     'workflowActivityVNext.nodeInspector.purpose.toolCall':
-      '运行已连接服务或已注册工具中的操作。',
+      '使用你提供的输入运行一个已注册工具。',
     'workflowActivityVNext.nodeInspector.purpose.transform':
-      '转换当前工作流值并传给下一步骤。',
+      '转换当前值，供下一步骤使用。',
+    'workflowActivityVNext.nodeInspector.purpose.vote':
+      '从可用的执行结果中选出一个结果。',
     'workflowActivityVNext.nodeInspector.purpose.waitSignal':
-      '暂停工作流，直到收到预期信号。',
+      '暂停并等待指定信号或超时。',
+    'workflowActivityVNext.nodeInspector.purpose.while':
+      '在条件为真时重复执行子步骤。',
     'workflowActivityVNext.nodeInspector.purpose.workflowCall':
-      '运行另一个工作流并在此处使用其结果。',
+      '运行另一个工作流并在此使用其结果。',
+    'workflowActivityVNext.nodeInspector.purpose.workflowYamlValidate':
+      '使用生成的工作流 YAML 前先检查其有效性。',
     'workflowActivityVNext.nodeInspector.rawConfigurationAria': '原始配置',
     'workflowActivityVNext.nodeInspector.rawConfigurationError':
       '配置必须为 JSON 对象。',
     'workflowActivityVNext.nodeInspector.sectionAria': '配置 {name}',
-    'workflowActivityVNext.nodeInspector.runtimeTool': '运行时工具',
     'workflowActivityVNext.nodeInspector.stepDetails': '技术详情',
     'workflowActivityVNext.nodeInspector.stepId': '步骤 ID',
     'workflowActivityVNext.nodeInspector.targetRole': '目标角色',
     'workflowActivityVNext.nodeInspector.title': '配置 {name}',
-    'workflowActivityVNext.nodeInspector.tool.action': '操作',
-    'workflowActivityVNext.nodeInspector.tool.actionHelp':
-      '选择此步骤要运行的外部服务操作。',
-    'workflowActivityVNext.nodeInspector.tool.actionPlaceholder':
-      '选择此步骤要做什么',
-    'workflowActivityVNext.nodeInspector.tool.approvalRequired': '需要审批',
-    'workflowActivityVNext.nodeInspector.tool.argumentsRecovery':
-      '打开高级 JSON 修复已有操作输入，或修改引导字段以替换这些输入。',
-    'workflowActivityVNext.nodeInspector.tool.bodyValue': '请求正文值',
-    'workflowActivityVNext.nodeInspector.tool.checking': '正在检查可用性',
-    'workflowActivityVNext.nodeInspector.tool.chooseAction': '请选择操作',
-    'workflowActivityVNext.nodeInspector.tool.chooseValue': '选择一个值',
-    'workflowActivityVNext.nodeInspector.tool.discoveryFailed':
-      '无法加载已连接的操作。',
-    'workflowActivityVNext.nodeInspector.tool.empty':
-      '暂时没有可用的已连接操作。',
-    'workflowActivityVNext.nodeInspector.tool.inputs': '操作输入',
-    'workflowActivityVNext.nodeInspector.tool.input.requestBody': '请求正文',
-    'workflowActivityVNext.nodeInspector.tool.input.resultFormat': '结果格式',
-    'workflowActivityVNext.nodeInspector.tool.input.value': '值',
-    'workflowActivityVNext.nodeInspector.tool.incompleteGuidance':
-      '此步骤运行前需补全必填输入；你仍可先应用这个草稿。',
-    'workflowActivityVNext.nodeInspector.tool.loadingActions':
-      '正在加载已连接操作',
-    'workflowActivityVNext.nodeInspector.tool.response.file': '文件',
-    'workflowActivityVNext.nodeInspector.tool.response.text': '文本',
-    'workflowActivityVNext.nodeInspector.tool.responseHelp':
-      '选择这个操作返回结果的方式',
-    'workflowActivityVNext.nodeInspector.tool.validation.allowedValue':
-      '{label} 必须是可选值之一。',
-    'workflowActivityVNext.nodeInspector.tool.validation.argumentsObject':
-      '操作输入必须是 JSON 对象。',
-    'workflowActivityVNext.nodeInspector.tool.validation.array':
-      '{label} 必须是 JSON 数组。',
-    'workflowActivityVNext.nodeInspector.tool.validation.boolean':
-      '{label} 必须为 true 或 false。',
-    'workflowActivityVNext.nodeInspector.tool.validation.integer':
-      '{label} 必须是整数。',
-    'workflowActivityVNext.nodeInspector.tool.validation.json':
-      '{label} 必须是有效的 JSON。',
-    'workflowActivityVNext.nodeInspector.tool.validation.number':
-      '{label} 必须是数字。',
-    'workflowActivityVNext.nodeInspector.tool.validation.object':
-      '{label} 必须是 JSON 对象。',
-    'workflowActivityVNext.nodeInspector.tool.validation.required':
-      '{label} 为必填项。',
-    'workflowActivityVNext.nodeInspector.tool.location.header': '请求头',
-    'workflowActivityVNext.nodeInspector.tool.location.path': '路径',
-    'workflowActivityVNext.nodeInspector.tool.location.query': '查询',
-    'workflowActivityVNext.nodeInspector.tool.needsSetup': '需要设置',
-    'workflowActivityVNext.nodeInspector.tool.numberPlaceholder':
-      '输入数字或工作流表达式',
-    'workflowActivityVNext.nodeInspector.tool.optionalSuffix': ' · 可选',
-    'workflowActivityVNext.nodeInspector.tool.parameterLocation':
-      '{location} 参数',
-    'workflowActivityVNext.nodeInspector.tool.readinessFailed':
-      '无法检查此操作。',
-    'workflowActivityVNext.nodeInspector.tool.ready': '可用',
-    'workflowActivityVNext.nodeInspector.tool.requiredSuffix': ' · 必填',
-    'workflowActivityVNext.nodeInspector.tool.risk.destructive': '危险操作',
-    'workflowActivityVNext.nodeInspector.tool.risk.readOnly': '只读',
-    'workflowActivityVNext.nodeInspector.tool.risk.write': '会写入数据',
-    'workflowActivityVNext.nodeInspector.tool.savedAction': '已保存的操作',
-    'workflowActivityVNext.nodeInspector.tool.savedUnavailable':
-      '此已保存操作不再可用。',
-    'workflowActivityVNext.nodeInspector.tool.unavailable': '不可用',
-    'workflowActivityVNext.nodeInspector.tool.valuePlaceholder':
-      '输入值或工作流表达式',
     'workflowActivityVNext.nodeInspector.type': '类型',
-    'workflowActivityVNext.nodeInspector.userServiceId': '用户服务 ID',
     'workflowActivityVNext.failure.accessDenied': '你无权使用此服务或模型。',
     'workflowActivityVNext.failure.accessDeniedGuidance':
       '请申请权限，或选择你的账户可用的服务和模型。',

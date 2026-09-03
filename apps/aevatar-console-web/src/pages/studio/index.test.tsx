@@ -1780,7 +1780,6 @@ jest.mock('./components/StudioBuildPanels', () => {
     const selectedStepDraftSeed = mockReact.useMemo(
       () => ({
         kind: 'step',
-        capability: selectedStep?.capability ?? null,
         id: selectedStep?.id || '',
         type: selectedStep?.type || 'llm_call',
         targetRole: selectedStep?.targetRole || '',
@@ -1790,7 +1789,6 @@ jest.mock('./components/StudioBuildPanels', () => {
       }),
       [
         selectedStep?.id,
-        selectedStep?.capability,
         selectedStep?.type,
         selectedStep?.targetRole,
         selectedStep?.next,
@@ -5723,7 +5721,6 @@ describe('StudioPage', () => {
         stepId: 'draft_step',
         draft: {
           kind: 'step',
-          capability: null,
           id: 'draft_step',
           type: 'llm_call',
           targetRole: 'assistant',
@@ -8191,7 +8188,6 @@ describe('StudioPage', () => {
         stepId: 'draft_step',
         draft: {
           kind: 'step',
-          capability: null,
           id: 'draft_step',
           type: 'llm_call',
           targetRole: 'assistant',

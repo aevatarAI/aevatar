@@ -1,3 +1,4 @@
+import type { ConsoleMessageDescriptor } from '@/shared/i18n/messages';
 import {
   formatInspectorParameters,
   normalizeStepParametersForType,
@@ -5,7 +6,6 @@ import {
   readStepParameterValue,
   resolveStepParameterName,
 } from './document';
-import type { ConsoleMessageDescriptor } from '@/shared/i18n/messages';
 
 export type StudioNodeConfigurationFieldKind =
   | 'array'
@@ -52,17 +52,17 @@ export type StudioNodeConfigurationSchema = {
   readonly stepType: string;
 };
 
-type StudioNodeConfigurationSchemaSource = Record<string, unknown> | null | undefined;
+type StudioNodeConfigurationSchemaSource =
+  | Record<string, unknown>
+  | null
+  | undefined;
 
 type StudioNodeConfigurationSchemaDefinition = {
   readonly fields: readonly StudioNodeConfigurationField[];
   readonly stepType: string;
 };
 
-function message(
-  id: string,
-  defaultMessage: string,
-): ConsoleMessageDescriptor {
+function message(id: string, defaultMessage: string): ConsoleMessageDescriptor {
   return { defaultMessage, id };
 }
 
@@ -284,7 +284,10 @@ const STEP_TYPE_OPTIONS = [
   },
 ] satisfies readonly StudioNodeConfigurationOption[];
 
-const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefinition> = {
+const SCHEMAS_BY_STEP_TYPE: Record<
+  string,
+  StudioNodeConfigurationSchemaDefinition
+> = {
   assign: {
     stepType: 'assign',
     fields: [
@@ -1096,10 +1099,14 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
     stepType: 'tool_call',
     fields: [
       {
+        description: message(
+          'shared.studio.nodeConfiguration.toolCall.tool.description',
+          "Use the exact name from the workflow template or target role's tool setup, for example web_search.",
+        ),
         kind: 'single-line',
         label: message(
           'shared.studio.nodeConfiguration.toolCall.tool.label',
-          'Tool',
+          'Tool name',
         ),
         name: 'tool',
         parameterName: 'tool',
@@ -1108,6 +1115,24 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
           'web_search',
         ),
         required: true,
+      },
+      {
+        description: message(
+          'shared.studio.nodeConfiguration.toolCall.arguments.description',
+          'Use the property names documented by this tool. The value is passed as JSON text.',
+        ),
+        kind: 'multi-line',
+        label: message(
+          'shared.studio.nodeConfiguration.toolCall.arguments.label',
+          'Arguments JSON',
+        ),
+        name: 'arguments',
+        parameterName: 'arguments',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.toolCall.arguments.placeholder',
+          '{"query":"$input"}',
+        ),
+        required: false,
       },
     ],
   },
@@ -1334,7 +1359,9 @@ function normalizeParameterName(value: string): string {
   return value.trim();
 }
 
-function labelFromParameterName(parameterName: string): ConsoleMessageDescriptor {
+function labelFromParameterName(
+  parameterName: string,
+): ConsoleMessageDescriptor {
   const normalized = normalizeParameterName(parameterName);
   const label = normalized
     .replace(/[_-]+/g, ' ')
@@ -1348,10 +1375,10 @@ function labelFromParameterName(parameterName: string): ConsoleMessageDescriptor
   );
 }
 
-function normalizeField(
-  field: StudioNodeConfigurationField,
-): NodeConfigField {
-  const parameterName = normalizeParameterName(field.parameterName || field.path || '');
+function normalizeField(field: StudioNodeConfigurationField): NodeConfigField {
+  const parameterName = normalizeParameterName(
+    field.parameterName || field.path || '',
+  );
   return {
     ...field,
     control: field.control ?? field.kind,
@@ -1360,7 +1387,9 @@ function normalizeField(
   };
 }
 
-function inferControlFromValue(value: unknown): StudioNodeConfigurationFieldKind {
+function inferControlFromValue(
+  value: unknown,
+): StudioNodeConfigurationFieldKind {
   if (typeof value === 'boolean') {
     return 'boolean';
   }
@@ -1576,13 +1605,19 @@ function readFieldValueFromInput(
           include: false,
         };
       }
-      if (field.validation?.min !== undefined && parsed < field.validation.min) {
+      if (
+        field.validation?.min !== undefined &&
+        parsed < field.validation.min
+      ) {
         return {
           error: `${field.label.defaultMessage} must be at least ${field.validation.min}.`,
           include: false,
         };
       }
-      if (field.validation?.max !== undefined && parsed > field.validation.max) {
+      if (
+        field.validation?.max !== undefined &&
+        parsed > field.validation.max
+      ) {
         return {
           error: `${field.label.defaultMessage} must be at most ${field.validation.max}.`,
           include: false,

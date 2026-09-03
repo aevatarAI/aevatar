@@ -717,7 +717,14 @@ const enUSMessages = {
     'Value matched against branch keys such as bug, feature, or _default.',
   'shared.studio.nodeConfiguration.switch.on.label': 'Switch on',
   'shared.studio.nodeConfiguration.switch.on.placeholder': '$input',
-  'shared.studio.nodeConfiguration.toolCall.tool.label': 'Tool',
+  'shared.studio.nodeConfiguration.toolCall.arguments.description':
+    'Use the property names documented by this tool. The value is passed as JSON text.',
+  'shared.studio.nodeConfiguration.toolCall.arguments.label': 'Arguments JSON',
+  'shared.studio.nodeConfiguration.toolCall.arguments.placeholder':
+    '{"query":"$input"}',
+  'shared.studio.nodeConfiguration.toolCall.tool.description':
+    "Use the exact name from the workflow template or target role's tool setup, for example web_search.",
+  'shared.studio.nodeConfiguration.toolCall.tool.label': 'Tool name',
   'shared.studio.nodeConfiguration.toolCall.tool.placeholder': 'web_search',
   'shared.studio.nodeConfiguration.transform.operation.label': 'Operation',
   'shared.studio.nodeConfiguration.transform.operation.option.count':

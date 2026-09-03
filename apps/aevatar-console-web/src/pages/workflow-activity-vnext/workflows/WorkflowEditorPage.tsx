@@ -1355,7 +1355,6 @@ const WorkflowEditorPage: React.FC<{
                 editor.setSelectedStepConfigurationError
               }
               onUnappliedChangesChange={setHasUnappliedNodeChanges}
-              scopeId={activeScopeId}
               stepDraft={editor.selectedStepDraft}
             />
           </WorkflowStudioEditorSurface>

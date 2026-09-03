@@ -679,7 +679,14 @@ const zhCNMessages = {
     '用于匹配 bug、feature 或 _default 等分支 key 的值。',
   'shared.studio.nodeConfiguration.switch.on.label': '分支输入',
   'shared.studio.nodeConfiguration.switch.on.placeholder': '$input',
-  'shared.studio.nodeConfiguration.toolCall.tool.label': '工具',
+  'shared.studio.nodeConfiguration.toolCall.arguments.description':
+    '请使用此工具文档中的属性名。该值会作为 JSON 文本传递。',
+  'shared.studio.nodeConfiguration.toolCall.arguments.label': '参数 JSON',
+  'shared.studio.nodeConfiguration.toolCall.arguments.placeholder':
+    '{"query":"$input"}',
+  'shared.studio.nodeConfiguration.toolCall.tool.description':
+    '使用工作流模板或目标角色工具设置中的准确名称，例如 web_search。',
+  'shared.studio.nodeConfiguration.toolCall.tool.label': '工具名称',
   'shared.studio.nodeConfiguration.toolCall.tool.placeholder': 'web_search',
   'shared.studio.nodeConfiguration.transform.operation.label': '操作',
   'shared.studio.nodeConfiguration.transform.operation.option.count':
