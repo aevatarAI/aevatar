@@ -148,6 +148,7 @@ public static class MainnetChatEndpoints
         var workflowQueryService = http.RequestServices.GetService<IWorkflowExecutionQueryApplicationService>();
         var chatStateQueryPort = http.RequestServices.GetService<INyxIdChatConversationStateQueryPort>();
         var workflowSignalAcceptancePort = http.RequestServices.GetService<INyxIdChatWorkflowSignalAcceptancePort>();
+        var chatHistoryCommandPort = http.RequestServices.GetService<IChatHistoryCommandPort>();
         var signalDispatchService = http.RequestServices
             .GetService<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         if (recoveryReadPort is null || currentStateQueryPort is null || workflowQueryService is null || signalDispatchService is null)
@@ -190,6 +191,26 @@ public static class MainnetChatEndpoints
             }
 
             var clientRequestId = TryGetString(body, "clientRequestId") ?? Guid.NewGuid().ToString("N");
+            var deliveryId = $"workflow-signal:{scopeId}:{conversationId}:{clientRequestId}";
+            var turnId = $"turn-{clientRequestId}";
+            if (chatHistoryCommandPort is not null)
+            {
+                await chatHistoryCommandPort.ReserveTurnDeliveryAsync(
+                        new ChatHistoryTurnDeliveryReservation(
+                            deliveryId,
+                            scopeId,
+                            conversationId,
+                            turnId,
+                            prompt,
+                            actorId,
+                            clientRequestId,
+                            clientRequestId,
+                            string.Empty,
+                            false),
+                        ct)
+                    .ConfigureAwait(false);
+            }
+
             var dispatch = await signalDispatchService.DispatchAsync(
                     new WorkflowSignalCommand(
                         actorId,
@@ -223,6 +244,29 @@ public static class MainnetChatEndpoints
                     .ConfigureAwait(false);
             }
 
+            if (chatHistoryCommandPort is not null)
+            {
+                var terminal = await TryReadWorkflowTerminalAsync(
+                        currentStateQueryPort,
+                        actorId,
+                        ct)
+                    .ConfigureAwait(false);
+                if (terminal is not null)
+                {
+                    await chatHistoryCommandPort.NotifyTurnTerminalAsync(
+                            new ChatHistoryTurnTerminalNotification(
+                                deliveryId,
+                                actorId,
+                                clientRequestId,
+                                terminal.Value.Status,
+                                terminal.Value.Text,
+                                string.Empty,
+                                DateTimeOffset.UtcNow),
+                            ct)
+                        .ConfigureAwait(false);
+                }
+            }
+
             http.Response.StatusCode = StatusCodes.Status202Accepted;
             await http.Response.WriteAsJsonAsync(new
             {
@@ -248,6 +292,88 @@ public static class MainnetChatEndpoints
                     conversationId);
             return false;
         }
+    }
+
+    private static async Task<(ChatHistoryTurnTerminalStatus Status, string Text)?> TryReadWorkflowTerminalAsync(
+        IWorkflowExecutionCurrentStateQueryPort currentStateQueryPort,
+        string actorId,
+        CancellationToken ct)
+    {
+        const int maxAttempts = 40;
+        var interval = TimeSpan.FromMilliseconds(250);
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            var snapshot = await currentStateQueryPort
+                .GetWorkflowActorCurrentStateAsync(actorId, ct)
+                .ConfigureAwait(false);
+            if (snapshot is not null && IsTerminal(snapshot.CompletionStatus))
+            {
+                return (ToChatTerminalStatus(snapshot.CompletionStatus),
+                    WorkflowOutputDisplayText(snapshot.LastOutput));
+            }
+
+            if (attempt + 1 < maxAttempts)
+                await Task.Delay(interval, ct).ConfigureAwait(false);
+        }
+
+        return null;
+    }
+
+    private static bool IsTerminal(WorkflowRunCompletionStatus status) =>
+        status is WorkflowRunCompletionStatus.Completed or
+            WorkflowRunCompletionStatus.TimedOut or
+            WorkflowRunCompletionStatus.Failed or
+            WorkflowRunCompletionStatus.Stopped;
+
+    private static ChatHistoryTurnTerminalStatus ToChatTerminalStatus(WorkflowRunCompletionStatus status) =>
+        status switch
+        {
+            WorkflowRunCompletionStatus.Completed => ChatHistoryTurnTerminalStatus.Completed,
+            WorkflowRunCompletionStatus.Stopped => ChatHistoryTurnTerminalStatus.Stopped,
+            WorkflowRunCompletionStatus.TimedOut => ChatHistoryTurnTerminalStatus.Blocked,
+            _ => ChatHistoryTurnTerminalStatus.Failed,
+        };
+
+    private static string WorkflowOutputDisplayText(string? output)
+    {
+        var text = output?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return text;
+
+            foreach (var propertyName in new[] { "message", "summary", "output", "result" })
+            {
+                if (document.RootElement.TryGetProperty(propertyName, out var property) &&
+                    property.ValueKind == JsonValueKind.String)
+                {
+                    var value = property.GetString()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(value))
+                        return value;
+                }
+            }
+
+            foreach (var propertyName in new[] { "selected", "kept", "choice" })
+            {
+                if (document.RootElement.TryGetProperty(propertyName, out var property) &&
+                    property.ValueKind == JsonValueKind.String)
+                {
+                    var value = property.GetString()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(value))
+                        return $"{value} is selected.";
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return text;
+        }
+
+        return text;
     }
 
     private static bool IsWaitingForSignal(

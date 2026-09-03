@@ -452,40 +452,59 @@ describe('ChatPage canonical NyxID Assistant', () => {
       stepId: 'wait_for_post_timeout_choice',
       timeoutMs: 60_000,
     };
+    let chatCallCount = 0;
+    let currentStateReads = 0;
     (authFetch as jest.Mock).mockImplementation(
       (path: string, request: RequestInit) => {
         if (path === '/api/chat') {
-          return Promise.resolve(
-            completedStream('The workflow is waiting for your choice.', 'conversation-alpha', 'turn-alpha', [
-              {
-                type: 'CUSTOM',
-                custom: {
-                  data: waitingSignal,
-                  name: 'aevatar.workflow.waiting_signal',
-                  payload: waitingSignal,
+          chatCallCount += 1;
+          if (chatCallCount === 1) {
+            return Promise.resolve(
+              completedStream('The workflow is waiting for your choice.', 'conversation-alpha', 'turn-alpha', [
+                {
+                  type: 'CUSTOM',
+                  custom: {
+                    data: waitingSignal,
+                    name: 'aevatar.workflow.waiting_signal',
+                    payload: waitingSignal,
+                  },
                 },
-              },
-            ]),
-          );
-        }
-        if (path === '/api/scopes/scope-alpha/runs/run-dinner-alpha:signal') {
+              ]),
+            );
+          }
+
           return Promise.resolve(
-            jsonResponse({
-              accepted: true,
-              runId: 'run-dinner-alpha',
-              signalName: 'dinner_date_user_choice_after_timeout',
-              stepId: 'wait_for_post_timeout_choice',
-            }),
+            jsonResponse(
+              {
+                accepted: true,
+                actorId: 'scope-workflow-alpha',
+                runId: 'run-dinner-alpha',
+                routed: 'workflow_signal_continuation',
+                signalName: 'dinner_date_user_choice_after_timeout',
+                stepId: 'wait_for_post_timeout_choice',
+              },
+              202,
+            ),
           );
         }
         if (path === '/api/workflow-actors/scope-workflow-alpha/current-state') {
+          currentStateReads += 1;
           return Promise.resolve(
-            jsonResponse({
-              actorId: 'scope-workflow-alpha',
-              completionStatus: 'Completed',
-              lastOutput: JSON.stringify({ kept: 'Tipo Pasta Bar' }),
-              runId: 'run-dinner-alpha',
-            }),
+            jsonResponse(
+              currentStateReads === 1
+                ? {
+                    actorId: 'scope-workflow-alpha',
+                    completionStatus: 'WaitingForSignal',
+                    lastOutput: '',
+                    runId: 'run-dinner-alpha',
+                  }
+                : {
+                    actorId: 'scope-workflow-alpha',
+                    completionStatus: 'Completed',
+                    lastOutput: JSON.stringify({ kept: 'Tipo Pasta Bar' }),
+                    runId: 'run-dinner-alpha',
+                  },
+            ),
           );
         }
         throw new Error(`Unexpected authFetch path: ${path}`);
@@ -503,26 +522,16 @@ describe('ChatPage canonical NyxID Assistant', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    await waitFor(() =>
-      expect(authFetch).toHaveBeenCalledWith(
-        '/api/scopes/scope-alpha/runs/run-dinner-alpha:signal',
-        expect.objectContaining({
-          body: JSON.stringify({
-            actorId: 'scope-workflow-alpha',
-            runId: 'run-dinner-alpha',
-            signalName: 'dinner_date_user_choice_after_timeout',
-            stepId: 'wait_for_post_timeout_choice',
-            payload: 'Use option 2',
-          }),
-          method: 'POST',
-        }),
-      ),
-    );
+    await waitFor(() => expect(requestBodies()).toHaveLength(2));
+    expect(requestBodies()[1]).toMatchObject({
+      conversationId: 'conversation-alpha',
+      prompt: 'Use option 2',
+      type: 'text',
+    });
     expect(await screen.findByText('Use option 2')).toBeInTheDocument();
     expect(
       await screen.findByText('Tipo Pasta Bar is selected.'),
     ).toBeInTheDocument();
-    expect(requestBodies()).toHaveLength(1);
   });
 
   it('routes workflow start receipt waiting signal from the composer without opening a new chat turn', async () => {
@@ -540,36 +549,44 @@ describe('ChatPage canonical NyxID Assistant', () => {
         timeout_ms: 10000,
       },
     });
+    let chatCallCount = 0;
     (authFetch as jest.Mock).mockImplementation(
       (path: string, request: RequestInit) => {
         if (path === '/api/chat') {
-          return Promise.resolve(
-            completedStream('The workflow is waiting for your choice.', 'conversation-alpha', 'turn-alpha', [
-              {
-                type: 'TOOL_CALL_START',
-                toolCallStart: {
-                  toolCallId: 'call-workflow-start',
-                  toolName: 'aevatar_start_workflow',
+          chatCallCount += 1;
+          if (chatCallCount === 1) {
+            return Promise.resolve(
+              completedStream('The workflow is waiting for your choice.', 'conversation-alpha', 'turn-alpha', [
+                {
+                  type: 'TOOL_CALL_START',
+                  toolCallStart: {
+                    toolCallId: 'call-workflow-start',
+                    toolName: 'aevatar_start_workflow',
+                  },
                 },
-              },
-              {
-                type: 'TOOL_CALL_END',
-                toolCallEnd: {
-                  result,
-                  toolCallId: 'call-workflow-start',
+                {
+                  type: 'TOOL_CALL_END',
+                  toolCallEnd: {
+                    result,
+                    toolCallId: 'call-workflow-start',
+                  },
                 },
-              },
-            ]),
-          );
-        }
-        if (path === '/api/scopes/scope-alpha/runs/run-dinner-alpha:signal') {
+              ]),
+            );
+          }
+
           return Promise.resolve(
-            jsonResponse({
-              accepted: true,
-              runId: 'run-dinner-alpha',
-              signalName: 'dinner_date_user_choice',
-              stepId: 'wait_for_user_choice_timeout',
-            }),
+            jsonResponse(
+              {
+                accepted: true,
+                actorId: 'scope-workflow-alpha',
+                runId: 'run-dinner-alpha',
+                routed: 'workflow_signal_continuation',
+                signalName: 'dinner_date_user_choice',
+                stepId: 'wait_for_user_choice_timeout',
+              },
+              202,
+            ),
           );
         }
         if (path === '/api/workflow-actors/scope-workflow-alpha/current-state') {
@@ -593,24 +610,14 @@ describe('ChatPage canonical NyxID Assistant', () => {
     fireEvent.change(signalInput, { target: { value: '1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    await waitFor(() =>
-      expect(authFetch).toHaveBeenCalledWith(
-        '/api/scopes/scope-alpha/runs/run-dinner-alpha:signal',
-        expect.objectContaining({
-          body: JSON.stringify({
-            actorId: 'scope-workflow-alpha',
-            runId: 'run-dinner-alpha',
-            signalName: 'dinner_date_user_choice',
-            stepId: 'wait_for_user_choice_timeout',
-            payload: '1',
-          }),
-          method: 'POST',
-        }),
-      ),
-    );
+    await waitFor(() => expect(requestBodies()).toHaveLength(2));
+    expect(requestBodies()[1]).toMatchObject({
+      conversationId: 'conversation-alpha',
+      prompt: '1',
+      type: 'text',
+    });
     expect(await screen.findByText('1')).toBeInTheDocument();
     expect(await screen.findByText('Pasta Bar is selected.')).toBeInTheDocument();
-    expect(requestBodies()).toHaveLength(1);
   });
 
   it('enables actor-authorized stop after current state materializes during an active SSE', async () => {

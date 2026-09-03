@@ -250,12 +250,15 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
           suspensionType: readString(nested, "suspensionType"),
           timeoutSeconds: readNumber(nested, 0, "timeoutSeconds"),
         });
-      case AGUIEventType.CUSTOM:
+      case AGUIEventType.CUSTOM: {
+        const data = nested?.data ?? nested?.payload ?? nested?.value ?? frame.data;
         return createTypedEvent(eventType, timestamp, {
-          name: readString(nested, "name"),
+          data,
+          name: readString(nested, "name") || readString(frame, "name"),
           payload: nested?.payload,
-          value: nested?.payload ?? nested?.value,
+          value: nested?.payload ?? nested?.value ?? nested?.data ?? data,
         });
+      }
       case AGUIEventType.STATE_SNAPSHOT:
         return createTypedEvent(eventType, timestamp, {
           snapshot: frame[oneofKey],

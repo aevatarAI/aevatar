@@ -701,7 +701,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             {
                 StepId = "wait_for_post_timeout_choice",
                 WaitingKind = "signal",
-                Prompt = "dinner_date_user_choice_after_timeout",
+                Prompt = "Please choose one held dinner option.",
                 Availability = "available",
             },
         });
@@ -723,6 +723,16 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner,
             chatHistoryCreateRecoveryReadPort: recoveryPort,
             currentStateQueryPort: currentStateQueryPort,
+            workflowQueryService: new FixedWorkflowQueryApplicationService(new WorkflowRunReport
+            {
+                CurrentWaitingSignal = new WorkflowRunWaitingSignal
+                {
+                    RunId = "run-1",
+                    StepId = "wait_for_post_timeout_choice",
+                    SignalName = "dinner_date_user_choice_after_timeout",
+                    Prompt = "Please choose one held dinner option.",
+                },
+            }),
             signalDispatchService: signalDispatchService,
             finalizeEmitter: new WorkflowRunFinalizeEmitter(currentStateQueryPort));
         var emitted = new List<WorkflowRunEventEnvelope>();
@@ -1461,6 +1471,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         IWorkflowChatHistoryCreateRecoveryReadPort? chatHistoryCreateRecoveryReadPort = null,
         WorkflowRunBehaviorOptions? behaviorOptions = null,
         IWorkflowExecutionCurrentStateQueryPort? currentStateQueryPort = null,
+        IWorkflowExecutionQueryApplicationService? workflowQueryService = null,
         ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? signalDispatchService = null,
         ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>? finalizeEmitter = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null) =>
@@ -1474,6 +1485,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             chatHistoryCreateRecoveryReadPort,
             behaviorOptions,
             currentStateQueryPort,
+            workflowQueryService,
             signalDispatchService,
             finalizeEmitter,
             delayAsync);
@@ -1835,6 +1847,61 @@ public sealed class WorkflowChatRunInteractionServiceTests
                     command.CommandId ?? "signal-cmd",
                     command.CorrelationId ?? command.CommandId ?? "signal-corr"));
         }
+    }
+
+    private sealed class FixedWorkflowQueryApplicationService(WorkflowRunReport? report) : IWorkflowExecutionQueryApplicationService
+    {
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
+        public List<string> ReportActorIds { get; } = [];
+
+        public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowAgentSummary>>([]);
+
+        public IReadOnlyList<string> ListWorkflows() => [];
+
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowCatalogItem>>([]);
+
+        public Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(string workflowName, CancellationToken ct = default) =>
+            Task.FromResult<WorkflowCatalogItemDetail?>(null);
+
+        public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowCapabilitiesDocument());
+
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default) =>
+            Task.FromResult<WorkflowActorSnapshot?>(null);
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
+        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string workflowRunId, CancellationToken ct = default)
+        {
+            ReportActorIds.Add(workflowRunId);
+            return Task.FromResult(report);
+        }
+
+        public Task<IReadOnlyList<WorkflowRunTimelineExportItem>> ListWorkflowRunTimelineExportAsync(
+            string workflowRunId,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowRunTimelineExportItem>>([]);
+
+        public Task<IReadOnlyList<WorkflowRunGraphExportEdge>> ListWorkflowRunGraphExportEdgesAsync(
+            string workflowRunId,
+            int take = 200,
+            WorkflowRunGraphExportQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowRunGraphExportEdge>>([]);
+
+        public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(
+            string workflowRunId,
+            int depth = 2,
+            int take = 200,
+            WorkflowRunGraphExportQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowRunGraphExportSubgraph());
     }
 
     private sealed class RecordingCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort

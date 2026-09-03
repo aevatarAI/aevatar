@@ -535,19 +535,33 @@ function workflowOutputDisplayText(output?: string): string {
   return text;
 }
 
+function waitForWorkflowProjectionRefresh(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 250);
+  });
+}
+
 async function readWorkflowControlReply(
   intervention: PendingRunInterventionInfo,
 ): Promise<string> {
   const actorId = (intervention.actorId || intervention.runId).trim();
   if (!actorId) return workflowControlFallbackMessage();
 
-  try {
-    const snapshot = await runtimeRunsApi.getWorkflowActorCurrentState(actorId);
-    const output = workflowOutputDisplayText(snapshot.lastOutput);
-    return output || workflowControlFallbackMessage(String(snapshot.completionStatus ?? ''));
-  } catch {
-    return workflowControlFallbackMessage();
+  let latestStatus: unknown;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    try {
+      const snapshot = await runtimeRunsApi.getWorkflowActorCurrentState(actorId);
+      latestStatus = snapshot.completionStatus;
+      const output = workflowOutputDisplayText(snapshot.lastOutput);
+      if (output) return output;
+    } catch {
+      return workflowControlFallbackMessage();
+    }
+
+    await waitForWorkflowProjectionRefresh();
   }
+
+  return workflowControlFallbackMessage(String(latestStatus ?? ''));
 }
 
 function hasUsage(usage: ChatUsageSummary | undefined): boolean {
@@ -1059,16 +1073,20 @@ const ChatPage: React.FC = () => {
           const final: ConversationState = {
             ...streaming,
             pendingRunIntervention: undefined,
-            messages: streaming.messages.map((message) =>
-              message.id === assistantMessageId
-                ? {
-                    ...message,
-                    content: assistantReply,
-                    pendingRunIntervention: undefined,
-                    status: 'complete',
-                  }
-                : message,
-            ),
+            messages: streaming.messages.map((message) => {
+              if (message.id === assistantMessageId) {
+                return {
+                  ...message,
+                  content: assistantReply,
+                  pendingRunIntervention: undefined,
+                  status: 'complete',
+                };
+              }
+
+              return message.pendingRunIntervention
+                ? { ...message, pendingRunIntervention: undefined }
+                : message;
+            }),
             status: 'completed_text',
           };
           activeConversationRef.current = final;
@@ -1400,9 +1418,25 @@ const ChatPage: React.FC = () => {
       setNotice(null);
       try {
         if (intervention.kind === 'wait_signal') {
+          const currentConversation = activeConversationRef.current;
+          const submittedPrompt = action.value?.trim();
+          if (currentConversation?.conversationId && submittedPrompt) {
+            await streamCommand(
+              currentConversation,
+              {
+                clientRequestId: createClientId(),
+                conversationId: currentConversation.conversationId,
+                prompt: submittedPrompt,
+                type: 'text',
+              },
+              submittedPrompt,
+            );
+            return;
+          }
+
           await runtimeRunsApi.signal(scopeId, {
             actorId: intervention.actorId || intervention.runId,
-            payload: action.value?.trim() || undefined,
+            payload: submittedPrompt || undefined,
             runId: intervention.runId,
             signalName: intervention.signalName || 'continue',
             stepId: intervention.stepId,
@@ -1468,7 +1502,7 @@ const ChatPage: React.FC = () => {
         setActiveRunInterventionKey(null);
       }
     },
-    [activeRunInterventionKey, loadActorState, scopeId],
+    [activeRunInterventionKey, loadActorState, scopeId, streamCommand],
   );
 
   const handleComposerSend = useCallback(() => {
