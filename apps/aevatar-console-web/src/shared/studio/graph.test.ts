@@ -1,4 +1,8 @@
-import { buildStudioGraphElements, formatStudioStepTypeLabel } from './graph';
+import {
+  buildStudioGraphElements,
+  formatStudioStepTypeLabel,
+  needsStudioAutoLayout,
+} from './graph';
 
 describe('studio graph helpers', () => {
   it('formats step type labels without leaking backend identifiers', () => {
@@ -146,5 +150,86 @@ describe('studio graph helpers', () => {
       'edge:guard:linear_target:linear',
       'edge:guard:branch_target:branch:next',
     ]);
+  });
+
+  it('skips automatic layout when every step has a saved position', () => {
+    const document = {
+      name: 'workflow-demo',
+      steps: [
+        { id: 'draft', type: 'transform', parameters: {} },
+        { id: 'publish', type: 'emit', parameters: {} },
+      ],
+    };
+    const savedPositions = {
+      draft: { x: -120.5, y: 34 },
+      publish: { x: 981, y: -47.25 },
+    };
+
+    expect(needsStudioAutoLayout(document.steps, savedPositions)).toBe(false);
+    expect(
+      buildStudioGraphElements(document, {
+        nodePositions: savedPositions,
+      }).nodes.map((node) => node.position),
+    ).toEqual([savedPositions.draft, savedPositions.publish]);
+  });
+
+  it('keeps valid partial positions while deterministically laying out missing steps', () => {
+    const document = {
+      name: 'workflow-demo',
+      steps: [
+        { id: 'draft', type: 'transform', parameters: {} },
+        { id: 'review', type: 'conditional', parameters: {} },
+        { id: 'publish', type: 'emit', parameters: {} },
+      ],
+    };
+    const savedPositions = {
+      draft: { x: 77, y: -53 },
+    };
+
+    expect(needsStudioAutoLayout(document.steps, savedPositions)).toBe(true);
+
+    const firstGraph = buildStudioGraphElements(document, {
+      nodePositions: savedPositions,
+    });
+    const secondGraph = buildStudioGraphElements(document, {
+      nodePositions: savedPositions,
+    });
+    const positions = firstGraph.nodes.map((node) => node.position);
+
+    expect(positions[0]).toEqual(savedPositions.draft);
+    expect(positions).toEqual(secondGraph.nodes.map((node) => node.position));
+    expect(positions.slice(1)).toEqual([
+      { x: 240, y: 540 },
+      { x: 240, y: 900 },
+    ]);
+    expect(
+      positions.every(({ x, y }) => Number.isFinite(x) && Number.isFinite(y)),
+    ).toBe(true);
+    expect(new Set(positions.map(({ x, y }) => `${x}:${y}`)).size).toBe(
+      positions.length,
+    );
+  });
+
+  it('ignores unknown and invalid saved positions before deciding on automatic layout', () => {
+    const document = {
+      name: 'workflow-demo',
+      steps: [
+        { id: 'draft', type: 'transform', parameters: {} },
+        { id: 'publish', type: 'emit', parameters: {} },
+      ],
+    };
+    const graph = buildStudioGraphElements(document, {
+      nodePositions: {
+        draft: { x: 14, y: 28 },
+        publish: { x: Number.NaN, y: 40 },
+        unknown: { x: 200, y: 300 },
+      },
+    });
+
+    expect(
+      needsStudioAutoLayout(document.steps, { draft: { x: 14, y: 28 } }),
+    ).toBe(true);
+    expect(graph.nodes[0]?.position).toEqual({ x: 14, y: 28 });
+    expect(graph.nodes[1]?.position).toEqual({ x: 240, y: 540 });
   });
 });

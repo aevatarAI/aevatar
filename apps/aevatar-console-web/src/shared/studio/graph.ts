@@ -393,6 +393,13 @@ function extractSavedLayoutPositions(
   );
 }
 
+export function needsStudioAutoLayout(
+  steps: readonly StudioGraphStep[],
+  savedPositions: Readonly<Record<string, XYPosition>>,
+): boolean {
+  return steps.some((step) => savedPositions[step.id] === undefined);
+}
+
 function buildAutoLayoutPositions(
   steps: StudioGraphStep[],
 ): Record<string, XYPosition> {
@@ -613,7 +620,12 @@ export function buildStudioGraphElements(
   const roles = normalizeRoles(normalizedDocument);
   const steps = normalizeSteps(normalizedDocument);
   const savedLayoutPositions = extractSavedLayoutPositions(layout);
-  const autoLayoutPositions = buildAutoLayoutPositions(steps);
+  const autoLayoutPositions = needsStudioAutoLayout(
+    steps,
+    savedLayoutPositions,
+  )
+    ? buildAutoLayoutPositions(steps)
+    : {};
 
   const nodes: Node<StudioGraphNodeData>[] = steps.map((step, index) => {
     const position = savedLayoutPositions[step.id] ?? autoLayoutPositions[step.id];
