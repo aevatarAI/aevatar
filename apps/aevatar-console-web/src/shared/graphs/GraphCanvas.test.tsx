@@ -14,6 +14,7 @@ const mockInitializedNodeTopologies = new Set<string>();
 let mockZoom = 1;
 let mockRenderedNodeTopology = '[]';
 let mockReactFlowInstance: any;
+let mockRenderFlowNodes = false;
 
 jest.mock('@xyflow/react', () => {
   const React = require('react');
@@ -51,9 +52,23 @@ jest.mock('@xyflow/react', () => {
       mockRenderedNodeTopology = JSON.stringify(
         props.nodes.map((node: any) => node.id),
       );
+      const renderedNodes = mockRenderFlowNodes
+        ? props.nodes.map((node: any) => {
+            const NodeComponent = props.nodeTypes?.[node.type];
+            return NodeComponent
+              ? React.createElement(NodeComponent, {
+                  data: node.data,
+                  id: node.id,
+                  key: node.id,
+                  selected: Boolean(node.selected),
+                })
+              : null;
+          })
+        : null;
       return React.createElement(
         'div',
         { 'data-testid': 'react-flow-mock' },
+        renderedNodes,
         props.children,
       );
     },
@@ -117,6 +132,7 @@ describe('GraphCanvas', () => {
 
   beforeEach(() => {
     mockZoom = 1;
+    mockRenderFlowNodes = false;
     mockRenderedNodeTopology = '[]';
     mockReactFlowInstance = createFlowInstance();
     mockFlowStoreListeners.clear();
@@ -606,6 +622,70 @@ describe('GraphCanvas', () => {
         }),
       }),
     );
+  });
+
+  it('preserves Studio rendering defaults and accepts explicit benchmark policy overrides', () => {
+    render(<GraphCanvas edges={edges} nodes={nodes} variant="studio" />);
+
+    expect(latestReactFlowProps().onlyRenderVisibleElements).toBe(true);
+    expect(mockMiniMapRender).toHaveBeenCalled();
+
+    mockMiniMapRender.mockClear();
+    render(
+      <GraphCanvas
+        edges={edges}
+        nodes={nodes}
+        onlyRenderVisibleElements={false}
+        showMiniMap={false}
+        variant="studio"
+      />,
+    );
+
+    expect(latestReactFlowProps().onlyRenderVisibleElements).toBe(false);
+    expect(mockMiniMapRender).not.toHaveBeenCalled();
+  });
+
+  it('reports committed Studio node renders without adding instrumentation to node data', () => {
+    mockRenderFlowNodes = true;
+    const onStudioNodeRender = jest.fn();
+    const { rerender } = render(
+      <GraphCanvas
+        edges={edges}
+        nodes={nodes}
+        onStudioNodeRender={onStudioNodeRender}
+        variant="studio"
+      />,
+    );
+
+    expect(onStudioNodeRender).toHaveBeenCalledWith('step:assert');
+    expect(latestReactFlowProps().nodes[0].data).toBe(nodes[0].data);
+
+    onStudioNodeRender.mockClear();
+    rerender(
+      <GraphCanvas
+        edges={edges}
+        nodes={nodes}
+        onStudioNodeRender={onStudioNodeRender}
+        variant="studio"
+      />,
+    );
+    expect(onStudioNodeRender).not.toHaveBeenCalled();
+
+    rerender(
+      <GraphCanvas
+        edges={edges}
+        nodes={[
+          {
+            ...nodes[0],
+            data: { ...nodes[0].data, executionStatus: 'active' },
+          },
+        ]}
+        onStudioNodeRender={onStudioNodeRender}
+        variant="studio"
+      />,
+    );
+    expect(onStudioNodeRender).toHaveBeenCalledTimes(1);
+    expect(onStudioNodeRender).toHaveBeenLastCalledWith('step:assert');
   });
 
   it('applies a drag change once while preserving untouched Studio node and data references', () => {

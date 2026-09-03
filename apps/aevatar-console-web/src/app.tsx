@@ -45,7 +45,16 @@ import {
 import { getNavigationSelectedKeys } from './shared/navigation/navigationMenuSelection';
 import { queryClient } from './shared/query/queryClient';
 
-const PUBLIC_ROUTES = new Set(['/login', '/auth/callback']);
+const WORKFLOW_CANVAS_BENCHMARK_ROUTE = '/workflow-canvas-benchmark';
+const WORKFLOW_CANVAS_BENCHMARK_ENABLED =
+  process.env.AEVATAR_WORKFLOW_CANVAS_BENCHMARK === '1';
+const PUBLIC_ROUTES = new Set([
+  '/login',
+  '/auth/callback',
+  ...(WORKFLOW_CANVAS_BENCHMARK_ENABLED
+    ? [WORKFLOW_CANVAS_BENCHMARK_ROUTE]
+    : []),
+]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
 const FULLSCREEN_DISPLAY_ROUTES = new Set(['/runtime/mission-wall']);
 const WORKFLOW_ACTIVITY_VNEXT_ROUTE =

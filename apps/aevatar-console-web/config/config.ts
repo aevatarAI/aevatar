@@ -1,9 +1,9 @@
 // https://umijs.org/config/
 
 import { defineConfig } from '@umijs/max';
+import { aevatarThemeConfig } from '../src/shared/ui/aevatarWorkbench';
 import defaultSettings from './defaultSettings';
 import proxy from './proxy';
-import { aevatarThemeConfig } from '../src/shared/ui/aevatarWorkbench';
 
 import routes from './routes';
 
@@ -15,7 +15,9 @@ function resolvePublicPath(value?: string): string {
     return '/';
   }
 
-  const rootRelative = normalized.startsWith('/') ? normalized : `/${normalized}`;
+  const rootRelative = normalized.startsWith('/')
+    ? normalized
+    : `/${normalized}`;
   return rootRelative.endsWith('/') ? rootRelative : `${rootRelative}/`;
 }
 
@@ -157,9 +159,7 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
   define: {
     'process.env.CI': JSON.stringify(process.env.CI),
     'process.env.NYXID_BASE_URL': JSON.stringify(process.env.NYXID_BASE_URL),
-    'process.env.NYXID_CLIENT_ID': JSON.stringify(
-      process.env.NYXID_CLIENT_ID,
-    ),
+    'process.env.NYXID_CLIENT_ID': JSON.stringify(process.env.NYXID_CLIENT_ID),
     'process.env.NYXID_REDIRECT_URI': JSON.stringify(
       process.env.NYXID_REDIRECT_URI,
     ),
@@ -170,6 +170,9 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
     ),
     'process.env.AEVATAR_CONSOLE_PUBLIC_PATH': JSON.stringify(
       process.env.AEVATAR_CONSOLE_PUBLIC_PATH,
+    ),
+    'process.env.AEVATAR_WORKFLOW_CANVAS_BENCHMARK': JSON.stringify(
+      process.env.AEVATAR_WORKFLOW_CANVAS_BENCHMARK,
     ),
   },
 });

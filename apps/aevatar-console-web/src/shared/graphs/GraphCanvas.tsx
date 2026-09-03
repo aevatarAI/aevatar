@@ -71,6 +71,9 @@ type GraphCanvasProps = {
   onNodeLayoutChange?: (nodes: Node[]) => void;
   onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
   onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
+  onStudioNodeRender?: (nodeId: string) => void;
+  onlyRenderVisibleElements?: boolean;
+  showMiniMap?: boolean;
 };
 
 const SELF_MANAGED_SELECTION_CLASS = 'graph-canvas-self-managed-selection';
@@ -346,10 +349,16 @@ const getStudioMiniMapNodeColor = (node: Node) => {
   return getStudioGraphCategory(data?.stepType || '').color;
 };
 
+const StudioNodeRenderContext = React.createContext<
+  ((nodeId: string) => void) | undefined
+>(undefined);
+
 function StudioWorkflowNode({
   data,
+  id,
   selected,
 }: NodeProps<Node<StudioGraphNodeData>>) {
+  const onStudioNodeRender = React.useContext(StudioNodeRenderContext);
   const category = getStudioGraphCategory(data.stepType);
   const Icon =
     STUDIO_NODE_ICON_BY_CATEGORY[category.key] ??
@@ -384,6 +393,10 @@ function StudioWorkflowNode({
           '{count} branches',
           { count: data.branchCount },
         );
+
+  useLayoutEffect(() => {
+    onStudioNodeRender?.(id);
+  });
 
   return (
     <div
@@ -727,6 +740,9 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   onNodeLayoutChange,
   onDeleteEdges,
   onDeleteNodes,
+  onStudioNodeRender,
+  onlyRenderVisibleElements,
+  showMiniMap,
 }) => {
   const isStudioVariant = variant === 'studio';
   const [localNodes, setLocalNodes] = useNodesState([...nodes]);
@@ -994,87 +1010,99 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   );
 
   return (
-    <div style={canvasStyle}>
-      <style>
-        {isStudioVariant ? studioCanvasCss : selfManagedSelectionCss}
-      </style>
-      <ReactFlow
-        onInit={setFlowInstance}
-        nodes={decoratedNodes}
-        edges={decoratedEdges}
-        fitView={!isStudioVariant}
-        fitViewOptions={isStudioVariant ? STUDIO_FIT_VIEW_OPTIONS : undefined}
-        minZoom={isStudioVariant ? STUDIO_CANVAS_MIN_ZOOM : undefined}
-        maxZoom={isStudioVariant ? STUDIO_CANVAS_MAX_ZOOM : undefined}
-        nodeTypes={isStudioVariant ? STUDIO_NODE_TYPES : undefined}
-        nodesDraggable={isStudioVariant}
-        nodesConnectable={Boolean(isStudioVariant && onConnectNodes)}
-        elementsSelectable
-        onlyRenderVisibleElements={isStudioVariant ? true : undefined}
-        deleteKeyCode={
-          isStudioVariant && !onDeleteNodes && !onDeleteEdges ? null : undefined
-        }
-        onNodesChange={isStudioVariant ? handleNodesChange : undefined}
-        onBeforeDelete={
-          isStudioVariant && (onDeleteNodes || onDeleteEdges)
-            ? handleBeforeDelete
-            : undefined
-        }
-        onNodeDragStop={isStudioVariant ? handleNodeDragStop : undefined}
-        onConnect={isStudioVariant ? handleConnect : undefined}
-        onNodeClick={handleNodeClick}
-        onEdgeClick={handleEdgeClick}
-        onPaneClick={handlePaneClick}
-        onPaneContextMenu={isStudioVariant ? handlePaneContextMenu : undefined}
-        onMoveStart={isStudioVariant ? handleMoveStart : undefined}
-        className={isStudioVariant ? 'studio-canvas' : undefined}
-        proOptions={isStudioVariant ? STUDIO_PRO_OPTIONS : undefined}
-      >
-        {isStudioVariant ? (
-          <StudioViewportController
-            autoFitKey={renderedAutoFitKey}
-            edgeIdsKey={renderedStudioTopology.edgeIdsKey}
-            navigationControlRef={navigationControlRef}
-            nodeIds={renderedStudioTopology.nodeIds}
-            nodeIdsKey={renderedStudioTopology.nodeIdsKey}
-            selectedNodeId={selectedNodeId}
-          />
-        ) : null}
-        <Background
-          color={isStudioVariant ? '#cbd5e1' : undefined}
-          variant={
-            isStudioVariant ? BackgroundVariant.Dots : BackgroundVariant.Lines
+    <StudioNodeRenderContext.Provider
+      value={isStudioVariant ? onStudioNodeRender : undefined}
+    >
+      <div style={canvasStyle}>
+        <style>
+          {isStudioVariant ? studioCanvasCss : selfManagedSelectionCss}
+        </style>
+        <ReactFlow
+          onInit={setFlowInstance}
+          nodes={decoratedNodes}
+          edges={decoratedEdges}
+          fitView={!isStudioVariant}
+          fitViewOptions={isStudioVariant ? STUDIO_FIT_VIEW_OPTIONS : undefined}
+          minZoom={isStudioVariant ? STUDIO_CANVAS_MIN_ZOOM : undefined}
+          maxZoom={isStudioVariant ? STUDIO_CANVAS_MAX_ZOOM : undefined}
+          nodeTypes={isStudioVariant ? STUDIO_NODE_TYPES : undefined}
+          nodesDraggable={isStudioVariant}
+          nodesConnectable={Boolean(isStudioVariant && onConnectNodes)}
+          elementsSelectable
+          onlyRenderVisibleElements={
+            onlyRenderVisibleElements ?? (isStudioVariant ? true : undefined)
           }
-          gap={isStudioVariant ? 28 : 16}
-          size={isStudioVariant ? 1 : 1}
-        />
-        {isStudioVariant ? (
-          <>
-            <MiniMap
-              position="bottom-right"
-              zoomable
-              pannable
-              style={miniMapStyle}
-              maskColor="rgba(241, 245, 249, 0.72)"
-              bgColor="rgba(255, 255, 255, 0.90)"
-              nodeBorderRadius={4}
-              nodeColor={getStudioMiniMapNodeColor}
+          deleteKeyCode={
+            isStudioVariant && !onDeleteNodes && !onDeleteEdges
+              ? null
+              : undefined
+          }
+          onNodesChange={isStudioVariant ? handleNodesChange : undefined}
+          onBeforeDelete={
+            isStudioVariant && (onDeleteNodes || onDeleteEdges)
+              ? handleBeforeDelete
+              : undefined
+          }
+          onNodeDragStop={isStudioVariant ? handleNodeDragStop : undefined}
+          onConnect={isStudioVariant ? handleConnect : undefined}
+          onNodeClick={handleNodeClick}
+          onEdgeClick={handleEdgeClick}
+          onPaneClick={handlePaneClick}
+          onPaneContextMenu={
+            isStudioVariant ? handlePaneContextMenu : undefined
+          }
+          onMoveStart={isStudioVariant ? handleMoveStart : undefined}
+          className={isStudioVariant ? 'studio-canvas' : undefined}
+          proOptions={isStudioVariant ? STUDIO_PRO_OPTIONS : undefined}
+        >
+          {isStudioVariant ? (
+            <StudioViewportController
+              autoFitKey={renderedAutoFitKey}
+              edgeIdsKey={renderedStudioTopology.edgeIdsKey}
+              navigationControlRef={navigationControlRef}
+              nodeIds={renderedStudioTopology.nodeIds}
+              nodeIdsKey={renderedStudioTopology.nodeIdsKey}
+              selectedNodeId={selectedNodeId}
             />
-            <Controls
-              onFitView={markManuallyNavigated}
-              onZoomIn={markManuallyNavigated}
-              onZoomOut={markManuallyNavigated}
-              position="bottom-left"
-              showInteractive={false}
-              style={studioControlsStyle}
-            />
-          </>
-        ) : (
-          <Controls showInteractive={false} />
-        )}
-      </ReactFlow>
-      {overlayContent}
-    </div>
+          ) : null}
+          <Background
+            color={isStudioVariant ? '#cbd5e1' : undefined}
+            variant={
+              isStudioVariant ? BackgroundVariant.Dots : BackgroundVariant.Lines
+            }
+            gap={isStudioVariant ? 28 : 16}
+            size={isStudioVariant ? 1 : 1}
+          />
+          {isStudioVariant ? (
+            <>
+              {(showMiniMap ?? true) ? (
+                <MiniMap
+                  position="bottom-right"
+                  zoomable
+                  pannable
+                  style={miniMapStyle}
+                  maskColor="rgba(241, 245, 249, 0.72)"
+                  bgColor="rgba(255, 255, 255, 0.90)"
+                  nodeBorderRadius={4}
+                  nodeColor={getStudioMiniMapNodeColor}
+                />
+              ) : null}
+              <Controls
+                onFitView={markManuallyNavigated}
+                onZoomIn={markManuallyNavigated}
+                onZoomOut={markManuallyNavigated}
+                position="bottom-left"
+                showInteractive={false}
+                style={studioControlsStyle}
+              />
+            </>
+          ) : (
+            <Controls showInteractive={false} />
+          )}
+        </ReactFlow>
+        {overlayContent}
+      </div>
+    </StudioNodeRenderContext.Provider>
   );
 };
 

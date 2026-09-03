@@ -244,7 +244,7 @@ jobs:
     # 19m57s, then 20m10s and 20m17s, the last two cancelled mid-test at the
     # 20m cap. The ~18m of test work is real, so give it headroom rather than
     # letting every run decide the build on runner jitter.
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -271,7 +271,20 @@ jobs:
         run: pnpm --dir apps/aevatar-console-web test --runInBand
 
       - name: Build console-web
+        env:
+          AEVATAR_WORKFLOW_CANVAS_BENCHMARK: '1'
         run: pnpm --dir apps/aevatar-console-web build
+
+      - name: Benchmark workflow canvas
+        run: pnpm --dir apps/aevatar-console-web benchmark:workflow-canvas
+
+      - name: Upload workflow canvas benchmark
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-canvas-benchmark
+          path: apps/aevatar-console-web/artifacts/workflow-canvas-benchmark
+          if-no-files-found: warn
 
   slow-test-guards:
     needs: changes
