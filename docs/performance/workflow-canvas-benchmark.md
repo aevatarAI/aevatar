@@ -19,9 +19,9 @@ the fixture has `2N - 3` edges: 197, 997, and 1997 respectively.
 Each node contains the complete `StudioGraphNodeData` contract, including its
 step identity and type, role, parameter summary, branch count, execution state,
 and focus state. Positions use a fixed 40-column grid and are finite. Initial
-node dimensions are fixed at 268 by 120 pixels so the first fit does not depend
-on browser measurement timing. The topology scenario adds one node and two
-edges while replacing only the branch source and new node references.
+node dimensions are fixed at 268 by 120 pixels to provide deterministic geometry
+before browser measurement completes. The topology scenario adds one node and
+two edges while replacing only the branch source and new node references.
 
 ## Policies and scenarios
 
