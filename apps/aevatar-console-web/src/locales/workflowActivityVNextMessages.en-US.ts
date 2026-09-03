@@ -1,4 +1,37 @@
 const workflowActivityVNextMessages = {
+  'workflowActivityVNext.arguments.addItem': 'Add item',
+  'workflowActivityVNext.arguments.addItemAria': 'Add item to {path}',
+  'workflowActivityVNext.arguments.addProperty': 'Add property',
+  'workflowActivityVNext.arguments.addPropertyAria': 'Add property to {path}',
+  'workflowActivityVNext.arguments.columnProperty': 'Property',
+  'workflowActivityVNext.arguments.columnType': 'Type',
+  'workflowActivityVNext.arguments.emptyArray': 'No items yet',
+  'workflowActivityVNext.arguments.emptyObject': 'No properties yet',
+  'workflowActivityVNext.arguments.duplicateProperty':
+    'Property names must be unique. "{property}" already exists in this object.',
+  'workflowActivityVNext.arguments.invalidObject':
+    'Enter a valid JSON object before switching to Fields.',
+  'workflowActivityVNext.arguments.item': 'Item {number}',
+  'workflowActivityVNext.arguments.jsonAria': 'Arguments JSON',
+  'workflowActivityVNext.arguments.mode.fields': 'Fields',
+  'workflowActivityVNext.arguments.mode.json': 'JSON',
+  'workflowActivityVNext.arguments.nullValue': 'No value',
+  'workflowActivityVNext.arguments.propertyName': 'Property name',
+  'workflowActivityVNext.arguments.propertyNameAria':
+    'Property name for {path}',
+  'workflowActivityVNext.arguments.removeItemAria': 'Remove item {number}',
+  'workflowActivityVNext.arguments.removePropertyAria': 'Remove {path}',
+  'workflowActivityVNext.arguments.type.array': 'Array',
+  'workflowActivityVNext.arguments.type.boolean': 'Boolean',
+  'workflowActivityVNext.arguments.type.null': 'Null',
+  'workflowActivityVNext.arguments.type.number': 'Number',
+  'workflowActivityVNext.arguments.type.object': 'Object',
+  'workflowActivityVNext.arguments.type.string': 'String',
+  'workflowActivityVNext.arguments.unnamedProperty': 'unnamed property',
+  'workflowActivityVNext.arguments.unsupportedNumber':
+    'This JSON contains a number that Fields mode cannot represent safely. Edit it in JSON or use a string.',
+  'workflowActivityVNext.arguments.valueAria': 'Value for {path}',
+  'workflowActivityVNext.arguments.valueTypeAria': 'Value type for {path}',
   'workflowActivityVNext.activity.allOrigins': 'All sources',
   'workflowActivityVNext.activity.allStatuses': 'All statuses',
   'workflowActivityVNext.activity.afterPlaceholder': 'Activity after',
@@ -233,12 +266,12 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.yaml': 'YAML',
   'workflowActivityVNext.editor.yamlReadFailed':
     'Workflow YAML could not be read.',
-  'workflowActivityVNext.nodeInspector.advanced': 'Advanced options',
+  'workflowActivityVNext.nodeInspector.advanced': 'Advanced JSON',
   'workflowActivityVNext.nodeInspector.advancedDescription':
-    'Use JSON only when the setting is not available above.',
-  'workflowActivityVNext.nodeInspector.applyChanges': 'Apply changes',
+    "Edit this step's runtime parameters as JSON.",
+  'workflowActivityVNext.nodeInspector.applyChanges': 'Apply step',
   'workflowActivityVNext.nodeInspector.applyBeforeSave':
-    'Apply changes before saving this workflow.',
+    'Apply this step before saving the workflow.',
   'workflowActivityVNext.nodeInspector.applyFailed':
     "Couldn't apply configuration",
   'workflowActivityVNext.nodeInspector.applyJson': 'Apply JSON',
@@ -247,22 +280,85 @@ const workflowActivityVNextMessages = {
     'Branches unavailable',
   'workflowActivityVNext.nodeInspector.close': 'Close configuration',
   'workflowActivityVNext.nodeInspector.closeAria': 'Close node configuration',
-  'workflowActivityVNext.nodeInspector.configuration': 'Configuration',
+  'workflowActivityVNext.nodeInspector.configuration': 'Settings',
   'workflowActivityVNext.nodeInspector.configurationDescription':
     'Set what this step needs before the workflow runs.',
   'workflowActivityVNext.nodeInspector.discard': 'Discard changes',
   'workflowActivityVNext.nodeInspector.discardDescription':
     'Your unapplied changes to this step will be lost.',
   'workflowActivityVNext.nodeInspector.discardTitle': 'Discard node changes?',
+  'workflowActivityVNext.nodeInspector.errorDetails': 'Error details',
+  'workflowActivityVNext.nodeInspector.fieldExample': 'Example: {value}',
+  'workflowActivityVNext.nodeInspector.fieldOptional': 'Optional',
+  'workflowActivityVNext.nodeInspector.fieldRequired': 'Required',
   'workflowActivityVNext.nodeInspector.nextStep': 'Next step',
   'workflowActivityVNext.nodeInspector.noBranches': 'No branches',
+  'workflowActivityVNext.nodeInspector.noSettings':
+    'No settings are needed for this step.',
   'workflowActivityVNext.nodeInspector.notSet': 'Not set',
+  'workflowActivityVNext.nodeInspector.purpose.assign':
+    'Store a value for later steps in this workflow.',
+  'workflowActivityVNext.nodeInspector.purpose.cache':
+    'Reuse a previous result when the same cache key appears.',
+  'workflowActivityVNext.nodeInspector.purpose.checkpoint':
+    'Record a named recovery point in this workflow.',
+  'workflowActivityVNext.nodeInspector.purpose.conditional':
+    'Continue only when the configured condition is true.',
+  'workflowActivityVNext.nodeInspector.purpose.connectorCall':
+    'Call an operation provided by a configured connector.',
+  'workflowActivityVNext.nodeInspector.purpose.default':
+    'Configure how this step behaves when the workflow runs.',
+  'workflowActivityVNext.nodeInspector.purpose.delay':
+    'Pause this workflow before the next step continues.',
+  'workflowActivityVNext.nodeInspector.purpose.dynamicWorkflow':
+    'Create and run workflow steps from generated YAML.',
+  'workflowActivityVNext.nodeInspector.purpose.emit':
+    'Publish an event for another workflow or system listener.',
+  'workflowActivityVNext.nodeInspector.purpose.evaluate':
+    'Score the current result against clear criteria.',
+  'workflowActivityVNext.nodeInspector.purpose.foreach':
+    'Run the same child step for every input item.',
+  'workflowActivityVNext.nodeInspector.purpose.guard':
+    'Check the input before allowing the workflow to continue.',
+  'workflowActivityVNext.nodeInspector.purpose.humanApproval':
+    'Pause until a person approves or rejects the next action.',
+  'workflowActivityVNext.nodeInspector.purpose.humanInput':
+    'Pause and collect information from a person.',
+  'workflowActivityVNext.nodeInspector.purpose.llmCall':
+    'Send an instruction and workflow input to an AI model.',
+  'workflowActivityVNext.nodeInspector.purpose.mapReduce':
+    'Process input chunks separately, then combine the results.',
+  'workflowActivityVNext.nodeInspector.purpose.parallel':
+    'Run several workers at the same time and combine their work.',
+  'workflowActivityVNext.nodeInspector.purpose.race':
+    'Run several workers and continue with the first results.',
+  'workflowActivityVNext.nodeInspector.purpose.reflect':
+    'Review and improve a result for a limited number of rounds.',
+  'workflowActivityVNext.nodeInspector.purpose.retrieveFacts':
+    'Find relevant facts to use in later workflow steps.',
+  'workflowActivityVNext.nodeInspector.purpose.switch':
+    'Choose the next branch by matching the current value.',
+  'workflowActivityVNext.nodeInspector.purpose.toolCall':
+    'Run a registered tool with the input you provide.',
+  'workflowActivityVNext.nodeInspector.purpose.transform':
+    'Transform the current value before the next step uses it.',
+  'workflowActivityVNext.nodeInspector.purpose.vote':
+    'Choose a result from the available worker responses.',
+  'workflowActivityVNext.nodeInspector.purpose.waitSignal':
+    'Pause until the expected signal arrives or time runs out.',
+  'workflowActivityVNext.nodeInspector.purpose.while':
+    'Repeat a child step while the condition remains true.',
+  'workflowActivityVNext.nodeInspector.purpose.workflowCall':
+    'Run another workflow and use its result here.',
+  'workflowActivityVNext.nodeInspector.purpose.workflowYamlValidate':
+    'Check generated workflow YAML before it is used.',
   'workflowActivityVNext.nodeInspector.rawConfigurationAria':
     'Raw configuration',
   'workflowActivityVNext.nodeInspector.rawConfigurationError':
     'Configuration must be a JSON object.',
   'workflowActivityVNext.nodeInspector.sectionAria': 'Configure {name}',
-  'workflowActivityVNext.nodeInspector.stepDetails': 'Step details',
+  'workflowActivityVNext.nodeInspector.stepDetails': 'Technical details',
+  'workflowActivityVNext.nodeInspector.stepId': 'Step ID',
   'workflowActivityVNext.nodeInspector.targetRole': 'Target role',
   'workflowActivityVNext.nodeInspector.title': 'Configure {name}',
   'workflowActivityVNext.nodeInspector.type': 'Type',

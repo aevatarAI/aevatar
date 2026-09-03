@@ -3,6 +3,38 @@ import enUSMessages from './workflowActivityVNextMessages.en-US';
 const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
   {
     ...enUSMessages,
+    'workflowActivityVNext.arguments.addItem': '添加一项',
+    'workflowActivityVNext.arguments.addItemAria': '向 {path} 添加一项',
+    'workflowActivityVNext.arguments.addProperty': '添加属性',
+    'workflowActivityVNext.arguments.addPropertyAria': '向 {path} 添加属性',
+    'workflowActivityVNext.arguments.columnProperty': '属性',
+    'workflowActivityVNext.arguments.columnType': '类型',
+    'workflowActivityVNext.arguments.emptyArray': '暂无项目',
+    'workflowActivityVNext.arguments.emptyObject': '暂无属性',
+    'workflowActivityVNext.arguments.duplicateProperty':
+      '属性名不能重复，此对象中已存在“{property}”。',
+    'workflowActivityVNext.arguments.invalidObject':
+      '请先输入有效的 JSON 对象，再切换到字段模式。',
+    'workflowActivityVNext.arguments.item': '第 {number} 项',
+    'workflowActivityVNext.arguments.jsonAria': '参数 JSON',
+    'workflowActivityVNext.arguments.mode.fields': '字段',
+    'workflowActivityVNext.arguments.mode.json': 'JSON',
+    'workflowActivityVNext.arguments.nullValue': '无值',
+    'workflowActivityVNext.arguments.propertyName': '属性名',
+    'workflowActivityVNext.arguments.propertyNameAria': '{path} 的属性名',
+    'workflowActivityVNext.arguments.removeItemAria': '删除第 {number} 项',
+    'workflowActivityVNext.arguments.removePropertyAria': '删除 {path}',
+    'workflowActivityVNext.arguments.type.array': '数组',
+    'workflowActivityVNext.arguments.type.boolean': '布尔值',
+    'workflowActivityVNext.arguments.type.null': '空值',
+    'workflowActivityVNext.arguments.type.number': '数字',
+    'workflowActivityVNext.arguments.type.object': '对象',
+    'workflowActivityVNext.arguments.type.string': '文本',
+    'workflowActivityVNext.arguments.unnamedProperty': '未命名属性',
+    'workflowActivityVNext.arguments.unsupportedNumber':
+      '此 JSON 包含字段模式无法安全表示的数字。请在 JSON 模式中编辑，或将其改为字符串。',
+    'workflowActivityVNext.arguments.valueAria': '{path} 的值',
+    'workflowActivityVNext.arguments.valueTypeAria': '{path} 的值类型',
     'workflowActivityVNext.activity.allOrigins': '全部来源',
     'workflowActivityVNext.activity.allStatuses': '全部状态',
     'workflowActivityVNext.activity.afterPlaceholder': '开始时间之后',
@@ -224,33 +256,95 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.viewRun': '查看运行',
     'workflowActivityVNext.editor.yaml': 'YAML',
     'workflowActivityVNext.editor.yamlReadFailed': '无法读取工作流 YAML。',
-    'workflowActivityVNext.nodeInspector.advanced': '高级选项',
+    'workflowActivityVNext.nodeInspector.advanced': '高级 JSON',
     'workflowActivityVNext.nodeInspector.advancedDescription':
-      '仅当上方没有对应设置时使用 JSON。',
-    'workflowActivityVNext.nodeInspector.applyChanges': '应用更改',
+      '以 JSON 编辑此步骤的运行参数。',
+    'workflowActivityVNext.nodeInspector.applyChanges': '应用步骤',
     'workflowActivityVNext.nodeInspector.applyBeforeSave':
-      '请先应用更改，再保存工作流。',
+      '请先应用此步骤，再保存工作流。',
     'workflowActivityVNext.nodeInspector.applyFailed': '无法应用配置',
     'workflowActivityVNext.nodeInspector.applyJson': '应用 JSON',
     'workflowActivityVNext.nodeInspector.branches': '分支',
     'workflowActivityVNext.nodeInspector.branchesUnavailable': '分支不可用',
     'workflowActivityVNext.nodeInspector.close': '关闭配置',
     'workflowActivityVNext.nodeInspector.closeAria': '关闭节点配置',
-    'workflowActivityVNext.nodeInspector.configuration': '配置',
+    'workflowActivityVNext.nodeInspector.configuration': '设置',
     'workflowActivityVNext.nodeInspector.configurationDescription':
       '设置此步骤在工作流运行前所需的内容。',
     'workflowActivityVNext.nodeInspector.discard': '放弃更改',
     'workflowActivityVNext.nodeInspector.discardDescription':
       '此步骤中尚未应用的更改将丢失。',
     'workflowActivityVNext.nodeInspector.discardTitle': '放弃节点更改？',
+    'workflowActivityVNext.nodeInspector.errorDetails': '错误详情',
+    'workflowActivityVNext.nodeInspector.fieldExample': '示例：{value}',
+    'workflowActivityVNext.nodeInspector.fieldOptional': '选填',
+    'workflowActivityVNext.nodeInspector.fieldRequired': '必填',
     'workflowActivityVNext.nodeInspector.nextStep': '下一步骤',
     'workflowActivityVNext.nodeInspector.noBranches': '没有分支',
+    'workflowActivityVNext.nodeInspector.noSettings': '此步骤无需设置。',
     'workflowActivityVNext.nodeInspector.notSet': '未设置',
+    'workflowActivityVNext.nodeInspector.purpose.assign':
+      '保存一个值，供工作流后续步骤使用。',
+    'workflowActivityVNext.nodeInspector.purpose.cache':
+      '遇到相同缓存键时复用之前的结果。',
+    'workflowActivityVNext.nodeInspector.purpose.checkpoint':
+      '在工作流中记录一个具名恢复点。',
+    'workflowActivityVNext.nodeInspector.purpose.conditional':
+      '仅在配置的条件为真时继续。',
+    'workflowActivityVNext.nodeInspector.purpose.connectorCall':
+      '调用已配置连接器提供的操作。',
+    'workflowActivityVNext.nodeInspector.purpose.default':
+      '设置此步骤在工作流运行时的行为。',
+    'workflowActivityVNext.nodeInspector.purpose.delay':
+      '暂停工作流一段时间后再继续下一步。',
+    'workflowActivityVNext.nodeInspector.purpose.dynamicWorkflow':
+      '根据生成的 YAML 创建并运行工作流步骤。',
+    'workflowActivityVNext.nodeInspector.purpose.emit':
+      '向其他工作流或系统监听器发布事件。',
+    'workflowActivityVNext.nodeInspector.purpose.evaluate':
+      '按照明确标准为当前结果评分。',
+    'workflowActivityVNext.nodeInspector.purpose.foreach':
+      '对每个输入项运行相同的子步骤。',
+    'workflowActivityVNext.nodeInspector.purpose.guard':
+      '在工作流继续前检查输入。',
+    'workflowActivityVNext.nodeInspector.purpose.humanApproval':
+      '暂停并等待人工批准或拒绝下一操作。',
+    'workflowActivityVNext.nodeInspector.purpose.humanInput':
+      '暂停并向用户收集信息。',
+    'workflowActivityVNext.nodeInspector.purpose.llmCall':
+      '将指令和工作流输入发送给 AI 模型。',
+    'workflowActivityVNext.nodeInspector.purpose.mapReduce':
+      '分别处理输入分块，再合并所有结果。',
+    'workflowActivityVNext.nodeInspector.purpose.parallel':
+      '同时运行多个执行者并合并结果。',
+    'workflowActivityVNext.nodeInspector.purpose.race':
+      '同时运行多个执行者，并采用最先返回的结果。',
+    'workflowActivityVNext.nodeInspector.purpose.reflect':
+      '在限定轮次内检查并改进结果。',
+    'workflowActivityVNext.nodeInspector.purpose.retrieveFacts':
+      '查找后续工作流步骤需要的相关事实。',
+    'workflowActivityVNext.nodeInspector.purpose.switch':
+      '根据当前值选择下一分支。',
+    'workflowActivityVNext.nodeInspector.purpose.toolCall':
+      '使用你提供的输入运行一个已注册工具。',
+    'workflowActivityVNext.nodeInspector.purpose.transform':
+      '转换当前值，供下一步骤使用。',
+    'workflowActivityVNext.nodeInspector.purpose.vote':
+      '从可用的执行结果中选出一个结果。',
+    'workflowActivityVNext.nodeInspector.purpose.waitSignal':
+      '暂停并等待指定信号或超时。',
+    'workflowActivityVNext.nodeInspector.purpose.while':
+      '在条件为真时重复执行子步骤。',
+    'workflowActivityVNext.nodeInspector.purpose.workflowCall':
+      '运行另一个工作流并在此使用其结果。',
+    'workflowActivityVNext.nodeInspector.purpose.workflowYamlValidate':
+      '使用生成的工作流 YAML 前先检查其有效性。',
     'workflowActivityVNext.nodeInspector.rawConfigurationAria': '原始配置',
     'workflowActivityVNext.nodeInspector.rawConfigurationError':
       '配置必须为 JSON 对象。',
     'workflowActivityVNext.nodeInspector.sectionAria': '配置 {name}',
-    'workflowActivityVNext.nodeInspector.stepDetails': '步骤详情',
+    'workflowActivityVNext.nodeInspector.stepDetails': '技术详情',
+    'workflowActivityVNext.nodeInspector.stepId': '步骤 ID',
     'workflowActivityVNext.nodeInspector.targetRole': '目标角色',
     'workflowActivityVNext.nodeInspector.title': '配置 {name}',
     'workflowActivityVNext.nodeInspector.type': '类型',

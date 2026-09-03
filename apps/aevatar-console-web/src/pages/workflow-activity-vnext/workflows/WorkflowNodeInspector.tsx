@@ -10,8 +10,11 @@ import {
   Typography,
 } from 'antd';
 import React from 'react';
-import AevatarTooltip from '@/shared/ui/AevatarTooltip';
-import { formatConsoleMessage, t } from '@/shared/i18n/messages';
+import {
+  type ConsoleMessageDescriptor,
+  formatConsoleMessage,
+  t,
+} from '@/shared/i18n/messages';
 import {
   parseInspectorParameters,
   type StudioStepInspectorDraft,
@@ -25,7 +28,9 @@ import {
   readStudioNodeConfigurationValues,
   type StudioStructuredNodeConfigField,
 } from '@/shared/studio/nodeConfigFields';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import TechnicalDetails from '../TechnicalDetails';
+import StructuredJsonArgumentsEditor from './StructuredJsonArgumentsEditor';
 
 export type WorkflowNodeInspectorHandle = {
   requestDiscardOrProceed: (proceed: () => void) => void;
@@ -42,6 +47,130 @@ type WorkflowNodeInspectorProps = {
   readonly onUnappliedChangesChange?: (hasUnappliedChanges: boolean) => void;
   readonly stepDraft: StudioStepInspectorDraft | null;
 };
+
+const STEP_PURPOSES: Readonly<Record<string, ConsoleMessageDescriptor>> = {
+  assign: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.assign',
+    defaultMessage: 'Store a value for later steps in this workflow.',
+  },
+  cache: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.cache',
+    defaultMessage: 'Reuse a previous result when the same cache key appears.',
+  },
+  checkpoint: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.checkpoint',
+    defaultMessage: 'Record a named recovery point in this workflow.',
+  },
+  conditional: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.conditional',
+    defaultMessage: 'Continue only when the configured condition is true.',
+  },
+  connector_call: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.connectorCall',
+    defaultMessage: 'Call an operation provided by a configured connector.',
+  },
+  delay: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.delay',
+    defaultMessage: 'Pause this workflow before the next step continues.',
+  },
+  dynamic_workflow: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.dynamicWorkflow',
+    defaultMessage: 'Create and run workflow steps from generated YAML.',
+  },
+  emit: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.emit',
+    defaultMessage: 'Publish an event for another workflow or system listener.',
+  },
+  evaluate: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.evaluate',
+    defaultMessage: 'Score the current result against clear criteria.',
+  },
+  foreach: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.foreach',
+    defaultMessage: 'Run the same child step for every input item.',
+  },
+  guard: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.guard',
+    defaultMessage: 'Check the input before allowing the workflow to continue.',
+  },
+  human_approval: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.humanApproval',
+    defaultMessage: 'Pause until a person approves or rejects the next action.',
+  },
+  human_input: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.humanInput',
+    defaultMessage: 'Pause and collect information from a person.',
+  },
+  llm_call: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.llmCall',
+    defaultMessage: 'Send an instruction and workflow input to an AI model.',
+  },
+  map_reduce: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.mapReduce',
+    defaultMessage:
+      'Process input chunks separately, then combine the results.',
+  },
+  parallel: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.parallel',
+    defaultMessage:
+      'Run several workers at the same time and combine their work.',
+  },
+  race: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.race',
+    defaultMessage: 'Run several workers and continue with the first results.',
+  },
+  reflect: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.reflect',
+    defaultMessage:
+      'Review and improve a result for a limited number of rounds.',
+  },
+  retrieve_facts: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.retrieveFacts',
+    defaultMessage: 'Find relevant facts to use in later workflow steps.',
+  },
+  switch: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.switch',
+    defaultMessage: 'Choose the next branch by matching the current value.',
+  },
+  tool_call: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.toolCall',
+    defaultMessage: 'Run a registered tool with the input you provide.',
+  },
+  transform: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.transform',
+    defaultMessage: 'Transform the current value before the next step uses it.',
+  },
+  vote: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.vote',
+    defaultMessage: 'Choose a result from the available worker responses.',
+  },
+  wait_signal: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.waitSignal',
+    defaultMessage: 'Pause until the expected signal arrives or time runs out.',
+  },
+  while: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.while',
+    defaultMessage: 'Repeat a child step while the condition remains true.',
+  },
+  workflow_call: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.workflowCall',
+    defaultMessage: 'Run another workflow and use its result here.',
+  },
+  workflow_yaml_validate: {
+    id: 'workflowActivityVNext.nodeInspector.purpose.workflowYamlValidate',
+    defaultMessage: 'Check generated workflow YAML before it is used.',
+  },
+};
+
+function stepPurpose(stepType: string): string {
+  const purpose = STEP_PURPOSES[stepType.trim().toLowerCase()];
+  return purpose
+    ? formatConsoleMessage(purpose)
+    : t(
+        'workflowActivityVNext.nodeInspector.purpose.default',
+        'Configure how this step behaves when the workflow runs.',
+      );
+}
 
 function readDraftParameters(
   stepDraft: StudioStepInspectorDraft,
@@ -199,6 +328,7 @@ const WorkflowNodeInspector = React.forwardRef<
     const [applying, setApplying] = React.useState(false);
     const [discardConfirmationOpen, setDiscardConfirmationOpen] =
       React.useState(false);
+    const [argumentsEditorError, setArgumentsEditorError] = React.useState('');
     const [pendingDiscardAction, setPendingDiscardAction] = React.useState<
       (() => void) | null
     >(null);
@@ -220,8 +350,19 @@ const WorkflowNodeInspector = React.forwardRef<
     } = useConfigurationDraft(stepDraft);
 
     React.useEffect(() => {
-      onConfigurationErrorChange(structuredError || rawError);
-    }, [onConfigurationErrorChange, rawError, structuredError]);
+      onConfigurationErrorChange(
+        structuredError || argumentsEditorError || rawError,
+      );
+    }, [
+      argumentsEditorError,
+      onConfigurationErrorChange,
+      rawError,
+      structuredError,
+    ]);
+
+    React.useEffect(() => {
+      setArgumentsEditorError('');
+    }, [stepDraft?.id, stepDraft?.type]);
 
     React.useEffect(() => {
       onUnappliedChangesChange?.(hasUnappliedChanges);
@@ -252,7 +393,7 @@ const WorkflowNodeInspector = React.forwardRef<
       stepDraft.type,
       schemaParameters,
     );
-    const validationError = structuredError || rawError;
+    const validationError = structuredError || argumentsEditorError || rawError;
     const nodeTypeLabel = formatStudioStepTypeLabel(stepDraft.type);
     const controlsDisabled = disabled || applying;
 
@@ -309,7 +450,7 @@ const WorkflowNodeInspector = React.forwardRef<
     };
 
     const applyConfiguration = () => {
-      if (controlsDisabled) return;
+      if (controlsDisabled || argumentsEditorError) return;
       const result = applyStudioNodeConfigurationValuesWithValidation(
         stepDraft.type,
         parameters,
@@ -353,32 +494,6 @@ const WorkflowNodeInspector = React.forwardRef<
       }
     };
 
-    const applyRawConfiguration = () => {
-      if (controlsDisabled) return;
-      try {
-        const nextParameters = applyRawStudioNodeConfiguration(
-          stepDraft.type,
-          rawConfigurationText,
-        );
-        const nextRawText = formatRawStudioNodeConfiguration(nextParameters);
-        const nextSchemaParameters = rememberSchemaParameters(nextParameters);
-        setRawError('');
-        setRawErrorDetails('');
-        setStructuredError('');
-        setRawConfigurationText(nextRawText);
-        setConfigurationValues(
-          readStudioNodeConfigurationValues(
-            stepDraft.type,
-            nextParameters,
-            nextSchemaParameters,
-          ),
-        );
-        void applyParametersText(nextRawText);
-      } catch (nextError) {
-        setRawConfigurationError(nextError);
-      }
-    };
-
     const requestClose = () => {
       requestDiscardOrProceed(onClose);
     };
@@ -386,9 +501,24 @@ const WorkflowNodeInspector = React.forwardRef<
     const renderFieldControl = (field: StudioStructuredNodeConfigField) => {
       const value = configurationValues[field.name] ?? '';
       const control = field.control ?? field.kind;
+      if (
+        stepDraft.type.trim().toLowerCase() === 'tool_call' &&
+        field.parameterName === 'arguments'
+      ) {
+        return (
+          <StructuredJsonArgumentsEditor
+            disabled={controlsDisabled}
+            key={`${stepDraft.id}:${field.name}`}
+            onChange={(nextValue) => updateFieldValue(field.name, nextValue)}
+            onErrorChange={setArgumentsEditorError}
+            value={value}
+          />
+        );
+      }
       if (control === 'select') {
         return (
           <Select
+            aria-required={field.required}
             disabled={controlsDisabled}
             aria-label={formatConsoleMessage(field.label)}
             onChange={(nextValue) => updateFieldValue(field.name, nextValue)}
@@ -410,6 +540,7 @@ const WorkflowNodeInspector = React.forwardRef<
         return (
           <Switch
             aria-label={formatConsoleMessage(field.label)}
+            aria-required={field.required}
             checked={value === 'true'}
             disabled={controlsDisabled}
             onChange={(checked) =>
@@ -428,6 +559,7 @@ const WorkflowNodeInspector = React.forwardRef<
         return (
           <Input.TextArea
             aria-label={formatConsoleMessage(field.label)}
+            aria-required={field.required}
             autoSize={{ maxRows: 10, minRows: 4 }}
             disabled={controlsDisabled}
             onChange={(event) =>
@@ -446,6 +578,7 @@ const WorkflowNodeInspector = React.forwardRef<
       return (
         <Input
           aria-label={formatConsoleMessage(field.label)}
+          aria-required={field.required}
           disabled={controlsDisabled}
           inputMode={control === 'number' ? 'decimal' : undefined}
           onChange={(event) => updateFieldValue(field.name, event.target.value)}
@@ -457,6 +590,39 @@ const WorkflowNodeInspector = React.forwardRef<
           status={structuredError ? 'error' : undefined}
           value={value}
         />
+      );
+    };
+
+    const renderField = (field: StudioStructuredNodeConfigField) => {
+      const guidance = field.description
+        ? formatConsoleMessage(field.description)
+        : field.placeholder
+          ? t(
+              'workflowActivityVNext.nodeInspector.fieldExample',
+              'Example: {value}',
+              { value: formatConsoleMessage(field.placeholder) },
+            )
+          : '';
+
+      return (
+        <div className="wa-vnext__node-inspector-field" key={field.name}>
+          <div className="wa-vnext__node-inspector-field-heading">
+            <span>{formatConsoleMessage(field.label)}</span>
+            <small>
+              {field.required
+                ? t(
+                    'workflowActivityVNext.nodeInspector.fieldRequired',
+                    'Required',
+                  )
+                : t(
+                    'workflowActivityVNext.nodeInspector.fieldOptional',
+                    'Optional',
+                  )}
+            </small>
+          </div>
+          {renderFieldControl(field)}
+          {guidance ? <small>{guidance}</small> : null}
+        </div>
       );
     };
 
@@ -482,9 +648,6 @@ const WorkflowNodeInspector = React.forwardRef<
                   { name: nodeTypeLabel },
                 )}
               </Typography.Title>
-              <Typography.Text className="wa-vnext__node-inspector-subtitle">
-                {stepDraft.id}
-              </Typography.Text>
             </div>
             <AevatarTooltip
               title={t(
@@ -505,7 +668,13 @@ const WorkflowNodeInspector = React.forwardRef<
             </AevatarTooltip>
           </header>
           <div className="wa-vnext__node-inspector-body">
-            <section aria-labelledby="wa-vnext-node-configuration-title">
+            <Typography.Paragraph className="wa-vnext__node-inspector-purpose">
+              {stepPurpose(stepDraft.type)}
+            </Typography.Paragraph>
+            <section
+              aria-labelledby="wa-vnext-node-configuration-title"
+              className="wa-vnext__node-inspector-settings"
+            >
               <Typography.Title
                 className="wa-vnext__node-inspector-section-title"
                 id="wa-vnext-node-configuration-title"
@@ -513,38 +682,40 @@ const WorkflowNodeInspector = React.forwardRef<
               >
                 {t(
                   'workflowActivityVNext.nodeInspector.configuration',
-                  'Configuration',
+                  'Settings',
                 )}
               </Typography.Title>
-              <Typography.Paragraph className="wa-vnext__node-inspector-description">
-                {t(
-                  'workflowActivityVNext.nodeInspector.configurationDescription',
-                  'Set what this step needs before the workflow runs.',
-                )}
-              </Typography.Paragraph>
               <div className="wa-vnext__node-inspector-fields">
-                {schema.fields.map((field) => (
-                  <div
-                    className="wa-vnext__node-inspector-field"
-                    key={field.name}
+                {schema.fields.length > 0 ? (
+                  schema.fields.map(renderField)
+                ) : (
+                  <Typography.Text
+                    className="wa-vnext__node-inspector-empty"
+                    type="secondary"
                   >
-                    <span>{formatConsoleMessage(field.label)}</span>
-                    {renderFieldControl(field)}
-                    {field.description ? (
-                      <small>{formatConsoleMessage(field.description)}</small>
-                    ) : null}
-                  </div>
-                ))}
+                    {t(
+                      'workflowActivityVNext.nodeInspector.noSettings',
+                      'No settings are needed for this step.',
+                    )}
+                  </Typography.Text>
+                )}
               </div>
               {validationError ? (
                 <Alert
                   className="wa-vnext__node-inspector-error"
                   description={
                     rawErrorDetails ? (
-                      <TechnicalDetails>{rawErrorDetails}</TechnicalDetails>
+                      <TechnicalDetails
+                        summary={t(
+                          'workflowActivityVNext.nodeInspector.errorDetails',
+                          'Error details',
+                        )}
+                      >
+                        {rawErrorDetails}
+                      </TechnicalDetails>
                     ) : undefined
                   }
-                  message={validationError}
+                  title={validationError}
                   role="alert"
                   showIcon
                   type="error"
@@ -557,15 +728,24 @@ const WorkflowNodeInspector = React.forwardRef<
                 >
                   {t(
                     'workflowActivityVNext.nodeInspector.applyBeforeSave',
-                    'Apply changes before saving this workflow.',
+                    'Apply this step before saving the workflow.',
                   )}
                 </Typography.Text>
               ) : null}
               {!validationError && error ? (
                 <Alert
                   className="wa-vnext__node-inspector-error"
-                  description={<TechnicalDetails>{error}</TechnicalDetails>}
-                  message={t(
+                  description={
+                    <TechnicalDetails
+                      summary={t(
+                        'workflowActivityVNext.nodeInspector.errorDetails',
+                        'Error details',
+                      )}
+                    >
+                      {error}
+                    </TechnicalDetails>
+                  }
+                  title={t(
                     'workflowActivityVNext.nodeInspector.applyFailed',
                     "Couldn't apply configuration",
                   )}
@@ -584,11 +764,20 @@ const WorkflowNodeInspector = React.forwardRef<
                       <div>
                         <dt>
                           {t(
+                            'workflowActivityVNext.nodeInspector.stepId',
+                            'Step ID',
+                          )}
+                        </dt>
+                        <dd>{stepDraft.id}</dd>
+                      </div>
+                      <div>
+                        <dt>
+                          {t(
                             'workflowActivityVNext.nodeInspector.type',
                             'Type',
                           )}
                         </dt>
-                        <dd>{nodeTypeLabel}</dd>
+                        <dd>{stepDraft.type}</dd>
                       </div>
                       <div>
                         <dt>
@@ -622,7 +811,7 @@ const WorkflowNodeInspector = React.forwardRef<
                   key: 'step-details',
                   label: t(
                     'workflowActivityVNext.nodeInspector.stepDetails',
-                    'Step details',
+                    'Technical details',
                   ),
                 },
                 {
@@ -631,7 +820,7 @@ const WorkflowNodeInspector = React.forwardRef<
                       <Typography.Paragraph className="wa-vnext__node-inspector-description">
                         {t(
                           'workflowActivityVNext.nodeInspector.advancedDescription',
-                          'Use JSON only when the setting is not available above.',
+                          "Edit this step's runtime parameters as JSON.",
                         )}
                       </Typography.Paragraph>
                       <Input.TextArea
@@ -648,21 +837,12 @@ const WorkflowNodeInspector = React.forwardRef<
                         status={rawError ? 'error' : undefined}
                         value={rawConfigurationText}
                       />
-                      <Button
-                        disabled={controlsDisabled || Boolean(rawError)}
-                        onClick={applyRawConfiguration}
-                      >
-                        {t(
-                          'workflowActivityVNext.nodeInspector.applyJson',
-                          'Apply JSON',
-                        )}
-                      </Button>
                     </div>
                   ),
                   key: 'advanced',
                   label: t(
                     'workflowActivityVNext.nodeInspector.advanced',
-                    'Advanced options',
+                    'Advanced JSON',
                   ),
                 },
               ]}
@@ -670,13 +850,14 @@ const WorkflowNodeInspector = React.forwardRef<
           </div>
           <footer className="wa-vnext__node-inspector-actions">
             <Button disabled={applying} onClick={requestClose}>
-              {t('workflowActivityVNext.common.close', 'Close')}
+              {t('workflowActivityVNext.common.cancel', 'Cancel')}
             </Button>
             <Button
               disabled={
                 controlsDisabled ||
                 applying ||
                 Boolean(structuredError) ||
+                Boolean(argumentsEditorError) ||
                 Boolean(rawError) ||
                 !hasUnappliedChanges
               }
@@ -686,7 +867,7 @@ const WorkflowNodeInspector = React.forwardRef<
             >
               {t(
                 'workflowActivityVNext.nodeInspector.applyChanges',
-                'Apply changes',
+                'Apply step',
               )}
             </Button>
           </footer>

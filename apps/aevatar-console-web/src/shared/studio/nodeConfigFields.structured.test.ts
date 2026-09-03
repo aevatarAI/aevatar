@@ -1,3 +1,4 @@
+import { STUDIO_GRAPH_CATEGORIES } from './graph';
 import {
   applyRawStudioNodeConfiguration,
   applyStudioNodeConfigurationValues,
@@ -9,7 +10,6 @@ import {
   readStudioNodeConfigurationValues,
   shouldShowRawStudioNodeConfiguration,
 } from './nodeConfigFields';
-import { STUDIO_GRAPH_CATEGORIES } from './graph';
 
 describe('studio node configuration semantics', () => {
   it('keeps every supported authoring step explicitly covered by the structured editor', () => {
@@ -74,18 +74,18 @@ describe('studio node configuration semantics', () => {
       applyStudioNodeConfigurationValues(
         'while',
         {
-          condition: '${lt(iteration, 5)}',
+          condition: '${' + 'lt(iteration, 5)}',
           max_iterations: '5',
           step: 'llm_call',
         },
         {
-          condition: '${lt(iteration, 3)}',
+          condition: '${' + 'lt(iteration, 3)}',
           maxIterations: '3',
           step: 'transform',
         },
       ),
     ).toEqual({
-      condition: '${lt(iteration, 3)}',
+      condition: '${' + 'lt(iteration, 3)}',
       max_iterations: '3',
       step: 'transform',
     });
@@ -119,7 +119,9 @@ describe('studio node configuration semantics', () => {
 
   it('keeps no-parameter steps intentionally empty while preserving raw JSON editing', () => {
     expect(getStudioNodeConfigurationSchema('vote').fields).toEqual([]);
-    expect(getStudioNodeConfigurationSchema('workflow_yaml_validate').fields).toEqual([]);
+    expect(
+      getStudioNodeConfigurationSchema('workflow_yaml_validate').fields,
+    ).toEqual([]);
     expect(applyRawStudioNodeConfiguration('vote', '{ "k": "2" }')).toEqual({
       k: '2',
     });
@@ -176,7 +178,9 @@ describe('studio node configuration semantics', () => {
 
   it('maps transform operation without exposing raw backend op as the user field name', () => {
     const schema = getStudioNodeConfigurationSchema('transform');
-    const values = readStudioNodeConfigurationValues('transform', { op: 'trim' });
+    const values = readStudioNodeConfigurationValues('transform', {
+      op: 'trim',
+    });
 
     expect(schema.fields[0]).toEqual(
       expect.objectContaining({
@@ -232,7 +236,11 @@ describe('studio node configuration semantics', () => {
     expect(
       applyStudioNodeConfigurationValues(
         'cache',
-        { cache_key: '$input', child_step_type: 'llm_call', ttl_seconds: '600' },
+        {
+          cache_key: '$input',
+          child_step_type: 'llm_call',
+          ttl_seconds: '600',
+        },
         { cacheKey: '$input', childStepType: 'llm_call', ttlSeconds: '900' },
       ),
     ).toEqual({
@@ -261,6 +269,45 @@ describe('studio node configuration semantics', () => {
     ).toEqual({
       signal_name: 'approval-ready',
       timeout_ms: '90000',
+    });
+  });
+
+  it('exposes tool arguments as optional JSON text without changing their runtime shape', () => {
+    const schema = getStudioNodeConfigurationSchema('tool_call');
+
+    expect(schema.fields).toEqual([
+      expect.objectContaining({
+        kind: 'single-line',
+        name: 'tool',
+        required: true,
+      }),
+      expect.objectContaining({
+        kind: 'multi-line',
+        name: 'arguments',
+        required: false,
+      }),
+    ]);
+    expect(
+      readStudioNodeConfigurationValues('tool_call', {
+        arguments: '{"query":{"request":"$input"}}',
+        tool: 'nyxid_proxy',
+      }),
+    ).toEqual({
+      arguments: '{"query":{"request":"$input"}}',
+      tool: 'nyxid_proxy',
+    });
+    expect(
+      applyStudioNodeConfigurationValues(
+        'tool_call',
+        { arguments: '{}', tool: 'nyxid_proxy' },
+        {
+          arguments: '{"query":{"request":"$result"}}',
+          tool: 'nyxid_proxy',
+        },
+      ),
+    ).toEqual({
+      arguments: '{"query":{"request":"$result"}}',
+      tool: 'nyxid_proxy',
     });
   });
 
@@ -346,7 +393,9 @@ describe('studio node configuration semantics', () => {
         path: 'title',
       }),
     ]);
-    expect(readStudioNodeConfigurationValues('custom_step', parameters)).toEqual({
+    expect(
+      readStudioNodeConfigurationValues('custom_step', parameters),
+    ).toEqual({
       enabled: 'true',
       limit: '3',
       notes: 'line one\nline two',
@@ -407,14 +456,10 @@ describe('studio node configuration semantics', () => {
       valid: true,
     });
     expect(
-      readStudioNodeConfigurationValues(
-        'custom_step',
-        result.parameters,
-        {
-          enabled: true,
-          title: 'Draft',
-        },
-      ),
+      readStudioNodeConfigurationValues('custom_step', result.parameters, {
+        enabled: true,
+        title: 'Draft',
+      }),
     ).toEqual({
       enabled: 'true',
       title: '',
