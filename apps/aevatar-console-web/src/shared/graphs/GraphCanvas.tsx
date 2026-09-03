@@ -23,22 +23,33 @@ import {
   Position,
   ReactFlow,
   type ReactFlowInstance,
+  type ReactFlowProps,
   useEdgesState,
   useNodesState,
   useStore,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import React, { useEffect, useLayoutEffect, useMemo } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from 'react';
 import { t } from '@/shared/i18n/messages';
 import {
   getStudioGraphCategory,
   type StudioGraphNodeData,
 } from '@/shared/studio/graph';
+import {
+  reconcileGraphEdges,
+  reconcileGraphNodes,
+} from './reconcileGraphElements';
 
 type GraphCanvasProps = {
   autoFitKey?: string;
-  nodes: Node[];
-  edges: Edge[];
+  nodes: readonly Node[];
+  edges: readonly Edge[];
   height?: number | string;
   bottomInset?: number;
   overlayContent?: React.ReactNode;
@@ -80,10 +91,10 @@ const STUDIO_FIT_VIEW_OPTIONS = {
 } as const satisfies FitViewOptions;
 const STUDIO_CANVAS_MIN_ZOOM = 0.28;
 const STUDIO_CANVAS_MAX_ZOOM = 1.55;
-const STUDIO_FIT_VIEW_ATTEMPT_COUNT = 3;
 const STUDIO_NODE_WIDTH = 268;
 const STUDIO_NODE_COMPACT_WIDTH = 244;
 const STUDIO_NODE_COMPACT_ZOOM = 0.48;
+const STUDIO_PRO_OPTIONS = { hideAttribution: true } as const;
 const SELECTED_EDGE_COLOR = '#1677ff';
 const SELECTED_EDGE_FILTER = 'drop-shadow(0 0 3px rgba(22, 119, 255, 0.55))';
 const SELECTED_EDGE_STROKE_WIDTH = 4;
@@ -324,6 +335,15 @@ const STUDIO_NODE_ICON_BY_CATEGORY: Record<
   custom: CodeOutlined,
 };
 
+const selectStudioNodeCompact = (state: {
+  transform: [number, number, number];
+}) => state.transform[2] < STUDIO_NODE_COMPACT_ZOOM;
+
+const getStudioMiniMapNodeColor = (node: Node) => {
+  const data = node.data as StudioGraphNodeData | undefined;
+  return getStudioGraphCategory(data?.stepType || '').color;
+};
+
 function StudioWorkflowNode({
   data,
   selected,
@@ -332,8 +352,7 @@ function StudioWorkflowNode({
   const Icon =
     STUDIO_NODE_ICON_BY_CATEGORY[category.key] ??
     STUDIO_NODE_ICON_BY_CATEGORY.custom;
-  const zoom = useStore((state) => state.transform[2]);
-  const compact = zoom < STUDIO_NODE_COMPACT_ZOOM;
+  const compact = useStore(selectStudioNodeCompact);
   const width = compact ? STUDIO_NODE_COMPACT_WIDTH : STUDIO_NODE_WIDTH;
   const executionStatus = data.executionStatus;
   const executionFocused = Boolean(data.executionFocused);
@@ -417,27 +436,29 @@ function StudioWorkflowNode({
           </span>
         ) : null}
       </div>
-      <div className="studio-workflow-node__body">
-        {data.targetRole ? (
-          <div className="studio-workflow-node__meta">
-            <span className="studio-workflow-node__meta-label">
-              {t('teamMemberWorkflowStudio.graph.role', 'Role')}
-            </span>
-            <span
-              className="studio-workflow-node__meta-value"
-              title={data.targetRole}
-            >
-              {data.targetRole}
-            </span>
+      {compact ? null : (
+        <div className="studio-workflow-node__body">
+          {data.targetRole ? (
+            <div className="studio-workflow-node__meta">
+              <span className="studio-workflow-node__meta-label">
+                {t('teamMemberWorkflowStudio.graph.role', 'Role')}
+              </span>
+              <span
+                className="studio-workflow-node__meta-value"
+                title={data.targetRole}
+              >
+                {data.targetRole}
+              </span>
+            </div>
+          ) : null}
+          <div
+            className="studio-workflow-node__summary"
+            title={data.parametersSummary}
+          >
+            {data.parametersSummary}
           </div>
-        ) : null}
-        <div
-          className="studio-workflow-node__summary"
-          title={data.parametersSummary}
-        >
-          {data.parametersSummary}
         </div>
-      </div>
+      )}
       <Handle
         className="studio-workflow-node__handle studio-workflow-node__handle--source"
         type="source"
@@ -445,6 +466,41 @@ function StudioWorkflowNode({
       />
     </div>
   );
+}
+
+const STUDIO_NODE_TYPES = {
+  studioWorkflowNode: React.memo(StudioWorkflowNode),
+};
+
+type StudioViewportFitRequest = {
+  focusNodeId?: string;
+};
+
+function decorateGraphEdge(edge: Edge, selectedEdgeId?: string): Edge {
+  const isSelected = edge.id === selectedEdgeId;
+  return {
+    ...edge,
+    selected: isSelected,
+    markerEnd:
+      isSelected && edge.markerEnd && typeof edge.markerEnd === 'object'
+        ? {
+            ...edge.markerEnd,
+            color: SELECTED_EDGE_COLOR,
+          }
+        : edge.markerEnd,
+    style: {
+      ...edge.style,
+      filter: isSelected ? SELECTED_EDGE_FILTER : edge.style?.filter,
+      stroke: isSelected ? 'var(--ant-color-primary)' : edge.style?.stroke,
+      strokeWidth: isSelected
+        ? SELECTED_EDGE_STROKE_WIDTH
+        : (edge.style?.strokeWidth ?? 1.5),
+    },
+    labelStyle: {
+      ...edge.labelStyle,
+      fill: isSelected ? 'var(--ant-color-primary)' : edge.labelStyle?.fill,
+    },
+  };
 }
 
 const GraphCanvas: React.FC<GraphCanvasProps> = ({
@@ -467,167 +523,308 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   onDeleteNodes,
 }) => {
   const isStudioVariant = variant === 'studio';
-  const [localNodes, setLocalNodes] = useNodesState(nodes);
-  const [localEdges, setLocalEdges] = useEdgesState(edges);
+  const [localNodes, setLocalNodes] = useNodesState([...nodes]);
+  const [localEdges, setLocalEdges] = useEdgesState([...edges]);
   const [flowInstance, setFlowInstance] =
     React.useState<ReactFlowInstance | null>(null);
+  const manuallyNavigatedRef = useRef(false);
+  const previousAutoFitKeyRef = useRef<string>(undefined);
+  const previousNodeIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const pendingViewportFitRef = useRef<StudioViewportFitRequest>(undefined);
+  const scheduledViewportFitRef = useRef<StudioViewportFitRequest>(undefined);
+  const animationFrameIdRef = useRef<number>(undefined);
 
   useEffect(() => {
-    setLocalNodes(nodes);
-  }, [nodes, setLocalNodes]);
+    setLocalNodes((currentNodes) =>
+      isStudioVariant
+        ? reconcileGraphNodes(currentNodes, nodes, selectedNodeId)
+        : [...nodes],
+    );
+  }, [isStudioVariant, nodes, selectedNodeId, setLocalNodes]);
 
   useEffect(() => {
-    setLocalEdges(edges);
-  }, [edges, setLocalEdges]);
+    setLocalEdges((currentEdges) => {
+      if (!isStudioVariant) {
+        return [...edges];
+      }
+
+      return reconcileGraphEdges(
+        currentEdges,
+        edges.map((edge) => decorateGraphEdge(edge, selectedEdgeId)),
+      );
+    });
+  }, [edges, isStudioVariant, selectedEdgeId, setLocalEdges]);
+
+  const cancelScheduledViewportFit = useCallback(() => {
+    if (
+      animationFrameIdRef.current !== undefined &&
+      typeof window !== 'undefined' &&
+      typeof window.cancelAnimationFrame === 'function'
+    ) {
+      window.cancelAnimationFrame(animationFrameIdRef.current);
+    }
+    animationFrameIdRef.current = undefined;
+    scheduledViewportFitRef.current = undefined;
+  }, []);
+
+  const scheduleViewportFit = useCallback(
+    (request: StudioViewportFitRequest) => {
+      pendingViewportFitRef.current = request;
+      if (!flowInstance) {
+        return;
+      }
+      if (manuallyNavigatedRef.current && !request.focusNodeId) {
+        pendingViewportFitRef.current = undefined;
+        return;
+      }
+
+      cancelScheduledViewportFit();
+      pendingViewportFitRef.current = undefined;
+      scheduledViewportFitRef.current = request;
+
+      const applyViewport = () => {
+        animationFrameIdRef.current = undefined;
+        scheduledViewportFitRef.current = undefined;
+        void flowInstance.fitView(
+          request.focusNodeId
+            ? {
+                ...STUDIO_FIT_VIEW_OPTIONS,
+                nodes: [{ id: request.focusNodeId }],
+              }
+            : STUDIO_FIT_VIEW_OPTIONS,
+        );
+      };
+
+      if (
+        typeof window !== 'undefined' &&
+        typeof window.requestAnimationFrame === 'function'
+      ) {
+        animationFrameIdRef.current =
+          window.requestAnimationFrame(applyViewport);
+        return;
+      }
+
+      applyViewport();
+    },
+    [cancelScheduledViewportFit, flowInstance],
+  );
 
   useLayoutEffect(() => {
+    const nextNodeIds = new Set(nodes.map((node) => node.id));
+    const topologyChanged = previousAutoFitKeyRef.current !== autoFitKey;
+    const addedSelectedNode =
+      selectedNodeId !== undefined &&
+      nextNodeIds.has(selectedNodeId) &&
+      !previousNodeIdsRef.current.has(selectedNodeId);
+
+    previousAutoFitKeyRef.current = autoFitKey;
+    previousNodeIdsRef.current = nextNodeIds;
+
     if (
+      !topologyChanged ||
       !autoFitKey ||
-      !flowInstance ||
       !isStudioVariant ||
       nodes.length === 0
     ) {
       return;
     }
 
-    const readyFlowInstance = flowInstance;
-    const animationFrameIds: number[] = [];
-    const timeoutIds: number[] = [];
-    let cancelled = false;
-    let attemptCount = 0;
-
-    function applyViewport() {
-      if (cancelled) {
-        return;
-      }
-
-      void readyFlowInstance.fitView(STUDIO_FIT_VIEW_OPTIONS);
-      attemptCount += 1;
-
-      if (attemptCount < STUDIO_FIT_VIEW_ATTEMPT_COUNT) {
-        scheduleFit();
-      }
+    if (manuallyNavigatedRef.current && !addedSelectedNode) {
+      pendingViewportFitRef.current = undefined;
+      return;
     }
 
-    function scheduleFit() {
-      if (typeof window === 'undefined') {
-        applyViewport();
-        return;
-      }
+    scheduleViewportFit({
+      focusNodeId: manuallyNavigatedRef.current ? selectedNodeId : undefined,
+    });
+  }, [autoFitKey, isStudioVariant, nodes, scheduleViewportFit, selectedNodeId]);
 
-      if (typeof window.requestAnimationFrame === 'function') {
-        const frameId = window.requestAnimationFrame(applyViewport);
-        animationFrameIds.push(frameId);
-        return;
-      }
+  useLayoutEffect(() => {
+    const pendingRequest = pendingViewportFitRef.current;
+    if (flowInstance && pendingRequest) {
+      scheduleViewportFit(pendingRequest);
+    }
+  }, [flowInstance, scheduleViewportFit]);
 
-      const timeoutId = window.setTimeout(applyViewport, 16);
-      timeoutIds.push(timeoutId);
+  useEffect(
+    () => () => {
+      cancelScheduledViewportFit();
+    },
+    [cancelScheduledViewportFit],
+  );
+
+  const decoratedNodes = useMemo(() => {
+    if (isStudioVariant) {
+      return localNodes;
     }
 
-    scheduleFit();
+    return localNodes.map((node) => {
+      const isSelected = node.id === selectedNodeId;
+      const managesOwnSelection = node.className
+        ?.split(' ')
+        .includes(SELF_MANAGED_SELECTION_CLASS);
 
-    return () => {
-      cancelled = true;
-      animationFrameIds.forEach((frameId) => {
-        window.cancelAnimationFrame(frameId);
-      });
-      timeoutIds.forEach((timeoutId) => {
-        window.clearTimeout(timeoutId);
-      });
-    };
-  }, [autoFitKey, flowInstance, isStudioVariant, nodes.length]);
-
-  const decoratedNodes = useMemo(
-    () =>
-      localNodes.map((node) => {
-        const isSelected = node.id === selectedNodeId;
-        const managesOwnSelection = node.className
-          ?.split(' ')
-          .includes(SELF_MANAGED_SELECTION_CLASS);
-        if (isStudioVariant) {
-          return {
-            ...node,
-            selected: isSelected,
-          };
-        }
-
-        if (managesOwnSelection) {
-          return {
-            ...node,
-            selected: isSelected,
-          };
-        }
-
+      if (managesOwnSelection) {
         return {
           ...node,
           selected: isSelected,
-          style: {
-            ...node.style,
-            borderColor: isSelected
-              ? 'var(--ant-color-primary)'
-              : node.style?.borderColor,
-            boxShadow: isSelected
-              ? '0 0 0 2px rgba(22, 119, 255, 0.18)'
-              : node.style?.boxShadow,
-          },
         };
-      }),
-    [isStudioVariant, localNodes, selectedNodeId],
-  );
+      }
+
+      return {
+        ...node,
+        selected: isSelected,
+        style: {
+          ...node.style,
+          borderColor: isSelected
+            ? 'var(--ant-color-primary)'
+            : node.style?.borderColor,
+          boxShadow: isSelected
+            ? '0 0 0 2px rgba(22, 119, 255, 0.18)'
+            : node.style?.boxShadow,
+        },
+      };
+    });
+  }, [isStudioVariant, localNodes, selectedNodeId]);
 
   const decoratedEdges = useMemo(
     () =>
-      localEdges.map((edge) => {
-        const isSelected = edge.id === selectedEdgeId;
-        return {
-          ...edge,
-          selected: isSelected,
-          markerEnd:
-            isSelected && edge.markerEnd && typeof edge.markerEnd === 'object'
-              ? {
-                  ...edge.markerEnd,
-                  color: SELECTED_EDGE_COLOR,
-                }
-              : edge.markerEnd,
-          style: {
-            ...edge.style,
-            filter: isSelected ? SELECTED_EDGE_FILTER : edge.style?.filter,
-            stroke: isSelected
-              ? 'var(--ant-color-primary)'
-              : edge.style?.stroke,
-            strokeWidth: isSelected
-              ? SELECTED_EDGE_STROKE_WIDTH
-              : (edge.style?.strokeWidth ?? 1.5),
-          },
-          labelStyle: {
-            ...edge.labelStyle,
-            fill: isSelected
-              ? 'var(--ant-color-primary)'
-              : edge.labelStyle?.fill,
-          },
-        };
-      }),
-    [localEdges, selectedEdgeId],
+      isStudioVariant
+        ? localEdges
+        : localEdges.map((edge) => decorateGraphEdge(edge, selectedEdgeId)),
+    [isStudioVariant, localEdges, selectedEdgeId],
   );
 
-  const handleNodesChange = (changes: NodeChange[]) => {
-    setLocalNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
-  };
+  const canvasStyle = useMemo<React.CSSProperties>(
+    () => ({
+      background: isStudioVariant ? '#f7f9fc' : undefined,
+      border: isStudioVariant ? '1px solid #d8e0ea' : '1px solid #f0f0f0',
+      borderRadius: 8,
+      height,
+      minHeight: 0,
+      overflow: 'hidden',
+      position: 'relative',
+      width: '100%',
+    }),
+    [height, isStudioVariant],
+  );
+  const miniMapStyle = useMemo<React.CSSProperties>(
+    () => ({
+      background: 'rgba(255, 255, 255, 0.90)',
+      border: '1px solid #d8e0ea',
+      borderRadius: 8,
+      height: 82,
+      marginBottom: 18 + bottomInset,
+      marginRight: 16,
+      width: 132,
+    }),
+    [bottomInset],
+  );
+  const studioControlsStyle = useMemo<React.CSSProperties>(
+    () => ({
+      marginBottom: 18 + bottomInset,
+      marginLeft: 16,
+    }),
+    [bottomInset],
+  );
+
+  const handleNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      setLocalNodes((currentNodes) => applyNodeChanges(changes, currentNodes));
+    },
+    [setLocalNodes],
+  );
+  const handleBeforeDelete = useCallback<
+    NonNullable<ReactFlowProps['onBeforeDelete']>
+  >(
+    async ({ edges: edgesToDelete, nodes: nodesToDelete }) => {
+      const nodeIds = nodesToDelete
+        .map((node) => String(node.id ?? '').trim())
+        .filter(Boolean);
+      const edgeIds = edgesToDelete
+        .map((edge) => String(edge.id ?? '').trim())
+        .filter(Boolean);
+      if (nodeIds.length === 0 && edgeIds.length === 0) {
+        return false;
+      }
+
+      try {
+        if (nodeIds.length > 0) {
+          await onDeleteNodes?.(nodeIds);
+        }
+        if (edgeIds.length > 0) {
+          await onDeleteEdges?.(edgeIds);
+        }
+      } catch {
+        // Keep the local graph unchanged until the parent document confirms deletion.
+      }
+
+      return false;
+    },
+    [onDeleteEdges, onDeleteNodes],
+  );
+  const handleNodeDragStop = useCallback<
+    NonNullable<ReactFlowProps['onNodeDragStop']>
+  >(() => {
+    onNodeLayoutChange?.((flowInstance?.getNodes() as Node[]) ?? localNodes);
+  }, [flowInstance, localNodes, onNodeLayoutChange]);
+  const handleConnect = useCallback<NonNullable<ReactFlowProps['onConnect']>>(
+    (connection) => {
+      if (!connection.source || !connection.target) {
+        return;
+      }
+      onConnectNodes?.(connection.source, connection.target);
+    },
+    [onConnectNodes],
+  );
+  const handleNodeClick = useCallback<
+    NonNullable<ReactFlowProps['onNodeClick']>
+  >((_, node) => onNodeSelect?.(node.id), [onNodeSelect]);
+  const handleEdgeClick = useCallback<
+    NonNullable<ReactFlowProps['onEdgeClick']>
+  >((_, edge) => onEdgeSelect?.(edge.id), [onEdgeSelect]);
+  const handlePaneClick = useCallback(() => {
+    onCanvasSelect?.();
+  }, [onCanvasSelect]);
+  const handlePaneContextMenu = useCallback<
+    NonNullable<ReactFlowProps['onPaneContextMenu']>
+  >(
+    (event) => {
+      event.preventDefault();
+      const flowPosition = flowInstance?.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      }) ?? { x: 420, y: 220 };
+      onCanvasContextMenu?.({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        flowX: flowPosition.x,
+        flowY: flowPosition.y,
+      });
+    },
+    [flowInstance, onCanvasContextMenu],
+  );
+  const handleMoveStart = useCallback<
+    NonNullable<ReactFlowProps['onMoveStart']>
+  >(
+    (event) => {
+      if (event === null) {
+        return;
+      }
+
+      manuallyNavigatedRef.current = true;
+      if (!pendingViewportFitRef.current?.focusNodeId) {
+        pendingViewportFitRef.current = undefined;
+      }
+      if (!scheduledViewportFitRef.current?.focusNodeId) {
+        cancelScheduledViewportFit();
+      }
+    },
+    [cancelScheduledViewportFit],
+  );
 
   return (
-    <div
-      style={{
-        background: isStudioVariant ? '#f7f9fc' : undefined,
-        border: isStudioVariant ? '1px solid #d8e0ea' : '1px solid #f0f0f0',
-        borderRadius: 8,
-        height,
-        minHeight: 0,
-        overflow: 'hidden',
-        position: 'relative',
-        width: '100%',
-      }}
-    >
+    <div style={canvasStyle}>
       <style>
         {isStudioVariant ? studioCanvasCss : selfManagedSelectionCss}
       </style>
@@ -639,89 +836,29 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         fitViewOptions={isStudioVariant ? STUDIO_FIT_VIEW_OPTIONS : undefined}
         minZoom={isStudioVariant ? STUDIO_CANVAS_MIN_ZOOM : undefined}
         maxZoom={isStudioVariant ? STUDIO_CANVAS_MAX_ZOOM : undefined}
-        nodeTypes={
-          isStudioVariant
-            ? {
-                studioWorkflowNode: StudioWorkflowNode,
-              }
-            : undefined
-        }
+        nodeTypes={isStudioVariant ? STUDIO_NODE_TYPES : undefined}
         nodesDraggable={isStudioVariant}
         nodesConnectable={Boolean(isStudioVariant && onConnectNodes)}
         elementsSelectable
+        onlyRenderVisibleElements={isStudioVariant ? true : undefined}
         deleteKeyCode={
           isStudioVariant && !onDeleteNodes && !onDeleteEdges ? null : undefined
         }
         onNodesChange={isStudioVariant ? handleNodesChange : undefined}
         onBeforeDelete={
           isStudioVariant && (onDeleteNodes || onDeleteEdges)
-            ? async ({ edges: edgesToDelete, nodes: nodesToDelete }) => {
-                const nodeIds = nodesToDelete
-                  .map((node) => String(node.id ?? '').trim())
-                  .filter(Boolean);
-                const edgeIds = edgesToDelete
-                  .map((edge) => String(edge.id ?? '').trim())
-                  .filter(Boolean);
-                if (nodeIds.length === 0 && edgeIds.length === 0) {
-                  return false;
-                }
-
-                try {
-                  if (nodeIds.length > 0) {
-                    await onDeleteNodes?.(nodeIds);
-                  }
-                  if (edgeIds.length > 0) {
-                    await onDeleteEdges?.(edgeIds);
-                  }
-                } catch {
-                  // Keep the local graph unchanged until the parent document confirms deletion.
-                }
-
-                return false;
-              }
+            ? handleBeforeDelete
             : undefined
         }
-        onNodeDragStop={
-          isStudioVariant
-            ? () =>
-                onNodeLayoutChange?.(
-                  (flowInstance?.getNodes() as Node[]) ?? localNodes,
-                )
-            : undefined
-        }
-        onConnect={
-          isStudioVariant
-            ? (connection) => {
-                if (!connection.source || !connection.target) {
-                  return;
-                }
-
-                onConnectNodes?.(connection.source, connection.target);
-              }
-            : undefined
-        }
-        onNodeClick={(_, node) => onNodeSelect?.(node.id)}
-        onEdgeClick={(_, edge) => onEdgeSelect?.(edge.id)}
-        onPaneClick={() => onCanvasSelect?.()}
-        onPaneContextMenu={
-          isStudioVariant
-            ? (event) => {
-                event.preventDefault();
-                const flowPosition = flowInstance?.screenToFlowPosition({
-                  x: event.clientX,
-                  y: event.clientY,
-                }) ?? { x: 420, y: 220 };
-                onCanvasContextMenu?.({
-                  clientX: event.clientX,
-                  clientY: event.clientY,
-                  flowX: flowPosition.x,
-                  flowY: flowPosition.y,
-                });
-              }
-            : undefined
-        }
+        onNodeDragStop={isStudioVariant ? handleNodeDragStop : undefined}
+        onConnect={isStudioVariant ? handleConnect : undefined}
+        onNodeClick={handleNodeClick}
+        onEdgeClick={handleEdgeClick}
+        onPaneClick={handlePaneClick}
+        onPaneContextMenu={isStudioVariant ? handlePaneContextMenu : undefined}
+        onMoveStart={isStudioVariant ? handleMoveStart : undefined}
         className={isStudioVariant ? 'studio-canvas' : undefined}
-        proOptions={isStudioVariant ? { hideAttribution: true } : undefined}
+        proOptions={isStudioVariant ? STUDIO_PRO_OPTIONS : undefined}
       >
         <Background
           color={isStudioVariant ? '#cbd5e1' : undefined}
@@ -737,30 +874,16 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
               position="bottom-right"
               zoomable
               pannable
-              style={{
-                background: 'rgba(255, 255, 255, 0.90)',
-                border: '1px solid #d8e0ea',
-                borderRadius: 8,
-                height: 82,
-                marginBottom: 18 + bottomInset,
-                marginRight: 16,
-                width: 132,
-              }}
+              style={miniMapStyle}
               maskColor="rgba(241, 245, 249, 0.72)"
               bgColor="rgba(255, 255, 255, 0.90)"
               nodeBorderRadius={4}
-              nodeColor={(node) => {
-                const data = node.data as StudioGraphNodeData | undefined;
-                return getStudioGraphCategory(data?.stepType || '').color;
-              }}
+              nodeColor={getStudioMiniMapNodeColor}
             />
             <Controls
               position="bottom-left"
               showInteractive={false}
-              style={{
-                marginBottom: 18 + bottomInset,
-                marginLeft: 16,
-              }}
+              style={studioControlsStyle}
             />
           </>
         ) : (
