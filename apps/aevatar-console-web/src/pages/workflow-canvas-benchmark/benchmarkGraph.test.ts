@@ -3,6 +3,7 @@ import {
   assertWorkflowCanvasBenchmarkResult,
   countChangedNodeReferences,
   createWorkflowCanvasBenchmarkGraph,
+  createWorkflowCanvasBenchmarkProgress,
   parseWorkflowCanvasBenchmarkGraphSize,
   WORKFLOW_CANVAS_BENCHMARK_GRAPH_SIZES,
   type WorkflowCanvasBenchmarkResult,
@@ -22,6 +23,8 @@ describe('workflow canvas benchmark graph', () => {
     expect(new Set(first.edges.map((edge) => edge.id)).size).toBe(size * 2 - 3);
 
     first.nodes.forEach((node, index) => {
+      expect(node.initialWidth).toBe(268);
+      expect(node.initialHeight).toBe(120);
       expect(Number.isFinite(node.position.x)).toBe(true);
       expect(Number.isFinite(node.position.y)).toBe(true);
       expect(Object.keys(node.data).sort()).toEqual([
@@ -96,6 +99,19 @@ describe('workflow canvas benchmark graph', () => {
       }),
     );
     expect(countChangedNodeReferences(graph.nodes, expanded.nodes)).toBe(2);
+  });
+});
+
+describe('workflow canvas benchmark artifact progress', () => {
+  it('formats complete and partial result counts for the Markdown artifact', () => {
+    expect(createWorkflowCanvasBenchmarkProgress(96, 96)).toEqual({
+      complete: true,
+      markdownLines: ['- Complete: yes', '- Results: 96/96'],
+    });
+    expect(createWorkflowCanvasBenchmarkProgress(17, 96)).toEqual({
+      complete: false,
+      markdownLines: ['- Complete: no', '- Results: 17/96'],
+    });
   });
 });
 

@@ -61,8 +61,15 @@ export type WorkflowCanvasBenchmarkGraph = {
   readonly edges: readonly Edge<StudioGraphEdgeData>[];
 };
 
+export type WorkflowCanvasBenchmarkProgress = {
+  readonly complete: boolean;
+  readonly markdownLines: readonly [string, string];
+};
+
 const BENCHMARK_COLUMNS = 40;
 const BENCHMARK_COLUMN_PITCH = 340;
+const BENCHMARK_NODE_HEIGHT = 120;
+const BENCHMARK_NODE_WIDTH = 268;
 const BENCHMARK_ROW_PITCH = 190;
 const BENCHMARK_STEP_TYPES = [
   ['llm_call', 'LLM call'],
@@ -96,6 +103,8 @@ function createBenchmarkNode(
 
   return {
     id: nodeId,
+    initialHeight: BENCHMARK_NODE_HEIGHT,
+    initialWidth: BENCHMARK_NODE_WIDTH,
     data: {
       branchCount: index + 2 < graphSize ? 1 : 0,
       executionFocused: false,
@@ -223,6 +232,20 @@ export function countChangedNodeReferences(
   ).length;
   const removed = previousNodes.filter((node) => !nextIds.has(node.id)).length;
   return changedOrAdded + removed;
+}
+
+export function createWorkflowCanvasBenchmarkProgress(
+  resultCount: number,
+  expectedResultCount: number,
+): WorkflowCanvasBenchmarkProgress {
+  const complete = resultCount === expectedResultCount;
+  return {
+    complete,
+    markdownLines: [
+      `- Complete: ${complete ? 'yes' : 'no'}`,
+      `- Results: ${resultCount}/${expectedResultCount}`,
+    ],
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

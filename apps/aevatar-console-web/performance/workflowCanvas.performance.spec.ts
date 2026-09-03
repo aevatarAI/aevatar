@@ -4,6 +4,7 @@ import path from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 import {
   assertWorkflowCanvasBenchmarkResult,
+  createWorkflowCanvasBenchmarkProgress,
   WORKFLOW_CANVAS_BENCHMARK_GRAPH_SIZES,
   WORKFLOW_CANVAS_BENCHMARK_SCENARIOS,
   type WorkflowCanvasBenchmarkPolicy,
@@ -55,6 +56,10 @@ const BENCHMARK_POLICIES: readonly PolicyCase[] = [
     policy: { minimap: false, visibleElementsOnly: true },
   },
 ];
+const EXPECTED_RESULT_COUNT =
+  WORKFLOW_CANVAS_BENCHMARK_GRAPH_SIZES.length *
+  BENCHMARK_POLICIES.length *
+  WORKFLOW_CANVAS_BENCHMARK_SCENARIOS.length;
 const ARTIFACT_DIRECTORY = path.resolve(
   __dirname,
   '../artifacts/workflow-canvas-benchmark',
@@ -535,6 +540,10 @@ async function writeArtifacts({
   readonly userAgent: string | null;
 }) {
   const cpus = os.cpus();
+  const progress = createWorkflowCanvasBenchmarkProgress(
+    results.length,
+    EXPECTED_RESULT_COUNT,
+  );
   const envelope = {
     build: {
       commit: process.env.GITHUB_SHA || null,
@@ -545,11 +554,7 @@ async function writeArtifacts({
       userAgent,
       version: browserVersion,
     },
-    complete:
-      results.length ===
-      WORKFLOW_CANVAS_BENCHMARK_GRAPH_SIZES.length *
-        BENCHMARK_POLICIES.length *
-        WORKFLOW_CANVAS_BENCHMARK_SCENARIOS.length,
+    complete: progress.complete,
     generatedAt: new Date().toISOString(),
     profiles: profiles.length ? profiles : undefined,
     results,
@@ -570,6 +575,7 @@ async function writeArtifacts({
     '# Workflow Canvas Benchmark',
     '',
     `- Build: production${envelope.build.commit ? ` (${envelope.build.commit})` : ''}`,
+    ...progress.markdownLines,
     `- Browser: system Chrome ${browserVersion}`,
     `- User agent: ${userAgent ?? 'unavailable'}`,
     `- Runner: ${envelope.runner.operatingSystem}, ${envelope.runner.architecture}, ${envelope.runner.logicalCpuCount} logical CPUs, ${envelope.runner.totalMemoryBytes} bytes memory`,
@@ -656,7 +662,7 @@ test('records every workflow canvas scale scenario and policy', async ({
       }
     }
 
-    expect(results).toHaveLength(96);
+    expect(results).toHaveLength(EXPECTED_RESULT_COUNT);
   } finally {
     await writeArtifacts({
       browserVersion: browser.version(),

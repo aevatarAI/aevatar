@@ -18,9 +18,10 @@ the fixture has `2N - 3` edges: 197, 997, and 1997 respectively.
 
 Each node contains the complete `StudioGraphNodeData` contract, including its
 step identity and type, role, parameter summary, branch count, execution state,
-and focus state. Positions use a fixed 40-column grid and are finite. The
-topology scenario adds one node and two edges while replacing only the branch
-source and new node references.
+and focus state. Positions use a fixed 40-column grid and are finite. Initial
+node dimensions are fixed at 268 by 120 pixels so the first fit does not depend
+on browser measurement timing. The topology scenario adds one node and two
+edges while replacing only the branch source and new node references.
 
 ## Policies and scenarios
 
@@ -94,7 +95,8 @@ The JSON artifact envelope also records the runner OS, architecture, CPU model,
 logical CPU count, total memory, production build commit when available, system
 Chrome version, and user agent. React Profiler commit samples are included only
 when the production runtime exposes them. The Markdown artifact states when
-profiling is unavailable.
+profiling is unavailable and reports `Complete: yes/no` plus the captured result
+count as `Results: X/96`, including for partial failure artifacts.
 
 CI gates schema validity, graph density, policy/scenario coverage, render-count
 invariants, compact-band behavior, and exact reference-change counts. Timing,
