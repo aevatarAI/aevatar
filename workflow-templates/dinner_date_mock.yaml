@@ -313,7 +313,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","kept":"${json(steps.hold_candidate_option_1.json.venue)}","kept_option":"option_1","released":${steps.release_unselected_after_confirm_option_1.json.released},"released_options":${steps.release_unselected_after_confirm_option_1.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
+      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","summary":"${json(steps.hold_candidate_option_1.json.venue)} is selected. Released ${json(steps.hold_candidate_option_2.json.venue)} and ${json(steps.hold_candidate_option_3.json.venue)}.","kept":"${json(steps.hold_candidate_option_1.json.venue)}","kept_option":"option_1","released":${steps.release_unselected_after_confirm_option_1.json.released},"released_options":${steps.release_unselected_after_confirm_option_1.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
     next: ""
 
   - id: release_unselected_after_confirm_option_2
@@ -328,7 +328,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","kept":"${json(steps.hold_candidate_option_2.json.venue)}","kept_option":"option_2","released":${steps.release_unselected_after_confirm_option_2.json.released},"released_options":${steps.release_unselected_after_confirm_option_2.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
+      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","summary":"${json(steps.hold_candidate_option_2.json.venue)} is selected. Released ${json(steps.hold_candidate_option_1.json.venue)} and ${json(steps.hold_candidate_option_3.json.venue)}.","kept":"${json(steps.hold_candidate_option_2.json.venue)}","kept_option":"option_2","released":${steps.release_unselected_after_confirm_option_2.json.released},"released_options":${steps.release_unselected_after_confirm_option_2.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
     next: ""
 
   - id: release_unselected_after_confirm_option_3
@@ -343,7 +343,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","kept":"${json(steps.hold_candidate_option_3.json.venue)}","kept_option":"option_3","released":${steps.release_unselected_after_confirm_option_3.json.released},"released_options":${steps.release_unselected_after_confirm_option_3.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
+      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","summary":"${json(steps.hold_candidate_option_3.json.venue)} is selected. Released ${json(steps.hold_candidate_option_1.json.venue)} and ${json(steps.hold_candidate_option_2.json.venue)}.","kept":"${json(steps.hold_candidate_option_3.json.venue)}","kept_option":"option_3","released":${steps.release_unselected_after_confirm_option_3.json.released},"released_options":${steps.release_unselected_after_confirm_option_3.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
     next: ""
 
   - id: final_artifact_waiting_after_holds

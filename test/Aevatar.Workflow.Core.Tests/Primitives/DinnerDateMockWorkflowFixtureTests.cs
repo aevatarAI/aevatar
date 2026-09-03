@@ -206,6 +206,8 @@ public sealed class DinnerDateMockWorkflowFixtureTests
 
         using var document = JsonDocument.Parse(renderedJson);
         document.RootElement.GetProperty("path").GetString().Should().Be("timeout_auto_hold_then_user_selected");
+        document.RootElement.GetProperty("summary").GetString().Should()
+            .Be("Option One is selected. Released Option Two and Option Three.");
         document.RootElement.GetProperty("kept").GetString().Should().Be("Option One");
         document.RootElement.GetProperty("released_options").EnumerateArray()
             .Select(element => element.GetString())
