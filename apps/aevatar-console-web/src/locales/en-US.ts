@@ -1225,7 +1225,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionPanel.output': 'Output',
   'teamMemberWorkflowStudio.executionPanel.overview': 'Overview',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '{count} run event(s) received, but no node output is available yet.',
+    '{count} run event(s) received. Waiting for the first node to start.',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': 'Result',
   'teamMemberWorkflowStudio.executionPanel.runLog': 'Run log',
   'teamMemberWorkflowStudio.executionPanel.selectLog':

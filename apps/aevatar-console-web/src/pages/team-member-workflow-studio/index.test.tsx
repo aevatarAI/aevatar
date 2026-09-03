@@ -5173,6 +5173,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     );
 
     const resultPanel = await screen.findByTestId('member-run-result-panel');
+    fireEvent.click(within(resultPanel).getByRole('radio', { name: 'Events' }));
     await waitFor(() => {
       expect(
         within(resultPanel).getByLabelText('Log details'),

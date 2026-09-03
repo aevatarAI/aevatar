@@ -4765,6 +4765,7 @@ describe('Workflow Activity vNext editor', () => {
       name: 'Workflow run console',
     });
     expect(within(logs).getByText('Logs')).toBeInTheDocument();
+    fireEvent.click(within(logs).getByRole('radio', { name: 'Events' }));
     await waitFor(() => {
       expect(within(logs).getByText('Run finished')).toBeInTheDocument();
       expect(within(logs).getByText('succeeded')).toBeInTheDocument();
@@ -5397,6 +5398,7 @@ describe('Workflow Activity vNext editor', () => {
     const logs = await screen.findByRole('complementary', {
       name: 'Workflow run console',
     });
+    fireEvent.click(within(logs).getByRole('radio', { name: 'Events' }));
     const stoppedLog = await within(logs).findByText('Run stopped');
     expect(within(logs).getByText('stopped')).toBeInTheDocument();
     fireEvent.click(stoppedLog);

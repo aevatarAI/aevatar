@@ -5,12 +5,10 @@ import {
   CloseOutlined,
   CopyOutlined,
   DownOutlined,
-  LoadingOutlined,
   PauseCircleOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Segmented, Tag, Typography } from 'antd';
 import React from 'react';
-import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { t } from '@/shared/i18n/messages';
 import {
   type ExecutionLogItem,
@@ -21,6 +19,8 @@ import {
   normalizeExecutionLogStatus,
   type WorkflowExecutionNodeSnapshot,
 } from '@/shared/studio/execution';
+import { AevatarLoadingDots } from '@/shared/ui/AevatarLoading';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import {
   type ConsoleToastApi,
   useConsoleToast,
@@ -266,7 +266,21 @@ function renderStatusIcon(status: ExecutionOverviewStatus): React.ReactNode {
     case 'waiting':
       return <PauseCircleOutlined style={{ color: '#d97706' }} />;
     default:
-      return <LoadingOutlined style={{ color: '#2563eb' }} />;
+      return (
+        <span
+          data-testid="workflow-execution-running-indicator"
+          style={{
+            alignItems: 'center',
+            display: 'inline-flex',
+            height: 18,
+            justifyContent: 'center',
+            overflow: 'visible',
+            width: 18,
+          }}
+        >
+          <AevatarLoadingDots color="#2563eb" decorative gap={2} size="small" />
+        </span>
+      );
   }
 }
 
@@ -667,6 +681,7 @@ function renderOverviewRow(
   entry: ExecutionOverviewEntry,
   selected: boolean,
   onSelectLog?: (index: number | null) => void,
+  ref?: React.Ref<HTMLButtonElement>,
 ): React.ReactNode {
   const selectable = entry.logIndex >= 0;
   const duration =
@@ -685,6 +700,7 @@ function renderOverviewRow(
           onSelectLog?.(entry.logIndex);
         }
       }}
+      ref={ref}
       style={{
         appearance: 'none',
         background: selected ? '#eef4ff' : '#ffffff',
@@ -966,8 +982,36 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
     [entries, workflowNodes],
   );
   const eventEntries = entries.filter((entry) => entry.rowType !== 'node');
+  const runStatus: ExecutionLogStatus =
+    execution?.status === 'failed'
+      ? 'error'
+      : execution?.status === 'succeeded' || execution?.status === 'completed'
+        ? 'success'
+        : 'running';
+  const latestExecutionNodeEntry = React.useMemo(() => {
+    const latestStepId = trace?.latestStepId;
+    if (!latestStepId) {
+      return null;
+    }
+
+    for (let index = nodeEntries.length - 1; index >= 0; index -= 1) {
+      if (nodeEntries[index]?.stepId === latestStepId) {
+        return nodeEntries[index];
+      }
+    }
+
+    return null;
+  }, [nodeEntries, trace?.latestStepId]);
+  const liveFollowEntry =
+    runStatus === 'running' && !execution?.completedAtUtc
+      ? latestExecutionNodeEntry
+      : null;
+  const controlledSelectedEntry = findSelectedEntry(entries, activeLogIndex);
   const baseSelectedEntry =
-    findSelectedEntry(entries, activeLogIndex) ||
+    (overviewMode === 'nodes' && controlledSelectedEntry?.rowType !== 'node'
+      ? liveFollowEntry
+      : controlledSelectedEntry) ||
+    liveFollowEntry ||
     entries.find((entry) => entry.status === 'error') ||
     nodeEntries.find((entry) => entry.logIndex >= 0) ||
     entries.find((entry) => entry.logIndex >= 0) ||
@@ -981,12 +1025,7 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
     ? formatDurationBetween(execution.startedAtUtc, execution.completedAtUtc)
     : '';
   const totalStepCount = new Set(nodeEntries.map((entry) => entry.stepId)).size;
-  const visibleEntries =
-    overviewMode === 'nodes'
-      ? nodeEntries.length
-        ? nodeEntries
-        : eventEntries
-      : eventEntries;
+  const visibleEntries = overviewMode === 'nodes' ? nodeEntries : eventEntries;
   const selectedEntry =
     visibleEntries.find((entry) => isEntrySelected(entry, baseSelectedEntry)) ||
     visibleEntries.find((entry) => entry.logIndex >= 0) ||
@@ -994,12 +1033,46 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
   const selectableEntries = visibleEntries.filter(
     (entry) => entry.logIndex >= 0,
   );
-  const runStatus: ExecutionLogStatus =
-    execution?.status === 'failed'
-      ? 'error'
-      : execution?.status === 'succeeded' || execution?.status === 'completed'
-        ? 'success'
-        : 'running';
+  const overviewRowRefs = React.useRef(new Map<string, HTMLButtonElement>());
+  const lastAutoFollowTargetRef = React.useRef('');
+  const previousExecutionSessionRef = React.useRef(
+    execution?.startedAtUtc || '',
+  );
+  React.useEffect(() => {
+    const executionSession = execution?.startedAtUtc || '';
+    if (
+      executionSession &&
+      previousExecutionSessionRef.current !== executionSession &&
+      runStatus === 'running'
+    ) {
+      setOverviewMode('nodes');
+    }
+    previousExecutionSessionRef.current = executionSession;
+  }, [execution?.startedAtUtc, runStatus]);
+  const liveFollowTargetKey = liveFollowEntry
+    ? `${execution?.startedAtUtc || ''}:${liveFollowEntry.entryId}`
+    : '';
+  React.useEffect(() => {
+    if (!liveFollowEntry || !onSelectLog) {
+      return;
+    }
+
+    if (lastAutoFollowTargetRef.current === liveFollowTargetKey) {
+      return;
+    }
+
+    lastAutoFollowTargetRef.current = liveFollowTargetKey;
+    onSelectLog(liveFollowEntry.logIndex);
+  }, [liveFollowEntry, liveFollowTargetKey, onSelectLog]);
+  React.useEffect(() => {
+    if (overviewMode !== 'nodes' || !liveFollowEntry) {
+      return;
+    }
+
+    overviewRowRefs.current
+      .get(liveFollowEntry.entryId)
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }, [liveFollowTargetKey, overviewMode]);
   const handleOverviewKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLElement>) => {
       if (!selectableEntries.length || !onSelectLog) {
@@ -1318,6 +1391,13 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                         entry,
                         isEntrySelected(entry, selectedEntry),
                         onSelectLog,
+                        (element) => {
+                          if (element) {
+                            overviewRowRefs.current.set(entry.entryId, element);
+                          } else {
+                            overviewRowRefs.current.delete(entry.entryId);
+                          }
+                        },
                       ),
                     )
                   ) : (
@@ -1326,7 +1406,7 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                         ? execution.eventCount
                           ? t(
                               'teamMemberWorkflowStudio.executionPanel.rawFrames',
-                              '{count} run event(s) received, but no node output is available yet.',
+                              '{count} run event(s) received. Waiting for the first node to start.',
                               { count: execution.eventCount },
                             )
                           : t(
