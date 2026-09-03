@@ -98,3 +98,61 @@ Run analyzer-reported Biome checks, `bash tools/ci/test_stability_guards.sh`, `g
 - [x] **Step 4: Review and deliver**
 
 Review the full base diff, stage only the task's plan, shared component, locale copy, and focused/integration tests, commit with an imperative single-purpose message, push `fix/2026-09-03_live-run-node-tracking`, and create a PR targeting `feat/2026-08-04_workflow-activity-vnext`. Include the required design-baseline declaration and exact focused verification evidence; do not wait for CI.
+
+### Task 4: Preserve Each Node Start Across Batched SSE Frames
+
+**Files:**
+- Create: `docs/superpowers/specs/2026-09-03-live-workflow-node-presentation-design.md`
+- Create: `apps/aevatar-console-web/src/shared/workflows/streamingExecutionPresentation.ts`
+- Create: `apps/aevatar-console-web/src/shared/workflows/streamingExecutionPresentation.test.ts`
+- Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/index.test.tsx`
+- Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/hooks/useWorkflowEditor.ts`
+- Modify: `apps/aevatar-console-web/src/pages/team-member-workflow-studio/hooks/useTeamMemberWorkflowStudio.ts`
+
+- [ ] **Step 1: Add a single-chunk page regression test**
+
+Make `parseBackendSSEStream` yield two complete node lifecycles synchronously.
+Install a controlled `requestAnimationFrame` queue, start a published run, and
+assert that `step-alpha` is visible as Running while `step-beta` is absent until
+the two callbacks representing a completed paint boundary are released.
+
+- [ ] **Step 2: Run the page regression and verify RED**
+
+Run:
+
+```bash
+pnpm --dir apps/aevatar-console-web exec jest --runInBand \
+  --runTestsByPath src/pages/workflow-activity-vnext/index.test.tsx \
+  --testNamePattern 'presents each node start from one SSE chunk'
+```
+
+Expected: FAIL because the current stream loop consumes both node lifecycles
+before React paints and the first observable state already contains both rows.
+
+- [ ] **Step 3: Add the shared paint-boundary helper and unit tests**
+
+Implement `waitForWorkflowNodeStartPaint(event, signal, scheduler)` in
+`streamingExecutionPresentation.ts`. Use `extractStepRequest(event)` as the
+typed semantic detector. Schedule two animation frames for a node-start event,
+resolve only from the second callback, return immediately for other events, and
+cancel pending callbacks when the abort signal fires.
+
+- [ ] **Step 4: Integrate both workflow execution consumers**
+
+After `setLiveRunExecution(...)` in `useWorkflowEditor.ts` and after
+`setExecutionDetail(...)` in `useTeamMemberWorkflowStudio.ts`, call:
+
+```ts
+await waitForWorkflowNodeStartPaint(event, controller.signal);
+```
+
+Do not apply this wait to the parser or unrelated SSE consumers.
+
+- [ ] **Step 5: Verify GREEN and update the pull request**
+
+Run the new helper test, the named page regression, the analyzer-selected
+related tests, changed-file Biome, `bash tools/ci/test_stability_guards.sh`, the
+vNext baseline verifier, and `git diff --check`. Review the base diff, commit,
+push the existing branch, and update PR #3580 with the new commands and design
+decision. Full frontend typecheck, suite, and production build remain delegated
+to GitHub CI.
