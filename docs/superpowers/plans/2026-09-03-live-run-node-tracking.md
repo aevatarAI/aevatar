@@ -156,3 +156,110 @@ vNext baseline verifier, and `git diff --check`. Review the base diff, commit,
 push the existing branch, and update PR #3580 with the new commands and design
 decision. Full frontend typecheck, suite, and production build remain delegated
 to GitHub CI.
+
+### Task 5: Present The Submitted Node Inventory Up Front
+
+**Files:**
+- Modify: `apps/aevatar-console-web/src/shared/workflows/WorkflowExecutionLogsPanel.tsx`
+- Modify: `apps/aevatar-console-web/src/pages/team-member-workflow-studio/components/WorkflowStudioExecutionPanel.test.tsx`
+- Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/index.test.tsx`
+- Modify: `apps/aevatar-console-web/src/locales/en-US.ts`
+- Modify: `apps/aevatar-console-web/src/locales/zh-CN.ts`
+
+- [ ] **Step 1: Write definition-first component regressions**
+
+Pass three distinct workflow node snapshots to `ControlledExecutionPanel`.
+With only `RUN_STARTED`, assert that all three node rows exist in definition
+order, remain disabled, and say `Pending`. After adding the first step request,
+assert that only the first row becomes Running and selected while the later rows
+remain Pending. Add a terminal execution case asserting that definition nodes
+without an attempt say `Not run`.
+
+- [ ] **Step 2: Update the single-chunk page regression**
+
+Keep the existing controlled animation-frame boundary, but replace the old
+assertion that `step-beta` is absent with:
+
+```ts
+const betaRow = within(logs).getByTestId(
+  'workflow-execution-log-row-node-step-beta',
+);
+expect(betaRow).toHaveTextContent('Pending');
+expect(betaRow).toBeDisabled();
+```
+
+After the first paint boundary, assert that the same row becomes Running,
+selected, and enabled.
+
+- [ ] **Step 3: Run the focused cases and verify RED**
+
+Run:
+
+```bash
+pnpm --dir apps/aevatar-console-web exec jest --runInBand \
+  --runTestsByPath \
+  src/pages/team-member-workflow-studio/components/WorkflowStudioExecutionPanel.test.tsx \
+  src/pages/workflow-activity-vnext/index.test.tsx \
+  --testNamePattern 'shows submitted nodes before they start|marks unentered nodes as not run|presents each node start from one SSE chunk'
+```
+
+Expected: FAIL because `buildNodeOverviewEntries` currently drops every
+definition node without a matching runtime log entry.
+
+- [ ] **Step 4: Merge definition placeholders with runtime attempts**
+
+Extend the presentation-only status union with `pending` and `not-run`. Build a
+placeholder entry for each unique definition node without a logged attempt:
+
+```ts
+function createDefinitionNodeEntry(
+  node: WorkflowExecutionNodeSnapshot,
+  status: 'pending' | 'not-run',
+): ExecutionOverviewEntry {
+  const stepId = node.stepId.trim();
+  return {
+    category: 'step',
+    completedAt: '',
+    entryId: `node-definition:${stepId}`,
+    eventCount: 0,
+    eventType: '',
+    inputText: '',
+    interactionText: '',
+    logIndex: -1,
+    logIndexes: [],
+    meta: node.targetRole,
+    outputText: '',
+    payloadText: '',
+    pendingText: '',
+    previewText: '',
+    rawText: '',
+    rowType: 'node',
+    startedAt: '',
+    status,
+    stepId,
+    subtitle: node.subtitle,
+    title: getUserFacingIdentifierLabel(stepId, node.title || stepId),
+  };
+}
+```
+
+Keep placeholders nonselectable and without timestamps or details. Replace a
+placeholder with all real attempt entries when logs for that step exist, and
+append runtime-only nodes after the definition order.
+
+- [ ] **Step 5: Add honest status copy and visuals**
+
+Map `pending` to the existing localized Pending label and a neutral clock icon.
+Add `teamMemberWorkflowStudio.executionPanel.status.notRun` with English
+`Not run` and Chinese `未运行`, rendered with a neutral minus icon. Keep
+interaction-level `waiting` separate because it describes a node that has
+already started and is waiting for input or a signal.
+
+- [ ] **Step 6: Verify GREEN and deliver the PR update**
+
+Run the focused RED command and the dependency-analyzer-selected related tests,
+then changed-file Biome, `bash tools/ci/test_stability_guards.sh`, the vNext
+baseline verifier, and `git diff --check`. Review the base diff, stage only Task
+5 files plus this plan, commit, push the existing branch, and update PR #3580.
+Package-wide typecheck, the full frontend suite, and production build remain
+delegated to GitHub CI.
