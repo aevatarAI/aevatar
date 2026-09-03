@@ -4685,6 +4685,117 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
   });
 
+  it('presents each node start from one SSE chunk before advancing', async () => {
+    const animationFrameCallbacks: FrameRequestCallback[] = [];
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const originalCancelAnimationFrame = window.cancelAnimationFrame;
+    Object.defineProperty(window, 'requestAnimationFrame', {
+      configurable: true,
+      value: jest.fn((callback: FrameRequestCallback) => {
+        animationFrameCallbacks.push(callback);
+        return animationFrameCallbacks.length;
+      }),
+    });
+    Object.defineProperty(window, 'cancelAnimationFrame', {
+      configurable: true,
+      value: jest.fn(),
+    });
+    const releasePaintBoundary = async () => {
+      expect(animationFrameCallbacks).toHaveLength(1);
+      act(() => {
+        animationFrameCallbacks.shift()?.(0);
+      });
+      expect(animationFrameCallbacks).toHaveLength(1);
+      await act(async () => {
+        animationFrameCallbacks.shift()?.(16);
+        await Promise.resolve();
+      });
+    };
+
+    try {
+      mockRuntimeRunsApi.streamChat.mockResolvedValue(
+        createSseResponse([
+          { runStarted: { runId: 'run-paced-alpha' } },
+          {
+            custom: {
+              name: 'aevatar.step.request',
+              payload: {
+                input: 'Alpha input',
+                stepId: 'step-alpha',
+                stepType: 'assign',
+              },
+            },
+          },
+          {
+            custom: {
+              name: 'aevatar.step.completed',
+              payload: {
+                output: 'Alpha output',
+                stepId: 'step-alpha',
+                success: true,
+              },
+            },
+          },
+          {
+            custom: {
+              name: 'aevatar.step.request',
+              payload: {
+                input: 'Beta input',
+                stepId: 'step-beta',
+                stepType: 'transform',
+              },
+            },
+          },
+        ]),
+      );
+
+      await renderPublishedWorkflowPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Start published run' }),
+      );
+
+      const logs = await screen.findByRole('complementary', {
+        name: 'Workflow run console',
+      });
+      const alphaRow = await within(logs).findByTestId(
+        'workflow-execution-log-row-node-step-alpha',
+      );
+      expect(alphaRow).toHaveTextContent('Running');
+      expect(
+        within(logs).queryByTestId('workflow-execution-log-row-node-step-beta'),
+      ).not.toBeInTheDocument();
+
+      await releasePaintBoundary();
+
+      expect(alphaRow).toHaveTextContent('Success');
+      const betaRow = await within(logs).findByTestId(
+        'workflow-execution-log-row-node-step-beta',
+      );
+      expect(betaRow).toHaveTextContent('Running');
+      expect(betaRow).toHaveAttribute('aria-pressed', 'true');
+      await releasePaintBoundary();
+      await waitFor(() =>
+        expect(
+          within(
+            screen.getByRole('complementary', {
+              name: 'Published run panel',
+            }),
+          ).getByRole('button', { name: 'Start published run' }),
+        ).toBeEnabled(),
+      );
+    } finally {
+      Object.defineProperty(window, 'requestAnimationFrame', {
+        configurable: true,
+        value: originalRequestAnimationFrame,
+      });
+      Object.defineProperty(window, 'cancelAnimationFrame', {
+        configurable: true,
+        value: originalCancelAnimationFrame,
+      });
+    }
+  });
+
   it('uploads published run files through the exact published service', async () => {
     arrangeObservedWorkflowPublication();
     mockRuntimeRunsApi.streamEndpoint.mockResolvedValue(createSseResponse([]));

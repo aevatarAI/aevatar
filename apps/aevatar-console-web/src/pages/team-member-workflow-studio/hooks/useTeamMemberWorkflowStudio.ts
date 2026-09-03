@@ -69,6 +69,7 @@ import type {
 } from '@/shared/studio/models';
 import { normalizeStudioMemberLifecycleStage } from '@/shared/studio/models';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import { waitForWorkflowNodeStartPaint } from '@/shared/workflows/streamingExecutionPresentation';
 
 type TeamMemberWorkflowStudioMode = 'new' | 'existing';
 type WorkflowPublishTone =
@@ -2467,6 +2468,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           setExecutionDetail(
             buildDetail(accumulator.errorText ? 'failed' : 'running'),
           );
+          await waitForWorkflowNodeStartPaint(event, controller.signal);
         }
 
         const completedAtUtc = new Date().toISOString();

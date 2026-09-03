@@ -109,14 +109,14 @@ Review the full base diff, stage only the task's plan, shared component, locale 
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/hooks/useWorkflowEditor.ts`
 - Modify: `apps/aevatar-console-web/src/pages/team-member-workflow-studio/hooks/useTeamMemberWorkflowStudio.ts`
 
-- [ ] **Step 1: Add a single-chunk page regression test**
+- [x] **Step 1: Add a single-chunk page regression test**
 
 Make `parseBackendSSEStream` yield two complete node lifecycles synchronously.
 Install a controlled `requestAnimationFrame` queue, start a published run, and
 assert that `step-alpha` is visible as Running while `step-beta` is absent until
 the two callbacks representing a completed paint boundary are released.
 
-- [ ] **Step 2: Run the page regression and verify RED**
+- [x] **Step 2: Run the page regression and verify RED**
 
 Run:
 
@@ -129,7 +129,7 @@ pnpm --dir apps/aevatar-console-web exec jest --runInBand \
 Expected: FAIL because the current stream loop consumes both node lifecycles
 before React paints and the first observable state already contains both rows.
 
-- [ ] **Step 3: Add the shared paint-boundary helper and unit tests**
+- [x] **Step 3: Add the shared paint-boundary helper and unit tests**
 
 Implement `waitForWorkflowNodeStartPaint(event, signal, scheduler)` in
 `streamingExecutionPresentation.ts`. Use `extractStepRequest(event)` as the
@@ -137,7 +137,7 @@ typed semantic detector. Schedule two animation frames for a node-start event,
 resolve only from the second callback, return immediately for other events, and
 cancel pending callbacks when the abort signal fires.
 
-- [ ] **Step 4: Integrate both workflow execution consumers**
+- [x] **Step 4: Integrate both workflow execution consumers**
 
 After `setLiveRunExecution(...)` in `useWorkflowEditor.ts` and after
 `setExecutionDetail(...)` in `useTeamMemberWorkflowStudio.ts`, call:
@@ -148,7 +148,7 @@ await waitForWorkflowNodeStartPaint(event, controller.signal);
 
 Do not apply this wait to the parser or unrelated SSE consumers.
 
-- [ ] **Step 5: Verify GREEN and update the pull request**
+- [x] **Step 5: Verify GREEN and update the pull request**
 
 Run the new helper test, the named page regression, the analyzer-selected
 related tests, changed-file Biome, `bash tools/ci/test_stability_guards.sh`, the
