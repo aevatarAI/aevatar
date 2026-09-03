@@ -4,10 +4,9 @@ import {
   type AuthFlow,
   type NyxIDAuthCallbackErrorReason,
   NyxIDAuthClient,
-  SERVICE_ACCESS_REVIEW_RETURN_TO,
 } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
-import { loadStoredAuthSession } from '@/shared/auth/session';
+import { loadStoredAuthSession, sanitizeReturnTo } from '@/shared/auth/session';
 import { t } from '@/shared/i18n/messages';
 import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
 import { AevatarPageLoading } from '@/shared/ui/AevatarLoading';
@@ -136,10 +135,10 @@ function readCallbackErrorState(error: unknown): CallbackErrorState {
       ? 'serviceAccessReviewFailed'
       : 'signInFailed';
   const fallbackReturnTo =
-    flow === 'serviceAccessReview' ? SERVICE_ACCESS_REVIEW_RETURN_TO : '/login';
+    flow === 'serviceAccessReview' ? CONSOLE_HOME_ROUTE : '/login';
   const returnTo =
-    typeof record?.returnTo === 'string' && record.returnTo.startsWith('/')
-      ? record.returnTo
+    typeof record?.returnTo === 'string'
+      ? sanitizeReturnTo(record.returnTo)
       : fallbackReturnTo;
 
   return {
@@ -203,13 +202,20 @@ const CallbackPage: React.FC = () => {
     try {
       setRetrying(true);
       const client = new NyxIDAuthClient(config);
-      await client.loginWithRedirect({
-        flow: callbackError.flow,
-        ...(callbackError.reason === 'requiredServiceAccessMissing'
-          ? { prompt: 'consent' as const }
-          : {}),
-        returnTo: callbackError.returnTo,
-      });
+      if (callbackError.flow === 'serviceAccessReview') {
+        await client.loginWithRedirect({
+          flow: 'serviceAccessReview',
+          returnTo: callbackError.returnTo,
+        });
+      } else {
+        await client.loginWithRedirect({
+          flow: 'signIn',
+          ...(callbackError.reason === 'requiredServiceAccessMissing'
+            ? { prompt: 'consent' as const }
+            : {}),
+          returnTo: callbackError.returnTo,
+        });
+      }
     } catch (error) {
       setRetrying(false);
       setCallbackError({

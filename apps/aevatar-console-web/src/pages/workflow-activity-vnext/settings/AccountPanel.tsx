@@ -19,8 +19,8 @@ import { AevatarCompactText } from '@/shared/ui/compactText';
 import type { AccountField, AccountIdentity } from './accountIdentity';
 
 type AccountPanelProps = {
+  readonly accountSettingsHref: string;
   readonly identity: AccountIdentity;
-  readonly returnTo: string;
 };
 
 function accountFieldValue(field: AccountField): string | null {
@@ -64,7 +64,10 @@ function buildLoginHref(returnTo: string): string {
   }).toString()}`;
 }
 
-const AccountPanel: React.FC<AccountPanelProps> = ({ identity, returnTo }) => {
+const AccountPanel: React.FC<AccountPanelProps> = ({
+  accountSettingsHref,
+  identity,
+}) => {
   const toast = useConsoleToast();
   const [reviewPending, setReviewPending] = React.useState(false);
   const recoverable =
@@ -166,7 +169,7 @@ const AccountPanel: React.FC<AccountPanelProps> = ({ identity, returnTo }) => {
 
   const signInAgain = () => {
     clearStoredAuthSession();
-    history.push(buildLoginHref(returnTo));
+    history.push(buildLoginHref(accountSettingsHref));
   };
 
   const signOut = () => {
@@ -179,7 +182,7 @@ const AccountPanel: React.FC<AccountPanelProps> = ({ identity, returnTo }) => {
       setReviewPending(true);
       await new NyxIDAuthClient(getNyxIDRuntimeConfig()).loginWithRedirect({
         flow: 'serviceAccessReview',
-        returnTo,
+        returnTo: accountSettingsHref,
       });
     } catch {
       setReviewPending(false);

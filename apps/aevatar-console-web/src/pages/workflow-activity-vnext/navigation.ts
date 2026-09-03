@@ -1,4 +1,5 @@
 export type WorkflowActivitySection = 'workflows' | 'activity' | 'settings';
+export type WorkflowActivitySettingsSection = 'ai' | 'account' | 'advanced';
 
 function encode(value: string): string {
   return encodeURIComponent(value.trim());
@@ -30,6 +31,14 @@ export function buildWorkflowActivitySectionHref(
   section: WorkflowActivitySection,
 ): string {
   return `${buildWorkflowActivityBaseHref(scopeId)}/${section}`;
+}
+
+export function buildWorkflowActivitySettingsHref(
+  scopeId: string,
+  section: WorkflowActivitySettingsSection,
+): string {
+  const base = buildWorkflowActivitySectionHref(scopeId, 'settings');
+  return section === 'ai' ? base : `${base}?section=${section}`;
 }
 
 export function buildWorkflowActivityNewHref(scopeId: string): string {
