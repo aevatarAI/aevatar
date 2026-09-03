@@ -40,6 +40,33 @@ describe('StructuredJsonArgumentsEditor', () => {
     ).toBeChecked();
   });
 
+  it('parses safe numbers when native JSON.parse omits source context', () => {
+    const nativeParse = JSON.parse;
+    const parseSpy = jest
+      .spyOn(JSON, 'parse')
+      .mockImplementation((text, reviver) =>
+        nativeParse(
+          text,
+          reviver
+            ? function (this: unknown, key: string, parsedValue: unknown) {
+                return reviver.call(this, key, parsedValue);
+              }
+            : undefined,
+        ),
+      );
+
+    try {
+      renderEditor('{"count":2}');
+
+      expect(screen.getByRole('radio', { name: 'Fields' })).toBeChecked();
+      expect(
+        screen.getByRole('spinbutton', { name: 'Value for count' }),
+      ).toHaveValue('2');
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
   it('synchronizes field edits to JSON while preserving the object shape', () => {
     renderEditor('{"query":{"request":"$input"}}');
 

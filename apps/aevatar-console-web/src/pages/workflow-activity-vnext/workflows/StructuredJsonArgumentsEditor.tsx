@@ -8,6 +8,7 @@ import {
   Switch,
   Typography,
 } from 'antd';
+import jsonParse from 'core-js-pure/actual/json/parse';
 import React from 'react';
 import { t } from '@/shared/i18n/messages';
 
@@ -189,7 +190,7 @@ function parseObject(value: string): ParseObjectResult {
   try {
     let hasUnsupportedNumber = false;
     const parsed = value.trim()
-      ? (JSON.parse as JsonParseWithSource)(
+      ? (jsonParse as JsonParseWithSource)(
           value,
           (_key, parsedValue, context) => {
             if (

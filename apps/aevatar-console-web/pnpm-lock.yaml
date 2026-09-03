@@ -38,6 +38,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      core-js-pure:
+        specifier: 3.49.0
+        version: 3.49.0
       dayjs:
         specifier: ^1.11.19
         version: 1.11.20
