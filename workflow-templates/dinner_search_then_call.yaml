@@ -94,7 +94,7 @@ steps:
     type: assign
     parameters:
       target: options_gate
-      value: '{"options_shown":true,"restaurant_calls_started":false,"money_spent":false,"silence_timeout_ms":2000,"production_timeout":"10m"}'
+      value: '{"options_shown":true,"restaurant_calls_started":false,"money_spent":false,"silence_timeout_ms":10000,"production_timeout":"10s"}'
     next: emit_options_shown
 
   - id: emit_options_shown
@@ -148,14 +148,14 @@ steps:
         response_mode: text
     parameters:
       tool: nyxid_proxy
-      arguments: '{"body":{"agent_id":"agent_6301m11a57yjeattnrb3ffwrbynr","agent_phone_number_id":"phnum_0301m0hkqza9fg48ghjjxtwa33dq","to_number":"+6580102726","telephony_call_config":{"ringing_timeout_secs":30},"conversation_initiation_client_data":{"dynamic_variables":{"restaurant_name":"${json(steps.build_shortlist_from_candidates.json.option_1_name)}","restaurant_source_url":"${json(steps.build_shortlist_from_candidates.json.option_1_url)}","client_name":"${json(steps.capture_user_choice.json.participant)}","party_size":"${json(steps.capture_user_choice.json.party_size)}","booking_date":"${json(steps.capture_user_choice.json.day)}","preferred_time":"${json(steps.capture_user_choice.json.time)}","backup_times":"${json(steps.capture_user_choice.json.backup_times)}","callback_phone":"${json(steps.capture_user_choice.json.phone_number)}","special_requests":"${json(steps.capture_user_choice.json.special_requests)}"}}}}'
+      arguments: '{"body":{"agent_id":"agent_6301m11a57yjeattnrb3ffwrbynr","agent_phone_number_id":"phnum_0301m0hkqza9fg48ghjjxtwa33dq","to_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","telephony_call_config":{"ringing_timeout_secs":30},"conversation_initiation_client_data":{"dynamic_variables":{"restaurant_name":"${json(steps.build_shortlist_from_candidates.json.option_1_name)}","restaurant_source_url":"${json(steps.build_shortlist_from_candidates.json.option_1_url)}","client_name":"${json(steps.capture_user_choice.json.participant)}","party_size":"${json(steps.capture_user_choice.json.party_size)}","booking_date":"${json(steps.capture_user_choice.json.day)}","preferred_time":"${json(steps.capture_user_choice.json.time)}","backup_times":"${json(steps.capture_user_choice.json.backup_times)}","callback_phone":"${json(steps.capture_user_choice.json.phone_number)}","special_requests":"${json(steps.capture_user_choice.json.special_requests)}"}}}}'
     next: verify_selected_hold_option_1
 
   - id: verify_selected_hold_option_1
     type: assign
     parameters:
       target: selected_hold_verification
-      value: '{"phone_call_started":"${json(steps.hold_selected_option_1.json.success)}","conversation_id":"${json(steps.hold_selected_option_1.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_1.json.callSid)}","provider_message":"${json(steps.hold_selected_option_1.json.message)}","mocked_restaurant_phone":"+6580102726","payment_requested":false,"result":"provider_response_recorded"}'
+      value: '{"phone_call_started":"${json(steps.hold_selected_option_1.json.success)}","conversation_id":"${json(steps.hold_selected_option_1.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_1.json.callSid)}","provider_message":"${json(steps.hold_selected_option_1.json.message)}","restaurant_phone_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","payment_requested":false,"result":"provider_response_recorded"}'
     next: emit_selected_only_completed_option_1
 
   - id: emit_selected_only_completed_option_1
@@ -169,7 +169,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"call_started","path":"selected_venue_phone_call_started","selected_restaurant":"${json(steps.build_shortlist_from_candidates.json.option_1_name)}","kept_option":"option_1","source_url":"${json(steps.build_shortlist_from_candidates.json.option_1_url)}","mocked_restaurant_phone":"+6580102726","conversation_id":"${json(steps.hold_selected_option_1.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_1.json.callSid)}","provider_success":"${json(steps.hold_selected_option_1.json.success)}","provider_message":"${json(steps.hold_selected_option_1.json.message)}","released":[],"money_spent":false,"success_contract":{"options_shown_before_any_call":true,"selected_option_only_called":true,"mocked_restaurant_phone_used":true,"money_spent":false}}'
+      value: '{"workflow_status":"call_started","path":"selected_venue_phone_call_started","summary":"${json(steps.build_shortlist_from_candidates.json.option_1_name)} call started.","selected_restaurant":"${json(steps.build_shortlist_from_candidates.json.option_1_name)}","kept_option":"option_1","source_url":"${json(steps.build_shortlist_from_candidates.json.option_1_url)}","restaurant_phone_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","conversation_id":"${json(steps.hold_selected_option_1.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_1.json.callSid)}","provider_success":"${json(steps.hold_selected_option_1.json.success)}","provider_message":"${json(steps.hold_selected_option_1.json.message)}","released":[],"money_spent":false,"success_contract":{"options_shown_before_any_call":true,"selected_option_only_called":true,"configured_restaurant_phone_used":true,"money_spent":false}}'
     next: ""
 
   - id: hold_selected_option_2
@@ -184,14 +184,14 @@ steps:
         response_mode: text
     parameters:
       tool: nyxid_proxy
-      arguments: '{"body":{"agent_id":"agent_6301m11a57yjeattnrb3ffwrbynr","agent_phone_number_id":"phnum_0301m0hkqza9fg48ghjjxtwa33dq","to_number":"+6580102726","telephony_call_config":{"ringing_timeout_secs":30},"conversation_initiation_client_data":{"dynamic_variables":{"restaurant_name":"${json(steps.build_shortlist_from_candidates.json.option_2_name)}","restaurant_source_url":"${json(steps.build_shortlist_from_candidates.json.option_2_url)}","client_name":"${json(steps.capture_user_choice.json.participant)}","party_size":"${json(steps.capture_user_choice.json.party_size)}","booking_date":"${json(steps.capture_user_choice.json.day)}","preferred_time":"${json(steps.capture_user_choice.json.time)}","backup_times":"${json(steps.capture_user_choice.json.backup_times)}","callback_phone":"${json(steps.capture_user_choice.json.phone_number)}","special_requests":"${json(steps.capture_user_choice.json.special_requests)}"}}}}'
+      arguments: '{"body":{"agent_id":"agent_6301m11a57yjeattnrb3ffwrbynr","agent_phone_number_id":"phnum_0301m0hkqza9fg48ghjjxtwa33dq","to_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","telephony_call_config":{"ringing_timeout_secs":30},"conversation_initiation_client_data":{"dynamic_variables":{"restaurant_name":"${json(steps.build_shortlist_from_candidates.json.option_2_name)}","restaurant_source_url":"${json(steps.build_shortlist_from_candidates.json.option_2_url)}","client_name":"${json(steps.capture_user_choice.json.participant)}","party_size":"${json(steps.capture_user_choice.json.party_size)}","booking_date":"${json(steps.capture_user_choice.json.day)}","preferred_time":"${json(steps.capture_user_choice.json.time)}","backup_times":"${json(steps.capture_user_choice.json.backup_times)}","callback_phone":"${json(steps.capture_user_choice.json.phone_number)}","special_requests":"${json(steps.capture_user_choice.json.special_requests)}"}}}}'
     next: verify_selected_hold_option_2
 
   - id: verify_selected_hold_option_2
     type: assign
     parameters:
       target: selected_hold_verification
-      value: '{"phone_call_started":"${json(steps.hold_selected_option_2.json.success)}","conversation_id":"${json(steps.hold_selected_option_2.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_2.json.callSid)}","provider_message":"${json(steps.hold_selected_option_2.json.message)}","mocked_restaurant_phone":"+6580102726","payment_requested":false,"result":"provider_response_recorded"}'
+      value: '{"phone_call_started":"${json(steps.hold_selected_option_2.json.success)}","conversation_id":"${json(steps.hold_selected_option_2.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_2.json.callSid)}","provider_message":"${json(steps.hold_selected_option_2.json.message)}","restaurant_phone_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","payment_requested":false,"result":"provider_response_recorded"}'
     next: emit_selected_only_completed_option_2
 
   - id: emit_selected_only_completed_option_2
@@ -205,7 +205,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"call_started","path":"selected_venue_phone_call_started","selected_restaurant":"${json(steps.build_shortlist_from_candidates.json.option_2_name)}","kept_option":"option_2","source_url":"${json(steps.build_shortlist_from_candidates.json.option_2_url)}","mocked_restaurant_phone":"+6580102726","conversation_id":"${json(steps.hold_selected_option_2.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_2.json.callSid)}","provider_success":"${json(steps.hold_selected_option_2.json.success)}","provider_message":"${json(steps.hold_selected_option_2.json.message)}","released":[],"money_spent":false,"success_contract":{"options_shown_before_any_call":true,"selected_option_only_called":true,"mocked_restaurant_phone_used":true,"money_spent":false}}'
+      value: '{"workflow_status":"call_started","path":"selected_venue_phone_call_started","summary":"${json(steps.build_shortlist_from_candidates.json.option_2_name)} call started.","selected_restaurant":"${json(steps.build_shortlist_from_candidates.json.option_2_name)}","kept_option":"option_2","source_url":"${json(steps.build_shortlist_from_candidates.json.option_2_url)}","restaurant_phone_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","conversation_id":"${json(steps.hold_selected_option_2.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_2.json.callSid)}","provider_success":"${json(steps.hold_selected_option_2.json.success)}","provider_message":"${json(steps.hold_selected_option_2.json.message)}","released":[],"money_spent":false,"success_contract":{"options_shown_before_any_call":true,"selected_option_only_called":true,"configured_restaurant_phone_used":true,"money_spent":false}}'
     next: ""
 
   - id: hold_selected_option_3
@@ -220,14 +220,14 @@ steps:
         response_mode: text
     parameters:
       tool: nyxid_proxy
-      arguments: '{"body":{"agent_id":"agent_6301m11a57yjeattnrb3ffwrbynr","agent_phone_number_id":"phnum_0301m0hkqza9fg48ghjjxtwa33dq","to_number":"+6580102726","telephony_call_config":{"ringing_timeout_secs":30},"conversation_initiation_client_data":{"dynamic_variables":{"restaurant_name":"${json(steps.build_shortlist_from_candidates.json.option_3_name)}","restaurant_source_url":"${json(steps.build_shortlist_from_candidates.json.option_3_url)}","client_name":"${json(steps.capture_user_choice.json.participant)}","party_size":"${json(steps.capture_user_choice.json.party_size)}","booking_date":"${json(steps.capture_user_choice.json.day)}","preferred_time":"${json(steps.capture_user_choice.json.time)}","backup_times":"${json(steps.capture_user_choice.json.backup_times)}","callback_phone":"${json(steps.capture_user_choice.json.phone_number)}","special_requests":"${json(steps.capture_user_choice.json.special_requests)}"}}}}'
+      arguments: '{"body":{"agent_id":"agent_6301m11a57yjeattnrb3ffwrbynr","agent_phone_number_id":"phnum_0301m0hkqza9fg48ghjjxtwa33dq","to_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","telephony_call_config":{"ringing_timeout_secs":30},"conversation_initiation_client_data":{"dynamic_variables":{"restaurant_name":"${json(steps.build_shortlist_from_candidates.json.option_3_name)}","restaurant_source_url":"${json(steps.build_shortlist_from_candidates.json.option_3_url)}","client_name":"${json(steps.capture_user_choice.json.participant)}","party_size":"${json(steps.capture_user_choice.json.party_size)}","booking_date":"${json(steps.capture_user_choice.json.day)}","preferred_time":"${json(steps.capture_user_choice.json.time)}","backup_times":"${json(steps.capture_user_choice.json.backup_times)}","callback_phone":"${json(steps.capture_user_choice.json.phone_number)}","special_requests":"${json(steps.capture_user_choice.json.special_requests)}"}}}}'
     next: verify_selected_hold_option_3
 
   - id: verify_selected_hold_option_3
     type: assign
     parameters:
       target: selected_hold_verification
-      value: '{"phone_call_started":"${json(steps.hold_selected_option_3.json.success)}","conversation_id":"${json(steps.hold_selected_option_3.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_3.json.callSid)}","provider_message":"${json(steps.hold_selected_option_3.json.message)}","mocked_restaurant_phone":"+6580102726","payment_requested":false,"result":"provider_response_recorded"}'
+      value: '{"phone_call_started":"${json(steps.hold_selected_option_3.json.success)}","conversation_id":"${json(steps.hold_selected_option_3.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_3.json.callSid)}","provider_message":"${json(steps.hold_selected_option_3.json.message)}","restaurant_phone_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","payment_requested":false,"result":"provider_response_recorded"}'
     next: emit_selected_only_completed_option_3
 
   - id: emit_selected_only_completed_option_3
@@ -241,27 +241,176 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"call_started","path":"selected_venue_phone_call_started","selected_restaurant":"${json(steps.build_shortlist_from_candidates.json.option_3_name)}","kept_option":"option_3","source_url":"${json(steps.build_shortlist_from_candidates.json.option_3_url)}","mocked_restaurant_phone":"+6580102726","conversation_id":"${json(steps.hold_selected_option_3.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_3.json.callSid)}","provider_success":"${json(steps.hold_selected_option_3.json.success)}","provider_message":"${json(steps.hold_selected_option_3.json.message)}","released":[],"money_spent":false,"success_contract":{"options_shown_before_any_call":true,"selected_option_only_called":true,"mocked_restaurant_phone_used":true,"money_spent":false}}'
+      value: '{"workflow_status":"call_started","path":"selected_venue_phone_call_started","summary":"${json(steps.build_shortlist_from_candidates.json.option_3_name)} call started.","selected_restaurant":"${json(steps.build_shortlist_from_candidates.json.option_3_name)}","kept_option":"option_3","source_url":"${json(steps.build_shortlist_from_candidates.json.option_3_url)}","restaurant_phone_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","conversation_id":"${json(steps.hold_selected_option_3.json.conversation_id)}","call_sid":"${json(steps.hold_selected_option_3.json.callSid)}","provider_success":"${json(steps.hold_selected_option_3.json.success)}","provider_message":"${json(steps.hold_selected_option_3.json.message)}","released":[],"money_spent":false,"success_contract":{"options_shown_before_any_call":true,"selected_option_only_called":true,"configured_restaurant_phone_used":true,"money_spent":false}}'
     next: ""
 
   - id: wait_for_user_choice_timeout
-    type: delay
+    type: wait_signal
     parameters:
-      duration_ms: "2000"
-    next: mark_silence_timeout
+      signal_name: "dinner_date_user_choice"
+      prompt: "Please choose one dinner option before automatic holds. 1. ${json(steps.build_shortlist_from_candidates.json.option_1_name)} — ${json(steps.build_shortlist_from_candidates.json.option_1_note)} ${json(steps.build_shortlist_from_candidates.json.option_1_url)} 2. ${json(steps.build_shortlist_from_candidates.json.option_2_name)} — ${json(steps.build_shortlist_from_candidates.json.option_2_note)} ${json(steps.build_shortlist_from_candidates.json.option_2_url)} 3. ${json(steps.build_shortlist_from_candidates.json.option_3_name)} — ${json(steps.build_shortlist_from_candidates.json.option_3_note)} ${json(steps.build_shortlist_from_candidates.json.option_3_url)}"
+      timeout_ms: "10000"
+    on_error:
+      strategy: fallback
+      fallback_step: mark_silence_timeout
+    next: normalize_user_choice
 
   - id: mark_silence_timeout
     type: assign
     parameters:
       target: user_gate_result
-      value: '{"status":"timeout","next_branch":"wait_for_choice","message":"No venue was held because no user choice arrived before timeout."}'
-    next: final_artifact_timeout_waiting_for_choice
+      value: '{"status":"timeout","next_branch":"hold_all","message":"User choice timed out; automatically holding all shown venues."}'
+    next: hold_candidate_option_1
 
-  - id: final_artifact_timeout_waiting_for_choice
+  - id: hold_candidate_option_1
+    type: tool_call
+    capability:
+      nyxid_request:
+        user_service_id: "27bb0fec-def4-40cd-abd7-01737690c5c4"
+        method: POST
+        path_template: "/v1/convai/twilio/outbound-call"
+        body_mode: json
+        body_required: true
+        response_mode: text
+    parameters:
+      tool: nyxid_proxy
+      arguments: '{"body":{"agent_id":"agent_6301m11a57yjeattnrb3ffwrbynr","agent_phone_number_id":"phnum_0301m0hkqza9fg48ghjjxtwa33dq","to_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","telephony_call_config":{"ringing_timeout_secs":30},"conversation_initiation_client_data":{"dynamic_variables":{"restaurant_name":"${json(steps.build_shortlist_from_candidates.json.option_1_name)}","restaurant_source_url":"${json(steps.build_shortlist_from_candidates.json.option_1_url)}","client_name":"${json(steps.capture_user_choice.json.participant)}","party_size":"${json(steps.capture_user_choice.json.party_size)}","booking_date":"${json(steps.capture_user_choice.json.day)}","preferred_time":"${json(steps.capture_user_choice.json.time)}","backup_times":"${json(steps.capture_user_choice.json.backup_times)}","callback_phone":"${json(steps.capture_user_choice.json.phone_number)}","special_requests":"${json(steps.capture_user_choice.json.special_requests)}"}}}}'
+    next: hold_candidate_option_2
+
+  - id: hold_candidate_option_2
+    type: tool_call
+    capability:
+      nyxid_request:
+        user_service_id: "27bb0fec-def4-40cd-abd7-01737690c5c4"
+        method: POST
+        path_template: "/v1/convai/twilio/outbound-call"
+        body_mode: json
+        body_required: true
+        response_mode: text
+    parameters:
+      tool: nyxid_proxy
+      arguments: '{"body":{"agent_id":"agent_6301m11a57yjeattnrb3ffwrbynr","agent_phone_number_id":"phnum_0301m0hkqza9fg48ghjjxtwa33dq","to_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","telephony_call_config":{"ringing_timeout_secs":30},"conversation_initiation_client_data":{"dynamic_variables":{"restaurant_name":"${json(steps.build_shortlist_from_candidates.json.option_2_name)}","restaurant_source_url":"${json(steps.build_shortlist_from_candidates.json.option_2_url)}","client_name":"${json(steps.capture_user_choice.json.participant)}","party_size":"${json(steps.capture_user_choice.json.party_size)}","booking_date":"${json(steps.capture_user_choice.json.day)}","preferred_time":"${json(steps.capture_user_choice.json.time)}","backup_times":"${json(steps.capture_user_choice.json.backup_times)}","callback_phone":"${json(steps.capture_user_choice.json.phone_number)}","special_requests":"${json(steps.capture_user_choice.json.special_requests)}"}}}}'
+    next: hold_candidate_option_3
+
+  - id: hold_candidate_option_3
+    type: tool_call
+    capability:
+      nyxid_request:
+        user_service_id: "27bb0fec-def4-40cd-abd7-01737690c5c4"
+        method: POST
+        path_template: "/v1/convai/twilio/outbound-call"
+        body_mode: json
+        body_required: true
+        response_mode: text
+    parameters:
+      tool: nyxid_proxy
+      arguments: '{"body":{"agent_id":"agent_6301m11a57yjeattnrb3ffwrbynr","agent_phone_number_id":"phnum_0301m0hkqza9fg48ghjjxtwa33dq","to_number":"${json(steps.capture_user_choice.json.restaurant_phone_number)}","telephony_call_config":{"ringing_timeout_secs":30},"conversation_initiation_client_data":{"dynamic_variables":{"restaurant_name":"${json(steps.build_shortlist_from_candidates.json.option_3_name)}","restaurant_source_url":"${json(steps.build_shortlist_from_candidates.json.option_3_url)}","client_name":"${json(steps.capture_user_choice.json.participant)}","party_size":"${json(steps.capture_user_choice.json.party_size)}","booking_date":"${json(steps.capture_user_choice.json.day)}","preferred_time":"${json(steps.capture_user_choice.json.time)}","backup_times":"${json(steps.capture_user_choice.json.backup_times)}","callback_phone":"${json(steps.capture_user_choice.json.phone_number)}","special_requests":"${json(steps.capture_user_choice.json.special_requests)}"}}}}'
+    next: publish_holds_wait_state
+
+  - id: publish_holds_wait_state
+    type: emit
+    parameters:
+      event_type: "dinner_date.timeout_auto_hold_all"
+      payload: '{"held_options":["option_1","option_2","option_3"],"reason":"user_choice_timeout","money_spent":false,"next_signal":"dinner_date_user_choice_after_timeout"}'
+    next: wait_for_post_timeout_choice
+
+  - id: wait_for_post_timeout_choice
+    type: wait_signal
+    parameters:
+      signal_name: "dinner_date_user_choice_after_timeout"
+      prompt: "Three venues are held after timeout. Please choose one held dinner option. 1. ${json(steps.build_shortlist_from_candidates.json.option_1_name)} — ${json(steps.build_shortlist_from_candidates.json.option_1_note)} ${json(steps.build_shortlist_from_candidates.json.option_1_url)} 2. ${json(steps.build_shortlist_from_candidates.json.option_2_name)} — ${json(steps.build_shortlist_from_candidates.json.option_2_note)} ${json(steps.build_shortlist_from_candidates.json.option_2_url)} 3. ${json(steps.build_shortlist_from_candidates.json.option_3_name)} — ${json(steps.build_shortlist_from_candidates.json.option_3_note)} ${json(steps.build_shortlist_from_candidates.json.option_3_url)}"
+      timeout_ms: "600000"
+    next: normalize_post_timeout_choice
+
+  - id: normalize_post_timeout_choice
+    type: llm_call
+    target_role: choice_normalizer
+    parameters:
+      prompt_prefix: >-
+        Three venues are already held because the user did not choose before the timeout. Available options JSON: ${steps.build_shortlist_from_candidates.output}.
+        Post-timeout user choice signal payload: ${steps.wait_for_post_timeout_choice.output}.
+        Normalize the post-timeout user choice to one workflow choice key:
+    next: route_post_timeout_choice
+
+  - id: route_post_timeout_choice
+    type: switch
+    parameters:
+      on: "${steps.normalize_post_timeout_choice.json.choice}"
+      branch.option_1: release_unselected_after_confirm_option_1
+      branch.option_2: release_unselected_after_confirm_option_2
+      branch.option_3: release_unselected_after_confirm_option_3
+      branch.deposit: final_artifact_payment_blocked
+      branch.deposit_required: final_artifact_payment_blocked
+      branch.ambiguous: final_artifact_confirmation_ambiguous
+      branch.await_choice: final_artifact_waiting_after_holds
+      branch._default: final_artifact_waiting_after_holds
+    branches:
+      option_1: release_unselected_after_confirm_option_1
+      option_2: release_unselected_after_confirm_option_2
+      option_3: release_unselected_after_confirm_option_3
+      deposit: final_artifact_payment_blocked
+      deposit_required: final_artifact_payment_blocked
+      ambiguous: final_artifact_confirmation_ambiguous
+      await_choice: final_artifact_waiting_after_holds
+      _default: final_artifact_waiting_after_holds
+
+  - id: release_unselected_after_confirm_option_1
+    type: assign
+    idempotency_key: "${run_id}:timeout-release:option_1"
+    parameters:
+      target: post_timeout_release
+      value: '{"kept_option":"option_1","released_options":["option_2","option_3"],"released":["${json(steps.build_shortlist_from_candidates.json.option_2_name)}","${json(steps.build_shortlist_from_candidates.json.option_3_name)}"],"release_records":["timeout-release-option-2","timeout-release-option-3"],"money_spent":false}'
+    next: final_artifact_post_timeout_confirmed_option_1
+
+  - id: final_artifact_post_timeout_confirmed_option_1
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"waiting","path":"silence_timeout_waiting_for_user_choice","held":[],"held_options":[],"released":[],"waiting_for":"user_choice_before_any_hold","reason":"no user choice arrived before timeout; no restaurant call, hold, booking, or payment was performed","requires_user_decision":true,"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"no_restaurant_calls_after_timeout":true,"no_venues_held_after_timeout":true,"requires_user_choice_before_hold":true}}'
+      value: '{"workflow_status":"call_started","path":"timeout_auto_hold_then_user_selected","summary":"${json(steps.build_shortlist_from_candidates.json.option_1_name)} call kept. Released ${json(steps.build_shortlist_from_candidates.json.option_2_name)} and ${json(steps.build_shortlist_from_candidates.json.option_3_name)}.","kept":"${json(steps.build_shortlist_from_candidates.json.option_1_name)}","kept_option":"option_1","released":${steps.release_unselected_after_confirm_option_1.json.released},"released_options":${steps.release_unselected_after_confirm_option_1.json.released_options},"held_conversation_ids":["${json(steps.hold_candidate_option_1.json.conversation_id)}","${json(steps.hold_candidate_option_2.json.conversation_id)}","${json(steps.hold_candidate_option_3.json.conversation_id)}"],"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"configured_restaurant_phone_used":true,"money_spent":false}}'
+    next: ""
+
+  - id: release_unselected_after_confirm_option_2
+    type: assign
+    idempotency_key: "${run_id}:timeout-release:option_2"
+    parameters:
+      target: post_timeout_release
+      value: '{"kept_option":"option_2","released_options":["option_1","option_3"],"released":["${json(steps.build_shortlist_from_candidates.json.option_1_name)}","${json(steps.build_shortlist_from_candidates.json.option_3_name)}"],"release_records":["timeout-release-option-1","timeout-release-option-3"],"money_spent":false}'
+    next: final_artifact_post_timeout_confirmed_option_2
+
+  - id: final_artifact_post_timeout_confirmed_option_2
+    type: assign
+    parameters:
+      target: dinner_date_artifact
+      value: '{"workflow_status":"call_started","path":"timeout_auto_hold_then_user_selected","summary":"${json(steps.build_shortlist_from_candidates.json.option_2_name)} call kept. Released ${json(steps.build_shortlist_from_candidates.json.option_1_name)} and ${json(steps.build_shortlist_from_candidates.json.option_3_name)}.","kept":"${json(steps.build_shortlist_from_candidates.json.option_2_name)}","kept_option":"option_2","released":${steps.release_unselected_after_confirm_option_2.json.released},"released_options":${steps.release_unselected_after_confirm_option_2.json.released_options},"held_conversation_ids":["${json(steps.hold_candidate_option_1.json.conversation_id)}","${json(steps.hold_candidate_option_2.json.conversation_id)}","${json(steps.hold_candidate_option_3.json.conversation_id)}"],"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"configured_restaurant_phone_used":true,"money_spent":false}}'
+    next: ""
+
+  - id: release_unselected_after_confirm_option_3
+    type: assign
+    idempotency_key: "${run_id}:timeout-release:option_3"
+    parameters:
+      target: post_timeout_release
+      value: '{"kept_option":"option_3","released_options":["option_1","option_2"],"released":["${json(steps.build_shortlist_from_candidates.json.option_1_name)}","${json(steps.build_shortlist_from_candidates.json.option_2_name)}"],"release_records":["timeout-release-option-1","timeout-release-option-2"],"money_spent":false}'
+    next: final_artifact_post_timeout_confirmed_option_3
+
+  - id: final_artifact_post_timeout_confirmed_option_3
+    type: assign
+    parameters:
+      target: dinner_date_artifact
+      value: '{"workflow_status":"call_started","path":"timeout_auto_hold_then_user_selected","summary":"${json(steps.build_shortlist_from_candidates.json.option_3_name)} call kept. Released ${json(steps.build_shortlist_from_candidates.json.option_1_name)} and ${json(steps.build_shortlist_from_candidates.json.option_2_name)}.","kept":"${json(steps.build_shortlist_from_candidates.json.option_3_name)}","kept_option":"option_3","released":${steps.release_unselected_after_confirm_option_3.json.released},"released_options":${steps.release_unselected_after_confirm_option_3.json.released_options},"held_conversation_ids":["${json(steps.hold_candidate_option_1.json.conversation_id)}","${json(steps.hold_candidate_option_2.json.conversation_id)}","${json(steps.hold_candidate_option_3.json.conversation_id)}"],"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"configured_restaurant_phone_used":true,"money_spent":false}}'
+    next: ""
+
+  - id: final_artifact_waiting_after_holds
+    type: assign
+    parameters:
+      target: dinner_date_artifact
+      value: '{"workflow_status":"waiting","path":"timeout_auto_hold_all_waiting_for_user_choice","held":["${json(steps.build_shortlist_from_candidates.json.option_1_name)}","${json(steps.build_shortlist_from_candidates.json.option_2_name)}","${json(steps.build_shortlist_from_candidates.json.option_3_name)}"],"held_options":["option_1","option_2","option_3"],"released":[],"waiting_for":"post_timeout_user_choice","requires_user_decision":true,"money_spent":false,"success_contract":{"options_shown_before_any_call":true,"timeout_auto_holds_all_three_venues":true,"all_three_venues_held_after_timeout":true,"configured_restaurant_phone_used":true,"money_spent":false}}'
+    next: ""
+
+  - id: final_artifact_confirmation_ambiguous
+    type: assign
+    parameters:
+      target: dinner_date_artifact
+      value: '{"workflow_status":"needs_attention","path":"post_timeout_choice_ambiguous","held_options":["option_1","option_2","option_3"],"released":[],"reason":"post-timeout user choice did not clearly identify one held venue","requires_user_decision":true,"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"ambiguous_choice_does_not_release_any_hold":true,"money_spent":false}}'
     next: ""
 
   - id: final_artifact_payment_blocked

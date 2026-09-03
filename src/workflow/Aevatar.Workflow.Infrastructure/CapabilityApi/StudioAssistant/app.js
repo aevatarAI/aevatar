@@ -677,8 +677,7 @@ function restoreTrajectoryFromActorProjection(entry, projection) {
   const turnId = String(task?.turnId || "").trim();
   if (!entry || !turnId || !(projection?.steps instanceof Map)) return;
   const steps = [...projection.steps.values()]
-    .filter((step) => step?.operation?.requestedAt &&
-      (step.kind === "llm" || step.kind === "tool"));
+    .filter((step) => step?.operation?.requestedAt || step?.stepId);
   if (!steps.length) return;
 
   const trace = ensureRestoredRequestTrace(entry, turnId, {
@@ -690,7 +689,7 @@ function restoreTrajectoryFromActorProjection(entry, projection) {
   if (!trace || !trace.restored) return;
 
   const firstStart = steps
-    .map((step) => restoredOperationTimestamp(step.operation.requestedAt))
+    .map((step) => restoredOperationTimestamp(step.operation?.requestedAt || step.requestedAt || step.startedAt))
     .find((value) => value != null) ?? null;
   if (trace.run.startedAt == null) trace.run.startedAt = firstStart;
   const input = createInputTraceOperation(trace);
@@ -701,24 +700,85 @@ function restoreTrajectoryFromActorProjection(entry, projection) {
   }
 
   for (const step of steps) {
-    applyRestoredOperation(trace, {
-      status: step.status,
-      title: step.kind === "tool" ? step.source?.tool?.toolName : step.source?.llm?.model,
-      toolName: step.source?.tool?.toolName || "",
-      presentation: step.source?.tool?.presentation || null,
-      model: step.source?.llm?.model || "",
-      startedAt: step.operation.requestedAt,
-      completedAt: step.operation.completedAt,
-      safeMessage: step.safeMessage,
-      order: step.order,
-    }, {
-      kind: step.kind === "llm" ? "model" : "tool",
-      id: step.operation.operationId || step.stepId,
-      title: step.kind === "tool"
-        ? step.source?.tool?.toolName
-        : step.source?.llm?.model || step.description,
-    });
+    if (step.kind === "llm" || step.kind === "tool") {
+      applyRestoredOperation(trace, {
+        status: step.status,
+        title: step.kind === "tool" ? step.source?.tool?.toolName : step.source?.llm?.model,
+        toolName: step.source?.tool?.toolName || "",
+        presentation: step.source?.tool?.presentation || null,
+        model: step.source?.llm?.model || "",
+        startedAt: step.operation?.requestedAt,
+        completedAt: step.operation?.completedAt,
+        safeMessage: step.safeMessage,
+        order: step.order,
+      }, {
+        kind: step.kind === "llm" ? "model" : "tool",
+        id: step.operation?.operationId || step.stepId,
+        title: step.kind === "tool"
+          ? step.source?.tool?.toolName
+          : step.source?.llm?.model || step.description,
+      });
+      continue;
+    }
+
+    applyWorkflowStepTraceOperation(trace, step);
   }
+}
+
+function workflowStepTraceStatus(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (["done", "skipped", "cancelled"].includes(normalized)) return "done";
+  if (normalized === "failed") return "error";
+  if (normalized === "waiting") return "running";
+  return normalized || "running";
+}
+
+function workflowStepOutput(step) {
+  return String(
+    step?.safeMessage ||
+    step?.outputPreview ||
+    step?.completionMessage ||
+    step?.suspensionPrompt ||
+    step?.description ||
+    "",
+  );
+}
+
+function applyWorkflowStepTraceOperation(trace, step) {
+  if (!trace || !step?.stepId) return null;
+  const record = upsertTraceOperation(trace, {
+    key: traceOperationKey("workflow", step.stepId),
+    id: step.stepId,
+    kind: "workflow",
+    title: actorStepDisplayName(step),
+    status: workflowStepTraceStatus(step.status),
+    output: workflowStepOutput(step),
+    serverSequence: step.order,
+  });
+  if (!record) return null;
+  record.startedAt = restoredOperationTimestamp(step.operation?.requestedAt || step.requestedAt || step.startedAt);
+  record.completedAt = restoredOperationTimestamp(step.operation?.completedAt || step.completedAt);
+  record.timingClock = record.startedAt == null ? null : "server";
+  return record;
+}
+
+function traceWorkflowStepEvent(trace, event, status) {
+  const stepId = String(event?.stepId || event?.stepName || event?.stepType || "").trim();
+  if (!trace || !stepId) return null;
+  const record = upsertTraceOperation(trace, {
+    key: traceOperationKey("workflow", stepId),
+    id: stepId,
+    kind: "workflow",
+    title: String(event?.displayName || event?.stepName || event?.stepType || stepId),
+    status,
+    output: String(event?.message || event?.prompt || event?.outputPreview || event?.output || ""),
+    serverSequence: event?.sequence,
+  });
+  if (!record) return null;
+  const timing = traceEventTiming(event);
+  if (status === "running") startTraceOperation(record, timing);
+  else finishTraceOperation(record, timing);
+  return record;
 }
 
 function selectedTraceOperation(trace) {
@@ -1065,6 +1125,17 @@ function applyRequestTraceEvent(entry, run, event) {
       finishTraceOperation(tool, timing);
       break;
     }
+    case "step_started":
+    case "step_request":
+      traceWorkflowStepEvent(trace, event, "running");
+      break;
+    case "step_finished":
+    case "step_completed":
+      traceWorkflowStepEvent(trace, event, event.success === false ? "error" : "done");
+      break;
+    case "waiting_signal":
+      traceWorkflowStepEvent(trace, event, "running");
+      break;
     case "usage": {
       const model = traceModelOperation(trace, event) ||
         [...trace.records].reverse().find((record) => record.kind === "model");
@@ -1148,7 +1219,7 @@ function traceOperationStartedAt(record) {
 }
 
 function traceOperationKindLabel(kind) {
-  return { input: "INPUT", model: "MODEL", tool: "TOOL" }[kind] || "OPERATION";
+  return { input: "INPUT", workflow: "WORKFLOW", model: "MODEL", tool: "TOOL" }[kind] || "OPERATION";
 }
 
 function traceOperationStatusLabel(status) {
@@ -1171,7 +1242,7 @@ function traceOperationStatusLabel(status) {
 // same recorded facts. Timing is rendered only when the operation reported it.
 // ---------------------------------------------------------------------------
 
-const TRAJECTORY_LANE = { input: 0, model: 1, tool: 2 };
+const TRAJECTORY_LANE = { input: 0, workflow: 1, model: 2, tool: 3 };
 const TRAJECTORY_DETAILS_MIN_WIDTH = 240;
 const TRAJECTORY_DETAILS_DEFAULT_WIDTH = 340;
 const TRAJECTORY_RANGE_MIN_PX = 3;
@@ -1194,7 +1265,7 @@ const trajectory = {
 };
 
 function traceOperationIcon(kind) {
-  return { input: "corner-down-right", model: "sparkles", tool: "wrench" }[kind] || "circle";
+  return { input: "corner-down-right", workflow: "workflow", model: "sparkles", tool: "wrench" }[kind] || "circle";
 }
 
 function trajectoryPreview(value, limit = 220) {
@@ -1203,6 +1274,7 @@ function trajectoryPreview(value, limit = 220) {
 
 function trajectoryRowTitle(record) {
   if (record.kind === "input") return trajectoryPreview(record.input) || "空请求";
+  if (record.kind === "workflow") return record.title || record.id || "Workflow step";
   if (record.kind === "model") return record.model || record.title || "LLM response";
   return describeToolOperation({
     toolName: record.invocationName || record.title,
@@ -1237,9 +1309,11 @@ function trajectoryLoadedToolsSummary(record, limit = 3) {
 }
 
 function trajectoryRequestSummary(records) {
+  const workflows = records.filter((record) => record.kind === "workflow").length;
   const models = records.filter((record) => record.kind === "model").length;
   const tools = records.filter((record) => record.kind === "tool").length;
   const parts = [`${records.length} 条记录`];
+  if (workflows) parts.push(`${workflows} 个 Workflow 步骤`);
   if (models) parts.push(`${models} 次模型响应`);
   if (tools) parts.push(`${tools} 次工具调用`);
   return parts.join(" · ");
