@@ -504,7 +504,12 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.ProxyResponseBody =
             """{"preferred_cuisines":["Italian","Japanese"],"budget_cap":200}""";
         var source = CreateSource(handler);
-        var provider = new NyxIdWorkflowInputPreferenceContextProvider(source);
+        var provider = new NyxIdWorkflowInputPreferenceContextProvider(
+            source,
+            new AdmittedAgentToolExecutor(
+                AlwaysStartingAgentToolAdmissionLedger.Instance,
+                new AppendedVerificationAuditTrail(),
+                new StableVerificationIdentityHasher()));
 
         using var scope = PushContext("user-token");
         var context = await provider.ReadAsync(

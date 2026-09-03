@@ -185,9 +185,30 @@ public static class MainnetChatEndpoints
             var report = await workflowQueryService
                 .GetWorkflowRunReportArtifactAsync(actorId, ct)
                 .ConfigureAwait(false);
-            if (!TryResolveCurrentWaitingSignal(report, runId, out runId, out var stepId, out var signalName))
+            if (!TryResolveCurrentWaitingSignal(report, runId, out runId, out var stepId, out var signalName,
+                    out var waitingPrompt))
             {
                 return false;
+            }
+
+            if (chatHistoryCommandPort is not null)
+            {
+                var reportUpdatedAt = report?.UpdatedAt ?? default;
+                var timeoutHoldObservedAt = reportUpdatedAt == default
+                    ? DateTimeOffset.UnixEpoch
+                    : reportUpdatedAt;
+                await PersistTimeoutHoldNoticeIfNeededAsync(
+                        chatHistoryCommandPort,
+                        scopeId,
+                        conversationId,
+                        actorId,
+                        runId,
+                        stepId,
+                        signalName,
+                        waitingPrompt,
+                        timeoutHoldObservedAt,
+                        ct)
+                    .ConfigureAwait(false);
             }
 
             var clientRequestId = TryGetString(body, "clientRequestId") ?? Guid.NewGuid().ToString("N");
@@ -292,6 +313,60 @@ public static class MainnetChatEndpoints
                     conversationId);
             return false;
         }
+    }
+
+    private static async Task PersistTimeoutHoldNoticeIfNeededAsync(
+        IChatHistoryCommandPort chatHistoryCommandPort,
+        string scopeId,
+        string conversationId,
+        string actorId,
+        string runId,
+        string stepId,
+        string signalName,
+        string waitingPrompt,
+        DateTimeOffset observedAt,
+        CancellationToken ct)
+    {
+        if (!LooksLikeTimeoutHoldWaitingPrompt(waitingPrompt))
+            return;
+
+        var deliveryId = $"workflow-timeout-hold:{scopeId}:{conversationId}:{actorId}:{runId}:{stepId}";
+        var commandId = $"{runId}:{stepId}:timeout-hold";
+        await chatHistoryCommandPort.ReserveTurnDeliveryAsync(
+                new ChatHistoryTurnDeliveryReservation(
+                    deliveryId,
+                    scopeId,
+                    conversationId,
+                    $"turn-{commandId}",
+                    string.Empty,
+                    actorId,
+                    commandId,
+                    commandId,
+                    signalName,
+                    false),
+                ct)
+            .ConfigureAwait(false);
+        await chatHistoryCommandPort.NotifyTurnTerminalAsync(
+                new ChatHistoryTurnTerminalNotification(
+                    deliveryId,
+                    actorId,
+                    commandId,
+                    ChatHistoryTurnTerminalStatus.Completed,
+                    waitingPrompt,
+                    string.Empty,
+                    observedAt),
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private static bool LooksLikeTimeoutHoldWaitingPrompt(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        return value.Contains("timeout", StringComparison.OrdinalIgnoreCase) &&
+               (value.Contains("held", StringComparison.OrdinalIgnoreCase) ||
+                value.Contains("hold", StringComparison.OrdinalIgnoreCase));
     }
 
     private static async Task<(ChatHistoryTurnTerminalStatus Status, string Text)?> TryReadWorkflowTerminalAsync(
@@ -403,17 +478,20 @@ public static class MainnetChatEndpoints
         string fallbackRunId,
         out string runId,
         out string stepId,
-        out string signalName)
+        out string signalName,
+        out string prompt)
     {
         runId = fallbackRunId;
         stepId = string.Empty;
         signalName = string.Empty;
+        prompt = string.Empty;
         if (report?.CurrentWaitingSignal is not { } signal)
             return false;
 
         runId = string.IsNullOrWhiteSpace(signal.RunId) ? fallbackRunId : signal.RunId.Trim();
         stepId = signal.StepId?.Trim() ?? string.Empty;
         signalName = signal.SignalName?.Trim() ?? string.Empty;
+        prompt = signal.Prompt?.Trim() ?? string.Empty;
         return !string.IsNullOrWhiteSpace(runId) &&
                !string.IsNullOrWhiteSpace(stepId) &&
                !string.IsNullOrWhiteSpace(signalName);

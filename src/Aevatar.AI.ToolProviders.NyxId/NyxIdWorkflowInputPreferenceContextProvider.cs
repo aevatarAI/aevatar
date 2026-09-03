@@ -1,10 +1,12 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
 
 public sealed class NyxIdWorkflowInputPreferenceContextProvider(
-    NyxIdConnectedServiceToolSource connectedServiceToolSource)
+    NyxIdConnectedServiceToolSource connectedServiceToolSource,
+    IAgentToolExecutionPort toolExecutionPort)
     : IWorkflowInputPreferenceContextProvider
 {
     private const string ReadProjectionKind = "connected_service_read_projection";
@@ -17,13 +19,19 @@ public sealed class NyxIdWorkflowInputPreferenceContextProvider(
         var sources = new List<WorkflowInputPreferenceContextSource>();
         foreach (var tool in tools.Where(IsPreferenceContextTool))
         {
-            var outcome = await tool.ExecuteWithOutcomeAsync(
-                    request.ToolContext?.Request.CallId ?? string.Empty,
-                    tool.Name,
-                    "{}",
+            var outcome = await toolExecutionPort.ExecuteAsync(
+                    new AgentToolExecutionRequest(
+                        tool,
+                        "{}",
+                        BuildExecutionContext(request, tool),
+                        AgentToolApprovalContinuationMode.None,
+                        null),
                     ct)
                 .ConfigureAwait(false);
-            if (TryReadSucceededProjectionData(outcome.ResultJson, out var dataJson))
+            if (outcome.Kind is (AgentToolExecutionOutcomeKind.Executed or
+                    AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete) &&
+                outcome.Receipt.Status == AgentToolReceiptStatus.Success &&
+                TryReadSucceededProjectionData(outcome.ResultJson, out var dataJson))
             {
                 var admission = ((IAgentToolOperationAdmissionOwner)tool).OperationAdmission;
                 sources.Add(new WorkflowInputPreferenceContextSource(
@@ -37,6 +45,30 @@ public sealed class NyxIdWorkflowInputPreferenceContextProvider(
         return sources.Count == 0
             ? WorkflowInputPreferenceContext.Empty
             : new WorkflowInputPreferenceContext(sources);
+    }
+
+    private static AgentToolExecutionContext BuildExecutionContext(
+        WorkflowInputPreferenceContextRequest request,
+        IAgentTool tool)
+    {
+        var context = request.ToolContext ?? AgentToolExecutionContext.Empty;
+        var requestId = Normalize(context.Request.RequestId) ??
+                        $"workflow-preference-context:{Normalize(request.WorkflowId) ?? "unknown"}";
+        var callId = Normalize(context.Request.CallId) ??
+                     $"{requestId}:{tool.Name}";
+        var owner = context.ExecutionOwner.Kind == AgentToolExecutionOwnerKind.Unspecified ||
+                    string.IsNullOrWhiteSpace(context.ExecutionOwner.OwnerId)
+            ? AgentToolExecutionOwners.HostService(nameof(NyxIdWorkflowInputPreferenceContextProvider))
+            : context.ExecutionOwner;
+        return context with
+        {
+            Request = context.Request with
+            {
+                RequestId = requestId,
+                CallId = callId,
+            },
+            ExecutionOwner = owner,
+        };
     }
 
     private static bool IsPreferenceContextTool(IAgentTool tool)
@@ -157,4 +189,7 @@ public sealed class NyxIdWorkflowInputPreferenceContextProvider(
         admission.Identity is AgentToolOperationIdentity.PublishedEndpoint published
             ? published.EndpointId
             : string.Empty;
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

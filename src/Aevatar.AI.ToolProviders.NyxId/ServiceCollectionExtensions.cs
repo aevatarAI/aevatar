@@ -81,7 +81,12 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<NyxIdWorkflowAgentToolSource>();
         services.TryAddTransient<NyxIdConnectedServiceInventoryToolSource>();
         services.TryAddTransient<NyxIdConnectedServiceToolSource>();
-        services.TryAddTransient<IWorkflowInputPreferenceContextProvider, NyxIdWorkflowInputPreferenceContextProvider>();
+        services.TryAddTransient<IWorkflowInputPreferenceContextProvider>(sp =>
+            sp.GetService<IAgentToolExecutionPort>() is { } toolExecutionPort
+                ? new NyxIdWorkflowInputPreferenceContextProvider(
+                    sp.GetRequiredService<NyxIdConnectedServiceToolSource>(),
+                    toolExecutionPort)
+                : EmptyWorkflowInputPreferenceContextProvider.Instance);
         services.TryAddTransient<INyxIdAdmittedOperationToolFactory,
             NyxIdAdmittedOperationToolFactory>();
 
@@ -246,6 +251,16 @@ public static class ServiceCollectionExtensions
                string.Equals(leftUri.Host, rightUri.Host, StringComparison.OrdinalIgnoreCase) &&
                leftUri.Port == rightUri.Port &&
                string.Equals(leftUri.AbsolutePath, rightUri.AbsolutePath, StringComparison.Ordinal);
+    }
+
+    private sealed class EmptyWorkflowInputPreferenceContextProvider : IWorkflowInputPreferenceContextProvider
+    {
+        public static EmptyWorkflowInputPreferenceContextProvider Instance { get; } = new();
+
+        public ValueTask<WorkflowInputPreferenceContext> ReadAsync(
+            WorkflowInputPreferenceContextRequest request,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(WorkflowInputPreferenceContext.Empty);
     }
 
     private sealed class NyxIdApiAccessRegistrationMarker;

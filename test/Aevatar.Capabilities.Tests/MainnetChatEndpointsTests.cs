@@ -191,6 +191,105 @@ public sealed class MainnetChatEndpointsTests
     }
 
     [Fact]
+    public async Task WorkflowSignalContinuation_ShouldPersistTimeoutHoldNoticeBeforePostTimeoutChoice()
+    {
+        const string json = """
+            {
+              "type":"text",
+              "conversationId":"nyxid-chat-1",
+              "prompt":"1",
+              "clientRequestId":"client-1"
+            }
+            """;
+        var recoveryPort = new RecordingChatHistoryCreateRecoveryReadPort
+        {
+            Recovery = new WorkflowChatHistoryCreateRecovery(
+                WorkflowChatHistoryCreateRecoveryStatus.Bound,
+                "scope-1",
+                "create-command",
+                "nyxid-chat-1",
+                "turn-1",
+                "workflow-actor-1",
+                "create-command",
+                "create-correlation",
+                "fingerprint",
+                7,
+                DateTimeOffset.UtcNow),
+        };
+        var waitingSnapshot = new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor-1",
+            ScopeId = "scope-1",
+            RunId = "run-1",
+            CompletionStatus = WorkflowRunCompletionStatus.WaitingForSignal,
+            ActivityWaiting = new WorkflowRunActivityWaitingSnapshot
+            {
+                Availability = "available",
+                WaitingKind = "signal",
+                StepId = "wait_for_post_timeout_choice",
+                Prompt = "Three venues are held after timeout. Please choose one held dinner option.",
+            },
+        };
+        var completedSnapshot = new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor-1",
+            ScopeId = "scope-1",
+            RunId = "run-1",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            LastOutput = "{\"kept\":\"Pasta Bar\"}",
+        };
+        var currentStateQueryPort = new SequencedWorkflowExecutionCurrentStateQueryPort(waitingSnapshot, completedSnapshot);
+        var signalDispatchService = new RecordingWorkflowSignalDispatchService();
+        var chatStateQueryPort = new FixedNyxIdChatConversationStateQueryPort(null);
+        var workflowQueryService = new FixedWorkflowExecutionQueryApplicationService(new WorkflowRunReport
+        {
+            CurrentWaitingSignal = new WorkflowRunWaitingSignal
+            {
+                RunId = "run-1",
+                StepId = "wait_for_post_timeout_choice",
+                SignalName = "dinner_date_user_choice_after_timeout",
+                Prompt = "Three venues are held after timeout. Please choose one held dinner option. 1. Pasta Bar 2. Tipo Pasta Bar 3. Kamoshita",
+                TimeoutMs = 600000,
+            },
+        });
+        var workflowSignalAcceptancePort = new RecordingWorkflowSignalAcceptancePort();
+        var chatHistoryCommandPort = new RecordingChatHistoryCommandPort();
+        var http = CreateAuthenticatedJsonContext(
+            json,
+            services =>
+            {
+                services.AddSingleton<IWorkflowChatHistoryCreateRecoveryReadPort>(recoveryPort);
+                services.AddSingleton<IWorkflowExecutionCurrentStateQueryPort>(currentStateQueryPort);
+                services.AddSingleton<IWorkflowExecutionQueryApplicationService>(workflowQueryService);
+                services.AddSingleton<INyxIdChatConversationStateQueryPort>(chatStateQueryPort);
+                services.AddSingleton<INyxIdChatWorkflowSignalAcceptancePort>(workflowSignalAcceptancePort);
+                services.AddSingleton<IChatHistoryCommandPort>(chatHistoryCommandPort);
+                services.AddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(signalDispatchService);
+            });
+        var classification = await MainnetChatEndpoints.ClassifyRequestAsync(http.Request);
+
+        var handled = await MainnetChatEndpoints.TryHandleWorkflowSignalContinuationAsync(
+            http,
+            classification.Body!.Value,
+            CancellationToken.None);
+
+        handled.Should().BeTrue();
+        chatHistoryCommandPort.Reservations.Should().HaveCount(2);
+        chatHistoryCommandPort.TerminalNotifications.Should().HaveCount(2);
+        chatHistoryCommandPort.Reservations[0].DeliveryId.Should()
+            .Be("workflow-timeout-hold:scope-1:nyxid-chat-1:workflow-actor-1:run-1:wait_for_post_timeout_choice");
+        chatHistoryCommandPort.Reservations[0].UserText.Should().BeEmpty();
+        chatHistoryCommandPort.TerminalNotifications[0].Text.Should().Contain("Three venues are held after timeout");
+        chatHistoryCommandPort.TerminalNotifications[0].Text.Should().Contain("Pasta Bar");
+        chatHistoryCommandPort.TerminalNotifications[0].Text.Should().Contain("Tipo Pasta Bar");
+        chatHistoryCommandPort.TerminalNotifications[0].Text.Should().Contain("Kamoshita");
+        chatHistoryCommandPort.Reservations[1].DeliveryId.Should()
+            .Be("workflow-signal:scope-1:nyxid-chat-1:client-1");
+        chatHistoryCommandPort.Reservations[1].UserText.Should().Be("1");
+        chatHistoryCommandPort.TerminalNotifications[1].Text.Should().Be("Pasta Bar is selected.");
+    }
+
+    [Fact]
     public async Task WorkflowSignalContinuation_ShouldRouteFromRecoveryWhenConversationHasNoPendingWorkflowSignal()
     {
         const string json = """
@@ -472,6 +571,43 @@ public sealed class MainnetChatEndpointsTests
             Task.FromResult<WorkflowActorProjectionState?>(null);
     }
 
+    private sealed class SequencedWorkflowExecutionCurrentStateQueryPort(
+        params WorkflowActorSnapshot?[] snapshots) : IWorkflowExecutionCurrentStateQueryPort
+    {
+        private int _index;
+
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
+
+        public List<string> ActorIds { get; } = [];
+
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ActorIds.Add(actorId);
+            var snapshot = _index < snapshots.Length
+                ? snapshots[_index]
+                : snapshots.LastOrDefault();
+            _index++;
+            return Task.FromResult(snapshot);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(
+            string actorId,
+            CancellationToken ct = default) =>
+            Task.FromResult<WorkflowActorProjectionState?>(null);
+    }
+
     private static NyxIdChatConversationStateQueryResult CreatePendingWorkflowSignalState() =>
         NyxIdChatConversationStateQueryResult.Current(new NyxIdChatConversationStateSnapshot(
             "nyxid-chat-1",
@@ -602,6 +738,58 @@ public sealed class MainnetChatEndpointsTests
             Commands.Add(command);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class RecordingChatHistoryCommandPort : IChatHistoryCommandPort
+    {
+        public List<ChatHistoryConversationInitialization> ConversationInitializations { get; } = [];
+
+        public List<ChatHistoryTurnDeliveryReservation> Reservations { get; } = [];
+
+        public List<ChatHistoryTurnTerminalNotification> TerminalNotifications { get; } = [];
+
+        public List<IReadOnlyList<StoredChatMessage>> SavedMessageBatches { get; } = [];
+
+        public Task InitializeConversationAsync(
+            ChatHistoryConversationInitialization request,
+            CancellationToken ct = default)
+        {
+            ConversationInitializations.Add(request);
+            return Task.CompletedTask;
+        }
+
+        public Task ReserveTurnDeliveryAsync(
+            ChatHistoryTurnDeliveryReservation request,
+            CancellationToken ct = default)
+        {
+            Reservations.Add(request);
+            return Task.CompletedTask;
+        }
+
+        public Task NotifyTurnTerminalAsync(
+            ChatHistoryTurnTerminalNotification notification,
+            CancellationToken ct = default)
+        {
+            TerminalNotifications.Add(notification);
+            return Task.CompletedTask;
+        }
+
+        public Task SaveMessagesAsync(
+            string scopeId,
+            string conversationId,
+            ConversationMeta meta,
+            IReadOnlyList<StoredChatMessage> messages,
+            CancellationToken ct = default)
+        {
+            SavedMessageBatches.Add(messages);
+            return Task.CompletedTask;
+        }
+
+        public Task<ChatHistoryDeleteResult> DeleteConversationAsync(
+            string scopeId,
+            string conversationId,
+            CancellationToken ct = default) =>
+            Task.FromResult(ChatHistoryDeleteResult.Accepted());
     }
 
     private sealed class RecordingWorkflowSignalDispatchService
