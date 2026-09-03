@@ -46,6 +46,17 @@ function shallowArrayItemsEqual(
   return left.every((item, index) => shallowEqual(item, right[index]));
 }
 
+function readEdgePathOptions(edge: Edge): unknown {
+  return 'pathOptions' in edge ? edge.pathOptions : undefined;
+}
+
+function edgePathOptionsMatch(previous: Edge, incoming: Edge): boolean {
+  return shallowEqual(
+    readEdgePathOptions(previous),
+    readEdgePathOptions(incoming),
+  );
+}
+
 function nodeSemanticsMatch(previous: Node, incoming: Node): boolean {
   return (
     previous.id === incoming.id &&
@@ -112,15 +123,30 @@ function edgeSemanticsMatch(previous: Edge, incoming: Edge): boolean {
     previous.ariaLabel === incoming.ariaLabel &&
     previous.ariaRole === incoming.ariaRole &&
     previous.className === incoming.className &&
-    shallowEqual(previous.domAttributes, incoming.domAttributes)
+    shallowEqual(previous.domAttributes, incoming.domAttributes) &&
+    edgePathOptionsMatch(previous, incoming)
   );
 }
 
+/**
+ * Reconciles React Flow user nodes by ID while preserving unchanged references.
+ * IDs must be unique strings within each input; duplicate IDs are unsupported.
+ */
+export function reconcileGraphNodes<NodeType extends Node>(
+  previous: NodeType[],
+  incoming: readonly NodeType[],
+  selectedNodeId?: string,
+): NodeType[];
 export function reconcileGraphNodes<NodeType extends Node>(
   previous: readonly NodeType[],
   incoming: readonly NodeType[],
   selectedNodeId?: string,
-): NodeType[] {
+): readonly NodeType[];
+export function reconcileGraphNodes<NodeType extends Node>(
+  previous: readonly NodeType[],
+  incoming: readonly NodeType[],
+  selectedNodeId?: string,
+): readonly NodeType[] {
   const previousById = new Map(
     previous.map((element) => [element.id, element]),
   );
@@ -148,13 +174,25 @@ export function reconcileGraphNodes<NodeType extends Node>(
     return nextElement;
   });
 
-  return unchanged ? (previous as NodeType[]) : reconciled;
+  return unchanged ? previous : reconciled;
 }
 
+/**
+ * Reconciles React Flow user edges by ID while preserving unchanged references.
+ * IDs must be unique strings within each input; duplicate IDs are unsupported.
+ */
+export function reconcileGraphEdges<EdgeType extends Edge>(
+  previous: EdgeType[],
+  incoming: readonly EdgeType[],
+): EdgeType[];
 export function reconcileGraphEdges<EdgeType extends Edge>(
   previous: readonly EdgeType[],
   incoming: readonly EdgeType[],
-): EdgeType[] {
+): readonly EdgeType[];
+export function reconcileGraphEdges<EdgeType extends Edge>(
+  previous: readonly EdgeType[],
+  incoming: readonly EdgeType[],
+): readonly EdgeType[] {
   const previousById = new Map(
     previous.map((element) => [element.id, element]),
   );
@@ -175,5 +213,5 @@ export function reconcileGraphEdges<EdgeType extends Edge>(
     return incomingElement;
   });
 
-  return unchanged ? (previous as EdgeType[]) : reconciled;
+  return unchanged ? previous : reconciled;
 }

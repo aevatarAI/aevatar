@@ -1,4 +1,9 @@
-import { type Edge, type Node, Position } from '@xyflow/react';
+import {
+  type BuiltInEdge,
+  type Edge,
+  type Node,
+  Position,
+} from '@xyflow/react';
 
 import {
   reconcileGraphEdges,
@@ -23,6 +28,26 @@ const edge = (
   target,
   ...overrides,
 });
+
+function assertReconcilerOwnershipTypes(): void {
+  const mutableNodes: Node[] = [];
+  const mutableEdges: Edge[] = [];
+  reconcileGraphNodes(mutableNodes, []).push(node('step:mutable'));
+  reconcileGraphEdges(mutableEdges, []).push(
+    edge('edge:mutable', 'step:source', 'step:target'),
+  );
+
+  const readonlyNodes: readonly Node[] = [];
+  const readonlyEdges: readonly Edge[] = [];
+  // @ts-expect-error A readonly previous node array produces a readonly result.
+  reconcileGraphNodes(readonlyNodes, []).push(node('step:readonly'));
+  // @ts-expect-error A readonly previous edge array produces a readonly result.
+  reconcileGraphEdges(readonlyEdges, []).push(
+    edge('edge:readonly', 'step:source', 'step:target'),
+  );
+}
+
+void assertReconcilerOwnershipTypes;
 
 describe('reconcileGraphElements', () => {
   it('returns the previous node array and objects when incoming nodes are unchanged', () => {
@@ -257,17 +282,31 @@ describe('reconcileGraphElements', () => {
     expected: unknown;
   }>([
     {
-      name: 'endpoint',
+      name: 'source endpoint',
       previous: { source: 'step:source-before' },
       incoming: { source: 'step:source-after' },
       read: (candidate) => candidate.source,
       expected: 'step:source-after',
     },
     {
-      name: 'handle',
+      name: 'target endpoint',
+      previous: { target: 'step:target-before' },
+      incoming: { target: 'step:target-after' },
+      read: (candidate) => candidate.target,
+      expected: 'step:target-after',
+    },
+    {
+      name: 'source handle',
       previous: { sourceHandle: 'handle:before' },
       incoming: { sourceHandle: 'handle:after' },
       read: (candidate) => candidate.sourceHandle,
+      expected: 'handle:after',
+    },
+    {
+      name: 'target handle',
+      previous: { targetHandle: 'handle:before' },
+      incoming: { targetHandle: 'handle:after' },
+      read: (candidate) => candidate.targetHandle,
       expected: 'handle:after',
     },
     {
@@ -311,6 +350,27 @@ describe('reconcileGraphElements', () => {
       incoming: { labelBgStyle: { fill: '#ffffff' } },
       read: (candidate) => candidate.labelBgStyle,
       expected: { fill: '#ffffff' },
+    },
+    {
+      name: 'label background visibility',
+      previous: { labelShowBg: false },
+      incoming: { labelShowBg: true },
+      read: (candidate) => candidate.labelShowBg,
+      expected: true,
+    },
+    {
+      name: 'label background padding',
+      previous: { labelBgPadding: [4, 6] },
+      incoming: { labelBgPadding: [8, 10] },
+      read: (candidate) => candidate.labelBgPadding,
+      expected: [8, 10],
+    },
+    {
+      name: 'label background radius',
+      previous: { labelBgBorderRadius: 2 },
+      incoming: { labelBgBorderRadius: 6 },
+      read: (candidate) => candidate.labelBgBorderRadius,
+      expected: 6,
     },
     {
       name: 'markers',
@@ -361,11 +421,39 @@ describe('reconcileGraphElements', () => {
       expected: true,
     },
     {
+      name: 'focusable flag',
+      previous: { focusable: false },
+      incoming: { focusable: true },
+      read: (candidate) => candidate.focusable,
+      expected: true,
+    },
+    {
+      name: 'reconnectable setting',
+      previous: { reconnectable: false },
+      incoming: { reconnectable: 'source' },
+      read: (candidate) => candidate.reconnectable,
+      expected: 'source',
+    },
+    {
+      name: 'interaction width',
+      previous: { interactionWidth: 10 },
+      incoming: { interactionWidth: 24 },
+      read: (candidate) => candidate.interactionWidth,
+      expected: 24,
+    },
+    {
       name: 'z-index',
       previous: { zIndex: 1 },
       incoming: { zIndex: 2 },
       read: (candidate) => candidate.zIndex,
       expected: 2,
+    },
+    {
+      name: 'ARIA label',
+      previous: { ariaLabel: 'Before edge' },
+      incoming: { ariaLabel: 'After edge' },
+      read: (candidate) => candidate.ariaLabel,
+      expected: 'After edge',
     },
     {
       name: 'ARIA role',
@@ -380,6 +468,13 @@ describe('reconcileGraphElements', () => {
       incoming: { domAttributes: { tabIndex: 1 } },
       read: (candidate) => candidate.domAttributes,
       expected: { tabIndex: 1 },
+    },
+    {
+      name: 'class name',
+      previous: { className: 'edge-before' },
+      incoming: { className: 'edge-after' },
+      read: (candidate) => candidate.className,
+      expected: 'edge-after',
     },
   ])('replaces only the edge whose $name changes', ({
     previous: before,
@@ -417,6 +512,42 @@ describe('reconcileGraphElements', () => {
     expect(result[0]).toBe(previousStable);
     expect(result[1]).toBe(incomingChanged);
     expect(read(result[1])).toEqual(expected);
+  });
+
+  it('replaces a built-in edge when its path options change', () => {
+    const previousChanged = {
+      id: 'edge:path-options',
+      source: 'step:path-source',
+      target: 'step:path-target',
+      type: 'smoothstep',
+      pathOptions: { offset: 10 },
+    } satisfies BuiltInEdge;
+    const previousStable = {
+      id: 'edge:path-stable',
+      source: 'step:stable-source',
+      target: 'step:stable-target',
+      type: 'smoothstep',
+      pathOptions: { offset: 20 },
+    } satisfies BuiltInEdge;
+    const incomingChanged = {
+      ...previousChanged,
+      pathOptions: { offset: 40 },
+    } satisfies BuiltInEdge;
+    const incomingStable = {
+      ...previousStable,
+      pathOptions: { offset: 20 },
+    } satisfies BuiltInEdge;
+    const previous = [previousChanged, previousStable];
+
+    const result = reconcileGraphEdges(previous, [
+      incomingChanged,
+      incomingStable,
+    ]);
+
+    expect(result).not.toBe(previous);
+    expect(result[0]).toBe(incomingChanged);
+    expect(result[0].pathOptions.offset).toBe(40);
+    expect(result[1]).toBe(previousStable);
   });
 
   it('preserves incoming node additions, removals, and ordering', () => {
@@ -465,5 +596,20 @@ describe('reconcileGraphElements', () => {
     expect(result.some((candidate) => candidate.id === 'edge:removed')).toBe(
       false,
     );
+  });
+
+  it('returns unchanged frozen readonly arrays by identity', () => {
+    const previousNodes = Object.freeze([node('step:frozen')]);
+    const previousEdges = Object.freeze([
+      edge('edge:frozen', 'step:frozen', 'step:target'),
+    ]);
+
+    const nodes = reconcileGraphNodes(previousNodes, [{ ...previousNodes[0] }]);
+    const edges = reconcileGraphEdges(previousEdges, [{ ...previousEdges[0] }]);
+
+    expect(nodes).toBe(previousNodes);
+    expect(edges).toBe(previousEdges);
+    expect(Object.isFrozen(nodes)).toBe(true);
+    expect(Object.isFrozen(edges)).toBe(true);
   });
 });
