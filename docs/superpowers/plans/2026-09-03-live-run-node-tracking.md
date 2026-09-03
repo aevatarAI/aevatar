@@ -161,12 +161,13 @@ to GitHub CI.
 
 **Files:**
 - Modify: `apps/aevatar-console-web/src/shared/workflows/WorkflowExecutionLogsPanel.tsx`
+- Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/workflows/WorkflowEditorPage.tsx`
 - Modify: `apps/aevatar-console-web/src/pages/team-member-workflow-studio/components/WorkflowStudioExecutionPanel.test.tsx`
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/index.test.tsx`
 - Modify: `apps/aevatar-console-web/src/locales/en-US.ts`
 - Modify: `apps/aevatar-console-web/src/locales/zh-CN.ts`
 
-- [ ] **Step 1: Write definition-first component regressions**
+- [x] **Step 1: Write definition-first component regressions**
 
 Pass three distinct workflow node snapshots to `ControlledExecutionPanel`.
 With only `RUN_STARTED`, assert that all three node rows exist in definition
@@ -175,7 +176,7 @@ assert that only the first row becomes Running and selected while the later rows
 remain Pending. Add a terminal execution case asserting that definition nodes
 without an attempt say `Not run`.
 
-- [ ] **Step 2: Update the single-chunk page regression**
+- [x] **Step 2: Update the single-chunk page regression**
 
 Keep the existing controlled animation-frame boundary, but replace the old
 assertion that `step-beta` is absent with:
@@ -188,10 +189,10 @@ expect(betaRow).toHaveTextContent('Pending');
 expect(betaRow).toBeDisabled();
 ```
 
-After the first paint boundary, assert that the same row becomes Running,
-selected, and enabled.
+After the first paint boundary, query the row again and assert that its real
+runtime attempt is Running, selected, and enabled.
 
-- [ ] **Step 3: Run the focused cases and verify RED**
+- [x] **Step 3: Run the focused cases and verify RED**
 
 Run:
 
@@ -206,7 +207,7 @@ pnpm --dir apps/aevatar-console-web exec jest --runInBand \
 Expected: FAIL because `buildNodeOverviewEntries` currently drops every
 definition node without a matching runtime log entry.
 
-- [ ] **Step 4: Merge definition placeholders with runtime attempts**
+- [x] **Step 4: Merge definition placeholders with runtime attempts**
 
 Extend the presentation-only status union with `pending` and `not-run`. Build a
 placeholder entry for each unique definition node without a logged attempt:
@@ -245,9 +246,12 @@ function createDefinitionNodeEntry(
 
 Keep placeholders nonselectable and without timestamps or details. Replace a
 placeholder with all real attempt entries when logs for that step exist, and
-append runtime-only nodes after the definition order.
+append runtime-only nodes after the definition order. In Workflow Activity,
+capture `buildWorkflowExecutionNodeSnapshots(editor.document)` in component
+state when the published run starts so edits made during that run cannot alter
+its submitted inventory; reset that snapshot when changing workflow routes.
 
-- [ ] **Step 5: Add honest status copy and visuals**
+- [x] **Step 5: Add honest status copy and visuals**
 
 Map `pending` to the existing localized Pending label and a neutral clock icon.
 Add `teamMemberWorkflowStudio.executionPanel.status.notRun` with English
@@ -255,7 +259,7 @@ Add `teamMemberWorkflowStudio.executionPanel.status.notRun` with English
 interaction-level `waiting` separate because it describes a node that has
 already started and is waiting for input or a signal.
 
-- [ ] **Step 6: Verify GREEN and deliver the PR update**
+- [x] **Step 6: Verify GREEN and deliver the PR update**
 
 Run the focused RED command and the dependency-analyzer-selected related tests,
 then changed-file Biome, `bash tools/ci/test_stability_guards.sh`, the vNext

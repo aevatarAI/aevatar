@@ -2740,7 +2740,19 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
   });
 
-  function arrangeSavedDraftPublication(): void {
+  function arrangeSavedDraftPublication(
+    steps: Array<{ id: string; type: string }> = [
+      { id: 'step-alpha', type: 'llm_call' },
+    ],
+  ): void {
+    const yaml = `name: workflow_alpha\nroles: []\nsteps:\n${steps
+      .map((step) => `  - id: ${step.id}\n    type: ${step.type}\n`)
+      .join('')}`;
+    const document = {
+      name: 'workflow_alpha',
+      roles: [],
+      steps,
+    };
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
     mockCreateWorkflowRevisionIdentityCandidate.mockReturnValue(
@@ -2753,31 +2765,19 @@ describe('Workflow Activity vNext editor', () => {
       filePath: '/workflows/workflow-alpha.yaml',
       directoryId: 'directory-alpha',
       directoryLabel: 'Workflows',
-      yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+      yaml,
       updatedAtUtc: '2026-08-06T10:00:00Z',
-      document: {
-        name: 'workflow_alpha',
-        roles: [],
-        steps: [{ id: 'step-alpha', type: 'llm_call' }],
-      },
+      document,
       draftExists: true,
       findings: [],
     });
     mockStudioApi.parseYaml.mockResolvedValue({
-      document: {
-        name: 'workflow_alpha',
-        roles: [],
-        steps: [{ id: 'step-alpha', type: 'llm_call' }],
-      },
+      document,
       findings: [],
     });
     mockStudioApi.serializeYaml.mockResolvedValue({
-      yaml: 'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
-      document: {
-        name: 'workflow_alpha',
-        roles: [],
-        steps: [{ id: 'step-alpha', type: 'llm_call' }],
-      },
+      yaml,
+      document,
       findings: [],
     });
     mockStudioApi.previewExplicitRequests.mockResolvedValue({
@@ -2795,8 +2795,10 @@ describe('Workflow Activity vNext editor', () => {
     });
   }
 
-  function arrangeObservedWorkflowPublication(): void {
-    arrangeSavedDraftPublication();
+  function arrangeObservedWorkflowPublication(
+    steps?: Array<{ id: string; type: string }>,
+  ): void {
+    arrangeSavedDraftPublication(steps);
     const observedWorkflow = {
       available: true,
       scopeId: 'scope-alpha',
@@ -2827,8 +2829,10 @@ describe('Workflow Activity vNext editor', () => {
     });
   }
 
-  async function renderPublishedWorkflowPage(): Promise<void> {
-    arrangeObservedWorkflowPublication();
+  async function renderPublishedWorkflowPage(
+    steps?: Array<{ id: string; type: string }>,
+  ): Promise<void> {
+    arrangeObservedWorkflowPublication(steps);
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     await publishObservedWorkflow();
   }
@@ -4746,10 +4750,14 @@ describe('Workflow Activity vNext editor', () => {
               },
             },
           },
+          { runFinished: { runId: 'run-paced-alpha' } },
         ]),
       );
 
-      await renderPublishedWorkflowPage();
+      await renderPublishedWorkflowPage([
+        { id: 'step-alpha', type: 'assign' },
+        { id: 'step-beta', type: 'transform' },
+      ]);
       fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
       fireEvent.click(
         await screen.findByRole('button', { name: 'Start published run' }),
@@ -4762,27 +4770,50 @@ describe('Workflow Activity vNext editor', () => {
         'workflow-execution-log-row-node-step-alpha',
       );
       expect(alphaRow).toHaveTextContent('Running');
+      const pendingBetaRow = within(logs).getByTestId(
+        'workflow-execution-log-row-node-step-beta',
+      );
+      expect(pendingBetaRow).toHaveTextContent('Pending');
+      expect(pendingBetaRow).toBeDisabled();
+
+      mockStudioApi.serializeYaml.mockImplementationOnce(
+        async ({ document: submittedDocument }) => ({
+          document: submittedDocument,
+          findings: [],
+          yaml: 'serialized',
+        }),
+      );
+      fireEvent.click(await screen.findByRole('button', { name: 'Add node' }));
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Insert Assign node' }),
+      );
+      await waitFor(() =>
+        expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+          document: expect.objectContaining({
+            steps: expect.arrayContaining([
+              expect.objectContaining({ id: 'assign_step' }),
+            ]),
+          }),
+        }),
+      );
       expect(
-        within(logs).queryByTestId('workflow-execution-log-row-node-step-beta'),
+        within(logs).queryByTestId(
+          'workflow-execution-log-row-node-assign_step',
+        ),
       ).not.toBeInTheDocument();
 
       await releasePaintBoundary();
 
       expect(alphaRow).toHaveTextContent('Success');
-      const betaRow = await within(logs).findByTestId(
+      const betaRow = within(logs).getByTestId(
         'workflow-execution-log-row-node-step-beta',
       );
       expect(betaRow).toHaveTextContent('Running');
       expect(betaRow).toHaveAttribute('aria-pressed', 'true');
+      expect(betaRow).toBeEnabled();
       await releasePaintBoundary();
       await waitFor(() =>
-        expect(
-          within(
-            screen.getByRole('complementary', {
-              name: 'Published run panel',
-            }),
-          ).getByRole('button', { name: 'Start published run' }),
-        ).toBeEnabled(),
+        expect(within(logs).getByText('succeeded')).toBeInTheDocument(),
       );
     } finally {
       Object.defineProperty(window, 'requestAnimationFrame', {

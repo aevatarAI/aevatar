@@ -1158,6 +1158,7 @@ const zhCNMessages = {
     '选择一条日志查看它的输入、输出和原始事件数据。',
   'teamMemberWorkflowStudio.executionPanel.steps': '步骤',
   'teamMemberWorkflowStudio.executionPanel.status.error': '错误',
+  'teamMemberWorkflowStudio.executionPanel.status.notRun': '未运行',
   'teamMemberWorkflowStudio.executionPanel.status.pending': '待运行',
   'teamMemberWorkflowStudio.executionPanel.status.recorded': '已记录',
   'teamMemberWorkflowStudio.executionPanel.status.running': '运行中',

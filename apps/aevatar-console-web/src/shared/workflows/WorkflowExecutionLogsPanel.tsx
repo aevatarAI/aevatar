@@ -5,6 +5,7 @@ import {
   CloseOutlined,
   CopyOutlined,
   DownOutlined,
+  MinusCircleOutlined,
   PauseCircleOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Segmented, Tag, Typography } from 'antd';
@@ -58,7 +59,7 @@ type WorkflowExecutionLogsPanelProps = {
 type OverviewMode = 'nodes' | 'events';
 type DetailPanelState = 'both' | 'input' | 'output';
 type OverviewEntryType = 'node' | 'run' | 'event';
-type ExecutionOverviewStatus = ExecutionLogStatus;
+type ExecutionOverviewStatus = ExecutionLogStatus | 'not-run' | 'pending';
 
 type ExecutionOverviewEntry = {
   readonly category: NonNullable<ExecutionLogItem['category']>;
@@ -147,6 +148,8 @@ const categoryColors: Record<
 
 const statusColors: Record<ExecutionOverviewStatus, string> = {
   error: 'red',
+  'not-run': 'default',
+  pending: 'default',
   recorded: 'default',
   running: 'processing',
   success: 'green',
@@ -232,6 +235,16 @@ function readStatusLabel(status: ExecutionOverviewStatus): string {
   switch (status) {
     case 'error':
       return t('teamMemberWorkflowStudio.executionPanel.status.error', 'Error');
+    case 'not-run':
+      return t(
+        'teamMemberWorkflowStudio.executionPanel.status.notRun',
+        'Not run',
+      );
+    case 'pending':
+      return t(
+        'teamMemberWorkflowStudio.executionPanel.status.pending',
+        'Pending',
+      );
     case 'recorded':
       return t(
         'teamMemberWorkflowStudio.executionPanel.status.recorded',
@@ -259,6 +272,10 @@ function renderStatusIcon(status: ExecutionOverviewStatus): React.ReactNode {
   switch (status) {
     case 'error':
       return <CloseCircleOutlined style={{ color: '#dc2626' }} />;
+    case 'not-run':
+      return <MinusCircleOutlined style={{ color: '#94a3b8' }} />;
+    case 'pending':
+      return <ClockCircleOutlined style={{ color: '#94a3b8' }} />;
     case 'recorded':
       return <CheckCircleOutlined style={{ color: '#64748b' }} />;
     case 'success':
@@ -497,6 +514,7 @@ function buildOverviewEntries(
 function buildNodeOverviewEntries(
   entries: readonly ExecutionOverviewEntry[],
   workflowNodes: WorkflowExecutionLogsPanelProps['workflowNodes'],
+  runIsTerminal: boolean,
 ): ExecutionOverviewEntry[] {
   const loggedNodeEntries = entries.filter((entry) => entry.rowType === 'node');
   if (!workflowNodes?.length) {
@@ -524,6 +542,33 @@ function buildNodeOverviewEntries(
       orderedEntries.push(...matchingEntries);
       return;
     }
+
+    orderedEntries.push({
+      category: 'step',
+      completedAt: '',
+      entryId: `node-definition:${stepId}`,
+      eventCount: 0,
+      eventType: '',
+      inputText: '',
+      interactionText: '',
+      logIndex: -1,
+      logIndexes: [],
+      meta: sanitizeVisibleText(node.targetRole),
+      outputText: '',
+      payloadText: '',
+      pendingText: '',
+      previewText: '',
+      rawText: '',
+      rowType: 'node',
+      startedAt: '',
+      status: runIsTerminal ? 'not-run' : 'pending',
+      stepId,
+      subtitle:
+        sanitizeVisibleText(node.subtitle) ||
+        sanitizeVisibleText(node.stepType) ||
+        categoryLabels.step,
+      title: getUserFacingIdentifierLabel(stepId, node.title || stepId),
+    });
   });
 
   orderedEntries.push(
@@ -977,17 +1022,19 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
   const trace = execution?.trace ?? null;
   const logs = trace?.logs ?? [];
   const entries = React.useMemo(() => buildOverviewEntries(logs), [logs]);
-  const nodeEntries = React.useMemo(
-    () => buildNodeOverviewEntries(entries, workflowNodes),
-    [entries, workflowNodes],
-  );
-  const eventEntries = entries.filter((entry) => entry.rowType !== 'node');
   const runStatus: ExecutionLogStatus =
     execution?.status === 'failed'
       ? 'error'
       : execution?.status === 'succeeded' || execution?.status === 'completed'
         ? 'success'
         : 'running';
+  const runIsTerminal =
+    runStatus !== 'running' || Boolean(execution?.completedAtUtc);
+  const nodeEntries = React.useMemo(
+    () => buildNodeOverviewEntries(entries, workflowNodes, runIsTerminal),
+    [entries, runIsTerminal, workflowNodes],
+  );
+  const eventEntries = entries.filter((entry) => entry.rowType !== 'node');
   const latestExecutionNodeEntry = React.useMemo(() => {
     const latestStepId = trace?.latestStepId;
     if (!latestStepId) {

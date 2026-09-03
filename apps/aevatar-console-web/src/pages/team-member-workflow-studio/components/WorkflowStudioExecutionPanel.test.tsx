@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import * as React from 'react';
 import WorkflowStudioExecutionPanel from './WorkflowStudioExecutionPanel';
 
@@ -34,6 +40,38 @@ const executionDetail = {
   status: 'succeeded',
   workflowName: 'Workflow Alpha',
 };
+
+type WorkflowNodes = ReadonlyArray<{
+  readonly stepId: string;
+  readonly stepType: string;
+  readonly subtitle: string;
+  readonly targetRole: string;
+  readonly title: string;
+}>;
+
+const submittedWorkflowNodes: WorkflowNodes = [
+  {
+    stepId: 'step-alpha',
+    stepType: 'llm_call',
+    subtitle: 'LLM call',
+    targetRole: 'assistant',
+    title: 'step-alpha',
+  },
+  {
+    stepId: 'step-beta',
+    stepType: 'transform',
+    subtitle: 'Transform',
+    targetRole: '',
+    title: 'step-beta',
+  },
+  {
+    stepId: 'step-gamma',
+    stepType: 'emit',
+    subtitle: 'Emit',
+    targetRole: '',
+    title: 'step-gamma',
+  },
+];
 
 function createExecutionFrame(
   payload: Record<string, unknown>,
@@ -123,7 +161,11 @@ function createRunningExecution(
 
 function ControlledExecutionPanel({
   detail,
-}: Readonly<{ detail: ReturnType<typeof createRunningExecution> }>) {
+  workflowNodes,
+}: Readonly<{
+  detail: ReturnType<typeof createRunningExecution>;
+  workflowNodes?: WorkflowNodes;
+}>) {
   const [activeLogIndex, setActiveLogIndex] = React.useReducer(
     (_current: number | null, next: number | null) => next,
     null,
@@ -134,6 +176,7 @@ function ControlledExecutionPanel({
       activeLogIndex={activeLogIndex}
       detail={detail}
       onSelectLog={setActiveLogIndex}
+      workflowNodes={workflowNodes}
     />
   );
 }
@@ -213,6 +256,94 @@ describe('WorkflowStudioExecutionPanel', () => {
     expect(screen.getByLabelText('Log details')).toHaveTextContent(
       'First node input',
     );
+  });
+
+  it('shows submitted nodes before they start and promotes only the running node', async () => {
+    const runStartedFrame = createRunStartedFrame();
+    const { rerender } = render(
+      <ControlledExecutionPanel
+        detail={createRunningExecution([runStartedFrame])}
+        workflowNodes={submittedWorkflowNodes}
+      />,
+    );
+
+    const overview = screen.getByRole('listbox', { name: 'Logs overview' });
+    const initialRows = within(overview).getAllByRole('button');
+    expect(initialRows.map((row) => row.dataset.testid)).toEqual([
+      'workflow-execution-log-row-node-step-alpha',
+      'workflow-execution-log-row-node-step-beta',
+      'workflow-execution-log-row-node-step-gamma',
+    ]);
+    initialRows.forEach((row) => {
+      expect(row).toHaveTextContent('Pending');
+      expect(row).toBeDisabled();
+    });
+
+    rerender(
+      <ControlledExecutionPanel
+        detail={createRunningExecution([
+          runStartedFrame,
+          createStepStartedFrame(
+            'step-alpha',
+            'First node input',
+            '2026-09-03T06:45:01.000Z',
+          ),
+        ])}
+        workflowNodes={submittedWorkflowNodes}
+      />,
+    );
+
+    const alphaRow = within(overview).getByTestId(
+      'workflow-execution-log-row-node-step-alpha',
+    );
+    await waitFor(() =>
+      expect(alphaRow).toHaveAttribute('aria-pressed', 'true'),
+    );
+    expect(alphaRow).toHaveTextContent('Running');
+    expect(alphaRow).toBeEnabled();
+    for (const stepId of ['step-beta', 'step-gamma']) {
+      const pendingRow = within(overview).getByTestId(
+        `workflow-execution-log-row-node-${stepId}`,
+      );
+      expect(pendingRow).toHaveTextContent('Pending');
+      expect(pendingRow).toBeDisabled();
+    }
+  });
+
+  it('marks unentered nodes as not run after execution finishes', () => {
+    render(
+      <ControlledExecutionPanel
+        detail={{
+          ...createRunningExecution([
+            createRunStartedFrame(),
+            createStepStartedFrame(
+              'step-alpha',
+              'First node input',
+              '2026-09-03T06:45:01.000Z',
+            ),
+            createStepCompletedFrame(
+              'step-alpha',
+              'First node output',
+              '2026-09-03T06:45:02.000Z',
+            ),
+          ]),
+          completedAtUtc: '2026-09-03T06:45:03.000Z',
+          status: 'succeeded',
+        }}
+        workflowNodes={submittedWorkflowNodes}
+      />,
+    );
+
+    expect(
+      screen.getByTestId('workflow-execution-log-row-node-step-alpha'),
+    ).toHaveTextContent('Success');
+    for (const stepId of ['step-beta', 'step-gamma']) {
+      const notRunRow = screen.getByTestId(
+        `workflow-execution-log-row-node-${stepId}`,
+      );
+      expect(notRunRow).toHaveTextContent('Not run');
+      expect(notRunRow).toBeDisabled();
+    }
   });
 
   it('follows each newly running node while preserving manual inspection within a node', async () => {
