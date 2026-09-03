@@ -134,17 +134,17 @@ function edgeSemanticsMatch(previous: Edge, incoming: Edge): boolean {
  */
 export function reconcileGraphNodes<NodeType extends Node>(
   previous: NodeType[],
-  incoming: readonly NodeType[],
+  incoming: readonly NoInfer<NodeType>[],
   selectedNodeId?: string,
 ): NodeType[];
 export function reconcileGraphNodes<NodeType extends Node>(
   previous: readonly NodeType[],
-  incoming: readonly NodeType[],
+  incoming: readonly NoInfer<NodeType>[],
   selectedNodeId?: string,
 ): readonly NodeType[];
 export function reconcileGraphNodes<NodeType extends Node>(
   previous: readonly NodeType[],
-  incoming: readonly NodeType[],
+  incoming: readonly NoInfer<NodeType>[],
   selectedNodeId?: string,
 ): readonly NodeType[] {
   const previousById = new Map(
@@ -183,15 +183,15 @@ export function reconcileGraphNodes<NodeType extends Node>(
  */
 export function reconcileGraphEdges<EdgeType extends Edge>(
   previous: EdgeType[],
-  incoming: readonly EdgeType[],
+  incoming: readonly NoInfer<EdgeType>[],
 ): EdgeType[];
 export function reconcileGraphEdges<EdgeType extends Edge>(
   previous: readonly EdgeType[],
-  incoming: readonly EdgeType[],
+  incoming: readonly NoInfer<EdgeType>[],
 ): readonly EdgeType[];
 export function reconcileGraphEdges<EdgeType extends Edge>(
   previous: readonly EdgeType[],
-  incoming: readonly EdgeType[],
+  incoming: readonly NoInfer<EdgeType>[],
 ): readonly EdgeType[] {
   const previousById = new Map(
     previous.map((element) => [element.id, element]),

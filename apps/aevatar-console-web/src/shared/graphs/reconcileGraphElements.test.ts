@@ -45,6 +45,25 @@ function assertReconcilerOwnershipTypes(): void {
   reconcileGraphEdges(readonlyEdges, []).push(
     edge('edge:readonly', 'step:source', 'step:target'),
   );
+
+  type NarrowNode = Node & { nodeKind: 'narrow' };
+  type NarrowEdge = Edge & { edgeKind: 'narrow' };
+  const narrowNodes: NarrowNode[] = [];
+  const narrowEdges: NarrowEdge[] = [];
+  const broadNodes: readonly Node[] = [];
+  const broadEdges: readonly Edge[] = [];
+
+  const narrowNodeResult = reconcileGraphNodes(narrowNodes, narrowNodes);
+  const narrowEdgeResult = reconcileGraphEdges(narrowEdges, narrowEdges);
+  const narrowNodeKind: 'narrow' = narrowNodeResult[0].nodeKind;
+  const narrowEdgeKind: 'narrow' = narrowEdgeResult[0].edgeKind;
+  void narrowNodeKind;
+  void narrowEdgeKind;
+
+  // @ts-expect-error Broad incoming nodes cannot widen a narrow mutable previous array.
+  reconcileGraphNodes(narrowNodes, broadNodes);
+  // @ts-expect-error Broad incoming edges cannot widen a narrow mutable previous array.
+  reconcileGraphEdges(narrowEdges, broadEdges);
 }
 
 void assertReconcilerOwnershipTypes;
@@ -210,11 +229,75 @@ describe('reconcileGraphElements', () => {
     expect(edges[1]).toBe(previousEdges[0]);
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    previous: Partial<Node>;
+    incoming: Partial<Node>;
+    read: (candidate: Node) => unknown;
+    expected: unknown;
+  }>([
+    {
+      name: 'style',
+      previous: { style: { opacity: 0.5 } },
+      incoming: { style: { opacity: 1 } },
+      read: (candidate) => candidate.style,
+      expected: { opacity: 1 },
+    },
+    {
+      name: 'type',
+      previous: { type: 'input' },
+      incoming: { type: 'output' },
+      read: (candidate) => candidate.type,
+      expected: 'output',
+    },
+    {
+      name: 'class name',
+      previous: { className: 'node-before' },
+      incoming: { className: 'node-after' },
+      read: (candidate) => candidate.className,
+      expected: 'node-after',
+    },
     {
       name: 'drag handle',
       previous: { dragHandle: '.drag-before' },
       incoming: { dragHandle: '.drag-after' },
+      read: (candidate) => candidate.dragHandle,
+      expected: '.drag-after',
+    },
+    {
+      name: 'width',
+      previous: { width: 100 },
+      incoming: { width: 200 },
+      read: (candidate) => candidate.width,
+      expected: 200,
+    },
+    {
+      name: 'height',
+      previous: { height: 60 },
+      incoming: { height: 120 },
+      read: (candidate) => candidate.height,
+      expected: 120,
+    },
+    {
+      name: 'initial width',
+      previous: { initialWidth: 100 },
+      incoming: { initialWidth: 200 },
+      read: (candidate) => candidate.initialWidth,
+      expected: 200,
+    },
+    {
+      name: 'initial height',
+      previous: { initialHeight: 60 },
+      incoming: { initialHeight: 120 },
+      read: (candidate) => candidate.initialHeight,
+      expected: 120,
+    },
+    {
+      name: 'measured dimensions',
+      previous: { measured: { width: 100, height: 60 } },
+      incoming: { measured: { width: 200, height: 120 } },
+      read: (candidate) => candidate.measured,
+      expected: { width: 200, height: 120 },
     },
     {
       name: 'handles',
@@ -222,7 +305,7 @@ describe('reconcileGraphElements', () => {
         handles: [
           {
             id: 'handle:before',
-            type: 'source' as const,
+            type: 'source',
             position: Position.Right,
             x: 10,
             y: 20,
@@ -233,32 +316,163 @@ describe('reconcileGraphElements', () => {
         handles: [
           {
             id: 'handle:after',
-            type: 'source' as const,
+            type: 'source',
             position: Position.Right,
             x: 10,
             y: 20,
           },
         ],
       },
+      read: (candidate) => candidate.handles,
+      expected: [
+        {
+          id: 'handle:after',
+          type: 'source',
+          position: Position.Right,
+          x: 10,
+          y: 20,
+        },
+      ],
+    },
+    {
+      name: 'parent ID',
+      previous: { parentId: 'step:parent-before' },
+      incoming: { parentId: 'step:parent-after' },
+      read: (candidate) => candidate.parentId,
+      expected: 'step:parent-after',
+    },
+    {
+      name: 'extent',
+      previous: { extent: 'parent' },
+      incoming: {
+        extent: [
+          [0, 0],
+          [200, 120],
+        ],
+      },
+      read: (candidate) => candidate.extent,
+      expected: [
+        [0, 0],
+        [200, 120],
+      ],
+    },
+    {
+      name: 'origin',
+      previous: { origin: [0, 0] },
+      incoming: { origin: [0.5, 0.5] },
+      read: (candidate) => candidate.origin,
+      expected: [0.5, 0.5],
+    },
+    {
+      name: 'source position',
+      previous: { sourcePosition: Position.Left },
+      incoming: { sourcePosition: Position.Right },
+      read: (candidate) => candidate.sourcePosition,
+      expected: Position.Right,
+    },
+    {
+      name: 'target position',
+      previous: { targetPosition: Position.Top },
+      incoming: { targetPosition: Position.Bottom },
+      read: (candidate) => candidate.targetPosition,
+      expected: Position.Bottom,
+    },
+    {
+      name: 'hidden flag',
+      previous: { hidden: false },
+      incoming: { hidden: true },
+      read: (candidate) => candidate.hidden,
+      expected: true,
+    },
+    {
+      name: 'draggable flag',
+      previous: { draggable: false },
+      incoming: { draggable: true },
+      read: (candidate) => candidate.draggable,
+      expected: true,
+    },
+    {
+      name: 'selectable flag',
+      previous: { selectable: false },
+      incoming: { selectable: true },
+      read: (candidate) => candidate.selectable,
+      expected: true,
+    },
+    {
+      name: 'connectable flag',
+      previous: { connectable: false },
+      incoming: { connectable: true },
+      read: (candidate) => candidate.connectable,
+      expected: true,
+    },
+    {
+      name: 'deletable flag',
+      previous: { deletable: false },
+      incoming: { deletable: true },
+      read: (candidate) => candidate.deletable,
+      expected: true,
+    },
+    {
+      name: 'focusable flag',
+      previous: { focusable: false },
+      incoming: { focusable: true },
+      read: (candidate) => candidate.focusable,
+      expected: true,
+    },
+    {
+      name: 'expand-parent flag',
+      previous: { expandParent: false },
+      incoming: { expandParent: true },
+      read: (candidate) => candidate.expandParent,
+      expected: true,
+    },
+    {
+      name: 'dragging state',
+      previous: { dragging: false },
+      incoming: { dragging: true },
+      read: (candidate) => candidate.dragging,
+      expected: true,
     },
     {
       name: 'resizing state',
       previous: { resizing: false },
       incoming: { resizing: true },
+      read: (candidate) => candidate.resizing,
+      expected: true,
+    },
+    {
+      name: 'z-index',
+      previous: { zIndex: 1 },
+      incoming: { zIndex: 2 },
+      read: (candidate) => candidate.zIndex,
+      expected: 2,
+    },
+    {
+      name: 'ARIA label',
+      previous: { ariaLabel: 'Before node' },
+      incoming: { ariaLabel: 'After node' },
+      read: (candidate) => candidate.ariaLabel,
+      expected: 'After node',
     },
     {
       name: 'ARIA role',
-      previous: { ariaRole: 'group' as const },
-      incoming: { ariaRole: 'button' as const },
+      previous: { ariaRole: 'group' },
+      incoming: { ariaRole: 'button' },
+      read: (candidate) => candidate.ariaRole,
+      expected: 'button',
     },
     {
       name: 'DOM attributes',
       previous: { domAttributes: { tabIndex: 0 } },
       incoming: { domAttributes: { tabIndex: 1 } },
+      read: (candidate) => candidate.domAttributes,
+      expected: { tabIndex: 1 },
     },
   ])('replaces a node when its $name changes', ({
     previous: before,
     incoming: after,
+    read,
+    expected,
   }) => {
     const previousChanged = node('step:semantic', before);
     const previousStable = node('step:stable', { data: { label: 'Stable' } });
@@ -272,6 +486,7 @@ describe('reconcileGraphElements', () => {
 
     expect(result[0]).toBe(incomingChanged);
     expect(result[1]).toBe(previousStable);
+    expect(read(result[0])).toEqual(expected);
   });
 
   it.each<{
