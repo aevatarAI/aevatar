@@ -367,6 +367,10 @@ function summarizeStepParameters(
     .join(' · ');
 }
 
+function createStudioGraphPositionMap(): Record<string, XYPosition> {
+  return Object.create(null);
+}
+
 function extractSavedLayoutPositions(
   layout: unknown,
 ): Record<string, XYPosition> {
@@ -379,25 +383,24 @@ function extractSavedLayoutPositions(
     return {};
   }
 
-  return Object.fromEntries(
-    Object.entries(nodePositions)
-      .map(([stepId, position]) => {
-        const x =
-          typeof position?.x === 'number' && Number.isFinite(position.x)
-            ? position.x
-            : null;
-        const y =
-          typeof position?.y === 'number' && Number.isFinite(position.y)
-            ? position.y
-            : null;
-        if (!stepId || x === null || y === null) {
-          return null;
-        }
+  const savedPositions = createStudioGraphPositionMap();
+  for (const [stepId, position] of Object.entries(nodePositions)) {
+    const x =
+      typeof position?.x === 'number' && Number.isFinite(position.x)
+        ? position.x
+        : null;
+    const y =
+      typeof position?.y === 'number' && Number.isFinite(position.y)
+        ? position.y
+        : null;
+    if (!stepId || x === null || y === null) {
+      continue;
+    }
 
-        return [stepId, { x, y }] as const;
-      })
-      .filter((entry): entry is readonly [string, XYPosition] => Boolean(entry)),
-  );
+    savedPositions[stepId] = { x, y };
+  }
+
+  return savedPositions;
 }
 
 export function needsStudioAutoLayout(
@@ -405,18 +408,16 @@ export function needsStudioAutoLayout(
   savedPositions: Readonly<Record<string, XYPosition>>,
 ): boolean {
   return steps.some(
-    (step) =>
-      !Object.hasOwn(savedPositions, step.id) ||
-      savedPositions[step.id] === undefined,
+    (step) => getStudioGraphPosition(savedPositions, step.id) === undefined,
   );
 }
 
-function getStudioSavedPosition(
-  savedPositions: Readonly<Record<string, XYPosition>>,
+function getStudioGraphPosition(
+  positions: Readonly<Record<string, XYPosition>>,
   stepId: string,
 ): XYPosition | undefined {
-  return Object.hasOwn(savedPositions, stepId)
-    ? savedPositions[stepId]
+  return Object.hasOwn(positions, stepId)
+    ? positions[stepId]
     : undefined;
 }
 
@@ -438,12 +439,8 @@ function buildStudioGraphNodePositions(
   autoLayoutPositions: Readonly<Record<string, XYPosition>>,
 ): XYPosition[] {
   const savedPositionsByStep = steps.map((step) =>
-    getStudioSavedPosition(savedPositions, step.id),
+    getStudioGraphPosition(savedPositions, step.id),
   );
-  if (savedPositionsByStep.every((position) => position === undefined)) {
-    return steps.map((step) => autoLayoutPositions[step.id]);
-  }
-
   const occupiedPositions = savedPositionsByStep.filter(
     (position): position is XYPosition => position !== undefined,
   );
@@ -454,15 +451,10 @@ function buildStudioGraphNodePositions(
       return savedPosition;
     }
 
-    const autoLayoutPosition = autoLayoutPositions[step.id];
-    if (!autoLayoutPosition) {
-      return {
+    let position = getStudioGraphPosition(autoLayoutPositions, step.id) ?? {
         x: STUDIO_AUTO_LAYOUT_ORIGIN_X + index * STUDIO_AUTO_LAYOUT_COLUMN_PITCH,
         y: STUDIO_AUTO_LAYOUT_ORIGIN_Y,
       };
-    }
-
-    let position = autoLayoutPosition;
     while (occupiedPositions.some((occupied) => studioGraphPositionsOverlap(position, occupied))) {
       position = {
         ...position,
@@ -579,7 +571,7 @@ function buildAutoLayoutPositions(
     }
   }
 
-  const positions: Record<string, XYPosition> = {};
+  const positions = createStudioGraphPositionMap();
   let globalRow = 0;
 
   function place(stepId: string, startRow: number) {
@@ -601,7 +593,7 @@ function buildAutoLayoutPositions(
   }
 
   for (const rootId of rootOrder) {
-    if (!depths.has(rootId) || positions[rootId]) {
+    if (!depths.has(rootId) || getStudioGraphPosition(positions, rootId)) {
       continue;
     }
 
@@ -663,18 +655,20 @@ export function buildStudioWorkflowLayout(
       ? (previousLayout as StudioWorkflowLayoutDocument).viewport
       : { x: 0, y: 0, zoom: 1 };
 
+  const nodePositions = createStudioGraphPositionMap();
+  for (const node of nodes) {
+    if (!node.data?.stepId) {
+      continue;
+    }
+
+    nodePositions[node.data.stepId] = {
+      x: node.position.x,
+      y: node.position.y,
+    };
+  }
+
   return {
-    nodePositions: Object.fromEntries(
-      nodes
-        .filter((node) => node.data?.stepId)
-        .map((node) => [
-          node.data.stepId,
-          {
-            x: node.position.x,
-            y: node.position.y,
-          },
-        ]),
-    ),
+    nodePositions,
     viewport,
     mode: 'manual',
     layoutVersion: 2,

@@ -307,4 +307,35 @@ describe('studio graph helpers', () => {
 
     expect(needsStudioAutoLayout(steps, {})).toBe(true);
   });
+
+  it('lays out inherited-key step ids without colliding with saved positions', () => {
+    const savedPositions = {
+      draft: { x: 570, y: 180 },
+    };
+    const document = {
+      name: 'workflow-demo',
+      steps: [
+        createStudioGraphStep('draft'),
+        createStudioGraphStep('toString', { type: 'conditional' }),
+      ],
+    };
+
+    const firstGraph = buildStudioGraphElements(document, {
+      nodePositions: savedPositions,
+    });
+    const secondGraph = buildStudioGraphElements(document, {
+      nodePositions: savedPositions,
+    });
+    const positions = firstGraph.nodes.map((node) => node.position);
+
+    expect(savedPositions).toEqual({ draft: { x: 570, y: 180 } });
+    expect(positions).toEqual([
+      { x: 570, y: 180 },
+      { x: 240, y: 540 },
+    ]);
+    expect(positions).toEqual(secondGraph.nodes.map((node) => node.position));
+    expect(
+      positions.every(({ x, y }) => Number.isFinite(x) && Number.isFinite(y)),
+    ).toBe(true);
+  });
 });
