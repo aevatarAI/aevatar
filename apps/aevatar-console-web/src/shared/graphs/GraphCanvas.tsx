@@ -625,6 +625,83 @@ function decorateGraphEdge(edge: Edge, selectedEdgeId?: string): Edge {
   };
 }
 
+function shallowGraphValueEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (
+    !left ||
+    !right ||
+    typeof left !== 'object' ||
+    typeof right !== 'object'
+  ) {
+    return false;
+  }
+
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  return (
+    leftKeys.length === Object.keys(rightRecord).length &&
+    leftKeys.every(
+      (key) =>
+        Object.hasOwn(rightRecord, key) &&
+        Object.is(leftRecord[key], rightRecord[key]),
+    )
+  );
+}
+
+function mergeIncomingNodeDelta(
+  currentNodes: readonly Node[],
+  previousIncomingNodes: readonly Node[],
+  incomingNodes: readonly Node[],
+): Node[] {
+  const currentById = new Map(currentNodes.map((node) => [node.id, node]));
+  const previousIncomingById = new Map(
+    previousIncomingNodes.map((node) => [node.id, node]),
+  );
+
+  return incomingNodes.map((incomingNode) => {
+    const currentNode = currentById.get(incomingNode.id);
+    const previousIncomingNode = previousIncomingById.get(incomingNode.id);
+    if (!currentNode || !previousIncomingNode) {
+      return incomingNode;
+    }
+
+    return {
+      ...incomingNode,
+      dragging:
+        previousIncomingNode.dragging === incomingNode.dragging
+          ? currentNode.dragging
+          : incomingNode.dragging,
+      height:
+        previousIncomingNode.height === incomingNode.height
+          ? currentNode.height
+          : incomingNode.height,
+      measured: shallowGraphValueEqual(
+        previousIncomingNode.measured,
+        incomingNode.measured,
+      )
+        ? currentNode.measured
+        : incomingNode.measured,
+      position: shallowGraphValueEqual(
+        previousIncomingNode.position,
+        incomingNode.position,
+      )
+        ? currentNode.position
+        : incomingNode.position,
+      resizing:
+        previousIncomingNode.resizing === incomingNode.resizing
+          ? currentNode.resizing
+          : incomingNode.resizing,
+      width:
+        previousIncomingNode.width === incomingNode.width
+          ? currentNode.width
+          : incomingNode.width,
+    };
+  });
+}
+
 const GraphCanvas: React.FC<GraphCanvasProps> = ({
   autoFitKey,
   nodes,
@@ -652,15 +729,30 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   const navigationControlRef = useRef<StudioViewportControl>({
     manuallyNavigated: false,
   });
+  const renderedAutoFitKeyRef = useRef(autoFitKey);
   const incomingStudioNodesRef = useRef<readonly Node[]>([]);
   const incomingStudioEdgesRef = useRef<readonly Edge[]>([]);
-  const studioTopology = useMemo(() => {
-    const nodeIds = nodes.map((node) => node.id);
+  const incomingNodeIdsKey = useMemo(
+    () => JSON.stringify(nodes.map((node) => node.id)),
+    [nodes],
+  );
+  const renderedStudioTopology = useMemo(() => {
+    const nodeIds = localNodes.map((node) => node.id);
     return {
       nodeIds,
       nodeIdsKey: JSON.stringify(nodeIds),
     };
-  }, [nodes]);
+  }, [localNodes]);
+  const renderedAutoFitKey =
+    incomingNodeIdsKey === renderedStudioTopology.nodeIdsKey
+      ? autoFitKey
+      : renderedAutoFitKeyRef.current;
+
+  useEffect(() => {
+    if (incomingNodeIdsKey === renderedStudioTopology.nodeIdsKey) {
+      renderedAutoFitKeyRef.current = autoFitKey;
+    }
+  }, [autoFitKey, incomingNodeIdsKey, renderedStudioTopology.nodeIdsKey]);
 
   useEffect(() => {
     if (!isStudioVariant) {
@@ -669,23 +761,29 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
       return;
     }
 
+    const previousIncomingNodes = incomingStudioNodesRef.current;
     const reconciledIncomingNodes = reconcileGraphNodes(
-      incomingStudioNodesRef.current,
+      previousIncomingNodes,
       nodes,
       selectedNodeId,
     );
-    if (reconciledIncomingNodes === incomingStudioNodesRef.current) {
+    if (reconciledIncomingNodes === previousIncomingNodes) {
       return;
     }
 
     incomingStudioNodesRef.current = reconciledIncomingNodes;
-    setLocalNodes((currentNodes) =>
-      reconcileGraphNodes(
+    setLocalNodes((currentNodes) => {
+      const mergedIncomingNodes = mergeIncomingNodeDelta(
         currentNodes,
+        previousIncomingNodes,
         reconciledIncomingNodes,
+      );
+      return reconcileGraphNodes(
+        currentNodes,
+        mergedIncomingNodes,
         selectedNodeId,
-      ),
-    );
+      );
+    });
   }, [isStudioVariant, nodes, selectedNodeId, setLocalNodes]);
 
   useEffect(() => {
@@ -910,10 +1008,10 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
       >
         {isStudioVariant ? (
           <StudioViewportController
-            autoFitKey={autoFitKey}
+            autoFitKey={renderedAutoFitKey}
             navigationControlRef={navigationControlRef}
-            nodeIds={studioTopology.nodeIds}
-            nodeIdsKey={studioTopology.nodeIdsKey}
+            nodeIds={renderedStudioTopology.nodeIds}
+            nodeIdsKey={renderedStudioTopology.nodeIdsKey}
             selectedNodeId={selectedNodeId}
           />
         ) : null}
