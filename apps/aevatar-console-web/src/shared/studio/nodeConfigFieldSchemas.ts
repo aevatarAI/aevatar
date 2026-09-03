@@ -1119,12 +1119,12 @@ const SCHEMAS_BY_STEP_TYPE: Record<
       {
         description: message(
           'shared.studio.nodeConfiguration.toolCall.arguments.description',
-          'Use the property names documented by this tool. The value is passed as JSON text.',
+          "Property names and value types must match the tool's expected input.",
         ),
         kind: 'multi-line',
         label: message(
           'shared.studio.nodeConfiguration.toolCall.arguments.label',
-          'Arguments JSON',
+          'Arguments',
         ),
         name: 'arguments',
         parameterName: 'arguments',

@@ -30,6 +30,7 @@ import {
 } from '@/shared/studio/nodeConfigFields';
 import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import TechnicalDetails from '../TechnicalDetails';
+import StructuredJsonArgumentsEditor from './StructuredJsonArgumentsEditor';
 
 export type WorkflowNodeInspectorHandle = {
   requestDiscardOrProceed: (proceed: () => void) => void;
@@ -327,6 +328,7 @@ const WorkflowNodeInspector = React.forwardRef<
     const [applying, setApplying] = React.useState(false);
     const [discardConfirmationOpen, setDiscardConfirmationOpen] =
       React.useState(false);
+    const [argumentsEditorError, setArgumentsEditorError] = React.useState('');
     const [pendingDiscardAction, setPendingDiscardAction] = React.useState<
       (() => void) | null
     >(null);
@@ -348,8 +350,19 @@ const WorkflowNodeInspector = React.forwardRef<
     } = useConfigurationDraft(stepDraft);
 
     React.useEffect(() => {
-      onConfigurationErrorChange(structuredError || rawError);
-    }, [onConfigurationErrorChange, rawError, structuredError]);
+      onConfigurationErrorChange(
+        structuredError || argumentsEditorError || rawError,
+      );
+    }, [
+      argumentsEditorError,
+      onConfigurationErrorChange,
+      rawError,
+      structuredError,
+    ]);
+
+    React.useEffect(() => {
+      setArgumentsEditorError('');
+    }, [stepDraft?.id, stepDraft?.type]);
 
     React.useEffect(() => {
       onUnappliedChangesChange?.(hasUnappliedChanges);
@@ -380,7 +393,7 @@ const WorkflowNodeInspector = React.forwardRef<
       stepDraft.type,
       schemaParameters,
     );
-    const validationError = structuredError || rawError;
+    const validationError = structuredError || argumentsEditorError || rawError;
     const nodeTypeLabel = formatStudioStepTypeLabel(stepDraft.type);
     const controlsDisabled = disabled || applying;
 
@@ -437,7 +450,7 @@ const WorkflowNodeInspector = React.forwardRef<
     };
 
     const applyConfiguration = () => {
-      if (controlsDisabled) return;
+      if (controlsDisabled || argumentsEditorError) return;
       const result = applyStudioNodeConfigurationValuesWithValidation(
         stepDraft.type,
         parameters,
@@ -488,6 +501,20 @@ const WorkflowNodeInspector = React.forwardRef<
     const renderFieldControl = (field: StudioStructuredNodeConfigField) => {
       const value = configurationValues[field.name] ?? '';
       const control = field.control ?? field.kind;
+      if (
+        stepDraft.type.trim().toLowerCase() === 'tool_call' &&
+        field.parameterName === 'arguments'
+      ) {
+        return (
+          <StructuredJsonArgumentsEditor
+            disabled={controlsDisabled}
+            key={`${stepDraft.id}:${field.name}`}
+            onChange={(nextValue) => updateFieldValue(field.name, nextValue)}
+            onErrorChange={setArgumentsEditorError}
+            value={value}
+          />
+        );
+      }
       if (control === 'select') {
         return (
           <Select
@@ -830,6 +857,7 @@ const WorkflowNodeInspector = React.forwardRef<
                 controlsDisabled ||
                 applying ||
                 Boolean(structuredError) ||
+                Boolean(argumentsEditorError) ||
                 Boolean(rawError) ||
                 !hasUnappliedChanges
               }

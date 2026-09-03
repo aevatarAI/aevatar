@@ -680,8 +680,8 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.switch.on.label': '分支输入',
   'shared.studio.nodeConfiguration.switch.on.placeholder': '$input',
   'shared.studio.nodeConfiguration.toolCall.arguments.description':
-    '请使用此工具文档中的属性名。该值会作为 JSON 文本传递。',
-  'shared.studio.nodeConfiguration.toolCall.arguments.label': '参数 JSON',
+    '属性名和值类型必须与工具要求的输入一致。',
+  'shared.studio.nodeConfiguration.toolCall.arguments.label': '参数',
   'shared.studio.nodeConfiguration.toolCall.arguments.placeholder':
     '\'{\'"query":"$input"\'}\'',
   'shared.studio.nodeConfiguration.toolCall.tool.description':

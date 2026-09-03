@@ -718,8 +718,8 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.switch.on.label': 'Switch on',
   'shared.studio.nodeConfiguration.switch.on.placeholder': '$input',
   'shared.studio.nodeConfiguration.toolCall.arguments.description':
-    'Use the property names documented by this tool. The value is passed as JSON text.',
-  'shared.studio.nodeConfiguration.toolCall.arguments.label': 'Arguments JSON',
+    "Property names and value types must match the tool's expected input.",
+  'shared.studio.nodeConfiguration.toolCall.arguments.label': 'Arguments',
   'shared.studio.nodeConfiguration.toolCall.arguments.placeholder':
     '\'{\'"query":"$input"\'}\'',
   'shared.studio.nodeConfiguration.toolCall.tool.description':

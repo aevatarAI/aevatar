@@ -48,12 +48,34 @@ The Settings surface exposes:
 
 - **Tool name** (required): the exact registered runtime tool name, with an
   explicit explanation and a concrete example.
-- **Arguments JSON** (optional): the existing string payload passed to the
-  tool, with guidance that its property names come from that tool's contract.
+- **Arguments** (optional): the existing string payload passed to the tool.
+  It opens in a beginner-oriented **Fields** mode and also provides a **JSON**
+  mode for pasting or editing the complete payload.
 
-The arguments editor deliberately preserves a string value. It must not parse
-the text and write an object because the current workflow contract stores
-`parameters.arguments` as a string.
+Fields mode parses the current JSON object into recursive, manually editable
+rows. Each property has a name input, a value-type select, a value control that
+matches the selected type, and a remove action. Object and array values remain
+structured and provide their own add actions. Empty arguments start as an
+empty object. The supported value types are string, number, boolean, object,
+array, and null.
+
+JSON mode exposes the complete text payload and supports pasting. A valid edit
+rebuilds Fields mode. An invalid edit remains visible in JSON mode with a clear
+error; the inspector must not switch to Fields or replace that text with stale
+structured data. Edits made in Fields mode immediately update JSON mode.
+
+Fields mode rejects duplicate property names within the same object instead of
+silently collapsing one row during serialization. Numbers that would change
+when parsed and serialized by JavaScript, including unsafe integers,
+underflowing or overflowing exponents, and high-precision decimals, remain
+byte-for-byte intact in JSON mode. They cannot enter Fields mode because doing
+so could change their value. Users can keep those values in JSON mode or
+represent them as strings.
+
+The arguments editor deliberately serializes its object back to JSON text and
+preserves the final parameter as a string. It must not write an object into the
+workflow document because the current contract stores `parameters.arguments`
+as a string.
 
 The inspector does not offer a connected-action picker. Producing a truthful
 picker would require caller-visible NyxID capability discovery, and no existing
@@ -67,7 +89,12 @@ risk, or setup status.
   configuration normalizer.
 - Invalid raw JSON displays a localized summary while technical parser detail
   stays collapsed.
-- Switching fields and editing Advanced JSON continue to share one local draft.
+- Fields and JSON modes in the tool arguments editor share one local draft and
+  synchronize only from valid values.
+- Duplicate property names block apply until the rejected edit is corrected or
+  discarded; unsafe integers are editable only as raw JSON or strings.
+- Editing Advanced JSON for the complete step continues to synchronize the
+  arguments editor through the existing configuration draft.
 - Cancel and close retain the existing discard confirmation for unapplied edits.
 
 ## Accessibility And Responsive Behavior
@@ -84,6 +111,11 @@ Focused tests must prove:
 
 - a user sees step purpose, field requirement state, and persistent guidance;
 - tool arguments remain a string after editing and applying;
+- nested argument values render as fields with type-appropriate controls;
+- adding, removing, and changing argument value types update JSON mode;
+- valid JSON edits update Fields mode while invalid JSON remains intact;
+- duplicate property names never discard visible values, and unsafe integers
+  remain exact in JSON mode;
 - no workflow capability discovery/readiness client is required;
 - raw JSON errors and discard behavior still work;
 - existing workflow editor integration accepts the unchanged
