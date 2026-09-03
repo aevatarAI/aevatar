@@ -914,7 +914,7 @@ function ApprovalCard({
   );
 }
 
-type RunInterventionAction =
+export type RunInterventionAction =
   | { kind: "resume"; value?: string }
   | { kind: "approve"; value?: string }
   | { kind: "reject"; value?: string }

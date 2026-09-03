@@ -203,6 +203,49 @@ describe('chatActorState', () => {
     );
   });
 
+  it('restores pending workflow signals from current-state reloads', () => {
+    const reload = applyCurrentStateResult(
+      createChatActorProjection('conversation-alpha'),
+      {
+        status: 'current',
+        stateVersion: 5,
+        snapshot: {
+          actorId: 'conversation-alpha',
+          scopeId: 'scope-alpha',
+          stateVersion: 5,
+          progressSequence: 1,
+          activeTurn: null,
+          latestTurn: null,
+          recentTerminalTurns: [],
+          activeTask: null,
+          pendingInput: null,
+          pendingApproval: null,
+          pendingWorkflowSignal: {
+            actorId: 'workflow-alpha',
+            runId: 'run-alpha',
+            signalName: 'dinner_date_user_choice',
+            stepId: 'wait-for-choice',
+            prompt: 'Choose a restaurant.',
+            timeoutMs: 600000,
+            observedAt: '2026-08-08T00:02:31Z',
+          },
+          pendingActions: [],
+        },
+      },
+    ).projection;
+
+    expect(reload.pendingWorkflowSignal).toEqual(
+      expect.objectContaining({
+        actorId: 'workflow-alpha',
+        runId: 'run-alpha',
+        signalName: 'dinner_date_user_choice',
+        stepId: 'wait-for-choice',
+        prompt: 'Choose a restaurant.',
+        timeoutMs: 600000,
+      }),
+    );
+  });
+
   it('uses the same typed TaskPlan decoder for live frames and current-state reload', () => {
     const live = reduceActorFrame(
       createChatActorProjection('conversation-alpha'),

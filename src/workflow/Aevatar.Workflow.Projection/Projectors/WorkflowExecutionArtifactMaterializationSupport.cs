@@ -187,8 +187,12 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         // EndedAt records when the run first reached a terminal status. A duplicate delivery or
         // a maintenance republish of the terminal outcome must not move it to its own
         // observation time.
-        if (IsTerminalStatus(state.Status) && readModel.EndedAt == default)
-            readModel.EndedAt = observedAt;
+        if (IsTerminalStatus(state.Status))
+        {
+            readModel.CurrentWaitingSignal = null;
+            if (readModel.EndedAt == default)
+                readModel.EndedAt = observedAt;
+        }
     }
 
     public static void ApplyObservedPayloadToReport(
@@ -321,6 +325,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             : WorkflowStepRetryDisposition.Unspecified;
         step.FileItemResults = SanitizeFileItemResults(evt.FileItemResults);
         step.VoteAgreementDecision = SanitizeVoteAgreementDecision(evt.VoteAgreementDecision);
+        if (string.Equals(readModel.CurrentWaitingSignal?.StepId, evt.StepId, StringComparison.Ordinal))
+            readModel.CurrentWaitingSignal = null;
         step.WorkerId = evt.WorkerId ?? string.Empty;
         step.NextStepId = evt.NextStepId ?? string.Empty;
         step.BranchKey = evt.BranchKey ?? string.Empty;
@@ -446,6 +452,14 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         DateTimeOffset observedAt)
     {
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
+        readModel.CurrentWaitingSignal = new WorkflowWaitingSignalReadModel
+        {
+            RunId = evt.RunId ?? string.Empty,
+            StepId = evt.StepId ?? string.Empty,
+            SignalName = evt.SignalName ?? string.Empty,
+            Prompt = SanitizeAuditText(evt.Prompt),
+            TimeoutMs = evt.TimeoutMs,
+        };
         AddTimeline(
             readModel.Timeline,
             observedAt,

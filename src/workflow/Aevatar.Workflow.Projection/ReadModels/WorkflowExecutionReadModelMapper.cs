@@ -180,6 +180,7 @@ public sealed class WorkflowExecutionReadModelMapper
             Input = source.Input,
             FinalOutput = source.FinalOutput,
             FinalError = source.FinalError,
+            CurrentWaitingSignal = MapCurrentWaitingSignal(source.CurrentWaitingSignal),
             Topology = source.Topology
                 .Select(edge => new WorkflowRunTopologyEdge(edge.Parent, edge.Child))
                 .ToList(),
@@ -302,6 +303,18 @@ public sealed class WorkflowExecutionReadModelMapper
         parsed > 0
             ? parsed
             : 0;
+
+    private static WorkflowRunWaitingSignal? MapCurrentWaitingSignal(WorkflowWaitingSignalReadModel? source) =>
+        source == null || string.IsNullOrWhiteSpace(source.SignalName) || string.IsNullOrWhiteSpace(source.StepId)
+            ? null
+            : new WorkflowRunWaitingSignal
+            {
+                RunId = source.RunId,
+                StepId = source.StepId,
+                SignalName = source.SignalName,
+                Prompt = source.Prompt,
+                TimeoutMs = source.TimeoutMs,
+            };
 
     private static WorkflowRunCompletionStatus MapCompletionStatus(string? status)
     {

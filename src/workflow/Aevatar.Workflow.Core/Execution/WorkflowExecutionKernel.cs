@@ -735,7 +735,20 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     return;
                 }
 
-                if (HasUncertainOutcome(evt) || IsTimeoutError(evt.Error))
+                var isTimeoutError = IsTimeoutError(evt.Error);
+                if (isTimeoutError && IsWaitSignalStep(current) &&
+                    await TryOnErrorAsync(
+                        current,
+                        evt,
+                        completionOutputValueId,
+                        state,
+                        ctx,
+                        ct))
+                {
+                    return;
+                }
+
+                if (HasUncertainOutcome(evt) || isTimeoutError)
                 {
                     ctx.Logger.LogError(
                         "workflow_loop: run={RunId} step={StepId} has an uncertain external outcome and run will fail. error={Error}",
@@ -2379,6 +2392,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     private static bool IsTimeoutError(string? error) =>
         !string.IsNullOrWhiteSpace(error) &&
         TimeoutErrorPattern.IsMatch(error);
+
+    private static bool IsWaitSignalStep(StepDefinition step) =>
+        string.Equals(
+            WorkflowPrimitiveCatalog.ToCanonicalType(step.Type),
+            "wait_signal",
+            StringComparison.OrdinalIgnoreCase);
 
     private static bool HasUncertainOutcome(StepCompletedEvent completion) =>
         completion.FailureOutcome == WorkflowStepFailureOutcome.OutcomeUncertain;

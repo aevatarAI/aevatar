@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.Capabilities;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -144,9 +145,12 @@ public static class MainnetChatEndpoints
 
         var recoveryReadPort = http.RequestServices.GetService<IWorkflowChatHistoryCreateRecoveryReadPort>();
         var currentStateQueryPort = http.RequestServices.GetService<IWorkflowExecutionCurrentStateQueryPort>();
+        var workflowQueryService = http.RequestServices.GetService<IWorkflowExecutionQueryApplicationService>();
+        var chatStateQueryPort = http.RequestServices.GetService<INyxIdChatConversationStateQueryPort>();
+        var workflowSignalAcceptancePort = http.RequestServices.GetService<INyxIdChatWorkflowSignalAcceptancePort>();
         var signalDispatchService = http.RequestServices
             .GetService<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
-        if (recoveryReadPort is null || currentStateQueryPort is null || signalDispatchService is null)
+        if (recoveryReadPort is null || currentStateQueryPort is null || workflowQueryService is null || signalDispatchService is null)
             return false;
 
         try
@@ -158,11 +162,32 @@ public static class MainnetChatEndpoints
                 return false;
 
             var actorId = recovery.WorkflowActorId.Trim();
+            if (chatStateQueryPort is not null)
+            {
+                var chatState = await chatStateQueryPort
+                    .GetAsync(new NyxIdChatConversationStateQuery(scopeId, conversationId), ct)
+                    .ConfigureAwait(false);
+                var pendingWorkflowSignal = chatState.Snapshot?.PendingWorkflowSignal;
+                if (pendingWorkflowSignal is not null &&
+                    !string.Equals(pendingWorkflowSignal.ActorId, actorId, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
             var snapshot = await currentStateQueryPort
                 .GetWorkflowActorCurrentStateAsync(actorId, ct)
                 .ConfigureAwait(false);
-            if (!IsWaitingForSignal(snapshot, scopeId, out var runId, out var stepId, out var signalName))
+            if (!IsWaitingForSignal(snapshot, scopeId, out var runId))
                 return false;
+
+            var report = await workflowQueryService
+                .GetWorkflowRunReportArtifactAsync(actorId, ct)
+                .ConfigureAwait(false);
+            if (!TryResolveCurrentWaitingSignal(report, runId, out runId, out var stepId, out var signalName))
+            {
+                return false;
+            }
 
             var clientRequestId = TryGetString(body, "clientRequestId") ?? Guid.NewGuid().ToString("N");
             var dispatch = await signalDispatchService.DispatchAsync(
@@ -178,6 +203,25 @@ public static class MainnetChatEndpoints
                 .ConfigureAwait(false);
             if (!dispatch.Succeeded || dispatch.Receipt is null)
                 return false;
+
+            if (workflowSignalAcceptancePort is not null)
+            {
+                await workflowSignalAcceptancePort.MarkAcceptedAsync(
+                        new NyxIdChatWorkflowSignalAcceptedCommand
+                        {
+                            ScopeId = scopeId,
+                            ConversationActorId = conversationId,
+                            WorkflowActorId = actorId,
+                            RunId = runId,
+                            SignalName = signalName,
+                            StepId = stepId,
+                            ClientRequestId = clientRequestId,
+                            CommandId = $"{clientRequestId}:workflow-signal-accepted",
+                            CorrelationId = dispatch.Receipt.CorrelationId,
+                        },
+                        ct)
+                    .ConfigureAwait(false);
+            }
 
             http.Response.StatusCode = StatusCodes.Status202Accepted;
             await http.Response.WriteAsJsonAsync(new
@@ -209,13 +253,9 @@ public static class MainnetChatEndpoints
     private static bool IsWaitingForSignal(
         WorkflowActorSnapshot? snapshot,
         string scopeId,
-        out string runId,
-        out string stepId,
-        out string signalName)
+        out string runId)
     {
         runId = string.Empty;
-        stepId = string.Empty;
-        signalName = string.Empty;
         if (snapshot is null ||
             snapshot.CompletionStatus != WorkflowRunCompletionStatus.WaitingForSignal ||
             !string.Equals(snapshot.ScopeId?.Trim(), scopeId, StringComparison.Ordinal) ||
@@ -229,8 +269,25 @@ public static class MainnetChatEndpoints
         runId = string.IsNullOrWhiteSpace(snapshot.RunId)
             ? snapshot.ActorId
             : snapshot.RunId.Trim();
-        stepId = snapshot.ActivityWaiting.StepId?.Trim() ?? string.Empty;
-        signalName = snapshot.ActivityWaiting.Prompt?.Trim() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(runId);
+    }
+
+    private static bool TryResolveCurrentWaitingSignal(
+        WorkflowRunReport? report,
+        string fallbackRunId,
+        out string runId,
+        out string stepId,
+        out string signalName)
+    {
+        runId = fallbackRunId;
+        stepId = string.Empty;
+        signalName = string.Empty;
+        if (report?.CurrentWaitingSignal is not { } signal)
+            return false;
+
+        runId = string.IsNullOrWhiteSpace(signal.RunId) ? fallbackRunId : signal.RunId.Trim();
+        stepId = signal.StepId?.Trim() ?? string.Empty;
+        signalName = signal.SignalName?.Trim() ?? string.Empty;
         return !string.IsNullOrWhiteSpace(runId) &&
                !string.IsNullOrWhiteSpace(stepId) &&
                !string.IsNullOrWhiteSpace(signalName);

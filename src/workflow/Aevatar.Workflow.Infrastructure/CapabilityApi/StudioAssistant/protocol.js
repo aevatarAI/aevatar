@@ -219,53 +219,80 @@ export function normalizeFrame(raw) {
 }
 
 function normalizeTypedFrame(raw) {
+  const payload = typedFramePayload(raw);
   switch (String(raw.type).toUpperCase()) {
     case "RUN_STARTED":
       return normalizeRunStarted(raw);
     case "RUN_FINISHED":
-      return { type: "run_finished", ...(raw.runFinished || {}), raw };
+      return { type: "run_finished", ...payload, raw };
     case "RUN_ERROR":
-      return { type: "run_error", ...(raw.runError || {}), raw };
+      return { type: "run_error", ...payload, raw };
     case "RUN_STOPPED":
-      return { type: "run_stopped", ...(raw.runStopped || {}), raw };
+      return { type: "run_stopped", ...payload, raw };
     case "TEXT_MESSAGE_START":
-      return { type: "text_start", ...(raw.textMessageStart || {}), raw };
+      return { type: "text_start", ...payload, raw };
     case "TEXT_MESSAGE_CONTENT":
-      return { type: "text_delta", ...(raw.textMessageContent || {}), raw };
+      return { type: "text_delta", ...payload, raw };
     case "TEXT_MESSAGE_END":
-      return { type: "text_end", ...(raw.textMessageEnd || {}), raw };
+      return { type: "text_end", ...payload, raw };
     case "MODEL_CALL_START":
-      return normalizeOperationFrame("model_start", raw.modelCallStart || {}, raw);
+      return normalizeOperationFrame("model_start", payload, raw);
     case "MODEL_CALL_END":
-      return normalizeOperationFrame("model_end", raw.modelCallEnd || {}, raw);
+      return normalizeOperationFrame("model_end", payload, raw);
     case "TOOL_CALL_START":
-      return normalizeOperationFrame("tool_start", raw.toolCallStart || {}, raw);
+      return normalizeOperationFrame("tool_start", payload, raw);
     case "TOOL_CALL_END":
-      return normalizeOperationFrame("tool_end", raw.toolCallEnd || {}, raw);
+      return normalizeOperationFrame("tool_end", payload, raw);
     case "TOOL_APPROVAL_REQUEST":
       return {
         type: "approval",
         approvalKind: "nyxid-chat",
-        ...(raw.toolApprovalRequest || {}),
+        ...payload,
         raw,
       };
     case "AUTHORIZATION_REQUIRED":
       return {
         type: "authorization_required",
-        ...(raw.authorizationRequired || {}),
+        ...payload,
         raw,
       };
     case "USAGE":
-      return { type: "usage", ...(raw.usage || {}), raw };
+      return { type: "usage", ...payload, raw };
     case "MEDIA_CONTENT":
-      return { type: "media", ...(raw.mediaContent || {}), raw };
+      return { type: "media", ...payload, raw };
     case "CUSTOM":
-      return normalizeCustom(raw.custom || {}, raw);
+      return normalizeCustom(payload, raw);
     case "DEMO_PROTOCOL_ERROR":
-      return { type: "protocol_error", ...(raw.protocolError || {}), raw };
+      return { type: "protocol_error", ...payload, raw };
     default:
       return { type: String(raw.type).toLowerCase(), raw };
   }
+}
+
+function typedFramePayload(raw) {
+  if (String(raw.type).toUpperCase() === "CUSTOM" && raw.name) return raw;
+  const oneofKey = {
+    AUTHORIZATION_REQUIRED: "authorizationRequired",
+    CUSTOM: "custom",
+    DEMO_PROTOCOL_ERROR: "protocolError",
+    MEDIA_CONTENT: "mediaContent",
+    MODEL_CALL_END: "modelCallEnd",
+    MODEL_CALL_START: "modelCallStart",
+    RUN_ERROR: "runError",
+    RUN_FINISHED: "runFinished",
+    RUN_STARTED: "runStarted",
+    RUN_STOPPED: "runStopped",
+    TEXT_MESSAGE_CONTENT: "textMessageContent",
+    TEXT_MESSAGE_END: "textMessageEnd",
+    TEXT_MESSAGE_START: "textMessageStart",
+    TOOL_APPROVAL_REQUEST: "toolApprovalRequest",
+    TOOL_CALL_END: "toolCallEnd",
+    TOOL_CALL_START: "toolCallStart",
+    USAGE: "usage",
+  }[String(raw.type).toUpperCase()];
+  return [oneofKey, "payload", "data", "value"]
+    .map((key) => key ? raw[key] : null)
+    .find((value) => value && typeof value === "object") || {};
 }
 
 function normalizeOperationFrame(type, payload, raw) {
@@ -281,7 +308,7 @@ function normalizeOperationFrame(type, payload, raw) {
 function normalizeRunStarted(raw) {
   const started = raw.runStarted && typeof raw.runStarted === "object"
     ? raw.runStarted
-    : {};
+    : typedFramePayload(raw);
   const conversationId = raw.conversationId || raw.actorId ||
     started.conversationId || started.actorId || started.threadId;
   const turnId = raw.turnId || started.turnId || started.runId;
@@ -300,7 +327,7 @@ function normalizeRunStarted(raw) {
 
 function normalizeCustom(custom, raw) {
   const name = String(custom.name || "");
-  const payload = unpackAny(custom.payload);
+  const payload = unpackAny(custom.payload || custom.value || custom.data);
   if (name === "nyxid.action.request") {
     try {
       return {

@@ -92,6 +92,53 @@ public sealed class NyxIdChatPublicToolReceiptResultTests
     }
 
     [Fact]
+    public void BuildDurableReceiptEvidence_WorkflowStartWaitingForSignal_ShouldKeepSignalContinuation()
+    {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "command-alpha",
+            ToolName = "aevatar_start_workflow",
+            Status = AgentToolReceiptStatus.Success,
+            SubjectId = "scope-workflow:run-alpha",
+            MutationStage = AgentToolReceiptMutationStage.ReadModelObserved,
+            ResultJson = JsonSerializer.Serialize(new
+            {
+                run_id = "scope-workflow:run-alpha",
+                actor_id = "scope-workflow:run-alpha",
+                command_id = "command-alpha",
+                status = "WaitingForSignal",
+                result = new
+                {
+                    run_id = "scope-workflow:run-alpha",
+                    status = "WaitingForSignal",
+                    state_version = 7,
+                    waiting_signal = new
+                    {
+                        run_id = "scope-workflow:run-alpha",
+                        step_id = "wait_for_user_choice_timeout",
+                        signal_name = "dinner_date_user_choice",
+                        prompt = "Choose one dinner option.",
+                        timeout_ms = 10000,
+                    },
+                },
+            }),
+        };
+
+        var durable = NyxIdChatConversationGAgent.BuildDurableReceiptEvidence(receipt);
+
+        durable.Should().NotBeNull();
+        using var document = JsonDocument.Parse(durable!.ResultJson);
+        document.RootElement.GetProperty("status").GetString().Should().Be("waiting_for_signal");
+        document.RootElement.TryGetProperty("state_version", out _).Should().BeFalse();
+        var waitingSignal = document.RootElement.GetProperty("waiting_signal");
+        waitingSignal.GetProperty("run_id").GetString().Should().Be("scope-workflow:run-alpha");
+        waitingSignal.GetProperty("step_id").GetString().Should().Be("wait_for_user_choice_timeout");
+        waitingSignal.GetProperty("signal_name").GetString().Should().Be("dinner_date_user_choice");
+        waitingSignal.GetProperty("prompt").GetString().Should().Be("Choose one dinner option.");
+        waitingSignal.GetProperty("timeout_ms").GetInt64().Should().Be(10000);
+    }
+
+    [Fact]
     public void BuildDurableReceiptEvidence_WorkflowStartCompleted_ShouldKeepBoundedPartialOutput()
     {
         const string secret = "start-secret-must-not-persist";
@@ -305,6 +352,49 @@ public sealed class NyxIdChatPublicToolReceiptResultTests
                 .ToLowerInvariant());
         document.RootElement.TryGetProperty("final_output", out _).Should().BeFalse();
         durable.ResultJson.Length.Should().BeLessThan(1_024);
+    }
+
+    [Fact]
+    public void BuildDurableReceiptEvidence_WaitingSignalArtifact_ShouldKeepSignalContinuation()
+    {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "artifact-call-alpha",
+            ToolName = "aevatar_read_workflow_run_artifact",
+            Status = AgentToolReceiptStatus.Success,
+            SubjectId = "run-alpha",
+            ResultJson = JsonSerializer.Serialize(new
+            {
+                workflow_run_id = "run-alpha",
+                artifact_actor_id = "workflow-run-actor-alpha",
+                root_actor_id = "workflow-run-actor-alpha",
+                artifact = "report",
+                workflow_name = "dinner_date",
+                status = "WaitingForSignal",
+                pending = true,
+                state_version = 18,
+                command_id = "command-alpha",
+                waiting_signal = new
+                {
+                    run_id = "run-alpha",
+                    step_id = "wait_for_user_choice_timeout",
+                    signal_name = "dinner_date_user_choice",
+                    prompt = "Choose one dinner option.",
+                    timeout_ms = 10000,
+                },
+            }),
+        };
+
+        var durable = NyxIdChatConversationGAgent.BuildDurableReceiptEvidence(receipt);
+
+        durable.Should().NotBeNull();
+        using var document = JsonDocument.Parse(durable!.ResultJson);
+        var waitingSignal = document.RootElement.GetProperty("waiting_signal");
+        waitingSignal.GetProperty("run_id").GetString().Should().Be("run-alpha");
+        waitingSignal.GetProperty("step_id").GetString().Should().Be("wait_for_user_choice_timeout");
+        waitingSignal.GetProperty("signal_name").GetString().Should().Be("dinner_date_user_choice");
+        waitingSignal.GetProperty("prompt").GetString().Should().Be("Choose one dinner option.");
+        waitingSignal.GetProperty("timeout_ms").GetInt64().Should().Be(10000);
     }
 
     [Fact]

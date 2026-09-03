@@ -187,6 +187,50 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task WorkflowSignalAccepted_ShouldClearPendingSignalForSameWorkflowRunWhenCurrentSignalAdvanced()
+    {
+        const string actorId = "nyxid-chat-workflow-signal-clear";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, actorId);
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatWorkflowSignalAcceptedCommittedEvent
+        {
+            State = new NyxIdChatConversationGAgentState
+            {
+                ConversationActorId = actorId,
+                ScopeId = "scope-alpha",
+                ProgressSequence = 7,
+                PendingWorkflowSignal = new NyxIdChatPendingWorkflowSignalState
+                {
+                    ActorId = "workflow-actor-alpha",
+                    RunId = "run-alpha",
+                    SignalName = "dinner_date_user_choice",
+                    StepId = "wait_for_user_choice_timeout",
+                    Prompt = "Choose before automatic holds.",
+                    TimeoutMs = 10000,
+                    ObservedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 9, 3, 8, 0, 0, TimeSpan.Zero)),
+                },
+            },
+        }));
+
+        await agent.HandleWorkflowSignalAcceptedAsync(new NyxIdChatWorkflowSignalAcceptedCommand
+        {
+            ScopeId = "scope-alpha",
+            ConversationActorId = actorId,
+            WorkflowActorId = "workflow-actor-alpha",
+            RunId = "run-alpha",
+            SignalName = "dinner_date_user_choice_after_timeout",
+            StepId = "wait_for_post_timeout_choice",
+            ClientRequestId = "client-alpha",
+            CommandId = "command-alpha",
+            CorrelationId = "correlation-alpha",
+        });
+
+        agent.State.PendingWorkflowSignal.Should().BeNull();
+    }
+
+    [Fact]
     public async Task WorkflowInteractiveActionHandoff_ShouldCreateActionOnlyStateAndRejectConflictingReplay()
     {
         const string actorId = "nyxid-chat-workflow-alpha";

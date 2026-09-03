@@ -30,6 +30,7 @@ public static class WorkflowAuditReportSanitizer
             Input = WorkflowAuditTextSanitizer.SanitizeForStorage(report.Input),
             FinalOutput = WorkflowAuditTextSanitizer.SanitizeForStorage(report.FinalOutput),
             FinalError = WorkflowAuditTextSanitizer.SanitizeForStorage(report.FinalError),
+            CurrentWaitingSignal = SanitizeWaitingSignal(report.CurrentWaitingSignal),
             Topology = report.Topology.Select(SanitizeTopology).ToList(),
             Steps = report.Steps.Select(SanitizeStep).ToList(),
             RoleReplies = report.RoleReplies.Select(SanitizeRoleReply).ToList(),
@@ -39,6 +40,18 @@ public static class WorkflowAuditReportSanitizer
             Summary = SanitizeSummary(report.Summary),
         };
     }
+
+    private static WorkflowRunWaitingSignal? SanitizeWaitingSignal(WorkflowRunWaitingSignal? signal) =>
+        signal == null
+            ? null
+            : new WorkflowRunWaitingSignal
+            {
+                RunId = WorkflowAuditTextSanitizer.Sanitize(signal.RunId),
+                StepId = WorkflowAuditTextSanitizer.Sanitize(signal.StepId),
+                SignalName = WorkflowAuditTextSanitizer.Sanitize(signal.SignalName),
+                Prompt = WorkflowAuditTextSanitizer.SanitizeForStorage(signal.Prompt),
+                TimeoutMs = signal.TimeoutMs,
+            };
 
     private static WorkflowRunTopologyEdge SanitizeTopology(WorkflowRunTopologyEdge edge) =>
         new(

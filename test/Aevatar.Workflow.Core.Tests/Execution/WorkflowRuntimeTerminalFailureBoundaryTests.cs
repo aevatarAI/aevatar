@@ -449,6 +449,73 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         tool.ReleaseAll();
     }
 
+    [Fact]
+    public async Task Kernel_WaitSignalTimeoutWithFallback_ShouldDispatchFallbackStep()
+    {
+        const string runId = "run-wait-signal-timeout-fallback";
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wait-signal-timeout-fallback",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "wait-choice",
+                    Type = "wait_signal",
+                    OnError = new StepErrorPolicy
+                    {
+                        Strategy = "fallback",
+                        FallbackStep = "timeout-hold-all",
+                    },
+                },
+                new StepDefinition { Id = "timeout-hold-all", Type = "assign" },
+            ],
+        };
+        var host = new RecordingStateHost { RunId = runId };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var ctx = new RecordingEventHandlerContext();
+
+        await kernel.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = runId,
+                WorkflowName = workflow.Name,
+                Input = "start",
+            }),
+            ctx,
+            CancellationToken.None);
+        var kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        var waitExecutionId = kernelState.ExecutionIdsByStepId["wait-choice"];
+        ctx.Published.Clear();
+
+        await kernel.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                RunId = runId,
+                StepId = "wait-choice",
+                ExecutionId = waitExecutionId,
+                Success = false,
+                Error = "signal 'dinner_date_user_choice' timed out after 10000ms",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var fallbackRequest = ctx.Published
+            .Select(static publication => publication.Event)
+            .Where(static payload => payload.Is(StepRequestEvent.Descriptor))
+            .Select(static payload => payload.Unpack<StepRequestEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        fallbackRequest.StepId.Should().Be("timeout-hold-all");
+        ctx.Published
+            .Select(static publication => publication.Event)
+            .Should()
+            .NotContain(static payload => payload.Is(WorkflowCompletedEvent.Descriptor));
+    }
+
     [Theory]
     [InlineData("foreach-parent_item_0")]
     [InlineData("foreach-parent_execution_0123456789abcdef_item_42")]

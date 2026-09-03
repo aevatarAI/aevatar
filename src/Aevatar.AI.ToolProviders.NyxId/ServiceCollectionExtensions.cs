@@ -80,6 +80,8 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<NyxIdExecutionAgentToolSource>();
         services.TryAddTransient<NyxIdWorkflowAgentToolSource>();
         services.TryAddTransient<NyxIdConnectedServiceInventoryToolSource>();
+        services.TryAddTransient<NyxIdConnectedServiceToolSource>();
+        services.TryAddTransient<IWorkflowInputPreferenceContextProvider, NyxIdWorkflowInputPreferenceContextProvider>();
         services.TryAddTransient<INyxIdAdmittedOperationToolFactory,
             NyxIdAdmittedOperationToolFactory>();
 

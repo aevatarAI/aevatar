@@ -268,6 +268,8 @@ function createRunState() {
     eventSequence: 0,
     clientRequestId: null,
     request: null,
+    pendingWorkflowSignal: null,
+    workflowSignalSubmission: null,
   };
 }
 
@@ -1307,7 +1309,7 @@ function buildTrajectoryRows(entry) {
       }
       rows.push({
         type: "operation",
-        key: `${trace.key} ${record.key}`,
+        key: `${trace.key}\u0000${record.key}`,
         trace,
         number,
         record,
@@ -4724,7 +4726,10 @@ async function refreshActorStateFor(entry, actorId, { uncursored = false } = {})
       // The conversation actor owns the in-flight turn's step ledger. Rebuilding
       // its trace container here is what makes a mid-run reload keep its
       // trajectory; committed turns come from the stored chat history instead.
-      if (isConversationActor) restoreTrajectoryFromActorProjection(entry, result.projection);
+      if (isConversationActor) {
+        restoreTrajectoryFromActorProjection(entry, result.projection);
+        restoreWorkflowSignalFromActorProjection(entry, result.projection);
+      }
       if (result.reloadWithoutCursor) {
         if (!uncursored) return refreshActorStateFor(entry, actorId, { uncursored: true });
         setActorStateNotice(entry, actorId, "Actor 要求重新加载状态，请稍后重试。");
@@ -4763,6 +4768,22 @@ async function refreshActorStateFor(entry, actorId, { uncursored = false } = {})
       entry.actionStateReloads.delete(actorId);
     }
   }
+}
+
+function restoreWorkflowSignalFromActorProjection(entry, projection) {
+  const pending = projection?.pendingWorkflowSignal;
+  if (!entry?.run || !pending?.runId || !pending?.signalName) return;
+  entry.run.context ||= {};
+  entry.run.context.runId = pending.runId;
+  entry.run.pendingWorkflowSignal = {
+    actorId: pending.actorId || pending.runId,
+    runId: pending.runId,
+    signalName: pending.signalName,
+    stepId: pending.stepId || "",
+    prompt: pending.prompt || projection.activeStepSummary || "Workflow 正在等待你的选择。",
+    status: pending.status || "waiting",
+  };
+  entry.run.workflowSignalSubmission = null;
 }
 
 function actorStateNotice(entry, actorId) {
@@ -5976,6 +5997,11 @@ async function submitComposer() {
     await submitPendingInputFromComposer(pending);
     return;
   }
+  const workflowSignal = activeWorkflowSignalContext();
+  if (workflowSignal) {
+    await submitWorkflowSignalFromComposer(workflowSignal);
+    return;
+  }
   const projection = entryActorProjection(state.activeConversation);
   const actorActive = state.config.surface === "nyxid-chat" && Boolean(
     projection?.activeTurn || projection?.task?.status === "active",
@@ -6015,6 +6041,123 @@ async function submitPendingInputFromComposer(context = activePendingInputContex
   });
   entry.needsYouDrafts.set(key, draft);
   renderComposerInputRequest(entry, entry.actorProjection);
+}
+
+function activeWorkflowSignalContext() {
+  const entry = state.activeConversation;
+  const run = currentRequestRun(entry) || entry?.run || state.run;
+  const pending = run?.pendingWorkflowSignal;
+  if (!entry || !pending?.runId || !pending?.signalName || pending.status === "submitted") return null;
+  return { entry, run, pending };
+}
+
+function workflowSignalFallbackReply(status = "") {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "completed" || normalized === "succeeded" || normalized === "1") {
+    return "Workflow 选择已接受，流程已完成。";
+  }
+  if (normalized === "waiting_for_signal" || normalized === "waitingforsignal") {
+    return "Workflow 选择已接受，正在等待下一步输入。";
+  }
+  return "Workflow 选择已接受。";
+}
+
+function workflowSignalOutputDisplayText(output = "") {
+  const text = String(output || "").trim();
+  if (!text) return "";
+  try {
+    const parsed = JSON.parse(text);
+    for (const key of ["message", "summary", "output", "result"]) {
+      const value = parsed?.[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    const selected = parsed?.selected || parsed?.kept || parsed?.choice;
+    if (typeof selected === "string" && selected.trim()) return `${selected.trim()} is selected.`;
+  } catch {
+    return text;
+  }
+  return text;
+}
+
+async function readWorkflowSignalReply(scopeId, pending) {
+  try {
+    const actorId = String(pending.actorId || pending.runId || "").trim();
+    if (!actorId) return workflowSignalFallbackReply();
+    const response = await fetch(
+      `/api/workflow-actors/${encodeURIComponent(actorId)}/current-state`,
+      { method: "GET", headers: { Accept: "application/json" } },
+    );
+    if (!response.ok) return workflowSignalFallbackReply();
+    const summary = await response.json().catch(() => null);
+    const output = workflowSignalOutputDisplayText(summary?.lastOutput || summary?.last_output || summary?.output || "");
+    return output || workflowSignalFallbackReply(summary?.completionStatus || summary?.completion_status);
+  } catch {
+    return workflowSignalFallbackReply();
+  }
+}
+
+async function submitWorkflowSignalFromComposer(context = activeWorkflowSignalContext()) {
+  if (!context) return;
+  const { entry, run, pending } = context;
+  const payload = dom.promptInput.value.trim();
+  if (!payload || pending.status === "submitting") return;
+  const scopeId = String(state.config.scopeId || state.auth.user?.id || "").trim();
+  if (!scopeId) {
+    run.workflowSignalSubmission = { status: "error", message: "无法解析当前 NyxID scope。" };
+    renderActorControlUi();
+    return;
+  }
+
+  const controller = new AbortController();
+  entry.controllers.add(controller);
+  if (!entry.controller) entry.controller = controller;
+  state.activeController = entry.controller;
+  pending.status = "submitting";
+  run.workflowSignalSubmission = { status: "pending", message: "正在发送 workflow 选择…" };
+  setRunningUi(true);
+  renderActorControlUi();
+
+  try {
+    const response = await fetch(
+      `/api/scopes/${encodeURIComponent(scopeId)}/runs/${encodeURIComponent(pending.runId)}:signal`,
+      {
+        method: "POST",
+        headers: demoHeaders(),
+        signal: controller.signal,
+        body: JSON.stringify({
+          actorId: pending.actorId || pending.runId,
+          runId: pending.runId,
+          signalName: pending.signalName,
+          stepId: pending.stepId || undefined,
+          payload,
+        }),
+      },
+    );
+    if (!response.ok) throw await responseError(response);
+    await response.json().catch(() => null);
+    const assistantReply = await readWorkflowSignalReply(scopeId, pending);
+    withConversationState(entry, () => {
+      addUserMessage(payload);
+      addAssistantMessage(assistantReply);
+      dom.promptInput.value = "";
+      entry.draft = "";
+      autoResizeComposer();
+      pending.status = "submitted";
+      run.workflowSignalSubmission = { status: "accepted", message: "选择已发送，workflow 已返回结果。" };
+      persistConversationState(entry);
+    });
+  } catch (error) {
+    run.workflowSignalSubmission = {
+      status: "error",
+      message: `提交失败：${String(error?.message || "unknown error").slice(0, 240)}`,
+    };
+    pending.status = "waiting";
+  } finally {
+    releaseConversationController(entry, controller);
+    setRunningUi(Boolean(state.activeController));
+    renderActorControlUi();
+    renderHistoryList();
+  }
 }
 
 async function sendPrompt(overridePrompt, options = {}) {
@@ -6294,6 +6437,11 @@ function handleFrame(raw, { streamActorId = null, preserveConversationActor = fa
     case "tool_end":
       removeRunProgress();
       finishTool(event);
+      rememberWorkflowToolResult(event.result);
+      break;
+    case "waiting_signal":
+      removeRunProgress();
+      installWorkflowSignal(event);
       break;
     case "role_chat_completed":
       removeRunProgress();
@@ -6418,6 +6566,16 @@ function addUserMessage(prompt, attachment) {
     body.append(file);
     refreshIcons(file);
   }
+  scrollThread();
+}
+
+function addAssistantMessage(content) {
+  const text = String(content || "").trim();
+  if (!text) return;
+  const { body } = createMessageShell("assistant");
+  const contentNode = el("div", "message-content", "");
+  body.append(contentNode);
+  renderAssistantSegments(contentNode, text);
   scrollThread();
 }
 
@@ -6693,6 +6851,9 @@ function applyRoleChatCompletion(event) {
   const receipts = Array.isArray(event.toolReceipts) ? event.toolReceipts : [];
   const receiptsById = new Map(receipts.map((receipt) => [receipt.callId, receipt]));
 
+  for (const receipt of receipts) {
+    rememberWorkflowToolResult(receipt.resultJson);
+  }
   for (const call of calls) {
     const receipt = receiptsById.get(call.callId);
     addTool({
@@ -6735,6 +6896,48 @@ function applyRoleChatCompletion(event) {
     ...(event.usage || {}),
     model: event.model,
   });
+}
+
+function rememberWorkflowToolResult(result) {
+  const payload = parseArguments(result);
+  if (!payload || typeof payload !== "object") return;
+  const nested = payload.result && typeof payload.result === "object" ? payload.result : {};
+  const runId = String(
+    payload.run_id || payload.runId || payload.workflow_run_id || payload.workflowRunId ||
+    nested.run_id || nested.runId || "",
+  ).trim();
+  const actorId = String(
+    payload.actor_id || payload.actorId || payload.artifact_actor_id || payload.artifactActorId ||
+    nested.actor_id || nested.actorId || runId || "",
+  ).trim();
+  if (runId) state.run.context.runId = runId;
+  const waitingSignal = payload.waiting_signal || payload.waitingSignal ||
+    nested.waiting_signal || nested.waitingSignal;
+  if (waitingSignal && typeof waitingSignal === "object") {
+    installWorkflowSignal(waitingSignal, actorId || runId);
+  }
+}
+
+function installWorkflowSignal(event, fallbackActorId = "") {
+  const runId = String(event.runId || event.run_id || state.run.context.runId || "").trim();
+  const signalName = String(event.signalName || event.signal_name || "").trim();
+  if (!runId || !signalName) return false;
+  const stepId = String(event.stepId || event.step_id || "").trim();
+  const actorId = String(event.actorId || event.actor_id || fallbackActorId || runId).trim();
+  state.run.context.runId = runId;
+  state.run.pendingWorkflowSignal = {
+    actorId,
+    runId,
+    signalName,
+    stepId,
+    prompt: String(event.prompt || "Workflow 正在等待你的选择。"),
+    status: "waiting",
+  };
+  state.run.workflowSignalSubmission = null;
+  startStep(stepId || signalName, "workflow", `signal:${stepId || signalName}`);
+  addInfo(state.run.pendingWorkflowSignal.prompt);
+  renderActorControlUi();
+  return true;
 }
 
 function appendFallbackText(content) {
@@ -7317,6 +7520,24 @@ function renderActorControlUi() {
       : reliableVersion > 0
         ? "一次回答全部缺口；提交后 Actor 将继续当前任务"
         : "正在同步 Actor 状态…", { working: locked || reliableVersion <= 0 });
+    return;
+  }
+
+  const workflowSignal = activeWorkflowSignalContext();
+  if (workflowSignal) {
+    const submission = workflowSignal.run.workflowSignalSubmission;
+    const locked = workflowSignal.pending.status === "submitting" || submission?.status === "pending";
+    dom.sendButton.classList.remove("hidden");
+    dom.sendButton.disabled = !state.auth.authenticated || locked || !dom.promptInput.value.trim();
+    dom.sendButton.setAttribute("aria-label", "提交 workflow 选择");
+    dom.sendButton.title = "提交 workflow 选择";
+    dom.steerButton.classList.add("hidden");
+    dom.stopButton.classList.add("hidden");
+    dom.promptInput.disabled = !state.auth.authenticated || locked;
+    dom.attachButton.disabled = true;
+    dom.composerServicesButton.disabled = true;
+    dom.observationDisconnectButton.classList.toggle("hidden", !state.activeController);
+    setComposerStatus(submission?.message || "输入选择后提交，workflow 将继续当前 run", { working: locked });
     return;
   }
 

@@ -16,6 +16,9 @@ type CustomEventParser<T> = (value: unknown) => T | undefined;
 export type RuntimeRunContextData = RunContextData & {
   readonly correlationId?: string;
 };
+export type RuntimeWaitingSignalData = WaitingSignalData & {
+  readonly actorId?: string;
+};
 
 function asRecord(value: unknown): JsonRecord | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -137,18 +140,22 @@ export function parseHumanInputRequestData(
 
 export function parseWaitingSignalData(
   value: unknown,
-): WaitingSignalData | undefined {
+): RuntimeWaitingSignalData | undefined {
   const record = asRecord(value);
   if (!record) {
     return undefined;
   }
 
-  const data: WaitingSignalData = {
-    runId: readOptionalString(record, 'runId'),
-    stepId: readOptionalString(record, 'stepId'),
-    signalName: readOptionalString(record, 'signalName'),
+  const data: RuntimeWaitingSignalData = {
+    actorId:
+      readOptionalString(record, 'actorId') ?? readOptionalString(record, 'actor_id'),
+    runId: readOptionalString(record, 'runId') ?? readOptionalString(record, 'run_id'),
+    stepId: readOptionalString(record, 'stepId') ?? readOptionalString(record, 'step_id'),
+    signalName:
+      readOptionalString(record, 'signalName') ?? readOptionalString(record, 'signal_name'),
     prompt: readOptionalString(record, 'prompt'),
-    timeoutMs: readOptionalNumber(record, 'timeoutMs'),
+    timeoutMs:
+      readOptionalNumber(record, 'timeoutMs') ?? readOptionalNumber(record, 'timeout_ms'),
   };
 
   return hasDefinedValues(Object.values(data)) ? data : undefined;

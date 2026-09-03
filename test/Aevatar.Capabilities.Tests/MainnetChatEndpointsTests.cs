@@ -1,9 +1,11 @@
 using System.Security.Claims;
 using System.Text;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Mainnet.Host.Api.Chat;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -134,12 +136,28 @@ public sealed class MainnetChatEndpointsTests
             },
         });
         var signalDispatchService = new RecordingWorkflowSignalDispatchService();
+        var chatStateQueryPort = new FixedNyxIdChatConversationStateQueryPort(CreatePendingWorkflowSignalState());
+        var workflowQueryService = new FixedWorkflowExecutionQueryApplicationService(new WorkflowRunReport
+        {
+            CurrentWaitingSignal = new WorkflowRunWaitingSignal
+            {
+                RunId = "run-1",
+                StepId = "wait_for_post_timeout_choice",
+                SignalName = "dinner_date_user_choice_after_timeout",
+                Prompt = "Waiting for user to choose one held dinner option",
+                TimeoutMs = 600000,
+            },
+        });
+        var workflowSignalAcceptancePort = new RecordingWorkflowSignalAcceptancePort();
         var http = CreateAuthenticatedJsonContext(
             json,
             services =>
             {
                 services.AddSingleton<IWorkflowChatHistoryCreateRecoveryReadPort>(recoveryPort);
                 services.AddSingleton<IWorkflowExecutionCurrentStateQueryPort>(currentStateQueryPort);
+                services.AddSingleton<IWorkflowExecutionQueryApplicationService>(workflowQueryService);
+                services.AddSingleton<INyxIdChatConversationStateQueryPort>(chatStateQueryPort);
+                services.AddSingleton<INyxIdChatWorkflowSignalAcceptancePort>(workflowSignalAcceptancePort);
                 services.AddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(signalDispatchService);
             });
         var classification = await MainnetChatEndpoints.ClassifyRequestAsync(http.Request);
@@ -160,7 +178,101 @@ public sealed class MainnetChatEndpointsTests
         command.CommandId.Should().Be("client-1");
         command.Payload.Should().Be("Let's pick the first restaurant, Pasta Bar.");
         command.CorrelationId.Should().Be("client-1");
+        chatStateQueryPort.Queries.Should().ContainSingle().Which.Should().Match<NyxIdChatConversationStateQuery>(query =>
+            query.ScopeId == "scope-1" && query.ActorId == "nyxid-chat-1");
+        var clearCommand = workflowSignalAcceptancePort.Commands.Should().ContainSingle().Subject;
+        clearCommand.ScopeId.Should().Be("scope-1");
+        clearCommand.ConversationActorId.Should().Be("nyxid-chat-1");
+        clearCommand.WorkflowActorId.Should().Be("workflow-actor-1");
+        clearCommand.RunId.Should().Be("run-1");
+        clearCommand.SignalName.Should().Be("dinner_date_user_choice_after_timeout");
+        clearCommand.StepId.Should().Be("wait_for_post_timeout_choice");
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+    }
+
+    [Fact]
+    public async Task WorkflowSignalContinuation_ShouldRouteFromRecoveryWhenConversationHasNoPendingWorkflowSignal()
+    {
+        const string json = """
+            {
+              "type":"text",
+              "conversationId":"nyxid-chat-1",
+              "prompt":"1",
+              "clientRequestId":"client-1"
+            }
+            """;
+        var recoveryPort = new RecordingChatHistoryCreateRecoveryReadPort
+        {
+            Recovery = new WorkflowChatHistoryCreateRecovery(
+                WorkflowChatHistoryCreateRecoveryStatus.Bound,
+                "scope-1",
+                "create-command",
+                "nyxid-chat-1",
+                "turn-1",
+                "workflow-actor-1",
+                "create-command",
+                "create-correlation",
+                "fingerprint",
+                7,
+                DateTimeOffset.UtcNow),
+        };
+        var currentStateQueryPort = new FixedWorkflowExecutionCurrentStateQueryPort(new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor-1",
+            ScopeId = "scope-1",
+            RunId = "run-1",
+            CompletionStatus = WorkflowRunCompletionStatus.WaitingForSignal,
+            ActivityWaiting = new WorkflowRunActivityWaitingSnapshot
+            {
+                Availability = "available",
+                WaitingKind = "signal",
+                StepId = "wait_for_post_timeout_choice",
+                Prompt = "dinner_date_user_choice_after_timeout",
+            },
+        });
+        var signalDispatchService = new RecordingWorkflowSignalDispatchService();
+        var chatStateQueryPort = new FixedNyxIdChatConversationStateQueryPort(null);
+        var workflowQueryService = new FixedWorkflowExecutionQueryApplicationService(new WorkflowRunReport
+        {
+            CurrentWaitingSignal = new WorkflowRunWaitingSignal
+            {
+                RunId = "run-1",
+                StepId = "wait_for_post_timeout_choice",
+                SignalName = "dinner_date_user_choice_after_timeout",
+                Prompt = "Waiting for user to choose one held dinner option",
+                TimeoutMs = 600000,
+            },
+        });
+        var workflowSignalAcceptancePort = new RecordingWorkflowSignalAcceptancePort();
+        var http = CreateAuthenticatedJsonContext(
+            json,
+            services =>
+            {
+                services.AddSingleton<IWorkflowChatHistoryCreateRecoveryReadPort>(recoveryPort);
+                services.AddSingleton<IWorkflowExecutionCurrentStateQueryPort>(currentStateQueryPort);
+                services.AddSingleton<IWorkflowExecutionQueryApplicationService>(workflowQueryService);
+                services.AddSingleton<INyxIdChatConversationStateQueryPort>(chatStateQueryPort);
+                services.AddSingleton<INyxIdChatWorkflowSignalAcceptancePort>(workflowSignalAcceptancePort);
+                services.AddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(signalDispatchService);
+            });
+        var classification = await MainnetChatEndpoints.ClassifyRequestAsync(http.Request);
+
+        var handled = await MainnetChatEndpoints.TryHandleWorkflowSignalContinuationAsync(
+            http,
+            classification.Body!.Value,
+            CancellationToken.None);
+
+        handled.Should().BeTrue();
+        chatStateQueryPort.Queries.Should().ContainSingle().Which.Should().Match<NyxIdChatConversationStateQuery>(query =>
+            query.ScopeId == "scope-1" && query.ActorId == "nyxid-chat-1");
+        var command = signalDispatchService.Commands.Should().ContainSingle().Subject;
+        command.ActorId.Should().Be("workflow-actor-1");
+        command.RunId.Should().Be("run-1");
+        command.SignalName.Should().Be("dinner_date_user_choice_after_timeout");
+        command.StepId.Should().Be("wait_for_post_timeout_choice");
+        command.CommandId.Should().Be("client-1");
+        command.Payload.Should().Be("1");
+        workflowSignalAcceptancePort.Commands.Should().ContainSingle();
     }
 
     [Fact]
@@ -358,6 +470,138 @@ public sealed class MainnetChatEndpointsTests
             string actorId,
             CancellationToken ct = default) =>
             Task.FromResult<WorkflowActorProjectionState?>(null);
+    }
+
+    private static NyxIdChatConversationStateQueryResult CreatePendingWorkflowSignalState() =>
+        NyxIdChatConversationStateQueryResult.Current(new NyxIdChatConversationStateSnapshot(
+            "nyxid-chat-1",
+            "scope-1",
+            9,
+            1,
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            [],
+            null,
+            null,
+            [],
+            null,
+            null,
+            null,
+            PendingWorkflowSignal: new NyxIdChatPendingWorkflowSignalSnapshot(
+                "workflow-actor-1",
+                "run-1",
+                "dinner_date_user_choice",
+                "wait_for_user_choice_timeout",
+                "Waiting for user to choose one dinner option before automatic holds",
+                10000,
+                DateTimeOffset.UtcNow)));
+
+    private sealed class FixedNyxIdChatConversationStateQueryPort(
+        NyxIdChatConversationStateQueryResult? result) : INyxIdChatConversationStateQueryPort
+    {
+        public List<NyxIdChatConversationStateQuery> Queries { get; } = [];
+
+        public Task<NyxIdChatConversationStateQueryResult> GetAsync(
+            NyxIdChatConversationStateQuery query,
+            CancellationToken ct = default)
+        {
+            Queries.Add(query);
+            return Task.FromResult(result ?? NyxIdChatConversationStateQueryResult.Current(
+                new NyxIdChatConversationStateSnapshot(
+                    query.ActorId,
+                    query.ScopeId,
+                    9,
+                    1,
+                    DateTimeOffset.UtcNow,
+                    null,
+                    null,
+                    [],
+                    null,
+                    null,
+                    [],
+                    null,
+                    null,
+                    null)));
+        }
+
+        public Task<IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary>>
+            GetAttentionSummariesAsync(
+                string scopeId,
+                IReadOnlyCollection<string> actorIds,
+                CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary>>(
+                new Dictionary<string, NyxIdChatConversationAttentionSummary>());
+    }
+
+    private sealed class FixedWorkflowExecutionQueryApplicationService(WorkflowRunReport? report)
+        : IWorkflowExecutionQueryApplicationService
+    {
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
+
+        public List<string> ReportActorIds { get; } = [];
+
+        public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowAgentSummary>>([]);
+
+        public IReadOnlyList<string> ListWorkflows() => [];
+
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowCatalogItem>>([]);
+
+        public Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(string workflowName, CancellationToken ct = default) =>
+            Task.FromResult<WorkflowCatalogItemDetail?>(null);
+
+        public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowCapabilitiesDocument());
+
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default) =>
+            Task.FromResult<WorkflowActorSnapshot?>(null);
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
+        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string workflowRunId, CancellationToken ct = default)
+        {
+            ReportActorIds.Add(workflowRunId);
+            return Task.FromResult(report);
+        }
+
+        public Task<IReadOnlyList<WorkflowRunTimelineExportItem>> ListWorkflowRunTimelineExportAsync(
+            string workflowRunId,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowRunTimelineExportItem>>([]);
+
+        public Task<IReadOnlyList<WorkflowRunGraphExportEdge>> ListWorkflowRunGraphExportEdgesAsync(
+            string workflowRunId,
+            int take = 200,
+            WorkflowRunGraphExportQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowRunGraphExportEdge>>([]);
+
+        public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(
+            string workflowRunId,
+            int depth = 2,
+            int take = 200,
+            WorkflowRunGraphExportQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowRunGraphExportSubgraph());
+    }
+
+    private sealed class RecordingWorkflowSignalAcceptancePort : INyxIdChatWorkflowSignalAcceptancePort
+    {
+        public List<NyxIdChatWorkflowSignalAcceptedCommand> Commands { get; } = [];
+
+        public Task MarkAcceptedAsync(
+            NyxIdChatWorkflowSignalAcceptedCommand command,
+            CancellationToken ct = default)
+        {
+            Commands.Add(command);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingWorkflowSignalDispatchService

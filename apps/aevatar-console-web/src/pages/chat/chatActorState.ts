@@ -82,6 +82,16 @@ export type ChatPendingApproval = JsonRecord & {
   grantBoundary?: 'within_grant' | 'nyxid_step_up';
 };
 
+export type ChatPendingWorkflowSignal = JsonRecord & {
+  actorId: string;
+  runId: string;
+  signalName: string;
+  stepId?: string;
+  prompt?: string;
+  timeoutMs?: number;
+  observedAt?: string;
+};
+
 export type ChatServiceConnectActionRequest = {
   readonly schemaVersion: 4;
   readonly actorId: string;
@@ -158,6 +168,7 @@ export type ChatActorProjection = {
   steps: Map<string, ChatActorStep>;
   pendingInput: ChatPendingInput | null;
   pendingApproval: ChatPendingApproval | null;
+  pendingWorkflowSignal: ChatPendingWorkflowSignal | null;
   actions: Map<string, ChatActionSummary>;
   controlFence: JsonRecord | null;
   latestControlResult: JsonRecord | null;
@@ -206,6 +217,7 @@ export function createChatActorProjection(
     steps: new Map(),
     pendingInput: null,
     pendingApproval: null,
+    pendingWorkflowSignal: null,
     actions: new Map(),
     controlFence: null,
     latestControlResult: null,
@@ -392,6 +404,9 @@ export function applyCurrentStateResult(
     : [];
   next.pendingInput = decodePendingInput(snapshot.pendingInput);
   next.pendingApproval = normalizePendingApproval(snapshot.pendingApproval);
+  next.pendingWorkflowSignal = decodePendingWorkflowSignal(
+    snapshot.pendingWorkflowSignal ?? snapshot.pending_workflow_signal,
+  );
   next.controlFence = cloneNullableRecord(snapshot.controlFence);
   next.latestControlResult = cloneNullableRecord(snapshot.latestControlResult);
   next.latestStepControlResult = cloneNullableRecord(
@@ -783,6 +798,29 @@ function normalizePendingApproval(input: unknown): ChatPendingApproval | null {
   };
 }
 
+function decodePendingWorkflowSignal(
+  input: unknown,
+): ChatPendingWorkflowSignal | null {
+  const value = optionalRecord(input);
+  if (!value) return null;
+  const actorId = readIdentity(value.actorId ?? value.actor_id);
+  const runId = readIdentity(value.runId ?? value.run_id);
+  const signalName = readIdentity(value.signalName ?? value.signal_name);
+  if (!actorId || !runId || !signalName) return null;
+  const stepId = readIdentity(value.stepId ?? value.step_id) ?? undefined;
+  const timeoutMs = value.timeoutMs ?? value.timeout_ms;
+  return {
+    ...cloneRecord(value),
+    actorId,
+    runId,
+    signalName,
+    ...(stepId ? { stepId } : {}),
+    ...(typeof value.prompt === 'string' ? { prompt: value.prompt } : {}),
+    ...(validSafeInteger(timeoutMs) ? { timeoutMs } : {}),
+    ...(typeof value.observedAt === 'string' ? { observedAt: value.observedAt } : {}),
+  };
+}
+
 function decodePendingInput(input: unknown): ChatPendingInput | null {
   const value = optionalRecord(input);
   if (!value) return null;
@@ -960,6 +998,9 @@ function cloneProjection(projection: ChatActorProjection): ChatActorProjection {
       : null,
     pendingApproval: projection.pendingApproval
       ? ({ ...projection.pendingApproval } as ChatPendingApproval)
+      : null,
+    pendingWorkflowSignal: projection.pendingWorkflowSignal
+      ? ({ ...projection.pendingWorkflowSignal } as ChatPendingWorkflowSignal)
       : null,
     actions: new Map(
       [...projection.actions].map(([key, value]) => [key, { ...value }]),

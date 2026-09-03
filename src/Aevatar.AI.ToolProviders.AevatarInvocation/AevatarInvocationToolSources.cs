@@ -507,6 +507,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
             final_output_bytes = finalOutputDigest.ByteCount,
             final_output_sha256 = finalOutputDigest.Sha256,
             final_error = EmptyToNull(report.FinalError),
+            waiting_signal = ToWaitingSignalResult(report.CurrentWaitingSignal),
             summary = new
             {
                 total_steps = report.Summary.TotalSteps,
@@ -734,6 +735,18 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
 
     private static string? EmptyToNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static object? ToWaitingSignalResult(WorkflowRunWaitingSignal? signal) =>
+        signal == null || string.IsNullOrWhiteSpace(signal.StepId) || string.IsNullOrWhiteSpace(signal.SignalName)
+            ? null
+            : new
+            {
+                run_id = EmptyToNull(signal.RunId),
+                step_id = signal.StepId,
+                signal_name = signal.SignalName,
+                prompt = EmptyToNull(signal.Prompt),
+                timeout_ms = signal.TimeoutMs > 0 ? signal.TimeoutMs : (int?)null,
+            };
 
     private static string? Truncate(string? value, int max) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Length <= max ? value : value[..max] + "...";

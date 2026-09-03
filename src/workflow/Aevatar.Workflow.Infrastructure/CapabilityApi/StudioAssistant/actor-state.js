@@ -35,6 +35,7 @@ export function createActorProjection(actorId = null) {
     steps: new Map(),
     pendingInput: null,
     pendingApproval: null,
+    pendingWorkflowSignal: null,
     latestInputResolution: null,
     latestApprovalResolution: null,
     taskStatus: null,
@@ -196,6 +197,9 @@ export function applyCurrentStateResult(projection, envelope) {
     : [];
   next.pendingInput = cloneNullable(snapshot.pendingInput);
   next.pendingApproval = cloneNullable(snapshot.pendingApproval);
+  next.pendingWorkflowSignal = pendingWorkflowSignalFromSnapshot(
+    snapshot.pendingWorkflowSignal || snapshot.pending_workflow_signal,
+  );
   next.latestInputResolution = cloneNullable(snapshot.latestInputResolution);
   next.latestApprovalResolution = cloneNullable(snapshot.latestApprovalResolution);
   next.taskStatus = snapshot.taskStatus || snapshot.activeTask?.status || null;
@@ -284,6 +288,23 @@ function applyStepChanged(projection, input) {
   }
 }
 
+function pendingWorkflowSignalFromSnapshot(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const runId = String(input.runId || input.run_id || "").trim();
+  const signalName = String(input.signalName || input.signal_name || "").trim();
+  if (!runId || !signalName) return null;
+  return {
+    actorId: String(input.actorId || input.actor_id || runId).trim(),
+    runId,
+    signalName,
+    stepId: String(input.stepId || input.step_id || "").trim(),
+    prompt: String(input.prompt || "Workflow 正在等待你的选择。"),
+    timeoutMs: Number.isSafeInteger(input.timeoutMs) ? input.timeoutMs : 0,
+    observedAt: input.observedAt || null,
+    status: "waiting",
+  };
+}
+
 function pendingApprovalFromEvent(input) {
   const presentation = input?.presentation && typeof input.presentation === "object"
     ? input.presentation
@@ -318,6 +339,13 @@ function updateAttention(projection) {
     projection.attentionSince = projection.pendingApproval.askedAt || null;
     projection.activeStepSummary = projection.pendingApproval.action ||
       projection.pendingApproval.toolName || null;
+    return;
+  }
+  if (projection.pendingWorkflowSignal) {
+    projection.attentionKind = "workflow_signal";
+    projection.attentionSince = projection.pendingWorkflowSignal.observedAt || null;
+    projection.activeStepSummary = projection.pendingWorkflowSignal.prompt ||
+      projection.pendingWorkflowSignal.signalName || null;
     return;
   }
   projection.attentionKind = "none";
@@ -484,6 +512,7 @@ function cloneProjection(projection) {
     steps: new Map([...projection.steps].map(([key, value]) => [key, cloneValue(value)])),
     pendingInput: cloneNullable(projection.pendingInput),
     pendingApproval: cloneNullable(projection.pendingApproval),
+    pendingWorkflowSignal: cloneNullable(projection.pendingWorkflowSignal),
     latestInputResolution: cloneNullable(projection.latestInputResolution),
     latestApprovalResolution: cloneNullable(projection.latestApprovalResolution),
     actions: new Map([...projection.actions].map(([key, value]) => [key, cloneValue(value)])),

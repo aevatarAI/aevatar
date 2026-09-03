@@ -256,7 +256,9 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
         app.Should().Contain("restoreTrajectoryFromStoredOperations(entry, storedOperations, messages);");
-        app.Should().Contain("if (isConversationActor) restoreTrajectoryFromActorProjection(entry, result.projection);");
+        app.Should().Contain("if (isConversationActor) {");
+        app.Should().Contain("restoreTrajectoryFromActorProjection(entry, result.projection);");
+        app.Should().Contain("restoreWorkflowSignalFromActorProjection(entry, result.projection);");
         // Tool result bodies are never archived, so the restore path must not read one.
         app.Should().NotContain("operation?.resultPreview");
     }

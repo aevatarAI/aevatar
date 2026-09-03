@@ -153,6 +153,7 @@ public sealed class WorkflowRunReport
     public string Input { get; set; } = string.Empty;
     public string FinalOutput { get; set; } = string.Empty;
     public string FinalError { get; set; } = string.Empty;
+    public WorkflowRunWaitingSignal? CurrentWaitingSignal { get; set; }
     public List<WorkflowRunTopologyEdge> Topology { get; set; } = [];
     public List<WorkflowRunStepTrace> Steps { get; set; } = [];
     public List<WorkflowRunRoleReply> RoleReplies { get; set; } = [];
@@ -160,6 +161,15 @@ public sealed class WorkflowRunReport
     public List<WorkflowRunTimelineEvent> Timeline { get; set; } = [];
     public WorkflowRunUsageMetrics Usage { get; set; } = new();
     public WorkflowRunStatistics Summary { get; set; } = new();
+}
+
+public sealed class WorkflowRunWaitingSignal
+{
+    public string RunId { get; set; } = string.Empty;
+    public string StepId { get; set; } = string.Empty;
+    public string SignalName { get; set; } = string.Empty;
+    public string Prompt { get; set; } = string.Empty;
+    public int TimeoutMs { get; set; }
 }
 
 public sealed class WorkflowRunUsageMetrics

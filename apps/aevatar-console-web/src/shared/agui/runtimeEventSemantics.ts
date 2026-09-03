@@ -33,6 +33,14 @@ function asRecord(value: unknown): JsonRecord | undefined {
   return value as JsonRecord;
 }
 
+function parseJsonRecord(value: string): JsonRecord | undefined {
+  try {
+    return asRecord(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+}
+
 function readOptionalString(
   record: JsonRecord | undefined,
   ...keys: string[]
@@ -49,6 +57,19 @@ function readOptionalString(
   }
 
   return "";
+}
+
+function readCustomPayloadRecord(event: AGUIEvent): JsonRecord | undefined {
+  const rawEvent = event as unknown as JsonRecord;
+  const nested = asRecord(rawEvent.custom);
+  return (
+    asRecord(rawEvent.value) ??
+    asRecord(rawEvent.payload) ??
+    asRecord(rawEvent.data) ??
+    asRecord(nested?.payload) ??
+    asRecord(nested?.data) ??
+    asRecord(nested?.value)
+  );
 }
 
 export type RuntimeEvent = AGUIEvent;
@@ -418,8 +439,9 @@ function buildWaitingSignalIntervention(
 
   const runId = String(data?.runId || "").trim();
   const signalName = String(data?.signalName || "").trim() || "continue";
+  const workflowActorId = String(data?.actorId || "").trim() || actorId;
   return {
-    actorId: actorId?.trim() || undefined,
+    actorId: workflowActorId?.trim() || undefined,
     key: buildRunInterventionKey("wait_signal", runId, stepId, signalName),
     kind: "wait_signal",
     prompt:
@@ -433,6 +455,84 @@ function buildWaitingSignalIntervention(
         ? Math.max(1, Math.round(data.timeoutMs / 1000))
         : undefined,
   };
+}
+
+function buildWorkflowArtifactWaitingSignalIntervention(
+  toolName: string,
+  result: string,
+  actorId?: string
+): RuntimeRunInterventionInfo | null {
+  if (
+    toolName !== "aevatar_read_workflow_run_artifact" &&
+    toolName !== "aevatar_start_workflow"
+  ) {
+    return null;
+  }
+
+  const root = parseJsonRecord(result);
+  const nestedResult = asRecord(root?.result);
+  const waitingSignal =
+    asRecord(root?.waiting_signal) ?? asRecord(nestedResult?.waiting_signal);
+  const runId = readOptionalString(waitingSignal, "run_id", "runId");
+  const stepId = readOptionalString(waitingSignal, "step_id", "stepId");
+  const signalName = readOptionalString(
+    waitingSignal,
+    "signal_name",
+    "signalName"
+  );
+  if (!runId || !stepId || !signalName) {
+    return null;
+  }
+
+  const timeoutMs = waitingSignal?.timeout_ms ?? waitingSignal?.timeoutMs;
+  const workflowActorId =
+    readOptionalString(
+      root,
+      "actor_id",
+      "actorId",
+      "artifact_actor_id",
+      "artifactActorId"
+    ) ||
+    readOptionalString(
+      nestedResult,
+      "actor_id",
+      "actorId",
+      "artifact_actor_id",
+      "artifactActorId"
+    ) ||
+    runId ||
+    actorId;
+  return {
+    key: `${runId}:${stepId}:${signalName}`,
+    kind: "wait_signal",
+    actorId: workflowActorId,
+    prompt:
+      readOptionalString(waitingSignal, "prompt") || "Send input to continue.",
+    runId,
+    signalName,
+    stepId,
+    timeoutSeconds:
+      typeof timeoutMs === "number" && timeoutMs > 0
+        ? Math.max(1, Math.round(timeoutMs / 1000))
+        : undefined,
+  };
+}
+
+function shouldClearRunInterventionForRuntimeEvent(
+  accumulator: RuntimeEventAccumulator,
+  event: RuntimeEvent
+): boolean {
+  const pending = accumulator.pendingRunIntervention;
+  if (!pending) {
+    return false;
+  }
+
+  const eventRunId = readOptionalString(
+    event as unknown as JsonRecord,
+    "runId",
+    "run_id"
+  );
+  return !!eventRunId && eventRunId === pending.runId;
 }
 
 export function extractRunInterventionRequest(
@@ -459,9 +559,10 @@ export function extractRunInterventionRequest(
   }
 
   if (custom.name === CustomEventName.WaitingSignal) {
+    const customPayload = readCustomPayloadRecord(event);
     return buildWaitingSignalIntervention(
       parseWaitingSignalData(custom.data),
-      actorId
+      readOptionalString(customPayload, "actorId", "actor_id") || actorId
     );
   }
 
@@ -499,7 +600,9 @@ export function applyRuntimeEvent(
     event.type === AGUIEventType.RUN_FINISHED ||
     event.type === AGUIEventType.RUN_ERROR
   ) {
-    accumulator.pendingRunIntervention = undefined;
+    if (shouldClearRunInterventionForRuntimeEvent(accumulator, event)) {
+      accumulator.pendingRunIntervention = undefined;
+    }
   }
 
   if (event.type === AGUIEventType.RUN_STARTED) {
@@ -535,7 +638,9 @@ export function applyRuntimeEvent(
   }
 
   if (event.type === AGUIEventType.STEP_STARTED) {
-    accumulator.pendingRunIntervention = undefined;
+    if (shouldClearRunInterventionForRuntimeEvent(accumulator, event)) {
+      accumulator.pendingRunIntervention = undefined;
+    }
     const stepName =
       String(event.stepName || "").trim() ||
       `Step ${accumulator.steps.length + 1}`;
@@ -548,7 +653,9 @@ export function applyRuntimeEvent(
   }
 
   if (event.type === AGUIEventType.STEP_FINISHED) {
-    accumulator.pendingRunIntervention = undefined;
+    if (shouldClearRunInterventionForRuntimeEvent(accumulator, event)) {
+      accumulator.pendingRunIntervention = undefined;
+    }
     const stepName = String(event.stepName || "").trim();
     const existingStep = accumulator.steps.find(
       (step) =>
@@ -586,6 +693,14 @@ export function applyRuntimeEvent(
           ? event.result.trim()
           : "";
       existingTool.status = "done";
+      const intervention = buildWorkflowArtifactWaitingSignalIntervention(
+        existingTool.name,
+        existingTool.result,
+        accumulator.actorId
+      );
+      if (intervention) {
+        accumulator.pendingRunIntervention = intervention;
+      }
     }
   }
 

@@ -124,6 +124,7 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatInputRequestedEvent>(ApplyInputRequested)
             .On<NyxIdChatInputResolutionCommittedEvent>(ApplyInputResolutionCommitted)
             .On<NyxIdChatApprovalResolutionCommittedEvent>(ApplyApprovalResolutionCommitted)
+            .On<NyxIdChatWorkflowSignalAcceptedCommittedEvent>(ApplyWorkflowSignalAcceptedCommitted)
             .On<NyxIdChatCanaryEffectFaultArmedCommittedEvent>(
                 ApplyCanaryEffectFaultArmedCommitted)
             .On<NyxIdChatCanaryEffectFaultConsumedCommittedEvent>(
@@ -1921,6 +1922,45 @@ public sealed class NyxIdChatConversationGAgent
                 command.CorrelationId,
                 Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
         }
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowSignalAcceptedAsync(NyxIdChatWorkflowSignalAcceptedCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!TryApplyWorkflowSignalAccepted(command, out var next))
+            return;
+
+        await PersistDomainEventAsync(new NyxIdChatWorkflowSignalAcceptedCommittedEvent
+        {
+            WorkflowActorId = command.WorkflowActorId.Trim(),
+            RunId = command.RunId.Trim(),
+            SignalName = command.SignalName.Trim(),
+            StepId = command.StepId?.Trim() ?? string.Empty,
+            ClientRequestId = command.ClientRequestId?.Trim() ?? string.Empty,
+            State = NyxIdChatNeedsYouDecisions.RefreshAttention(next),
+        }, CancellationToken.None);
+    }
+
+    private bool TryApplyWorkflowSignalAccepted(
+        NyxIdChatWorkflowSignalAcceptedCommand command,
+        out NyxIdChatConversationGAgentState next)
+    {
+        next = State.Clone();
+        var pending = State.PendingWorkflowSignal;
+        if (pending is null ||
+            !string.Equals(State.ScopeId, command.ScopeId?.Trim(), StringComparison.Ordinal) ||
+            !string.Equals(Id, command.ConversationActorId?.Trim(), StringComparison.Ordinal) ||
+            !string.Equals(pending.ActorId, command.WorkflowActorId?.Trim(), StringComparison.Ordinal) ||
+            !string.Equals(pending.RunId, command.RunId?.Trim(), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        next.PendingWorkflowSignal = null;
+        next.ProgressSequence = checked(Math.Max(0, next.ProgressSequence) + 1);
+        next.UpdatedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        return true;
     }
 
     [EventHandler]
@@ -3885,6 +3925,11 @@ public sealed class NyxIdChatConversationGAgent
     private static NyxIdChatConversationGAgentState ApplyApprovalResolutionCommitted(
         NyxIdChatConversationGAgentState current,
         NyxIdChatApprovalResolutionCommittedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
+    private static NyxIdChatConversationGAgentState ApplyWorkflowSignalAcceptedCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatWorkflowSignalAcceptedCommittedEvent evt) =>
         evt.State?.Clone() ?? current;
 
     private static NyxIdChatConversationGAgentState ApplyCanaryEffectFaultArmedCommitted(

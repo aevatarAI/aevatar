@@ -29,7 +29,7 @@ public sealed class DinnerDateMockWorkflowFixtureTests
         var discovery = workflow.Steps.Should().Contain(step => step.Id == "discover_restaurant_candidates").Subject;
         discovery.Type.Should().Be("assign");
         discovery.Parameters["value"].Should().Contain("mock_catalog")
-            .And.Contain("${json(steps.capture_user_choice.json.search_query)}");
+            .And.Contain("${json(steps.initialize_context.json.search_query)}");
         yaml.Should().NotContain("tool: web_search");
         yaml.Should().NotContain("Keong Saik Duxton Singapore")
             .And.NotContain("\"participant\":\"Priya\"")
@@ -46,9 +46,21 @@ public sealed class DinnerDateMockWorkflowFixtureTests
 
         var workflow = new WorkflowParser().Parse(yaml);
 
+        var optionsShown = workflow.Steps.Should().Contain(step => step.Id == "emit_options_shown").Subject;
+        optionsShown.Next.Should().Be("wait_for_user_choice_timeout");
+
         var timeoutWait = workflow.Steps.Should().Contain(step => step.Id == "wait_for_user_choice_timeout").Subject;
-        timeoutWait.Type.Should().Be("delay");
-        timeoutWait.Parameters["duration_ms"].Should().Be("10000");
+        timeoutWait.Type.Should().Be("wait_signal");
+        timeoutWait.Next.Should().Be("normalize_user_choice");
+        timeoutWait.Parameters["signal_name"].Should().Be("dinner_date_user_choice");
+        timeoutWait.Parameters["timeout_ms"].Should().Be("10000");
+        timeoutWait.OnError.Should().NotBeNull();
+        timeoutWait.OnError!.Strategy.Should().Be("fallback");
+        timeoutWait.OnError.FallbackStep.Should().Be("mark_silence_timeout");
+
+        var normalizer = workflow.Steps.Should().Contain(step => step.Id == "normalize_user_choice").Subject;
+        normalizer.Parameters["prompt_prefix"].Should().Contain("steps.wait_for_user_choice_timeout.output")
+            .And.NotContain("steps.capture_user_choice.output");
 
         var timeoutMarker = workflow.Steps.Should().Contain(step => step.Id == "mark_silence_timeout").Subject;
         timeoutMarker.Next.Should().Be("hold_candidate_option_1");
@@ -110,6 +122,7 @@ public sealed class DinnerDateMockWorkflowFixtureTests
             ["steps.capture_user_choice.json.policy"] = "{\"show_options_before_calls\":true,\"money_spend_allowed\":false,\"reservation_calls_auto_allowed\":true}",
             ["steps.capture_user_choice.json.missing_fields"] = "[]",
             ["steps.capture_user_choice.json.search_query"] = "Keong Saik Duxton Singapore romantic dinner Tuesday 7:30pm",
+            ["steps.initialize_context.json.search_query"] = "Keong Saik Duxton Singapore romantic dinner Tuesday 7:30pm",
         };
         var evaluator = new WorkflowExpressionEvaluator();
 
@@ -127,6 +140,48 @@ public sealed class DinnerDateMockWorkflowFixtureTests
         candidatesDocument.RootElement.GetProperty("query").GetString().Should()
             .Be("Keong Saik Duxton Singapore romantic dinner Tuesday 7:30pm");
         candidatesDocument.RootElement.GetProperty("results").EnumerateArray().Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void RenderedParameters_ShouldNormalizeSemanticAliasesFromChatInput()
+    {
+        var workflow = new WorkflowParser().Parse(File.ReadAllText(Path.Combine(
+            GetRepositoryRoot(),
+            "workflow-templates",
+            "dinner_date_mock.yaml")));
+        var variables = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["steps.capture_user_choice.output"] = "Plan a dinner date with Priya this Friday at 7:30 PM",
+            ["steps.capture_user_choice.json.companion_name"] = "Priya",
+            ["steps.capture_user_choice.json.date"] = "2026-09-04",
+            ["steps.capture_user_choice.json.time"] = "19:30",
+            ["steps.capture_user_choice.json.party_size"] = "2",
+            ["steps.capture_user_choice.json.location_context"] = "Keong Saik Duxton Singapore",
+            ["steps.capture_user_choice.json.preferred_cuisines"] = "[\"Japanese\",\"Italian\"]",
+            ["steps.capture_user_choice.json.contact_phone_number"] = "+6590000000",
+            ["steps.capture_user_choice.json.budget_cap"] = "120",
+            ["steps.capture_user_choice.json.policy"] = "{\"show_options_before_calls\":true,\"money_spend_allowed\":false,\"reservation_calls_auto_allowed\":true}",
+        };
+        var evaluator = new WorkflowExpressionEvaluator();
+
+        var initialize = workflow.Steps.Single(step => step.Id == "initialize_context");
+        var contextJson = evaluator.Evaluate(initialize.Parameters["value"], variables);
+
+        using var contextDocument = JsonDocument.Parse(contextJson);
+        var context = contextDocument.RootElement;
+        context.GetProperty("raw_user_request").GetString().Should().Be("Plan a dinner date with Priya this Friday at 7:30 PM");
+        context.GetProperty("participant").GetString().Should().Be("Priya");
+        context.GetProperty("day").GetString().Should().Be("2026-09-04");
+        context.GetProperty("time").GetString().Should().Be("19:30");
+        context.GetProperty("party_size").GetInt32().Should().Be(2);
+        context.GetProperty("location").GetString().Should().Be("Keong Saik Duxton Singapore");
+        context.GetProperty("cuisines").EnumerateArray().Select(element => element.GetString())
+            .Should().Equal("Japanese", "Italian");
+        context.GetProperty("phone_number").GetString().Should().Be("+6590000000");
+        context.GetProperty("budget_cap").GetInt32().Should().Be(120);
+        context.GetProperty("policy").GetProperty("reservation_calls_auto_allowed").GetBoolean().Should().BeTrue();
+        context.GetProperty("search_query").GetString().Should().Be("Keong Saik Duxton Singapore");
+        context.GetProperty("missing_fields").EnumerateArray().Should().BeEmpty();
     }
 
     [Fact]

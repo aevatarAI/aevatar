@@ -113,19 +113,29 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             assert.notEqual(end, -1);
 
             const entry = {
-              actorId:'actor-alpha', actorProjection:null, draft:'',
-              needsYouDrafts:new Map(), needsYouSubmissions:new Map()
+              actorId:'actor-alpha', actorProjection:null, draft:'', controller:null,
+              controllers:new Set(), needsYouDrafts:new Map(), needsYouSubmissions:new Map(),
+              run:{context:{}, pendingWorkflowSignal:null, workflowSignalSubmission:null}
             };
             let acceptsInput = true;
             const decisions = [];
             const controls = [];
             const messages = [];
+            const assistantMessages = [];
+            const signalCalls = [];
+            const stateReads = [];
             let sends = 0;
             const context = {
-              Map, Set,
-              state:{activeConversation:entry,config:{surface:'nyxid-chat'}},
+              Map, Set, AbortController, JSON, encodeURIComponent,
+              state:{
+                activeConversation:entry,
+                activeController:null,
+                auth:{authenticated:true,user:{id:'fallback-scope'}},
+                config:{surface:'nyxid-chat',scopeId:'scope-alpha'}
+              },
               dom:{promptInput:{value:''}},
               entryActorProjection:(candidate) => candidate?.actorProjection || null,
+              currentRequestRun:(candidate) => candidate?.requestRun || null,
               needsYouKey:(kind, requestId) => `${kind}:${requestId}`,
               createId:(prefix) => `${prefix}-alpha`,
               submitNeedsYouDecision:async (...args) => {
@@ -134,8 +144,35 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               },
               submitActorControl:async (...args) => { controls.push(args); },
               sendPrompt:async () => { sends += 1; },
+              fetch:async (path, init) => {
+                if (init?.method === 'GET') {
+                  stateReads.push(path);
+                  assert.equal(path, '/api/workflow-actors/workflow-actor-alpha/current-state');
+                  return {
+                    ok:true,
+                    json:async () => ({
+                      actorId:'workflow-actor-alpha',
+                      completionStatus:'Completed',
+                      lastOutput:JSON.stringify({kept:'Pasta Bar'})
+                    })
+                  };
+                }
+                signalCalls.push({path, body:JSON.parse(init.body), method:init.method});
+                return {ok:true,json:async () => ({accepted:true})};
+              },
+              responseError:async () => new Error('signal failed'),
+              demoHeaders:() => ({'Content-Type':'application/json'}),
+              setRunningUi:() => {},
+              renderActorControlUi:() => {},
+              releaseConversationController:(_candidate, controller) => {
+                _candidate.controllers.delete(controller);
+                if (_candidate.controller === controller) _candidate.controller = null;
+                if (context.state.activeController === controller) context.state.activeController = null;
+              },
+              renderHistoryList:() => {},
               withConversationState:(_candidate, action) => action(),
               addUserMessage:(message) => { messages.push(message); },
+              addAssistantMessage:(message) => { assistantMessages.push(message); },
               autoResizeComposer:() => {},
               persistConversationState:() => {},
               renderComposerInputRequest:() => {}
@@ -174,8 +211,35 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(entry.draft, '失败后保留');
             assert.deepEqual(messages, ['完整回答']);
 
+            entry.actorProjection = {stateVersion:8,pendingInput:null,task:{status:'succeeded'}};
+            entry.run.pendingWorkflowSignal = {
+              actorId:'workflow-actor-alpha', runId:'workflow-run-alpha',
+              signalName:'dinner_date_user_choice', stepId:'wait_for_user_choice_timeout',
+              status:'waiting'
+            };
+            context.dom.promptInput.value = '1';
+            entry.draft = '1';
+            await context.submitComposer();
+            assert.equal(signalCalls.length, 1);
+            assert.equal(signalCalls[0].path, '/api/scopes/scope-alpha/runs/workflow-run-alpha:signal');
+            assert.equal(signalCalls[0].method, 'POST');
+            assert.deepEqual(signalCalls[0].body, {
+              actorId:'workflow-actor-alpha', runId:'workflow-run-alpha',
+              signalName:'dinner_date_user_choice', stepId:'wait_for_user_choice_timeout', payload:'1'
+            });
+            assert.equal(entry.run.pendingWorkflowSignal.status, 'submitted');
+            assert.equal(entry.run.workflowSignalSubmission.status, 'accepted');
+            assert.deepEqual(messages, ['完整回答', '1']);
+            assert.deepEqual(stateReads, ['/api/workflow-actors/workflow-actor-alpha/current-state']);
+            assert.deepEqual(assistantMessages, ['Pasta Bar is selected.']);
+            assert.equal(context.dom.promptInput.value, '');
+            assert.equal(entry.draft, '');
+            assert.equal(controls.length, 0);
+            assert.equal(sends, 0);
+
+            entry.run.pendingWorkflowSignal = null;
             entry.actorProjection = {
-              stateVersion:8, pendingInput:null,
+              stateVersion:9, pendingInput:null,
               activeTurn:{turnId:'turn-alpha'}, task:{status:'active'}
             };
             context.dom.promptInput.value = '改为只处理后端';
@@ -183,7 +247,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             assert.deepEqual(controls, [['steer', null, '改为只处理后端']]);
             assert.equal(sends, 0);
 
-            entry.actorProjection = {stateVersion:9,pendingInput:null,task:{status:'succeeded'}};
+            entry.actorProjection = {stateVersion:10,pendingInput:null,task:{status:'succeeded'}};
             context.dom.promptInput.value = '开始新任务';
             await context.submitComposer();
             assert.equal(sends, 1);
@@ -191,6 +255,110 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               console.error(error);
               process.exitCode = 1;
             });
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_StateReload_ShouldRestorePendingWorkflowSignal()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function restoreWorkflowSignalFromActorProjection(entry, projection)');
+            const end = source.indexOf('\nfunction actorStateNotice(', start);
+            assert.notEqual(start, -1);
+            assert.notEqual(end, -1);
+
+            const entry = { run: { context: {}, pendingWorkflowSignal: null, workflowSignalSubmission: { status: 'accepted' } } };
+            const projection = {
+              activeStepSummary: 'Choose one held option.',
+              pendingWorkflowSignal: {
+                actorId: 'workflow-actor-alpha',
+                runId: 'workflow-run-alpha',
+                signalName: 'dinner_date_user_choice_after_timeout',
+                stepId: 'wait_for_post_timeout_choice',
+                prompt: 'Pick a held restaurant.',
+              },
+            };
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+
+            context.restoreWorkflowSignalFromActorProjection(entry, projection);
+            assert.deepEqual(JSON.parse(JSON.stringify(entry.run.pendingWorkflowSignal)), {
+              actorId: 'workflow-actor-alpha',
+              runId: 'workflow-run-alpha',
+              signalName: 'dinner_date_user_choice_after_timeout',
+              stepId: 'wait_for_post_timeout_choice',
+              prompt: 'Pick a held restaurant.',
+              status: 'waiting',
+            });
+            assert.equal(entry.run.context.runId, 'workflow-run-alpha');
+            assert.equal(entry.run.workflowSignalSubmission, null);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_WorkflowToolResult_ShouldInstallPendingSignal()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function rememberWorkflowToolResult(result)');
+            const end = source.indexOf('\nfunction appendFallbackText(', start);
+            assert.notEqual(start, -1);
+            assert.notEqual(end, -1);
+
+            const infos = [];
+            const steps = [];
+            const context = {
+              state:{run:{context:{}, pendingWorkflowSignal:null, workflowSignalSubmission:null}},
+              parseArguments:(value) => typeof value === 'string' ? JSON.parse(value) : value,
+              startStep:(name, kind, explicitId) => { steps.push({name, kind, explicitId}); },
+              addInfo:(message) => { infos.push(message); },
+              renderActorControlUi:() => {}
+            };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+
+            context.rememberWorkflowToolResult(JSON.stringify({
+              run_id:'workflow-run-alpha',
+              result:{
+                waiting_signal:{
+                  run_id:'workflow-run-alpha',
+                  step_id:'wait_for_user_choice_timeout',
+                  signal_name:'dinner_date_user_choice',
+                  prompt:'Choose one dinner option.'
+                }
+              }
+            }));
+
+            assert.equal(context.state.run.context.runId, 'workflow-run-alpha');
+            assert.deepEqual(JSON.parse(JSON.stringify(context.state.run.pendingWorkflowSignal)), {
+              actorId:'workflow-run-alpha',
+              runId:'workflow-run-alpha',
+              signalName:'dinner_date_user_choice',
+              stepId:'wait_for_user_choice_timeout',
+              prompt:'Choose one dinner option.',
+              status:'waiting'
+            });
+            assert.deepEqual(steps, [{
+              name:'wait_for_user_choice_timeout', kind:'workflow',
+              explicitId:'signal:wait_for_user_choice_timeout'
+            }]);
+            assert.deepEqual(infos, ['Choose one dinner option.']);
             """;
 
         var result = await RunNodeAsync(script, app);
@@ -402,6 +570,70 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
 
         app.Should().Contain("source.postcondition.check");
         app.Should().NotContain("source.postcondition.postconditionKind");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_Protocol_ShouldPreserveTypedChatFramePayloads()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const started = context.normalizeFrame({
+              type:'RUN_STARTED', payload:{runId:'turn-alpha', threadId:'conversation-alpha'}
+            });
+            assert.equal(started.type, 'run_started');
+            assert.equal(started.runId, 'turn-alpha');
+            assert.equal(started.threadId, 'conversation-alpha');
+            assert.equal(started.actorId, 'conversation-alpha');
+
+            const finished = context.normalizeFrame({
+              type:'RUN_FINISHED', data:{
+                runId:'turn-alpha', threadId:'conversation-alpha',
+                result:{output:'final run answer'}
+              }
+            });
+            assert.equal(finished.type, 'run_finished');
+            assert.equal(finished.runId, 'turn-alpha');
+            assert.equal(finished.result.output, 'final run answer');
+
+            const toolEnd = context.normalizeFrame({
+              type:'TOOL_CALL_END', payload:{
+                toolCallId:'tool-alpha',
+                result:JSON.stringify({
+                  run_id:'workflow-run-alpha',
+                  waiting_signal:{
+                    run_id:'workflow-run-alpha',
+                    step_id:'wait_for_user_choice_timeout',
+                    signal_name:'dinner_date_user_choice'
+                  }
+                })
+              }
+            });
+            assert.equal(toolEnd.type, 'tool_end');
+            assert.equal(toolEnd.toolCallId, 'tool-alpha');
+            assert.match(toolEnd.result, /workflow-run-alpha/);
+
+            const waiting = context.normalizeFrame({
+              type:'CUSTOM', name:'aevatar.workflow.waiting_signal', value:{
+                run_id:'workflow-run-alpha',
+                step_id:'wait_for_user_choice_timeout',
+                signal_name:'dinner_date_user_choice'
+              }
+            });
+            assert.equal(waiting.type, 'waiting_signal');
+            assert.equal(waiting.run_id, 'workflow-run-alpha');
+            assert.equal(waiting.signal_name, 'dinner_date_user_choice');
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]

@@ -292,6 +292,21 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             if (diagnostics.Any(static diagnostic =>
                     diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation))
             {
+                if (TryCreateOrdinaryManagedWorkflowFallbackNames(
+                        userMessage,
+                        available,
+                        availableTools,
+                        out var fallbackNames))
+                {
+                    return CreatePreparation(
+                        sessionId,
+                        candidate: null,
+                        selectedExactSkillRef: null,
+                        AgentProfileTurnAuthorityKind.Recovery,
+                        fallbackNames,
+                        diagnostics);
+                }
+
                 var clarificationNames = available.Contains("ask_user")
                     ? new[] { "ask_user" }
                     : Array.Empty<string>();
@@ -350,6 +365,22 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         if (diagnostics.Any(static diagnostic =>
                 diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation))
         {
+            if (TryCreateManagedWorkflowFallbackNames(
+                    candidate.IntentId,
+                    userMessage,
+                    available,
+                    availableTools,
+                    out var fallbackNames))
+            {
+                return CreatePreparation(
+                    sessionId,
+                    candidateIdentity,
+                    selectedExactSkillRef: null,
+                    AgentProfileTurnAuthorityKind.Recovery,
+                    fallbackNames,
+                    diagnostics);
+            }
+
             var clarificationNames = available.Contains("ask_user")
                 ? new[] { "ask_user" }
                 : Array.Empty<string>();
@@ -365,17 +396,21 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         }
         if (taskPolicy.HadFailure)
         {
+            var failedTaskPolicyNames = new HashSet<string>(recoveryNames, StringComparer.OrdinalIgnoreCase);
+            ApplyProfileTaskRouteIntentFilter(candidate.IntentId, userMessage, available, failedTaskPolicyNames);
             return CreatePreparation(
                 sessionId,
                 candidateIdentity,
                 candidate.SkillRef,
                 AgentProfileTurnAuthorityKind.Recovery,
-                recoveryNames,
+                failedTaskPolicyNames,
                 diagnostics);
         }
 
         var selectedPolicy = new HashSet<string>(recovery.Names, StringComparer.OrdinalIgnoreCase);
         selectedPolicy.UnionWith(taskPolicy.Names);
+        ApplyProfileTaskRouteIntentFilter(candidate.IntentId, userMessage, available, selectedPolicy);
+
         var ceiling = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
         ceiling.IntersectWith(selectedPolicy);
         if (includeBuiltInNyxIdIntents && ceiling.Count == 0)
@@ -835,12 +870,13 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         if (messageTokens.Count == 0)
             return names.OrderBy(static name => name, StringComparer.Ordinal).ToArray();
 
+        var hasDiningIntent = HasDiningIntent(userMessage);
         var ranked = names
             .Select(name => new
             {
                 Name = name,
                 Score = TryCreateConnectedOperationSelectionEntry(name, availableTools[name], out var entry)
-                    ? ScoreConnectedOperation(messageTokens, entry.Candidate)
+                    ? ScoreConnectedOperation(messageTokens, entry, hasDiningIntent)
                     : 0,
             })
             .OrderByDescending(static item => item.Score)
@@ -855,39 +891,206 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
     private static int ScoreConnectedOperation(
         IReadOnlySet<string> messageTokens,
-        AgentProfileConnectedOperationSelectionCandidate candidate)
+        ConnectedOperationSelectionEntry entry,
+        bool hasDiningIntent)
     {
+        var candidate = entry.Candidate;
         var serviceTokens = TokenizeSelectionText(string.Join(' ',
+            entry.Admission.ServiceInstanceId,
+            entry.Admission.ServiceSlug,
             candidate.CatalogServiceSlug,
             candidate.ConnectorDisplayName,
             candidate.ConnectionLabel));
         var operationTokens = TokenizeSelectionText(string.Join(' ',
+            GetPublishedEndpointId(entry.Admission),
             candidate.DisplayName,
             candidate.Description,
             candidate.PathTemplate));
         var serviceScore = messageTokens.Sum(token => serviceTokens.Contains(token) ? 4 : 0);
         var operationScore = messageTokens.Sum(token => operationTokens.Contains(token) ? 3 : 0);
-        var contextScore = operationTokens.Any(static token =>
-            string.Equals(token, "profile", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(token, "context", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(token, "preference", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(token, "preferences", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(token, "settings", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(token, "config", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(token, "account", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(token, "user", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(token, "me", StringComparison.OrdinalIgnoreCase))
-            ? 1
-            : 0;
-        var diningScore = HasAnyToken(messageTokens, "dinner", "dining", "restaurant", "reservation", "booking", "cuisine") &&
-                          HasAnyToken(operationTokens, "dining", "restaurant", "restaurants", "meal", "cuisine", "cuisines")
-            ? 8
-            : 0;
+        var contextScore = HasContextToken(operationTokens) ? 1 : 0;
+        var diningScore = hasDiningIntent && HasDiningToken(operationTokens) ? 8 : 0;
         return serviceScore + operationScore + contextScore + diningScore;
     }
 
+    private static HashSet<string> SelectDeterministicContextReadOperations(
+        IReadOnlySet<string> names,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        string userMessage,
+        int maximumReadSelections,
+        bool requireLargeCandidateSet = true)
+    {
+        if (maximumReadSelections <= 0)
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (requireLargeCandidateSet && names.Count <= MaximumRankedConnectedReadCandidates)
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var messageTokens = TokenizeSelectionText(userMessage);
+        var hasDiningIntent = HasDiningIntent(userMessage);
+        var requestsPreferenceContext = RequestsPreferenceContext(userMessage, messageTokens);
+        var selected = names
+            .Select(name => TryCreateConnectedOperationSelectionEntry(name, availableTools[name], out var entry)
+                ? new
+                {
+                    Name = name,
+                    Entry = entry,
+                    CandidateTokens = TokenizeSelectionText(string.Join(' ',
+                        entry.Admission.ServiceInstanceId,
+                        entry.Admission.ServiceSlug,
+                        entry.Candidate.CatalogServiceSlug,
+                        entry.Candidate.ConnectorDisplayName,
+                        entry.Candidate.ConnectionLabel,
+                        GetPublishedEndpointId(entry.Admission),
+                        entry.Candidate.DisplayName,
+                        entry.Candidate.Description,
+                        entry.Candidate.PathTemplate)),
+                    OperationTokens = TokenizeSelectionText(string.Join(' ',
+                        GetPublishedEndpointId(entry.Admission),
+                        entry.Candidate.DisplayName,
+                        entry.Candidate.Description,
+                        entry.Candidate.PathTemplate)),
+                    Score = ScoreConnectedOperation(messageTokens, entry, hasDiningIntent),
+                }
+                : null)
+            .Where(item => item is not null &&
+                           item.Entry.Admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly &&
+                           IsHighConfidenceContextRead(
+                               item.CandidateTokens,
+                               item.OperationTokens,
+                               hasDiningIntent,
+                               requestsPreferenceContext))
+            .OrderByDescending(static item => item!.Score)
+            .ThenBy(static item => item!.Name, StringComparer.Ordinal)
+            .Take(maximumReadSelections)
+            .Select(static item => item!.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return selected;
+    }
+
+    private static bool IsHighConfidenceContextRead(
+        IReadOnlySet<string> candidateTokens,
+        IReadOnlySet<string> operationTokens,
+        bool hasDiningIntent,
+        bool requestsPreferenceContext)
+    {
+        if (!HasContextToken(operationTokens))
+            return false;
+
+        if (hasDiningIntent)
+            return HasDiningToken(operationTokens) && !HasAnyToken(candidateTokens, "other", "others", "shared", "public", "team", "org");
+
+        return requestsPreferenceContext && HasOwnerScopedContextToken(candidateTokens);
+    }
+
+    private static bool RequestsPreferenceContext(string userMessage, IReadOnlySet<string> messageTokens) =>
+        HasAnyToken(messageTokens, "preference", "preferences", "profile", "context", "saved", "usual", "favorite", "favourite", "personal") ||
+        ContainsAny(userMessage, "偏好", "喜好", "口味", "常去", "喜欢");
+
+    private static bool HasDiningIntent(string userMessage)
+    {
+        var tokens = TokenizeSelectionText(userMessage);
+        return HasAnyToken(tokens, "dinner", "dining", "restaurant", "restaurants", "reservation", "booking", "cuisine", "cuisines", "meal") ||
+               ContainsAny(userMessage, "晚餐", "餐厅", "餐馆", "预订", "订餐", "吃饭", "料理", "约会");
+    }
+
+    private static bool HasManagedWorkflowExecutionIntent(string userMessage) =>
+        HasDiningIntent(userMessage);
+
+    private static void ApplyProfileTaskRouteIntentFilter(
+        string intentId,
+        string? userMessage,
+        IReadOnlySet<string> availableToolNames,
+        HashSet<string> selectedToolNames)
+    {
+        if (!string.Equals(intentId, ProfileTaskRouteIntentId, StringComparison.Ordinal))
+            return;
+
+        if (HasManagedWorkflowExecutionIntent(userMessage ?? string.Empty))
+        {
+            selectedToolNames.Remove("ask_user");
+            AddAvailableManagedWorkflowTools(availableToolNames, selectedToolNames);
+            return;
+        }
+
+        selectedToolNames.RemoveWhere(ManagedWorkflowExecutionToolNames.Contains);
+    }
+
+    private static bool TryCreateManagedWorkflowFallbackNames(
+        string intentId,
+        string? userMessage,
+        IReadOnlySet<string> availableToolNames,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        out HashSet<string> fallbackNames)
+    {
+        fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.Equals(intentId, ProfileTaskRouteIntentId, StringComparison.Ordinal) ||
+            !HasManagedWorkflowExecutionIntent(userMessage ?? string.Empty))
+        {
+            return false;
+        }
+
+        AddAvailableManagedWorkflowTools(availableToolNames, fallbackNames);
+        fallbackNames.UnionWith(SelectDeterministicContextReadOperations(
+            availableToolNames,
+            availableTools,
+            userMessage ?? string.Empty,
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount,
+            requireLargeCandidateSet: false));
+        return fallbackNames.Count > 0;
+    }
+
+    private static bool TryCreateOrdinaryManagedWorkflowFallbackNames(
+        string? userMessage,
+        IReadOnlySet<string> availableToolNames,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        out HashSet<string> fallbackNames)
+    {
+        fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!HasManagedWorkflowExecutionIntent(userMessage ?? string.Empty))
+            return false;
+
+        AddAvailableManagedWorkflowTools(availableToolNames, fallbackNames);
+        fallbackNames.UnionWith(SelectDeterministicContextReadOperations(
+            availableToolNames,
+            availableTools,
+            userMessage ?? string.Empty,
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount,
+            requireLargeCandidateSet: false));
+        return fallbackNames.Count > 0;
+    }
+
+    private static void AddAvailableManagedWorkflowTools(
+        IReadOnlySet<string> availableToolNames,
+        HashSet<string> selectedToolNames)
+    {
+        foreach (var name in ManagedWorkflowExecutionToolNames)
+        {
+            if (availableToolNames.Contains(name))
+                selectedToolNames.Add(name);
+        }
+    }
+
+    private static bool HasContextToken(IReadOnlySet<string> tokens) =>
+        HasAnyToken(tokens, "profile", "context", "preference", "preferences", "settings", "config", "account", "user", "me");
+
+    private static bool HasOwnerScopedContextToken(IReadOnlySet<string> tokens) =>
+        !HasAnyToken(tokens, "other", "others", "shared", "public", "team", "org") &&
+        HasAnyToken(tokens, "user", "current", "me", "my", "self", "mine");
+
+    private static bool HasDiningToken(IReadOnlySet<string> tokens) =>
+        HasAnyToken(tokens, "dining", "dinner", "restaurant", "restaurants", "meal", "cuisine", "cuisines", "reservation", "booking");
+
+    private static string GetPublishedEndpointId(AgentToolOperationAdmission admission) =>
+        admission.Identity is AgentToolOperationIdentity.PublishedEndpoint endpoint
+            ? endpoint.EndpointId
+            : string.Empty;
+
     private static bool HasAnyToken(IReadOnlySet<string> tokens, params string[] expected) =>
         expected.Any(tokens.Contains);
+
+    private static bool ContainsAny(string value, params string[] expected) =>
+        expected.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlySet<string> TokenizeSelectionText(string? value)
     {
@@ -900,6 +1103,12 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         {
             if (char.IsLetterOrDigit(ch))
             {
+                if (char.IsUpper(ch) && builder.Length > 0 &&
+                    (char.IsLower(builder[^1]) || char.IsDigit(builder[^1])))
+                {
+                    AddToken(builder, tokens);
+                }
+
                 builder.Append(char.ToLowerInvariant(ch));
                 continue;
             }
@@ -1890,6 +2099,20 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                             owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.Write &&
                             maximumWriteSelections > 0))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var deterministicReadNames = SelectDeterministicContextReadOperations(
+            selectionNames,
+            availableTools,
+            selectionContext.UserMessage,
+            maximumReadSelections);
+        if (deterministicReadNames.Count > 0)
+        {
+            connectedMatches.Clear();
+            connectedMatches.UnionWith(exactConnectedMatches);
+            connectedMatches.UnionWith(deterministicReadNames);
+            names.UnionWith(connectedMatches);
+            return new ToolPolicyResolution(names, hadFailure);
+        }
+
         var boundedSelectionNames = selectionNames;
         var selectionCounts = CountConnectedOperations(boundedSelectionNames, availableTools);
         if (selectionCounts.WriteCount == 0 &&

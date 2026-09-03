@@ -117,6 +117,15 @@ message WorkflowRunInsightReportDocument {
   // typed collection, not an extension bag; each full sanitized request parameter map appears
   // at most once in the report document.
   map<string, WorkflowStepRequestEvidence> request_evidence_by_id = 28;
+  WorkflowWaitingSignalReadModel current_waiting_signal = 29;
+}
+
+message WorkflowWaitingSignalReadModel {
+  string run_id = 1;
+  string step_id = 2;
+  string signal_name = 3;
+  string prompt = 4;
+  int32 timeout_ms = 5;
 }
 
 message WorkflowExecutionCurrentStateDocument {

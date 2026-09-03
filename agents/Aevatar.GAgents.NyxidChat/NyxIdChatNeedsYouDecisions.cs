@@ -291,6 +291,13 @@ public static class NyxIdChatNeedsYouDecisions
             attention.AttentionKind = NyxIdChatAttentionKind.Approval;
             attention.AttentionSince = approval.AskedAt?.Clone();
         }
+        else if (next.PendingWorkflowSignal is { } workflowSignal)
+        {
+            attention.TaskStatus = NyxIdChatTaskStatus.Active;
+            attention.AttentionKind = NyxIdChatAttentionKind.WorkflowSignal;
+            attention.AttentionSince = workflowSignal.ObservedAt?.Clone();
+            attention.ActiveStepSummary = ResolveWorkflowSignalSummary(workflowSignal);
+        }
         else if (ResolveStalledStep(next.ActiveTask) is { } stalledStep)
         {
             attention.AttentionKind = NyxIdChatAttentionKind.Stalled;
@@ -657,6 +664,11 @@ public static class NyxIdChatNeedsYouDecisions
             string.Equals(candidate.StepId, task.ActiveStepId, StringComparison.Ordinal));
         return step?.Description?.Trim() ?? string.Empty;
     }
+
+    private static string ResolveWorkflowSignalSummary(NyxIdChatPendingWorkflowSignalState signal) =>
+        !string.IsNullOrWhiteSpace(signal.Prompt)
+            ? signal.Prompt.Trim()
+            : signal.SignalName;
 
     private static ByteString Hash(string value) =>
         ByteString.CopyFrom(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
