@@ -156,17 +156,20 @@ function decimalValue(source: string): DecimalValue | null {
   );
   if (!match) return null;
   const [, sign, integer, fraction = '', sourceExponent = '0'] = match;
+  const zero = BigInt(0);
+  const one = BigInt(1);
+  const ten = BigInt(10);
   let coefficient = BigInt(`${integer}${fraction}`);
   let exponent = BigInt(sourceExponent) - BigInt(fraction.length);
-  while (coefficient !== 0n && coefficient % 10n === 0n) {
-    coefficient /= 10n;
-    exponent += 1n;
+  while (coefficient !== zero && coefficient % ten === zero) {
+    coefficient /= ten;
+    exponent += one;
   }
-  if (coefficient === 0n) exponent = 0n;
+  if (coefficient === zero) exponent = zero;
   return {
     coefficient: sign === '-' ? -coefficient : coefficient,
     exponent,
-    negativeZero: sign === '-' && coefficient === 0n,
+    negativeZero: sign === '-' && coefficient === zero,
   };
 }
 
