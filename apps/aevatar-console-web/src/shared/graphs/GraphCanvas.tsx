@@ -481,6 +481,7 @@ type StudioViewportControl = {
 
 type StudioViewportControllerProps = {
   autoFitKey?: string;
+  edgeIdsKey: string;
   navigationControlRef: React.RefObject<StudioViewportControl>;
   nodeIds: readonly string[];
   nodeIdsKey: string;
@@ -489,6 +490,7 @@ type StudioViewportControllerProps = {
 
 function StudioViewportController({
   autoFitKey,
+  edgeIdsKey,
   navigationControlRef,
   nodeIds,
   nodeIdsKey,
@@ -509,7 +511,7 @@ function StudioViewportController({
 
   useLayoutEffect(() => {
     const currentNodeIds = new Set(latestNodeIdsRef.current);
-    if (!autoFitKey || currentNodeIds.size === 0) {
+    if (currentNodeIds.size === 0) {
       previousNodeIdsRef.current = currentNodeIds;
       lastFittedRef.current = undefined;
       return;
@@ -518,7 +520,11 @@ function StudioViewportController({
       return;
     }
 
-    const fitReason = JSON.stringify([autoFitKey, nodeIdsKey]);
+    const fitReason = JSON.stringify(
+      autoFitKey === undefined
+        ? ['topology', nodeIdsKey, edgeIdsKey]
+        : ['explicit', autoFitKey, nodeIdsKey, edgeIdsKey],
+    );
     if (
       lastFittedRef.current?.reason === fitReason &&
       lastFittedRef.current.flowInstance === flowInstance
@@ -589,6 +595,7 @@ function StudioViewportController({
     return cancelFit;
   }, [
     autoFitKey,
+    edgeIdsKey,
     flowInstance,
     navigationControlRef,
     nodeIdsKey,
@@ -729,6 +736,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   const navigationControlRef = useRef<StudioViewportControl>({
     manuallyNavigated: false,
   });
+  const latestLocalNodesRef = useRef(localNodes);
   const renderedAutoFitKeyRef = useRef(autoFitKey);
   const incomingStudioNodesRef = useRef<readonly Node[]>([]);
   const incomingStudioEdgesRef = useRef<readonly Edge[]>([]);
@@ -736,23 +744,32 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
     () => JSON.stringify(nodes.map((node) => node.id)),
     [nodes],
   );
+  const incomingEdgeIdsKey = useMemo(
+    () => JSON.stringify(edges.map((edge) => edge.id)),
+    [edges],
+  );
   const renderedStudioTopology = useMemo(() => {
     const nodeIds = localNodes.map((node) => node.id);
     return {
+      edgeIdsKey: JSON.stringify(localEdges.map((edge) => edge.id)),
       nodeIds,
       nodeIdsKey: JSON.stringify(nodeIds),
     };
-  }, [localNodes]);
-  const renderedAutoFitKey =
-    incomingNodeIdsKey === renderedStudioTopology.nodeIdsKey
-      ? autoFitKey
-      : renderedAutoFitKeyRef.current;
+  }, [localEdges, localNodes]);
+  const renderedTopologyMatchesIncoming =
+    incomingNodeIdsKey === renderedStudioTopology.nodeIdsKey &&
+    incomingEdgeIdsKey === renderedStudioTopology.edgeIdsKey;
+  const renderedAutoFitKey = renderedTopologyMatchesIncoming
+    ? autoFitKey
+    : renderedAutoFitKeyRef.current;
+
+  latestLocalNodesRef.current = localNodes;
 
   useEffect(() => {
-    if (incomingNodeIdsKey === renderedStudioTopology.nodeIdsKey) {
+    if (renderedTopologyMatchesIncoming) {
       renderedAutoFitKeyRef.current = autoFitKey;
     }
-  }, [autoFitKey, incomingNodeIdsKey, renderedStudioTopology.nodeIdsKey]);
+  }, [autoFitKey, renderedTopologyMatchesIncoming]);
 
   useEffect(() => {
     if (!isStudioVariant) {
@@ -920,8 +937,11 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   const handleNodeDragStop = useCallback<
     NonNullable<ReactFlowProps['onNodeDragStop']>
   >(() => {
-    onNodeLayoutChange?.((flowInstance?.getNodes() as Node[]) ?? localNodes);
-  }, [flowInstance, localNodes, onNodeLayoutChange]);
+    onNodeLayoutChange?.(
+      (flowInstance?.getNodes() as Node[] | undefined) ??
+        latestLocalNodesRef.current,
+    );
+  }, [flowInstance, onNodeLayoutChange]);
   const handleConnect = useCallback<NonNullable<ReactFlowProps['onConnect']>>(
     (connection) => {
       if (!connection.source || !connection.target) {
@@ -958,16 +978,20 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
     },
     [flowInstance, onCanvasContextMenu],
   );
-  const handleMoveStart = useCallback<
-    NonNullable<ReactFlowProps['onMoveStart']>
-  >((event) => {
-    if (event === null) {
-      return;
-    }
-
+  const markManuallyNavigated = useCallback(() => {
     navigationControlRef.current.manuallyNavigated = true;
     navigationControlRef.current.cancelOrdinaryFit?.();
   }, []);
+  const handleMoveStart = useCallback<
+    NonNullable<ReactFlowProps['onMoveStart']>
+  >(
+    (event) => {
+      if (event !== null) {
+        markManuallyNavigated();
+      }
+    },
+    [markManuallyNavigated],
+  );
 
   return (
     <div style={canvasStyle}>
@@ -1009,6 +1033,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         {isStudioVariant ? (
           <StudioViewportController
             autoFitKey={renderedAutoFitKey}
+            edgeIdsKey={renderedStudioTopology.edgeIdsKey}
             navigationControlRef={navigationControlRef}
             nodeIds={renderedStudioTopology.nodeIds}
             nodeIdsKey={renderedStudioTopology.nodeIdsKey}
@@ -1036,6 +1061,9 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
               nodeColor={getStudioMiniMapNodeColor}
             />
             <Controls
+              onFitView={markManuallyNavigated}
+              onZoomIn={markManuallyNavigated}
+              onZoomOut={markManuallyNavigated}
               position="bottom-left"
               showInteractive={false}
               style={studioControlsStyle}

@@ -719,6 +719,38 @@ describe('GraphCanvas', () => {
     );
   });
 
+  it('keeps the drag-stop handler stable while reporting the latest local nodes', () => {
+    const onNodeLayoutChange = jest.fn();
+    render(
+      <GraphCanvas
+        edges={edges}
+        nodes={nodes}
+        onNodeLayoutChange={onNodeLayoutChange}
+        variant="studio"
+      />,
+    );
+    const beforeChange = latestReactFlowProps();
+
+    act(() => {
+      beforeChange.onNodesChange([
+        {
+          dragging: true,
+          id: 'step:assert',
+          position: { x: 48, y: 72 },
+          type: 'position',
+        },
+      ]);
+    });
+
+    const afterChange = latestReactFlowProps();
+    act(() => {
+      afterChange.onNodeDragStop({}, afterChange.nodes[0], afterChange.nodes);
+    });
+
+    expect(onNodeLayoutChange).toHaveBeenCalledWith(afterChange.nodes);
+    expect(afterChange.onNodeDragStop).toBe(beforeChange.onNodeDragStop);
+  });
+
   it('replaces only the previous and next selected Studio nodes', () => {
     const studioNodes = [
       nodes[0],
@@ -860,10 +892,108 @@ describe('GraphCanvas', () => {
     expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
   });
 
+  it('fits ready Studio topology without an explicit key and tracks node and edge ids', () => {
+    const animationFrame = installAnimationFrameMock();
+    const flowInstance = createFlowInstance();
+    mockReactFlowInstance = flowInstance;
+    const replacementEdges = [
+      {
+        ...edges[0],
+        id: 'edge:assert:archive:linear',
+        target: 'step:archive',
+      },
+    ];
+    const replacementNodes = [{ ...nodes[0], id: 'step:replacement' }];
+    const { rerender } = render(
+      <GraphCanvas edges={edges} nodes={nodes} variant="studio" />,
+    );
+
+    expect(animationFrame.requestAnimationFrame).not.toHaveBeenCalled();
+    updateNodesInitialized(true);
+    expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
+    animationFrame.flush();
+    expect(flowInstance.fitView).toHaveBeenCalledTimes(1);
+
+    animationFrame.requestAnimationFrame.mockClear();
+    flowInstance.fitView.mockClear();
+    rerender(
+      <GraphCanvas
+        edges={edges}
+        nodes={[
+          {
+            ...nodes[0],
+            data: { ...nodes[0].data, executionStatus: 'active' },
+            position: { x: 20, y: 40 },
+          },
+        ]}
+        selectedNodeId="step:assert"
+        variant="studio"
+      />,
+    );
+    expect(animationFrame.requestAnimationFrame).not.toHaveBeenCalled();
+
+    rerender(
+      <GraphCanvas edges={replacementEdges} nodes={nodes} variant="studio" />,
+    );
+    expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
+    animationFrame.flush();
+    expect(flowInstance.fitView).toHaveBeenCalledTimes(1);
+
+    animationFrame.requestAnimationFrame.mockClear();
+    flowInstance.fitView.mockClear();
+    rerender(
+      <GraphCanvas
+        edges={replacementEdges}
+        nodes={replacementNodes}
+        variant="studio"
+      />,
+    );
+    expect(animationFrame.requestAnimationFrame).not.toHaveBeenCalled();
+    updateNodesInitialized(true);
+    expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
+    animationFrame.flush();
+    expect(flowInstance.fitView).toHaveBeenCalledTimes(1);
+  });
+
+  it('refits identical Studio topology when the explicit fit identity changes', () => {
+    const animationFrame = installAnimationFrameMock();
+    const flowInstance = createFlowInstance();
+    mockReactFlowInstance = flowInstance;
+    markNodesInitialized(nodes);
+    const { rerender } = render(
+      <GraphCanvas
+        autoFitKey="identity-alpha"
+        edges={edges}
+        nodes={nodes}
+        variant="studio"
+      />,
+    );
+    animationFrame.flush();
+    animationFrame.requestAnimationFrame.mockClear();
+    flowInstance.fitView.mockClear();
+
+    rerender(
+      <GraphCanvas
+        autoFitKey="identity-beta"
+        edges={edges}
+        nodes={nodes}
+        variant="studio"
+      />,
+    );
+
+    expect(animationFrame.requestAnimationFrame).toHaveBeenCalledTimes(1);
+    animationFrame.flush();
+    expect(flowInstance.fitView).toHaveBeenCalledTimes(1);
+  });
+
   it('retains built-in fitView only for the default variant', () => {
     render(<GraphCanvas edges={edges} nodes={nodes} />);
 
     expect(latestReactFlowProps().fitView).toBe(true);
+    const controlsProps = mockControlsRender.mock.calls.at(-1)?.[0] as any;
+    expect(controlsProps.onFitView).toBeUndefined();
+    expect(controlsProps.onZoomIn).toBeUndefined();
+    expect(controlsProps.onZoomOut).toBeUndefined();
   });
 
   it('fits when a same-key Studio topology first becomes non-empty', () => {
@@ -1017,6 +1147,47 @@ describe('GraphCanvas', () => {
         nodes: [{ id: 'step:new' }],
       }),
     );
+  });
+
+  it.each([
+    'onZoomIn',
+    'onZoomOut',
+    'onFitView',
+  ])('treats Studio Controls %s as manual navigation', (controlCallback) => {
+    const animationFrame = installAnimationFrameMock();
+    const flowInstance = createFlowInstance();
+    mockReactFlowInstance = flowInstance;
+    const replacementNodes = [{ ...nodes[0], id: 'step:replacement' }];
+    markNodesInitialized(nodes);
+    markNodesInitialized(replacementNodes);
+    const { rerender } = render(
+      <GraphCanvas
+        autoFitKey="topology-alpha"
+        edges={edges}
+        nodes={nodes}
+        variant="studio"
+      />,
+    );
+    animationFrame.flush();
+    animationFrame.requestAnimationFrame.mockClear();
+    flowInstance.fitView.mockClear();
+    const controlsProps = mockControlsRender.mock.calls.at(-1)?.[0] as any;
+
+    expect(controlsProps[controlCallback]).toEqual(expect.any(Function));
+    act(() => {
+      controlsProps[controlCallback]();
+    });
+    rerender(
+      <GraphCanvas
+        autoFitKey="topology-beta"
+        edges={edges}
+        nodes={replacementNodes}
+        variant="studio"
+      />,
+    );
+
+    expect(animationFrame.requestAnimationFrame).not.toHaveBeenCalled();
+    expect(flowInstance.fitView).not.toHaveBeenCalled();
   });
 
   it('does not fit for selection, position, or execution-status-only changes', () => {
