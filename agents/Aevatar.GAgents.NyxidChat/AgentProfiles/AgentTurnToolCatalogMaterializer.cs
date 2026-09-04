@@ -2475,7 +2475,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
     private static bool IsValidConnectedServiceSelector(
         AgentProfileConnectedServiceSelector selector) =>
         (NyxIdServiceSlugPolicy.IsCanonical(selector.CatalogServiceSlug) ||
-         IsDynamicReadConnectedServiceSelector(selector)) &&
+         IsDynamicReadConnectedServiceSelector(selector) ||
+         IsEndpointOnlyReadConnectedServiceSelector(selector)) &&
         (string.IsNullOrEmpty(selector.EndpointId) ||
          selector.EndpointId.Length <= 256 &&
          string.Equals(selector.EndpointId, selector.EndpointId.Trim(), StringComparison.Ordinal) &&
@@ -2489,6 +2490,14 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         AgentProfileConnectedServiceSelector selector) =>
         string.IsNullOrEmpty(selector.CatalogServiceSlug) &&
         string.IsNullOrEmpty(selector.EndpointId) &&
+        selector.Readiness is null &&
+        selector.AllowedRisks.Count == 1 &&
+        selector.AllowedRisks[0] == AgentToolOperationRiskPayload.ReadOnly;
+
+    private static bool IsEndpointOnlyReadConnectedServiceSelector(
+        AgentProfileConnectedServiceSelector selector) =>
+        string.IsNullOrEmpty(selector.CatalogServiceSlug) &&
+        !string.IsNullOrEmpty(selector.EndpointId) &&
         selector.Readiness is null &&
         selector.AllowedRisks.Count == 1 &&
         selector.AllowedRisks[0] == AgentToolOperationRiskPayload.ReadOnly;

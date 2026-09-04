@@ -119,6 +119,61 @@ public sealed class AgentProfileContractsTests
     }
 
     [Fact]
+    public void ValidateDraft_ShouldAcceptEndpointOnlyReadConnectedServiceSelector()
+    {
+        var draft = new AgentProfileDraft
+        {
+            DisplayName = "Research assistant",
+            Instructions = "Use verified sources.",
+            RuntimeProfile = new AgentProfileSnapshot
+            {
+                AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
+                RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
+                MaximumToolPolicy = new AgentProfileToolPolicy(),
+                RecoveryToolPolicy = new AgentProfileToolPolicy(),
+                Members = { ValidMember("research", "2d05bf2e-88ee-4f76-9998-728ba2f9db10") },
+            },
+        };
+        draft.RuntimeProfile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(
+            new AgentProfileConnectedServiceSelector
+            {
+                EndpointId = "readDiningProfileContext",
+                AllowedRisks = { AgentToolOperationRiskPayload.ReadOnly },
+            });
+
+        AgentProfilePolicies.ValidateDraft(draft).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ValidateDraft_ShouldRejectEndpointOnlyWriteConnectedServiceSelector()
+    {
+        var draft = new AgentProfileDraft
+        {
+            DisplayName = "Research assistant",
+            Instructions = "Use verified sources.",
+            RuntimeProfile = new AgentProfileSnapshot
+            {
+                AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
+                RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
+                MaximumToolPolicy = new AgentProfileToolPolicy(),
+                RecoveryToolPolicy = new AgentProfileToolPolicy(),
+                Members = { ValidMember("research", "2d05bf2e-88ee-4f76-9998-728ba2f9db10") },
+            },
+        };
+        draft.RuntimeProfile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(
+            new AgentProfileConnectedServiceSelector
+            {
+                EndpointId = "updateDiningProfileContext",
+                AllowedRisks = { AgentToolOperationRiskPayload.Write },
+            });
+
+        AgentProfilePolicies.ValidateDraft(draft)
+            .Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "PROFILE_CONNECTED_SERVICE_SLUG_INVALID" &&
+                diagnostic.Field == "runtimeProfile.members[0].taskToolPolicy.connectedServiceSelectors[0].catalogServiceSlug");
+    }
+
+    [Fact]
     public void CreateProfileId_ShouldBeStableForTheSameOwnerAndIdempotencyKey()
     {
         var owner = AgentProfileOwners.ForScope("scope-alpha");
