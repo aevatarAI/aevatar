@@ -1,5 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Application.Workflows;
@@ -8,15 +10,18 @@ public sealed class ScopeWorkflowTemplateEnsureService : IScopeWorkflowTemplateE
 {
     private readonly IScopeWorkflowQueryPort _workflowQueryPort;
     private readonly IScopeWorkflowSaveAndBindPort _saveAndBindPort;
+    private readonly IWorkflowExplicitRequestPreviewService _explicitRequestPreviewService;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
     public ScopeWorkflowTemplateEnsureService(
         IScopeWorkflowQueryPort workflowQueryPort,
         IScopeWorkflowSaveAndBindPort saveAndBindPort,
+        IWorkflowExplicitRequestPreviewService explicitRequestPreviewService,
         IOptions<ScopeWorkflowCapabilityOptions> options)
     {
         _workflowQueryPort = workflowQueryPort ?? throw new ArgumentNullException(nameof(workflowQueryPort));
         _saveAndBindPort = saveAndBindPort ?? throw new ArgumentNullException(nameof(saveAndBindPort));
+        _explicitRequestPreviewService = explicitRequestPreviewService ?? throw new ArgumentNullException(nameof(explicitRequestPreviewService));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
     }
 
@@ -41,6 +46,14 @@ public sealed class ScopeWorkflowTemplateEnsureService : IScopeWorkflowTemplateE
         }
 
         var workflowYaml = ResolveWorkflowYaml(template);
+        var capabilityAdmission = await BuildCapabilityAdmissionAsync(
+                request.CapabilityAdmission,
+                scopeId,
+                workflowYaml,
+                workflowId,
+                revisionId,
+                ct)
+            .ConfigureAwait(false);
         var result = await _saveAndBindPort.SaveAndBindAsync(
             new ScopeWorkflowSaveAndBindRequest(
                 scopeId,
@@ -53,7 +66,7 @@ public sealed class ScopeWorkflowTemplateEnsureService : IScopeWorkflowTemplateE
                 ExposureDesired: template.ExposureDesired,
                 RevisionId: revisionId)
             {
-                CapabilityAdmission = request.CapabilityAdmission,
+                CapabilityAdmission = capabilityAdmission,
             },
             ct).ConfigureAwait(false);
 
@@ -70,6 +83,52 @@ public sealed class ScopeWorkflowTemplateEnsureService : IScopeWorkflowTemplateE
                 lookup.Status == ScopeWorkflowLookupStatus.NotFound
                     ? "workflow_template_missing"
                     : "workflow_template_stale");
+    }
+
+    private async Task<WorkflowCapabilityAdmissionContext?> BuildCapabilityAdmissionAsync(
+        WorkflowCapabilityAdmissionContext? admission,
+        string scopeId,
+        string workflowYaml,
+        string workflowId,
+        string revisionId,
+        CancellationToken ct)
+    {
+        if (admission is null)
+            return null;
+        if (admission.ExplicitRequestConfirmations.Count > 0)
+            return admission;
+
+        var preview = await _explicitRequestPreviewService.PreviewAsync(
+                new WorkflowExplicitRequestPreviewRequest(
+                    new ExternalWorkflowCapabilityAccessContext(
+                        scopeId,
+                        admission.CallerId,
+                        admission.NyxIdCallerCredential,
+                        admission.NyxIdOrganizationBearerToken),
+                    workflowYaml,
+                    InlineWorkflowYamls: null,
+                    admission.ExecutionMode,
+                    workflowId,
+                    revisionId),
+                ct)
+            .ConfigureAwait(false);
+        if (preview.Items.Count == 0)
+            return admission;
+
+        return new WorkflowCapabilityAdmissionContext(
+            admission.CallerId,
+            admission.NyxIdCallerCredential,
+            admission.NyxIdOrganizationBearerToken,
+            admission.ExecutionMode,
+            admission.ExistingPlan,
+            preview.Items.Select(item => new NyxIdExplicitRequestConfirmation
+            {
+                CallSiteId = item.CallSiteId,
+                RequestContractDigest = item.RequestContractDigest,
+                AttestedRisk = item.EffectiveRisk,
+                WorkflowId = preview.WorkflowId,
+                RevisionId = preview.RevisionId,
+            }));
     }
 
     private async Task<ScopeWorkflowSummary?> WaitForRunnableRevisionAsync(

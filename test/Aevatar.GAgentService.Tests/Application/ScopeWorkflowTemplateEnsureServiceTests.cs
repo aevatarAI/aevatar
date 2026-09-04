@@ -2,6 +2,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
 
@@ -100,6 +101,62 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
     }
 
     [Fact]
+    public async Task EnsureAsync_ShouldPreviewExplicitRequestsBeforeSaveAndBind()
+    {
+        var queryPort = new RecordingScopeWorkflowQueryPort(
+            new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.NotFound,
+                null,
+                "service_catalog_missing"),
+            new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.Runnable,
+                BuildWorkflow("scope-1", "wf-default", "rev-expected"),
+                "runnable"));
+        var saveAndBindPort = new RecordingScopeWorkflowSaveAndBindPort();
+        var previewService = new RecordingWorkflowExplicitRequestPreviewService(
+            new WorkflowExplicitRequestPreviewItem(
+                "wf_default/discover",
+                "sha256:request-alpha",
+                "service-alpha",
+                NyxIdRequestMethod.Post,
+                "/v1/search",
+                NyxIdRequestBodyMode.Json,
+                true,
+                NyxIdRequestResponseMode.Text,
+                NyxIdOperationRisk.ReadOnly,
+                false,
+                WorkflowExplicitRequestApprovalEnforcement.None,
+                [ExternalCapabilityExecutionMode.Interactive]));
+        var service = CreateService(queryPort, saveAndBindPort, previewService, BuildTemplate());
+        var admission = new WorkflowCapabilityAdmissionContext(
+            "caller-1",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer("source-token"));
+
+        await service.EnsureAsync(new ScopeWorkflowTemplateEnsureRequest("scope-1", "wf-default")
+        {
+            CapabilityAdmission = admission,
+        });
+
+        var previewRequest = previewService.Requests.Should().ContainSingle().Subject;
+        previewRequest.Access.ScopeId.Should().Be("scope-1");
+        previewRequest.Access.CallerId.Should().Be("caller-1");
+        previewRequest.WorkflowId.Should().Be("wf-default");
+        previewRequest.RevisionId.Should().Be("rev-expected");
+        previewRequest.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        var forwardedAdmission = saveAndBindPort.Requests.Should().ContainSingle().Subject.CapabilityAdmission;
+        forwardedAdmission.Should().NotBeNull();
+        forwardedAdmission!.ExplicitRequestConfirmations.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new NyxIdExplicitRequestConfirmation
+            {
+                CallSiteId = "wf_default/discover",
+                RequestContractDigest = "sha256:request-alpha",
+                AttestedRisk = NyxIdOperationRisk.ReadOnly,
+                WorkflowId = "wf-default",
+                RevisionId = "rev-expected",
+            });
+    }
+
+    [Fact]
     public async Task EnsureAsync_WhenSaveAndBindReadModelIsNotObserved_ShouldFail()
     {
         var queryPort = new RecordingScopeWorkflowQueryPort(
@@ -179,11 +236,26 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
         RecordingScopeWorkflowQueryPort queryPort,
         RecordingScopeWorkflowSaveAndBindPort saveAndBindPort,
         params ScopeWorkflowConfiguredTemplateOptions[] templates) =>
-        CreateService(queryPort, saveAndBindPort, null, templates);
+        CreateService(queryPort, saveAndBindPort, new RecordingWorkflowExplicitRequestPreviewService(), null, templates);
 
     private static ScopeWorkflowTemplateEnsureService CreateService(
         RecordingScopeWorkflowQueryPort queryPort,
         RecordingScopeWorkflowSaveAndBindPort saveAndBindPort,
+        Action<ScopeWorkflowCapabilityOptions>? configure,
+        params ScopeWorkflowConfiguredTemplateOptions[] templates) =>
+        CreateService(queryPort, saveAndBindPort, new RecordingWorkflowExplicitRequestPreviewService(), configure, templates);
+
+    private static ScopeWorkflowTemplateEnsureService CreateService(
+        RecordingScopeWorkflowQueryPort queryPort,
+        RecordingScopeWorkflowSaveAndBindPort saveAndBindPort,
+        RecordingWorkflowExplicitRequestPreviewService previewService,
+        params ScopeWorkflowConfiguredTemplateOptions[] templates) =>
+        CreateService(queryPort, saveAndBindPort, previewService, null, templates);
+
+    private static ScopeWorkflowTemplateEnsureService CreateService(
+        RecordingScopeWorkflowQueryPort queryPort,
+        RecordingScopeWorkflowSaveAndBindPort saveAndBindPort,
+        RecordingWorkflowExplicitRequestPreviewService previewService,
         Action<ScopeWorkflowCapabilityOptions>? configure,
         params ScopeWorkflowConfiguredTemplateOptions[] templates)
     {
@@ -195,6 +267,7 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
         return new ScopeWorkflowTemplateEnsureService(
             queryPort,
             saveAndBindPort,
+            previewService,
             Options.Create(options));
     }
 
@@ -281,6 +354,23 @@ public sealed class ScopeWorkflowTemplateEnsureServiceTests
             string actorId,
             CancellationToken ct = default) =>
             Task.FromResult<ScopeWorkflowSummary?>(null);
+    }
+
+    private sealed class RecordingWorkflowExplicitRequestPreviewService(
+        params WorkflowExplicitRequestPreviewItem[] items) : IWorkflowExplicitRequestPreviewService
+    {
+        public List<WorkflowExplicitRequestPreviewRequest> Requests { get; } = [];
+
+        public Task<WorkflowExplicitRequestPreviewResult> PreviewAsync(
+            WorkflowExplicitRequestPreviewRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new WorkflowExplicitRequestPreviewResult(
+                request.WorkflowId ?? string.Empty,
+                request.RevisionId ?? string.Empty,
+                items));
+        }
     }
 
     private sealed class RecordingScopeWorkflowSaveAndBindPort : IScopeWorkflowSaveAndBindPort

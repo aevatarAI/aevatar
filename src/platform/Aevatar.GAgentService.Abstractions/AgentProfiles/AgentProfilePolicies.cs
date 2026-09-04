@@ -158,12 +158,13 @@ public static partial class AgentProfilePolicies
             var selector = policy.ConnectedServiceSelectors[index];
             var selectorField = $"{field}.connectedServiceSelectors[{index}]";
             if (!NyxIdServiceSlugPolicy.IsCanonical(selector.CatalogServiceSlug) &&
-                !IsDynamicReadConnectedServiceSelector(selector))
+                !IsDynamicReadConnectedServiceSelector(selector) &&
+                !IsEndpointOnlyReadConnectedServiceSelector(selector))
             {
                 diagnostics.Add(Diagnostic(
                     "PROFILE_CONNECTED_SERVICE_SLUG_INVALID",
                     $"{selectorField}.catalogServiceSlug",
-                    "Connected-service catalog slug must be canonical, or empty for dynamic read-only selection."));
+                    "Connected-service catalog slug must be canonical, or empty for read-only dynamic or endpoint-only selection."));
             }
             else if (!seenSelectors.Add(SelectorKey(selector)))
             {
@@ -227,6 +228,13 @@ public static partial class AgentProfilePolicies
     private static bool IsDynamicReadConnectedServiceSelector(AgentProfileConnectedServiceSelector selector) =>
         string.IsNullOrEmpty(selector.CatalogServiceSlug) &&
         string.IsNullOrEmpty(selector.EndpointId) &&
+        selector.Readiness is null &&
+        selector.AllowedRisks.Count == 1 &&
+        selector.AllowedRisks[0] == AgentToolOperationRiskPayload.ReadOnly;
+
+    private static bool IsEndpointOnlyReadConnectedServiceSelector(AgentProfileConnectedServiceSelector selector) =>
+        string.IsNullOrEmpty(selector.CatalogServiceSlug) &&
+        !string.IsNullOrEmpty(selector.EndpointId) &&
         selector.Readiness is null &&
         selector.AllowedRisks.Count == 1 &&
         selector.AllowedRisks[0] == AgentToolOperationRiskPayload.ReadOnly;
