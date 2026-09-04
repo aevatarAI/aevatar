@@ -18,7 +18,10 @@ import { formatUtcDateTime } from '@/shared/datetime/dateTime';
 import { t } from '@/shared/i18n/messages';
 import { getLocationSnapshot, history } from '@/shared/navigation/history';
 import { isStudioApiErrorCode, studioApi } from '@/shared/studio/api';
-import { buildWorkflowExecutionNodeSnapshots } from '@/shared/studio/execution';
+import {
+  buildWorkflowExecutionNodeSnapshots,
+  type WorkflowExecutionNodeSnapshot,
+} from '@/shared/studio/execution';
 import { createWorkflowRevisionIdentityCandidate } from '@/shared/studio/explicitRequestConfirmation';
 import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
@@ -150,6 +153,9 @@ const WorkflowEditorPage: React.FC<{
   const [activeRunLogIndex, setActiveRunLogIndex] = React.useState<
     number | null
   >(null);
+  const [runWorkflowNodes, setRunWorkflowNodes] = React.useState<
+    readonly WorkflowExecutionNodeSnapshot[]
+  >([]);
   const [pendingNavigation, setPendingNavigation] =
     React.useState<PendingNavigation | null>(null);
   const [hasUnappliedNodeChanges, setHasUnappliedNodeChanges] =
@@ -356,6 +362,7 @@ const WorkflowEditorPage: React.FC<{
       setRunConsoleVisible(false);
       setRunConsoleExpanded(false);
       setActiveRunLogIndex(null);
+      setRunWorkflowNodes([]);
       setActiveEditorRoute({
         scopeId: nextScopeId,
         target: nextTarget,
@@ -736,9 +743,6 @@ const WorkflowEditorPage: React.FC<{
       ? observedRunExecution
       : liveRunExecution || observedRunExecution
     : null;
-  const runWorkflowNodes = editor.document
-    ? buildWorkflowExecutionNodeSnapshots(editor.document)
-    : [];
   const runConsoleError =
     runConsoleVisible && editor.runPhase === 'failed' && !observedRunTerminal
       ? editor.runError ||
@@ -1399,6 +1403,11 @@ const WorkflowEditorPage: React.FC<{
             setRunConsoleVisible(true);
             setRunConsoleExpanded(true);
             setActiveRunLogIndex(null);
+            setRunWorkflowNodes(
+              editor.document
+                ? buildWorkflowExecutionNodeSnapshots(editor.document)
+                : [],
+            );
             void editor.run(publishedInvocationTarget);
           }}
           onRunMessageChange={editor.setRunInput}

@@ -1158,13 +1158,14 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.executionPanel.output': '输出',
   'teamMemberWorkflowStudio.executionPanel.overview': '概览',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '已收到 {count} 个运行事件，但暂时还没有节点输出。',
+    '已收到 {count} 个运行事件，正在等待第一个节点开始。',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': '结果',
   'teamMemberWorkflowStudio.executionPanel.runLog': '运行日志',
   'teamMemberWorkflowStudio.executionPanel.selectLog':
     '选择一条日志查看它的输入、输出和原始事件数据。',
   'teamMemberWorkflowStudio.executionPanel.steps': '步骤',
   'teamMemberWorkflowStudio.executionPanel.status.error': '错误',
+  'teamMemberWorkflowStudio.executionPanel.status.notRun': '未运行',
   'teamMemberWorkflowStudio.executionPanel.status.pending': '待运行',
   'teamMemberWorkflowStudio.executionPanel.status.recorded': '已记录',
   'teamMemberWorkflowStudio.executionPanel.status.running': '运行中',

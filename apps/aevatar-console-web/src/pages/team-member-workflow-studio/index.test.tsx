@@ -4885,16 +4885,14 @@ describe('TeamMemberWorkflowStudioPage', () => {
     ).toHaveTextContent('RUN_STARTED');
     fireEvent.click(within(consolePanel).getByRole('radio', { name: 'Nodes' }));
     expect(
-      within(consolePanel).queryByTestId(
+      within(consolePanel).getByTestId(
         'workflow-execution-log-row-node-triage',
       ),
-    ).toBeNull();
+    ).toHaveTextContent('Pending');
     expect(
-      within(consolePanel).queryByTestId(
-        'workflow-execution-log-row-node-guard',
-      ),
-    ).toBeNull();
-    expect(consolePanel).toHaveTextContent(/Steps\s*0/);
+      within(consolePanel).getByTestId('workflow-execution-log-row-node-guard'),
+    ).toHaveTextContent('Pending');
+    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
 
     const confirmSpy = jest
       .spyOn(window, 'confirm')
@@ -4905,11 +4903,9 @@ describe('TeamMemberWorkflowStudioPage', () => {
       expect(screen.getByText('nodes:1')).toBeTruthy();
     });
     expect(
-      within(consolePanel).queryByTestId(
-        'workflow-execution-log-row-node-guard',
-      ),
-    ).toBeNull();
-    expect(consolePanel).toHaveTextContent(/Steps\s*0/);
+      within(consolePanel).getByTestId('workflow-execution-log-row-node-guard'),
+    ).toHaveTextContent('Pending');
+    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
     confirmSpy.mockRestore();
 
     await act(async () => {
@@ -4932,10 +4928,8 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(runningTriageRow).toHaveTextContent('Running');
     expect(runningTriageRow).toBeEnabled();
     expect(
-      within(consolePanel).queryByTestId(
-        'workflow-execution-log-row-node-guard',
-      ),
-    ).toBeNull();
+      within(consolePanel).getByTestId('workflow-execution-log-row-node-guard'),
+    ).toHaveTextContent('Pending');
     expect(runningTriageRow).not.toHaveTextContent('Run the workflow');
     fireEvent.click(runningTriageRow);
     expect(
@@ -4949,7 +4943,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
     expect(runningTriageRow).toHaveAttribute('aria-pressed', 'true');
     expect(consolePanel).toHaveTextContent(/Events\s*2/);
-    expect(consolePanel).toHaveTextContent(/Steps\s*1/);
+    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
 
     await act(async () => {
       stream.emit({
@@ -5035,7 +5029,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(
       within(consolePanel).getByLabelText('Log details'),
     ).toHaveTextContent('Second pass output');
-    expect(consolePanel).toHaveTextContent(/Steps\s*1/);
+    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
 
     await act(async () => {
       stream.emit({
@@ -5052,6 +5046,9 @@ describe('TeamMemberWorkflowStudioPage', () => {
     await waitFor(() => {
       expect(consolePanel).toHaveTextContent('succeeded');
     });
+    expect(
+      within(consolePanel).getByTestId('workflow-execution-log-row-node-guard'),
+    ).toHaveTextContent('Not run');
     expect(
       within(consolePanel).getByRole('button', { name: 'Clear logs' }),
     ).toBeEnabled();
@@ -5100,16 +5097,16 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
     const secondRunConsole = await screen.findByLabelText('Draft run console');
     expect(
-      within(secondRunConsole).queryByTestId(
+      within(secondRunConsole).getByTestId(
         'workflow-execution-log-row-node-triage',
       ),
-    ).toBeNull();
+    ).toHaveTextContent('Not run');
     expect(
       within(secondRunConsole).queryByTestId(
         'workflow-execution-log-row-node-guard',
       ),
     ).toBeNull();
-    expect(secondRunConsole).toHaveTextContent(/Steps\s*0/);
+    expect(secondRunConsole).toHaveTextContent(/Steps\s*1/);
   });
 
   it('starts a failed draft run from the draft run panel and keeps the error visible', async () => {
@@ -5173,6 +5170,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     );
 
     const resultPanel = await screen.findByTestId('member-run-result-panel');
+    fireEvent.click(within(resultPanel).getByRole('radio', { name: 'Events' }));
     await waitFor(() => {
       expect(
         within(resultPanel).getByLabelText('Log details'),
@@ -5186,7 +5184,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
         'workflow-execution-log-row-node-triage',
       ),
     ).toBeNull();
-    expect(resultPanel).toHaveTextContent(/Steps\s*0/);
+    expect(resultPanel).toHaveTextContent(/Steps\s*1/);
     expect(screen.queryByTestId('member-run-summary')).toBeNull();
     expect(resultPanel).not.toHaveTextContent('Member run');
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();

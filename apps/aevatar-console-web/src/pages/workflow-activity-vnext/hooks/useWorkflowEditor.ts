@@ -33,6 +33,7 @@ import type {
   StudioWorkflowFile,
 } from '@/shared/studio/models';
 import { createStreamingExecutionDetail } from '@/shared/workflows/executionDetail';
+import { waitForWorkflowNodeStartPaint } from '@/shared/workflows/streamingExecutionPresentation';
 import { buildWorkflowActivityEditorHref } from '../navigation';
 import { hasBlockingFindings } from '../workflows/workflowCreation';
 import { useDraftMaterialization } from './useDraftMaterialization';
@@ -972,6 +973,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
               liveAccumulator.errorText || null,
             ),
           );
+          await waitForWorkflowNodeStartPaint(event, controller.signal);
           const reportedRunId = readSseRunId(event);
           if (reportedRunId && !sseRunIdRef.current) {
             sseRunIdRef.current = reportedRunId;
