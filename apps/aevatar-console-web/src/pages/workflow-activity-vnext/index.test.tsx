@@ -5218,14 +5218,15 @@ describe('Workflow Activity vNext editor', () => {
         target: { value: 'Review order 42' },
       },
     );
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Start published run' }),
-    );
-
     const startRun = await screen.findByRole('button', {
       name: 'Start published run',
     });
-    await waitFor(() => expect(startRun).toBeEnabled());
+    fireEvent.click(startRun);
+
+    await waitFor(() => {
+      expect(startRun).toBeInTheDocument();
+      expect(startRun).toBeEnabled();
+    });
     expect(
       screen.queryByText(
         'Live updates ended. Open Activity to check the latest status.',
