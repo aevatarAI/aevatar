@@ -8,6 +8,7 @@ import {
   SafetyCertificateOutlined,
   UserOutlined,
 } from '@ant-design/icons';
+import { useIntl } from '@umijs/max';
 import {
   applyNodeChanges,
   Background,
@@ -39,7 +40,6 @@ import React, {
   useMemo,
   useRef,
 } from 'react';
-import { t } from '@/shared/i18n/messages';
 import {
   getStudioGraphCategory,
   type StudioGraphNodeData,
@@ -360,6 +360,7 @@ function StudioWorkflowNode({
   id,
   selected,
 }: NodeProps<Node<StudioGraphNodeData>>) {
+  const intl = useIntl();
   const onStudioNodeRender = React.useContext(StudioNodeRenderContext);
   const category = getStudioGraphCategory(data.stepType);
   const Icon =
@@ -389,10 +390,15 @@ function StudioWorkflowNode({
           : '#DBEAFE';
   const branchCountLabel =
     data.branchCount === 1
-      ? t('teamMemberWorkflowStudio.graph.branchCount.one', '1 branch')
-      : t(
-          'teamMemberWorkflowStudio.graph.branchCount.other',
-          '{count} branches',
+      ? intl.formatMessage({
+          defaultMessage: '1 branch',
+          id: 'teamMemberWorkflowStudio.graph.branchCount.one',
+        })
+      : intl.formatMessage(
+          {
+            defaultMessage: '{count} branches',
+            id: 'teamMemberWorkflowStudio.graph.branchCount.other',
+          },
           { count: data.branchCount },
         );
 
@@ -458,7 +464,10 @@ function StudioWorkflowNode({
           {data.targetRole ? (
             <div className="studio-workflow-node__meta">
               <span className="studio-workflow-node__meta-label">
-                {t('teamMemberWorkflowStudio.graph.role', 'Role')}
+                {intl.formatMessage({
+                  defaultMessage: 'Role',
+                  id: 'teamMemberWorkflowStudio.graph.role',
+                })}
               </span>
               <span
                 className="studio-workflow-node__meta-value"

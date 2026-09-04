@@ -1,4 +1,5 @@
 import { act, render, screen } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import * as React from 'react';
 import GraphCanvas from './GraphCanvas';
 
@@ -165,6 +166,7 @@ describe('GraphCanvas', () => {
   ];
 
   beforeEach(() => {
+    setLocale('en-US', false);
     mockZoom = 1;
     mockRenderFlowNodes = false;
     mockRenderedNodeTopology = '[]';
@@ -584,6 +586,32 @@ describe('GraphCanvas', () => {
     expect(screen.getByTestId('handle-source')).toHaveClass(
       'studio-workflow-node__handle',
     );
+  });
+
+  it('updates memoized studio node labels when the locale context changes', () => {
+    render(<GraphCanvas edges={edges} nodes={nodes} variant="studio" />);
+
+    const StudioNode = latestReactFlowProps().nodeTypes.studioWorkflowNode;
+    const localizedNodeData = {
+      ...nodes[0].data,
+      branchCount: 2,
+      targetRole: 'assistant',
+    };
+    render(
+      <StudioNode data={localizedNodeData} id="step:assert" selected={false} />,
+    );
+
+    expect(screen.getByText('2 branches')).toBeTruthy();
+    expect(screen.getByText('Role')).toBeTruthy();
+
+    act(() => {
+      setLocale('zh-CN', false);
+    });
+
+    expect(screen.getByText('2 个分支')).toBeTruthy();
+    expect(screen.getByText('角色')).toBeTruthy();
+    expect(screen.queryByText('2 branches')).toBeNull();
+    expect(screen.queryByText('Role')).toBeNull();
   });
 
   it('keeps React Flow invariants and semantic event handlers stable across parent rerenders', () => {
