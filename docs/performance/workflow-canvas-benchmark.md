@@ -43,8 +43,10 @@ Each policy runs these scenarios:
   on-screen position verified.
 - `selection`: real pointer clicks that select one hit-tested Studio node, then
   move selection to a second node and clear the first.
-- `pan`: a real pointer pan from an unobstructed canvas point, with viewport
-  translation verified and zoom held constant.
+- `pan`: a long real pointer pan between unobstructed canvas points, with
+  viewport translation verified and zoom held constant. Under visible-element
+  rendering, mounted node IDs must prove that at least one node exits the
+  viewport and at least one new node enters it.
 - `zoom-same-band`: a non-expanding control zoom that changes scale without
   crossing the compact-node threshold.
 - `zoom-threshold`: control zooms that cross the compact-node threshold.
@@ -83,11 +85,12 @@ exactly this shape:
 
 `renderedNodeCount` is the total number of Studio node commit callbacks invoked
 during the scenario, including repeat commits for the same node.
-`changedNodeReferences` records immutable graph reference changes: all fixture
-nodes on initial load, two when selection moves between nodes, one for drag and
-status update, two for topology add, and zero for pan and zoom. The drag
-scenario commits the new position back through the same immutable owner-update
-path used by product wrappers. A buffered Long Tasks observer provides
+`changedNodeReferences` compares consecutive node arrays actually delivered by
+`GraphCanvas` to React Flow: all fixture nodes on initial load, two when
+selection moves between nodes, one for drag and status update, two for topology
+add, and zero for pan and zoom. The drag scenario commits the new position back
+through the same immutable owner-update path used by product wrappers. A
+buffered Long Tasks observer provides
 `longTasks`. Chromium's `performance.memory` is sampled when exposed and is
 otherwise reported as `null`; unavailable values are never invented.
 

@@ -130,30 +130,84 @@ async function waitForInitialFit(page: Page) {
   });
 }
 
-async function findPanePoint(page: Page): Promise<{ x: number; y: number }> {
+async function findPanePanGesture(page: Page): Promise<{
+  readonly end: { readonly x: number; readonly y: number };
+  readonly minimumHorizontalDistance: number;
+  readonly start: { readonly x: number; readonly y: number };
+}> {
   return page.evaluate(() => {
     const pane = document.querySelector<HTMLElement>('.react-flow__pane');
     if (!pane) {
       throw new Error('React Flow pane is unavailable');
     }
     const bounds = pane.getBoundingClientRect();
-    const candidates = [
-      [0.75, 0.75],
-      [0.5, 0.75],
-      [0.75, 0.5],
-      [0.25, 0.75],
-      [0.5, 0.5],
-    ] as const;
-    for (const [horizontal, vertical] of candidates) {
-      const x = bounds.left + bounds.width * horizontal;
-      const y = bounds.top + bounds.height * vertical;
-      if (
-        document.elementFromPoint(x, y)?.classList.contains('react-flow__pane')
-      ) {
-        return { x, y };
+    const fractions = [0.12, 0.22, 0.32, 0.42, 0.58, 0.68, 0.78, 0.88];
+    const candidates: Array<{ x: number; y: number }> = [];
+    for (const vertical of fractions) {
+      for (const horizontal of fractions) {
+        const point = {
+          x: bounds.left + bounds.width * horizontal,
+          y: bounds.top + bounds.height * vertical,
+        };
+        if (
+          document
+            .elementFromPoint(point.x, point.y)
+            ?.classList.contains('react-flow__pane')
+        ) {
+          candidates.push(point);
+        }
       }
     }
-    throw new Error('No unobstructed React Flow pane point is available');
+
+    let gesture:
+      | {
+          end: { x: number; y: number };
+          horizontalDistance: number;
+          start: { x: number; y: number };
+        }
+      | undefined;
+    for (let startIndex = 0; startIndex < candidates.length; startIndex += 1) {
+      const start = candidates[startIndex];
+      for (
+        let endIndex = startIndex + 1;
+        endIndex < candidates.length;
+        endIndex += 1
+      ) {
+        const end = candidates[endIndex];
+        const horizontalDistance = Math.abs(end.x - start.x);
+        if (!gesture || horizontalDistance > gesture.horizontalDistance) {
+          gesture = { end, horizontalDistance, start };
+        }
+      }
+    }
+
+    const minimumHorizontalDistance = bounds.width * 0.45;
+    if (!gesture || gesture.horizontalDistance < minimumHorizontalDistance) {
+      throw new Error(
+        `No sufficiently long unobstructed horizontal pane gesture is available; found ${gesture?.horizontalDistance ?? 0}px`,
+      );
+    }
+    return {
+      end: gesture.end,
+      minimumHorizontalDistance,
+      start: gesture.start,
+    };
+  });
+}
+
+async function readMountedNodeIds(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() => {
+    const ids = Array.from(
+      document.querySelectorAll<HTMLElement>('.react-flow__node'),
+      (node) => node.dataset.id,
+    );
+    if (ids.some((id) => !id)) {
+      throw new Error('A mounted workflow node is missing its data-id');
+    }
+    if (new Set(ids).size !== ids.length) {
+      throw new Error('Mounted workflow node IDs are not unique');
+    }
+    return (ids as string[]).sort();
   });
 }
 
@@ -319,21 +373,49 @@ async function runDrag(page: Page) {
   ).toBeGreaterThan(POSITION_CHANGE_TOLERANCE);
 }
 
-async function runPan(page: Page) {
+async function runPan(page: Page, visibleElementsOnly: boolean) {
   const before = await readViewport(page);
-  const start = await findPanePoint(page);
-  await page.mouse.move(start.x, start.y);
+  const beforeMountedNodeIds = await readMountedNodeIds(page);
+  const gesture = await findPanePanGesture(page);
+  await page.mouse.move(gesture.start.x, gesture.start.y);
   await page.mouse.down();
-  await page.mouse.move(start.x + 72, start.y + 48, { steps: 8 });
+  await page.mouse.move(gesture.end.x, gesture.end.y, { steps: 16 });
   await page.mouse.up();
   await waitForAnimationFrames(page);
+  if (visibleElementsOnly) {
+    await page.waitForFunction((previousIds) => {
+      const currentIds = Array.from(
+        document.querySelectorAll<HTMLElement>('.react-flow__node'),
+        (node) => node.dataset.id,
+      ).filter((id): id is string => Boolean(id));
+      const currentIdSet = new Set(currentIds);
+      const previousIdSet = new Set(previousIds);
+      return (
+        previousIds.some((id) => !currentIdSet.has(id)) &&
+        currentIds.some((id) => !previousIdSet.has(id))
+      );
+    }, beforeMountedNodeIds);
+  }
   const after = await readViewport(page);
-  expect(
-    Math.max(Math.abs(after.x - before.x), Math.abs(after.y - before.y)),
-  ).toBeGreaterThan(POSITION_CHANGE_TOLERANCE);
+  const afterMountedNodeIds = await readMountedNodeIds(page);
+  expect(Math.abs(after.x - before.x)).toBeGreaterThan(
+    gesture.minimumHorizontalDistance * 0.8,
+  );
   expect(Math.abs(after.zoom - before.zoom)).toBeLessThanOrEqual(
     ZOOM_CHANGE_TOLERANCE,
   );
+  if (visibleElementsOnly) {
+    const beforeMountedNodeIdSet = new Set(beforeMountedNodeIds);
+    const afterMountedNodeIdSet = new Set(afterMountedNodeIds);
+    expect(
+      beforeMountedNodeIds.filter((id) => !afterMountedNodeIdSet.has(id))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(
+      afterMountedNodeIds.filter((id) => !beforeMountedNodeIdSet.has(id))
+        .length,
+    ).toBeGreaterThan(0);
+  }
 }
 
 async function clickZoomControl(page: Page, direction: 'in' | 'out') {
@@ -404,6 +486,7 @@ async function runZoomThreshold(page: Page) {
 async function runScenarioAction(
   page: Page,
   scenario: Exclude<WorkflowCanvasBenchmarkScenario, 'initial-load'>,
+  visibleElementsOnly: boolean,
   selectionTargets?: InteractableNodePair,
 ) {
   switch (scenario) {
@@ -418,7 +501,7 @@ async function runScenarioAction(
       await runDrag(page);
       break;
     case 'pan':
-      await runPan(page);
+      await runPan(page, visibleElementsOnly);
       break;
     case 'zoom-same-band':
       await runZoomSameBand(page);
@@ -648,7 +731,12 @@ test('records every workflow canvas scale scenario and policy', async ({
             api.beginScenario(nextScenario);
             return performance.now();
           }, scenario);
-          await runScenarioAction(page, scenario, selectionTargets);
+          await runScenarioAction(
+            page,
+            scenario,
+            policyCase.policy.visibleElementsOnly,
+            selectionTargets,
+          );
           const captured = await appendResult(page, scenario, startedAt);
           results.push(captured.result);
           if (captured.profile) profiles.push(captured.profile);

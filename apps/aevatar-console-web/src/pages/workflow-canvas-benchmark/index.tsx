@@ -152,6 +152,7 @@ function BenchmarkCanvas({
   const [graph, setGraph] = React.useState(initialGraph);
   const [selectedNodeId, setSelectedNodeId] = React.useState<string>();
   const graphRef = React.useRef(graph);
+  const renderedNodesRef = React.useRef<readonly Node[] | undefined>(undefined);
   const resultsRef = React.useRef<WorkflowCanvasBenchmarkResult[]>([]);
   const longTasksRef = React.useRef<LongTaskSample[]>([]);
   const measurementRef = React.useRef<ActiveMeasurement>({
@@ -184,6 +185,18 @@ function BenchmarkCanvas({
     measurementRef.current.renderedNodeCount += 1;
   }, []);
 
+  const handleRenderedNodesChange = React.useCallback(
+    (renderedNodes: readonly Node[]) => {
+      const previousRenderedNodes = renderedNodesRef.current;
+      renderedNodesRef.current = renderedNodes;
+      if (previousRenderedNodes) {
+        measurementRef.current.changedNodeReferences =
+          countChangedNodeReferences(previousRenderedNodes, renderedNodes);
+      }
+    },
+    [],
+  );
+
   const handleProfileRender = React.useCallback<React.ProfilerOnRenderCallback>(
     (_id, phase, actualDuration, _baseDuration, startTime) => {
       if (
@@ -203,11 +216,7 @@ function BenchmarkCanvas({
   );
 
   const handleNodeSelect = React.useCallback((nodeId: string) => {
-    setSelectedNodeId((currentNodeId) => {
-      measurementRef.current.changedNodeReferences =
-        currentNodeId === nodeId ? 0 : currentNodeId ? 2 : 1;
-      return nodeId;
-    });
+    setSelectedNodeId(nodeId);
   }, []);
 
   const handleNodeLayoutChange = React.useCallback((renderedNodes: Node[]) => {
@@ -224,12 +233,7 @@ function BenchmarkCanvas({
         }
         return { ...node, position: { ...renderedNode.position } };
       });
-      const nextGraph = { ...currentGraph, nodes };
-      measurementRef.current.changedNodeReferences = countChangedNodeReferences(
-        currentGraph.nodes,
-        nextGraph.nodes,
-      );
-      return nextGraph;
+      return { ...currentGraph, nodes };
     });
   }, []);
 
@@ -278,18 +282,12 @@ function BenchmarkCanvas({
                 }
               : node,
           );
-          const nextGraph = { ...currentGraph, nodes };
-          measurementRef.current.changedNodeReferences =
-            countChangedNodeReferences(currentGraph.nodes, nextGraph.nodes);
-          return nextGraph;
+          return { ...currentGraph, nodes };
         });
       } else if (scenario === 'topology-add') {
-        setGraph((currentGraph) => {
-          const nextGraph = addWorkflowCanvasBenchmarkTopology(currentGraph);
-          measurementRef.current.changedNodeReferences =
-            countChangedNodeReferences(currentGraph.nodes, nextGraph.nodes);
-          return nextGraph;
-        });
+        setGraph((currentGraph) =>
+          addWorkflowCanvasBenchmarkTopology(currentGraph),
+        );
       } else {
         throw new Error(`Unsupported state scenario: ${scenario}`);
       }
@@ -365,6 +363,7 @@ function BenchmarkCanvas({
           nodes={graph.nodes}
           onNodeLayoutChange={handleNodeLayoutChange}
           onNodeSelect={handleNodeSelect}
+          onRenderedNodesChange={handleRenderedNodesChange}
           onStudioNodeRender={handleStudioNodeRender}
           onlyRenderVisibleElements={policy.visibleElementsOnly}
           selectedNodeId={selectedNodeId}

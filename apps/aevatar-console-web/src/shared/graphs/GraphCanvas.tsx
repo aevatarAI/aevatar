@@ -29,6 +29,7 @@ import {
   useNodesState,
   useReactFlow,
   useStore,
+  useStoreApi,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import React, {
@@ -71,6 +72,7 @@ type GraphCanvasProps = {
   onNodeLayoutChange?: (nodes: Node[]) => void;
   onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
   onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
+  onRenderedNodesChange?: (nodes: readonly Node[]) => void;
   onStudioNodeRender?: (nodeId: string) => void;
   onlyRenderVisibleElements?: boolean;
   showMiniMap?: boolean;
@@ -488,9 +490,62 @@ const STUDIO_NODE_TYPES = {
 };
 
 type StudioViewportControl = {
+  automaticFitRequest?: symbol;
   cancelOrdinaryFit?: () => void;
   manuallyNavigated: boolean;
 };
+
+type StudioViewportSnapshotNode = {
+  readonly height?: number;
+  readonly initialHeight?: number;
+  readonly initialWidth?: number;
+  readonly internals: {
+    readonly positionAbsolute: {
+      readonly x: number;
+      readonly y: number;
+    };
+  };
+  readonly measured: {
+    readonly height?: number;
+    readonly width?: number;
+  };
+  readonly width?: number;
+};
+
+type StudioViewportSnapshot = {
+  readonly height: number;
+  readonly nodeLookup: ReadonlyMap<string, StudioViewportSnapshotNode>;
+  readonly transform: readonly [number, number, number];
+  readonly width: number;
+};
+
+function isNodeVisibleInViewport(
+  nodeId: string,
+  snapshot: StudioViewportSnapshot,
+): boolean {
+  const node = snapshot.nodeLookup.get(nodeId);
+  const nodeWidth = node?.measured.width ?? node?.width ?? node?.initialWidth;
+  const nodeHeight =
+    node?.measured.height ?? node?.height ?? node?.initialHeight;
+  if (
+    !node ||
+    nodeWidth === undefined ||
+    nodeHeight === undefined ||
+    snapshot.width <= 0 ||
+    snapshot.height <= 0
+  ) {
+    return false;
+  }
+
+  const [viewportX, viewportY, zoom] = snapshot.transform;
+  const left = node.internals.positionAbsolute.x * zoom + viewportX;
+  const top = node.internals.positionAbsolute.y * zoom + viewportY;
+  const right = left + nodeWidth * zoom;
+  const bottom = top + nodeHeight * zoom;
+  return (
+    right > 0 && bottom > 0 && left < snapshot.width && top < snapshot.height
+  );
+}
 
 type StudioViewportControllerProps = {
   autoFitKey?: string;
@@ -511,6 +566,7 @@ function StudioViewportController({
 }: StudioViewportControllerProps) {
   const nodesInitialized = useNodesInitialized();
   const flowInstance = useReactFlow();
+  const storeApi = useStoreApi();
   const previousNodeIdsRef = useRef<ReadonlySet<string>>(new Set());
   const latestNodeIdsRef = useRef(nodeIds);
   const latestSelectedNodeIdRef = useRef(selectedNodeId);
@@ -552,14 +608,20 @@ function StudioViewportController({
       currentNodeIds.has(selectedNodeId) &&
       !previousNodeIdsRef.current.has(selectedNodeId);
     previousNodeIdsRef.current = currentNodeIds;
+    const shouldRevealAddedNode =
+      navigationControlRef.current.manuallyNavigated &&
+      addedSelectedNode &&
+      selectedNodeId !== undefined &&
+      !isNodeVisibleInViewport(selectedNodeId, storeApi.getState());
 
-    if (navigationControlRef.current.manuallyNavigated && !addedSelectedNode) {
+    if (
+      navigationControlRef.current.manuallyNavigated &&
+      !shouldRevealAddedNode
+    ) {
       return;
     }
 
-    const focusNodeId = navigationControlRef.current.manuallyNavigated
-      ? selectedNodeId
-      : undefined;
+    const focusNodeId = shouldRevealAddedNode ? selectedNodeId : undefined;
     let active = true;
     let animationFrameId: number | undefined;
     const cancelFit = () => {
@@ -586,14 +648,26 @@ function StudioViewportController({
       animationFrameId = undefined;
       navigationControlRef.current.cancelOrdinaryFit = undefined;
       lastFittedRef.current = { flowInstance, reason: fitReason };
-      void flowInstance.fitView(
-        focusNodeId
-          ? {
-              ...STUDIO_FIT_VIEW_OPTIONS,
-              nodes: [{ id: focusNodeId }],
-            }
-          : STUDIO_FIT_VIEW_OPTIONS,
-      );
+      const automaticFitRequest = Symbol('studio-automatic-fit');
+      navigationControlRef.current.automaticFitRequest = automaticFitRequest;
+      const clearAutomaticFitRequest = () => {
+        if (
+          navigationControlRef.current.automaticFitRequest ===
+          automaticFitRequest
+        ) {
+          navigationControlRef.current.automaticFitRequest = undefined;
+        }
+      };
+      void flowInstance
+        .fitView(
+          focusNodeId
+            ? {
+                ...STUDIO_FIT_VIEW_OPTIONS,
+                nodes: [{ id: focusNodeId }],
+              }
+            : STUDIO_FIT_VIEW_OPTIONS,
+        )
+        .then(clearAutomaticFitRequest, clearAutomaticFitRequest);
     };
 
     if (
@@ -613,6 +687,7 @@ function StudioViewportController({
     navigationControlRef,
     nodeIdsKey,
     nodesInitialized,
+    storeApi,
   ]);
 
   return null;
@@ -740,6 +815,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   onNodeLayoutChange,
   onDeleteEdges,
   onDeleteNodes,
+  onRenderedNodesChange,
   onStudioNodeRender,
   onlyRenderVisibleElements,
   showMiniMap,
@@ -882,6 +958,12 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
     [isStudioVariant, localEdges, selectedEdgeId],
   );
 
+  useEffect(() => {
+    if (isStudioVariant) {
+      onRenderedNodesChange?.(decoratedNodes);
+    }
+  }, [decoratedNodes, isStudioVariant, onRenderedNodesChange]);
+
   const canvasStyle = useMemo<React.CSSProperties>(
     () => ({
       background: isStudioVariant ? '#f7f9fc' : undefined,
@@ -998,11 +1080,34 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
     navigationControlRef.current.manuallyNavigated = true;
     navigationControlRef.current.cancelOrdinaryFit?.();
   }, []);
+  const viewportMoveStartRef = useRef<
+    | {
+        readonly x: number;
+        readonly y: number;
+        readonly zoom: number;
+      }
+    | undefined
+  >(undefined);
   const handleMoveStart = useCallback<
     NonNullable<ReactFlowProps['onMoveStart']>
-  >(
-    (event) => {
-      if (event !== null) {
+  >((_event, viewport) => {
+    viewportMoveStartRef.current = viewport;
+  }, []);
+  const handleMoveEnd = useCallback<NonNullable<ReactFlowProps['onMoveEnd']>>(
+    (_event, viewport) => {
+      const startViewport = viewportMoveStartRef.current;
+      viewportMoveStartRef.current = undefined;
+      if (
+        navigationControlRef.current.automaticFitRequest !== undefined ||
+        !startViewport
+      ) {
+        return;
+      }
+      if (
+        startViewport.x !== viewport.x ||
+        startViewport.y !== viewport.y ||
+        startViewport.zoom !== viewport.zoom
+      ) {
         markManuallyNavigated();
       }
     },
@@ -1051,6 +1156,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
           onPaneContextMenu={
             isStudioVariant ? handlePaneContextMenu : undefined
           }
+          onMoveEnd={isStudioVariant ? handleMoveEnd : undefined}
           onMoveStart={isStudioVariant ? handleMoveStart : undefined}
           className={isStudioVariant ? 'studio-canvas' : undefined}
           proOptions={isStudioVariant ? STUDIO_PRO_OPTIONS : undefined}
