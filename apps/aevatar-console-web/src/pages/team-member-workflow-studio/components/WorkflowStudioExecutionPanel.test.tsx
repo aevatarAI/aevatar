@@ -8,6 +8,9 @@ import {
 import * as React from 'react';
 import WorkflowStudioExecutionPanel from './WorkflowStudioExecutionPanel';
 
+type StudioExecutionDetailFixture =
+  import('@/shared/studio/models').StudioExecutionDetail;
+
 const mockConsoleToast = {
   error: jest.fn(),
   info: jest.fn(),
@@ -144,8 +147,8 @@ function createDiagnosticFrame(receivedAtUtc: string) {
 }
 
 function createRunningExecution(
-  frames: ReadonlyArray<{ payload: string; receivedAtUtc: string }>,
-) {
+  frames: ReadonlyArray<StudioExecutionDetailFixture['frames'][number]>,
+): StudioExecutionDetailFixture {
   return {
     actorId: 'actor-live-alpha',
     completedAtUtc: null,
@@ -163,7 +166,7 @@ function ControlledExecutionPanel({
   detail,
   workflowNodes,
 }: Readonly<{
-  detail: ReturnType<typeof createRunningExecution>;
+  detail: StudioExecutionDetailFixture;
   workflowNodes?: WorkflowNodes;
 }>) {
   const [activeLogIndex, setActiveLogIndex] = React.useReducer(
