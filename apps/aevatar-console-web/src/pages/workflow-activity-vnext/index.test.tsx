@@ -416,12 +416,16 @@ jest.mock('@/shared/ui/ConsoleToast', () => ({
   useConsoleToast: () => mockConsoleToast,
 }));
 
+const mockWorkflowStudioCanvasProps = jest.fn();
+
 jest.mock(
   '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvas',
   () => ({
     __esModule: true,
     default: ({
       nodes,
+      onAddFirstStep,
+      onCanvasSelect,
       onConnectNodes,
       onDeleteEdges,
       onDeleteNodes,
@@ -430,6 +434,8 @@ jest.mock(
       onNodeSelect,
     }: {
       nodes: readonly { readonly id: string }[];
+      onAddFirstStep?: () => void;
+      onCanvasSelect?: () => void;
       onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
       onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
       onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
@@ -441,32 +447,44 @@ jest.mock(
         }[],
       ) => void;
       onNodeSelect?: (nodeId: string) => void;
-    }) => (
-      <div
-        data-connectable={String(Boolean(onConnectNodes))}
-        data-deletable={String(Boolean(onDeleteEdges && onDeleteNodes))}
-        data-edge-selectable={String(Boolean(onEdgeSelect))}
-        data-layout-editable={String(Boolean(onNodeLayoutChange))}
-        data-testid="workflow-studio-canvas"
-      >
-        {nodes.map((node) => (
+    }) => {
+      mockWorkflowStudioCanvasProps({
+        onAddFirstStep,
+        onCanvasSelect,
+        onConnectNodes,
+        onDeleteEdges,
+        onDeleteNodes,
+        onEdgeSelect,
+        onNodeLayoutChange,
+        onNodeSelect,
+      });
+      return (
+        <div
+          data-connectable={String(Boolean(onConnectNodes))}
+          data-deletable={String(Boolean(onDeleteEdges && onDeleteNodes))}
+          data-edge-selectable={String(Boolean(onEdgeSelect))}
+          data-layout-editable={String(Boolean(onNodeLayoutChange))}
+          data-testid="workflow-studio-canvas"
+        >
+          {nodes.map((node) => (
+            <button
+              key={node.id}
+              onClick={() => onNodeSelect?.(node.id)}
+              type="button"
+            >
+              Select {node.id}
+            </button>
+          ))}
           <button
-            key={node.id}
-            onClick={() => onNodeSelect?.(node.id)}
+            disabled={!onConnectNodes || nodes.length < 2}
+            onClick={() => onConnectNodes?.(nodes[0].id, nodes[1].id)}
             type="button"
           >
-            Select {node.id}
+            Connect first two nodes
           </button>
-        ))}
-        <button
-          disabled={!onConnectNodes || nodes.length < 2}
-          onClick={() => onConnectNodes?.(nodes[0].id, nodes[1].id)}
-          type="button"
-        >
-          Connect first two nodes
-        </button>
-      </div>
-    ),
+        </div>
+      );
+    },
   }),
 );
 
@@ -3660,6 +3678,32 @@ describe('Workflow Activity vNext editor', () => {
         }),
       }),
     );
+  });
+
+  it('keeps canvas editing callbacks stable when the node library opens', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    await screen.findByTestId('workflow-studio-canvas');
+    const initialProps = mockWorkflowStudioCanvasProps.mock.calls.at(-1)?.[0];
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add node' }));
+
+    await waitFor(() =>
+      expect(mockWorkflowStudioCanvasProps).toHaveBeenCalledTimes(2),
+    );
+    const nodeLibraryProps =
+      mockWorkflowStudioCanvasProps.mock.calls.at(-1)?.[0];
+
+    expect(nodeLibraryProps?.onConnectNodes).toBe(initialProps?.onConnectNodes);
+    expect(nodeLibraryProps?.onAddFirstStep).toBe(initialProps?.onAddFirstStep);
+    expect(nodeLibraryProps?.onCanvasSelect).toBe(initialProps?.onCanvasSelect);
+    expect(nodeLibraryProps?.onDeleteEdges).toBe(initialProps?.onDeleteEdges);
+    expect(nodeLibraryProps?.onDeleteNodes).toBe(initialProps?.onDeleteNodes);
+    expect(nodeLibraryProps?.onEdgeSelect).toBe(initialProps?.onEdgeSelect);
+    expect(nodeLibraryProps?.onNodeLayoutChange).toBe(
+      initialProps?.onNodeLayoutChange,
+    );
+    expect(nodeLibraryProps?.onNodeSelect).toBe(initialProps?.onNodeSelect);
   });
 
   it('keeps the Canvas/YAML editor view switch discoverable and keyboard operable', async () => {

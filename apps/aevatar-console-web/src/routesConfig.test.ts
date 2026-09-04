@@ -1,6 +1,8 @@
 import { CONSOLE_HOME_ROUTE } from './shared/navigation/consoleHome';
 
 describe('console routes', () => {
+  const benchmarkEnvironmentKey = 'AEVATAR_WORKFLOW_CANVAS_BENCHMARK';
+
   function loadRoutes(): typeof import('../config/routes').default {
     let loadedRoutes!: typeof import('../config/routes').default;
     jest.isolateModules(() => {
@@ -43,6 +45,33 @@ describe('console routes', () => {
 
   beforeEach(() => {
     jest.resetModules();
+    delete process.env[benchmarkEnvironmentKey];
+  });
+
+  afterEach(() => {
+    delete process.env[benchmarkEnvironmentKey];
+  });
+
+  it('registers the workflow canvas benchmark only for the exact opt-in value', () => {
+    expect(hasRoute(loadRoutes(), '/workflow-canvas-benchmark')).toBe(false);
+
+    process.env[benchmarkEnvironmentKey] = 'true';
+    jest.resetModules();
+    expect(hasRoute(loadRoutes(), '/workflow-canvas-benchmark')).toBe(false);
+
+    process.env[benchmarkEnvironmentKey] = '1';
+    jest.resetModules();
+    const benchmarkRoute = findRoute(
+      loadRoutes(),
+      '/workflow-canvas-benchmark',
+    );
+    expect(benchmarkRoute).toEqual(
+      expect.objectContaining({
+        component: './workflow-canvas-benchmark',
+        hideInMenu: true,
+        layout: false,
+      }),
+    );
   });
 
   it('routes console home to Workflow Activity while preserving scoped Teams', () => {

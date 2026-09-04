@@ -6,6 +6,8 @@
   "description": "Aevatar console shell built on Ant Design Pro",
   "scripts": {
     "analyze": "cross-env ANALYZE=1 max build",
+    "benchmark:workflow-canvas": "playwright test --config=playwright.performance.config.ts",
+    "benchmark:workflow-canvas:serve": "cross-env AEVATAR_WORKFLOW_CANVAS_BENCHMARK=1 max preview --port 4174",
     "build": "max build",
     "build:web": "npm run build",
     "dev": "npm run start:dev",
@@ -48,6 +50,7 @@
     "@biomejs/biome": "^2.1.1",
     "@commitlint/cli": "^20.1.0",
     "@commitlint/config-conventional": "^20.0.0",
+    "@playwright/test": "1.60.0",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",

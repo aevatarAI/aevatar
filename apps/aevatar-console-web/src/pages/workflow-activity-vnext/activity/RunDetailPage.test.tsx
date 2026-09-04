@@ -17,8 +17,16 @@ type WorkflowRunLineageFixture =
   import('@/shared/models/workflowActivity').WorkflowRunLineage;
 type WorkflowRunRecoveryCapabilityFixture =
   import('@/shared/models/workflowActivity').WorkflowRunRecoveryCapability;
+type GraphCanvasPropsFixture = {
+  readonly edges: readonly import('@xyflow/react').Edge[];
+  readonly nodes: readonly import('@xyflow/react').Node[];
+  readonly onCanvasSelect?: () => void;
+  readonly onNodeSelect?: (nodeId: string) => void;
+  readonly selectedNodeId?: string;
+};
 
 let mockSearch = '';
+let mockGraphCanvasProps: GraphCanvasPropsFixture[] = [];
 
 const mockConsoleToast = {
   error: jest.fn(),
@@ -77,6 +85,30 @@ jest.mock('@/shared/api/workflowActivityApi', () => {
 
 jest.mock('@/shared/navigation/history', () => ({
   history: { push: jest.fn(), replace: jest.fn() },
+}));
+
+jest.mock('@/shared/graphs/GraphCanvas', () => ({
+  __esModule: true,
+  default: (props: GraphCanvasPropsFixture) => {
+    mockGraphCanvasProps.push(props);
+    return (
+      <div data-testid="graph-canvas">
+        {props.nodes.map((node) => (
+          <button
+            aria-label={`Select ${node.id}`}
+            key={node.id}
+            onClick={() => props.onNodeSelect?.(node.id)}
+            type="button"
+          />
+        ))}
+        <button
+          aria-label="Clear graph selection"
+          onClick={() => props.onCanvasSelect?.()}
+          type="button"
+        />
+      </div>
+    );
+  },
 }));
 
 jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
@@ -368,6 +400,7 @@ describe('Workflow Activity vNext run detail console', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockSearch = '?definition=definition-alpha';
+    mockGraphCanvasProps = [];
     mockWorkflowActivityApi.getRun.mockResolvedValue(buildRunDetail());
     mockWorkflowActivityApi.getRunGraph.mockResolvedValue({
       rootNodeId: 'node-root',
@@ -758,6 +791,44 @@ describe('Workflow Activity vNext run detail console', () => {
     expect(history.push).toHaveBeenLastCalledWith(
       '/scopes/scope-alpha/workflow-activity-vnext/activity/run-source-beta?definition=definition-alpha',
     );
+  });
+
+  it('changes graph selection without rebuilding unchanged graph elements or callbacks', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    await screen.findByTestId('graph-canvas');
+    await waitFor(() =>
+      expect(mockGraphCanvasProps.at(-1)?.selectedNodeId).toBe(
+        'step:step-failed',
+      ),
+    );
+    const beforeSelection = mockGraphCanvasProps.at(-1);
+    expect(beforeSelection).toBeDefined();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Select step:step-root' }),
+    );
+
+    await waitFor(() =>
+      expect(mockGraphCanvasProps.at(-1)?.selectedNodeId).toBe(
+        'step:step-root',
+      ),
+    );
+    const afterSelection = mockGraphCanvasProps.at(-1);
+    expect(afterSelection).toBeDefined();
+    expect(afterSelection?.nodes).toBe(beforeSelection?.nodes);
+    expect(afterSelection?.nodes[0]).toBe(beforeSelection?.nodes[0]);
+    expect(afterSelection?.nodes[0].data).toBe(beforeSelection?.nodes[0].data);
+    expect(afterSelection?.nodes[1]).toBe(beforeSelection?.nodes[1]);
+    expect(afterSelection?.nodes[1].data).toBe(beforeSelection?.nodes[1].data);
+    expect(afterSelection?.edges).toBe(beforeSelection?.edges);
+    expect(afterSelection?.edges[0]).toBe(beforeSelection?.edges[0]);
+    expect(afterSelection?.onCanvasSelect).toBe(
+      beforeSelection?.onCanvasSelect,
+    );
+    expect(afterSelection?.onNodeSelect).toBe(beforeSelection?.onNodeSelect);
   });
 
   it('bounds the published-runs rail inside the run detail viewport and scrolls its history list', async () => {

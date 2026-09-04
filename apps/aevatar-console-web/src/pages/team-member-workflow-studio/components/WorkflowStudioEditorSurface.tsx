@@ -49,4 +49,4 @@ const WorkflowStudioEditorSurface: React.FC<
   </WorkflowStudioCanvasRegion>
 );
 
-export default WorkflowStudioEditorSurface;
+export default React.memo(WorkflowStudioEditorSurface);

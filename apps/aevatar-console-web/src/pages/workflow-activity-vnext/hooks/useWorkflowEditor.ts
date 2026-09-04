@@ -209,6 +209,21 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const [selectedStepConfigurationError, setSelectedStepConfigurationError] =
     React.useState('');
   const [canvasMutationError, setCanvasMutationError] = React.useState('');
+  const selectCanvas = React.useCallback(() => {
+    setSelectedEdgeId('');
+    setSelectedNodeId('');
+    setSelectedStepConfigurationError('');
+  }, []);
+  const selectEdge = React.useCallback((edgeId: string) => {
+    setSelectedEdgeId(edgeId);
+    setSelectedNodeId('');
+    setSelectedStepConfigurationError('');
+  }, []);
+  const selectNode = React.useCallback((nodeId: string) => {
+    setSelectedEdgeId('');
+    setSelectedNodeId(nodeId);
+    setSelectedStepConfigurationError('');
+  }, []);
   const runControllerRef = React.useRef<AbortController | null>(null);
   const runInFlightRef = React.useRef(false);
   const runGenerationRef = React.useRef(0);
@@ -1086,21 +1101,9 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     selectedEdgeId,
     selectedStepConfigurationError,
     selectedStepDraft,
-    selectCanvas: () => {
-      setSelectedEdgeId('');
-      setSelectedNodeId('');
-      setSelectedStepConfigurationError('');
-    },
-    selectEdge: (edgeId: string) => {
-      setSelectedEdgeId(edgeId);
-      setSelectedNodeId('');
-      setSelectedStepConfigurationError('');
-    },
-    selectNode: (nodeId: string) => {
-      setSelectedEdgeId('');
-      setSelectedNodeId(nodeId);
-      setSelectedStepConfigurationError('');
-    },
+    selectCanvas,
+    selectEdge,
+    selectNode,
     addRunFiles: (files: readonly File[]) => {
       if (files.length > 0) {
         setRunFiles((current) => [...current, ...files]);
