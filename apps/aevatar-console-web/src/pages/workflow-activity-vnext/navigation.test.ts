@@ -1,6 +1,7 @@
 import {
   buildWorkflowActivityEditorHref,
   buildWorkflowActivityNewHref,
+  buildWorkflowActivitySettingsHref,
   buildWorkflowActivityTemplatesHref,
 } from './navigation';
 
@@ -23,5 +24,25 @@ describe('Workflow Activity vNext navigation', () => {
     ).toBe(
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/workflow%20alpha',
     );
+  });
+
+  it.each([
+    [
+      'scope with space',
+      'ai',
+      '/scopes/scope%20with%20space/workflow-activity-vnext/settings',
+    ],
+    [
+      'scope-alpha',
+      'account',
+      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account',
+    ],
+    [
+      'scope-alpha',
+      'advanced',
+      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=advanced',
+    ],
+  ] as const)('builds the canonical %s settings URL for %s', (scopeId, section, expected) => {
+    expect(buildWorkflowActivitySettingsHref(scopeId, section)).toBe(expected);
   });
 });

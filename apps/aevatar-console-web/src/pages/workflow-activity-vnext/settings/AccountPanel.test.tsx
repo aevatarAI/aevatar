@@ -39,6 +39,29 @@ const identity = {
 describe('Workflow Activity vNext account panel', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockLoginWithRedirect.mockReset();
+    mockLoginWithRedirect.mockResolvedValue(undefined);
+  });
+
+  it('starts service access review with the canonical Account settings URL', async () => {
+    render(
+      <AccountPanel
+        accountSettingsHref="/scopes/scope-alpha/workflow-activity-vnext/settings?section=account"
+        identity={identity}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Manage service access' }),
+    );
+
+    await waitFor(() =>
+      expect(mockLoginWithRedirect).toHaveBeenCalledWith({
+        flow: 'serviceAccessReview',
+        returnTo:
+          '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account',
+      }),
+    );
   });
 
   it('reports service access review failures with a toast', async () => {
@@ -48,8 +71,8 @@ describe('Workflow Activity vNext account panel', () => {
 
     render(
       <AccountPanel
+        accountSettingsHref="/scopes/scope-alpha/workflow-activity-vnext/settings?section=account"
         identity={identity}
-        returnTo="/scopes/scope-alpha/workflow-activity-vnext/settings"
       />,
     );
 
@@ -71,6 +94,7 @@ describe('Workflow Activity vNext account panel', () => {
   it('keeps identity and access facts primary without placeholder product status', () => {
     render(
       <AccountPanel
+        accountSettingsHref="/scopes/scope-alpha/workflow-activity-vnext/settings?section=account"
         identity={{
           ...identity,
           emailVerified: true,
@@ -80,7 +104,6 @@ describe('Workflow Activity vNext account panel', () => {
             subject: 'user-alpha',
           },
         }}
-        returnTo="/scopes/scope-alpha/workflow-activity-vnext/settings"
       />,
     );
 
@@ -108,6 +131,7 @@ describe('Workflow Activity vNext account panel', () => {
   it('shows provider user IDs when they use a machine identifier shape', () => {
     render(
       <AccountPanel
+        accountSettingsHref="/scopes/scope-alpha/workflow-activity-vnext/settings?section=account"
         identity={{
           ...identity,
           support: {
@@ -116,7 +140,6 @@ describe('Workflow Activity vNext account panel', () => {
             subject: 'ccb108c4-dcb3-473a-a0f7-e9859bb2f2a0',
           },
         }}
-        returnTo="/scopes/scope-alpha/workflow-activity-vnext/settings"
       />,
     );
 
@@ -126,6 +149,7 @@ describe('Workflow Activity vNext account panel', () => {
   it('renders a compact signed-in state when optional profile fields are absent', () => {
     render(
       <AccountPanel
+        accountSettingsHref="/scopes/scope-alpha/workflow-activity-vnext/settings?section=account"
         identity={{
           ...identity,
           displayName: { kind: 'not_provided' },
@@ -135,7 +159,6 @@ describe('Workflow Activity vNext account panel', () => {
           scope: { kind: 'not_provided' },
           support: { groups: [], roles: [], subject: null },
         }}
-        returnTo="/scopes/scope-alpha/workflow-activity-vnext/settings"
       />,
     );
 

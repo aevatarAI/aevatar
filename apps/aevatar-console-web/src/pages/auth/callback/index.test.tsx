@@ -8,10 +8,11 @@ import CallbackPage from './index';
 const replaceLocation = jest.fn();
 const handleRedirectCallback = jest.fn();
 const loginWithRedirect = jest.fn();
+const reviewReturnTo =
+  '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
 
 jest.mock('@/shared/auth/client', () => ({
   NyxIDAuthClient: jest.fn(),
-  SERVICE_ACCESS_REVIEW_RETURN_TO: '/settings?section=account',
 }));
 
 function mockLocationReplace(
@@ -109,7 +110,7 @@ describe('NyxID callback page', () => {
   it('returns to Account settings after service access review succeeds', async () => {
     handleRedirectCallback.mockResolvedValue({
       flow: 'serviceAccessReview',
-      returnTo: '/settings?section=account',
+      returnTo: reviewReturnTo,
       session: {
         tokens: {
           accessToken: 'review-access-token',
@@ -126,7 +127,7 @@ describe('NyxID callback page', () => {
     render(React.createElement(CallbackPage));
 
     await waitFor(() => {
-      expect(replaceLocation).toHaveBeenCalledWith('/settings?section=account');
+      expect(replaceLocation).toHaveBeenCalledWith(reviewReturnTo);
     });
   });
 
@@ -135,7 +136,7 @@ describe('NyxID callback page', () => {
       Object.assign(new Error('OAuth error: access_denied'), {
         flow: 'serviceAccessReview',
         reason: 'oauthDenied',
-        returnTo: '/settings?section=account',
+        returnTo: reviewReturnTo,
       }),
     );
 
@@ -154,11 +155,11 @@ describe('NyxID callback page', () => {
     fireEvent.click(retryButton);
     expect(loginWithRedirect).toHaveBeenCalledWith({
       flow: 'serviceAccessReview',
-      returnTo: '/settings?section=account',
+      returnTo: reviewReturnTo,
     });
     expect(
       await findByRole('link', { name: 'Back to Account settings' }),
-    ).toHaveAttribute('href', '/settings?section=account');
+    ).toHaveAttribute('href', reviewReturnTo);
     expect(replaceLocation).not.toHaveBeenCalled();
   });
 
@@ -184,7 +185,7 @@ describe('NyxID callback page', () => {
       Object.assign(new Error('raw'), {
         flow: 'serviceAccessReview',
         reason,
-        returnTo: '/settings?section=account',
+        returnTo: reviewReturnTo,
       }),
     );
     const { findByRole } = render(React.createElement(CallbackPage));
@@ -243,7 +244,7 @@ describe('NyxID callback page', () => {
       Object.assign(new Error('raw'), {
         flow: 'serviceAccessReview',
         reason: 'serviceAccessReviewUnavailable',
-        returnTo: '/settings?section=account',
+        returnTo: reviewReturnTo,
       }),
     );
     loginWithRedirect.mockRejectedValueOnce(new Error('config unavailable'));
@@ -256,6 +257,31 @@ describe('NyxID callback page', () => {
       'Could not restart service access review. Try again.',
     );
     await waitFor(() => expect(retryButton).not.toHaveClass('ant-btn-loading'));
+  });
+
+  it('sanitizes unsafe review error navigation before back or retry', async () => {
+    handleRedirectCallback.mockRejectedValue(
+      Object.assign(new Error('OAuth error: access_denied'), {
+        flow: 'serviceAccessReview',
+        reason: 'oauthDenied',
+        returnTo: '//evil.example/account',
+      }),
+    );
+
+    const { findByRole } = render(React.createElement(CallbackPage));
+    const retryButton = await findByRole('button', {
+      name: 'Retry service access review',
+    });
+
+    fireEvent.click(retryButton);
+
+    expect(loginWithRedirect).toHaveBeenCalledWith({
+      flow: 'serviceAccessReview',
+      returnTo: CONSOLE_HOME_ROUTE,
+    });
+    expect(
+      await findByRole('link', { name: 'Back to Account settings' }),
+    ).toHaveAttribute('href', CONSOLE_HOME_ROUTE);
   });
 
   it('skips callback finalization when no callback payload is present and a session exists', async () => {

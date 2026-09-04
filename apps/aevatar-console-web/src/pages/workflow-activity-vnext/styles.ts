@@ -751,17 +751,36 @@ export const workflowActivityVNextCss = `
   min-width: 0;
 }
 .wa-vnext-run-detail__inspector-body--loading { gap: 10px; }
-.wa-vnext__node-inspector { background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); bottom: 16px; box-shadow: 0 16px 36px rgba(16, 24, 40, .16); display: flex; flex-direction: column; max-width: calc(100% - 32px); min-height: 0; overflow: hidden; position: absolute; right: 16px; top: 16px; width: min(400px, calc(100% - 32px)); z-index: 20; }
+.wa-vnext__node-inspector { background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); bottom: 16px; box-shadow: 0 16px 36px rgba(16, 24, 40, .16); display: flex; flex-direction: column; max-width: calc(100% - 32px); min-height: 0; overflow: hidden; position: absolute; right: 16px; top: 16px; width: min(440px, calc(100% - 32px)); z-index: 20; }
 .wa-vnext__node-inspector-header { align-items: flex-start; border-bottom: 1px solid var(--wa-line); display: flex; gap: 12px; justify-content: space-between; padding: 16px 16px 14px; }
 .wa-vnext__node-inspector-title.ant-typography { font-size: 15px; line-height: 1.35; margin: 0; }
 .wa-vnext__node-inspector-subtitle { color: var(--wa-muted); display: block; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 4px; overflow-wrap: anywhere; }
 .wa-vnext__node-inspector-body { display: grid; gap: 14px; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px; }
+.wa-vnext__node-inspector-settings { display: grid; gap: 12px; }
 .wa-vnext__node-inspector-section-title.ant-typography { font-size: 14px; line-height: 1.4; margin: 0; }
 .wa-vnext__node-inspector-description.ant-typography { color: var(--wa-muted); font-size: 12px; line-height: 1.5; margin: 5px 0 14px; text-wrap: pretty; }
+.wa-vnext__node-inspector-purpose.ant-typography { color: var(--wa-muted); font-size: 13px; line-height: 1.55; margin: 0; text-wrap: pretty; }
 .wa-vnext__node-inspector-fields { display: grid; gap: 14px; }
 .wa-vnext__node-inspector-field { display: grid; gap: 6px; min-width: 0; }
-.wa-vnext__node-inspector-field > span { color: var(--wa-ink); font-size: 12px; font-weight: 650; }
+.wa-vnext__node-inspector-field-heading { align-items: baseline; display: flex; gap: 10px; justify-content: space-between; }
+.wa-vnext__node-inspector-field-heading > span { color: var(--wa-ink); font-size: 12px; font-weight: 650; }
+.wa-vnext__node-inspector-field-heading > small { color: var(--wa-muted); flex: 0 0 auto; font-size: 10px; font-weight: 600; }
 .wa-vnext__node-inspector-field small { color: var(--wa-muted); font-size: 11px; line-height: 1.45; }
+.wa-vnext__arguments-editor { display: grid; gap: 10px; min-width: 0; }
+.wa-vnext__arguments-collection { border-left: 1px solid var(--wa-line); display: grid; gap: 10px; min-width: 0; padding-left: 10px; }
+.wa-vnext__arguments-entry { display: grid; gap: 7px; min-width: 0; }
+.wa-vnext__arguments-entry + .wa-vnext__arguments-entry { border-top: 1px solid var(--wa-line); padding-top: 10px; }
+.wa-vnext__arguments-entry-heading, .wa-vnext__arguments-array-heading { align-items: center; display: grid; gap: 6px; grid-template-columns: minmax(88px, 1fr) minmax(92px, .72fr) 32px; min-width: 0; }
+.wa-vnext__arguments-column-labels { color: var(--wa-muted); display: grid; font-size: 10px; font-weight: 650; gap: 6px; grid-template-columns: minmax(88px, 1fr) minmax(92px, .72fr) 32px; line-height: 1.2; min-width: 0; }
+.wa-vnext__arguments-array-heading > .ant-typography { color: var(--wa-muted); font-size: 11px; font-weight: 650; }
+.wa-vnext__arguments-entry-heading .ant-select, .wa-vnext__arguments-array-heading .ant-select, .wa-vnext__arguments-entry-value > .ant-input-number { width: 100%; }
+.wa-vnext__arguments-entry-value { min-width: 0; }
+.wa-vnext__arguments-entry-value > .wa-vnext__arguments-collection { margin-left: 4px; }
+.wa-vnext__arguments-empty.ant-typography, .wa-vnext__arguments-null.ant-typography { color: var(--wa-muted); font-size: 11px; }
+.wa-vnext__arguments-json { display: grid; gap: 6px; }
+.wa-vnext__arguments-json .ant-input { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.wa-vnext__arguments-error.ant-typography { font-size: 11px; line-height: 1.45; }
+.wa-vnext__node-inspector-empty { font-size: 12px; line-height: 1.5; }
 .wa-vnext__node-inspector-error { margin-top: 14px; }
 .wa-vnext__node-inspector-disclosure.ant-collapse { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: 4px; }
 .wa-vnext__node-inspector-disclosure .ant-collapse-header { align-items: center; color: var(--wa-ink); font-size: 12px; font-weight: 650; min-height: 42px; }
@@ -955,7 +974,7 @@ export const workflowActivityVNextCss = `
   .wa-vnext__workflow-actions .ant-btn { min-height: 44px; }
   .wa-vnext__workflow-actions .ant-btn-icon-only { min-width: 44px; width: 44px; }
   .wa-vnext__settings-layout { max-width: none; }
-  .wa-vnext__node-inspector { bottom: 12px; left: 12px; max-height: calc(100% - 24px); max-width: none; right: 12px; top: auto; width: auto; }
+  .wa-vnext__node-inspector { bottom: 56px; left: 12px; max-height: calc(100dvh - 120px); max-width: none; position: fixed; right: 12px; top: auto; width: auto; }
 }
 @media (max-width: 600px) {
   .wa-vnext__header { flex-direction: column; }
