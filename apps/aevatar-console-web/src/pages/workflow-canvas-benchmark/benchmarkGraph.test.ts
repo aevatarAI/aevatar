@@ -4,6 +4,7 @@ import {
   countChangedNodeReferences,
   createWorkflowCanvasBenchmarkGraph,
   createWorkflowCanvasBenchmarkProgress,
+  getChangedNodeReferenceIds,
   parseWorkflowCanvasBenchmarkGraphSize,
   WORKFLOW_CANVAS_BENCHMARK_GRAPH_SIZES,
   type WorkflowCanvasBenchmarkResult,
@@ -99,6 +100,45 @@ describe('workflow canvas benchmark graph', () => {
       }),
     );
     expect(countChangedNodeReferences(graph.nodes, expanded.nodes)).toBe(2);
+  });
+
+  it('identifies changed, added, and removed node references by id', () => {
+    const graph = createWorkflowCanvasBenchmarkGraph(100);
+    const updated = [
+      { ...graph.nodes[0] },
+      ...graph.nodes.slice(2),
+      { ...graph.nodes[1], id: 'benchmark:replacement' },
+    ];
+
+    expect(getChangedNodeReferenceIds(graph.nodes, updated)).toEqual(
+      new Set([graph.nodes[0].id, graph.nodes[1].id, 'benchmark:replacement']),
+    );
+  });
+
+  it('retains larger and disjoint reference deltas across later transitions', () => {
+    const graph = createWorkflowCanvasBenchmarkGraph(100);
+    const changedNodeIds = new Set<string>();
+    const observe = (nextNodes: typeof graph.nodes) => {
+      for (const nodeId of getChangedNodeReferenceIds(graph.nodes, nextNodes)) {
+        changedNodeIds.add(nodeId);
+      }
+    };
+    const twoChanged = graph.nodes.map((node, index) =>
+      index < 2 ? { ...node } : node,
+    );
+    const oneChanged = graph.nodes.map((node, index) =>
+      index === 0 ? { ...node } : node,
+    );
+
+    observe(twoChanged);
+    observe(oneChanged);
+    expect(changedNodeIds).toEqual(
+      new Set([graph.nodes[0].id, graph.nodes[1].id]),
+    );
+
+    observe(graph.nodes.map((node) => ({ ...node })));
+    observe(oneChanged);
+    expect(changedNodeIds.size).toBe(graph.nodes.length);
   });
 });
 

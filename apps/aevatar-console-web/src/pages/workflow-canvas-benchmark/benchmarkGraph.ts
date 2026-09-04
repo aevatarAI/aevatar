@@ -225,13 +225,26 @@ export function countChangedNodeReferences(
   previousNodes: readonly Node[],
   nextNodes: readonly Node[],
 ): number {
+  return getChangedNodeReferenceIds(previousNodes, nextNodes).size;
+}
+
+export function getChangedNodeReferenceIds(
+  previousNodes: readonly Node[],
+  nextNodes: readonly Node[],
+): ReadonlySet<string> {
   const previousById = new Map(previousNodes.map((node) => [node.id, node]));
   const nextIds = new Set(nextNodes.map((node) => node.id));
-  const changedOrAdded = nextNodes.filter(
-    (node) => previousById.get(node.id) !== node,
-  ).length;
-  const removed = previousNodes.filter((node) => !nextIds.has(node.id)).length;
-  return changedOrAdded + removed;
+  const changedNodeIds = new Set(
+    nextNodes
+      .filter((node) => previousById.get(node.id) !== node)
+      .map((node) => node.id),
+  );
+  for (const node of previousNodes) {
+    if (!nextIds.has(node.id)) {
+      changedNodeIds.add(node.id);
+    }
+  }
+  return changedNodeIds;
 }
 
 export function createWorkflowCanvasBenchmarkProgress(

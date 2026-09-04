@@ -4,8 +4,8 @@ import GraphCanvas from '@/shared/graphs/GraphCanvas';
 import {
   addWorkflowCanvasBenchmarkTopology,
   assertWorkflowCanvasBenchmarkResult,
-  countChangedNodeReferences,
   createWorkflowCanvasBenchmarkGraph,
+  getChangedNodeReferenceIds,
   parseWorkflowCanvasBenchmarkGraphSize,
   WORKFLOW_CANVAS_BENCHMARK_SCENARIOS,
   type WorkflowCanvasBenchmarkGraph,
@@ -43,6 +43,7 @@ declare global {
 }
 
 type ActiveMeasurement = {
+  readonly changedNodeReferenceIds: Set<string>;
   changedNodeReferences: number;
   readonly reactCommits: WorkflowCanvasBenchmarkReactCommit[];
   renderedNodeCount: number;
@@ -151,19 +152,20 @@ function BenchmarkCanvas({
 }) {
   const [graph, setGraph] = React.useState(initialGraph);
   const [selectedNodeId, setSelectedNodeId] = React.useState<string>();
-  const graphRef = React.useRef(graph);
   const renderedNodesRef = React.useRef<readonly Node[] | undefined>(undefined);
+  const scenarioBaselineNodesRef = React.useRef<readonly Node[] | undefined>(
+    undefined,
+  );
   const resultsRef = React.useRef<WorkflowCanvasBenchmarkResult[]>([]);
   const longTasksRef = React.useRef<LongTaskSample[]>([]);
   const measurementRef = React.useRef<ActiveMeasurement>({
+    changedNodeReferenceIds: new Set(initialGraph.nodes.map((node) => node.id)),
     changedNodeReferences: size,
     reactCommits: [],
     renderedNodeCount: 0,
     scenario: 'initial-load',
     startedAt: 0,
   });
-  graphRef.current = graph;
-
   React.useEffect(() => {
     if (
       typeof PerformanceObserver === 'undefined' ||
@@ -187,11 +189,17 @@ function BenchmarkCanvas({
 
   const handleRenderedNodesChange = React.useCallback(
     (renderedNodes: readonly Node[]) => {
-      const previousRenderedNodes = renderedNodesRef.current;
       renderedNodesRef.current = renderedNodes;
-      if (previousRenderedNodes) {
+      const baselineNodes = scenarioBaselineNodesRef.current;
+      if (baselineNodes) {
+        for (const nodeId of getChangedNodeReferenceIds(
+          baselineNodes,
+          renderedNodes,
+        )) {
+          measurementRef.current.changedNodeReferenceIds.add(nodeId);
+        }
         measurementRef.current.changedNodeReferences =
-          countChangedNodeReferences(previousRenderedNodes, renderedNodes);
+          measurementRef.current.changedNodeReferenceIds.size;
       }
     },
     [],
@@ -242,7 +250,9 @@ function BenchmarkCanvas({
       if (!WORKFLOW_CANVAS_BENCHMARK_SCENARIOS.includes(scenario)) {
         throw new Error(`Unsupported workflow canvas scenario: ${scenario}`);
       }
+      scenarioBaselineNodesRef.current = renderedNodesRef.current;
       measurementRef.current = {
+        changedNodeReferenceIds: new Set(),
         changedNodeReferences: 0,
         reactCommits: [],
         renderedNodeCount: 0,

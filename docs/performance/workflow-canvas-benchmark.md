@@ -85,12 +85,14 @@ exactly this shape:
 
 `renderedNodeCount` is the total number of Studio node commit callbacks invoked
 during the scenario, including repeat commits for the same node.
-`changedNodeReferences` compares consecutive node arrays actually delivered by
-`GraphCanvas` to React Flow: all fixture nodes on initial load, two when
-selection moves between nodes, one for drag and status update, two for topology
-add, and zero for pan and zoom. The drag scenario commits the new position back
-through the same immutable owner-update path used by product wrappers. A
-buffered Long Tasks observer provides
+`changedNodeReferences` compares every node array actually delivered by
+`GraphCanvas` to React Flow against the array present when the scenario began,
+then accumulates the changed node IDs. This reports all fixture nodes on initial
+load, two when selection moves between nodes, one for drag and status update,
+two for topology add, and zero for pan and zoom without letting a later
+measurement update erase an earlier reference change. The drag scenario commits
+the new position back through the same immutable owner-update path used by
+product wrappers. A buffered Long Tasks observer provides
 `longTasks`. Chromium's `performance.memory` is sampled when exposed and is
 otherwise reported as `null`; unavailable values are never invented.
 
