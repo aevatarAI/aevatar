@@ -216,7 +216,8 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         var conventionalService = await GetExistingServiceAsync(conventionalIdentity, ct);
         var identity = conventionalIdentity;
         var serviceSnapshot = conventionalService;
-        if (distinctDescriptors.Length == 1)
+        var hasExplicitDescriptor = distinctDescriptors.Length == 1;
+        if (hasExplicitDescriptor)
         {
             var explicitIdentity = BuildIdentity(distinctDescriptors[0]);
             identity = explicitIdentity;
@@ -298,8 +299,9 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
                 Reason: "workflow_actor_binding_mismatched");
         }
 
-        if (!string.IsNullOrWhiteSpace(binding.WorkflowId) &&
-            !string.Equals(binding.WorkflowId.Trim(), normalizedWorkflowId, StringComparison.Ordinal))
+        var bindingWorkflowId = binding.WorkflowId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(bindingWorkflowId) &&
+            !string.Equals(bindingWorkflowId, normalizedWorkflowId, StringComparison.Ordinal))
         {
             return new ScopeWorkflowLookupResult(
                 ScopeWorkflowLookupStatus.Stale,

@@ -80,6 +80,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             PendingInput = ToPendingInput(state.PendingInput),
             LatestInputResolution = ToInputResolution(state.LatestInputResolution),
             LatestApprovalResolution = ToApprovalResolution(state.LatestApprovalResolution),
+            PendingWorkflowSignal = ToPendingWorkflowSignal(state.PendingWorkflowSignal),
             TaskStatus = ToWireName(state.Attention?.TaskStatus ?? NyxIdChatTaskStatus.Unspecified),
             AttentionKind = ToWireName(state.Attention?.AttentionKind ?? NyxIdChatAttentionKind.Unspecified),
             AttentionSince = state.Attention?.AttentionSince?.Clone(),
@@ -447,6 +448,21 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                     NyxIdChatApprovalReversibility.Unspecified),
                 GrantBoundary = approval.Presentation?.GrantBoundary ?? string.Empty,
                 NyxidRequestId = approval.Presentation?.NyxidRequestId ?? string.Empty,
+            };
+
+    private static NyxIdChatConversationPendingWorkflowSignalDocument? ToPendingWorkflowSignal(
+        NyxIdChatPendingWorkflowSignalState? signal) =>
+        signal is null
+            ? null
+            : new NyxIdChatConversationPendingWorkflowSignalDocument
+            {
+                ActorId = signal.ActorId,
+                RunId = signal.RunId,
+                SignalName = signal.SignalName,
+                StepId = signal.StepId,
+                Prompt = signal.Prompt,
+                TimeoutMs = signal.TimeoutMs,
+                ObservedAt = signal.ObservedAt?.Clone(),
             };
 
     private static NyxIdChatConversationPendingInputDocument? ToPendingInput(
@@ -923,6 +939,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         NyxIdChatAttentionKind.Input => "input",
         NyxIdChatAttentionKind.Approval => "approval",
         NyxIdChatAttentionKind.Stalled => "stalled",
+        NyxIdChatAttentionKind.WorkflowSignal => "workflow_signal",
         _ => string.Empty,
     };
 

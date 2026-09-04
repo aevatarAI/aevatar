@@ -179,6 +179,48 @@ describe('chatApi', () => {
     expect(frames[0].raw).toEqual(raw);
   });
 
+  it('normalizes typed payload run frames without losing run identity', async () => {
+    const response = createSseResponse(
+      [
+        {
+          payload: {
+            runId: 'turn-alpha',
+            threadId: 'conversation-alpha',
+          },
+          type: 'RUN_STARTED',
+        },
+        {
+          data: {
+            result: { output: 'Done' },
+            runId: 'turn-alpha',
+            threadId: 'conversation-alpha',
+          },
+          type: 'RUN_FINISHED',
+        },
+      ]
+        .map((frame) => `data: ${JSON.stringify(frame)}\n\n`)
+        .join(''),
+    );
+    const frames = [];
+
+    for await (const frame of readChatStreamFrames(response)) {
+      frames.push(frame.event);
+    }
+
+    expect(frames).toEqual([
+      expect.objectContaining({
+        runId: 'turn-alpha',
+        threadId: 'conversation-alpha',
+        type: 'RUN_STARTED',
+      }),
+      expect.objectContaining({
+        runId: 'turn-alpha',
+        threadId: 'conversation-alpha',
+        type: 'RUN_FINISHED',
+      }),
+    ]);
+  });
+
   it('extracts usage and studio target only from structured frames', () => {
     expect(
       extractChatStreamArtifacts([

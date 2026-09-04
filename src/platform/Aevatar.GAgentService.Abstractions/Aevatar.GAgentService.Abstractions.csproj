@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
     <ProjectReference Include="..\..\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
+    <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Cronos" />

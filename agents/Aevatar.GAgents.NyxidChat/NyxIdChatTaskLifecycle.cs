@@ -264,6 +264,7 @@ public static class NyxIdChatTaskLifecycle
                 next,
                 operationKey.StepId,
                 normalizedSignal.Tool.Receipt.ProviderResourceId);
+            ApplyPendingWorkflowSignal(next, normalizedSignal.Tool.Receipt, now);
             successor = ActivatePlannedVerificationStep(
                 next,
                 normalizedSignal.Key,
@@ -295,6 +296,47 @@ public static class NyxIdChatTaskLifecycle
             transition.SafeMessage,
             next,
             successor);
+    }
+
+    private static void ApplyPendingWorkflowSignal(
+        NyxIdChatConversationGAgentState state,
+        AgentToolReceipt receipt,
+        Timestamp now)
+    {
+        if (NyxIdChatPublicToolReceiptResult.TryProjectPendingWorkflowSignal(
+                receipt,
+                now,
+                out var pending))
+        {
+            state.PendingWorkflowSignal = pending.Clone();
+            return;
+        }
+
+        if (state.PendingWorkflowSignal is null || string.IsNullOrWhiteSpace(receipt.SubjectId))
+            return;
+
+        if (receipt.ToolName is not ("aevatar_start_workflow" or "aevatar_read_workflow_run_artifact"))
+            return;
+
+        if (!string.Equals(state.PendingWorkflowSignal.RunId, receipt.SubjectId, StringComparison.Ordinal))
+            return;
+
+        var projected = NyxIdChatPublicToolReceiptResult.Project(receipt);
+        if (string.IsNullOrWhiteSpace(projected))
+            return;
+
+        using var document = JsonDocument.Parse(projected);
+        if (!document.RootElement.TryGetProperty("status", out var statusElement) ||
+            statusElement.ValueKind != JsonValueKind.String)
+        {
+            return;
+        }
+
+        if (statusElement.GetString()?.Trim().ToLowerInvariant() is
+            "completed" or "failed" or "stopped" or "timed_out" or "not_found" or "disabled")
+        {
+            state.PendingWorkflowSignal = null;
+        }
     }
 
     private static NyxIdChatConversationGAgentState DisableRetryForUnavailableAuthorizationContinuation(

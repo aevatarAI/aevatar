@@ -380,6 +380,23 @@ public sealed class AgentProfileSkillSealerTests
     }
 
     [Fact]
+    public async Task ResolveAndSealAsync_WhenMembersAreEmpty_ShouldSealWithoutOrnnResolution()
+    {
+        var draft = Draft();
+        draft.RuntimeProfile.Members.Clear();
+        var resolver = new RecordingResolver();
+
+        var result = await NewSealer(resolver).ResolveAndSealAsync(
+            Identity(),
+            draft,
+            Context(token: null));
+
+        result.IsSuccess.Should().BeTrue();
+        result.Snapshot.Should().NotBeNull();
+        resolver.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ResolveAndSealAsync_ShouldRejectUnsupportedRouteToolSetBeforeResolution()
     {
         var draft = Draft();

@@ -397,6 +397,27 @@ public sealed class NyxIdChatTaskContractTests
             .GetValue<bool>().Should().BeFalse();
     }
 
+    [Fact]
+    public void FormatterOutput_ShouldIncludePendingInputAnswerModeDefaults()
+    {
+        var pending = new NyxIdChatPendingInputState
+        {
+            RequestId = "input-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            Prompt = "When should I book dinner?",
+            AllowFreeText = true,
+            MultiSelect = false,
+        };
+
+        var node = NyxIdChatTaskPlanJsonFormatter.FormatProtobuf(pending);
+
+        node["allowFreeText"]!.GetValue<bool>().Should().BeTrue();
+        node["multiSelect"]!.GetValue<bool>().Should().BeFalse();
+        node["options"]!.AsArray().Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData(ToolPresentationKind.Generic, "generic")]
     [InlineData(ToolPresentationKind.BuiltIn, "builtIn")]

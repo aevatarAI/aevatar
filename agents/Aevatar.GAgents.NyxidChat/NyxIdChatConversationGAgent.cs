@@ -124,6 +124,7 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatInputRequestedEvent>(ApplyInputRequested)
             .On<NyxIdChatInputResolutionCommittedEvent>(ApplyInputResolutionCommitted)
             .On<NyxIdChatApprovalResolutionCommittedEvent>(ApplyApprovalResolutionCommitted)
+            .On<NyxIdChatWorkflowSignalAcceptedCommittedEvent>(ApplyWorkflowSignalAcceptedCommitted)
             .On<NyxIdChatCanaryEffectFaultArmedCommittedEvent>(
                 ApplyCanaryEffectFaultArmedCommitted)
             .On<NyxIdChatCanaryEffectFaultConsumedCommittedEvent>(
@@ -1924,6 +1925,45 @@ public sealed class NyxIdChatConversationGAgent
     }
 
     [EventHandler]
+    public async Task HandleWorkflowSignalAcceptedAsync(NyxIdChatWorkflowSignalAcceptedCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!TryApplyWorkflowSignalAccepted(command, out var next))
+            return;
+
+        await PersistDomainEventAsync(new NyxIdChatWorkflowSignalAcceptedCommittedEvent
+        {
+            WorkflowActorId = command.WorkflowActorId.Trim(),
+            RunId = command.RunId.Trim(),
+            SignalName = command.SignalName.Trim(),
+            StepId = command.StepId?.Trim() ?? string.Empty,
+            ClientRequestId = command.ClientRequestId?.Trim() ?? string.Empty,
+            State = NyxIdChatNeedsYouDecisions.RefreshAttention(next),
+        }, CancellationToken.None);
+    }
+
+    private bool TryApplyWorkflowSignalAccepted(
+        NyxIdChatWorkflowSignalAcceptedCommand command,
+        out NyxIdChatConversationGAgentState next)
+    {
+        next = State.Clone();
+        var pending = State.PendingWorkflowSignal;
+        if (pending is null ||
+            !string.Equals(State.ScopeId, command.ScopeId?.Trim(), StringComparison.Ordinal) ||
+            !string.Equals(Id, command.ConversationActorId?.Trim(), StringComparison.Ordinal) ||
+            !string.Equals(pending.ActorId, command.WorkflowActorId?.Trim(), StringComparison.Ordinal) ||
+            !string.Equals(pending.RunId, command.RunId?.Trim(), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        next.PendingWorkflowSignal = null;
+        next.ProgressSequence = checked(Math.Max(0, next.ProgressSequence) + 1);
+        next.UpdatedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        return true;
+    }
+
+    [EventHandler]
     public async Task HandleApprovalResolveAsync(NyxIdChatApprovalResolveCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -3083,11 +3123,13 @@ public sealed class NyxIdChatConversationGAgent
                     llmControl,
                     CancellationToken.None);
             Logger.LogInformation(
-                "Agent profile turn authority prepared. turn={TurnId} activation={ActivationMode} kind={AuthorityKind} ceilingCount={CeilingCount} diagnostics={Diagnostics}",
+                "Agent profile turn authority prepared. turn={TurnId} activation={ActivationMode} kind={AuthorityKind} ceilingCount={CeilingCount} maximumSelectorCount={MaximumSelectorCount} dynamicReadSelectorCount={DynamicReadSelectorCount} diagnostics={Diagnostics}",
                 command.TurnId,
                 profile.ActivationMode,
                 preparation.Authority.AuthorityKind,
                 preparation.Authority.AuthorityCeilingToolNames.Count,
+                profile.MaximumToolPolicy?.ConnectedServiceSelectors.Count ?? 0,
+                CountDynamicReadConnectedServiceSelectors(profile.MaximumToolPolicy),
                 string.Join(
                     ",",
                     preparation.Diagnostics.Select(static diagnostic =>
@@ -3109,6 +3151,14 @@ public sealed class NyxIdChatConversationGAgent
                     AgentProfileTurnDegradationReason.MaterializationFailed);
         }
     }
+
+    private static int CountDynamicReadConnectedServiceSelectors(AgentProfileToolPolicy? policy) =>
+        policy?.ConnectedServiceSelectors.Count(static selector =>
+            string.IsNullOrEmpty(selector.CatalogServiceSlug) &&
+            string.IsNullOrEmpty(selector.EndpointId) &&
+            selector.Readiness is null &&
+            selector.AllowedRisks.Count == 1 &&
+            selector.AllowedRisks[0] == AgentToolOperationRiskPayload.ReadOnly) ?? 0;
 
     private async Task<NyxIdChatTurnIntent> ClassifyTurnIntentAsync(
         NyxIdChatStartTurnCommand command,
@@ -3875,6 +3925,11 @@ public sealed class NyxIdChatConversationGAgent
     private static NyxIdChatConversationGAgentState ApplyApprovalResolutionCommitted(
         NyxIdChatConversationGAgentState current,
         NyxIdChatApprovalResolutionCommittedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
+    private static NyxIdChatConversationGAgentState ApplyWorkflowSignalAcceptedCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatWorkflowSignalAcceptedCommittedEvent evt) =>
         evt.State?.Clone() ?? current;
 
     private static NyxIdChatConversationGAgentState ApplyCanaryEffectFaultArmedCommitted(

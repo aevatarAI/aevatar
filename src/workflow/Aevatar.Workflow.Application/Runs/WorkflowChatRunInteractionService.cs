@@ -18,6 +18,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     private readonly IWorkflowChatHistoryTerminalDeliveryPort? _chatHistoryTerminalDeliveryPort;
     private readonly IWorkflowChatHistoryCreateRecoveryReadPort? _chatHistoryCreateRecoveryReadPort;
     private readonly IWorkflowExecutionCurrentStateQueryPort? _currentStateQueryPort;
+    private readonly IWorkflowExecutionQueryApplicationService? _workflowQueryService;
     private readonly ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? _signalDispatchService;
     private readonly ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>? _finalizeEmitter;
     private readonly WorkflowRunBehaviorOptions _behaviorOptions;
@@ -33,6 +34,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         IWorkflowChatHistoryCreateRecoveryReadPort? chatHistoryCreateRecoveryReadPort = null,
         WorkflowRunBehaviorOptions? behaviorOptions = null,
         IWorkflowExecutionCurrentStateQueryPort? currentStateQueryPort = null,
+        IWorkflowExecutionQueryApplicationService? workflowQueryService = null,
         ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? signalDispatchService = null,
         ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>? finalizeEmitter = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
@@ -45,6 +47,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         _chatHistoryTerminalDeliveryPort = chatHistoryTerminalDeliveryPort;
         _chatHistoryCreateRecoveryReadPort = chatHistoryCreateRecoveryReadPort;
         _currentStateQueryPort = currentStateQueryPort;
+        _workflowQueryService = workflowQueryService;
         _signalDispatchService = signalDispatchService;
         _finalizeEmitter = finalizeEmitter;
         _behaviorOptions = behaviorOptions ?? new WorkflowRunBehaviorOptions();
@@ -468,6 +471,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     {
         if (_chatHistoryCreateRecoveryReadPort is null ||
             _currentStateQueryPort is null ||
+            _workflowQueryService is null ||
             _signalDispatchService is null ||
             _finalizeEmitter is null ||
             request.ChatConversation?.Intent != WorkflowChatConversationIntentKind.Continue ||
@@ -495,7 +499,13 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         var snapshot = await _currentStateQueryPort
             .GetWorkflowActorCurrentStateAsync(actorId, ct)
             .ConfigureAwait(false);
-        if (!IsWaitingForSignal(snapshot, normalizedScopeId, out var runId, out var stepId, out var signalName))
+        if (!IsWaitingForSignal(snapshot, normalizedScopeId, out var fallbackRunId))
+            return null;
+
+        var report = await _workflowQueryService
+            .GetWorkflowRunReportArtifactAsync(actorId, ct)
+            .ConfigureAwait(false);
+        if (!TryResolveCurrentWaitingSignal(report, fallbackRunId, out var runId, out var stepId, out var signalName))
             return null;
 
         var commandId = string.IsNullOrWhiteSpace(request.CommandIdSeed)
@@ -621,13 +631,9 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     private static bool IsWaitingForSignal(
         WorkflowActorSnapshot? snapshot,
         string scopeId,
-        out string runId,
-        out string stepId,
-        out string signalName)
+        out string runId)
     {
         runId = string.Empty;
-        stepId = string.Empty;
-        signalName = string.Empty;
         if (snapshot == null ||
             snapshot.CompletionStatus != WorkflowRunCompletionStatus.WaitingForSignal ||
             !string.Equals(snapshot.ScopeId?.Trim(), scopeId, StringComparison.Ordinal) ||
@@ -641,8 +647,25 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         runId = string.IsNullOrWhiteSpace(snapshot.RunId)
             ? snapshot.ActorId
             : snapshot.RunId.Trim();
-        stepId = snapshot.ActivityWaiting.StepId?.Trim() ?? string.Empty;
-        signalName = snapshot.ActivityWaiting.Prompt?.Trim() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(runId);
+    }
+
+    private static bool TryResolveCurrentWaitingSignal(
+        WorkflowRunReport? report,
+        string fallbackRunId,
+        out string runId,
+        out string stepId,
+        out string signalName)
+    {
+        runId = fallbackRunId;
+        stepId = string.Empty;
+        signalName = string.Empty;
+        if (report?.CurrentWaitingSignal is not { } signal)
+            return false;
+
+        runId = string.IsNullOrWhiteSpace(signal.RunId) ? fallbackRunId : signal.RunId.Trim();
+        stepId = signal.StepId?.Trim() ?? string.Empty;
+        signalName = signal.SignalName?.Trim() ?? string.Empty;
         return !string.IsNullOrWhiteSpace(runId) &&
                !string.IsNullOrWhiteSpace(stepId) &&
                !string.IsNullOrWhiteSpace(signalName);

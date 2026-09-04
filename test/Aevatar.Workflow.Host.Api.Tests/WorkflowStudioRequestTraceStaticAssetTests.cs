@@ -256,7 +256,9 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
         app.Should().Contain("restoreTrajectoryFromStoredOperations(entry, storedOperations, messages);");
-        app.Should().Contain("if (isConversationActor) restoreTrajectoryFromActorProjection(entry, result.projection);");
+        app.Should().Contain("if (isConversationActor) {");
+        app.Should().Contain("restoreTrajectoryFromActorProjection(entry, result.projection);");
+        app.Should().Contain("restoreWorkflowSignalFromActorProjection(entry, result.projection);");
         // Tool result bodies are never archived, so the restore path must not read one.
         app.Should().NotContain("operation?.resultPreview");
     }
@@ -597,6 +599,34 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               'a workflow-level invocation must not masquerade as a provider response');
 
             apply(entry, run, {
+              type: 'waiting_signal', stepId: 'wait_for_post_timeout_choice',
+              signalName: 'dinner_date_user_choice_after_timeout',
+              prompt: 'All three venues are held. Pick one to keep.',
+              sequence: 14, timestamp: 1700000001250,
+            });
+            const waitingStep = trace.recordIndex.get('workflow:wait_for_post_timeout_choice');
+            assert.ok(waitingStep, 'waiting signals are shown in the same request trajectory');
+            assert.equal(waitingStep.kind, 'workflow');
+            assert.equal(waitingStep.title, 'wait_for_post_timeout_choice');
+            assert.equal(waitingStep.status, 'running');
+            assert.equal(waitingStep.output, 'All three venues are held. Pick one to keep.');
+            assert.equal(waitingStep.serverSequence, 14);
+            assert.equal(context.traceOperationDurationMs(waitingStep), null);
+
+            apply(entry, run, {
+              type: 'step_completed', stepId: 'hold_candidate_option_1',
+              displayName: 'Hold candidate option 1', message: 'Pasta Bar held.',
+              success: true, sequence: 15, timestamp: 1700000001300,
+            });
+            const holdStep = trace.recordIndex.get('workflow:hold_candidate_option_1');
+            assert.ok(holdStep, 'workflow primitive steps are first-class trajectory records');
+            assert.equal(holdStep.kind, 'workflow');
+            assert.equal(holdStep.title, 'Hold candidate option 1');
+            assert.equal(holdStep.status, 'done');
+            assert.equal(holdStep.output, 'Pasta Bar held.');
+            assert.equal(holdStep.serverSequence, 15);
+
+            apply(entry, run, {
               type: 'model_end', operationId: 'model-out-of-order', sessionId: 'session-shared',
               round: 2, model: 'deepseek-chat', content: 'Already complete', success: true,
               sequence: 31, timestamp: 1700000001500,
@@ -621,6 +651,8 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("function trajectoryLoadedToolsSummary(record, limit = 3)");
         app.Should().Contain("const tools = el(\"span\", \"trajectory-content-tools\")");
         app.Should().Contain("fields.tools.title = loadedTools === null ? \"\" : record.tools.join(\"\\n\");");
+        app.Should().Contain("applyWorkflowStepTraceOperation(trace, step);");
+        app.Should().Contain("const workflows = records.filter((record) => record.kind === \"workflow\").length;");
     }
 
     [Fact]

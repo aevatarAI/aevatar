@@ -198,12 +198,13 @@ function sseResponse(frames: readonly unknown[]): Response {
   } as Response;
 }
 
-function jsonResponse(payload: unknown): Response {
+function jsonResponse(payload: unknown, status = 200): Response {
   return {
+    headers: new Headers({ 'content-type': 'application/json' }),
     json: jest.fn().mockResolvedValue(payload),
-    ok: true,
-    status: 200,
-    statusText: 'OK',
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 202 ? 'Accepted' : 'OK',
   } as unknown as Response;
 }
 
@@ -386,6 +387,237 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(first).not.toHaveProperty('sessionId');
     expect(first).not.toHaveProperty('workflow');
     expect(first).not.toHaveProperty('conversation');
+  });
+
+  it('renders recovered workflow signal continuation accepted through chat API', async () => {
+    let chatCallCount = 0;
+    (authFetch as jest.Mock).mockImplementation((path: string) => {
+      if (path === '/api/chat') {
+        chatCallCount += 1;
+        if (chatCallCount === 1) {
+          return Promise.resolve(
+            completedStream('Please choose one dinner option.', 'conversation-alpha', 'turn-alpha'),
+          );
+        }
+        return Promise.resolve(
+          jsonResponse(
+            {
+              accepted: true,
+              actorId: 'scope-workflow-alpha',
+              runId: 'run-dinner-alpha',
+              routed: 'workflow_signal_continuation',
+              signalName: 'dinner_date_user_choice_after_timeout',
+              stepId: 'wait_for_post_timeout_choice',
+            },
+            202,
+          ),
+        );
+      }
+      if (path === '/api/workflow-actors/scope-workflow-alpha/current-state') {
+        return Promise.resolve(
+          jsonResponse({
+            actorId: 'scope-workflow-alpha',
+            completionStatus: 'Completed',
+            lastOutput: JSON.stringify({ kept: 'Tipo Pasta Bar' }),
+            runId: 'run-dinner-alpha',
+          }),
+        );
+      }
+      throw new Error(`Unexpected authFetch path: ${path}`);
+    });
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt('Book dinner tonight');
+    expect(await screen.findByText('Please choose one dinner option.')).toBeInTheDocument();
+    await sendPrompt('2');
+
+    expect(await screen.findByText('2')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Tipo Pasta Bar is selected.'),
+    ).toBeInTheDocument();
+    expect(requestBodies()).toHaveLength(2);
+    expect(requestBodies()[1]).toMatchObject({
+      conversationId: 'conversation-alpha',
+      prompt: '2',
+      type: 'text',
+    });
+  });
+
+  it('submits pending workflow signal from the composer after the chat turn completes', async () => {
+    const waitingSignal = {
+      actorId: 'scope-workflow-alpha',
+      prompt: 'Choose one dinner option.',
+      runId: 'run-dinner-alpha',
+      signalName: 'dinner_date_user_choice_after_timeout',
+      stepId: 'wait_for_post_timeout_choice',
+      timeoutMs: 60_000,
+    };
+    let chatCallCount = 0;
+    let currentStateReads = 0;
+    (authFetch as jest.Mock).mockImplementation(
+      (path: string, request: RequestInit) => {
+        if (path === '/api/chat') {
+          chatCallCount += 1;
+          if (chatCallCount === 1) {
+            return Promise.resolve(
+              completedStream('The workflow is waiting for your choice.', 'conversation-alpha', 'turn-alpha', [
+                {
+                  type: 'CUSTOM',
+                  custom: {
+                    data: waitingSignal,
+                    name: 'aevatar.workflow.waiting_signal',
+                    payload: waitingSignal,
+                  },
+                },
+              ]),
+            );
+          }
+
+          return Promise.resolve(
+            jsonResponse(
+              {
+                accepted: true,
+                actorId: 'scope-workflow-alpha',
+                runId: 'run-dinner-alpha',
+                routed: 'workflow_signal_continuation',
+                signalName: 'dinner_date_user_choice_after_timeout',
+                stepId: 'wait_for_post_timeout_choice',
+              },
+              202,
+            ),
+          );
+        }
+        if (path === '/api/workflow-actors/scope-workflow-alpha/current-state') {
+          currentStateReads += 1;
+          return Promise.resolve(
+            jsonResponse(
+              currentStateReads === 1
+                ? {
+                    actorId: 'scope-workflow-alpha',
+                    completionStatus: 'WaitingForSignal',
+                    lastOutput: '',
+                    runId: 'run-dinner-alpha',
+                  }
+                : {
+                    actorId: 'scope-workflow-alpha',
+                    completionStatus: 'Completed',
+                    lastOutput: JSON.stringify({ kept: 'Tipo Pasta Bar' }),
+                    runId: 'run-dinner-alpha',
+                  },
+            ),
+          );
+        }
+        throw new Error(`Unexpected authFetch path: ${path}`);
+      },
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt('Book dinner tonight');
+    const signalInput = await screen.findByPlaceholderText(
+      'Send your workflow choice...',
+    );
+    fireEvent.change(signalInput, { target: { value: 'Use option 2' } });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(requestBodies()).toHaveLength(2));
+    expect(requestBodies()[1]).toMatchObject({
+      conversationId: 'conversation-alpha',
+      prompt: 'Use option 2',
+      type: 'text',
+    });
+    expect(await screen.findByText('Use option 2')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Tipo Pasta Bar is selected.'),
+    ).toBeInTheDocument();
+  });
+
+  it('routes workflow start receipt waiting signal from the composer without opening a new chat turn', async () => {
+    const result = JSON.stringify({
+      actor_id: 'scope-workflow-alpha',
+      command_id: 'command-alpha',
+      mutation_stage: 'read_model_observed',
+      run_id: 'run-dinner-alpha',
+      status: 'waiting_for_signal',
+      waiting_signal: {
+        prompt: 'Choose one dinner option.',
+        run_id: 'run-dinner-alpha',
+        signal_name: 'dinner_date_user_choice',
+        step_id: 'wait_for_user_choice_timeout',
+        timeout_ms: 10000,
+      },
+    });
+    let chatCallCount = 0;
+    (authFetch as jest.Mock).mockImplementation(
+      (path: string, request: RequestInit) => {
+        if (path === '/api/chat') {
+          chatCallCount += 1;
+          if (chatCallCount === 1) {
+            return Promise.resolve(
+              completedStream('The workflow is waiting for your choice.', 'conversation-alpha', 'turn-alpha', [
+                {
+                  type: 'TOOL_CALL_START',
+                  toolCallStart: {
+                    toolCallId: 'call-workflow-start',
+                    toolName: 'aevatar_start_workflow',
+                  },
+                },
+                {
+                  type: 'TOOL_CALL_END',
+                  toolCallEnd: {
+                    result,
+                    toolCallId: 'call-workflow-start',
+                  },
+                },
+              ]),
+            );
+          }
+
+          return Promise.resolve(
+            jsonResponse(
+              {
+                accepted: true,
+                actorId: 'scope-workflow-alpha',
+                runId: 'run-dinner-alpha',
+                routed: 'workflow_signal_continuation',
+                signalName: 'dinner_date_user_choice',
+                stepId: 'wait_for_user_choice_timeout',
+              },
+              202,
+            ),
+          );
+        }
+        if (path === '/api/workflow-actors/scope-workflow-alpha/current-state') {
+          return Promise.resolve(
+            jsonResponse({
+              completionStatus: 'Completed',
+              lastOutput: 'Pasta Bar is selected.',
+              runId: 'run-dinner-alpha',
+            }),
+          );
+        }
+        throw new Error(`Unexpected authFetch path: ${path}`);
+      },
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt('Book dinner tonight');
+    const signalInput = await screen.findByPlaceholderText(
+      'Send your workflow choice...',
+    );
+    fireEvent.change(signalInput, { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(requestBodies()).toHaveLength(2));
+    expect(requestBodies()[1]).toMatchObject({
+      conversationId: 'conversation-alpha',
+      prompt: '1',
+      type: 'text',
+    });
+    expect(await screen.findByText('1')).toBeInTheDocument();
+    expect(await screen.findByText('Pasta Bar is selected.')).toBeInTheDocument();
   });
 
   it('enables actor-authorized stop after current state materializes during an active SSE', async () => {

@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
+using Aevatar.GAgentService.Application.AgentProfiles;
 
 namespace Aevatar.GAgentService.Hosting.AgentProfiles;
 
@@ -19,19 +20,19 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapOptions
 
     public string PolicyRevision { get; set; } = "v1";
 
-    public int MaxPlanSteps { get; set; } = 8;
+    public int MaxPlanSteps { get; set; } = AgentProfileValidationLimits.RequiredMaxPlanSteps;
 
-    public int HandoffTtlSeconds { get; set; } = 600;
+    public int HandoffTtlSeconds { get; set; } = AgentProfileValidationLimits.RequiredHandoffTtlSeconds;
 
-    public int ClassifierTimeoutMs { get; set; } = 3_000;
+    public int ClassifierTimeoutMs { get; set; } = AgentProfileValidationLimits.RequiredClassifierTimeoutMs;
 
-    public int ExactSkillFetchTimeoutMs { get; set; } = 3_000;
+    public int ExactSkillFetchTimeoutMs { get; set; } = AgentProfileValidationLimits.RequiredExactSkillFetchTimeoutMs;
 
-    public int MaxSelectedSkillBytes { get; set; } = 65_536;
+    public int MaxSelectedSkillBytes { get; set; } = AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes;
 
-    public int MaxOwnedToolCount { get; set; } = 64;
+    public int MaxOwnedToolCount { get; set; } = AgentProfileValidationLimits.MaximumOwnedToolCount;
 
-    public int MaxSchemaBytes { get; set; } = 262_144;
+    public int MaxSchemaBytes { get; set; } = AgentProfileValidationLimits.MaximumSchemaBytes;
 
     public int CohortBasisPoints { get; set; } = AgentProfilePolicies.FullCohortBasisPoints;
 

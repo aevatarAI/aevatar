@@ -1888,6 +1888,97 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflow_ShouldMergePreferenceContextIntoJsonPromptBeforeDispatch()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        harness.WorkflowInputPreferenceContextProvider.Result = new WorkflowInputPreferenceContext(
+        [
+            new WorkflowInputPreferenceContextSource(
+                "nyxid_read_dining_profile",
+                "readDiningProfileContext",
+                "/profile/dining",
+                """
+                {
+                  "location": "Shanghai",
+                  "cuisines": ["Italian", "Japanese"],
+                  "party_size": 2,
+                  "budget_cap": "RMB 800",
+                  "preference_context_merged": false
+                }
+                """),
+        ]);
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-workflow-preferences");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": {
+                "prompt": "{\"location\":\"\",\"cuisines\":[\"Sichuan\"],\"missing_fields\":[\"location\",\"party_size\"]}"
+              },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowInputPreferenceContextProvider.Requests.Should().ContainSingle()
+            .Which.WorkflowId.Should().Be("wf-main");
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        using var prompt = JsonDocument.Parse(harness.WorkflowDispatch.Command!.Prompt);
+        var root = prompt.RootElement;
+        root.GetProperty("location").GetString().Should().Be("Shanghai");
+        root.GetProperty("cuisines").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().BeEquivalentTo("Sichuan");
+        root.GetProperty("party_size").GetInt32().Should().Be(2);
+        root.GetProperty("budget_cap").GetString().Should().Be("RMB 800");
+        root.GetProperty("preference_context_merged").GetBoolean().Should().BeTrue();
+        root.GetProperty("preference_context_source_tools").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().BeEquivalentTo("nyxid_read_dining_profile");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_FromNyxIdAssistant_ShouldBindRecoveryToCurrentConversation()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-chat-recovery",
+            chatContext: new AgentChatInvocationContext(
+                AgentChatInvocationSurface.NyxIdAssistant,
+                "nyxid-chat-conversation-1",
+                "turn-1",
+                "task-1",
+                null,
+                null));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowChatHistoryDelivery.Reservations.Should().ContainSingle();
+        var reservation = harness.WorkflowChatHistoryDelivery.Reservations.Single();
+        reservation.ScopeId.Should().Be("scope-1");
+        reservation.Conversation.Intent.Should().Be(WorkflowChatConversationIntentKind.Create);
+        reservation.Conversation.ConversationId.Should().Be("nyxid-chat-conversation-1");
+        reservation.WorkflowActorId.Should().Be("workflow-actor");
+        reservation.WorkflowCommandId.Should().Be("call-workflow-chat-recovery");
+        reservation.RequestFingerprint.Should().NotBeNullOrWhiteSpace();
+        harness.WorkflowChatHistoryDelivery.Bindings.Should().ContainSingle();
+        harness.WorkflowChatHistoryDelivery.Bindings.Single().Receipt.ActorId.Should().Be("workflow-actor");
+    }
+
+    [Fact]
     public async Task StartWorkflow_CreateResultReceipt_WithAcceptedStreamAck_ShouldReturnVerifiedReceipt()
     {
         var harness = new Harness();
@@ -2209,7 +2300,10 @@ public sealed class AevatarInvocationToolSourceTests
             "workflow_template_missing");
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
 
-        using var _ = PushContext(callId: "call-configured-scope-workflow");
+        using var _ = PushContext(
+            callId: "call-configured-scope-workflow",
+            accessToken: "source-token",
+            nyxIdCredentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
         var output = await tool.ExecuteAsync("""
             {
               "workflow_id": "wf-configured",
@@ -2219,8 +2313,14 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.ScopeWorkflowTemplateEnsure.Requests.Should().ContainSingle()
-            .Which.Should().Be(new ScopeWorkflowTemplateEnsureRequest("scope-1", "wf-configured"));
+        var ensureRequest = harness.ScopeWorkflowTemplateEnsure.Requests.Should().ContainSingle().Subject;
+        ensureRequest.ScopeId.Should().Be("scope-1");
+        ensureRequest.WorkflowId.Should().Be("wf-configured");
+        ensureRequest.CapabilityAdmission.Should().NotBeNull();
+        ensureRequest.CapabilityAdmission!.CallerId.Should().Be("owner-1");
+        ensureRequest.CapabilityAdmission.NyxIdCallerCredential.Should().NotBeNull();
+        ensureRequest.CapabilityAdmission.NyxIdCallerCredential!.SourceReadableUserBearerToken.Should()
+            .Be("source-token");
         harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
             .Which.Should().Be(("scope-1", "wf-configured"));
         harness.WorkflowDispatch.Command.Should().NotBeNull();
@@ -3393,6 +3493,7 @@ public sealed class AevatarInvocationToolSourceTests
         receipt.ManagedWorkflowHandoff.ParentStepId.Should().Be("parent-step");
         receipt.ManagedWorkflowHandoff.InvocationId.Should().Be("parent-run:workflow_tool:parent-step:call-managed-workflow");
         receipt.ManagedWorkflowHandoff.ChildRunId.Should().Be("parent-run:workflow_tool:parent-step:call-managed-workflow");
+        harness.WorkflowInputPreferenceContextProvider.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -4692,6 +4793,41 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task ReadWorkflowRunArtifact_WaitingForSignalReport_ShouldExposeSignalContinuation()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Report = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            WorkflowName = "dinner_date",
+            CommandId = "command-alpha",
+            CompletionStatus = WorkflowRunCompletionStatus.WaitingForSignal,
+            StateVersion = 20,
+            Success = null,
+            CurrentWaitingSignal = new WorkflowRunWaitingSignal
+            {
+                RunId = "run-1",
+                StepId = "wait_for_user_choice_timeout",
+                SignalName = "dinner_date_user_choice",
+                Prompt = "Choose one dinner option.",
+                TimeoutMs = 10000,
+            },
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1"}""");
+
+        var result = Read(output);
+        result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.WaitingForSignal));
+        var waitingSignal = result.GetProperty("waiting_signal");
+        waitingSignal.GetProperty("run_id").GetString().Should().Be("run-1");
+        waitingSignal.GetProperty("step_id").GetString().Should().Be("wait_for_user_choice_timeout");
+        waitingSignal.GetProperty("signal_name").GetString().Should().Be("dinner_date_user_choice");
+        waitingSignal.GetProperty("prompt").GetString().Should().Be("Choose one dinner option.");
+        waitingSignal.GetProperty("timeout_ms").GetInt32().Should().Be(10000);
+    }
+
+    [Fact]
     public async Task ReadWorkflowRunArtifact_TimedOutReport_ShouldSerializeTypedTerminalFailure()
     {
         var harness = new Harness();
@@ -5485,6 +5621,7 @@ public sealed class AevatarInvocationToolSourceTests
         public RecordingWorkflowDispatchService WorkflowDispatch { get; } = new();
         public RecordingServiceInvocationDispatcher ServiceInvocationDispatcher { get; } = new();
         public RecordingWorkflowRunBackgroundDeliveryRegistrationPort WorkflowRunDelivery { get; } = new();
+        public RecordingWorkflowChatHistoryTerminalDeliveryPort WorkflowChatHistoryDelivery { get; } = new();
         public RecordingChannelAgentKeyReadinessPort ChannelAgentKeyReadiness { get; } = new();
         public RecordingServiceInvocationResolutionPort ServiceInvocationResolution { get; } = new();
         public RecordingInvokeAdmissionAuthorizer AdmissionAuthorizer { get; } = new();
@@ -5495,6 +5632,7 @@ public sealed class AevatarInvocationToolSourceTests
         public RecordingScopeWorkflowQueryPort ScopeWorkflowQuery { get; } = new();
         public RecordingScopeWorkflowTemplateEnsurePort ScopeWorkflowTemplateEnsure { get; } = new();
         public RecordingWorkflowRunBindingReader RunBindingReader { get; } = new();
+        public StubWorkflowInputPreferenceContextProvider WorkflowInputPreferenceContextProvider { get; } = new();
 
         public Harness()
         {
@@ -5534,7 +5672,9 @@ public sealed class AevatarInvocationToolSourceTests
                 scopeWorkflowQueryPort: ScopeWorkflowQuery,
                 workflowStartObservationTimeout: TimeSpan.Zero,
                 channelAgentKeyReadinessPort: ChannelAgentKeyReadiness,
-                scopeWorkflowTemplateEnsurePort: ScopeWorkflowTemplateEnsure);
+                scopeWorkflowTemplateEnsurePort: ScopeWorkflowTemplateEnsure,
+                workflowChatHistoryTerminalDeliveryPort: WorkflowChatHistoryDelivery,
+                workflowInputPreferenceContextProvider: WorkflowInputPreferenceContextProvider);
 
         public void ConfigureServiceTarget(
             ServiceImplementationKind implementationKind,
@@ -5626,6 +5766,7 @@ public sealed class AevatarInvocationToolSourceTests
             services.AddSingleton<IScopeWorkflowTemplateEnsurePort>(ScopeWorkflowTemplateEnsure);
             services.AddSingleton<IWorkflowRunBindingReader>(RunBindingReader);
             services.AddSingleton<IWorkflowRunBackgroundDeliveryRegistrationPort>(WorkflowRunDelivery);
+            services.AddSingleton<IWorkflowInputPreferenceContextProvider>(WorkflowInputPreferenceContextProvider);
         }
 
         public async Task<IAgentTool> DiscoverToolAsync(string toolName)
@@ -5642,6 +5783,21 @@ public sealed class AevatarInvocationToolSourceTests
             };
             var tools = await source.DiscoverToolsAsync();
             return tools.Single(tool => tool.Name == toolName);
+        }
+    }
+
+    private sealed class StubWorkflowInputPreferenceContextProvider : IWorkflowInputPreferenceContextProvider
+    {
+        public WorkflowInputPreferenceContext Result { get; set; } = WorkflowInputPreferenceContext.Empty;
+
+        public List<WorkflowInputPreferenceContextRequest> Requests { get; } = [];
+
+        public ValueTask<WorkflowInputPreferenceContext> ReadAsync(
+            WorkflowInputPreferenceContextRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            return ValueTask.FromResult(Result);
         }
     }
 
@@ -5973,6 +6129,49 @@ public sealed class AevatarInvocationToolSourceTests
                 target.Service,
                 target.Artifact.Clone(),
                 target.Endpoint.Clone());
+    }
+
+    private sealed class RecordingWorkflowChatHistoryTerminalDeliveryPort : IWorkflowChatHistoryTerminalDeliveryPort
+    {
+        public List<WorkflowChatHistoryTerminalDeliveryReservationRequest> Reservations { get; } = [];
+        public List<(WorkflowChatHistoryTerminalDeliveryReservation Reservation, WorkflowChatRunAcceptedReceipt Receipt)> Bindings { get; } = [];
+        public List<(WorkflowChatHistoryTerminalDeliveryReservation Reservation, string Reason)> Abandons { get; } = [];
+
+        public Task<WorkflowChatHistoryTerminalDeliveryReservationResult> ReserveAsync(
+            WorkflowChatHistoryTerminalDeliveryReservationRequest request,
+            CancellationToken ct = default)
+        {
+            Reservations.Add(request);
+            var reservation = new WorkflowChatHistoryTerminalDeliveryReservation(
+                "chat-history-delivery-actor",
+                request.DeliveryId,
+                request.WorkflowActorId,
+                request.WorkflowCommandId);
+            var chatContext = new WorkflowChatContext(
+                request.ScopeId,
+                request.Conversation.ConversationId ?? "generated-conversation",
+                "generated-turn",
+                1);
+            return Task.FromResult(WorkflowChatHistoryTerminalDeliveryReservationResult.Success(reservation, chatContext));
+        }
+
+        public Task BindAcceptedAsync(
+            WorkflowChatHistoryTerminalDeliveryReservation reservation,
+            WorkflowChatRunAcceptedReceipt receipt,
+            CancellationToken ct = default)
+        {
+            Bindings.Add((reservation, receipt));
+            return Task.CompletedTask;
+        }
+
+        public Task AbandonAsync(
+            WorkflowChatHistoryTerminalDeliveryReservation reservation,
+            string reason,
+            CancellationToken ct = default)
+        {
+            Abandons.Add((reservation, reason));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingWorkflowRunBackgroundDeliveryRegistrationPort

@@ -695,6 +695,16 @@ message NyxIdChatConversationPendingInputDocument {
   NyxIdChatConversationNumericThresholdInputDocument numeric_threshold = 10;
 }
 
+message NyxIdChatConversationPendingWorkflowSignalDocument {
+  string actor_id = 1;
+  string run_id = 2;
+  string signal_name = 3;
+  string step_id = 4;
+  string prompt = 5;
+  int64 timeout_ms = 6;
+  google.protobuf.Timestamp observed_at = 7;
+}
+
 message NyxIdChatConversationNumericThresholdInputDocument {
   int64 suggested_value = 1;
   int64 minimum_value = 2;
@@ -914,6 +924,7 @@ message NyxIdChatConversationCurrentStateDocument {
   bool deleted = 43;
   google.protobuf.Timestamp deleted_at = 44;
   repeated NyxIdChatConversationContextAttachmentDocument context_attachments = 45;
+  NyxIdChatConversationPendingWorkflowSignalDocument pending_workflow_signal = 46;
 }
 
 message NyxIdChatConversationCanaryEffectFaultDocument {

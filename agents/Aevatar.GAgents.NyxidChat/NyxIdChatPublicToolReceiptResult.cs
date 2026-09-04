@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -49,6 +50,54 @@ internal static class NyxIdChatPublicToolReceiptResult
         catch (JsonException)
         {
             return string.Empty;
+        }
+    }
+
+    public static bool TryProjectPendingWorkflowSignal(
+        AgentToolReceipt receipt,
+        Timestamp observedAt,
+        out NyxIdChatPendingWorkflowSignalState pending)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(observedAt);
+        pending = null!;
+        var projected = Project(receipt);
+        if (string.IsNullOrWhiteSpace(projected))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(projected);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+
+            var root = document.RootElement;
+            var waitingSignal = ReadObject(root, "waiting_signal");
+            if (waitingSignal is null)
+                return false;
+
+            var runId = ReadBoundedString(waitingSignal.Value, "run_id", MaxIdentifierBytes);
+            var signalName = ReadBoundedString(waitingSignal.Value, "signal_name", MaxIdentifierBytes);
+            if (runId is null || signalName is null)
+                return false;
+
+            pending = new NyxIdChatPendingWorkflowSignalState
+            {
+                ActorId = ReadBoundedString(root, "actor_id", MaxIdentifierBytes) ??
+                          ReadBoundedString(root, "artifact_actor_id", MaxIdentifierBytes) ??
+                          runId,
+                RunId = runId,
+                SignalName = signalName,
+                StepId = ReadOptionalBoundedString(waitingSignal.Value, "step_id", MaxIdentifierBytes) ?? string.Empty,
+                Prompt = ReadOptionalBoundedString(waitingSignal.Value, "prompt", MaxPartialOutputBytes) ?? string.Empty,
+                TimeoutMs = ReadPositiveInt64(waitingSignal.Value, "timeout_ms") ?? 0,
+                ObservedAt = observedAt.Clone(),
+            };
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 
@@ -132,6 +181,8 @@ internal static class NyxIdChatPublicToolReceiptResult
 
         if (ReadOptionalBoundedString(completionRoot, "partial_output", MaxPartialOutputBytes) is { } partialOutput)
             result["partial_output"] = partialOutput;
+        if (status == "waiting_for_signal" && ProjectWaitingSignal(completionRoot) is { } waitingSignal)
+            result["waiting_signal"] = waitingSignal;
 
         return result;
     }
@@ -193,7 +244,7 @@ internal static class NyxIdChatPublicToolReceiptResult
                 return null;
             }
 
-            return new Dictionary<string, object?>(StringComparer.Ordinal)
+            var nonTerminalResult = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["workflow_run_id"] = workflowRunId,
                 ["artifact_actor_id"] = artifactActorId,
@@ -204,6 +255,9 @@ internal static class NyxIdChatPublicToolReceiptResult
                 ["state_version"] = stateVersion.Value,
                 ["command_id"] = commandId,
             };
+            if (status == "waiting_for_signal" && ProjectWaitingSignal(root) is { } waitingSignal)
+                nonTerminalResult["waiting_signal"] = waitingSignal;
+            return nonTerminalResult;
         }
 
         if (!TryReadBoolean(root, "success", out var success))
@@ -250,8 +304,8 @@ internal static class NyxIdChatPublicToolReceiptResult
         status is "running" or "awaiting_tool_approval" or "waiting_for_signal";
 
     private static bool IsWorkflowStartStatus(string? status) =>
-        status is "accepted" or "streaming" or "completed" or "failed" or "stopped" or "timed_out" or
-            "not_found" or "disabled";
+        status is "accepted" or "streaming" or "waiting_for_signal" or "completed" or "failed" or "stopped" or
+            "timed_out" or "not_found" or "disabled";
 
     private static bool IsTerminalWorkflowStartStatus(string? status) =>
         status is "completed" or "failed" or "stopped" or "timed_out" or "not_found" or "disabled";
@@ -259,6 +313,7 @@ internal static class NyxIdChatPublicToolReceiptResult
     private static string? NormalizeWorkflowStartStatus(string? status) =>
         status?.Trim().ToLowerInvariant() switch
         {
+            "waitingforsignal" or "waiting_for_signal" => "waiting_for_signal",
             "timedout" or "timed_out" => "timed_out",
             "notfound" or "not_found" => "not_found",
             var normalized => normalized,
@@ -286,6 +341,31 @@ internal static class NyxIdChatPublicToolReceiptResult
                string.Equals(runId, handoff.InvocationId, StringComparison.Ordinal) &&
                string.Equals(runId, handoff.ChildRunId, StringComparison.Ordinal) &&
                string.Equals(actorId, handoff.ParentActorId, StringComparison.Ordinal);
+    }
+
+    private static Dictionary<string, object?>? ProjectWaitingSignal(JsonElement root)
+    {
+        var signal = ReadObject(root, "waiting_signal");
+        if (signal is null)
+            return null;
+
+        var runId = ReadBoundedString(signal.Value, "run_id", MaxIdentifierBytes);
+        var stepId = ReadBoundedString(signal.Value, "step_id", MaxIdentifierBytes);
+        var signalName = ReadBoundedString(signal.Value, "signal_name", MaxIdentifierBytes);
+        if (runId is null || stepId is null || signalName is null)
+            return null;
+
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["run_id"] = runId,
+            ["step_id"] = stepId,
+            ["signal_name"] = signalName,
+        };
+        if (ReadOptionalBoundedString(signal.Value, "prompt", MaxPartialOutputBytes) is { } prompt)
+            result["prompt"] = prompt;
+        if (ReadPositiveInt64(signal.Value, "timeout_ms") is { } timeoutMs)
+            result["timeout_ms"] = timeoutMs;
+        return result;
     }
 
     private static JsonElement? ReadObject(JsonElement root, string name) =>

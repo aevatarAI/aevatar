@@ -171,6 +171,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
 
     public string Description =>
         "Start a mounted/imported Aevatar Scope Workflow by workflow_id with typed inputs. " +
+        "A workflow_id explicitly named by the active sealed Agent Profile instructions as a configured managed workflow is already resolved for this turn. " +
         "Before starting a workflow whose input contract needs stable user context, use only relevant read-only scoped connected-service tools already admitted for this turn and merge their results into inputs.prompt; leave missing fields explicit instead of guessing. " +
         "The returned run_id is the workflow run actor id; command_id is the start command/tool-call id. " +
         "Use inline workflow_yamls only as an explicit fallback when Scope Workflow mounting/import is unavailable; Ornn workflow YAMLs from use_skill are templates/import sources, not page-visible runnable workflow authority by themselves. " +
@@ -506,6 +507,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
             final_output_bytes = finalOutputDigest.ByteCount,
             final_output_sha256 = finalOutputDigest.Sha256,
             final_error = EmptyToNull(report.FinalError),
+            waiting_signal = ToWaitingSignalResult(report.CurrentWaitingSignal),
             summary = new
             {
                 total_steps = report.Summary.TotalSteps,
@@ -733,6 +735,18 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
 
     private static string? EmptyToNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static object? ToWaitingSignalResult(WorkflowRunWaitingSignal? signal) =>
+        signal == null || string.IsNullOrWhiteSpace(signal.StepId) || string.IsNullOrWhiteSpace(signal.SignalName)
+            ? null
+            : new
+            {
+                run_id = EmptyToNull(signal.RunId),
+                step_id = signal.StepId,
+                signal_name = signal.SignalName,
+                prompt = EmptyToNull(signal.Prompt),
+                timeout_ms = signal.TimeoutMs > 0 ? signal.TimeoutMs : (int?)null,
+            };
 
     private static string? Truncate(string? value, int max) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Length <= max ? value : value[..max] + "...";

@@ -22,6 +22,7 @@ internal static class NyxIdChatTaskPlanJsonFormatter
         var node = JsonNode.Parse(JsonFormatter.Default.Format(payload))
                    ?? throw new InvalidOperationException(
                        "Typed custom payload must serialize to JSON.");
+        IncludeWireRequiredBooleans(payload, node);
         NormalizeNyxIdEnumValues(node);
         return node;
     }
@@ -30,6 +31,11 @@ internal static class NyxIdChatTaskPlanJsonFormatter
     {
         switch (payload)
         {
+            case NyxIdChatPendingInputState pending when node is JsonObject inputNode:
+                inputNode["allowFreeText"] = pending.AllowFreeText;
+                inputNode["multiSelect"] = pending.MultiSelect;
+                inputNode["options"] ??= new JsonArray();
+                break;
             case NyxIdChatTaskPlan plan when node["steps"] is JsonArray steps:
                 if (steps.Count != plan.Steps.Count)
                     throw new InvalidOperationException("TaskPlan step serialization is inconsistent.");

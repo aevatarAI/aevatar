@@ -5,6 +5,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
+import type { WorkflowResumeRequest } from '@aevatar-react-sdk/types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -36,6 +37,7 @@ import {
 } from '@/shared/navigation/teamRoutes';
 import { NyxIDAuthClient } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
+import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { studioApi } from '@/shared/studio/api';
 import { AevatarPageShell } from '@/shared/ui/aevatarPageShells';
 import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
@@ -46,6 +48,7 @@ import {
   type ChatActorProjection,
   type ChatActorStep,
   type ChatPendingInput,
+  type ChatPendingWorkflowSignal,
   type ChatNyxIdActionRequest,
   chatActionIdentityKey,
   createChatActorProjection,
@@ -66,13 +69,18 @@ import {
   isRawObserved,
 } from './chatEventAdapter';
 import { chatHistoryApi } from './chatHistoryApi';
-import { ChatInput, ChatMessageBubble } from './chatPresentation';
+import {
+  ChatInput,
+  ChatMessageBubble,
+  type RunInterventionAction,
+} from './chatPresentation';
 import type {
   ChatMessage,
   ChatStudioTarget,
   ChatUsageSummary,
   ConversationMeta,
   LocalChatStatus,
+  PendingRunInterventionInfo,
   StepInfo,
   StoredChatMessage,
   ToolCallInfo,
@@ -91,6 +99,7 @@ type ConversationState = {
   expectedTurnCount: number;
   latestTurnId?: string;
   messages: ChatMessage[];
+  pendingRunIntervention?: PendingRunInterventionInfo;
   status: LocalChatStatus;
   target?: ChatStudioTarget;
   title: string;
@@ -121,6 +130,13 @@ type ActionDisposition =
   | 'expired';
 
 type ChatControlCommand = Exclude<ChatCommand, { type: 'text' }>;
+type WorkflowSignalContinuationReceipt = {
+  actorId: string;
+  runId: string;
+  routed: 'workflow_signal_continuation';
+  signalName: string;
+  stepId: string;
+};
 
 const ACTIVE_STATE_REFRESH_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 
@@ -176,9 +192,17 @@ function resolveStoredConversationStatus(
 }
 
 function ChatMessageEntry({
+  activeRunInterventionKey,
   message,
+  onRunInterventionAction,
 }: {
+  activeRunInterventionKey?: string | null;
   message: ChatMessage;
+  onRunInterventionAction?: (
+    messageId: string,
+    intervention: PendingRunInterventionInfo,
+    action: RunInterventionAction,
+  ) => void;
 }): React.ReactElement {
   const authorName = message.authorName?.trim() || '';
   if (message.role === 'user' || message.role === 'assistant') {
@@ -196,7 +220,11 @@ function ChatMessageEntry({
             {authorName}
           </Typography.Text>
         ) : null}
-        <ChatMessageBubble message={message} />
+        <ChatMessageBubble
+          activeRunInterventionKey={activeRunInterventionKey}
+          message={message}
+          onRunInterventionAction={onRunInterventionAction}
+        />
       </div>
     );
   }
@@ -380,6 +408,162 @@ function resolveStudioJump(
   return null;
 }
 
+async function readWorkflowSignalContinuationReceipt(
+  response: Response,
+): Promise<WorkflowSignalContinuationReceipt | null> {
+  if (response.status !== 202) return null;
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+  if (!contentType.includes('application/json')) return null;
+
+  try {
+    const payload = (await response.json()) as Record<string, unknown>;
+    const actorId = typeof payload.actorId === 'string' ? payload.actorId.trim() : '';
+    const runId = typeof payload.runId === 'string' ? payload.runId.trim() : '';
+    const signalName =
+      typeof payload.signalName === 'string' ? payload.signalName.trim() : '';
+    const stepId = typeof payload.stepId === 'string' ? payload.stepId.trim() : '';
+    if (
+      payload.accepted !== true ||
+      payload.routed !== 'workflow_signal_continuation' ||
+      !actorId ||
+      !runId ||
+      !signalName ||
+      !stepId
+    ) {
+      return null;
+    }
+    return {
+      actorId,
+      runId,
+      routed: 'workflow_signal_continuation',
+      signalName,
+      stepId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildProjectedRunIntervention(
+  pending: ChatPendingWorkflowSignal | null | undefined,
+): PendingRunInterventionInfo | null {
+  if (!pending?.runId || !pending.signalName) return null;
+  const stepId = pending.stepId || pending.signalName;
+  return {
+    actorId: pending.actorId || pending.runId,
+    key: ['wait_signal', pending.runId, stepId, pending.signalName].join(':'),
+    kind: 'wait_signal',
+    prompt: pending.prompt || `Runtime is waiting for signal ${pending.signalName}.`,
+    runId: pending.runId,
+    signalName: pending.signalName,
+    stepId,
+    timeoutSeconds:
+      typeof pending.timeoutMs === 'number' && pending.timeoutMs > 0
+        ? Math.max(1, Math.round(pending.timeoutMs / 1000))
+        : undefined,
+  };
+}
+
+function findLatestPendingRunIntervention(
+  conversation: ConversationState | null | undefined,
+): { intervention: PendingRunInterventionInfo; messageId: string } | null {
+  if (conversation?.pendingRunIntervention) {
+    return {
+      intervention: conversation.pendingRunIntervention,
+      messageId: conversation.messages.at(-1)?.id ?? '',
+    };
+  }
+
+  const message = [...(conversation?.messages ?? [])]
+    .reverse()
+    .find((entry) => entry.pendingRunIntervention);
+  return message?.pendingRunIntervention
+    ? { intervention: message.pendingRunIntervention, messageId: message.id }
+    : null;
+}
+
+function mergeRuntimePendingRunIntervention(
+  conversation: ConversationState,
+  accumulator: ReturnType<typeof createRuntimeEventAccumulator>,
+): ConversationState {
+  return accumulator.pendingRunIntervention
+    ? {
+        ...conversation,
+        pendingRunIntervention: { ...accumulator.pendingRunIntervention },
+      }
+    : conversation;
+}
+
+function workflowControlFallbackMessage(status?: string): string {
+  const normalized = status?.trim().toLowerCase() ?? '';
+  if (normalized === 'completed' || normalized === 'succeeded' || normalized === '1') {
+    return t(
+      'pages.chat.index.workflowInputCompleted',
+      'Workflow input accepted. The workflow has completed.',
+    );
+  }
+  if (normalized === 'waiting_for_signal' || normalized === 'waitingforsignal') {
+    return t(
+      'pages.chat.index.workflowInputAcceptedWaiting',
+      'Workflow input accepted. The workflow is waiting for the next input.',
+    );
+  }
+  return t('pages.chat.index.runInterventionAccepted', 'Run input accepted');
+}
+
+function workflowOutputDisplayText(output?: string): string {
+  const text = output?.trim() ?? '';
+  if (!text) return '';
+
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    for (const key of ['message', 'summary', 'output', 'result']) {
+      const value = parsed[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+
+    const selected = parsed.selected ?? parsed.kept ?? parsed.choice;
+    if (typeof selected === 'string' && selected.trim()) {
+      return t('pages.chat.index.workflowSelectionResult', '{selection} is selected.', {
+        selection: selected.trim(),
+      });
+    }
+  } catch {
+    return text;
+  }
+
+  return text;
+}
+
+function waitForWorkflowProjectionRefresh(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 250);
+  });
+}
+
+async function readWorkflowControlReply(
+  intervention: PendingRunInterventionInfo,
+): Promise<string> {
+  const actorId = (intervention.actorId || intervention.runId).trim();
+  if (!actorId) return workflowControlFallbackMessage();
+
+  let latestStatus: unknown;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    try {
+      const snapshot = await runtimeRunsApi.getWorkflowActorCurrentState(actorId);
+      latestStatus = snapshot.completionStatus;
+      const output = workflowOutputDisplayText(snapshot.lastOutput);
+      if (output) return output;
+    } catch {
+      return workflowControlFallbackMessage();
+    }
+
+    await waitForWorkflowProjectionRefresh();
+  }
+
+  return workflowControlFallbackMessage(String(latestStatus ?? ''));
+}
+
 function hasUsage(usage: ChatUsageSummary | undefined): boolean {
   return Boolean(
     usage &&
@@ -457,6 +641,8 @@ const ChatPage: React.FC = () => {
   });
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
+  const [activeRunInterventionKey, setActiveRunInterventionKey] =
+    useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [controlBusy, setControlBusy] = useState(false);
   const [diagnosticWire, setDiagnosticWire] = useState<unknown>(undefined);
@@ -538,6 +724,15 @@ const ChatPage: React.FC = () => {
     ];
   }, [activeConversation, conversations]);
   const studioJump = resolveStudioJump(activeConversation?.target);
+  const projectedRunIntervention = buildProjectedRunIntervention(
+    projection?.pendingWorkflowSignal,
+  );
+  const latestPendingRunIntervention = projectedRunIntervention
+    ? {
+        intervention: projectedRunIntervention,
+        messageId: activeConversation?.messages.at(-1)?.id ?? '',
+      }
+    : findLatestPendingRunIntervention(activeConversation);
   const isConversationActionDisabled =
     !canStartChat || detailLoadState.status === 'loading' || controlBusy;
 
@@ -856,6 +1051,64 @@ const ChatPage: React.FC = () => {
       setActiveConversation(streaming);
       try {
         const response = await sendChatCommand(command, controller.signal);
+        const continuationReceipt =
+          command.type === 'text'
+            ? await readWorkflowSignalContinuationReceipt(response)
+            : null;
+        if (continuationReceipt) {
+          const assistantReply = await readWorkflowControlReply({
+            actorId: continuationReceipt.actorId,
+            key: [
+              'wait_signal',
+              continuationReceipt.runId,
+              continuationReceipt.stepId,
+              continuationReceipt.signalName,
+            ].join(':'),
+            kind: 'wait_signal',
+            prompt: '',
+            runId: continuationReceipt.runId,
+            signalName: continuationReceipt.signalName,
+            stepId: continuationReceipt.stepId,
+          });
+          const final: ConversationState = {
+            ...streaming,
+            pendingRunIntervention: undefined,
+            messages: streaming.messages.map((message) => {
+              if (message.id === assistantMessageId) {
+                return {
+                  ...message,
+                  content: assistantReply,
+                  pendingRunIntervention: undefined,
+                  status: 'complete',
+                };
+              }
+
+              return message.pendingRunIntervention
+                ? { ...message, pendingRunIntervention: undefined }
+                : message;
+            }),
+            status: 'completed_text',
+          };
+          activeConversationRef.current = final;
+          setActiveConversation(final);
+          await queryClient.invalidateQueries({
+            queryKey: ['chat-conversations', scopeId],
+          });
+          if (command.conversationId) {
+            try {
+              const refreshed = await loadActorState(
+                command.conversationId,
+                projectionRef.current,
+                controller.signal,
+                false,
+              );
+              applyProjection(refreshed);
+            } catch {
+              // The workflow result is already rendered from the canonical workflow state.
+            }
+          }
+          return true;
+        }
         for await (const frame of readChatStreamFrames(response, {
           signal: controller.signal,
         })) {
@@ -933,20 +1186,23 @@ const ChatPage: React.FC = () => {
             };
           }
           if (isRawObserved(frame.event)) continue;
-          streaming = {
-            ...streaming,
-            messages: streaming.messages.map((message) =>
-              message.id === assistantMessageId
-                ? {
-                    ...message,
-                    ...buildAssistantMessagePatch(
-                      accumulator,
-                      accumulator.errorText ? 'error' : 'streaming',
-                    ),
-                  }
-                : message,
-            ),
-          };
+          streaming = mergeRuntimePendingRunIntervention(
+            {
+              ...streaming,
+              messages: streaming.messages.map((message) =>
+                message.id === assistantMessageId
+                  ? {
+                      ...message,
+                      ...buildAssistantMessagePatch(
+                        accumulator,
+                        accumulator.errorText ? 'error' : 'streaming',
+                      ),
+                    }
+                  : message,
+              ),
+            },
+            accumulator,
+          );
           activeConversationRef.current = streaming;
           setActiveConversation(streaming);
         }
@@ -961,27 +1217,30 @@ const ChatPage: React.FC = () => {
         }
         const artifacts = extractChatStreamArtifacts(rawFrames);
         const target = artifacts.target || streaming.target;
-        const final: ConversationState = {
-          ...streaming,
-          messages: streaming.messages.map((message) =>
-            message.id === assistantMessageId
-              ? {
-                  ...message,
-                  ...buildAssistantMessagePatch(
-                    accumulator,
-                    accumulator.errorText ? 'error' : 'complete',
-                  ),
-                }
-              : message,
-          ),
-          status: accumulator.errorText
-            ? 'error'
-            : resolveStudioJump(target)
-              ? 'completed_with_studio_target'
-              : 'completed_text',
-          target,
-          usage: artifacts.usage || streaming.usage,
-        };
+        const final: ConversationState = mergeRuntimePendingRunIntervention(
+          {
+            ...streaming,
+            messages: streaming.messages.map((message) =>
+              message.id === assistantMessageId
+                ? {
+                    ...message,
+                    ...buildAssistantMessagePatch(
+                      accumulator,
+                      accumulator.errorText ? 'error' : 'complete',
+                    ),
+                  }
+                : message,
+            ),
+            status: accumulator.errorText
+              ? 'error'
+              : resolveStudioJump(target)
+                ? 'completed_with_studio_target'
+                : 'completed_text',
+            target,
+            usage: artifacts.usage || streaming.usage,
+          },
+          accumulator,
+        );
         activeConversationRef.current = final;
         setActiveConversation(final);
         await queryClient.invalidateQueries({
@@ -1005,18 +1264,21 @@ const ChatPage: React.FC = () => {
             ? t('pages.chat.index.observationStopped', 'Observation stopped.')
             : errorMessage(error);
         accumulator.errorText = message;
-        const failed: ConversationState = {
-          ...streaming,
-          messages: streaming.messages.map((entry) =>
-            entry.id === assistantMessageId
-              ? {
-                  ...entry,
-                  ...buildAssistantMessagePatch(accumulator, 'error'),
-                }
-              : entry,
-          ),
-          status: 'error',
-        };
+        const failed: ConversationState = mergeRuntimePendingRunIntervention(
+          {
+            ...streaming,
+            messages: streaming.messages.map((entry) =>
+              entry.id === assistantMessageId
+                ? {
+                    ...entry,
+                    ...buildAssistantMessagePatch(accumulator, 'error'),
+                  }
+                : entry,
+            ),
+            status: 'error',
+          },
+          accumulator,
+        );
         activeConversationRef.current = failed;
         setActiveConversation(failed);
         return false;
@@ -1145,6 +1407,104 @@ const ChatPage: React.FC = () => {
     [dispatchAcceptedCommand, requireControlContext],
   );
 
+  const handleRunInterventionAction = useCallback(
+    async (
+      messageId: string,
+      intervention: PendingRunInterventionInfo,
+      action: RunInterventionAction,
+    ) => {
+      if (!scopeId || activeRunInterventionKey) return;
+      setActiveRunInterventionKey(intervention.key);
+      setNotice(null);
+      try {
+        if (intervention.kind === 'wait_signal') {
+          const currentConversation = activeConversationRef.current;
+          const submittedPrompt = action.value?.trim();
+          if (currentConversation?.conversationId && submittedPrompt) {
+            await streamCommand(
+              currentConversation,
+              {
+                clientRequestId: createClientId(),
+                conversationId: currentConversation.conversationId,
+                prompt: submittedPrompt,
+                type: 'text',
+              },
+              submittedPrompt,
+            );
+            return;
+          }
+
+          await runtimeRunsApi.signal(scopeId, {
+            actorId: intervention.actorId || intervention.runId,
+            payload: submittedPrompt || undefined,
+            runId: intervention.runId,
+            signalName: intervention.signalName || 'continue',
+            stepId: intervention.stepId,
+          });
+        } else {
+          const resumeRequest: WorkflowResumeRequest = {
+            actorId: intervention.actorId || intervention.runId,
+            approved: action.kind !== 'reject',
+            runId: intervention.runId,
+            stepId: intervention.stepId,
+            userInput: action.value?.trim() || undefined,
+          };
+          await runtimeRunsApi.resume(scopeId, resumeRequest);
+        }
+        const submittedValue = action.value?.trim() ?? '';
+        const assistantReply = await readWorkflowControlReply(intervention);
+        setActiveConversation((current) => {
+          if (!current) return current;
+          const clearedMessages = current.messages.map((message) =>
+            message.id === messageId ||
+            message.pendingRunIntervention?.key === intervention.key
+              ? { ...message, pendingRunIntervention: undefined }
+              : message,
+          );
+          const next = {
+            ...current,
+            pendingRunIntervention:
+              current.pendingRunIntervention?.key === intervention.key
+                ? undefined
+                : current.pendingRunIntervention,
+            messages: [
+              ...clearedMessages,
+              ...(submittedValue
+                ? [createChatMessage('user', submittedValue)]
+                : []),
+              createChatMessage('assistant', assistantReply),
+            ],
+            status: 'completed_text' as const,
+          };
+          activeConversationRef.current = next;
+          return next;
+        });
+        setNotice({
+          message: t(
+            'pages.chat.index.runInterventionAccepted',
+            'Run input accepted',
+          ),
+          type: 'info',
+        });
+        if (activeConversationRef.current?.conversationId) {
+          try {
+            await loadActorState(
+              activeConversationRef.current.conversationId,
+              projectionRef.current,
+            );
+          } catch {
+            // Runtime run controls can be accepted before the chat actor projection advances.
+          }
+        }
+      } catch (error) {
+        setNotice({ message: errorMessage(error), type: 'error' });
+      } finally {
+        setActiveRunInterventionKey(null);
+      }
+    },
+    [activeRunInterventionKey, loadActorState, scopeId, streamCommand],
+  );
+
   const handleComposerSend = useCallback(() => {
     const value = prompt.trim();
     if (!value) return;
@@ -1154,13 +1514,36 @@ const ChatPage: React.FC = () => {
       setPrompt('');
       return;
     }
+    if (latestPendingRunIntervention) {
+      void handleRunInterventionAction(
+        latestPendingRunIntervention.messageId,
+        latestPendingRunIntervention.intervention,
+        {
+          kind:
+            latestPendingRunIntervention.intervention.kind === 'wait_signal'
+              ? 'signal'
+              : 'resume',
+          value,
+        },
+      );
+      setPrompt('');
+      return;
+    }
     if (actorHasActiveWork) {
       handleSteer(value);
       setPrompt('');
       return;
     }
     handleSend();
-  }, [actorHasActiveWork, handleInputResolve, handleSend, handleSteer, prompt]);
+  }, [
+    actorHasActiveWork,
+    handleInputResolve,
+    handleRunInterventionAction,
+    handleSend,
+    handleSteer,
+    latestPendingRunIntervention,
+    prompt,
+  ]);
 
   const dispatchStepControl = useCallback(
     (type: 'step.retry' | 'step.skip', step: ChatActorStep) => {
@@ -1938,7 +2321,12 @@ const ChatPage: React.FC = () => {
                 style={{ marginInline: 'auto', maxWidth: 1440, width: '100%' }}
               >
                 {activeConversation?.messages.map((message) => (
-                  <ChatMessageEntry key={message.id} message={message} />
+                  <ChatMessageEntry
+                    activeRunInterventionKey={activeRunInterventionKey}
+                    key={message.id}
+                    message={message}
+                    onRunInterventionAction={handleRunInterventionAction}
+                  />
                 ))}
               </Space>
             )}
@@ -1991,7 +2379,9 @@ const ChatPage: React.FC = () => {
             ) : null}
             <ChatInput
               disabled={isConversationActionDisabled}
-              isStreaming={isStreaming && !actorHasActiveWork}
+              isStreaming={
+                isStreaming && !actorHasActiveWork && !latestPendingRunIntervention
+              }
               onChange={setPrompt}
               onSend={handleComposerSend}
               onStop={handleComposerStop}
@@ -2001,12 +2391,22 @@ const ChatPage: React.FC = () => {
                       'pages.chat.index.composerInputAnswer',
                       'Answer the current question...',
                     )
-                  : actorHasActiveWork
-                    ? t(
-                        'pages.chat.index.composerSteering',
-                        'Steer the active task...',
-                      )
-                    : t(
+                  : latestPendingRunIntervention
+                    ? latestPendingRunIntervention.intervention.kind === 'wait_signal'
+                      ? t(
+                          'pages.chat.index.composerWorkflowSignal',
+                          'Send your workflow choice...',
+                        )
+                      : t(
+                          'pages.chat.index.composerWorkflowInput',
+                          'Send input to continue the workflow...',
+                        )
+                    : actorHasActiveWork
+                      ? t(
+                          'pages.chat.index.composerSteering',
+                          'Steer the active task...',
+                        )
+                      : t(
                         'pages.chat.index.composerPlaceholder',
                         'Describe the workflow you want, or ask about the current setup...',
                       )

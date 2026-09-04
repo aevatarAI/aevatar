@@ -73,7 +73,14 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         var catalogueVisibleDeployment = ResolveCatalogueVisibleDeployment(
             state.Deployments.Values,
             serviceCatalog?.DefaultServingRevisionId);
-        await MaterializeAsync(state.Identity, serviceKey, revisionCatalog, catalogueVisibleDeployment, eventId, observedAt, ct);
+        await MaterializeAsync(
+            state.Identity,
+            serviceKey,
+            revisionCatalog,
+            catalogueVisibleDeployment,
+            eventId,
+            observedAt,
+            ct);
     }
 
     public async ValueTask ProjectRevisionCatalogAsync(
@@ -133,16 +140,10 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         CancellationToken ct)
     {
         if (catalogueVisibleDeployment == null)
-        {
-            await DeleteNonVisibleWorkflowSourcesAsync(identity, revisionCatalog, null, eventId, observedAt, ct);
             return;
-        }
 
         if (!TryResolveWorkflowRevision(revisionCatalog, catalogueVisibleDeployment.RevisionId, identity.ServiceId, out var revision, out var workflowId))
-        {
-            await DeleteNonVisibleWorkflowSourcesAsync(identity, revisionCatalog, null, eventId, observedAt, ct);
             return;
-        }
 
         var serviceSource = await PrepareServiceSourceAsync(
             ToCatalogueServiceSource(identity, serviceKey, workflowId, revision, catalogueVisibleDeployment, eventId, observedAt),

@@ -117,7 +117,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
-        services.TryAddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>();
+        services.TryAddSingleton<NyxIdChatControlCommandPort>();
+        services.TryAddSingleton<INyxIdChatControlCommandPort>(sp => sp.GetRequiredService<NyxIdChatControlCommandPort>());
+        services.TryAddSingleton<INyxIdChatWorkflowSignalAcceptancePort>(sp => sp.GetRequiredService<NyxIdChatControlCommandPort>());
         services.TryAddSingleton<INyxIdVoiceAgentCommandService, NyxIdVoiceAgentCommandService>();
         AddNyxIdLifecycleCommands(services);
 

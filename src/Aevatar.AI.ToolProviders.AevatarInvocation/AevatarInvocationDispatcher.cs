@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -95,9 +97,11 @@ public sealed class AevatarInvocationDispatcher
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
     private readonly WorkflowStartReadModelObserver _workflowStartReadModelObserver;
     private readonly IWorkflowRunBackgroundDeliveryRegistrationPort? _workflowRunDeliveryRegistrationPort;
+    private readonly IWorkflowChatHistoryTerminalDeliveryPort? _workflowChatHistoryTerminalDeliveryPort;
     private readonly IChannelNyxIdAgentKeyReadinessPort? _channelAgentKeyReadinessPort;
     private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
     private readonly IScopeWorkflowTemplateEnsurePort? _scopeWorkflowTemplateEnsurePort;
+    private readonly IWorkflowInputPreferenceContextProvider? _workflowInputPreferenceContextProvider;
     private readonly ILogger<AevatarInvocationDispatcher> _logger;
 
     public AevatarInvocationDispatcher(
@@ -118,7 +122,9 @@ public sealed class AevatarInvocationDispatcher
         IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
         TimeSpan? workflowStartObservationTimeout = null,
         IChannelNyxIdAgentKeyReadinessPort? channelAgentKeyReadinessPort = null,
-        IScopeWorkflowTemplateEnsurePort? scopeWorkflowTemplateEnsurePort = null)
+        IScopeWorkflowTemplateEnsurePort? scopeWorkflowTemplateEnsurePort = null,
+        IWorkflowChatHistoryTerminalDeliveryPort? workflowChatHistoryTerminalDeliveryPort = null,
+        IWorkflowInputPreferenceContextProvider? workflowInputPreferenceContextProvider = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _actorRegistryQueryPort = actorRegistryQueryPort ?? throw new ArgumentNullException(nameof(actorRegistryQueryPort));
@@ -137,9 +143,11 @@ public sealed class AevatarInvocationDispatcher
             workflowStartObservationTimeout,
             workflowStartObservationTimeout);
         _workflowRunDeliveryRegistrationPort = workflowRunDeliveryRegistrationPort;
+        _workflowChatHistoryTerminalDeliveryPort = workflowChatHistoryTerminalDeliveryPort;
         _channelAgentKeyReadinessPort = channelAgentKeyReadinessPort;
         _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
         _scopeWorkflowTemplateEnsurePort = scopeWorkflowTemplateEnsurePort;
+        _workflowInputPreferenceContextProvider = workflowInputPreferenceContextProvider;
         _logger = logger ?? NullLogger<AevatarInvocationDispatcher>.Instance;
     }
 
@@ -540,17 +548,26 @@ public sealed class AevatarInvocationDispatcher
         }
 
         var metadata = BuildPayloadHeaders(inputs.Headers);
+        var prompt = await ApplyWorkflowInputPreferenceContextAsync(
+                workflowName,
+                inputs.Prompt,
+                toolContext,
+                ct)
+            .ConfigureAwait(false);
+        LogWorkflowPreferenceContextMergeEvidence(workflowName, prompt, toolContext);
         var sourceResolution = await ResolveWorkflowStartSourceAsync(
                 scope.ScopeId,
+                scope.OwnerSubject,
                 workflowName,
                 workflowYamls,
+                callerCredential.Value,
                 ct)
             .ConfigureAwait(false);
         if (sourceResolution.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(sourceResolution.Error), sourceResolution.Error);
 
         var command = new WorkflowChatRunRequest(
-            Prompt: inputs.Prompt,
+            Prompt: prompt,
             Source: sourceResolution.Source!,
             ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: ResolveSessionId(),
@@ -569,17 +586,216 @@ public sealed class AevatarInvocationDispatcher
             ct);
     }
 
+    private async ValueTask<string> ApplyWorkflowInputPreferenceContextAsync(
+        string workflowId,
+        string prompt,
+        AgentToolExecutionContext? toolContext,
+        CancellationToken ct)
+    {
+        if (_workflowInputPreferenceContextProvider is null || string.IsNullOrWhiteSpace(prompt))
+            return prompt;
+
+        JsonObject promptObject;
+        try
+        {
+            if (JsonNode.Parse(prompt) is not JsonObject parsedPromptObject)
+                return prompt;
+
+            promptObject = parsedPromptObject;
+        }
+        catch (JsonException)
+        {
+            return prompt;
+        }
+
+        WorkflowInputPreferenceContext preferenceContext;
+        try
+        {
+            preferenceContext = await _workflowInputPreferenceContextProvider.ReadAsync(
+                    new WorkflowInputPreferenceContextRequest(workflowId, prompt, toolContext),
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Workflow input preference context provider failed: workflowId={WorkflowId} requestId={RequestId}",
+                workflowId,
+                toolContext?.Request.RequestId ?? string.Empty);
+            return prompt;
+        }
+
+        var sourceTools = new JsonArray();
+        var merged = false;
+        foreach (var source in preferenceContext.Sources)
+        {
+            if (string.IsNullOrWhiteSpace(source.DataJson))
+                continue;
+
+            JsonObject? sourceObject;
+            try
+            {
+                sourceObject = JsonNode.Parse(source.DataJson) as JsonObject;
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            if (sourceObject is null)
+                continue;
+
+            var sourceMerged = false;
+            foreach (var property in sourceObject.ToArray())
+            {
+                if (IsPreferenceContextEvidenceField(property.Key) ||
+                    property.Value is null ||
+                    PromptHasPresentValue(promptObject, property.Key))
+                {
+                    continue;
+                }
+
+                promptObject[property.Key] = property.Value.DeepClone();
+                sourceMerged = true;
+            }
+
+            if (!sourceMerged)
+                continue;
+
+            merged = true;
+            sourceTools.Add(string.IsNullOrWhiteSpace(source.ToolName) ? source.OperationId : source.ToolName);
+        }
+
+        if (!merged)
+            return prompt;
+
+        promptObject["preference_context_merged"] = true;
+        promptObject["preference_context_source_tools"] = sourceTools;
+        return promptObject.ToJsonString();
+    }
+
+    private static bool IsPreferenceContextEvidenceField(string fieldName) =>
+        fieldName is "preference_context_merged" or "preference_context_source_tools";
+
+    private static bool PromptHasPresentValue(JsonObject promptObject, string propertyName) =>
+        promptObject.TryGetPropertyValue(propertyName, out var value) && IsPresent(value);
+
+    private static bool IsPresent(JsonNode? value) =>
+        value switch
+        {
+            null => false,
+            JsonValue jsonValue when jsonValue.TryGetValue<string>(out var text) => !string.IsNullOrWhiteSpace(text),
+            JsonArray array => array.Count > 0,
+            JsonObject jsonObject => jsonObject.Count > 0,
+            JsonValue => true,
+            _ => false,
+        };
+
+    private void LogWorkflowPreferenceContextMergeEvidence(
+        string workflowId,
+        string prompt,
+        AgentToolExecutionContext? toolContext)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            _logger.LogInformation(
+                "Aevatar workflow preference context merge evidence: workflowId={WorkflowId} promptJsonObject=false reason=prompt_empty requestId={RequestId}",
+                workflowId,
+                toolContext?.Request.RequestId ?? string.Empty);
+            return;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(prompt);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                _logger.LogInformation(
+                    "Aevatar workflow preference context merge evidence: workflowId={WorkflowId} promptJsonObject=false rootKind={RootKind} requestId={RequestId}",
+                    workflowId,
+                    root.ValueKind,
+                    toolContext?.Request.RequestId ?? string.Empty);
+                return;
+            }
+
+            var fieldNames = root.EnumerateObject()
+                .Select(static property => property.Name)
+                .OrderBy(static name => name, StringComparer.Ordinal)
+                .ToArray();
+            var merged = TryGetBoolean(root, "preference_context_merged") == true;
+            var sourceToolCount = CountArrayItems(root, "preference_context_source_tools");
+            var populatedDinnerFieldNames = fieldNames
+                .Where(name => IsDinnerInputFieldName(name) && IsPresent(root.GetProperty(name)))
+                .ToArray();
+
+            _logger.LogInformation(
+                "Aevatar workflow preference context merge evidence: workflowId={WorkflowId} promptJsonObject=true preferenceContextMerged={PreferenceContextMerged} preferenceContextSourceToolCount={PreferenceContextSourceToolCount} promptFieldNames={PromptFieldNames} populatedDinnerFieldNames={PopulatedDinnerFieldNames} requestId={RequestId}",
+                workflowId,
+                merged,
+                sourceToolCount,
+                string.Join(',', fieldNames),
+                string.Join(',', populatedDinnerFieldNames),
+                toolContext?.Request.RequestId ?? string.Empty);
+        }
+        catch (JsonException)
+        {
+            _logger.LogInformation(
+                "Aevatar workflow preference context merge evidence: workflowId={WorkflowId} promptJsonObject=false reason=prompt_malformed requestId={RequestId}",
+                workflowId,
+                toolContext?.Request.RequestId ?? string.Empty);
+        }
+    }
+
+    private static bool? TryGetBoolean(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var property) && property.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? property.GetBoolean()
+            : null;
+
+    private static int CountArrayItems(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.Array
+            ? property.GetArrayLength()
+            : 0;
+
+    private static bool IsDinnerInputFieldName(string fieldName) =>
+        fieldName is "participant" or "window" or "party_size" or "day" or "time" or "location" or
+            "cuisines" or "restaurant_type" or "phone_number" or "budget_cap" or "policy" or
+            "search_query" or "missing_fields";
+
+    private static bool IsPresent(JsonElement value) =>
+        value.ValueKind switch
+        {
+            JsonValueKind.String => !string.IsNullOrWhiteSpace(value.GetString()),
+            JsonValueKind.Array => value.GetArrayLength() > 0,
+            JsonValueKind.Object => value.EnumerateObject().Any(),
+            JsonValueKind.Null or JsonValueKind.Undefined => false,
+            _ => true,
+        };
+
     private async ValueTask<WorkflowStartSourceResolution> ResolveWorkflowStartSourceAsync(
         string scopeId,
+        string callerId,
         string workflowName,
         string[]? workflowYamls,
+        WorkflowRunCallerCredential? callerCredential,
         CancellationToken ct)
     {
         if (workflowYamls is { Length: > 0 })
             return WorkflowStartSourceResolution.Success(
                 WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName));
 
-        var templateEnsure = await TryEnsureScopeWorkflowTemplateAsync(scopeId, workflowName, ct).ConfigureAwait(false);
+        var templateEnsure = await TryEnsureScopeWorkflowTemplateAsync(
+                scopeId,
+                callerId,
+                workflowName,
+                callerCredential,
+                ct)
+            .ConfigureAwait(false);
         if (templateEnsure.Error != null)
             return templateEnsure;
 
@@ -601,7 +817,9 @@ public sealed class AevatarInvocationDispatcher
 
     private async ValueTask<WorkflowStartSourceResolution> TryEnsureScopeWorkflowTemplateAsync(
         string scopeId,
+        string callerId,
         string workflowId,
+        WorkflowRunCallerCredential? callerCredential,
         CancellationToken ct)
     {
         if (_scopeWorkflowTemplateEnsurePort is null)
@@ -610,9 +828,19 @@ public sealed class AevatarInvocationDispatcher
         try
         {
             var result = await _scopeWorkflowTemplateEnsurePort.EnsureAsync(
-                    new ScopeWorkflowTemplateEnsureRequest(scopeId, workflowId),
+                    new ScopeWorkflowTemplateEnsureRequest(scopeId, workflowId)
+                    {
+                        CapabilityAdmission = ToTemplateEnsureAdmissionContext(callerId, callerCredential),
+                    },
                     ct)
                 .ConfigureAwait(false);
+            _logger.LogInformation(
+                "Scope workflow template ensure completed before workflow start: scopeId={ScopeId} workflowId={WorkflowId} status={Status} revisionId={RevisionId} reason={Reason}",
+                scopeId,
+                workflowId,
+                result.Status,
+                result.RevisionId,
+                result.Reason);
             return result.Succeeded
                 ? WorkflowStartSourceResolution.NotResolved()
                 : WorkflowStartSourceResolution.Failed(ScopeWorkflowTemplateEnsureFailedError(result));
@@ -628,6 +856,22 @@ public sealed class AevatarInvocationDispatcher
         }
     }
 
+    private static WorkflowCapabilityAdmissionContext? ToTemplateEnsureAdmissionContext(
+        string callerId,
+        WorkflowRunCallerCredential? callerCredential)
+    {
+        var sourceReadableBearerToken = callerCredential?.Kind == NyxIdCallerCredentialKind.SourceReadableUserBearer
+            ? callerCredential.BearerToken
+            : callerCredential?.SourceReadableUserBearerToken;
+        if (string.IsNullOrWhiteSpace(sourceReadableBearerToken))
+            return null;
+
+        return new WorkflowCapabilityAdmissionContext(
+            callerId,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(sourceReadableBearerToken),
+            executionMode: ExternalCapabilityExecutionMode.Interactive);
+    }
+
     private async ValueTask<WorkflowStartSourceResolution> TryResolveScopeWorkflowAsync(
         string scopeId,
         string workflowId,
@@ -640,6 +884,13 @@ public sealed class AevatarInvocationDispatcher
         {
             var lookup = await _scopeWorkflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct)
                 .ConfigureAwait(false);
+            _logger.LogInformation(
+                "Scope workflow lookup completed before workflow start: scopeId={ScopeId} workflowId={WorkflowId} status={Status} reason={Reason} actorIdPresent={ActorIdPresent}",
+                scopeId,
+                workflowId,
+                lookup.Status,
+                lookup.Reason,
+                !string.IsNullOrWhiteSpace(lookup.Workflow?.ActorId));
             if (lookup.IsRunnable && !string.IsNullOrWhiteSpace(lookup.Workflow!.ActorId))
                 return WorkflowStartSourceResolution.Resolved(lookup.Workflow);
 
@@ -773,6 +1024,7 @@ public sealed class AevatarInvocationDispatcher
                 deliveryReservation?.Reservation.ExpectedWorkflowCommandId ?? string.Empty,
                 receipt.CommandId);
         }
+        await TryBindNyxIdAssistantWorkflowConversationAsync(command, receipt, ct).ConfigureAwait(false);
         var streamTopic = wait == InvocationWaitMode.Stream
             ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
             : string.Empty;
@@ -790,13 +1042,23 @@ public sealed class AevatarInvocationDispatcher
         }
 
         var completionSnapshot = wait == InvocationWaitMode.Complete
-            ? await _workflowStartReadModelObserver.ObserveCompletionAsync(
+            ? await _workflowStartReadModelObserver.ObserveInteractivePauseAsync(
                     scopeId,
                     receipt.ActorId,
                     receipt.CommandId,
+                    WorkflowStartReadModelObserver.DefaultCompletionObservationTimeout,
                     ct)
                 .ConfigureAwait(false)
-            : null;
+            : wait == InvocationWaitMode.Stream
+                ? await _workflowStartReadModelObserver.ObserveInteractivePauseAsync(
+                        scopeId,
+                        receipt.ActorId,
+                        receipt.CommandId,
+                        WorkflowStartReadModelObserver.DefaultCompletionObservationTimeout,
+                        WorkflowStartReadModelObserver.DefaultObservationTimeout,
+                        ct)
+                    .ConfigureAwait(false)
+                : null;
         var observedSnapshot = completionSnapshot ??
                                await _workflowStartReadModelObserver.ObserveSnapshotAsync(
                                        scopeId,
@@ -819,7 +1081,8 @@ public sealed class AevatarInvocationDispatcher
 
         var completionResultJson = observedSnapshot == null
             ? string.Empty
-            : AevatarInvocationJson.Serialize(MapWorkflowSnapshot(observedSnapshot, receipt.ActorId));
+            : await BuildWorkflowObservationResultJsonAsync(observedSnapshot, receipt.ActorId, ct)
+                .ConfigureAwait(false);
 
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
@@ -1991,28 +2254,43 @@ public sealed class AevatarInvocationDispatcher
         if (error != null)
             return AevatarInvocationJson.Error(error);
 
-        var snapshot = await _workflowQueryService.GetWorkflowActorCurrentStateAsync(target.ActorId.Trim(), ct);
+        var normalizedActorId = target.ActorId.Trim();
+        var normalizedCommandId = target.CommandId.Trim();
+        var snapshot = string.IsNullOrWhiteSpace(normalizedCommandId)
+            ? await _workflowQueryService.GetWorkflowActorCurrentStateAsync(normalizedActorId, ct)
+                .ConfigureAwait(false)
+            : await _workflowStartReadModelObserver.ObserveInteractivePauseAsync(
+                    string.Empty,
+                    normalizedActorId,
+                    normalizedCommandId,
+                    WorkflowStartReadModelObserver.DefaultCompletionObservationTimeout,
+                    WorkflowStartReadModelObserver.DefaultObservationTimeout,
+                    ct)
+                .ConfigureAwait(false) ??
+              await _workflowQueryService.GetWorkflowActorCurrentStateAsync(normalizedActorId, ct)
+                  .ConfigureAwait(false);
         if (snapshot == null)
         {
             return AevatarInvocationJson.Serialize(NotFound(
-                target.CommandId.Trim(),
+                normalizedCommandId,
                 "workflow_current_state_not_found",
                 "No workflow current-state readmodel matched workflow_current_state.actor_id."));
         }
 
-        if (!string.IsNullOrWhiteSpace(target.CommandId) &&
-            !string.Equals(snapshot.LastCommandId, target.CommandId.Trim(), StringComparison.Ordinal))
+        if (!string.IsNullOrWhiteSpace(normalizedCommandId) &&
+            !string.Equals(snapshot.LastCommandId, normalizedCommandId, StringComparison.Ordinal))
         {
             return AevatarInvocationJson.Serialize(NotFound(
-                target.CommandId.Trim(),
+                normalizedCommandId,
                 "workflow_current_state_not_found",
                 "Workflow current-state readmodel actor matched, but last_command_id did not match workflow_current_state.command_id."));
         }
 
-        var observedRunId = string.IsNullOrWhiteSpace(target.CommandId)
+        var observedRunId = string.IsNullOrWhiteSpace(normalizedCommandId)
             ? snapshot.LastCommandId
-            : target.CommandId.Trim();
-        return AevatarInvocationJson.Serialize(MapWorkflowSnapshot(snapshot, observedRunId));
+            : normalizedCommandId;
+        return await BuildWorkflowObservationResultJsonAsync(snapshot, observedRunId, ct)
+            .ConfigureAwait(false);
     }
 
     private static ObserveRunResult MapTerminal(GAgentRunTerminalSnapshot terminal, string runId) =>
@@ -2033,6 +2311,42 @@ public sealed class AevatarInvocationDispatcher
                 },
             },
         };
+
+    private async Task<string> BuildWorkflowObservationResultJsonAsync(
+        WorkflowActorSnapshot snapshot,
+        string runId,
+        CancellationToken ct)
+    {
+        if (snapshot.CompletionStatus != WorkflowRunCompletionStatus.WaitingForSignal)
+            return AevatarInvocationJson.Serialize(MapWorkflowSnapshot(snapshot, runId));
+
+        var report = await _workflowQueryService.GetWorkflowRunReportArtifactAsync(snapshot.ActorId, ct)
+            .ConfigureAwait(false);
+        if (report?.CurrentWaitingSignal is not { } signal ||
+            string.IsNullOrWhiteSpace(signal.StepId) ||
+            string.IsNullOrWhiteSpace(signal.SignalName))
+        {
+            return AevatarInvocationJson.Serialize(MapWorkflowSnapshot(snapshot, runId));
+        }
+
+        return AevatarInvocationJson.ToJson(new
+        {
+            run_id = runId,
+            status = snapshot.CompletionStatus.ToString(),
+            partial_output = string.IsNullOrWhiteSpace(snapshot.LastOutput) ? null : snapshot.LastOutput,
+            actor_id = snapshot.ActorId,
+            command_id = snapshot.LastCommandId,
+            state_version = snapshot.StateVersion,
+            waiting_signal = new
+            {
+                run_id = string.IsNullOrWhiteSpace(signal.RunId) ? runId : signal.RunId,
+                step_id = signal.StepId,
+                signal_name = signal.SignalName,
+                prompt = string.IsNullOrWhiteSpace(signal.Prompt) ? null : signal.Prompt,
+                timeout_ms = signal.TimeoutMs > 0 ? signal.TimeoutMs : (int?)null,
+            },
+        });
+    }
 
     private static ObserveRunResult MapWorkflowSnapshot(
         WorkflowActorSnapshot snapshot,
@@ -2682,6 +2996,80 @@ public sealed class AevatarInvocationDispatcher
         Normalize(AgentToolRequestContext.CallId)
         ?? Normalize(AgentToolRequestContext.RequestId)
         ?? Guid.NewGuid().ToString("N");
+
+    private async Task TryBindNyxIdAssistantWorkflowConversationAsync(
+        WorkflowChatRunRequest command,
+        WorkflowChatRunAcceptedReceipt receipt,
+        CancellationToken ct)
+    {
+        if (_workflowChatHistoryTerminalDeliveryPort is null)
+            return;
+
+        var chat = AgentToolRequestContext.Current?.Chat;
+        if (chat?.Surface != AgentChatInvocationSurface.NyxIdAssistant ||
+            string.IsNullOrWhiteSpace(chat.ConversationId) ||
+            string.IsNullOrWhiteSpace(command.ScopeId) ||
+            string.IsNullOrWhiteSpace(command.Prompt))
+        {
+            return;
+        }
+
+        var conversationId = chat.ConversationId.Trim();
+        var scopeId = command.ScopeId.Trim();
+        var request = command with
+        {
+            ChatConversation = WorkflowChatConversationIntent.Create(conversationId),
+            TargetSeed = null,
+            CompletionNotificationTarget = null,
+        };
+
+        try
+        {
+            var reservation = await _workflowChatHistoryTerminalDeliveryPort.ReserveAsync(
+                    new WorkflowChatHistoryTerminalDeliveryReservationRequest(
+                        WorkflowChatHistoryCreateRecoveryIds.FromScopeAndCommandId(scopeId, receipt.CommandId),
+                        scopeId,
+                        WorkflowChatConversationIntent.Create(conversationId),
+                        command.Prompt.Trim(),
+                        receipt.ActorId,
+                        receipt.CommandId,
+                        receipt.CorrelationId,
+                        WorkflowChatCreateRequestFingerprint.Compute(request)),
+                    ct)
+                .ConfigureAwait(false);
+            if (!reservation.Succeeded || reservation.Reservation is null)
+            {
+                _logger.LogWarning(
+                    "NyxID assistant workflow conversation recovery binding unavailable: scopeId={ScopeId} conversationId={ConversationId} workflowActorId={WorkflowActorId} commandId={CommandId} failure={Failure}",
+                    scopeId,
+                    conversationId,
+                    receipt.ActorId,
+                    receipt.CommandId,
+                    reservation.Failure);
+                return;
+            }
+
+            await _workflowChatHistoryTerminalDeliveryPort
+                .BindAcceptedAsync(reservation.Reservation, receipt, ct)
+                .ConfigureAwait(false);
+            _logger.LogInformation(
+                "NyxID assistant workflow conversation recovery bound: scopeId={ScopeId} conversationId={ConversationId} workflowActorId={WorkflowActorId} commandId={CommandId}",
+                scopeId,
+                conversationId,
+                receipt.ActorId,
+                receipt.CommandId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "NyxID assistant workflow conversation recovery binding failed: scopeId={ScopeId} conversationId={ConversationId} workflowActorId={WorkflowActorId} commandId={CommandId}",
+                scopeId,
+                conversationId,
+                receipt.ActorId,
+                receipt.CommandId);
+        }
+    }
 
     private void LogWorkflowStartAccepted(
         WorkflowChatRunRequest command,

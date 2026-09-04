@@ -514,6 +514,30 @@ describe("runtimeRunsApi", () => {
     );
   });
 
+  it("routes workflow actor current-state queries through the workflow actor endpoint", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        actorId: "scope-workflow:scope-1:run:run-1",
+        lastOutput: "Done",
+      }),
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.getWorkflowActorCurrentState("scope-workflow:scope-1:run:run-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/workflow-actors/scope-workflow%3Ascope-1%3Arun%3Arun-1/current-state",
+      expect.objectContaining({
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      })
+    );
+  });
+
   it("routes scoped getRunSummary through the service run endpoint with actor filters", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

@@ -164,6 +164,7 @@ enum NyxIdChatAttentionKind {
   NYX_ID_CHAT_ATTENTION_KIND_INPUT = 2;
   NYX_ID_CHAT_ATTENTION_KIND_APPROVAL = 3;
   NYX_ID_CHAT_ATTENTION_KIND_STALLED = 4;
+  NYX_ID_CHAT_ATTENTION_KIND_WORKFLOW_SIGNAL = 5;
 }
 
 enum NyxIdChatApprovalReversibility {
@@ -806,6 +807,16 @@ message NyxIdChatInputResolutionState {
   NyxIdChatInputAnswer answer = 7;
 }
 
+message NyxIdChatPendingWorkflowSignalState {
+  string actor_id = 1;
+  string run_id = 2;
+  string signal_name = 3;
+  string step_id = 4;
+  string prompt = 5;
+  int64 timeout_ms = 6;
+  google.protobuf.Timestamp observed_at = 7;
+}
+
 message NyxIdChatApprovalResolutionState {
   string request_id = 1;
   string client_request_id = 2;
@@ -1184,6 +1195,7 @@ message NyxIdChatConversationGAgentState {
   bool deleted = 46;
   google.protobuf.Timestamp deleted_at = 47;
   aevatar.ai.ConversationContextAttachmentSet context_attachments = 48;
+  NyxIdChatPendingWorkflowSignalState pending_workflow_signal = 49;
 }
 
 message NyxIdChatOperationResultAcknowledgementFence {
@@ -1982,6 +1994,18 @@ message NyxIdChatApprovalResolveCommand {
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
 }
 
+message NyxIdChatWorkflowSignalAcceptedCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string workflow_actor_id = 3;
+  string run_id = 4;
+  string signal_name = 5;
+  string step_id = 6;
+  string client_request_id = 7;
+  string command_id = 8;
+  string correlation_id = 9;
+}
+
 message NyxIdChatCanaryEffectFaultArmCommand {
   reserved 5, 7;
   reserved "key", "catalog_digest";
@@ -2191,6 +2215,15 @@ message NyxIdChatInputResolutionCommittedEvent {
 message NyxIdChatApprovalResolutionCommittedEvent {
   NyxIdChatApprovalResolutionState resolution = 1;
   NyxIdChatConversationGAgentState state = 2;
+}
+
+message NyxIdChatWorkflowSignalAcceptedCommittedEvent {
+  string workflow_actor_id = 1;
+  string run_id = 2;
+  string signal_name = 3;
+  string step_id = 4;
+  string client_request_id = 5;
+  NyxIdChatConversationGAgentState state = 6;
 }
 
 message NyxIdChatCanaryEffectFaultArmedCommittedEvent {

@@ -146,4 +146,31 @@ describe("sseFrameNormalizer", () => {
       type: AGUIEventType.RUN_ERROR,
     });
   });
+
+  it("preserves typed custom event names and data payloads", () => {
+    const data = {
+      actor_id: "scope-workflow-alpha",
+      prompt: "Choose one dinner option.",
+      run_id: "run-dinner-alpha",
+      signal_name: "dinner_date_user_choice",
+      step_id: "wait_for_user_choice_timeout",
+      timeout_ms: 10000,
+    };
+
+    expect(
+      normalizeBackendSseFrame({
+        data,
+        name: "aevatar.workflow.waiting_signal",
+        timestamp: 8,
+        type: AGUIEventType.CUSTOM,
+      })
+    ).toEqual({
+      data,
+      name: "aevatar.workflow.waiting_signal",
+      payload: undefined,
+      timestamp: 8,
+      type: AGUIEventType.CUSTOM,
+      value: data,
+    });
+  });
 });

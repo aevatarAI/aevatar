@@ -97,6 +97,112 @@ describe("runtimeEventSemantics", () => {
     expect(accumulator.errorText).toBe("failed");
   });
 
+  it("keeps workflow waiting signal from start result after chat run finishes", () => {
+    const accumulator = createRuntimeEventAccumulator();
+    const events: AGUIEvent[] = [
+      {
+        type: AGUIEventType.RUN_STARTED,
+        actorId: "chat-actor-1",
+        runId: "chat-run-1",
+        threadId: "chat-actor-1",
+      } as unknown as AGUIEvent,
+      {
+        type: AGUIEventType.TOOL_CALL_START,
+        toolCallId: "tool-1",
+        toolName: "aevatar_start_workflow",
+      } as unknown as AGUIEvent,
+      {
+        type: AGUIEventType.TOOL_CALL_END,
+        toolCallId: "tool-1",
+        result: JSON.stringify({
+          run_id: "workflow-run-1",
+          status: "waiting_for_signal",
+          result: {
+            waiting_signal: {
+              run_id: "workflow-run-1",
+              step_id: "wait_for_user_choice_timeout",
+              signal_name: "dinner_date_user_choice",
+              prompt: "Choose one dinner option.",
+              timeout_ms: 10000,
+            },
+          },
+        }),
+      } as unknown as AGUIEvent,
+      {
+        type: AGUIEventType.RUN_FINISHED,
+        result: { output: "" },
+        runId: "chat-run-1",
+      } as unknown as AGUIEvent,
+    ];
+
+    events.forEach((event) => {
+      applyRuntimeEvent(accumulator, event);
+    });
+
+    expect(accumulator.pendingRunIntervention).toMatchObject({
+      actorId: "workflow-run-1",
+      kind: "wait_signal",
+      runId: "workflow-run-1",
+      stepId: "wait_for_user_choice_timeout",
+      signalName: "dinner_date_user_choice",
+      prompt: "Choose one dinner option.",
+      timeoutSeconds: 10,
+    });
+  });
+
+  it("keeps workflow waiting signal from artifact result after chat run finishes", () => {
+    const accumulator = createRuntimeEventAccumulator();
+    const events: AGUIEvent[] = [
+      {
+        type: AGUIEventType.RUN_STARTED,
+        actorId: "chat-actor-1",
+        runId: "chat-run-1",
+        threadId: "chat-actor-1",
+      } as unknown as AGUIEvent,
+      {
+        type: AGUIEventType.TOOL_CALL_START,
+        toolCallId: "tool-1",
+        toolName: "aevatar_read_workflow_run_artifact",
+      } as unknown as AGUIEvent,
+      {
+        type: AGUIEventType.TOOL_CALL_END,
+        toolCallId: "tool-1",
+        result: JSON.stringify({
+          workflow_run_id: "workflow-run-1",
+          artifact: "report",
+          status: "pending",
+          pending: true,
+          waiting_signal: {
+            run_id: "workflow-run-1",
+            step_id: "wait_for_user_choice_timeout",
+            signal_name: "dinner_date_user_choice",
+            prompt: "Choose one dinner option.",
+            timeout_ms: 10000,
+          },
+        }),
+      } as unknown as AGUIEvent,
+      {
+        type: AGUIEventType.RUN_FINISHED,
+        result: { output: "" },
+        runId: "chat-run-1",
+      } as unknown as AGUIEvent,
+    ];
+
+    events.forEach((event) => {
+      applyRuntimeEvent(accumulator, event);
+    });
+
+    expect(accumulator.pendingRunIntervention).toMatchObject({
+      actorId: "workflow-run-1",
+      kind: "wait_signal",
+      runId: "workflow-run-1",
+      stepId: "wait_for_user_choice_timeout",
+      signalName: "dinner_date_user_choice",
+      prompt: "Choose one dinner option.",
+      timeoutSeconds: 10,
+    });
+  });
+
   it("keeps run-started command and correlation ids through run finish", () => {
     const accumulator = createRuntimeEventAccumulator();
     const events: AGUIEvent[] = [

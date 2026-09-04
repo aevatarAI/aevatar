@@ -488,6 +488,46 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task WorkflowInputPreferenceContextProvider_ShouldIgnoreGenericContextAndReadDiningProfile()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("aevatar-context", "aevatar", "svc-aevatar"),
+            CustomInstanceWithOpenApiUrl(
+                "custom-service-alpha",
+                "user-context-mock",
+                "http://127.0.0.1:5119/openapi.json"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("aevatar-context", "aevatar", ContextEndpoint("get_api_app_context", "/api/app/context")));
+        handler.OpenApiResponsesByPath["/api/v1/proxy/s/user-context-mock/openapi.json"] = CustomOpenApi;
+        handler.ProxyResponseBody =
+            """{"preferred_cuisines":["Italian","Japanese"],"budget_cap":200}""";
+        var source = CreateSource(handler);
+        var provider = new NyxIdWorkflowInputPreferenceContextProvider(
+            source,
+            new AdmittedAgentToolExecutor(
+                AlwaysStartingAgentToolAdmissionLedger.Instance,
+                new AppendedVerificationAuditTrail(),
+                new StableVerificationIdentityHasher()));
+
+        using var scope = PushContext("user-token");
+        var context = await provider.ReadAsync(
+            new WorkflowInputPreferenceContextRequest(
+                "dinner_date",
+                "book dinner tonight at 7pm for two people.",
+                AgentToolRequestContext.Current),
+            CancellationToken.None);
+
+        var sourceContext = context.Sources.Should().ContainSingle().Subject;
+        sourceContext.OperationId.Should().Be("readDiningProfileContext");
+        sourceContext.PathTemplate.Should().Be("/profile/dining");
+        sourceContext.DataJson.Should().Contain("preferred_cuisines");
+        handler.ProxyRequests.Should().ContainSingle();
+        handler.ProxyRequests.Single().Path.Should().Contain("/profile/dining");
+    }
+
+    [Fact]
     public async Task DiscoverToolsAsync_CustomOpenApiEffects_DisabledByDefault()
     {
         var handler = new FakeNyxIdHandler();
@@ -1843,6 +1883,20 @@ public class NyxIdConnectedServiceToolSourceTests
           "parameters": [
             { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
           ],
+          "request_body_schema": null,
+          "request_content_type": null,
+          "request_body_required": false,
+          "response": { "content_types": ["application/json"], "binary_artifact": false }
+        }
+        """;
+
+    private static string ContextEndpoint(string endpointId, string path) => $$"""
+        {
+          "endpoint_id": "{{endpointId}}",
+          "name": "{{endpointId}}",
+          "method": "GET",
+          "path": "{{path}}",
+          "parameters": [],
           "request_body_schema": null,
           "request_content_type": null,
           "request_body_required": false,

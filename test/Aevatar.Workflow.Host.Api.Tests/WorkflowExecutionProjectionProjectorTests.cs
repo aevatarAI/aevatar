@@ -621,6 +621,59 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public void ApplyObservedPayloadToReport_WaitingSignal_ShouldExposeAndClearCurrentSignal()
+    {
+        var observedAt = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var report = new WorkflowRunInsightReportDocument
+        {
+            Id = "workflow-run-actor",
+            RootActorId = "workflow-run-actor",
+            CommandId = "command-alpha",
+            ReportVersion = "1.0",
+        };
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new WaitingForSignalEvent
+                {
+                    RunId = "run-alpha",
+                    StepId = "wait_for_user_choice_timeout",
+                    SignalName = "dinner_date_user_choice",
+                    Prompt = "Choose one dinner option.",
+                    TimeoutMs = 10000,
+                },
+                5,
+                "evt-waiting"),
+            observedAt);
+
+        report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.WaitingForSignal);
+        report.CurrentWaitingSignal.Should().NotBeNull();
+        report.CurrentWaitingSignal!.RunId.Should().Be("run-alpha");
+        report.CurrentWaitingSignal.StepId.Should().Be("wait_for_user_choice_timeout");
+        report.CurrentWaitingSignal.SignalName.Should().Be("dinner_date_user_choice");
+        report.CurrentWaitingSignal.Prompt.Should().Be("Choose one dinner option.");
+        report.CurrentWaitingSignal.TimeoutMs.Should().Be(10000);
+        var mapped = new WorkflowExecutionReadModelMapper().ToRunReport(report);
+        mapped.CurrentWaitingSignal.Should().NotBeNull();
+        mapped.CurrentWaitingSignal!.SignalName.Should().Be("dinner_date_user_choice");
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "wait_for_user_choice_timeout",
+                    Success = true,
+                },
+                6,
+                "evt-completed"),
+            observedAt.AddSeconds(1));
+
+        report.CurrentWaitingSignal.Should().BeNull();
+    }
+
+    [Fact]
     public void ApplyObservedPayloadToReport_ShouldKeepRetryAttemptsSeparateAndClearSnapshotAfterSuccess()
     {
         const int maxFailureOutputUtf8Bytes = 64 * 1024;

@@ -224,6 +224,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeWorkflowArchiveCommandPort, ScopeWorkflowArchiveApplicationService>();
         services.TryAddSingleton<IScopeWorkflowSaveAndBindPort, ScopeWorkflowSaveAndBindApplicationService>();
         services.TryAddSingleton<IScopeWorkflowTemplateEnsurePort, ScopeWorkflowTemplateEnsureService>();
+        services.TryAddSingleton<IScopeWorkflowDefinitionBindingResolvePort, ScopeWorkflowDefinitionBindingResolveService>();
         services.Replace(ServiceDescriptor.Singleton(
             typeof(SkillWorkflowMountAdapter),
             typeof(SkillWorkflowMountAdapter)));

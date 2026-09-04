@@ -25,6 +25,24 @@ const ONEOF_KEY_MAP: Record<string, RuntimeEventType> = {
   toolCallStart: AGUIEventType.TOOL_CALL_START,
 };
 
+const TYPE_TO_ONEOF_KEY: Record<string, string> = {
+  CUSTOM: "custom",
+  HUMAN_INPUT_REQUEST: "humanInputRequest",
+  RUN_ERROR: "runError",
+  RUN_FINISHED: "runFinished",
+  RUN_STARTED: "runStarted",
+  RUN_STOPPED: "runStopped",
+  STATE_SNAPSHOT: "stateSnapshot",
+  STEP_FINISHED: "stepFinished",
+  STEP_STARTED: "stepStarted",
+  TEXT_MESSAGE_CONTENT: "textMessageContent",
+  TEXT_MESSAGE_END: "textMessageEnd",
+  TEXT_MESSAGE_START: "textMessageStart",
+  TOOL_APPROVAL_REQUEST: "toolApprovalRequest",
+  TOOL_CALL_END: "toolCallEnd",
+  TOOL_CALL_START: "toolCallStart",
+};
+
 function asRecord(value: unknown): JsonRecord | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -232,12 +250,15 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
           suspensionType: readString(nested, "suspensionType"),
           timeoutSeconds: readNumber(nested, 0, "timeoutSeconds"),
         });
-      case AGUIEventType.CUSTOM:
+      case AGUIEventType.CUSTOM: {
+        const data = nested?.data ?? nested?.payload ?? nested?.value ?? frame.data;
         return createTypedEvent(eventType, timestamp, {
-          name: readString(nested, "name"),
+          data,
+          name: readString(nested, "name") || readString(frame, "name"),
           payload: nested?.payload,
-          value: nested?.payload ?? nested?.value,
+          value: nested?.payload ?? nested?.value ?? nested?.data ?? data,
         });
+      }
       case AGUIEventType.STATE_SNAPSHOT:
         return createTypedEvent(eventType, timestamp, {
           snapshot: frame[oneofKey],
@@ -248,6 +269,18 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
   }
 
   if (typeof frame.type === "string") {
+    const typedOneofKey = TYPE_TO_ONEOF_KEY[frame.type];
+    const typedPayload =
+      asRecord(frame.payload) ?? asRecord(frame.data) ?? asRecord(frame.value);
+    if (typedOneofKey && typedPayload) {
+      return normalizeBackendSseFrame({
+        ...frame,
+        [typedOneofKey]: typedPayload,
+        timestamp,
+        type: undefined,
+      });
+    }
+
     return { ...frame, timestamp } as unknown as AGUIEvent;
   }
 

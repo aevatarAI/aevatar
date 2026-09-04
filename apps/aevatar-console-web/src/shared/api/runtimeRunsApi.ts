@@ -244,6 +244,15 @@ export type WorkflowRunSummary = {
   workflowName?: string;
 };
 
+export type WorkflowActorCurrentState = {
+  actorId: string;
+  completionStatus?: string | number;
+  lastOutput?: string;
+  runId?: string;
+  stateVersion?: number;
+  workflowName?: string;
+};
+
 function buildStreamEndpointPayload(request: StreamEndpointInvokeRequest) {
   return compactObject({
     prompt: request.prompt?.trim() ?? "",
@@ -442,6 +451,19 @@ export const runtimeRunsApi = {
         actorId: trimOptional(options?.actorId),
       }),
       (value) => value as WorkflowRunSummary,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      }
+    );
+  },
+
+  getWorkflowActorCurrentState(actorId: string): Promise<WorkflowActorCurrentState> {
+    return requestJson(
+      `/api/workflow-actors/${encodeSegment(actorId)}/current-state`,
+      (value) => value as WorkflowActorCurrentState,
       {
         method: "GET",
         headers: {

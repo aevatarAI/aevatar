@@ -48,6 +48,7 @@ internal sealed class WorkflowStartReadModelObserver
                 commandId,
                 static _ => true,
                 _observationTimeout,
+                initialObservationTimeout: null,
                 ct)
             .ConfigureAwait(false);
 
@@ -62,6 +63,40 @@ internal sealed class WorkflowStartReadModelObserver
                 commandId,
                 static snapshot => IsTerminal(snapshot.CompletionStatus),
                 _completionObservationTimeout,
+                initialObservationTimeout: null,
+                ct)
+            .ConfigureAwait(false);
+
+    public async Task<WorkflowActorSnapshot?> ObserveInteractivePauseAsync(
+        string scopeId,
+        string actorId,
+        string commandId,
+        TimeSpan observationTimeout,
+        CancellationToken ct) =>
+        await ObserveInteractivePauseAsync(
+                scopeId,
+                actorId,
+                commandId,
+                observationTimeout,
+                initialObservationTimeout: null,
+                ct)
+            .ConfigureAwait(false);
+
+    public async Task<WorkflowActorSnapshot?> ObserveInteractivePauseAsync(
+        string scopeId,
+        string actorId,
+        string commandId,
+        TimeSpan observationTimeout,
+        TimeSpan? initialObservationTimeout,
+        CancellationToken ct) =>
+        await ObserveMatchingSnapshotAsync(
+                scopeId,
+                actorId,
+                commandId,
+                static snapshot => IsTerminal(snapshot.CompletionStatus) ||
+                                   snapshot.CompletionStatus == WorkflowRunCompletionStatus.WaitingForSignal,
+                observationTimeout,
+                initialObservationTimeout,
                 ct)
             .ConfigureAwait(false);
 
@@ -71,10 +106,10 @@ internal sealed class WorkflowStartReadModelObserver
         string commandId,
         Func<WorkflowActorSnapshot, bool> accept,
         TimeSpan observationTimeout,
+        TimeSpan? initialObservationTimeout,
         CancellationToken ct)
     {
         if (!_queryService.WorkflowActorCurrentStateQueryEnabled ||
-            string.IsNullOrWhiteSpace(scopeId) ||
             string.IsNullOrWhiteSpace(actorId) ||
             string.IsNullOrWhiteSpace(commandId))
         {
@@ -85,6 +120,10 @@ internal sealed class WorkflowStartReadModelObserver
         var normalizedActorId = actorId.Trim();
         var normalizedCommandId = commandId.Trim();
         var deadline = _timeProvider.GetUtcNow() + observationTimeout;
+        var initialDeadline = initialObservationTimeout.HasValue
+            ? _timeProvider.GetUtcNow() + initialObservationTimeout.Value
+            : (DateTimeOffset?)null;
+        var matchingSnapshotObserved = false;
 
         while (true)
         {
@@ -92,13 +131,13 @@ internal sealed class WorkflowStartReadModelObserver
             {
                 var snapshot = await _queryService.GetWorkflowActorCurrentStateAsync(normalizedActorId, ct)
                     .ConfigureAwait(false);
-                if (snapshot is { StateVersion: > 0 } &&
-                    string.Equals(snapshot.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
-                    string.Equals(snapshot.ActorId, normalizedActorId, StringComparison.Ordinal) &&
-                    string.Equals(snapshot.LastCommandId, normalizedCommandId, StringComparison.Ordinal) &&
-                    accept(snapshot))
+                if (IsMatchingSnapshotIdentity(snapshot, normalizedScopeId, normalizedActorId, normalizedCommandId))
                 {
-                    return snapshot;
+                    matchingSnapshotObserved = true;
+                    if (accept(snapshot!))
+                    {
+                        return snapshot;
+                    }
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -115,7 +154,11 @@ internal sealed class WorkflowStartReadModelObserver
                 return null;
             }
 
-            var remaining = deadline - _timeProvider.GetUtcNow();
+            var now = _timeProvider.GetUtcNow();
+            var effectiveDeadline = !matchingSnapshotObserved && initialDeadline.HasValue && initialDeadline.Value < deadline
+                ? initialDeadline.Value
+                : deadline;
+            var remaining = effectiveDeadline - now;
             if (remaining <= TimeSpan.Zero)
                 return null;
 
@@ -126,6 +169,17 @@ internal sealed class WorkflowStartReadModelObserver
                 .ConfigureAwait(false);
         }
     }
+
+    private static bool IsMatchingSnapshotIdentity(
+        WorkflowActorSnapshot? snapshot,
+        string normalizedScopeId,
+        string normalizedActorId,
+        string normalizedCommandId) =>
+        snapshot is { StateVersion: > 0 } &&
+        (string.IsNullOrWhiteSpace(normalizedScopeId) ||
+         string.Equals(snapshot.ScopeId, normalizedScopeId, StringComparison.Ordinal)) &&
+        string.Equals(snapshot.ActorId, normalizedActorId, StringComparison.Ordinal) &&
+        string.Equals(snapshot.LastCommandId, normalizedCommandId, StringComparison.Ordinal);
 
     private static bool IsTerminal(WorkflowRunCompletionStatus status) =>
         status is WorkflowRunCompletionStatus.Completed or

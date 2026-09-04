@@ -1,5 +1,4 @@
 using System.Text;
-using Aevatar.Configuration;
 using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -115,14 +114,6 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayStore, InMemoryWorkflowWebhookReplayStore>();
             services.TryAddSingleton<IWorkflowWebhookBindingStore, InMemoryWorkflowWebhookBindingStore>();
         }
-        services.AddWorkflowDefinitionFileSource(options =>
-        {
-            options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));
-            options.WorkflowDirectories.Add(AevatarPaths.RepoRootWorkflows);
-            options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
-            options.WorkflowDirectories.Add(AevatarPaths.Workflows);
-            options.DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override;
-        });
         services.AddWorkflowInfrastructure(
             options => configuration.GetSection("WorkflowRunReportExport").Bind(options),
             configuration);

@@ -189,7 +189,21 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             ToStepControlResult(document.LatestStepControlResult),
             document.RecentStepControlResults.Select(result => ToStepControlResult(result)!).ToArray(),
             ToCanaryEffectFault(document.CanaryEffectFault),
-            ToContextAttachments(document.ContextAttachments));
+            ToContextAttachments(document.ContextAttachments),
+            ToPendingWorkflowSignal(document.PendingWorkflowSignal));
+
+    private static NyxIdChatPendingWorkflowSignalSnapshot? ToPendingWorkflowSignal(
+        NyxIdChatConversationPendingWorkflowSignalDocument? signal) =>
+        signal is null
+            ? null
+            : new NyxIdChatPendingWorkflowSignalSnapshot(
+                signal.ActorId,
+                signal.RunId,
+                signal.SignalName,
+                NullIfEmpty(signal.StepId),
+                NullIfEmpty(signal.Prompt),
+                signal.TimeoutMs,
+                ToDateTimeOffset(signal.ObservedAt));
 
     private static IReadOnlyList<NyxIdChatConversationContextAttachmentSnapshot> ToContextAttachments(
         IEnumerable<NyxIdChatConversationContextAttachmentDocument> attachments) =>

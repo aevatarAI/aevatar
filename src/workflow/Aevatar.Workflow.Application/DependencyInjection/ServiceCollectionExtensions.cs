@@ -170,6 +170,7 @@ public static class ServiceCollectionExtensions
                 sp.GetService<IWorkflowChatHistoryCreateRecoveryReadPort>(),
                 sp.GetRequiredService<WorkflowRunBehaviorOptions>(),
                 sp.GetService<IWorkflowExecutionCurrentStateQueryPort>(),
+                sp.GetService<IWorkflowExecutionQueryApplicationService>(),
                 sp.GetService<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(),
                 sp.GetService<ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>>()));
         services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();

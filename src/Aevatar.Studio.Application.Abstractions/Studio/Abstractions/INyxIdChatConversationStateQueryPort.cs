@@ -129,7 +129,17 @@ public sealed record NyxIdChatConversationStateSnapshot(
     NyxIdChatStepControlResultSnapshot? LatestStepControlResult = null,
     IReadOnlyList<NyxIdChatStepControlResultSnapshot>? RecentStepControlResults = null,
     NyxIdChatCanaryEffectFaultSnapshot? CanaryEffectFault = null,
-    IReadOnlyList<NyxIdChatConversationContextAttachmentSnapshot>? ContextAttachments = null);
+    IReadOnlyList<NyxIdChatConversationContextAttachmentSnapshot>? ContextAttachments = null,
+    NyxIdChatPendingWorkflowSignalSnapshot? PendingWorkflowSignal = null);
+
+public sealed record NyxIdChatPendingWorkflowSignalSnapshot(
+    string ActorId,
+    string RunId,
+    string SignalName,
+    string? StepId,
+    string? Prompt,
+    long TimeoutMs,
+    DateTimeOffset? ObservedAt);
 
 public sealed record NyxIdChatCanaryEffectFaultSnapshot(
     string ArmId,

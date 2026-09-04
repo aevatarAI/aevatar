@@ -42,14 +42,14 @@ steps:
     type: assign
     parameters:
       target: dinner_date_context
-      value: '{"task_id":"${json(steps.capture_user_choice.json.task_id)}","raw_user_request":"${json(steps.capture_user_choice.json.raw_user_request)}","participant":"${json(steps.capture_user_choice.json.participant)}","window":"${json(steps.capture_user_choice.json.window)}","party_size":${if(isBlank(steps.capture_user_choice.json.party_size), "null", steps.capture_user_choice.json.party_size)},"day":"${json(steps.capture_user_choice.json.day)}","time":"${json(steps.capture_user_choice.json.time)}","location":"${json(steps.capture_user_choice.json.location)}","cuisines":${if(isBlank(steps.capture_user_choice.json.cuisines), "null", steps.capture_user_choice.json.cuisines)},"restaurant_type":"${json(steps.capture_user_choice.json.restaurant_type)}","phone_number":"${json(steps.capture_user_choice.json.phone_number)}","budget_cap":${if(isBlank(steps.capture_user_choice.json.budget_cap), "null", steps.capture_user_choice.json.budget_cap)},"policy":${if(isBlank(steps.capture_user_choice.json.policy), "null", steps.capture_user_choice.json.policy)},"mode":"mock","missing_fields":${if(isBlank(steps.capture_user_choice.json.missing_fields), "[]", steps.capture_user_choice.json.missing_fields)}}'
+      value: '{"task_id":"${json(steps.capture_user_choice.json.task_id)}","raw_user_request":"${json(if(isBlank(steps.capture_user_choice.json.raw_user_request), if(isBlank(steps.capture_user_choice.json.request), steps.capture_user_choice.output, steps.capture_user_choice.json.request), steps.capture_user_choice.json.raw_user_request))}","participant":"${json(if(isBlank(steps.capture_user_choice.json.participant), steps.capture_user_choice.json.companion_name, steps.capture_user_choice.json.participant))}","window":"${json(steps.capture_user_choice.json.window)}","party_size":${if(isBlank(steps.capture_user_choice.json.party_size), "null", steps.capture_user_choice.json.party_size)},"day":"${json(if(isBlank(steps.capture_user_choice.json.day), steps.capture_user_choice.json.date, steps.capture_user_choice.json.day))}","time":"${json(steps.capture_user_choice.json.time)}","location":"${json(if(isBlank(steps.capture_user_choice.json.location), steps.capture_user_choice.json.location_context, steps.capture_user_choice.json.location))}","cuisines":${if(isBlank(steps.capture_user_choice.json.cuisines), if(isBlank(steps.capture_user_choice.json.preferred_cuisines), "null", steps.capture_user_choice.json.preferred_cuisines), steps.capture_user_choice.json.cuisines)},"restaurant_type":"${json(steps.capture_user_choice.json.restaurant_type)}","phone_number":"${json(if(isBlank(steps.capture_user_choice.json.phone_number), steps.capture_user_choice.json.contact_phone_number, steps.capture_user_choice.json.phone_number))}","budget_cap":${if(isBlank(steps.capture_user_choice.json.budget_cap), "null", steps.capture_user_choice.json.budget_cap)},"policy":${if(isBlank(steps.capture_user_choice.json.policy), "null", steps.capture_user_choice.json.policy)},"search_query":"${json(if(isBlank(steps.capture_user_choice.json.search_query), if(isBlank(steps.capture_user_choice.json.location), if(isBlank(steps.capture_user_choice.json.location_context), if(isBlank(steps.capture_user_choice.json.request), steps.capture_user_choice.output, steps.capture_user_choice.json.request), steps.capture_user_choice.json.location_context), steps.capture_user_choice.json.location), steps.capture_user_choice.json.search_query))}","mode":"mock","missing_fields":${if(isBlank(steps.capture_user_choice.json.missing_fields), "[]", steps.capture_user_choice.json.missing_fields)}}'
     next: discover_restaurant_candidates
 
   - id: discover_restaurant_candidates
     type: assign
     parameters:
       target: mock_restaurant_candidates
-      value: '{"source":"mock_catalog","query":"${json(steps.capture_user_choice.json.search_query)}","results":[{"name":"Pasta Bar","url":"https://example.local/restaurants/pasta-bar","note":"Intimate Italian counter dining near Keong Saik; suitable for a romantic dinner under the requested budget if ordering selectively."},{"name":"Tipo Pasta Bar","url":"https://example.local/restaurants/tipo-pasta-bar","note":"Budget-safer Italian option near the requested area with casual date-night fit."},{"name":"Kamoshita","url":"https://example.local/restaurants/kamoshita","note":"Cozy Japanese dinner option near Duxton and Tanjong Pagar with moderate ordering."}]}'
+      value: '{"source":"mock_catalog","query":"${json(steps.initialize_context.json.search_query)}","results":[{"name":"Pasta Bar","url":"https://example.local/restaurants/pasta-bar","note":"Intimate Italian counter dining near Keong Saik; suitable for a romantic dinner under the requested budget if ordering selectively."},{"name":"Tipo Pasta Bar","url":"https://example.local/restaurants/tipo-pasta-bar","note":"Budget-safer Italian option near the requested area with casual date-night fit."},{"name":"Kamoshita","url":"https://example.local/restaurants/kamoshita","note":"Cozy Japanese dinner option near Duxton and Tanjong Pagar with moderate ordering."}]}'
     next: build_shortlist_from_candidates
 
   - id: build_shortlist_from_candidates
@@ -91,7 +91,7 @@ steps:
     parameters:
       event_type: "dinner_date.options_shown"
       payload: "${steps.build_shortlist_from_candidates.output}"
-    next: normalize_user_choice
+    next: wait_for_user_choice_timeout
 
   - id: normalize_user_choice
     type: llm_call
@@ -99,8 +99,8 @@ steps:
     parameters:
       prompt_prefix: >-
         Available options JSON: ${steps.build_shortlist_from_candidates.output}.
-        Raw user input: ${steps.capture_user_choice.output}.
-        Normalize the raw user input to one workflow choice key. Ignore the workflow state JSON below unless it helps with context:
+        User choice signal payload: ${steps.wait_for_user_choice_timeout.output}.
+        Normalize the signal payload to one workflow choice key. Ignore the workflow state JSON below unless it helps with context:
     next: route_user_choice_before_timeout
 
   - id: route_user_choice_before_timeout
@@ -130,7 +130,7 @@ steps:
     idempotency_key: "${run_id}:hold:option_1"
     parameters:
       target: selected_only_hold
-      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${json(steps.build_shortlist_from_candidates.json.option_1_name)}","venue_id":"option_1","source_url":"${json(steps.build_shortlist_from_candidates.json.option_1_url)}","raw_user_input":"${json(steps.capture_user_choice.output)}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-option-1","elevenlabs_transcript":"mock-transcript-hold-option-1","confirmed_time":"19:30","allergy_answer":"availability and allergy notes verified for selected venue","payment_requested":false}'
+      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${json(steps.build_shortlist_from_candidates.json.option_1_name)}","venue_id":"option_1","source_url":"${json(steps.build_shortlist_from_candidates.json.option_1_url)}","raw_user_input":"${json(steps.wait_for_user_choice_timeout.output)}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-option-1","elevenlabs_transcript":"mock-transcript-hold-option-1","confirmed_time":"19:30","allergy_answer":"availability and allergy notes verified for selected venue","payment_requested":false}'
     next: verify_selected_hold_option_1
 
   - id: verify_selected_hold_option_1
@@ -159,7 +159,7 @@ steps:
     idempotency_key: "${run_id}:hold:option_2"
     parameters:
       target: selected_only_hold
-      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${json(steps.build_shortlist_from_candidates.json.option_2_name)}","venue_id":"option_2","source_url":"${json(steps.build_shortlist_from_candidates.json.option_2_url)}","raw_user_input":"${json(steps.capture_user_choice.output)}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-option-2","elevenlabs_transcript":"mock-transcript-hold-option-2","confirmed_time":"19:30","allergy_answer":"availability and allergy notes verified for selected venue","payment_requested":false}'
+      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${json(steps.build_shortlist_from_candidates.json.option_2_name)}","venue_id":"option_2","source_url":"${json(steps.build_shortlist_from_candidates.json.option_2_url)}","raw_user_input":"${json(steps.wait_for_user_choice_timeout.output)}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-option-2","elevenlabs_transcript":"mock-transcript-hold-option-2","confirmed_time":"19:30","allergy_answer":"availability and allergy notes verified for selected venue","payment_requested":false}'
     next: verify_selected_hold_option_2
 
   - id: verify_selected_hold_option_2
@@ -188,7 +188,7 @@ steps:
     idempotency_key: "${run_id}:hold:option_3"
     parameters:
       target: selected_only_hold
-      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${json(steps.build_shortlist_from_candidates.json.option_3_name)}","venue_id":"option_3","source_url":"${json(steps.build_shortlist_from_candidates.json.option_3_url)}","raw_user_input":"${json(steps.capture_user_choice.output)}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-option-3","elevenlabs_transcript":"mock-transcript-hold-option-3","confirmed_time":"20:00","allergy_answer":"availability and allergy notes verified for selected venue","payment_requested":false}'
+      value: '{"mocked_services":["api-twilio","api-elevenlabs","restaurant-phone"],"venue":"${json(steps.build_shortlist_from_candidates.json.option_3_name)}","venue_id":"option_3","source_url":"${json(steps.build_shortlist_from_candidates.json.option_3_url)}","raw_user_input":"${json(steps.wait_for_user_choice_timeout.output)}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-option-3","elevenlabs_transcript":"mock-transcript-hold-option-3","confirmed_time":"20:00","allergy_answer":"availability and allergy notes verified for selected venue","payment_requested":false}'
     next: verify_selected_hold_option_3
 
   - id: verify_selected_hold_option_3
@@ -213,10 +213,15 @@ steps:
     next: ""
 
   - id: wait_for_user_choice_timeout
-    type: delay
+    type: wait_signal
     parameters:
-      duration_ms: "10000"
-    next: mark_silence_timeout
+      signal_name: "dinner_date_user_choice"
+      prompt: "Please choose one dinner option before automatic holds. 1. ${json(steps.build_shortlist_from_candidates.json.option_1_name)} — ${json(steps.build_shortlist_from_candidates.json.option_1_note)} ${json(steps.build_shortlist_from_candidates.json.option_1_url)} 2. ${json(steps.build_shortlist_from_candidates.json.option_2_name)} — ${json(steps.build_shortlist_from_candidates.json.option_2_note)} ${json(steps.build_shortlist_from_candidates.json.option_2_url)} 3. ${json(steps.build_shortlist_from_candidates.json.option_3_name)} — ${json(steps.build_shortlist_from_candidates.json.option_3_note)} ${json(steps.build_shortlist_from_candidates.json.option_3_url)}"
+      timeout_ms: "10000"
+    on_error:
+      strategy: fallback
+      fallback_step: mark_silence_timeout
+    next: normalize_user_choice
 
   - id: mark_silence_timeout
     type: assign
@@ -260,7 +265,7 @@ steps:
     type: wait_signal
     parameters:
       signal_name: "dinner_date_user_choice_after_timeout"
-      prompt: "Waiting for user to choose one held dinner option"
+      prompt: "Three venues are held after timeout. Please choose one held dinner option. 1. ${json(steps.build_shortlist_from_candidates.json.option_1_name)} — ${json(steps.build_shortlist_from_candidates.json.option_1_note)} ${json(steps.build_shortlist_from_candidates.json.option_1_url)} 2. ${json(steps.build_shortlist_from_candidates.json.option_2_name)} — ${json(steps.build_shortlist_from_candidates.json.option_2_note)} ${json(steps.build_shortlist_from_candidates.json.option_2_url)} 3. ${json(steps.build_shortlist_from_candidates.json.option_3_name)} — ${json(steps.build_shortlist_from_candidates.json.option_3_note)} ${json(steps.build_shortlist_from_candidates.json.option_3_url)}"
       timeout_ms: "600000"
     next: normalize_post_timeout_choice
 
@@ -308,7 +313,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","kept":"${json(steps.hold_candidate_option_1.json.venue)}","kept_option":"option_1","released":${steps.release_unselected_after_confirm_option_1.json.released},"released_options":${steps.release_unselected_after_confirm_option_1.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
+      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","summary":"${json(steps.hold_candidate_option_1.json.venue)} is selected. Released ${json(steps.hold_candidate_option_2.json.venue)} and ${json(steps.hold_candidate_option_3.json.venue)}.","kept":"${json(steps.hold_candidate_option_1.json.venue)}","kept_option":"option_1","released":${steps.release_unselected_after_confirm_option_1.json.released},"released_options":${steps.release_unselected_after_confirm_option_1.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
     next: ""
 
   - id: release_unselected_after_confirm_option_2
@@ -323,7 +328,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","kept":"${json(steps.hold_candidate_option_2.json.venue)}","kept_option":"option_2","released":${steps.release_unselected_after_confirm_option_2.json.released},"released_options":${steps.release_unselected_after_confirm_option_2.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
+      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","summary":"${json(steps.hold_candidate_option_2.json.venue)} is selected. Released ${json(steps.hold_candidate_option_1.json.venue)} and ${json(steps.hold_candidate_option_3.json.venue)}.","kept":"${json(steps.hold_candidate_option_2.json.venue)}","kept_option":"option_2","released":${steps.release_unselected_after_confirm_option_2.json.released},"released_options":${steps.release_unselected_after_confirm_option_2.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
     next: ""
 
   - id: release_unselected_after_confirm_option_3
@@ -338,7 +343,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","kept":"${json(steps.hold_candidate_option_3.json.venue)}","kept_option":"option_3","released":${steps.release_unselected_after_confirm_option_3.json.released},"released_options":${steps.release_unselected_after_confirm_option_3.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
+      value: '{"workflow_status":"completed","path":"timeout_auto_hold_then_user_selected","summary":"${json(steps.hold_candidate_option_3.json.venue)} is selected. Released ${json(steps.hold_candidate_option_1.json.venue)} and ${json(steps.hold_candidate_option_2.json.venue)}.","kept":"${json(steps.hold_candidate_option_3.json.venue)}","kept_option":"option_3","released":${steps.release_unselected_after_confirm_option_3.json.released},"released_options":${steps.release_unselected_after_confirm_option_3.json.released_options},"money_spent":false,"success_contract":{"timeout_auto_holds_all_three_venues":true,"post_timeout_choice_releases_unselected_venues":true,"money_spent":false}}'
     next: ""
 
   - id: final_artifact_waiting_after_holds

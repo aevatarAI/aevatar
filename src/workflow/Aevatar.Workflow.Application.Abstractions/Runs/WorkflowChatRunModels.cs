@@ -131,8 +131,10 @@ public sealed record WorkflowChatConversationIntent(
     public static WorkflowChatConversationIntent None() =>
         new(WorkflowChatConversationIntentKind.None);
 
-    public static WorkflowChatConversationIntent Create() =>
-        new(WorkflowChatConversationIntentKind.Create);
+    public static WorkflowChatConversationIntent Create(string? conversationId = null) =>
+        new(
+            WorkflowChatConversationIntentKind.Create,
+            string.IsNullOrWhiteSpace(conversationId) ? null : conversationId.Trim());
 
     public static WorkflowChatConversationIntent Continue(
         string conversationId,

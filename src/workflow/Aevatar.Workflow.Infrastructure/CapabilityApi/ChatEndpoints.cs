@@ -70,6 +70,36 @@ public static class WorkflowCapabilityEndpoints
             http.RequestServices.GetRequiredService<WorkflowMultipartChatRequestParser>(),
             ct);
 
+    public static async Task HandleHttpChat(
+        HttpContext http,
+        HttpChatInput input,
+        IWorkflowChatRunInteractionPort chatRunService,
+        CancellationToken ct = default,
+        WorkflowDefinitionBinding? resolvedDefinitionBinding = null)
+    {
+        var scopeResolution = ResolvePostTrustedScope(http);
+        if (!scopeResolution.Succeeded)
+        {
+            await WriteJsonErrorResponseAsync(
+                http,
+                scopeResolution.StatusCode,
+                scopeResolution.Code,
+                scopeResolution.Message,
+                ct);
+            return;
+        }
+
+        await HandleHttpChat(
+                http,
+                input,
+                scopeResolution.ScopeId!,
+                chatRunService,
+                ct,
+                allowEmptyInputForResolvedWorkflowService: resolvedDefinitionBinding != null,
+                resolvedDefinitionBinding: resolvedDefinitionBinding)
+            .ConfigureAwait(false);
+    }
+
     public static ValueTask<ChatRunRequestNormalizationResult> NormalizeChatInputAsync(
         ChatInput input,
         IFileArtifactIngressPort? fileIngressPort,
@@ -358,7 +388,9 @@ public static class WorkflowCapabilityEndpoints
         string trustedScopeId,
         IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
-        IFileArtifactIngressPort? fileIngressPort = null)
+        IFileArtifactIngressPort? fileIngressPort = null,
+        bool allowEmptyInputForResolvedWorkflowService = false,
+        WorkflowDefinitionBinding? resolvedDefinitionBinding = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
@@ -387,6 +419,7 @@ public static class WorkflowCapabilityEndpoints
                 trustedCallerCredential: callerCredential.Credential,
                 cancellationToken: ct,
                 trustedScopeId: trustedScopeId,
+                allowEmptyInputForResolvedWorkflowService: allowEmptyInputForResolvedWorkflowService,
                 trustedNyxIdCredentialSelection: callerCredential.NyxIdCredentialSelection);
             if (!normalizedRequest.Succeeded)
             {
@@ -397,8 +430,11 @@ public static class WorkflowCapabilityEndpoints
                 return;
             }
 
-            var result = await chatRunService.ExecuteAsync(
+            var request = AttachResolvedDefinitionBinding(
                 normalizedRequest.Request!,
+                resolvedDefinitionBinding);
+            var result = await chatRunService.ExecuteAsync(
+                request,
                 async (frame, token) =>
                 {
                     await writer.WriteAsync(frame, token);

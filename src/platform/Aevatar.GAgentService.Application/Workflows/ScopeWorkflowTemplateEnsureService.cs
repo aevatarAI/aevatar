@@ -51,7 +51,10 @@ public sealed class ScopeWorkflowTemplateEnsureService : IScopeWorkflowTemplateE
                 AppId: NormalizeOptional(template.AppId),
                 ServiceId: NormalizeOptional(template.ServiceId),
                 ExposureDesired: template.ExposureDesired,
-                RevisionId: revisionId),
+                RevisionId: revisionId)
+            {
+                CapabilityAdmission = request.CapabilityAdmission,
+            },
             ct).ConfigureAwait(false);
 
         var observed = await WaitForRunnableRevisionAsync(scopeId, workflowId, revisionId, ct).ConfigureAwait(false);

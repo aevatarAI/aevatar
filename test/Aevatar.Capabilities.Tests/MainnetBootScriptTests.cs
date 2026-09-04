@@ -85,6 +85,34 @@ public sealed class MainnetBootScriptTests
     }
 
     [Fact]
+    public void AppSettings_DefaultNyxIdChatProfile_ShouldSealDiningPreferenceMergePrecedence()
+    {
+        var configuration = BuildMainnetConfiguration();
+        var instructions = configuration["AgentProfiles:SystemDefaultNyxIdChat:Instructions"];
+
+        instructions.Should().Contain("current user message always overrides recovered defaults");
+        instructions.Should().Contain("Interpret recovered context semantically against the selected workflow's expected input");
+        instructions.Should().Contain("recovered context fills only missing task inputs");
+        instructions.Should().Contain("asks the user only for inputs still missing");
+        instructions.Should().Contain("any available current-user read-only profile, preference, or context tool that is relevant");
+        instructions.Should().Contain("dinner reservation or dinner date requests");
+        instructions.Should().Contain("instead of asking for planning details up front");
+        instructions.Should().Contain("workflow start dispatcher may enrich a sparse JSON object");
+        instructions.Should().Contain("one companion and no party size");
+        instructions.Should().Contain("published dinner_date input contract");
+        instructions.Should().Contain("Map semantic values from the current request and recovered context into the selected workflow's contract fields");
+        instructions.Should().Contain("preserve nested contract object structure only when that nesting exists in the published contract");
+        instructions.Should().Contain("do not create new grouping objects outside the contract shape");
+        instructions.Should().Contain("do not wrap them in a new schema");
+        instructions.Should().NotContain("home_location");
+        instructions.Should().NotContain("preferred_cuisines");
+        instructions.Should().NotContain("contact_phone_number");
+        instructions.Should().NotContain("raw_user_request");
+        instructions.Should().NotContain("restaurant_type");
+        instructions.Should().NotContain("preference_context_source_tools");
+    }
+
+    [Fact]
     public async Task BootScript_LocalMode_ShouldPassCompleteDevelopmentStartupBoundary()
     {
         var repoRoot = FindRepoRoot();

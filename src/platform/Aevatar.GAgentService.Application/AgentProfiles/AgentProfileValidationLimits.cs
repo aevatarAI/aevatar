@@ -19,11 +19,11 @@ public sealed class AgentProfileValidationLimits
     {
         ArgumentNullException.ThrowIfNull(runtimeProfile);
         var diagnostics = new List<AgentProfileSealingDiagnostic>();
-        if (runtimeProfile.Members.Count is < 1 or > MaximumMembers)
+        if (runtimeProfile.Members.Count > MaximumMembers)
             diagnostics.Add(new(
                 "PROFILE_MEMBER_LIMIT_INVALID",
                 "runtimeProfile.members",
-                $"Profile members must contain between 1 and {MaximumMembers} entries."));
+                $"Profile members must contain at most {MaximumMembers} entries."));
         if (runtimeProfile.MaxPlanSteps != RequiredMaxPlanSteps)
             diagnostics.Add(new(
                 "PROFILE_MAX_PLAN_STEPS_INVALID",
