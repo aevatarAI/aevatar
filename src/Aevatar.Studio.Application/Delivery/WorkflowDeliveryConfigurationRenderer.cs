@@ -109,13 +109,12 @@ public sealed class WorkflowDeliveryConfigurationRenderer : IWorkflowDeliveryCon
         }
 
         var resolvedConnections = ResolveConnections(package, connectionReferences);
-        foreach (var (slotKey, userServiceId) in resolvedConnections)
+        foreach (var slot in package.ConnectionSlots)
         {
-            var slot = package.ConnectionSlots.Single(item => string.Equals(item.Key, slotKey, StringComparison.Ordinal));
             var yamlNode = ResolveYamlPointer(stream.Documents[0].RootNode, slot.YamlPointer);
             if (yamlNode is not YamlScalarNode scalar)
                 throw InvalidPointer(slot.Key);
-            scalar.Value = userServiceId;
+            scalar.Value = resolvedConnections.GetValueOrDefault(slot.Key) ?? string.Empty;
             scalar.Style = ScalarStyle.Plain;
         }
 

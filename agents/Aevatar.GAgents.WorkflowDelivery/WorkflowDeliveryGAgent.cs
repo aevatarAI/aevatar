@@ -968,6 +968,9 @@ public sealed class WorkflowDeliveryGAgent
             throw new InvalidOperationException("workflow delivery connection slot keys must be unique.");
         if (package.ConnectionSlots.Select(x => x.YamlPointer).Distinct(StringComparer.Ordinal).Count() != package.ConnectionSlots.Count)
             throw new InvalidOperationException("workflow delivery connection slot yaml pointers must be unique.");
+        var variableYamlPointers = package.VariableSchema.Select(x => x.YamlPointer).ToHashSet(StringComparer.Ordinal);
+        if (package.ConnectionSlots.Any(x => variableYamlPointers.Contains(x.YamlPointer)))
+            throw new InvalidOperationException("workflow delivery connection slot yaml pointers must not overlap variable yaml pointers.");
     }
 
     private void ValidateInstallation(StartWorkflowInstallationCommand command)

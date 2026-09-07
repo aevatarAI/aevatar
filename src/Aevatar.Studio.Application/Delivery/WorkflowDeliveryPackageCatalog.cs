@@ -202,6 +202,9 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
             throw new InvalidOperationException("Delivery package connection slot keys must be unique.");
         if (connectionSlots.Select(static value => value.YamlPointer).Distinct(StringComparer.Ordinal).Count() != connectionSlots.Length)
             throw new InvalidOperationException("Delivery package connection slot yaml pointers must be unique.");
+        var variableYamlPointers = variables.Select(static value => value.YamlPointer).ToHashSet(StringComparer.Ordinal);
+        if (connectionSlots.Any(value => variableYamlPointers.Contains(value.YamlPointer)))
+            throw new InvalidOperationException("Delivery package connection slot yaml pointers must not overlap variable yaml pointers.");
 
         var acceptance = options.Acceptance ?? throw new InvalidOperationException(
             "Delivery package acceptance policy is required.");

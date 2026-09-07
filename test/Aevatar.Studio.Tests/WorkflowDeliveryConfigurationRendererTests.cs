@@ -132,6 +132,30 @@ public sealed class WorkflowDeliveryConfigurationRendererTests
     }
 
     [Fact]
+    public void Render_WhenOptionalConnectionSlotIsMissing_ShouldClearPackageDefault()
+    {
+        var package = Package();
+        package.ConnectionSlots[0].Required = false;
+        var renderer = new WorkflowDeliveryConfigurationRenderer();
+
+        var result = renderer.Render(
+            package,
+            new Dictionary<string, JsonElement>
+            {
+                ["threshold"] = Json("25"),
+            },
+            null);
+
+        result.ConnectionReferences.Should().BeEmpty();
+        var root = ParseRoot(result.ResolvedYaml);
+        var steps = (YamlSequenceNode)Child(root, "steps");
+        var call = (YamlMappingNode)steps.Children[1];
+        var capability = (YamlMappingNode)Child(call, "capability");
+        var request = (YamlMappingNode)Child(capability, "nyxid_request");
+        Scalar(request, "user_service_id").Value.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Render_ShouldResolveMultipleConnectionSlotsByDeclaredYamlPointers()
     {
         const string sourceYaml = """

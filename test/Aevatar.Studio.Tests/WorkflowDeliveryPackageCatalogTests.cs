@@ -250,6 +250,19 @@ public sealed class WorkflowDeliveryPackageCatalogTests
     }
 
     [Fact]
+    public async Task StartupProbe_WhenConnectionSlotYamlPointerOverlapsVariable_ShouldFailHostStartup()
+    {
+        var definition = Package("workflow-alpha");
+        definition.ConnectionSlots[0].YamlPointer = definition.Variables[0].YamlPointer;
+        var probe = new WorkflowDeliveryPackageCatalogStartupProbe(CreateCatalog([definition]));
+
+        var action = () => probe.StartAsync(CancellationToken.None);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connection slot yaml pointers must not overlap variable yaml pointers*");
+    }
+
+    [Fact]
     public async Task StartupProbe_WhenConfiguredPackageSourceIsMissing_ShouldFailHostStartup()
     {
         var probe = new WorkflowDeliveryPackageCatalogStartupProbe(CreateCatalog(

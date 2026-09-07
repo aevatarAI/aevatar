@@ -119,6 +119,30 @@ public sealed class WorkflowDeliveryServiceTests
     }
 
     [Fact]
+    public async Task PublishAsync_ShouldRenderMultipleCompletedConnectionsIntoProvisionRequest()
+    {
+        var context = new TestContext(
+            DeliveryWithMultipleConnectionSlots(),
+            renderer: new WorkflowDeliveryConfigurationRenderer());
+
+        await context.Service.PublishAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            PublishRequest("digest-alpha", "write"),
+            Caller());
+
+        var workflowYaml = context.Provisioning.PreparationRequests.Should().ContainSingle().Subject.WorkflowYaml;
+        workflowYaml.Should().Contain("user_service_id: user-service-calendar");
+        workflowYaml.Should().Contain("user_service_id: user-service-document");
+        workflowYaml.Should().NotContain("calendar-placeholder");
+        workflowYaml.Should().NotContain("document-placeholder");
+
+        var start = context.Commands.Started.Should().ContainSingle().Subject;
+        start.ConnectionReferences.Should().Contain("calendar", "user-service-calendar");
+        start.ConnectionReferences.Should().Contain("document", "user-service-document");
+    }
+
+    [Fact]
     public async Task PublishAsync_WhenInstallationAlreadyExistsWithDifferentRequest_ShouldConflictBeforePreparation()
     {
         var context = new TestContext();
@@ -1076,6 +1100,66 @@ public sealed class WorkflowDeliveryServiceTests
         };
     }
 
+    private static WorkflowDeliverySnapshot DeliveryWithMultipleConnectionSlots()
+    {
+        const string sourceYaml = """
+            name: workflow-alpha
+            steps:
+              - id: calendar
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: calendar-placeholder
+              - id: document
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: document-placeholder
+            """;
+        var snapshot = DeliverySnapshot();
+        var now = DateTimeOffset.Parse("2026-08-16T01:30:00Z");
+        return snapshot with
+        {
+            Package = snapshot.Package with
+            {
+                SourceYaml = sourceYaml,
+                SourceHash = WorkflowDeliveryPackageCatalog.ComputeHash(sourceYaml),
+                ConnectionSlots =
+                [
+                    new WorkflowDeliveryConnectionSlotDefinition(
+                        "calendar",
+                        "Calendar",
+                        "service-calendar",
+                        true,
+                        "/steps/0/capability/nyxid_request/user_service_id"),
+                    new WorkflowDeliveryConnectionSlotDefinition(
+                        "document",
+                        "Document",
+                        "service-document",
+                        true,
+                        "/steps/1/capability/nyxid_request/user_service_id"),
+                ],
+            },
+            Connections =
+            [
+                new WorkflowDeliveryConnectionSnapshot(
+                    "calendar",
+                    "service-calendar",
+                    string.Empty,
+                    WorkflowDeliveryConnectionStatus.Completed,
+                    "user-service-calendar",
+                    now),
+                new WorkflowDeliveryConnectionSnapshot(
+                    "document",
+                    "service-document",
+                    string.Empty,
+                    WorkflowDeliveryConnectionStatus.Completed,
+                    "user-service-document",
+                    now),
+            ],
+        };
+    }
+
     private static NyxIdUserServiceInventoryItem UserService(
         string userServiceId,
         string instanceSlug = "customer-lark",
@@ -1113,7 +1197,8 @@ public sealed class WorkflowDeliveryServiceTests
             Action<BeginWorkflowDeliveryConnectionMutation, StubQueryPort>? beginProjection = null,
             Action<AttachWorkflowDeliveryConnectionMutation, StubQueryPort>? attachProjection = null,
             Action<StartWorkflowInstallationMutation, StubQueryPort>? startProjection = null,
-            IWorkflowDeliveryPackageCatalog? packageCatalog = null)
+            IWorkflowDeliveryPackageCatalog? packageCatalog = null,
+            IWorkflowDeliveryConfigurationRenderer? renderer = null)
         {
             Queries = new StubQueryPort(snapshot ?? DeliverySnapshot());
             var projector = beginProjection ??
@@ -1130,7 +1215,7 @@ public sealed class WorkflowDeliveryServiceTests
             Provisioning = new RecordingProvisioningService();
             Service = new WorkflowDeliveryService(
                 packageCatalog ?? new UnusedPackageCatalog(),
-                new StubRenderer(),
+                renderer ?? new StubRenderer(),
                 Commands,
                 Queries,
                 connectLinks ?? new UnusedConnectLinkPort(),

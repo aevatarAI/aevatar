@@ -133,6 +133,30 @@ public sealed class WorkflowDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task Create_WhenConnectionSlotYamlPointerOverlapsVariable_ShouldRejectBeforeCommit()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var command = CreateCommandWithConnectionSlot();
+        command.Package.VariableSchema.Add(new WorkflowDeliveryVariableDefinition
+        {
+            Key = "threshold",
+            Label = "Threshold",
+            Description = "Approval threshold",
+            Kind = WorkflowDeliveryVariableKind.Integer,
+            Required = true,
+            YamlPointer = "/steps/0/parameters/value",
+        });
+        command.Package.ConnectionSlots[0].YamlPointer = command.Package.VariableSchema[0].YamlPointer;
+        ResealPackage(command.Package);
+
+        var action = () => agent.HandleCreateAsync(command);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connection slot yaml pointers must not overlap variable yaml pointers*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(0);
+    }
+
+    [Fact]
     public async Task DuplicateCreate_WithDefaultExpiryClockDrift_ShouldKeepFirstExpiryWhileExplicitDriftConflicts()
     {
         var defaultedAgent = await CreateAgentAsync("delivery-defaulted");
