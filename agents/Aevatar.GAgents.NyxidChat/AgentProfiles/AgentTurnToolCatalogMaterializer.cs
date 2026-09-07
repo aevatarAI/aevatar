@@ -89,6 +89,25 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             "aevatar_read_workflow_run_artifact",
         };
 
+    private static readonly IReadOnlySet<string> ScheduledAutomationToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ask_user",
+            "ornn_search_skills",
+            "use_skill",
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+        };
+
+    private static readonly IReadOnlySet<string> ScheduledAutomationExclusiveToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+        };
+
     private readonly IToolSetRegistry _toolSetRegistry;
     private readonly IAgentProfileTurnClassifier _classifier;
     private readonly IExactRemoteSkillFetcher? _exactRemoteSkillFetcher;
@@ -296,7 +315,11 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                         userMessage,
                         available,
                         availableTools,
-                        out var fallbackNames))
+                        out var fallbackNames) ||
+                    TryCreateOrdinaryScheduledAutomationFallbackNames(
+                        userMessage,
+                        available,
+                        out fallbackNames))
                 {
                     return CreatePreparation(
                         sessionId,
@@ -370,7 +393,12 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                     userMessage,
                     available,
                     availableTools,
-                    out var fallbackNames))
+                    out var fallbackNames) ||
+                TryCreateScheduledAutomationFallbackNames(
+                    candidate.IntentId,
+                    userMessage,
+                    available,
+                    out fallbackNames))
             {
                 return CreatePreparation(
                     sessionId,
@@ -997,6 +1025,71 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
     private static bool HasManagedWorkflowExecutionIntent(string userMessage) =>
         HasDiningIntent(userMessage);
 
+    private static bool HasScheduledAutomationIntent(string userMessage)
+    {
+        var tokens = TokenizeSelectionText(userMessage);
+        if (HasAnyToken(
+                tokens,
+                "schedule",
+                "scheduled",
+                "schedules",
+                "recurring",
+                "repeat",
+                "daily",
+                "weekly",
+                "monthly",
+                "hourly",
+                "remind",
+                "reminder",
+                "automation",
+                "automate") ||
+            ContainsAny(
+                userMessage,
+                "定时",
+                "计划",
+                "每天",
+                "每日",
+                "每周",
+                "每月",
+                "每小时",
+                "提醒",
+                "长期跟踪"))
+        {
+            return true;
+        }
+
+        return (HasAnyToken(tokens, "monitor", "watch") || ContainsAny(userMessage, "监控", "跟踪")) &&
+               HasScheduledAutomationContinuationContext(tokens, userMessage);
+    }
+
+    private static bool HasScheduledAutomationContinuationContext(IReadOnlySet<string> tokens, string userMessage) =>
+        HasAnyToken(
+            tokens,
+            "every",
+            "each",
+            "per",
+            "daily",
+            "weekly",
+            "monthly",
+            "hourly",
+            "recurring",
+            "repeat",
+            "continuously",
+            "continual",
+            "ongoing",
+            "longterm") ||
+        ContainsAny(
+            userMessage,
+            "每天",
+            "每日",
+            "每周",
+            "每月",
+            "每小时",
+            "持续",
+            "长期",
+            "定时",
+            "周期");
+
     private static void ApplyProfileTaskRouteIntentFilter(
         string intentId,
         string? userMessage,
@@ -1009,11 +1102,22 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         if (HasManagedWorkflowExecutionIntent(userMessage ?? string.Empty))
         {
             selectedToolNames.Remove("ask_user");
+            selectedToolNames.RemoveWhere(ScheduledAutomationExclusiveToolNames.Contains);
             AddAvailableManagedWorkflowTools(availableToolNames, selectedToolNames);
             return;
         }
 
+        if (HasScheduledAutomationIntent(userMessage ?? string.Empty))
+        {
+            AddAvailableScheduledAutomationTools(availableToolNames, selectedToolNames);
+            selectedToolNames.RemoveWhere(name =>
+                ManagedWorkflowExecutionToolNames.Contains(name) &&
+                !ScheduledAutomationToolNames.Contains(name));
+            return;
+        }
+
         selectedToolNames.RemoveWhere(ManagedWorkflowExecutionToolNames.Contains);
+        selectedToolNames.RemoveWhere(ScheduledAutomationExclusiveToolNames.Contains);
     }
 
     private static bool TryCreateManagedWorkflowFallbackNames(
@@ -1040,6 +1144,23 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         return fallbackNames.Count > 0;
     }
 
+    private static bool TryCreateScheduledAutomationFallbackNames(
+        string intentId,
+        string? userMessage,
+        IReadOnlySet<string> availableToolNames,
+        out HashSet<string> fallbackNames)
+    {
+        fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.Equals(intentId, ProfileTaskRouteIntentId, StringComparison.Ordinal) ||
+            !HasScheduledAutomationIntent(userMessage ?? string.Empty))
+        {
+            return false;
+        }
+
+        AddAvailableScheduledAutomationTools(availableToolNames, fallbackNames);
+        return fallbackNames.Count > 0;
+    }
+
     private static bool TryCreateOrdinaryManagedWorkflowFallbackNames(
         string? userMessage,
         IReadOnlySet<string> availableToolNames,
@@ -1060,11 +1181,35 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         return fallbackNames.Count > 0;
     }
 
+    private static bool TryCreateOrdinaryScheduledAutomationFallbackNames(
+        string? userMessage,
+        IReadOnlySet<string> availableToolNames,
+        out HashSet<string> fallbackNames)
+    {
+        fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!HasScheduledAutomationIntent(userMessage ?? string.Empty))
+            return false;
+
+        AddAvailableScheduledAutomationTools(availableToolNames, fallbackNames);
+        return fallbackNames.Count > 0;
+    }
+
     private static void AddAvailableManagedWorkflowTools(
         IReadOnlySet<string> availableToolNames,
         HashSet<string> selectedToolNames)
     {
         foreach (var name in ManagedWorkflowExecutionToolNames)
+        {
+            if (availableToolNames.Contains(name))
+                selectedToolNames.Add(name);
+        }
+    }
+
+    private static void AddAvailableScheduledAutomationTools(
+        IReadOnlySet<string> availableToolNames,
+        HashSet<string> selectedToolNames)
+    {
+        foreach (var name in ScheduledAutomationToolNames)
         {
             if (availableToolNames.Contains(name))
                 selectedToolNames.Add(name);

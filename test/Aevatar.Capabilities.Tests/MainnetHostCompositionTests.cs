@@ -1141,7 +1141,8 @@ public sealed class MainnetHostCompositionTests
             typeof(OrnnPublishAgentToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
-            typeof(ReadWorkflowRunArtifactToolSource));
+            typeof(ReadWorkflowRunArtifactToolSource),
+            typeof(AgentBuilderToolSource));
         nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source =>
             source is NyxIdConnectedServiceInventoryToolSource);
@@ -1273,6 +1274,12 @@ public sealed class MainnetHostCompositionTests
             .Equal(nyxIdChatToolSources.Select(static source => source.GetType()));
         nyxIdChatDefault.Sources.Should().NotContain(source =>
             source is WorkflowExternalCapabilityAuthoringToolSource);
+        var nyxIdChatDefaultDiscovery = await AgentToolDiscoveryService.Instance.DiscoverAsync(
+            nyxIdChatDefault.Sources,
+            AgentToolExecutionContext.Empty);
+        nyxIdChatDefaultDiscovery.IsSuccess.Should().BeTrue(nyxIdChatDefaultDiscovery.Failure?.Detail);
+        nyxIdChatDefaultDiscovery.Tools.Select(static tool => tool.Name).Should()
+            .ContainSingle(name => name == "scheduled_agent_creator");
 
         var nyxIdConnectedServices = registry.Resolve(ToolSetNames.NyxIdConnectedServices);
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
@@ -1299,6 +1306,7 @@ public sealed class MainnetHostCompositionTests
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
             typeof(ReadWorkflowRunArtifactToolSource),
+            typeof(AgentBuilderToolSource),
             typeof(WorkflowExternalCapabilityAuthoringToolSource));
         nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source =>
