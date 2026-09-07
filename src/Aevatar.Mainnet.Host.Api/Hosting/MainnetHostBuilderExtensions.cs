@@ -656,8 +656,9 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
+                    ResolveAgentBuilderToolSource,
                 ],
-                "Ordinary NyxID Assistant turn surface: safe management reads, admitted request-local connected-service operations, web and Ornn skill search, readiness, typed user input, explicit skill loading, and managed workflow execution with typed observation.");
+                "Ordinary NyxID Assistant turn surface: safe management reads, admitted request-local connected-service operations, web and Ornn skill search, readiness, typed user input, explicit skill loading, managed workflow execution with typed observation, and scheduled automation tools selected only by turn intent.");
             options.AddToolSet(
                 AgentProfilePolicies.NyxIdChatRouteToolSet,
                 [
@@ -707,6 +708,10 @@ public static class MainnetHostBuilderExtensions
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)
         where TSource : class, IAgentToolSource
         => ActivatorUtilities.CreateInstance<TSource>(serviceProvider);
+
+    private static IAgentToolSource ResolveAgentBuilderToolSource(IServiceProvider serviceProvider) =>
+        serviceProvider.GetServices<IAgentToolSource>()
+            .Single(static source => source is AgentBuilderToolSource);
 
     public static WebApplication MapAevatarMainnetHost(this WebApplication app)
     {
