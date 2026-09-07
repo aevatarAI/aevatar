@@ -109,17 +109,14 @@ public sealed class WorkflowDeliveryConfigurationRenderer : IWorkflowDeliveryCon
         }
 
         var resolvedConnections = ResolveConnections(package, connectionReferences);
-        if (resolvedConnections.Count != 0)
+        foreach (var (slotKey, userServiceId) in resolvedConnections)
         {
-            var replacements = ReplaceUserServiceIds(
-                stream.Documents[0].RootNode,
-                resolvedConnections.Values.Single());
-            if (replacements == 0)
-            {
-                throw new WorkflowDeliveryConfigurationException(
-                    "CONNECTION_BINDING_NOT_FOUND",
-                    "The workflow package has no structured user_service_id fields for its connection slot.");
-            }
+            var slot = package.ConnectionSlots.Single(item => string.Equals(item.Key, slotKey, StringComparison.Ordinal));
+            var yamlNode = ResolveYamlPointer(stream.Documents[0].RootNode, slot.YamlPointer);
+            if (yamlNode is not YamlScalarNode scalar)
+                throw InvalidPointer(slot.Key);
+            scalar.Value = userServiceId;
+            scalar.Style = ScalarStyle.Plain;
         }
 
         string resolvedYaml;
@@ -156,8 +153,6 @@ public sealed class WorkflowDeliveryConfigurationRenderer : IWorkflowDeliveryCon
             }
             resolved.Add(slot.Key, raw.Trim());
         }
-        if (resolved.Count > 1)
-            throw new WorkflowDeliveryConfigurationException("MULTIPLE_CONNECTIONS_UNSUPPORTED", "This MVP supports one connection slot per workflow package.");
         return resolved;
     }
 
@@ -258,36 +253,6 @@ public sealed class WorkflowDeliveryConfigurationRenderer : IWorkflowDeliveryCon
             default:
                 throw InvalidPointer(fieldKey);
         }
-    }
-
-    private static int ReplaceUserServiceIds(YamlNode node, string userServiceId)
-    {
-        var count = 0;
-        switch (node)
-        {
-            case YamlMappingNode mapping:
-                foreach (var pair in mapping.Children)
-                {
-                    if (pair.Key is YamlScalarNode key &&
-                        string.Equals(key.Value, "user_service_id", StringComparison.Ordinal) &&
-                        pair.Value is YamlScalarNode value)
-                    {
-                        value.Value = userServiceId;
-                        value.Style = ScalarStyle.Plain;
-                        count++;
-                    }
-                    else
-                    {
-                        count += ReplaceUserServiceIds(pair.Value, userServiceId);
-                    }
-                }
-                break;
-            case YamlSequenceNode sequence:
-                foreach (var child in sequence.Children)
-                    count += ReplaceUserServiceIds(child, userServiceId);
-                break;
-        }
-        return count;
     }
 
     private static string DecodePointerSegment(string value) =>

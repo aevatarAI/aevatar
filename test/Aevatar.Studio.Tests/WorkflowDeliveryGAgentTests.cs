@@ -1392,6 +1392,7 @@ public sealed class WorkflowDeliveryGAgentTests
             Label = "Lark",
             ServiceSlug = "api-lark",
             Required = true,
+            YamlPointer = "/steps/0/capability/nyxid_request/user_service_id",
         });
         command.Package.PackageHash = WorkflowDeliveryConventions.ComputePackageHash(command.Package);
         command.Package.Version = command.Package.PackageHash[..16];
