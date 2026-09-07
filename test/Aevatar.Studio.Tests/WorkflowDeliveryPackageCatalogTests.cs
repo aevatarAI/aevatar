@@ -56,6 +56,7 @@ public sealed class WorkflowDeliveryPackageCatalogTests
         packages.Should().OnlyContain(static package =>
             package.PackageId == package.WorkflowName &&
             package.SourceYaml.Length > 0 &&
+            package.ConnectionSlots.All(slot => slot.YamlPointer == "/steps/0/capability/nyxid_request/user_service_id") &&
             package.AcceptancePolicy.Input.Literals.Fields.ContainsKey("dry_run"));
 
         var parser = new WorkflowParser();
@@ -119,6 +120,7 @@ public sealed class WorkflowDeliveryPackageCatalogTests
         {
             Mutate(package, value => value.VariableSchema[0].Label += " changed"),
             Mutate(package, value => value.ConnectionSlots[0].ServiceSlug += "-changed"),
+            Mutate(package, value => value.ConnectionSlots[0].YamlPointer += "-changed"),
             Mutate(package, value => value.Capabilities.Add("new.capability")),
             Mutate(package, value => value.RiskSummary += " changed"),
             Mutate(package, value => value.ParserDiagnostics.Add("new diagnostic")),
@@ -212,6 +214,19 @@ public sealed class WorkflowDeliveryPackageCatalogTests
 
         await action.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*delivery display name is required*");
+    }
+
+    [Fact]
+    public async Task StartupProbe_WhenConnectionSlotDoesNotDeclareYamlPointer_ShouldFailHostStartup()
+    {
+        var definition = Package("workflow-alpha");
+        definition.ConnectionSlots[0].YamlPointer = " ";
+        var probe = new WorkflowDeliveryPackageCatalogStartupProbe(CreateCatalog([definition]));
+
+        var action = () => probe.StartAsync(CancellationToken.None);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*delivery connection yaml pointer is required*");
     }
 
     [Fact]
@@ -536,6 +551,7 @@ public sealed class WorkflowDeliveryPackageCatalogTests
                     Label = "Provider",
                     ServiceSlug = "provider-alpha",
                     Required = true,
+                    YamlPointer = "/steps/0/capability/nyxid_request/user_service_id",
                 },
             ],
             Acceptance = new WorkflowDeliveryAcceptanceOptions

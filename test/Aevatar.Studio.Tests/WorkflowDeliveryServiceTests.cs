@@ -987,7 +987,8 @@ public sealed class WorkflowDeliveryServiceTests
                         "lark",
                         "Lark",
                         "api-lark",
-                        true),
+                        true,
+                        "/steps/0/capability/nyxid_request/user_service_id"),
                 ],
             },
         };

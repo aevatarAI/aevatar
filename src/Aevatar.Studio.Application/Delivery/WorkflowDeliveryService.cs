@@ -910,7 +910,8 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
                 item.Key,
                 item.Label,
                 item.ServiceSlug,
-                item.Required)).ToArray(),
+                item.Required,
+                item.YamlPointer)).ToArray(),
             package.Capabilities.ToArray(),
             package.RiskSummary,
             package.ParserDiagnostics.ToArray(),
@@ -953,6 +954,7 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             Label = item.Label,
             ServiceSlug = item.ServiceSlug,
             Required = item.Required,
+            YamlPointer = item.YamlPointer,
         }));
         result.Capabilities.Add(package.Capabilities);
         result.ParserDiagnostics.Add(package.ParserDiagnostics);

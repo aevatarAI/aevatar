@@ -835,6 +835,12 @@ public sealed class WorkflowDeliveryGAgent
             string.IsNullOrWhiteSpace(package.AcceptancePolicy.Limitation))
             throw new InvalidOperationException("manual workflow delivery acceptance policy requires a limitation.");
         WorkflowDeliveryConventions.ValidateAcceptanceInput(package.AcceptancePolicy.Input);
+        foreach (var slot in package.ConnectionSlots)
+        {
+            WorkflowDeliveryConventions.NormalizeRequired(slot.Key, "connection_slot.key");
+            WorkflowDeliveryConventions.NormalizeRequired(slot.ServiceSlug, "connection_slot.service_slug");
+            WorkflowDeliveryConventions.NormalizeRequired(slot.YamlPointer, "connection_slot.yaml_pointer");
+        }
         var expectedPackageHash = WorkflowDeliveryConventions.ComputePackageHash(package);
         if (!string.Equals(package.PackageHash, expectedPackageHash, StringComparison.Ordinal))
             throw new InvalidOperationException("workflow delivery package hash does not match its immutable content.");

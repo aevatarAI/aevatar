@@ -92,6 +92,7 @@ message WorkflowDeliveryConnectionSlotDefinition {
   string label = 2;
   string service_slug = 3;
   bool required = 4;
+  string yaml_pointer = 5;
 }
 
 enum WorkflowDeliveryAcceptanceDateProjection {
