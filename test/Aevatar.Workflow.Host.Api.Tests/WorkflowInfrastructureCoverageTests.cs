@@ -998,7 +998,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void AddWorkflowCapabilityServices_ShouldNotRegisterStartupWorkflowFileSourceByDefault()
+    public void AddWorkflowCapabilityServices_ShouldRegisterStartupWorkflowFileSourceByDefault()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -1010,8 +1010,8 @@ public sealed class WorkflowInfrastructureCoverageTests
         var options = provider.GetRequiredService<IOptions<WorkflowDefinitionFileSourceOptions>>().Value;
 
         options.WorkflowDirectories.Should().BeEmpty();
-        services.Should().NotContain(x => x.ServiceType == typeof(WorkflowDefinitionFileLoader));
-        services.Should().NotContain(x => x.ServiceType == typeof(IHostedService) &&
+        services.Should().Contain(x => x.ServiceType == typeof(WorkflowDefinitionFileLoader));
+        services.Should().Contain(x => x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
     }
 
