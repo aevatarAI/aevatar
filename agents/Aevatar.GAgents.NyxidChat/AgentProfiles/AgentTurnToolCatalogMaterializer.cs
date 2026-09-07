@@ -97,6 +97,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             "use_skill",
             "ornn_publish_skill",
             "scheduled_agent_creator",
+            "agent_builder",
         };
 
     private static readonly IReadOnlySet<string> ScheduledAutomationExclusiveToolNames =
@@ -104,6 +105,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         {
             "ornn_publish_skill",
             "scheduled_agent_creator",
+            "agent_builder",
         };
 
     private readonly IToolSetRegistry _toolSetRegistry;
@@ -1026,36 +1028,67 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
     private static bool HasScheduledAutomationIntent(string userMessage)
     {
         var tokens = TokenizeSelectionText(userMessage);
-        return HasAnyToken(
-                   tokens,
-                   "schedule",
-                   "scheduled",
-                   "schedules",
-                   "recurring",
-                   "repeat",
-                   "daily",
-                   "weekly",
-                   "monthly",
-                   "hourly",
-                   "remind",
-                   "reminder",
-                   "monitor",
-                   "watch",
-                   "automation",
-                   "automate") ||
-               ContainsAny(
-                   userMessage,
-                   "定时",
-                   "计划",
-                   "每天",
-                   "每日",
-                   "每周",
-                   "每月",
-                   "每小时",
-                   "提醒",
-                   "监控",
-                   "长期跟踪");
+        if (HasAnyToken(
+                tokens,
+                "schedule",
+                "scheduled",
+                "schedules",
+                "recurring",
+                "repeat",
+                "daily",
+                "weekly",
+                "monthly",
+                "hourly",
+                "remind",
+                "reminder",
+                "automation",
+                "automate") ||
+            ContainsAny(
+                userMessage,
+                "定时",
+                "计划",
+                "每天",
+                "每日",
+                "每周",
+                "每月",
+                "每小时",
+                "提醒",
+                "长期跟踪"))
+        {
+            return true;
+        }
+
+        return (HasAnyToken(tokens, "monitor", "watch") || ContainsAny(userMessage, "监控", "跟踪")) &&
+               HasScheduledAutomationContinuationContext(tokens, userMessage);
     }
+
+    private static bool HasScheduledAutomationContinuationContext(IReadOnlySet<string> tokens, string userMessage) =>
+        HasAnyToken(
+            tokens,
+            "every",
+            "each",
+            "per",
+            "daily",
+            "weekly",
+            "monthly",
+            "hourly",
+            "recurring",
+            "repeat",
+            "continuously",
+            "continual",
+            "ongoing",
+            "longterm") ||
+        ContainsAny(
+            userMessage,
+            "每天",
+            "每日",
+            "每周",
+            "每月",
+            "每小时",
+            "持续",
+            "长期",
+            "定时",
+            "周期");
 
     private static void ApplyProfileTaskRouteIntentFilter(
         string intentId,
@@ -1069,6 +1102,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         if (HasManagedWorkflowExecutionIntent(userMessage ?? string.Empty))
         {
             selectedToolNames.Remove("ask_user");
+            selectedToolNames.RemoveWhere(ScheduledAutomationExclusiveToolNames.Contains);
             AddAvailableManagedWorkflowTools(availableToolNames, selectedToolNames);
             return;
         }

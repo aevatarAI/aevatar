@@ -711,6 +711,11 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         IAgentTool[] tools =
         [
             new TestTool("ask_user"),
+            new TestTool("use_skill"),
+            new TestTool("ornn_search_skills"),
+            new TestTool("ornn_publish_skill"),
+            new TestTool("scheduled_agent_creator"),
+            new TestTool("agent_builder"),
             new TestTool("aevatar_start_workflow"),
             new TestTool("aevatar_observe_run"),
             new TestTool("aevatar_read_workflow_run_artifact"),
@@ -736,6 +741,11 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         profile.MaximumToolPolicy.ToolNames.Clear();
         profile.MaximumToolPolicy.ToolNames.Add([
             "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
             "aevatar_start_workflow",
             "aevatar_observe_run",
             "aevatar_read_workflow_run_artifact",
@@ -746,6 +756,9 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         profile.RecoveryToolPolicy.ToolNames.Clear();
         profile.RecoveryToolPolicy.ToolNames.Add([
             "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+            "scheduled_agent_creator",
             "aevatar_observe_run",
             "aevatar_read_workflow_run_artifact",
         ]);
@@ -783,6 +796,8 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         preparation.Authority.CandidateRoute!.IntentId.Should()
             .Be(AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
+            "use_skill",
+            "ornn_search_skills",
             "aevatar_start_workflow",
             "aevatar_observe_run",
             "aevatar_read_workflow_run_artifact",
@@ -790,6 +805,11 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             "nyxop_current_user_dining_context_read");
         preparation.Authority.AuthorityCeilingToolNames.Should().NotContain(
             "nyxop_current_user_dining_context_write");
+        preparation.Authority.AuthorityCeilingToolNames.Should().NotContain([
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+        ]);
         materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             preparation.Authority.AuthorityCeilingToolNames);
         materialization.Catalog.ExactTools.Keys.Should().BeEquivalentTo(
@@ -811,6 +831,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             new TestTool("ornn_search_skills"),
             new TestTool("ornn_publish_skill"),
             new TestTool("scheduled_agent_creator"),
+            new TestTool("agent_builder"),
             new TestTool("aevatar_start_workflow"),
             new TestTool("aevatar_observe_run"),
             new TestTool("aevatar_read_workflow_run_artifact"),
@@ -826,6 +847,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             "ornn_search_skills",
             "ornn_publish_skill",
             "scheduled_agent_creator",
+            "agent_builder",
             "aevatar_start_workflow",
             "aevatar_observe_run",
             "aevatar_read_workflow_run_artifact",
@@ -874,6 +896,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         preparation.Authority.AuthorityCeilingToolNames.Should().NotContain([
             "ornn_publish_skill",
             "scheduled_agent_creator",
+            "agent_builder",
             "aevatar_start_workflow",
             "aevatar_observe_run",
             "aevatar_read_workflow_run_artifact",
@@ -883,6 +906,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         materialization.Catalog.FinalAllowedToolNames.Should().NotContain([
             "ornn_publish_skill",
             "scheduled_agent_creator",
+            "agent_builder",
             "aevatar_start_workflow",
             "aevatar_observe_run",
             "aevatar_read_workflow_run_artifact",
@@ -899,6 +923,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             new TestTool("ornn_search_skills"),
             new TestTool("ornn_publish_skill"),
             new TestTool("scheduled_agent_creator"),
+            new TestTool("agent_builder"),
             new TestTool("aevatar_start_workflow"),
             new TestTool("aevatar_observe_run"),
             new TestTool("aevatar_read_workflow_run_artifact"),
@@ -914,6 +939,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             "ornn_search_skills",
             "ornn_publish_skill",
             "scheduled_agent_creator",
+            "agent_builder",
             "aevatar_start_workflow",
             "aevatar_observe_run",
             "aevatar_read_workflow_run_artifact",
@@ -962,6 +988,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             "ornn_search_skills",
             "ornn_publish_skill",
             "scheduled_agent_creator",
+            "agent_builder",
             "nyxid_services");
         preparation.Authority.AuthorityCeilingToolNames.Should().NotContain([
             "aevatar_start_workflow",
@@ -971,6 +998,80 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             preparation.Authority.AuthorityCeilingToolNames);
         materialization.Catalog.ExactTools.Keys.Should().Contain("scheduled_agent_creator");
+        materialization.Catalog.ExactTools.Keys.Should().Contain("agent_builder");
+    }
+
+    [Fact]
+    public async Task PrepareNyxIdChatAsync_EmptyMembersAmbiguousWatchRequest_ShouldNotExposeScheduledAutomationTools()
+    {
+        IAgentTool[] tools =
+        [
+            new TestTool("ask_user"),
+            new TestTool("use_skill"),
+            new TestTool("ornn_search_skills"),
+            new TestTool("ornn_publish_skill"),
+            new TestTool("scheduled_agent_creator"),
+            new TestTool("agent_builder"),
+            new TestTool("nyxid_services"),
+        ];
+        var profile = BuildProfile();
+        profile.Instructions = "Use scheduled_agent_creator for recurring tasks and reminders.";
+        profile.Members.Clear();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add([
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+            "nyxid_services",
+        ]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Add([
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+            "scheduled_agent_creator",
+        ]);
+        var sealedProfile = SealProfile(profile);
+        var materializer = NewMaterializer(
+            RegistryWithRoute(tools),
+            new SequencedClassifier(
+                AgentProfileTurnClassificationResult.Matched(
+                    AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+                AgentProfileTurnClassificationResult.Failed("classifier_not_configured")),
+            fetcher: null);
+
+        var preparation = await materializer.PrepareNyxIdChatAsync(
+            sealedProfile,
+            "session-ambiguous-watch-empty-members",
+            "Help me watch a movie tonight.",
+            tools,
+            ToolContext(),
+            llmControl: null,
+            CancellationToken.None);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            sealedProfile,
+            preparation.Authority,
+            accessToken: null,
+            tools,
+            ToolContext(),
+            CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Selected);
+        preparation.Authority.AuthorityCeilingToolNames.Should().Contain([
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+        ]);
+        preparation.Authority.AuthorityCeilingToolNames.Should().NotContain([
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+        ]);
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            preparation.Authority.AuthorityCeilingToolNames);
     }
 
     [Fact]
