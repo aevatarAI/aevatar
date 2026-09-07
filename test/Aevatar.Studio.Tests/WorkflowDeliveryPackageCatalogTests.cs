@@ -230,6 +230,26 @@ public sealed class WorkflowDeliveryPackageCatalogTests
     }
 
     [Fact]
+    public async Task StartupProbe_WhenConnectionSlotYamlPointersAreDuplicated_ShouldFailHostStartup()
+    {
+        var definition = Package("workflow-alpha");
+        definition.ConnectionSlots.Add(new WorkflowDeliveryConnectionSlotOptions
+        {
+            Key = "provider-secondary",
+            Label = "Provider Secondary",
+            ServiceSlug = "provider-beta",
+            Required = true,
+            YamlPointer = definition.ConnectionSlots[0].YamlPointer,
+        });
+        var probe = new WorkflowDeliveryPackageCatalogStartupProbe(CreateCatalog([definition]));
+
+        var action = () => probe.StartAsync(CancellationToken.None);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connection slot yaml pointers must be unique*");
+    }
+
+    [Fact]
     public async Task StartupProbe_WhenConfiguredPackageSourceIsMissing_ShouldFailHostStartup()
     {
         var probe = new WorkflowDeliveryPackageCatalogStartupProbe(CreateCatalog(

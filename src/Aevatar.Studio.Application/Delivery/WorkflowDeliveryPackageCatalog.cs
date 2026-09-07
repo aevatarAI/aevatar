@@ -200,6 +200,8 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
             NormalizeRequired(value.YamlPointer, "delivery connection yaml pointer"))).ToArray();
         if (connectionSlots.Select(static value => value.Key).Distinct(StringComparer.Ordinal).Count() != connectionSlots.Length)
             throw new InvalidOperationException("Delivery package connection slot keys must be unique.");
+        if (connectionSlots.Select(static value => value.YamlPointer).Distinct(StringComparer.Ordinal).Count() != connectionSlots.Length)
+            throw new InvalidOperationException("Delivery package connection slot yaml pointers must be unique.");
 
         var acceptance = options.Acceptance ?? throw new InvalidOperationException(
             "Delivery package acceptance policy is required.");

@@ -111,6 +111,28 @@ public sealed class WorkflowDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task Create_WhenConnectionSlotYamlPointersAreDuplicated_ShouldRejectBeforeCommit()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var command = CreateCommandWithConnectionSlot();
+        command.Package.ConnectionSlots.Add(new WorkflowDeliveryConnectionSlotDefinition
+        {
+            Key = "calendar-secondary",
+            Label = "Calendar Secondary",
+            ServiceSlug = "api-calendar-secondary",
+            Required = true,
+            YamlPointer = command.Package.ConnectionSlots[0].YamlPointer,
+        });
+        ResealPackage(command.Package);
+
+        var action = () => agent.HandleCreateAsync(command);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connection slot yaml pointers must be unique*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(0);
+    }
+
+    [Fact]
     public async Task DuplicateCreate_WithDefaultExpiryClockDrift_ShouldKeepFirstExpiryWhileExplicitDriftConflicts()
     {
         var defaultedAgent = await CreateAgentAsync("delivery-defaulted");

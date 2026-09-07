@@ -966,6 +966,8 @@ public sealed class WorkflowDeliveryGAgent
             throw new InvalidOperationException("workflow delivery variable keys must be unique.");
         if (package.ConnectionSlots.Select(x => x.Key).Distinct(StringComparer.Ordinal).Count() != package.ConnectionSlots.Count)
             throw new InvalidOperationException("workflow delivery connection slot keys must be unique.");
+        if (package.ConnectionSlots.Select(x => x.YamlPointer).Distinct(StringComparer.Ordinal).Count() != package.ConnectionSlots.Count)
+            throw new InvalidOperationException("workflow delivery connection slot yaml pointers must be unique.");
     }
 
     private void ValidateInstallation(StartWorkflowInstallationCommand command)
