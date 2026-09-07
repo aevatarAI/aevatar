@@ -1902,6 +1902,7 @@ public sealed class AevatarInvocationToolSourceTests
                 """
                 {
                   "location": "Shanghai",
+                  "contact_name": "Louis",
                   "cuisines": ["Italian", "Japanese"],
                   "party_size": 2,
                   "budget_cap": "RMB 800",
@@ -1929,6 +1930,7 @@ public sealed class AevatarInvocationToolSourceTests
         using var prompt = JsonDocument.Parse(harness.WorkflowDispatch.Command!.Prompt);
         var root = prompt.RootElement;
         root.GetProperty("location").GetString().Should().Be("Shanghai");
+        root.GetProperty("contact_name").GetString().Should().Be("Louis");
         root.GetProperty("cuisines").EnumerateArray()
             .Select(static item => item.GetString())
             .Should().BeEquivalentTo("Sichuan");

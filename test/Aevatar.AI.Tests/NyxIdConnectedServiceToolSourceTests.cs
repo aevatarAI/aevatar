@@ -502,7 +502,7 @@ public class NyxIdConnectedServiceToolSourceTests
             McpService("aevatar-context", "aevatar", ContextEndpoint("get_api_app_context", "/api/app/context")));
         handler.OpenApiResponsesByPath["/api/v1/proxy/s/user-context-mock/openapi.json"] = CustomOpenApi;
         handler.ProxyResponseBody =
-            """{"preferred_cuisines":["Italian","Japanese"],"budget_cap":200}""";
+            """{"contact_name":"Louis","preferred_cuisines":["Italian","Japanese"],"budget_cap":200}""";
         var source = CreateSource(handler);
         var provider = new NyxIdWorkflowInputPreferenceContextProvider(
             source,
@@ -522,7 +522,8 @@ public class NyxIdConnectedServiceToolSourceTests
         var sourceContext = context.Sources.Should().ContainSingle().Subject;
         sourceContext.OperationId.Should().Be("readDiningProfileContext");
         sourceContext.PathTemplate.Should().Be("/profile/dining");
-        sourceContext.DataJson.Should().Contain("preferred_cuisines");
+        sourceContext.DataJson.Should().Contain("preferred_cuisines")
+            .And.Contain("contact_name");
         handler.ProxyRequests.Should().ContainSingle();
         handler.ProxyRequests.Single().Path.Should().Contain("/profile/dining");
     }

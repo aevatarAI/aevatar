@@ -763,9 +763,10 @@ public sealed class AevatarInvocationDispatcher
             : 0;
 
     private static bool IsDinnerInputFieldName(string fieldName) =>
-        fieldName is "participant" or "window" or "party_size" or "day" or "time" or "location" or
-            "cuisines" or "restaurant_type" or "phone_number" or "budget_cap" or "policy" or
-            "search_query" or "missing_fields";
+        fieldName is "participant" or "contact_name" or "window" or "time_window" or "party_size" or "day" or
+            "time" or "location" or "home_location" or "cuisines" or "preferred_cuisines" or
+            "restaurant_type" or "phone_number" or "restaurant_phone_number" or "budget_cap" or
+            "policy" or "search_query" or "missing_fields";
 
     private static bool IsPresent(JsonElement value) =>
         value.ValueKind switch

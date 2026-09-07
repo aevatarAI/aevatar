@@ -27,6 +27,14 @@ public sealed class NyxIdChatSystemAgentProfileDraftFactoryTests
                     "aevatar_observe_run",
                 },
                 ToolSetRefs = { AgentProfilePolicies.NyxIdChatRouteToolSet },
+                ConnectedServiceSelectors =
+                {
+                    new AgentProfileConnectedServiceSelectorOptions
+                    {
+                        EndpointId = "readDiningProfileContext",
+                        AllowedRisks = { "read_only" },
+                    },
+                },
             },
         };
 
@@ -34,6 +42,8 @@ public sealed class NyxIdChatSystemAgentProfileDraftFactoryTests
 
         draft.RuntimeProfile.MaximumToolPolicy.ToolNames.Should().Contain("aevatar_start_workflow");
         draft.RuntimeProfile.MaximumToolPolicy.ToolSetRefs.Should().Contain(AgentProfilePolicies.NyxIdChatRouteToolSet);
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Should().ContainSingle().Which
+            .EndpointId.Should().Be("readDiningProfileContext");
         draft.RuntimeProfile.MaxPlanSteps.Should().Be(AgentProfileValidationLimits.RequiredMaxPlanSteps);
         draft.RuntimeProfile.MaxOwnedToolCount.Should().Be(AgentProfileValidationLimits.MaximumOwnedToolCount);
         draft.RuntimeProfile.MaxSchemaBytes.Should().Be(AgentProfileValidationLimits.MaximumSchemaBytes);
