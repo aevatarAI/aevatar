@@ -314,7 +314,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().NotContain(x =>
             x.ServiceType == typeof(IWorkflowWebhookReplayStore) &&
             x.ImplementationType == typeof(RedisWorkflowWebhookReplayStore));
-        services.Should().NotContain(x =>
+        services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
     }
@@ -1043,7 +1043,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         var options = provider.GetRequiredService<IOptions<WorkflowDefinitionFileSourceOptions>>().Value;
 
-        provider.GetService<WorkflowDefinitionFileLoader>().Should().BeNull();
+        provider.GetService<WorkflowDefinitionFileLoader>().Should().NotBeNull();
         options.WorkflowDirectories.Should().BeEmpty();
         registry.GetYaml("mission_wall_15_node_probe").Should().BeNull();
         registry.GetYaml("demo_template").Should().BeNull();
