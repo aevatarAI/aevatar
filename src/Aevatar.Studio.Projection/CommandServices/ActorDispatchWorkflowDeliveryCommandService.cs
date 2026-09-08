@@ -520,6 +520,7 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
             Label = value.Label,
             ServiceSlug = value.ServiceSlug,
             Required = value.Required,
+            YamlPointer = value.YamlPointer,
         };
 
     private static WorkflowDeliveryTriggerIntent MapTrigger(DeliveryApplication.WorkflowDeliveryTriggerIntent value)

@@ -354,7 +354,12 @@ public sealed class ActorDispatchWorkflowDeliveryCommandServiceTests
                     null,
                     "10"),
             ],
-            [new ApplicationConnectionSlotDefinition("mail", "Mail", "lark", true)],
+            [new ApplicationConnectionSlotDefinition(
+                "mail",
+                "Mail",
+                "lark",
+                true,
+                "/steps/0/capability/nyxid_request/user_service_id")],
             ["network.write"],
             "Writes a notification",
             [],

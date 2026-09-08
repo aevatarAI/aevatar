@@ -174,6 +174,7 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
             Label = value.Label,
             ServiceSlug = value.ServiceSlug,
             Required = value.Required,
+            YamlPointer = value.YamlPointer,
         };
 
     private static PackageDefinition ToDefinition(WorkflowDeliveryPackageOptions options)
@@ -195,9 +196,15 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
             NormalizeRequired(value.Key, "delivery connection slot key"),
             NormalizeRequired(value.Label, "delivery connection slot label"),
             NormalizeRequired(value.ServiceSlug, "delivery connection service slug"),
-            value.Required)).ToArray();
+            value.Required,
+            NormalizeRequired(value.YamlPointer, "delivery connection yaml pointer"))).ToArray();
         if (connectionSlots.Select(static value => value.Key).Distinct(StringComparer.Ordinal).Count() != connectionSlots.Length)
             throw new InvalidOperationException("Delivery package connection slot keys must be unique.");
+        if (connectionSlots.Select(static value => value.YamlPointer).Distinct(StringComparer.Ordinal).Count() != connectionSlots.Length)
+            throw new InvalidOperationException("Delivery package connection slot yaml pointers must be unique.");
+        var variableYamlPointers = variables.Select(static value => value.YamlPointer).ToHashSet(StringComparer.Ordinal);
+        if (connectionSlots.Any(value => variableYamlPointers.Contains(value.YamlPointer)))
+            throw new InvalidOperationException("Delivery package connection slot yaml pointers must not overlap variable yaml pointers.");
 
         var acceptance = options.Acceptance ?? throw new InvalidOperationException(
             "Delivery package acceptance policy is required.");
@@ -413,7 +420,8 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
         string Key,
         string Label,
         string ServiceSlug,
-        bool Required);
+        bool Required,
+        string YamlPointer);
 }
 
 public sealed class WorkflowDeliveryPackageNotAllowedException(string workflowName)

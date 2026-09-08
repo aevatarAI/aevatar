@@ -131,6 +131,97 @@ public sealed class WorkflowDeliveryConfigurationRendererTests
         result.ResolvedYaml.Should().Contain("\"keep\":\"yes\"");
     }
 
+    [Fact]
+    public void Render_WhenOptionalConnectionSlotIsMissing_ShouldClearPackageDefault()
+    {
+        var package = Package();
+        package.ConnectionSlots[0].Required = false;
+        var renderer = new WorkflowDeliveryConfigurationRenderer();
+
+        var result = renderer.Render(
+            package,
+            new Dictionary<string, JsonElement>
+            {
+                ["threshold"] = Json("25"),
+            },
+            null);
+
+        result.ConnectionReferences.Should().BeEmpty();
+        var root = ParseRoot(result.ResolvedYaml);
+        var steps = (YamlSequenceNode)Child(root, "steps");
+        var call = (YamlMappingNode)steps.Children[1];
+        var capability = (YamlMappingNode)Child(call, "capability");
+        var request = (YamlMappingNode)Child(capability, "nyxid_request");
+        Scalar(request, "user_service_id").Value.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Render_ShouldResolveMultipleConnectionSlotsByDeclaredYamlPointers()
+    {
+        const string sourceYaml = """
+            name: merchant-intake-workflow
+            description: 'user_service_id: decoy'
+            steps:
+              - id: calendar
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: calendar-placeholder
+              - id: document
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: document-placeholder
+            """;
+        var package = new WorkflowPackageVersionSnapshot
+        {
+            PackageId = "merchant-intake-workflow",
+            PackageVersionId = "merchant-intake-workflow@source-alpha",
+            WorkflowName = "merchant-intake-workflow",
+            Version = "1",
+            DisplayName = "Merchant Intake Workflow",
+            SourceYaml = sourceYaml,
+            SourceHash = Hash(sourceYaml),
+            CreatedBy = "admin-alpha",
+        };
+        package.ConnectionSlots.Add(new WorkflowDeliveryConnectionSlotDefinition
+        {
+            Key = "calendar",
+            Label = "Calendar",
+            ServiceSlug = "service-calendar",
+            Required = true,
+            YamlPointer = "/steps/0/capability/nyxid_request/user_service_id",
+        });
+        package.ConnectionSlots.Add(new WorkflowDeliveryConnectionSlotDefinition
+        {
+            Key = "document",
+            Label = "Document",
+            ServiceSlug = "service-document",
+            Required = true,
+            YamlPointer = "/steps/1/capability/nyxid_request/user_service_id",
+        });
+        var renderer = new WorkflowDeliveryConfigurationRenderer();
+
+        var result = renderer.Render(
+            package,
+            null,
+            new Dictionary<string, string>
+            {
+                ["calendar"] = "user-service-calendar",
+                ["document"] = "user-service-document",
+            });
+
+        result.ConnectionReferences.Should().Contain("calendar", "user-service-calendar");
+        result.ConnectionReferences.Should().Contain("document", "user-service-document");
+        var root = ParseRoot(result.ResolvedYaml);
+        Scalar(root, "description").Value.Should().Be("user_service_id: decoy");
+        var steps = (YamlSequenceNode)Child(root, "steps");
+        var calendar = (YamlMappingNode)Child((YamlMappingNode)Child((YamlMappingNode)steps.Children[0], "capability"), "nyxid_request");
+        var document = (YamlMappingNode)Child((YamlMappingNode)Child((YamlMappingNode)steps.Children[1], "capability"), "nyxid_request");
+        Scalar(calendar, "user_service_id").Value.Should().Be("user-service-calendar");
+        Scalar(document, "user_service_id").Value.Should().Be("user-service-document");
+    }
+
     private static WorkflowPackageVersionSnapshot Package()
     {
         var package = new WorkflowPackageVersionSnapshot
@@ -160,6 +251,7 @@ public sealed class WorkflowDeliveryConfigurationRendererTests
             Label = "Mail",
             ServiceSlug = "api-lark-bot",
             Required = true,
+            YamlPointer = "/steps/1/capability/nyxid_request/user_service_id",
         });
         return package;
     }
