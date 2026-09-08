@@ -27,8 +27,7 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         var native = payload.ShouldBeOfType<TelegramOutboundMessage>();
         native.MessageType.ShouldBe("text");
         native.IsInteractive.ShouldBeTrue();
-        native.PlainText.ShouldContain("Confirm");
-        native.PlainText.ShouldContain("Cancel");
+        native.PlainText.ShouldBe(intent.Text);
         using var document = JsonDocument.Parse(native.ContentJson);
         var keyboard = document.RootElement.GetProperty("reply_markup").GetProperty("inline_keyboard");
         keyboard[0][0].GetProperty("text").GetString().ShouldBe("Confirm");
@@ -90,8 +89,7 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         payload.IsInteractive.ShouldBeTrue();
         payload.ContentJson.ShouldContain("inline_keyboard");
         payload.ContentJson.ShouldContain("callback_data");
-        payload.PlainText.ShouldContain("• Confirm");
-        payload.PlainText.ShouldContain("• Cancel");
+        payload.PlainText.ShouldBe("Choose");
     }
 
     [Fact]
@@ -250,6 +248,8 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         var payload = CreateComposer().Compose(intent, BuildContext());
 
         payload.IsInteractive.ShouldBeTrue();
+        payload.PlainText.ShouldContain("Open NyxID");
+        payload.PlainText.ShouldContain("https://nyxid.example/services");
         using var document = JsonDocument.Parse(payload.ContentJson);
         var button = document.RootElement
             .GetProperty("reply_markup")
@@ -257,6 +257,29 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         button.GetProperty("text").GetString().ShouldBe("Open NyxID");
         button.GetProperty("url").GetString().ShouldBe("https://nyxid.example/services");
         button.TryGetProperty("callback_data", out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Compose_with_link_action_renders_url_in_text_when_buttons_are_unavailable()
+    {
+        var capabilities = TelegramMessageComposer.DefaultCapabilities.Clone();
+        capabilities.SupportsActionButtons = false;
+        var intent = new MessageContent { Text = "Setup" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Link,
+            ActionId = "open",
+            Label = "Open NyxID",
+            Value = "https://nyxid.example/services",
+        });
+
+        var payload = CreateComposer().Compose(intent, BuildContext(capabilities));
+
+        payload.IsInteractive.ShouldBeFalse();
+        payload.ContentJson.ShouldNotContain("inline_keyboard");
+        payload.PlainText.ShouldContain("Open NyxID");
+        payload.PlainText.ShouldContain("https://nyxid.example/services");
+        CreateComposer().Evaluate(intent, BuildContext(capabilities)).ShouldBe(ComposeCapability.Degraded);
     }
 
     [Fact]
@@ -313,7 +336,7 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         TelegramMessageComposer.DefaultCapabilities.SupportsActionButtons.ShouldBeTrue();
     }
 
-    private static ComposeContext BuildContext() => new()
+    private static ComposeContext BuildContext(ChannelCapabilities? capabilities = null) => new()
     {
         Conversation = ConversationReference.Create(
             ChannelId.From("telegram"),
@@ -321,6 +344,6 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
             ConversationScope.DirectMessage,
             partition: null,
             "user-1"),
-        Capabilities = TelegramMessageComposer.DefaultCapabilities.Clone(),
+        Capabilities = capabilities ?? TelegramMessageComposer.DefaultCapabilities.Clone(),
     };
 }
