@@ -1678,15 +1678,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         {
             using var document = JsonDocument.Parse(response);
             var root = document.RootElement;
+            var platformMessageId = TryGetMessageId(root, "platform_message_id") ??
+                                    TryGetMessageId(root, "upstream_message_id");
             return new NyxIdChannelRelayReplyResult(
                 true,
-                MessageId: root.TryGetProperty("message_id", out var replyMessageId) && replyMessageId.ValueKind == JsonValueKind.String
-                    ? replyMessageId.GetString()
-                    : null,
-                PlatformMessageId: root.TryGetProperty("platform_message_id", out var platformMessageId) &&
-                                   platformMessageId.ValueKind == JsonValueKind.String
-                    ? platformMessageId.GetString()
-                    : null);
+                MessageId: TryGetMessageId(root, "message_id"),
+                PlatformMessageId: platformMessageId);
         }
         catch (JsonException ex)
         {
@@ -1767,10 +1764,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         {
             using var document = JsonDocument.Parse(response);
             var root = document.RootElement;
-            var upstream = root.TryGetProperty("upstream_message_id", out var upstreamProp) &&
-                           upstreamProp.ValueKind == JsonValueKind.String
-                ? upstreamProp.GetString()
-                : null;
+            var upstream = TryGetMessageId(root, "upstream_message_id");
             return new NyxIdChannelRelayReplyResult(
                 true,
                 MessageId: null,
@@ -2645,6 +2639,20 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         root.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String
             ? prop.GetString()
             : null;
+
+    private static string? TryGetMessageId(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var prop))
+            return null;
+
+        return prop.ValueKind switch
+        {
+            JsonValueKind.String => prop.GetString(),
+            JsonValueKind.Number when prop.TryGetInt64(out var value) =>
+                value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            _ => null,
+        };
+    }
 
     private static int? TryGetInt(JsonElement root, string propertyName) =>
         root.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.Number &&
