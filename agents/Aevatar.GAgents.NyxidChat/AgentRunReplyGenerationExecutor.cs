@@ -446,7 +446,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Content = effectiveContent ?? string.Empty,
             ReasoningContent = llmResult.ReasoningContent ?? string.Empty,
             FinishReason = llmResult.FinishReason ?? string.Empty,
-            HasStreamedTextContent = !approvalRequired &&
+            HasStreamedTextContent = streamingState is not null &&
+                                     !approvalRequired &&
                                      !hasToolCalls &&
                                      !string.IsNullOrEmpty(effectiveContent),
             ToolRequestId = llmRequest.ToolContext?.Request.RequestId ?? string.Empty,
@@ -1265,6 +1266,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
         if (string.IsNullOrWhiteSpace(request.CorrelationId))
             return null;
+        if (!ShouldUseStreamingReplies(request.Activity))
+            return null;
 
         var cardMode = ShouldUseCardKitStreaming(request.Activity);
         var streamingTargetActorId = cardMode ? runActorId : targetActorId;
@@ -1281,6 +1284,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             _logger,
             cardMode);
     }
+
+    private bool ShouldUseStreamingReplies(ChatActivity? activity) =>
+        ShouldUseCardKitStreaming(activity) ||
+        !string.Equals(activity?.TransportExtras?.NyxPlatform?.Trim(), "telegram", StringComparison.OrdinalIgnoreCase);
 
     private bool ShouldUseCardKitStreaming(ChatActivity? activity) =>
         _relayOptions?.StreamingCardKitEnabled == true &&

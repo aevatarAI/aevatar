@@ -349,9 +349,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task BuildLlmStepContinuation_WhenTelegramTurnHasCardKitEnabled_ShouldDispatchTextStreamChunk()
+    public async Task BuildLlmStepContinuation_WhenTelegramTurnHasStreamingEnabled_ShouldWaitForFinalReply()
     {
-        var provider = new RecordingProvider("telegram streamed text");
+        var provider = new RecordingProvider("telegram final text");
         var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
         var executor = CreateToolEnabledExecutor(
             new CountingTool("submit_record"),
@@ -376,13 +376,12 @@ public sealed class AgentRunReplyGenerationExecutorTests
         workItem.Request.ReplyToken = "relay-token";
         workItem.Request.ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds();
 
-        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
-        var envelope = envelopes.Should().ContainSingle().Subject;
-        envelope.Route.Direct.TargetActorId.Should().Be("conversation-actor");
-        envelope.Payload.Is(LlmReplyStreamChunkEvent.Descriptor).Should().BeTrue();
-        envelope.Payload.Is(LlmReplyCardStreamChunkEvent.Descriptor).Should().BeFalse();
-        envelope.Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText.Should().Be("telegram streamed text");
+        envelopes.Should().BeEmpty();
+        execution.Continuation.LlmStepResult.AccumulatedText.Should().Be("telegram final text");
+        execution.Continuation.LlmStepResult.HasStreamedTextContent.Should().BeFalse();
+        execution.Continuation.LlmStepResult.Content.Should().Be("telegram final text");
     }
 
     [Fact]
