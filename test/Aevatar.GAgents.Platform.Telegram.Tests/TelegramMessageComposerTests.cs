@@ -248,8 +248,8 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         var payload = CreateComposer().Compose(intent, BuildContext());
 
         payload.IsInteractive.ShouldBeTrue();
-        payload.PlainText.ShouldBe("Setup");
-        payload.PlainText.ShouldNotContain("https://nyxid.example/services");
+        payload.PlainText.ShouldContain("Open NyxID");
+        payload.PlainText.ShouldContain("https://nyxid.example/services");
         using var document = JsonDocument.Parse(payload.ContentJson);
         var button = document.RootElement
             .GetProperty("reply_markup")

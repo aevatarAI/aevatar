@@ -121,9 +121,10 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
                 AppendParagraph(builder, $"{field.Title}: {field.Text}");
         }
 
-        // Render only actions that will not be expressed as inline keyboard buttons.
+        // Render actions that will not be expressed as inline keyboard buttons. Link actions
+        // keep their URL in text as a reliable fallback when relays drop native buttons.
         var buttonActions = GetInlineKeyboardActionCandidates(intent)
-            .Where(action => !inlineKeyboardActions.Contains(action))
+            .Where(action => action.Kind == ActionElementKind.Link || !inlineKeyboardActions.Contains(action))
             .Select(static action =>
             {
                 var label = action.Label!.Trim();
