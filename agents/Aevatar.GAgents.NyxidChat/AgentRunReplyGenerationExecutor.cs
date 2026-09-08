@@ -176,11 +176,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var request = workItem.Request.Clone();
         var hasBlockingReceipt = AgentToolReceiptDeliveryPolicy.HasBlockingMutation(
             AgentToolReceiptDeliveryPolicy.Reconcile(workItem.StepState.ToolReceipts));
-        var suppressTextStreaming = hasBlockingReceipt && _relayOptions?.StreamingCardKitEnabled != true;
+        var cardKitStreaming = ShouldUseCardKitStreaming(request.Activity);
+        var suppressTextStreaming = hasBlockingReceipt && !cardKitStreaming;
         using TurnStreamingReplySink? streamingSink = suppressTextStreaming
             ? null
             : TryBuildStreamingSink(request, workItem.RunActorId, request.TargetActorId);
-        var streamingState = TryBuildStreamingReplyState(streamingSink);
+        var streamingState = TryBuildStreamingReplyState(streamingSink, request.Activity);
         var generator = RequireStepGenerator();
         var stepMetadata = AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata);
         var stepControl = AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState);
@@ -1265,7 +1266,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (string.IsNullOrWhiteSpace(request.CorrelationId))
             return null;
 
-        var cardMode = _relayOptions.StreamingCardKitEnabled;
+        var cardMode = ShouldUseCardKitStreaming(request.Activity);
         var streamingTargetActorId = cardMode ? runActorId : targetActorId;
         return new TurnStreamingReplySink(
             _actorDispatchPort,
@@ -1281,12 +1282,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             cardMode);
     }
 
-    private StreamingReplyRunState? TryBuildStreamingReplyState(TurnStreamingReplySink? sink)
+    private bool ShouldUseCardKitStreaming(ChatActivity? activity) =>
+        _relayOptions?.StreamingCardKitEnabled == true &&
+        string.Equals(activity?.TransportExtras?.NyxPlatform?.Trim(), "lark", StringComparison.OrdinalIgnoreCase);
+
+    private StreamingReplyRunState? TryBuildStreamingReplyState(TurnStreamingReplySink? sink, ChatActivity? activity)
     {
         if (sink is null || _relayOptions is null)
             return null;
 
-        var cardMode = _relayOptions.StreamingCardKitEnabled;
+        var cardMode = ShouldUseCardKitStreaming(activity);
         var throttle = TimeSpan.FromMilliseconds(Math.Max(0, cardMode
             ? _relayOptions.StreamingCardKitFlushIntervalMs
             : _relayOptions.StreamingFlushIntervalMs));
