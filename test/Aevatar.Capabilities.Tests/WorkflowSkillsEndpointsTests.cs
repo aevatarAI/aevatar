@@ -86,6 +86,36 @@ public sealed class WorkflowSkillsEndpointsTests
     }
 
     [Fact]
+    public async Task InvokeSkill_WhenSkillAccessIsDenied_ShouldReturnTypedForbidden()
+    {
+        var runService = new RecordingUserSkillRunService
+        {
+            Outcome = SkillRunOutcome.Failed(
+                "skill_access_denied",
+                "The skill could not be loaded with the caller's NyxID credential. Connect or request access to the required service, then retry."),
+        };
+        var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();
+        bindingQuery.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "binding-alpha" }));
+        using var services = CreateRequestServices(bindingQuery);
+        var http = CreateHttpContext(services, "Bearer caller-token");
+
+        var result = await WorkflowSkillsEndpoints.InvokeSkill(
+            http,
+            "skill-alpha",
+            runService,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status403Forbidden);
+        var response = ((IValueHttpResult)result).Value;
+        response.Should().NotBeNull();
+        response!.GetType().GetProperty("code")!.GetValue(response)
+            .Should().Be("skill_access_denied");
+        response.GetType().GetProperty("message")!.GetValue(response)
+            .Should().Be("The skill could not be loaded with the caller's NyxID credential. Connect or request access to the required service, then retry.");
+    }
+
+    [Fact]
     public async Task ScheduleSkill_WhenConfirmationIsRequired_ShouldReturnTypedPreviewWithHttp200()
     {
         var preview = new SkillWorkflowMountPreview(
@@ -279,6 +309,41 @@ public sealed class WorkflowSkillsEndpointsTests
         logs.Messages.Should().ContainSingle(message =>
             message.Contains("Stage=authorization_catalog", StringComparison.Ordinal) &&
             message.Contains("ErrorCode=api_key_scope_plan_denied", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ScheduleSkill_WhenSkillAccessIsDenied_ShouldReturnTypedForbidden()
+    {
+        var runService = new RecordingUserSkillRunService
+        {
+            ScheduleOutcome = SkillScheduleOutcome.Failed(
+                "skill_access_denied",
+                "The skill could not be loaded with the caller's NyxID credential. Connect or request access to the required service, then retry."),
+        };
+        var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();
+        bindingQuery.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "binding-alpha" }));
+        using var logs = new RecordingLoggerProvider();
+        using var services = CreateRequestServices(bindingQuery, logs);
+        var http = CreateHttpContext(
+            services,
+            "Bearer caller-token",
+            "{\"cronExpression\":\"0 9 * * *\",\"teamId\":\"team-alpha\",\"workflowConfirmationToken\":\"sha256:supplied\"}");
+
+        var result = await WorkflowSkillsEndpoints.ScheduleSkill(
+            http,
+            "skill-alpha",
+            runService,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status403Forbidden);
+        var response = ((IValueHttpResult)result).Value;
+        response.Should().NotBeNull();
+        response!.GetType().GetProperty("code")!.GetValue(response)
+            .Should().Be("skill_access_denied");
+        logs.Messages.Should().ContainSingle(message =>
+            message.Contains("Stage=skill_fetch", StringComparison.Ordinal) &&
+            message.Contains("ErrorCode=skill_access_denied", StringComparison.Ordinal));
     }
 
     [Fact]

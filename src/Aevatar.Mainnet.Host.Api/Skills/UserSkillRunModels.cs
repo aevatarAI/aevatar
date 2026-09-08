@@ -24,6 +24,17 @@ internal sealed record SkillRunOutcome(
     public static SkillRunOutcome Failed(string code, string message) => new(false, null, code, message);
 }
 
+internal sealed record SkillReadOutcome(
+    bool Succeeded,
+    SkillDefinition? Skill = null,
+    string? ErrorCode = null,
+    string? ErrorMessage = null)
+{
+    public static SkillReadOutcome Ok(SkillDefinition skill) => new(true, skill);
+
+    public static SkillReadOutcome Failed(string code, string message) => new(false, null, code, message);
+}
+
 // Schedule request body for POST /api/workflow/skills/{guid}/schedule (read via ReadFromJsonAsync).
 internal sealed record SkillScheduleHttpRequest(
     string? Prompt = null,

@@ -52,9 +52,11 @@ internal sealed class UserSkillRunService : IUserSkillRunService
             return SkillRunOutcome.Failed("invalid_caller_credential", "Caller credential is invalid.");
 
         var accessToken = parsedToken.NormalizedBearerToken!;
-        var skill = await _remoteSkillFetcher.FetchSkillAsync(accessToken, skillGuid, ct);
-        if (skill == null)
-            return SkillRunOutcome.Failed("skill_not_found", $"Skill '{skillGuid}' was not found or is not accessible.");
+        var skillRead = await FetchSkillAsync(accessToken, skillGuid, ct);
+        if (!skillRead.Succeeded)
+            return SkillRunOutcome.Failed(skillRead.ErrorCode!, skillRead.ErrorMessage!);
+
+        var skill = skillRead.Skill!;
 
         var (runKind, yamls) = ResolveWorkflowYamls(skill);
         var commandIdentity = Guid.NewGuid().ToString("N");
@@ -112,11 +114,11 @@ internal sealed class UserSkillRunService : IUserSkillRunService
                 "A source-readable NyxID user bearer is required to review and schedule this skill workflow.");
         }
 
-        var skill = await _remoteSkillFetcher.FetchSkillAsync(accessToken, skillGuid, ct);
-        if (skill == null)
-            return SkillScheduleOutcome.Failed("skill_not_found", $"Skill '{skillGuid}' was not found or is not accessible.");
+        var skillRead = await FetchSkillAsync(sourceReadableBearerToken, skillGuid, ct);
+        if (!skillRead.Succeeded)
+            return SkillScheduleOutcome.Failed(skillRead.ErrorCode!, skillRead.ErrorMessage!);
 
-        var scheduleWorkflow = ResolveScheduleWorkflow(skill);
+        var scheduleWorkflow = ResolveScheduleWorkflow(skillRead.Skill!);
         if (scheduleWorkflow.ErrorCode is not null)
             return SkillScheduleOutcome.Failed(scheduleWorkflow.ErrorCode, scheduleWorkflow.ErrorMessage!);
 
@@ -159,7 +161,7 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         var request = new WorkflowScheduleProvisioningRequest(
             ScopeId: scopeId,
             TeamId: teamId,
-            DisplayName: string.IsNullOrWhiteSpace(displayName) ? skill.Name : displayName,
+            DisplayName: string.IsNullOrWhiteSpace(displayName) ? skillRead.Skill!.Name : displayName,
             WorkflowYaml: workflow.WorkflowYamls[0])
         {
             CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
@@ -246,6 +248,32 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         catch (InvalidOperationException ex)
         {
             return SkillScheduleOutcome.Failed("schedule_failed", ex.Message);
+        }
+    }
+
+    private async Task<SkillReadOutcome> FetchSkillAsync(
+        string accessToken,
+        string skillGuid,
+        CancellationToken ct)
+    {
+        try
+        {
+            var skill = await _remoteSkillFetcher.FetchSkillAsync(accessToken, skillGuid, ct);
+            return skill is null
+                ? SkillReadOutcome.Failed("skill_not_found", $"Skill '{skillGuid}' was not found or is not accessible.")
+                : SkillReadOutcome.Ok(skill);
+        }
+        catch (RemoteSkillFetchException ex) when (ex.FailureKind == RemoteSkillFetchFailureKind.AccessDenied)
+        {
+            return SkillReadOutcome.Failed(
+                "skill_access_denied",
+                "The skill could not be loaded with the caller's NyxID credential. Connect or request access to the required service, then retry.");
+        }
+        catch (RemoteSkillFetchException)
+        {
+            return SkillReadOutcome.Failed(
+                "skill_source_unavailable",
+                "The skill source is temporarily unavailable. Retry after the skill catalog is reachable.");
         }
     }
 

@@ -213,9 +213,7 @@ internal static class WorkflowSkillsEndpoints
         if (outcome.Succeeded)
             return Results.Json(outcome.Receipt);
 
-        var statusCode = string.Equals(outcome.ErrorCode, "skill_not_found", StringComparison.Ordinal)
-            ? StatusCodes.Status404NotFound
-            : StatusCodes.Status502BadGateway;
+        var statusCode = ResolveSkillRunFailureStatus(outcome.ErrorCode);
         return Results.Json(new { code = outcome.ErrorCode, message = outcome.ErrorMessage }, statusCode: statusCode);
     }
 
@@ -306,11 +304,18 @@ internal static class WorkflowSkillsEndpoints
             ? $"/api/scopes/{Uri.EscapeDataString(receipt.ScopeId)}/members/{Uri.EscapeDataString(receipt.MemberId)}"
             : $"/api/schedules/{Uri.EscapeDataString(receipt.ScheduleId)}";
 
+    private static int ResolveSkillRunFailureStatus(string? errorCode) => errorCode switch
+    {
+        "skill_not_found" => StatusCodes.Status404NotFound,
+        "skill_access_denied" => StatusCodes.Status403Forbidden,
+        _ => StatusCodes.Status502BadGateway,
+    };
+
     private static int ResolveScheduleFailureStatus(string? errorCode) => errorCode switch
     {
         "skill_not_found" or "api_key_scope_plan_not_found" => StatusCodes.Status404NotFound,
         "authentication_failed" or "unauthorized" or "token_expired" => StatusCodes.Status401Unauthorized,
-        "forbidden" or "api_key_scope_plan_denied" => StatusCodes.Status403Forbidden,
+        "forbidden" or "skill_access_denied" or "api_key_scope_plan_denied" => StatusCodes.Status403Forbidden,
         "bad_request" or "validation_error" or "api_key_scope_plan_owner_unsupported" =>
             StatusCodes.Status400BadRequest,
         "conflict" or "api_key_scope_plan_route_unresolved" or "api_key_scope_plan_stale" or
@@ -333,7 +338,7 @@ internal static class WorkflowSkillsEndpoints
             return "caller_authority";
         }
 
-        if (string.Equals(errorCode, "skill_not_found", StringComparison.Ordinal))
+        if (errorCode is "skill_not_found" or "skill_access_denied" or "skill_source_unavailable")
             return "skill_fetch";
         if (errorCode.StartsWith("skill_schedule_workflow_", StringComparison.Ordinal))
             return "workflow_resolution";
