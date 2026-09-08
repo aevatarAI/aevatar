@@ -39,8 +39,11 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
 
         var capabilities = context.Capabilities ?? DefaultCapabilities;
         var maxLength = ResolveTextLimit(capabilities.MaxMessageLength, TelegramTextLimit);
-        var effectiveText = BuildRenderedText(intent, maxLength);
         var inlineKeyboardActions = GetInlineKeyboardActions(intent);
+        var effectiveText = BuildRenderedText(
+            intent,
+            maxLength,
+            capabilities.SupportsActionButtons ? inlineKeyboardActions : Array.Empty<ActionElement>());
         if (inlineKeyboardActions.Length > 0 && capabilities.SupportsActionButtons)
         {
             var inlineKeyboard = inlineKeyboardActions
@@ -93,13 +96,19 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
             degraded = true;
 
         var maxLength = ResolveTextLimit(capabilities.MaxMessageLength, TelegramTextLimit);
-        if (BuildRenderedText(intent, int.MaxValue).Length > maxLength)
+        if (BuildRenderedText(
+                intent,
+                int.MaxValue,
+                capabilities.SupportsActionButtons ? renderableActions : Array.Empty<ActionElement>()).Length > maxLength)
             degraded = true;
 
         return degraded ? ComposeCapability.Degraded : ComposeCapability.Exact;
     }
 
-    private static string BuildRenderedText(MessageContent intent, int maxLength)
+    private static string BuildRenderedText(
+        MessageContent intent,
+        int maxLength,
+        IReadOnlyCollection<ActionElement> inlineKeyboardActions)
     {
         var builder = new StringBuilder();
         AppendParagraph(builder, intent.Text);
@@ -112,9 +121,9 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
                 AppendParagraph(builder, $"{field.Title}: {field.Text}");
         }
 
-        // Render available action labels as a bullet list so the user can still see what
-        // the agent intended to offer if the inline keyboard is unavailable downstream.
+        // Render only actions that will not be expressed as inline keyboard buttons.
         var buttonActions = GetInlineKeyboardActionCandidates(intent)
+            .Where(action => !inlineKeyboardActions.Contains(action))
             .Select(static action =>
             {
                 var label = action.Label!.Trim();

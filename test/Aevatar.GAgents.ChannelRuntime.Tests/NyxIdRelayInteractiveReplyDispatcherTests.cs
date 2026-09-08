@@ -392,6 +392,24 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
     }
 
     [Fact]
+    public void BuildTextFallback_link_action_includes_url_value()
+    {
+        var intent = new MessageContent { Text = "Open the authorization link" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Link,
+            ActionId = "nyxid_init_open",
+            Label = "Open NyxID",
+            Value = "https://nyxid.example/oauth/authorize",
+            IsPrimary = true,
+        });
+
+        var fallback = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(intent);
+
+        fallback.Should().Be("Open the authorization link\n• Open NyxID: https://nyxid.example/oauth/authorize");
+    }
+
+    [Fact]
     public void BuildTextFallback_select_action_includes_option_labels()
     {
         var intent = new MessageContent { Text = "Choose a model" };
