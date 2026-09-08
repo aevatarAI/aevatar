@@ -39,8 +39,8 @@ public sealed class MainnetBootScriptTests
 
         instructions.Should().NotBeNullOrWhiteSpace();
         instructions.Should().Contain("use scheduled_agent_creator directly");
-        instructions.Should().Contain("Do not call ornn_search_skills, ornn_publish_skill, or agent_builder before handling ordinary scheduled task or reminder requests");
-        instructions.Should().Contain("Use agent_builder or ornn_publish_skill only when the user explicitly asks to design, publish, or reuse a portable Ornn skill or reusable agent first");
+        instructions.Should().Contain("when a direct admitted scheduled automation tool can handle the request");
+        instructions.Should().Contain("Use Ornn skill search or publish only when no direct admitted scheduling or agent-management tool can handle the requested automation");
         instructions.Should().Contain("Call ornn_search_skills only when the user explicitly asks to find, browse, load, reuse, or inspect Ornn skills");
     }
 

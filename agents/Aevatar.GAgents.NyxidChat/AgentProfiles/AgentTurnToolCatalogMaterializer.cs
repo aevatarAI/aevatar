@@ -1129,7 +1129,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         var normalizedUserMessage = userMessage ?? string.Empty;
         if (HasScheduledAutomationIntent(normalizedUserMessage))
         {
-            var scheduledAutomationToolNames = SelectScheduledAutomationToolNames(normalizedUserMessage);
+            var scheduledAutomationToolNames = SelectScheduledAutomationToolNames(normalizedUserMessage, availableToolNames);
             AddAvailableScheduledAutomationTools(
                 availableToolNames,
                 selectedToolNames,
@@ -1188,7 +1188,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         AddAvailableScheduledAutomationTools(
             availableToolNames,
             fallbackNames,
-            SelectScheduledAutomationToolNames(normalizedUserMessage));
+            SelectScheduledAutomationToolNames(normalizedUserMessage, availableToolNames));
         return fallbackNames.Count > 0;
     }
 
@@ -1225,7 +1225,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         AddAvailableScheduledAutomationTools(
             availableToolNames,
             fallbackNames,
-            SelectScheduledAutomationToolNames(normalizedUserMessage));
+            SelectScheduledAutomationToolNames(normalizedUserMessage, availableToolNames));
         return fallbackNames.Count > 0;
     }
 
@@ -1252,15 +1252,25 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         }
     }
 
-    private static IReadOnlySet<string> SelectScheduledAutomationToolNames(string userMessage)
+    private static IReadOnlySet<string> SelectScheduledAutomationToolNames(
+        string userMessage,
+        IReadOnlySet<string> availableToolNames)
     {
         if (HasExplicitOrnnSkillAutomationIntent(userMessage))
             return ScheduledAutomationToolNames;
 
-        return HasRecurringScheduledAutomationIntent(userMessage)
+        if (!HasRecurringScheduledAutomationIntent(userMessage))
+            return DirectScheduledAutomationToolNames;
+
+        return HasAvailableDirectScheduledAutomationTool(availableToolNames)
             ? ScheduledAutomationClarificationToolNames
-            : DirectScheduledAutomationToolNames;
+            : ScheduledAutomationToolNames;
     }
+
+    private static bool HasAvailableDirectScheduledAutomationTool(IReadOnlySet<string> availableToolNames) =>
+        availableToolNames.Contains("use_skill") ||
+        availableToolNames.Contains("scheduled_agent_creator") ||
+        availableToolNames.Contains("agent_builder");
 
     private static bool HasExplicitOrnnSkillAutomationIntent(string userMessage)
     {
