@@ -54,7 +54,7 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         var accessToken = parsedToken.NormalizedBearerToken!;
         var skillRead = await FetchSkillAsync(accessToken, skillGuid, ct);
         if (!skillRead.Succeeded)
-            return SkillRunOutcome.Failed(skillRead.ErrorCode!, skillRead.ErrorMessage!);
+            return SkillRunOutcome.FailedSkillRead(skillRead.FailureKind!.Value, skillRead.ErrorMessage!);
 
         var skill = skillRead.Skill!;
 
@@ -116,7 +116,7 @@ internal sealed class UserSkillRunService : IUserSkillRunService
 
         var skillRead = await FetchSkillAsync(sourceReadableBearerToken, skillGuid, ct);
         if (!skillRead.Succeeded)
-            return SkillScheduleOutcome.Failed(skillRead.ErrorCode!, skillRead.ErrorMessage!);
+            return SkillScheduleOutcome.FailedSkillRead(skillRead.FailureKind!.Value, skillRead.ErrorMessage!);
 
         var scheduleWorkflow = ResolveScheduleWorkflow(skillRead.Skill!);
         if (scheduleWorkflow.ErrorCode is not null)
@@ -260,19 +260,19 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         {
             var skill = await _remoteSkillFetcher.FetchSkillAsync(accessToken, skillGuid, ct);
             return skill is null
-                ? SkillReadOutcome.Failed("skill_not_found", $"Skill '{skillGuid}' was not found or is not accessible.")
+                ? SkillReadOutcome.Failed(SkillReadFailureKind.NotFound, $"Skill '{skillGuid}' was not found or is not accessible.")
                 : SkillReadOutcome.Ok(skill);
         }
         catch (RemoteSkillFetchException ex) when (ex.FailureKind == RemoteSkillFetchFailureKind.AccessDenied)
         {
             return SkillReadOutcome.Failed(
-                "skill_access_denied",
+                SkillReadFailureKind.AccessDenied,
                 "The skill could not be loaded with the caller's NyxID credential. Connect or request access to the required service, then retry.");
         }
         catch (RemoteSkillFetchException)
         {
             return SkillReadOutcome.Failed(
-                "skill_source_unavailable",
+                SkillReadFailureKind.SourceUnavailable,
                 "The skill source is temporarily unavailable. Retry after the skill catalog is reachable.");
         }
     }

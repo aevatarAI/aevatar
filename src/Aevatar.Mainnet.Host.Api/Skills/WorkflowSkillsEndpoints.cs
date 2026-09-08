@@ -213,8 +213,9 @@ internal static class WorkflowSkillsEndpoints
         if (outcome.Succeeded)
             return Results.Json(outcome.Receipt);
 
-        var statusCode = ResolveSkillRunFailureStatus(outcome.ErrorCode);
-        return Results.Json(new { code = outcome.ErrorCode, message = outcome.ErrorMessage }, statusCode: statusCode);
+        var errorCode = ResolveSkillRunFailureCode(outcome);
+        var statusCode = ResolveSkillRunFailureStatus(outcome);
+        return Results.Json(new { code = errorCode, message = outcome.ErrorMessage }, statusCode: statusCode);
     }
 
     internal static async Task<IResult> ScheduleSkill(
@@ -282,17 +283,18 @@ internal static class WorkflowSkillsEndpoints
             return Results.Json(outcome.Confirmation);
         }
 
+        var errorCode = ResolveScheduleFailureCode(outcome);
         logger?.LogWarning(
             "Workflow skill schedule failed. SkillGuid={SkillGuid} Stage={Stage} ErrorCode={ErrorCode}",
             guid,
-            ResolveScheduleFailureStage(outcome.ErrorCode),
-            outcome.ErrorCode ?? "skill_schedule_unknown_failure");
+            ResolveScheduleFailureStage(outcome),
+            errorCode);
 
-        var scheduleStatus = ResolveScheduleFailureStatus(outcome.ErrorCode);
+        var scheduleStatus = ResolveScheduleFailureStatus(outcome);
         return Results.Json(
             new
             {
-                code = outcome.ErrorCode,
+                code = errorCode,
                 message = outcome.ErrorMessage,
                 requiredUserServiceIds = outcome.RequiredUserServiceIds,
             },
@@ -304,30 +306,53 @@ internal static class WorkflowSkillsEndpoints
             ? $"/api/scopes/{Uri.EscapeDataString(receipt.ScopeId)}/members/{Uri.EscapeDataString(receipt.MemberId)}"
             : $"/api/schedules/{Uri.EscapeDataString(receipt.ScheduleId)}";
 
-    private static int ResolveSkillRunFailureStatus(string? errorCode) => errorCode switch
-    {
-        "skill_not_found" => StatusCodes.Status404NotFound,
-        "skill_access_denied" => StatusCodes.Status403Forbidden,
-        _ => StatusCodes.Status502BadGateway,
-    };
+    private static string ResolveSkillRunFailureCode(SkillRunOutcome outcome) =>
+        outcome.SkillReadFailureKind is { } skillReadFailureKind
+            ? ResolveSkillReadFailureCode(skillReadFailureKind)
+            : outcome.ErrorCode ?? "skill_run_unknown_failure";
 
-    private static int ResolveScheduleFailureStatus(string? errorCode) => errorCode switch
+    private static int ResolveSkillRunFailureStatus(SkillRunOutcome outcome)
     {
-        "skill_not_found" or "api_key_scope_plan_not_found" => StatusCodes.Status404NotFound,
-        "authentication_failed" or "unauthorized" or "token_expired" => StatusCodes.Status401Unauthorized,
-        "forbidden" or "skill_access_denied" or "api_key_scope_plan_denied" => StatusCodes.Status403Forbidden,
-        "bad_request" or "validation_error" or "api_key_scope_plan_owner_unsupported" =>
-            StatusCodes.Status400BadRequest,
-        "conflict" or "api_key_scope_plan_route_unresolved" or "api_key_scope_plan_stale" or
-            "schedule_authorization_route_unresolved" =>
-            StatusCodes.Status409Conflict,
-        "rate_limited" => StatusCodes.Status429TooManyRequests,
-        "nyxid_scope_plan_provider_timed_out" => StatusCodes.Status504GatewayTimeout,
-        _ => StatusCodes.Status502BadGateway,
-    };
+        if (outcome.SkillReadFailureKind is { } skillReadFailureKind)
+            return ResolveSkillReadFailureStatus(skillReadFailureKind);
 
-    private static string ResolveScheduleFailureStage(string? errorCode)
+        return string.Equals(outcome.ErrorCode, "skill_not_found", StringComparison.Ordinal)
+            ? StatusCodes.Status404NotFound
+            : StatusCodes.Status502BadGateway;
+    }
+
+    private static string ResolveScheduleFailureCode(SkillScheduleOutcome outcome) =>
+        outcome.SkillReadFailureKind is { } skillReadFailureKind
+            ? ResolveSkillReadFailureCode(skillReadFailureKind)
+            : outcome.ErrorCode ?? "skill_schedule_unknown_failure";
+
+    private static int ResolveScheduleFailureStatus(SkillScheduleOutcome outcome)
     {
+        if (outcome.SkillReadFailureKind is { } skillReadFailureKind)
+            return ResolveSkillReadFailureStatus(skillReadFailureKind);
+
+        return outcome.ErrorCode switch
+        {
+            "api_key_scope_plan_not_found" => StatusCodes.Status404NotFound,
+            "authentication_failed" or "unauthorized" or "token_expired" => StatusCodes.Status401Unauthorized,
+            "forbidden" or "api_key_scope_plan_denied" => StatusCodes.Status403Forbidden,
+            "bad_request" or "validation_error" or "api_key_scope_plan_owner_unsupported" =>
+                StatusCodes.Status400BadRequest,
+            "conflict" or "api_key_scope_plan_route_unresolved" or "api_key_scope_plan_stale" or
+                "schedule_authorization_route_unresolved" =>
+                StatusCodes.Status409Conflict,
+            "rate_limited" => StatusCodes.Status429TooManyRequests,
+            "nyxid_scope_plan_provider_timed_out" => StatusCodes.Status504GatewayTimeout,
+            _ => StatusCodes.Status502BadGateway,
+        };
+    }
+
+    private static string ResolveScheduleFailureStage(SkillScheduleOutcome outcome)
+    {
+        if (outcome.SkillReadFailureKind is not null)
+            return "skill_fetch";
+
+        var errorCode = outcome.ErrorCode;
         if (string.IsNullOrWhiteSpace(errorCode))
             return "unknown";
 
@@ -338,8 +363,6 @@ internal static class WorkflowSkillsEndpoints
             return "caller_authority";
         }
 
-        if (errorCode is "skill_not_found" or "skill_access_denied" or "skill_source_unavailable")
-            return "skill_fetch";
         if (errorCode.StartsWith("skill_schedule_workflow_", StringComparison.Ordinal))
             return "workflow_resolution";
         if (errorCode.Contains("confirmation", StringComparison.OrdinalIgnoreCase))
@@ -354,6 +377,22 @@ internal static class WorkflowSkillsEndpoints
 
         return "provisioning";
     }
+
+    private static string ResolveSkillReadFailureCode(SkillReadFailureKind failureKind) => failureKind switch
+    {
+        SkillReadFailureKind.NotFound => "skill_not_found",
+        SkillReadFailureKind.AccessDenied => "skill_access_denied",
+        SkillReadFailureKind.SourceUnavailable => "skill_source_unavailable",
+        _ => "skill_source_unavailable",
+    };
+
+    private static int ResolveSkillReadFailureStatus(SkillReadFailureKind failureKind) => failureKind switch
+    {
+        SkillReadFailureKind.NotFound => StatusCodes.Status404NotFound,
+        SkillReadFailureKind.AccessDenied => StatusCodes.Status403Forbidden,
+        SkillReadFailureKind.SourceUnavailable => StatusCodes.Status502BadGateway,
+        _ => StatusCodes.Status502BadGateway,
+    };
 
     private static bool TryGetBearerToken(HttpContext http, out string token)
     {

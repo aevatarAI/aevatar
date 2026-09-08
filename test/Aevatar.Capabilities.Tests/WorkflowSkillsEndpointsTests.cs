@@ -90,8 +90,8 @@ public sealed class WorkflowSkillsEndpointsTests
     {
         var runService = new RecordingUserSkillRunService
         {
-            Outcome = SkillRunOutcome.Failed(
-                "skill_access_denied",
+            Outcome = SkillRunOutcome.FailedSkillRead(
+                SkillReadFailureKind.AccessDenied,
                 "The skill could not be loaded with the caller's NyxID credential. Connect or request access to the required service, then retry."),
         };
         var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();
@@ -316,8 +316,8 @@ public sealed class WorkflowSkillsEndpointsTests
     {
         var runService = new RecordingUserSkillRunService
         {
-            ScheduleOutcome = SkillScheduleOutcome.Failed(
-                "skill_access_denied",
+            ScheduleOutcome = SkillScheduleOutcome.FailedSkillRead(
+                SkillReadFailureKind.AccessDenied,
                 "The skill could not be loaded with the caller's NyxID credential. Connect or request access to the required service, then retry."),
         };
         var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();

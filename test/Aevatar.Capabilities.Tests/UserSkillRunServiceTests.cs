@@ -266,7 +266,7 @@ public sealed class UserSkillRunServiceTests
             CancellationToken.None);
 
         outcome.Succeeded.Should().BeFalse();
-        outcome.ErrorCode.Should().Be("skill_access_denied");
+        outcome.SkillReadFailureKind.Should().Be(SkillReadFailureKind.AccessDenied);
         outcome.ErrorMessage.Should().Contain("Connect or request access");
         confirmation.Request.Should().BeNull();
         schedule.Request.Should().BeNull();
@@ -297,7 +297,7 @@ public sealed class UserSkillRunServiceTests
             CancellationToken.None);
 
         outcome.Succeeded.Should().BeFalse();
-        outcome.ErrorCode.Should().Be("skill_access_denied");
+        outcome.SkillReadFailureKind.Should().Be(SkillReadFailureKind.AccessDenied);
         outcome.ErrorMessage.Should().Contain("Connect or request access");
         dispatch.Request.Should().BeNull();
     }
