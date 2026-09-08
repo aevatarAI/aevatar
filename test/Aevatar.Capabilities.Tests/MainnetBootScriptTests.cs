@@ -32,6 +32,19 @@ public sealed class MainnetBootScriptTests
     }
 
     [Fact]
+    public void AppSettings_ShouldRouteScheduledProfileRequestsToScheduledCreator()
+    {
+        var configuration = BuildMainnetConfiguration();
+        var instructions = configuration["AgentProfiles:SystemDefaultNyxIdChat:Instructions"];
+
+        instructions.Should().NotBeNullOrWhiteSpace();
+        instructions.Should().Contain("use scheduled_agent_creator directly");
+        instructions.Should().Contain("Do not call ornn_search_skills, ornn_publish_skill, or agent_builder before handling ordinary scheduled task or reminder requests");
+        instructions.Should().Contain("Use agent_builder or ornn_publish_skill only when the user explicitly asks to design, publish, or reuse a portable Ornn skill or reusable agent first");
+        instructions.Should().Contain("Call ornn_search_skills only when the user explicitly asks to find, browse, load, reuse, or inspect Ornn skills");
+    }
+
+    [Fact]
     public async Task DistributedAppSettings_ShouldDisableGraphProvidersByDefault()
     {
         var appSettingsPath = Path.Combine(

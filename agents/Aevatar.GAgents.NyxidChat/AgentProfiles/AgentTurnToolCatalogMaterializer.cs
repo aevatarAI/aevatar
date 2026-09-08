@@ -100,6 +100,21 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             "agent_builder",
         };
 
+    private static readonly IReadOnlySet<string> DirectScheduledAutomationToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ask_user",
+            "use_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+        };
+
+    private static readonly IReadOnlySet<string> ScheduledAutomationClarificationToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ask_user",
+        };
+
     private static readonly IReadOnlySet<string> ScheduledAutomationExclusiveToolNames =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1036,11 +1051,15 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                 "recurring",
                 "repeat",
                 "daily",
+                "weekday",
+                "weekdays",
                 "weekly",
                 "monthly",
                 "hourly",
                 "remind",
+                "reminds",
                 "reminder",
+                "reminders",
                 "automation",
                 "automate") ||
             ContainsAny(
@@ -1107,12 +1126,20 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             return;
         }
 
-        if (HasScheduledAutomationIntent(userMessage ?? string.Empty))
+        var normalizedUserMessage = userMessage ?? string.Empty;
+        if (HasScheduledAutomationIntent(normalizedUserMessage))
         {
-            AddAvailableScheduledAutomationTools(availableToolNames, selectedToolNames);
+            var scheduledAutomationToolNames = SelectScheduledAutomationToolNames(normalizedUserMessage);
+            AddAvailableScheduledAutomationTools(
+                availableToolNames,
+                selectedToolNames,
+                scheduledAutomationToolNames);
             selectedToolNames.RemoveWhere(name =>
                 ManagedWorkflowExecutionToolNames.Contains(name) &&
                 !ScheduledAutomationToolNames.Contains(name));
+            selectedToolNames.RemoveWhere(name =>
+                ScheduledAutomationToolNames.Contains(name) &&
+                !scheduledAutomationToolNames.Contains(name));
             return;
         }
 
@@ -1151,13 +1178,17 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         out HashSet<string> fallbackNames)
     {
         fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var normalizedUserMessage = userMessage ?? string.Empty;
         if (!string.Equals(intentId, ProfileTaskRouteIntentId, StringComparison.Ordinal) ||
-            !HasScheduledAutomationIntent(userMessage ?? string.Empty))
+            !HasScheduledAutomationIntent(normalizedUserMessage))
         {
             return false;
         }
 
-        AddAvailableScheduledAutomationTools(availableToolNames, fallbackNames);
+        AddAvailableScheduledAutomationTools(
+            availableToolNames,
+            fallbackNames,
+            SelectScheduledAutomationToolNames(normalizedUserMessage));
         return fallbackNames.Count > 0;
     }
 
@@ -1187,10 +1218,14 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         out HashSet<string> fallbackNames)
     {
         fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!HasScheduledAutomationIntent(userMessage ?? string.Empty))
+        var normalizedUserMessage = userMessage ?? string.Empty;
+        if (!HasScheduledAutomationIntent(normalizedUserMessage))
             return false;
 
-        AddAvailableScheduledAutomationTools(availableToolNames, fallbackNames);
+        AddAvailableScheduledAutomationTools(
+            availableToolNames,
+            fallbackNames,
+            SelectScheduledAutomationToolNames(normalizedUserMessage));
         return fallbackNames.Count > 0;
     }
 
@@ -1207,13 +1242,52 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
     private static void AddAvailableScheduledAutomationTools(
         IReadOnlySet<string> availableToolNames,
-        HashSet<string> selectedToolNames)
+        HashSet<string> selectedToolNames,
+        IReadOnlySet<string> candidateToolNames)
     {
-        foreach (var name in ScheduledAutomationToolNames)
+        foreach (var name in candidateToolNames)
         {
             if (availableToolNames.Contains(name))
                 selectedToolNames.Add(name);
         }
+    }
+
+    private static IReadOnlySet<string> SelectScheduledAutomationToolNames(string userMessage)
+    {
+        if (HasExplicitOrnnSkillAutomationIntent(userMessage))
+            return ScheduledAutomationToolNames;
+
+        return HasRecurringScheduledAutomationIntent(userMessage)
+            ? ScheduledAutomationClarificationToolNames
+            : DirectScheduledAutomationToolNames;
+    }
+
+    private static bool HasExplicitOrnnSkillAutomationIntent(string userMessage)
+    {
+        var tokens = TokenizeSelectionText(userMessage);
+        return HasAnyToken(tokens, "ornn", "skill", "skills", "publish", "published", "reuse", "reusable") ||
+               ContainsAny(userMessage, "技能", "发布", "复用", "可复用");
+    }
+
+    private static bool HasRecurringScheduledAutomationIntent(string userMessage)
+    {
+        var tokens = TokenizeSelectionText(userMessage);
+        return HasAnyToken(
+                   tokens,
+                   "every",
+                   "each",
+                   "per",
+                   "daily",
+                   "weekday",
+                   "weekdays",
+                   "weekly",
+                   "monthly",
+                   "hourly",
+                   "recurring",
+                   "repeat",
+                   "repeats",
+                   "repeated") ||
+               ContainsAny(userMessage, "每天", "每日", "每周", "每月", "每小时", "周期", "循环", "重复", "长期", "持续");
     }
 
     private static bool HasContextToken(IReadOnlySet<string> tokens) =>
