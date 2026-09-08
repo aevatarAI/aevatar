@@ -10,27 +10,28 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 
 /// <summary>
 /// Pins the user-visible behaviour of the per-binding slash command handlers
-/// added in issue #513 (Phase 1 /init Lark card, Phase 4 /whoami, Phase 6
+/// added in issue #513 (Phase 1 /init binding card, Phase 4 /whoami, Phase 6
 /// RequiresBinding metadata). The handlers run inside the channel turn runner
 /// and produce <see cref="MessageContent"/>; tests assert on that content
 /// directly rather than reaching through the runner.
 /// </summary>
 public sealed class SlashCommandHandlerTests
 {
-    private static ExternalSubjectRef Subject() => new()
+    private static ExternalSubjectRef Subject(string platform = "lark") => new()
     {
-        Platform = "lark",
+        Platform = platform,
         Tenant = "ou_tenant_x",
         ExternalUserId = "ou_user_y",
     };
 
     private static ChannelSlashCommandContext Context(
         string? bindingValue = null,
-        bool privateChat = true) => new()
+        bool privateChat = true,
+        string platform = "lark") => new()
     {
         CommandName = "init",
         ArgumentText = string.Empty,
-        Subject = Subject(),
+        Subject = Subject(platform),
         BindingIdValue = bindingValue,
         RegistrationId = "reg-1",
         RegistrationScopeId = "scope-1",
@@ -55,6 +56,25 @@ public sealed class SlashCommandHandlerTests
             action.Value.Contains("test-nyxid.local/oauth/authorize"));
         // text fallback retains the URL so non-card transports keep working.
         reply.Text.Should().Contain("test-nyxid.local/oauth/authorize");
+    }
+
+    [Fact]
+    public async Task Init_TelegramReply_DoesNotDuplicateAuthorizeUrlOrMentionLark()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var handler = new InitChannelSlashCommandHandler(broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
+
+        var reply = await handler.HandleAsync(Context(platform: "telegram"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().NotContain("test-nyxid.local/oauth/authorize");
+        reply.Text.Should().Contain("Telegram");
+        reply.Text.Should().NotContain("Lark");
+        reply.Cards.Should().ContainSingle().Which.Text.Should().NotContain("Lark");
+        reply.Actions.Should().ContainSingle(action =>
+            action.Kind == ActionElementKind.Link &&
+            action.IsPrimary &&
+            action.Value.Contains("test-nyxid.local/oauth/authorize"));
     }
 
     [Fact]

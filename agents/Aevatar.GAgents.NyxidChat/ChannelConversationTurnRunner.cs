@@ -559,7 +559,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     inbound.Platform,
                     inbound.SenderId,
                     registration.Id);
-                reply = new MessageContent { Text = "无法识别当前 Lark 用户身份,请稍后重试。" };
+                reply = new MessageContent { Text = $"无法识别当前 {inbound.Platform} 用户身份,请稍后重试。" };
             }
             else
             {
@@ -568,6 +568,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     var challenge = await broker.StartExternalBindingAsync(subject, ct).ConfigureAwait(false);
                     reply = InitChannelSlashCommandHandler.BuildBindingCard(
                         challenge.AuthorizeUrl,
+                        subject.Platform,
                         challenge.RenewsExistingBinding);
                 }
                 catch (AevatarOAuthClientNotProvisionedException ex)
