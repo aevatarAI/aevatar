@@ -299,19 +299,11 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static IEnumerable<IAgentToolSource> ResolveChannelToolSources(IServiceProvider serviceProvider)
+    private static IReadOnlyList<IAgentToolSource> ResolveChannelToolSources(IServiceProvider serviceProvider)
     {
-        var workspace = serviceProvider.GetRequiredService<IToolSetRegistry>()
-            .Resolve(ToolSetNames.WorkspaceDefault);
-        var sources = workspace.IsSuccess
-            ? workspace.Sources
-            : serviceProvider.GetServices<IAgentToolSource>();
-        foreach (var source in sources)
-            yield return source;
-
-        var inventory = serviceProvider.GetService<ChannelNyxIdConnectedServiceInventoryToolSource>();
-        if (inventory is not null)
-            yield return inventory;
+        var result = serviceProvider.GetRequiredService<IToolSetRegistry>()
+            .Resolve(ToolSetNames.ChannelReplyDefault);
+        return result.IsSuccess ? result.Sources : [];
     }
 
     private static IReadOnlyList<IAgentToolSource> ResolveNyxIdChatToolSources(

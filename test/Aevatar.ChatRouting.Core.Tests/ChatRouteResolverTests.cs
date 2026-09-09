@@ -13,6 +13,66 @@ namespace Aevatar.ChatRouting.Core.Tests;
 public sealed class ChatRouteResolverTests
 {
     [Fact]
+    public void Resolve_RelayFallback_ShouldDeferToolSetToProfileWithoutMutatingSharedFallback()
+    {
+        var sharedFallback = new ChatRouteDecision
+        {
+            Action = ForwardToModelAction("fallback-model"),
+            UsedFallback = true,
+        };
+        sharedFallback.Action.ForwardToModel.ToolSetRef = new ChatRouteToolSetRef
+        {
+            Name = "workspace.default",
+        };
+        var fallback = Substitute.For<IChatRouteFallbackProvider>();
+        fallback.GetFallbackDecision().Returns(sharedFallback);
+        var resolver = new ChatRouteResolver(fallback, Options.Create(new ChatRoutingOptions
+        {
+            Defaults = new ChatRoutingDefaultsOptions
+            {
+                DefaultForwardToModelToolSetName = "workspace.default",
+            },
+        }));
+
+        var relay = resolver.Resolve(null, new ChatRouteInput { SourceKind = ChatSourceKind.NyxRelay });
+        var workspace = resolver.Resolve(null, new ChatRouteInput { SourceKind = ChatSourceKind.NyxResponses });
+        var selected = resolver.Resolve(
+            null,
+            new ChatRouteInput { SourceKind = ChatSourceKind.NyxRelay },
+            implicitToolSetNameOverride: "channel.reply.default");
+
+        relay.Action.ForwardToModel.ProfileKind.Should().Be(ChatRouteAgentProfileKind.ChannelReply);
+        relay.Action.ForwardToModel.ToolSetRef.Should().BeNull();
+        workspace.Action.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
+        selected.Action.ForwardToModel.ToolSetRef.Name.Should().Be("channel.reply.default");
+        sharedFallback.Action.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Resolve_RelayPolicy_ShouldPreserveOnlyExplicitToolSet(bool matchedRule, bool explicitToolSet)
+    {
+        var action = ForwardToModelAction("channel-model");
+        if (explicitToolSet)
+            action.ForwardToModel.ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" };
+        var snapshot = new ChatRoutePolicySnapshot(
+            matchedRule ? ForwardToModelAction("unused-model") : action,
+            matchedRule ? [new ChatRouteRule { RuleId = "channel-rule", Action = action }] : []);
+
+        var result = NewResolver("workspace.default").Resolve(
+            snapshot,
+            new ChatRouteInput { SourceKind = ChatSourceKind.NyxRelay });
+
+        result.Action.ForwardToModel.ModelName.Should().Be("channel-model");
+        result.Action.ForwardToModel.ProfileKind.Should().Be(ChatRouteAgentProfileKind.ChannelReply);
+        result.Action.ForwardToModel.ToolSetRef.Should().Be(action.ForwardToModel.ToolSetRef);
+        result.MatchedRuleId.Should().Be(matchedRule ? "channel-rule" : string.Empty);
+    }
+
+    [Fact]
     public void Resolve_NullSnapshot_UsesFallbackDecision()
     {
         var fallback = Substitute.For<IChatRouteFallbackProvider>();

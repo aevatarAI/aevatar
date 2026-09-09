@@ -967,6 +967,59 @@ public sealed class MainnetHostCompositionTests
             !route.Route!.Contains("scopeId", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static async Task AssertChannelProfileInventoryAsync(
+        IToolSetRegistry registry,
+        string platform,
+        bool hasBinding,
+        bool maximumAllowsInventory = true,
+        bool recoveryAllowsInventory = true)
+    {
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(platform, "sender-alpha", "registration-alpha", null, null),
+            SenderBinding = new AgentToolSenderBindingContext(hasBinding ? "binding-alpha" : null),
+            Credentials = new AgentToolCredentials("bot-owner-token", null, null),
+        };
+        var profile = new AgentProfileSnapshot
+        {
+            ProfileId = "prof-channel-inventory",
+            PublishedRevision = 3,
+            AgentKind = AgentProfilePolicies.ChannelReplyAgentKind,
+            RouteToolSetRef = "channel.reply.default",
+            ActivationMode = AgentProfileActivationMode.Enforced,
+            MaximumToolPolicy = new AgentProfileToolPolicy { ToolNames = { "use_skill", "nyxid_services" } },
+            RecoveryToolPolicy = new AgentProfileToolPolicy { ToolNames = { "use_skill", "nyxid_services" } },
+            MaxOwnedToolCount = 8,
+            MaxSchemaBytes = 49152,
+        };
+        if (maximumAllowsInventory)
+            profile.MaximumToolPolicy.ToolNames.Add("nyxid_service_inventory");
+        if (recoveryAllowsInventory)
+            profile.RecoveryToolPolicy.ToolNames.Add("nyxid_service_inventory");
+        profile = AgentProfileSnapshotCodec.Seal(profile);
+        var materializer = new AgentTurnToolCatalogMaterializer(
+            registry,
+            Substitute.For<IAgentProfileTurnClassifier>());
+
+        var preparation = await materializer.PrepareAsync(
+            profile, "run-inventory", "我有哪些已连接的 NyxID Service", [], toolContext);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            profile, preparation.Authority, null, [], toolContext);
+
+        string[] expectedNames = hasBinding && maximumAllowsInventory && recoveryAllowsInventory
+            ? ["use_skill", "nyxid_service_inventory"]
+            : ["use_skill"];
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(expectedNames);
+        materialization.Catalog.ExactTools.Keys.Should().BeEquivalentTo(expectedNames);
+        materialization.Catalog.Proof.ToolCount.Should().Be(expectedNames.Length);
+
+        var workspace = registry.Resolve(ToolSetNames.WorkspaceDefault);
+        var workspaceDiscovery = await AgentToolDiscoveryService.Instance.DiscoverAsync(workspace.Sources, toolContext);
+        workspaceDiscovery.IsSuccess.Should().BeTrue();
+        workspaceDiscovery.Tools.Select(static tool => tool.Name).Should()
+            .NotContain(["nyxid_service_inventory", "nyxid_services"]);
+    }
+
     [Fact]
     public async Task AddAevatarMainnetHost_ShouldRegisterDefaultToolSets()
     {
@@ -1006,6 +1059,7 @@ public sealed class MainnetHostCompositionTests
             AgentProfilePolicies.NyxIdChatRouteToolSet,
             ToolSetNames.ChannelCore,
             ToolSetNames.ChannelLark,
+            "channel.reply.default",
             ToolSetNames.ChannelTelegram,
             ToolSetNames.ChatCore,
             ToolSetNames.LarkSelfNotify,
@@ -1049,6 +1103,7 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
         workspace.Sources.Should().NotContain(source => source is NyxIdExecutionAgentToolSource);
         workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceInventoryToolSource);
+        workspace.Sources.Should().NotContain(source => source is ChannelNyxIdConnectedServiceInventoryToolSource);
         workspace.Sources.Should().NotContain(source => source is LarkAgentToolSource);
         workspace.Sources.Should().NotContain(source => source is TelegramAgentToolSource);
         workspace.Sources.Should().NotContain(source => source is ChronoStorageReadAgentToolSource);
@@ -1121,6 +1176,17 @@ public sealed class MainnetHostCompositionTests
                 source is ChannelNyxIdConnectedServiceInventoryToolSource)
             .Which.Should()
             .BeSameAs(channelInventorySource);
+        var channelReply = registry.Resolve("channel.reply.default");
+        channelReply.IsSuccess.Should().BeTrue(channelReply.Error?.Message);
+        channelReply.Sources.Select(static source => source.GetType()).Should()
+            .Equal(channelToolSources.Select(static source => source.GetType()));
+        foreach (var platform in new[] { "telegram", "lark" })
+        {
+            await AssertChannelProfileInventoryAsync(registry, platform, hasBinding: true);
+            await AssertChannelProfileInventoryAsync(registry, platform, hasBinding: false);
+            await AssertChannelProfileInventoryAsync(registry, platform, hasBinding: true, maximumAllowsInventory: false);
+            await AssertChannelProfileInventoryAsync(registry, platform, hasBinding: true, recoveryAllowsInventory: false);
+        }
         channelToolSources.Should().NotContain(source =>
             source is WorkflowExternalCapabilityAuthoringToolSource);
         channelToolSources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));

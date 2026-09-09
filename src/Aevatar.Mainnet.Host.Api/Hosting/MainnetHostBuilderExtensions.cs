@@ -598,6 +598,11 @@ public static class MainnetHostBuilderExtensions
                 [],
                 "Public text route ceiling composed from reviewed runtime capabilities.");
             options.AddToolSet(
+                ToolSetNames.ChannelReplyDefault,
+                [ToolSetNames.WorkspaceDefault],
+                [static sp => sp.GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>()],
+                "Channel reply runtime with sender-authorized NyxID inventory.");
+            options.AddToolSet(
                 ToolSetNames.LarkSelfNotify,
                 [ToolSetNames.WorkspaceDefault, ToolSetNames.ChannelLark],
                 [],

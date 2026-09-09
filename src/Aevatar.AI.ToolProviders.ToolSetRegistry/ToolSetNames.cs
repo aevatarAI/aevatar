@@ -21,6 +21,10 @@ public static class ToolSetNames
 
     public const string ChannelLark = "channel.lark";
     public const string ChannelTelegram = "channel.telegram";
+    /// <summary>
+    /// Channel reply runtime composed from workspace tools and sender-authorized NyxID inventory.
+    /// </summary>
+    public const string ChannelReplyDefault = "channel.reply.default";
     public const string WorkspaceDefault = "workspace.default";
     public const string LarkSelfNotify = "lark.self_notify";
 

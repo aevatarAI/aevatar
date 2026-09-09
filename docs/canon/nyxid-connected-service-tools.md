@@ -175,7 +175,20 @@ Milestone 40 使用 ADR-0048 的 Tier B approval fallback。turn actor 提交准
 
 计划只投影 read-only progress，不参与工具授权。conversation actor 直接派发 server-sealed typed Tool command；turn actor 在执行前持久化 exact admission、operation key、idempotency key 与 effect dispatch waterline。ambiguous operation dispatch 走普通 operation probe/tombstone 协议，迟到命令不得越过已提交 fence。显式 effect retry 只携带 credential-free authorization snapshot、完整 tool-definition fingerprint 与 exact `not_applied` source operation key；turn 重新匹配 current profile tool 和 complete admission contract，不能把 generation counter、历史 receipt 或 generic approval 当成授权。工具若返回 exact `ApprovalRequired`，只能由该 invocation 对应的 `approval.resolve` 继续；计划、OAuth 完成信号或其他工具 receipt 都不能替代它。
 
-只读 `nyxid_service_inventory` 也可由 `ChannelNyxIdConnectedServiceInventoryToolSource` 显式挂入 channel reply generator。该 wrapper 在模型真正调用时才以 current sender authority 读取 `/api/v1/keys`；不得替换为 bot-owner token、sandbox CLI login 或进程级 cache。自然语言 inventory 走 `AgentRun -> ChatStreamAsync -> use_skill("nyxid") -> nyxid_service_inventory -> sender /keys -> streamed answer`，不引入 phrase matcher、direct query adapter 或 `code_execute`。
+只读 `nyxid_service_inventory` 由 `ChannelNyxIdConnectedServiceInventoryToolSource` 注册到
+`channel.reply.default`。Mainnet Host 在 `MainnetHostBuilderExtensions.cs` 的
+`AddToolSetRegistry` 中组合 `workspace.default` 与该 sender wrapper；普通 channel reply
+generator 和 Agent Profile catalog materializer 通过同一个注册项发现工具，禁止在 generator
+中额外追加 inventory，形成另一份工具清单。`workspace.default` 已经从 `skill.runtime`
+继承 `use_skill`，其公共工具面不包含 channel inventory 或 NyxID management 工具。
+
+发现 inventory schema 必须具有 typed `SenderBinding.BindingId`。wrapper 在模型真正调用时
+才使用 verified sender token，或按该 binding 签发的窄 inventory capability，读取
+`/api/v1/keys`；不得替换为 bot-owner token、sandbox CLI login 或进程级 cache。Profile 的
+maximum 和 recovery 都要包含 `use_skill`、`nyxid_service_inventory`；仅在 policy 中写入
+工具名不能把缺席于 route set 的工具变出来。自然语言 inventory 走
+`AgentRun -> ChatStreamAsync -> use_skill(skill="nyxid-service-discovery") -> nyxid_service_inventory({}) -> sender /keys -> streamed answer`，
+不引入 phrase matcher、direct query adapter 或 `code_execute`。
 
 Pinned NyxID Assistant route 不挂载 `nyxid_service_inventory`：该 route 的 caller inventory 读取由 read-only `nyxid_services`（list/show，读 `/api/v1/keys`）承担，不为同一事实并列第二个 model-visible 读取工具。kernel 与 floor prompt 对 inventory 读取的指引必须以 `nyxid_service_inventory` 出现在最终 tool schemas 为条件；缺席时指向当前实际存在的只读 management read，不得无条件指向单一工具名。
 

@@ -32,6 +32,49 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class AgentRunReplyGenerationExecutorTests
 {
+    [Theory]
+    [InlineData("workspace.default", false)]
+    [InlineData("workspace.default", true)]
+    [InlineData("channel.reply.default", false)]
+    [InlineData("channel.reply.default", true)]
+    public async Task BuildInitialStepState_WhenRouteToolSetIsImplicit_ShouldUseResolvedOrPinnedProfile(
+        string routeToolSet, bool pinned)
+    {
+        var fixture = CreateProfiledChannelExecutor(routeToolSet);
+        var request = fixture.Request.Clone();
+        request.TargetRef.ForwardToModel.ToolSetRef = null;
+        if (pinned)
+            request.AgentProfile = fixture.Profile.Clone();
+
+        var state = await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
+            CancellationToken.None);
+
+        AgentProfileSnapshotCodec.ByteEquivalent(state.AgentProfileSnapshot, fixture.Profile).Should().BeTrue();
+        state.AgentProfileSnapshot.RouteToolSetRef.Should().Be(routeToolSet);
+        state.ToolCatalogProof.Should().Be(fixture.Catalog.Proof.ToPayload());
+        fixture.Generator.ReceivedCatalog.Should().BeSameAs(fixture.Catalog);
+        if (pinned)
+            fixture.ProfileResolver.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WhenExplicitRouteToolSetDiffersFromProfile_ShouldFailClosed()
+    {
+        var fixture = CreateProfiledChannelExecutor("channel.reply.default");
+        var request = fixture.Request.Clone();
+        request.TargetRef.ForwardToModel.ToolSetRef.Name = "workspace.default";
+
+        var act = () => fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
+            CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<AgentTurnToolCatalogException>();
+        exception.Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.CatalogProofMismatch);
+        fixture.ProfilePlanner.ReceivedCalls().Should().BeEmpty();
+        fixture.Provider.Requests.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task BuildInitialStepState_WhenChannelProfileIsSelected_ShouldPinAndReplayExactCatalog()
     {
@@ -2098,7 +2141,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
 
-    private static ProfiledChannelExecutorFixture CreateProfiledChannelExecutor()
+    private static ProfiledChannelExecutorFixture CreateProfiledChannelExecutor(
+        string routeToolSet = AgentProfilePolicies.ChannelReplyRouteToolSet)
     {
         var tool = new CountingTool("workspace_profile_tool");
         var provider = new RecordingProvider();
@@ -2110,7 +2154,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             PublishedRevision = 1,
             AgentKind = AgentProfilePolicies.ChannelReplyAgentKind,
             PolicyRevision = "policy-v1",
-            RouteToolSetRef = AgentProfilePolicies.ChannelReplyRouteToolSet,
+            RouteToolSetRef = routeToolSet,
             ActivationMode = AgentProfileActivationMode.Enforced,
         });
         var authority = new AgentProfileTurnAuthorityState
@@ -2185,7 +2229,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                     ProfileKind = ChatRouteAgentProfileKind.ChannelReply,
                     ToolSetRef = new ChatRouteToolSetRef
                     {
-                        Name = AgentProfilePolicies.ChannelReplyRouteToolSet,
+                        Name = routeToolSet,
                     },
                 },
             },

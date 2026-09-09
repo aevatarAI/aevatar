@@ -12,7 +12,7 @@ public static partial class AgentProfilePolicies
     public const string ChannelReplyAgentKind = "channel.reply";
     public const string NyxIdChatRouteToolSet = "agent-profile.nyxid-chat";
     public const string WorkspaceChatRouteToolSet = "workspace.default";
-    public const string ChannelReplyRouteToolSet = "workspace.default";
+    public const string ChannelReplyRouteToolSet = "channel.reply.default";
     public const int CanaryCohortBasisPoints = 500;
     public const int ExpandedCohortBasisPoints = 2_500;
     public const int FullCohortBasisPoints = 10_000;
@@ -22,7 +22,13 @@ public static partial class AgentProfilePolicies
         {
             [NyxIdChatAgentKind] = new HashSet<string>(StringComparer.Ordinal) { NyxIdChatRouteToolSet },
             [WorkspaceChatAgentKind] = new HashSet<string>(StringComparer.Ordinal) { WorkspaceChatRouteToolSet },
-            [ChannelReplyAgentKind] = new HashSet<string>(StringComparer.Ordinal) { ChannelReplyRouteToolSet },
+            // The workspace route remains a supported, narrower ceiling for channel profiles.
+            // Existing sealed conversations retain it; it is never aliased to the broader set.
+            [ChannelReplyAgentKind] = new HashSet<string>(StringComparer.Ordinal)
+            {
+                ChannelReplyRouteToolSet,
+                WorkspaceChatRouteToolSet,
+            },
         };
 
     public static IReadOnlyList<AgentProfileDiagnostic> ValidateProfileSlug(string? profileSlug)

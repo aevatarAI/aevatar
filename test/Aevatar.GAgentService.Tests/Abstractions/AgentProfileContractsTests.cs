@@ -8,6 +8,19 @@ namespace Aevatar.GAgentService.Tests.Abstractions;
 
 public sealed class AgentProfileContractsTests
 {
+    [Theory]
+    [InlineData("channel.reply", "channel.reply.default", true)]
+    [InlineData("channel.reply", "workspace.default", true)]
+    [InlineData("workspace.chat", "channel.reply.default", false)]
+    [InlineData("workspace.chat", "workspace.default", true)]
+    [InlineData("nyxid.chat", "channel.reply.default", false)]
+    public void RouteToolSets_ShouldKeepChannelInventoryWithinChannelProfiles(
+        string agentKind, string routeToolSet, bool supported)
+    {
+        AgentProfilePolicies.ChannelReplyRouteToolSet.Should().Be("channel.reply.default");
+        AgentProfilePolicies.IsSupportedRouteToolSet(agentKind, routeToolSet).Should().Be(supported);
+    }
+
     [Fact]
     public void OwnerFactories_ShouldKeepScopeAndSystemIdentitySeparate()
     {

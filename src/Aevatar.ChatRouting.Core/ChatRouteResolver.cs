@@ -36,7 +36,7 @@ public sealed class ChatRouteResolver
                 _fallbackProvider.GetFallbackDecision().Clone(),
                 input.SourceKind,
                 implicitToolSetNameOverride,
-                replaceExisting: !string.IsNullOrWhiteSpace(implicitToolSetNameOverride));
+                fromHostFallback: true);
         }
 
         foreach (var rule in snapshot.Rules)
@@ -116,14 +116,30 @@ public sealed class ChatRouteResolver
         ChatRouteDecision decision,
         ChatSourceKind sourceKind,
         string? implicitToolSetNameOverride,
-        bool replaceExisting = false)
+        bool fromHostFallback = false)
     {
+        var forward = decision.Action?.ForwardToModel;
+        ApplyDefaultProfileKind(forward, sourceKind);
+        if (sourceKind == ChatSourceKind.NyxRelay &&
+            forward?.ProfileKind == ChatRouteAgentProfileKind.ChannelReply &&
+            string.IsNullOrWhiteSpace(implicitToolSetNameOverride))
+        {
+            // Channel admission resolves the sealed profile in the AgentRun executor.
+            // Leave its implicit ceiling unset until then, including host defaults.
+            // An explicit projected route still has to match the resolved/pinned profile.
+            if (fromHostFallback)
+                forward.ToolSetRef = null;
+            return decision;
+        }
+
         var toolSetName = string.IsNullOrWhiteSpace(implicitToolSetNameOverride)
             ? _options.Value.Defaults.DefaultForwardToModelToolSetName
             : implicitToolSetNameOverride;
         if (!string.IsNullOrWhiteSpace(toolSetName))
-            ApplyDefaultToolSet(decision.Action?.ForwardToModel, toolSetName, replaceExisting);
-        ApplyDefaultProfileKind(decision.Action?.ForwardToModel, sourceKind);
+            ApplyDefaultToolSet(
+                forward,
+                toolSetName,
+                replaceExisting: fromHostFallback && !string.IsNullOrWhiteSpace(implicitToolSetNameOverride));
         return decision;
     }
 

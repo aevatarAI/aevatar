@@ -85,7 +85,7 @@ INTERSECT platform safety policy
 MINUS deny policy
 ```
 
-`routeToolSetRef` 只能引用 Host 为 `nyxid.chat` 静态注册的 tool set。Profile draft、Admin 页面或 published state 都不能动态创建 tool set、注入 tool instance、授予 credential/scope 或扩张 caller authority。
+`routeToolSetRef` 只能引用 Host 静态注册且该 agent kind 支持的 tool set。Profile draft、Admin 页面或 published state 都不能动态创建 tool set、注入 tool instance、授予 credential/scope 或扩张 caller authority。
 
 `maximum/recovery/task` policy 可以把 literal tool name、tool-set ref 与 `connectedServiceSelectors` 相加。selector 以 canonical `catalogServiceSlug` 和非空 `allowedRisks`（仅 `READ_ONLY/WRITE`）表达 connected-service operation 类别；它只匹配本 turn 已由 route discovery 和 caller authorization 准入的工具，并读取 exact typed admission 中 server-sealed 的 catalog slug 与 risk。`serviceInstanceId`、opaque `nyxop_*` 名称、展示 descriptor、method/path 都不是 selector 权威。多个同类 exact connection 会全部匹配，但每个工具仍保留自己的 exact execution admission；未匹配 selector 不会使其他显式允许项失效。
 
@@ -106,6 +106,60 @@ case-insensitive、完整 token/phrase boundary 在整条用户消息中匹配�
 归属一个 member；同一消息命中多个 member 时仍按 collision fail closed，不能靠 member 顺序或
 classifier 猜测。Profile 作者应使用稳定服务/能力词作为 natural-language alias，slash command
 alias 继续遵守同一 boundary 规则。
+
+## Channel reply 与发送者 inventory
+
+`channel.reply` 推荐使用 `channel.reply.default`：Host 组合 `workspace.default` 与
+`ChannelNyxIdConnectedServiceInventoryToolSource`。`use_skill` 来自 workspace 的
+`skill.runtime`，`nyxid_service_inventory` 来自 channel sender wrapper。
+`nyxid_services` 属于 NyxID Assistant 的 management surface，不包含在该 channel set 中。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    W["workspace.default"] --> C["channel.reply.default"]
+    S["Sender inventory source"] --> C
+    C --> G["Ordinary channel generator"]
+    C --> M["Profile catalog materializer"]
+    P["Sealed maximum / recovery / task policy"] --> M
+    A["Typed sender authorization"] --> M
+    M --> T["Exact turn tools + proof"]
+```
+
+Relay ingress 的 `ForwardToModel` 若选择 channel Profile 且 policy 未显式指定 tool set，
+resolver 保留空 `ToolSetRef`，由 AgentRun executor 使用 resolved 或 conversation-pinned
+sealed Profile 的 `routeToolSetRef`。Host fallback 中的默认 tool set 也是隐式值，必须在
+clone 上移除；不能把它当成显式 channel policy。显式 projected route 仍保留，和 Profile
+route 不一致时在模型执行前 fail closed。未绑定 Profile 的 channel AgentRun 仍为
+restricted-empty catalog。
+
+`workspace.default` 继续作为 channel Profile 可选的较窄工具上限；已封存的旧版本和旧
+Conversation 可继续运行。它不会被 alias 或自动升级为 `channel.reply.default`。
+只有更新并发布 Profile route，才会让新 Conversation 使用新工具面。
+
+从引用 `workspace.default` 的 `channel-reply-default` 迁移时：
+
+1. 先通过正常源码交付与 CI/CD 部署含 `channel.reply.default` 注册项的 Host。
+2. 回读当前 Profile draft，复制为独立 candidate Profile（不同 `profileId` / slug，例如
+   `channel-reply-inventory`）。保留 instructions、members、workflow policies 和预算，
+   把 candidate 的 `routeToolSetRef` 改为 `channel.reply.default`，确保 maximum 和
+   recovery 的 `toolNames` 同时包含 `use_skill`、`nyxid_service_inventory`，移除无效的
+   `nyxid_services` 名称。validate、publish candidate，并回读确认 published revision。
+3. 回读 `channel.reply` system binding，使用它自己的最新 authority version 切换到 candidate，
+   按 `500 -> 2500 -> 10000` 推进 cohort。每步都观察 committed mutation outcome；Profile
+   的 published revision 不能用作 binding 的 `expectedVersion`。
+4. 在新的 channel Conversation 验证最终工具 schema 和真实 sender inventory receipt。
+   已固定旧 Profile 的 Conversation 不会因默认 binding 更新而自动切换。
+
+当前 resolver 的既有限制要求 binding target 与该 Profile catalog entry 的最新
+published revision/digest 完全一致。因此在同一 `profileId` 上直接发布新 revision，
+会使仍指向旧 revision 的 binding 或 `previous_reviewed_target` 返回
+`ProfileNotPublished`。上述独立 candidate 保留旧 `channel-reply-default` 的已发布
+v2 作为可解析的灰度基线；在此限制修复前，不要用同 Profile 原地发布实现无中断灰度。
+
+生产 API 使用 NyxID proxy；mutation precondition 使用回读得到的 strong ETag，或官方
+body `expectedVersion` 与唯一 `idempotencyKey`。不得提前在尚不支持新 tool set 的 Host 上
+切换线上 Profile，也不得以生产 pod 变更代替标准源码部署。
 
 ## Legacy 删除
 
