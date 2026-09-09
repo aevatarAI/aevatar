@@ -15,7 +15,7 @@ namespace Aevatar.GAgentService.Tests.Hosting;
 public sealed class NyxIdChatSystemAgentProfileBootstrapHostedServiceTests
 {
     [Fact]
-    public async Task StartAsync_ShouldWaitForChannelReplyDefaultBindingToMaterialize()
+    public async Task StartAsync_ShouldSetChannelReplyDefaultBinding()
     {
         var store = new ProfileStore();
         var actorPort = new RecordingActorPort(store);
@@ -92,7 +92,6 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedServiceTests
     private sealed class ProfileStore
     {
         private readonly Dictionary<string, ProfileState> _profiles = [];
-        private readonly List<PendingBinding> _pendingBindings = [];
         private readonly List<AgentProfileDefaultBinding> _bindings = [];
         private long _namespaceVersion;
 
@@ -105,7 +104,6 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedServiceTests
         {
             owner.Should().BeEquivalentTo(AgentProfileOwners.ForSystem());
             MaterializePendingProfiles();
-            MaterializePendingBindings();
             return new AgentProfileCatalogSnapshot(
                 "namespace-actor",
                 _namespaceVersion,
@@ -199,7 +197,14 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedServiceTests
 
         public void SetBinding(SetAgentProfileDefaultBindingCommand command)
         {
-            _pendingBindings.Add(new PendingBinding(command));
+            _bindings.RemoveAll(binding => binding.AgentKind == command.AgentKind);
+            _bindings.Add(new AgentProfileDefaultBinding
+            {
+                AgentKind = command.AgentKind,
+                Target = command.Target.Clone(),
+                System = command.System.Clone(),
+            });
+            _namespaceVersion++;
         }
 
         private ProfileState Profile(string slug) => _profiles[slug];
@@ -235,28 +240,6 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedServiceTests
                 _namespaceVersion++;
             }
         }
-
-        private void MaterializePendingBindings()
-        {
-            foreach (var pending in _pendingBindings.ToArray())
-            {
-                if (pending.ReadsBeforeMaterialized > 0)
-                {
-                    pending.ReadsBeforeMaterialized--;
-                    continue;
-                }
-
-                _bindings.RemoveAll(binding => binding.AgentKind == pending.Command.AgentKind);
-                _bindings.Add(new AgentProfileDefaultBinding
-                {
-                    AgentKind = pending.Command.AgentKind,
-                    Target = pending.Command.Target.Clone(),
-                    System = pending.Command.System.Clone(),
-                });
-                _pendingBindings.Remove(pending);
-                _namespaceVersion++;
-            }
-        }
     }
 
     private sealed class ProfileState(
@@ -270,12 +253,6 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedServiceTests
         public AgentProfileSnapshot PublishedRuntimeProfile { get; set; } = new();
         public int ProfileReadsBeforeActive { get; set; } = 1;
         public int ExecutionReadsRemaining { get; set; }
-    }
-
-    private sealed class PendingBinding(SetAgentProfileDefaultBindingCommand command)
-    {
-        public SetAgentProfileDefaultBindingCommand Command { get; } = command.Clone();
-        public int ReadsBeforeMaterialized { get; set; } = 1;
     }
 
     private sealed class FakeCatalogQuery(ProfileStore store) : IAgentProfileCatalogQueryPort

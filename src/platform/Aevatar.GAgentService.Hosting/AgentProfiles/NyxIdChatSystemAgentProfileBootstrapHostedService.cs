@@ -241,80 +241,42 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
         NyxIdChatSystemAgentProfileBootstrapOptions options,
         CancellationToken ct)
     {
-        var deadline = _timeProvider.GetUtcNow() + options.ProjectionWaitTimeout;
-        var interval = options.ProjectionPollInterval <= TimeSpan.Zero
-            ? TimeSpan.FromMilliseconds(250)
-            : options.ProjectionPollInterval;
-        var setAccepted = false;
-        var bindingIdempotencyOperation = BindingIdempotencyOperation(idempotencyOperation, detail.Snapshot);
-
-        while (true)
+        var binding = await _profileService.GetBindingAsync(
+            owner,
+            agentKind,
+            ct).ConfigureAwait(false);
+        if (BindingTargetsPublishedSnapshot(binding.Binding, detail.Snapshot, options))
         {
-            var binding = await _profileService.GetBindingAsync(
+            _logger.LogInformation(
+                "System Agent Profile bootstrap binding already current: agentKind={AgentKind}, profileSlug={ProfileSlug}, publishedRevision={PublishedRevision}",
+                agentKind,
+                profileSlug,
+                detail.Snapshot.PublishedRevision);
+            return;
+        }
+
+        var receipt = await _profileService.SetBindingAsync(
+            new AgentProfileBindingUpdateRequest(
                 owner,
                 agentKind,
-                ct).ConfigureAwait(false);
-            if (BindingTargetsPublishedSnapshot(binding.Binding, detail.Snapshot, options))
-            {
-                _logger.LogInformation(
-                    "System Agent Profile bootstrap binding current: agentKind={AgentKind}, profileSlug={ProfileSlug}, publishedRevision={PublishedRevision}",
-                    agentKind,
-                    profileSlug,
-                    detail.Snapshot.PublishedRevision);
-                return;
-            }
-
-            if (!setAccepted)
-            {
-                try
+                new AgentProfileReference
                 {
-                    var receipt = await _profileService.SetBindingAsync(
-                        new AgentProfileBindingUpdateRequest(
-                            owner,
-                            agentKind,
-                            new AgentProfileReference
-                            {
-                                OwnerKind = AgentProfileReferenceOwnerKind.System,
-                                ProfileSlug = profileSlug,
-                            },
-                            binding.AuthorityStateVersion,
-                            IdempotencyKey(options, profileSlug, bindingIdempotencyOperation),
-                            AuditSubject,
-                            Enabled: true,
-                            CohortBasisPoints: options.CohortBasisPoints),
-                        ct).ConfigureAwait(false);
-                    setAccepted = true;
-                    _logger.LogInformation(
-                        "System Agent Profile bootstrap binding set accepted: agentKind={AgentKind}, profileSlug={ProfileSlug}, publishedRevision={PublishedRevision}, operationId={OperationId}, commandId={CommandId}",
-                        agentKind,
-                        profileSlug,
-                        detail.Snapshot.PublishedRevision,
-                        receipt.OperationId,
-                        receipt.CommandId);
-                }
-                catch (AgentProfileUnavailableException exception)
-                {
-                    _logger.LogInformation(
-                        exception,
-                        "System Agent Profile bootstrap binding is waiting for protected execution: agentKind={AgentKind}, profileSlug={ProfileSlug}, publishedRevision={PublishedRevision}",
-                        agentKind,
-                        profileSlug,
-                        detail.Snapshot.PublishedRevision);
-                }
-            }
-
-            if (_timeProvider.GetUtcNow() >= deadline)
-            {
-                _logger.LogWarning(
-                    "System Agent Profile bootstrap binding did not become current before timeout: agentKind={AgentKind}, profileSlug={ProfileSlug}, publishedRevision={PublishedRevision}",
-                    agentKind,
-                    profileSlug,
-                    detail.Snapshot.PublishedRevision);
-                return;
-            }
-
-            await Task.Delay(interval, _timeProvider, ct).ConfigureAwait(false);
-        }
+                    OwnerKind = AgentProfileReferenceOwnerKind.System,
+                    ProfileSlug = profileSlug,
+                },
+                binding.AuthorityStateVersion,
+                IdempotencyKey(options, profileSlug, BindingIdempotencyOperation(idempotencyOperation, detail.Snapshot)),
+                AuditSubject,
+                Enabled: true,
+                CohortBasisPoints: options.CohortBasisPoints),
+            ct).ConfigureAwait(false);
+        _logger.LogInformation(
+            "System Agent Profile bootstrap binding set accepted: agentKind={AgentKind}, profileSlug={ProfileSlug}, publishedRevision={PublishedRevision}, operationId={OperationId}, commandId={CommandId}",
+            agentKind,
+            profileSlug,
+            detail.Snapshot.PublishedRevision,
+            receipt.OperationId,
+            receipt.CommandId);
     }
 
     private async Task<ProfileBootstrapState> GetProfileBootstrapStateAsync(
