@@ -237,6 +237,11 @@ public sealed class WorkflowScheduleApplicationServiceTests
         fact.OwnerLLMSelection.NyxIdUserServiceId.Should().Be("svc-chrono");
         fact.OwnerLLMSelection.ServiceSlugSnapshot.Should().Be("chrono-llm");
         fact.OwnerLLMSelection.Model.Should().Be("gpt-5.5");
+
+        var chatRequest = actorPort.Created.Single().Configuration.Target.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.LlmControl.Should().NotBeNull();
+        chatRequest.LlmControl!.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        chatRequest.LlmControl.ModelOverride.Should().Be("gpt-5.5");
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
@@ -68,12 +69,30 @@ internal static class WorkflowScheduleConfigurationMapper
         var request = new ChatRequestEvent
         {
             Prompt = NormalizeOptional(configuration.Prompt, string.Empty),
+            LlmControl = BuildWorkflowLLMControl(configuration),
         };
 
         foreach (var (key, value) in BuildWorkflowScheduleHeaders(configuration))
             request.Metadata[key] = value;
 
         return request;
+    }
+
+    private static LLMControlContextPayload? BuildWorkflowLLMControl(
+        WorkflowScheduleConfiguration configuration)
+    {
+        var ownerLLMSelection = configuration.AuthorizationFact?.OwnerLLMSelection;
+        if (ownerLLMSelection == null)
+            return null;
+
+        return new LLMControlContext(
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: NormalizeOptional(ownerLLMSelection.Model, string.Empty),
+            NyxIdRoutePreference: NormalizeOptional(ownerLLMSelection.RouteValue, string.Empty),
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null).ToPayload();
     }
 
     private static ScheduledDispatchScheduleMode ToScheduledDispatchScheduleMode(WorkflowScheduleMode mode) =>
