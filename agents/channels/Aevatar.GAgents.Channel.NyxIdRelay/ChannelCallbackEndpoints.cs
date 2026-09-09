@@ -40,6 +40,14 @@ public static class ChannelCallbackEndpoints
                 EndpointAuditTargetResolvers.Static("channel-registration", "new"),
                 ChannelRegistrationRequestSummary)
             .RequireAuthorization();
+        group.MapPost("/registrations/local-mirror", HandleRegisterLocalMirrorAsync)
+            .WithEndpointAudit(
+                "channel.registration.local-mirror.create",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.Static("channel-registration", "local-mirror"),
+                ChannelRegistrationRequestSummary)
+            .RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
         group.MapPost(
@@ -178,6 +186,87 @@ public static class ChannelCallbackEndpoints
             statusCode,
             result.Error);
         return Results.Json(payload, statusCode: statusCode);
+    }
+
+    private static async Task<IResult> HandleRegisterLocalMirrorAsync(
+        HttpContext http,
+        [FromServices] ChannelRegistrationCommandFacade registrationCommandFacade,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.LocalMirror");
+
+        LocalMirrorRegistrationRequest? request;
+        try
+        {
+            request = await http.Request.ReadFromJsonAsync<LocalMirrorRegistrationRequest>(RegistrationJsonOptions, ct);
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Invalid local mirror registration request payload");
+            return Results.BadRequest(new { error = "Invalid JSON" });
+        }
+
+        if (request is null)
+            return Results.BadRequest(new { error = "request body is required" });
+
+        var platform = NormalizeOptional(request.Platform)?.ToLowerInvariant();
+        if (platform is null)
+            return Results.BadRequest(new { error = "platform is required" });
+
+        var scopeResolution = ResolveScopeId(http, request.ScopeId, required: true);
+        if (scopeResolution.Error is not null)
+            return Results.BadRequest(new { error = scopeResolution.Error });
+
+        var registrationId = NormalizeOptional(request.RegistrationId) ?? NormalizeOptional(request.NyxConversationRouteId);
+        if (registrationId is null)
+            return Results.BadRequest(new { error = "registration_id or nyx_conversation_route_id is required" });
+
+        var webhookUrl = NormalizeOptional(request.WebhookUrl);
+        if (webhookUrl is null)
+            return Results.BadRequest(new { error = "webhook_url is required" });
+
+        var apiKeyId = NormalizeOptional(request.NyxAgentApiKeyId);
+        if (apiKeyId is null)
+            return Results.BadRequest(new { error = "nyx_agent_api_key_id is required" });
+
+        var channelBotId = NormalizeOptional(request.NyxChannelBotId);
+        if (channelBotId is null)
+            return Results.BadRequest(new { error = "nyx_channel_bot_id is required" });
+
+        var routeId = NormalizeOptional(request.NyxConversationRouteId);
+        if (routeId is null)
+            return Results.BadRequest(new { error = "nyx_conversation_route_id is required" });
+
+        var receipt = await registrationCommandFacade.RegisterLocalMirrorAsync(
+            new ChannelBotRegisterCommand
+            {
+                RequestedId = registrationId,
+                Platform = platform,
+                NyxProviderSlug = NormalizeOptional(request.NyxProviderSlug) ?? ResolveDefaultProviderSlug(platform),
+                ScopeId = scopeResolution.ScopeId!,
+                WebhookUrl = webhookUrl,
+                NyxAgentApiKeyId = apiKeyId,
+                NyxChannelBotId = channelBotId,
+                NyxConversationRouteId = routeId,
+                DefaultSkillName = NormalizeOptional(request.DefaultSkillName) ?? string.Empty,
+            },
+            ct);
+
+        return Results.Accepted(value: new
+        {
+            status = "accepted",
+            registration_id = registrationId,
+            platform,
+            scope_id = scopeResolution.ScopeId,
+            webhook_url = webhookUrl,
+            nyx_provider_slug = NormalizeOptional(request.NyxProviderSlug) ?? ResolveDefaultProviderSlug(platform),
+            nyx_channel_bot_id = channelBotId,
+            nyx_agent_api_key_id = apiKeyId,
+            nyx_conversation_route_id = routeId,
+            command_id = receipt.CommandId,
+            actor_id = receipt.ActorId,
+        });
     }
 
     /// <summary>
@@ -767,6 +856,17 @@ public static class ChannelCallbackEndpoints
         string? Label,
         // Optional Ornn skill this bot's plain inbound messages are routed to
         // (deterministic channel→skill binding; message text becomes the skill args).
+        string? DefaultSkillName);
+
+    private sealed record LocalMirrorRegistrationRequest(
+        string? RegistrationId,
+        string? Platform,
+        string? NyxProviderSlug,
+        string? ScopeId,
+        string? WebhookUrl,
+        string? NyxChannelBotId,
+        string? NyxAgentApiKeyId,
+        string? NyxConversationRouteId,
         string? DefaultSkillName);
 
     private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(
