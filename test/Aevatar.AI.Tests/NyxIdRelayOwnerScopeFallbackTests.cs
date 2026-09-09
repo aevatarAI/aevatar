@@ -67,9 +67,9 @@ public sealed class NyxIdRelayOwnerScopeFallbackTests
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         scopeResolver.LastNyxAgentApiKeyId.Should().Be("nyx-key-owner-fallback");
-        var expectedActorId = BuildScopedRelayConversationActorId("owner-scope-1", "lark:dm:ou_user_1");
+        var expectedActorId = BuildScopedRelayConversationThreadActorId("owner-scope-1", "lark:dm:ou_user_1");
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(ConversationGAgent) &&
+            call.Type == typeof(ChannelConversationThreadGAgent) &&
             call.Id == expectedActorId);
         var actor = runtime.Actors[expectedActorId];
         var relayInbound = actor.HandledEnvelopes.Single().Payload.Unpack<NyxRelayInboundActivity>();
@@ -275,11 +275,11 @@ public sealed class NyxIdRelayOwnerScopeFallbackTests
     private static string ComputeBodySha256Hex(byte[] bodyBytes) =>
         Convert.ToHexString(SHA256.HashData(bodyBytes)).ToLowerInvariant();
 
-    private static string BuildScopedRelayConversationActorId(string scopeId, string canonicalKey)
+    private static string BuildScopedRelayConversationThreadActorId(string scopeId, string canonicalKey)
     {
         var scopeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
             .ToLowerInvariant();
-        return $"channel-conversation:{canonicalKey}:scope:{scopeHash}";
+        return $"channel-conversation-thread:{canonicalKey}:scope:{scopeHash}";
     }
 
     private sealed record RelayInvocationDependencies(

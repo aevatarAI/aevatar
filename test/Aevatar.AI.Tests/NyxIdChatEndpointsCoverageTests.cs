@@ -1941,8 +1941,11 @@ public partial class NyxIdChatEndpointsCoverageTests
         response.Body.Should().Contain("msg-card-builder-1");
         response.Body.Should().NotContain("unsupported_card_action");
 
-        runtime.CreateCalls.Should().ContainSingle(call => call.Type == typeof(ConversationGAgent));
-        var actor = (StubActor)runtime.Actors.Values.Single();
+        var threadActorId = runtime.CreateCalls.Should()
+            .ContainSingle(call => call.Type == typeof(ChannelConversationThreadGAgent))
+            .Subject.Id!;
+        threadActorId.Should().Be(BuildScopedRelayConversationThreadActorId("scope-card", "lark:dm:ou_user_b"));
+        var actor = (StubActor)runtime.Actors[threadActorId];
         actor.HandledEnvelopes.Should().ContainSingle(envelope =>
             envelope.Payload != null &&
             envelope.Payload.Is(NyxRelayInboundActivity.Descriptor));
@@ -2002,8 +2005,11 @@ public partial class NyxIdChatEndpointsCoverageTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("accepted");
 
-        runtime.CreateCalls.Should().ContainSingle(call => call.Type == typeof(ConversationGAgent));
-        var actor = (StubActor)runtime.Actors.Values.Single();
+        var threadActorId = runtime.CreateCalls.Should()
+            .ContainSingle(call => call.Type == typeof(ChannelConversationThreadGAgent))
+            .Subject.Id!;
+        threadActorId.Should().Be(BuildScopedRelayConversationThreadActorId("scope-card", "lark:dm:ou_user_wf"));
+        var actor = (StubActor)runtime.Actors[threadActorId];
         var relayInbound = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<NyxRelayInboundActivity>();
         var activity = relayInbound.Activity;
         activity.Type.Should().Be(ActivityType.CardAction);
@@ -2129,16 +2135,16 @@ public partial class NyxIdChatEndpointsCoverageTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("accepted");
         response.Body.Should().Contain("msg-1");
-        var expectedActorId = BuildScopedRelayConversationActorId("scope-a", "slack:group:room-1");
+        var expectedThreadActorId = BuildScopedRelayConversationThreadActorId("scope-a", "slack:group:room-1");
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(ConversationGAgent) &&
-            call.Id == expectedActorId);
-        runtime.Actors.Should().ContainKey(expectedActorId);
-        var actor = (StubActor)runtime.Actors[expectedActorId];
-        actor.HandledEnvelopes.Should().ContainSingle(envelope =>
+            call.Type == typeof(ChannelConversationThreadGAgent) &&
+            call.Id == expectedThreadActorId);
+        runtime.Actors.Should().ContainKey(expectedThreadActorId);
+        var threadActor = (StubActor)runtime.Actors[expectedThreadActorId];
+        threadActor.HandledEnvelopes.Should().ContainSingle(envelope =>
             envelope.Payload != null &&
             envelope.Payload.Is(NyxRelayInboundActivity.Descriptor));
-        var relayInbound = actor.HandledEnvelopes.Single().Payload.Unpack<NyxRelayInboundActivity>();
+        var relayInbound = threadActor.HandledEnvelopes.Single().Payload.Unpack<NyxRelayInboundActivity>();
         relayInbound.ReplyToken.Should().Be("reply-token-1");
         relayInbound.CorrelationId.Should().Be("corr-1");
         relayInbound.RelayApiKeyId.Should().Be(relay.RelayApiKeyId);
@@ -2202,17 +2208,17 @@ public partial class NyxIdChatEndpointsCoverageTests
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("accepted");
-        var expectedActorId = BuildScopedRelayConversationActorId("scope-summary", "lark:dm:ou_user_1");
+        var expectedThreadActorId = BuildScopedRelayConversationThreadActorId("scope-summary", "lark:dm:ou_user_1");
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(ConversationGAgent) &&
-            call.Id == expectedActorId);
-        runtime.Actors.Should().ContainKey(expectedActorId);
+            call.Type == typeof(ChannelConversationThreadGAgent) &&
+            call.Id == expectedThreadActorId);
+        runtime.Actors.Should().ContainKey(expectedThreadActorId);
 
-        var actor = (StubActor)runtime.Actors[expectedActorId];
-        actor.HandledEnvelopes.Should().ContainSingle(envelope =>
+        var threadActor = (StubActor)runtime.Actors[expectedThreadActorId];
+        threadActor.HandledEnvelopes.Should().ContainSingle(envelope =>
             envelope.Payload != null &&
             envelope.Payload.Is(NyxRelayInboundActivity.Descriptor));
-        var relayInbound = actor.HandledEnvelopes.Single().Payload.Unpack<NyxRelayInboundActivity>();
+        var relayInbound = threadActor.HandledEnvelopes.Single().Payload.Unpack<NyxRelayInboundActivity>();
         relayInbound.ReplyToken.Should().Be("reply-token-summary-1");
         relayInbound.CorrelationId.Should().Be("corr-summary-1");
         relayInbound.RelayApiKeyId.Should().Be(relay.RelayApiKeyId);
@@ -2276,7 +2282,7 @@ public partial class NyxIdChatEndpointsCoverageTests
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        var expectedActorId = BuildScopedRelayConversationActorId("scope-summary", "lark:dm:ou_user_2");
+        var expectedActorId = BuildScopedRelayConversationThreadActorId("scope-summary", "lark:dm:ou_user_2");
         var actor = (StubActor)runtime.Actors[expectedActorId];
         var relayInbound = actor.HandledEnvelopes.Single().Payload.Unpack<NyxRelayInboundActivity>();
         relayInbound.Activity.TransportExtras.NyxSenderUserId.Should().Be(
@@ -2331,7 +2337,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         response.StatusCode.Should().Be(
             StatusCodes.Status202Accepted,
             "an unreliable /me must not break ingress; routing falls back to scope-only / default policies");
-        var expectedActorId = BuildScopedRelayConversationActorId("scope-summary", "lark:dm:ou_user_3");
+        var expectedActorId = BuildScopedRelayConversationThreadActorId("scope-summary", "lark:dm:ou_user_3");
         var actor = (StubActor)runtime.Actors[expectedActorId];
         var relayInbound = actor.HandledEnvelopes.Single().Payload.Unpack<NyxRelayInboundActivity>();
         relayInbound.Activity.TransportExtras.NyxSenderUserId.Should().BeEmpty();
@@ -2382,9 +2388,9 @@ public partial class NyxIdChatEndpointsCoverageTests
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         scopeResolver.LastNyxAgentApiKeyId.Should().Be("nyx-key-1");
-        var expectedActorId = BuildScopedRelayConversationActorId("scope-from-registration", "lark:dm:ou_user_1");
+        var expectedActorId = BuildScopedRelayConversationThreadActorId("scope-from-registration", "lark:dm:ou_user_1");
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(ConversationGAgent) &&
+            call.Type == typeof(ChannelConversationThreadGAgent) &&
             call.Id == expectedActorId);
         runtime.Actors.Should().ContainKey(expectedActorId);
     }
@@ -2608,9 +2614,9 @@ public partial class NyxIdChatEndpointsCoverageTests
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        var expectedActorId = BuildScopedRelayConversationActorId("scope-b", "discord:channel:conv-1");
+        var expectedActorId = BuildScopedRelayConversationThreadActorId("scope-b", "discord:channel:conv-1");
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(ConversationGAgent) &&
+            call.Type == typeof(ChannelConversationThreadGAgent) &&
             call.Id == expectedActorId);
         runtime.Actors.Should().ContainKey(expectedActorId);
     }
@@ -3136,12 +3142,8 @@ public partial class NyxIdChatEndpointsCoverageTests
         public object? GetService(Type serviceType) => null;
     }
 
-    private static string BuildScopedRelayConversationActorId(string scopeId, string canonicalKey)
-    {
-        var scopeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
-            .ToLowerInvariant();
-        return $"channel-conversation:{canonicalKey}:scope:{scopeHash}";
-    }
+    private static string BuildScopedRelayConversationThreadActorId(string scopeId, string canonicalKey) =>
+        $"channel-conversation-thread:{canonicalKey}:scope:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim()))).ToLowerInvariant()}";
 
     private static string GetRepositoryRoot()
     {
