@@ -63,9 +63,11 @@ public sealed class ConversationDispatchMiddlewareTests
             },
             CancellationToken.None);
 
-        runtime.CreatedActorIds.Should().ContainSingle("channel-conversation:lark:dm:user-2");
-        runtime.Actor.HandledEnvelopes.Should().ContainSingle();
-        var envelope = runtime.Actor.HandledEnvelopes[0];
+        runtime.CreatedActorIds.Should().ContainInOrder(
+            "channel-conversation-thread:lark:dm:user-2",
+            "channel-conversation:lark:dm:user-2");
+        runtime.HandledEnvelopesByActor.Should().ContainKey("channel-conversation:lark:dm:user-2");
+        var envelope = runtime.HandledEnvelopesByActor["channel-conversation:lark:dm:user-2"].Should().ContainSingle().Which;
         envelope.Route.Direct.TargetActorId.Should().Be("channel-conversation:lark:dm:user-2");
         envelope.Payload.Should().NotBeNull();
         envelope.Payload.Is(ChatActivity.Descriptor).Should().BeTrue();
@@ -73,16 +75,51 @@ public sealed class ConversationDispatchMiddlewareTests
         nextCalls.Should().Be(1);
     }
 
+    [Fact]
+    public async Task InvokeAsync_ShouldDispatchToActiveLogicalConversation_WhenThreadWasRotated()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.ThreadAgent.State.ActiveConversationCanonicalKey = "lark:dm:user-2#session-00000001";
+        var middleware = new ConversationDispatchMiddleware(runtime);
+        var activity = new ChatActivity
+        {
+            Id = "msg-3",
+            Type = ActivityType.Message,
+            Conversation = new ConversationReference
+            {
+                CanonicalKey = "lark:dm:user-2",
+            },
+            Content = new MessageContent
+            {
+                Text = "hello again",
+            },
+        };
+
+        await middleware.InvokeAsync(
+            new StubTurnContext(activity),
+            () => Task.CompletedTask,
+            CancellationToken.None);
+
+        runtime.CreatedActorIds.Should().ContainInOrder(
+            "channel-conversation-thread:lark:dm:user-2",
+            "channel-conversation:lark:dm:user-2#session-00000001");
+        runtime.HandledEnvelopesByActor.Should().ContainKey("channel-conversation:lark:dm:user-2#session-00000001");
+        runtime.HandledEnvelopesByActor.Should().NotContainKey("channel-conversation:lark:dm:user-2");
+    }
+
     private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
-        public RecordingActor Actor { get; } = new("channel-conversation:lark:dm:user-2");
+        public ChannelConversationThreadGAgent ThreadAgent { get; } = new();
         public List<string?> CreatedActorIds { get; } = [];
+        public Dictionary<string, List<EventEnvelope>> HandledEnvelopesByActor { get; } = new(StringComparer.Ordinal);
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
         {
             CreatedActorIds.Add(id);
-            Actor.IdValue = id ?? string.Empty;
-            return Task.FromResult<IActor>(Actor);
+            if (typeof(TAgent) == typeof(ChannelConversationThreadGAgent))
+                return Task.FromResult<IActor>(new RecordingActor(id ?? string.Empty, ThreadAgent, HandledEnvelopesByActor));
+
+            return Task.FromResult<IActor>(new RecordingActor(id ?? string.Empty, new NoopAgent(id ?? string.Empty), HandledEnvelopesByActor));
         }
 
         public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
@@ -96,7 +133,14 @@ public sealed class ConversationDispatchMiddlewareTests
 
         public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            await Actor.HandleEventAsync(envelope, ct);
+            if (!HandledEnvelopesByActor.TryGetValue(actorId, out var envelopes))
+            {
+                envelopes = [];
+                HandledEnvelopesByActor.Add(actorId, envelopes);
+            }
+
+            envelopes.Add(envelope);
+            await Task.CompletedTask;
             return DispatchAdmissionFactory.Create(actorId, envelope);
         }
 
@@ -107,15 +151,14 @@ public sealed class ConversationDispatchMiddlewareTests
             throw new NotSupportedException();
     }
 
-    private sealed class RecordingActor(string id) : IActor
+    private sealed class RecordingActor(
+        string id,
+        IAgent agent,
+        Dictionary<string, List<EventEnvelope>> handledEnvelopesByActor) : IActor
     {
-        public string Id => IdValue;
+        public string Id { get; } = id;
 
-        public string IdValue { get; set; } = id;
-
-        public IAgent Agent => throw new NotSupportedException();
-
-        public List<EventEnvelope> HandledEnvelopes { get; } = [];
+        public IAgent Agent { get; } = agent;
 
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
@@ -123,13 +166,34 @@ public sealed class ConversationDispatchMiddlewareTests
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
         {
-            HandledEnvelopes.Add(envelope);
+            if (!handledEnvelopesByActor.TryGetValue(Id, out var envelopes))
+            {
+                envelopes = [];
+                handledEnvelopesByActor.Add(Id, envelopes);
+            }
+
+            envelopes.Add(envelope);
             return Task.CompletedTask;
         }
 
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
 
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class NoopAgent(string id) : IAgent
+    {
+        public string Id { get; } = id;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class StubTurnContext(ChatActivity activity) : ITurnContext

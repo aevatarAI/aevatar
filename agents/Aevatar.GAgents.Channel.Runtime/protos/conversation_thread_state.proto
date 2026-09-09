@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.runtime;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
+
+message ConversationThreadGAgentState {
+  string source_conversation_canonical_key = 1;
+  int64 generation = 2;
+  string active_conversation_canonical_key = 3;
+  int64 last_updated_unix_ms = 4;
+}
+
+message StartNewConversationCommand {
+  string source_conversation_canonical_key = 1;
+  string requested_activity_id = 2;
+  int64 requested_at_unix_ms = 3;
+}
+
+message ConversationThreadRotatedEvent {
+  string source_conversation_canonical_key = 1;
+  int64 generation = 2;
+  string active_conversation_canonical_key = 3;
+  string requested_activity_id = 4;
+  int64 rotated_at_unix_ms = 5;
+}

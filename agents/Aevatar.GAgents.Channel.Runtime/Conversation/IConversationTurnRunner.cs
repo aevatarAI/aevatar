@@ -160,7 +160,8 @@ public sealed record ConversationTurnResult(
     // Typed business outcome of a /clear turn: the conversation actor (the sole
     // owner of retained history) persists ConversationRetainedHistoryClearedEvent
     // and resets its transcript window when this is set.
-    bool RetainedHistoryClearRequested = false)
+    bool RetainedHistoryClearRequested = false,
+    bool NewConversationRequested = false)
 {
     /// <summary>
     /// Success factory.

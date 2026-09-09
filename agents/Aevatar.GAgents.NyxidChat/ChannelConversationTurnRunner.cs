@@ -47,13 +47,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         "enable-agent",
         "delete-agent",
         "clear",
-        "reset",
+        "new",
     };
 
     private static readonly HashSet<string> ClearHistoryCommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "clear",
-        "reset",
+    };
+
+    private static readonly HashSet<string> NewConversationCommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "new",
     };
 
     private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject, string? OwnerScopeId);
@@ -352,12 +356,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!TryParseSlashCommand(inbound.Text, out var commandName, out var argumentText))
             return null;
 
-        // /clear is a conversation-state command, not a user-identity command: the
-        // retained transcript window belongs to the conversation actor running this
-        // turn, so it is handled here (no binding required) and the actor applies the
-        // typed clear outcome through its own committed domain event.
+        // /clear and /new are conversation-state commands, not user-identity commands.
         if (ClearHistoryCommands.Contains(commandName))
             return await HandleClearHistoryCommandAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+        if (NewConversationCommands.Contains(commandName))
+            return await HandleNewConversationCommandAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
 
         var queryPort = _identityBindingQueryPort;
         if (queryPort is null)
@@ -473,7 +476,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         var sent = await SendReplyAsync(
-            "✅ 已清空本会话的对话记忆,后续对话将从干净的上下文开始。",
+            "已清空本会话的对话记忆,后续对话将从干净的上下文开始。",
             activity,
             inbound,
             registration,
@@ -482,6 +485,34 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // The flag rides back even when the confirmation send failed: the user asked
         // for the wipe, and the conversation actor owns (and commits) that outcome.
         return sent with { RetainedHistoryClearRequested = true };
+    }
+
+    private async Task<ConversationTurnResult> HandleNewConversationCommandAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (!IsPrivateChat(inbound))
+        {
+            return await SendReplyAsync(
+                "/new 仅支持单聊会话:群聊上下文由全体成员共享,不能由单个成员重开。",
+                activity,
+                inbound,
+                registration,
+                runtimeContext,
+                ct).ConfigureAwait(false);
+        }
+
+        var sent = await SendReplyAsync(
+            "已开启新的会话,后续对话将使用当前默认配置。",
+            activity,
+            inbound,
+            registration,
+            runtimeContext,
+            ct).ConfigureAwait(false);
+        return sent with { NewConversationRequested = true };
     }
 
     private static bool TryParseSlashCommand(string? text, out string commandName, out string argumentText)
