@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
@@ -452,8 +453,25 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 catalog?.ContentDigest ?? string.Empty,
                 catalog?.ContractVersion ?? string.Empty,
                 catalog?.PolicyVersion ?? string.Empty,
-                catalog?.EvaluatedAt?.ToDateTimeOffset() ?? default));
+                catalog?.EvaluatedAt?.ToDateTimeOffset() ?? default),
+            MapOwnerLLMSelection(plan.OwnerLlmSelection));
     }
+
+    private static WorkflowScheduleOwnerLLMSelection? MapOwnerLLMSelection(
+        ScheduledInvocationOwnerLLMSelection? selection) =>
+        selection is null
+            ? null
+            : new WorkflowScheduleOwnerLLMSelection(
+                selection.RouteKind switch
+                {
+                    LLMRouteKind.Gateway => WorkflowScheduleOwnerLLMRouteKind.Gateway,
+                    LLMRouteKind.NyxIdUserService => WorkflowScheduleOwnerLLMRouteKind.NyxIdUserService,
+                    _ => WorkflowScheduleOwnerLLMRouteKind.Unspecified,
+                },
+                selection.RouteValue,
+                selection.NyxIdUserServiceId,
+                selection.ServiceSlugSnapshot,
+                selection.Model);
 
     private static string ToScopeName(NyxIdCredentialScope scope) => scope switch
     {

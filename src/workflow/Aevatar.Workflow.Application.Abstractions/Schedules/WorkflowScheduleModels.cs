@@ -38,7 +38,22 @@ public sealed record WorkflowScheduleAuthorizationFact(
     DateTimeOffset ExpiresAt,
     bool ServiceGrantsNotRequired,
     WorkflowScheduleAuthorizationDisclosure Disclosure,
-    WorkflowScheduleAuthorizationAuthority Authority);
+    WorkflowScheduleAuthorizationAuthority Authority,
+    WorkflowScheduleOwnerLLMSelection? OwnerLLMSelection = null);
+
+public enum WorkflowScheduleOwnerLLMRouteKind
+{
+    Unspecified = 0,
+    Gateway = 1,
+    NyxIdUserService = 2,
+}
+
+public sealed record WorkflowScheduleOwnerLLMSelection(
+    WorkflowScheduleOwnerLLMRouteKind RouteKind,
+    string RouteValue,
+    string NyxIdUserServiceId,
+    string ServiceSlugSnapshot,
+    string Model);
 
 public sealed record WorkflowScheduleAuthorizationOwner(
     string Authority,

@@ -231,6 +231,12 @@ public sealed class WorkflowScheduleApplicationServiceTests
         fact.ServiceGrants.Should().ContainSingle()
             .Which.ServiceId.Should().Be("svc-alpha");
         fact.Authority.CatalogStateVersion.Should().Be(42);
+        fact.OwnerLLMSelection.Should().NotBeNull();
+        fact.OwnerLLMSelection!.RouteKind.Should().Be(LLMRouteKind.NyxIdUserService);
+        fact.OwnerLLMSelection.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
+        fact.OwnerLLMSelection.NyxIdUserServiceId.Should().Be("svc-chrono");
+        fact.OwnerLLMSelection.ServiceSlugSnapshot.Should().Be("chrono-llm");
+        fact.OwnerLLMSelection.Model.Should().Be("gpt-5.5");
     }
 
     [Fact]
@@ -1286,7 +1292,13 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 CatalogContentDigest: "catalog-digest-alpha",
                 CatalogContractVersion: "catalog-contract-alpha",
                 CatalogPolicyVersion: "catalog-policy-alpha",
-                CatalogEvaluatedAt: now.AddMinutes(-6)));
+                CatalogEvaluatedAt: now.AddMinutes(-6)),
+            new WorkflowScheduleOwnerLLMSelection(
+                WorkflowScheduleOwnerLLMRouteKind.NyxIdUserService,
+                "/api/v1/proxy/s/chrono-llm",
+                "svc-chrono",
+                "chrono-llm",
+                "gpt-5.5"));
     }
 
     private static WorkflowScheduleConfiguration CreateScopeOwnerWorkflowConfiguration(string scheduleId) =>

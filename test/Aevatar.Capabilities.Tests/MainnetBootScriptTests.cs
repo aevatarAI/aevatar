@@ -42,6 +42,10 @@ public sealed class MainnetBootScriptTests
         instructions.Should().Contain("when a direct admitted scheduled automation tool can handle the request");
         instructions.Should().Contain("Use Ornn skill search or publish only when no direct admitted scheduling or agent-management tool can handle the requested automation");
         instructions.Should().Contain("Call ornn_search_skills only when the user explicitly asks to find, browse, load, reuse, or inspect Ornn skills");
+        configuration["Aevatar:NyxId:AssistantActions:ScheduledDeliveryProviderSlug"]
+            .Should().NotBeNullOrWhiteSpace();
+        configuration["Aevatar:NyxId:AssistantActions:ScheduledDeliveryProviderUserServiceId"]
+            .Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]

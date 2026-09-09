@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Google.Protobuf.WellKnownTypes;
@@ -179,8 +180,26 @@ internal static class WorkflowScheduleConfigurationMapper
                 NormalizeOptional(fact.Authority.CatalogContractVersion, string.Empty),
                 NormalizeOptional(fact.Authority.CatalogPolicyVersion, string.Empty),
                 fact.Authority.CatalogEvaluatedAt.ToUniversalTime()),
-            null);
+            MapOwnerLLMSelection(fact.OwnerLLMSelection));
     }
+
+    private static ScheduledInvocationOwnerLLMSelection? MapOwnerLLMSelection(
+        WorkflowScheduleOwnerLLMSelection? selection) =>
+        selection is null
+            ? null
+            : new ScheduledInvocationOwnerLLMSelection
+            {
+                RouteKind = selection.RouteKind switch
+                {
+                    WorkflowScheduleOwnerLLMRouteKind.Gateway => LLMRouteKind.Gateway,
+                    WorkflowScheduleOwnerLLMRouteKind.NyxIdUserService => LLMRouteKind.NyxIdUserService,
+                    _ => LLMRouteKind.Unspecified,
+                },
+                RouteValue = NormalizeOptional(selection.RouteValue, string.Empty),
+                NyxIdUserServiceId = NormalizeOptional(selection.NyxIdUserServiceId, string.Empty),
+                ServiceSlugSnapshot = NormalizeOptional(selection.ServiceSlugSnapshot, string.Empty),
+                Model = NormalizeOptional(selection.Model, string.Empty),
+            };
 
     private static IReadOnlyDictionary<string, string> BuildWorkflowScheduleHeaders(
         WorkflowScheduleConfiguration configuration)

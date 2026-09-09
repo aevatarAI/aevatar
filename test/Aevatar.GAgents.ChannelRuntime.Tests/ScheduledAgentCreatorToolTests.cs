@@ -1076,6 +1076,13 @@ public sealed class ScheduledAgentCreatorToolTests
                 .Should().BeEquivalentTo("svc-lark", "svc-lark-failure", "svc-llm");
             captured.Schedule.AuthorizationFact.PolicyVersion.Should()
                 .Be(ScheduledInvocationAuthorizationContractVersions.CredentialPolicy);
+            captured.Schedule.AuthorizationFact.OwnerLLMSelection.Should().BeEquivalentTo(
+                new WorkflowScheduleOwnerLLMSelection(
+                    WorkflowScheduleOwnerLLMRouteKind.NyxIdUserService,
+                    "/api/v1/proxy/s/chrono-llm-public",
+                    "svc-llm",
+                    "chrono-llm-public",
+                    "gpt-5.5"));
             IssuedServiceIds(harness)
                 .Should().BeEquivalentTo("svc-lark", "svc-lark-failure", "svc-llm");
         });
