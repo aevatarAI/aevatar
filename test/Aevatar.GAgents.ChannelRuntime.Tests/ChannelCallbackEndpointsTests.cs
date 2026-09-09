@@ -108,6 +108,31 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public void MapChannelCallbackEndpoints_ShouldRegisterLocalMirrorRoute_RequiringAuthorization()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = "Development",
+        });
+
+        var app = builder.Build();
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        app.MapChannelCallbackEndpoints();
+
+        var endpoint = routeBuilder.DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(route => string.Equals(
+                route.RoutePattern.RawText,
+                "/api/channels/registrations/local-mirror",
+                StringComparison.Ordinal));
+
+        endpoint.Metadata.OfType<IAuthorizeData>().Should().NotBeEmpty();
+        endpoint.Metadata.OfType<HttpMethodMetadata>()
+            .Single().HttpMethods.Should().Contain("POST");
+    }
+
+    [Fact]
     public async Task ChannelRegistrationRoute_ShouldAppendEndpointAuditRecords()
     {
         var appender = new RecordingAuditTrailAppender();
@@ -436,6 +461,59 @@ public sealed class ChannelCallbackEndpointsTests
                 request.Lark.AppSecret == "secret" &&
                 request.Lark.VerificationToken == "verify-123"),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleRegisterLocalMirrorAsync_DispatchesRegisterCommandWithoutNyxProvisioning()
+    {
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "registration_id": "reg-local",
+              "platform": "telegram",
+              "nyx_provider_slug": "api-telegram-bot",
+              "scope_id": "scope-1",
+              "webhook_url": "https://nyx.example.com/api/v1/webhooks/channel/telegram/bot-1",
+              "nyx_channel_bot_id": "bot-1",
+              "nyx_agent_api_key_id": "key-1",
+              "nyx_conversation_route_id": "route-1"
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRegisterLocalMirrorAsync",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("\"registration_id\":\"reg-local\"");
+        response.Body.Should().Contain("\"nyx_conversation_route_id\":\"route-1\"");
+        capturedEnvelope.Should().NotBeNull();
+        var command = capturedEnvelope!.Payload.Unpack<ChannelBotRegisterCommand>();
+        command.RequestedId.Should().Be("reg-local");
+        command.Platform.Should().Be("telegram");
+        command.NyxProviderSlug.Should().Be("api-telegram-bot");
+        command.ScopeId.Should().Be("scope-1");
+        command.WebhookUrl.Should().Be("https://nyx.example.com/api/v1/webhooks/channel/telegram/bot-1");
+        command.NyxChannelBotId.Should().Be("bot-1");
+        command.NyxAgentApiKeyId.Should().Be("key-1");
+        command.NyxConversationRouteId.Should().Be("route-1");
+        response.Body.Should().NotContain("test-token");
     }
 
     [Fact]
