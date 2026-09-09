@@ -3296,7 +3296,6 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.RetainedHistoryClearRequested.Should().BeFalse();
-        result.NewConversationRequested.Should().BeFalse();
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().NotContain("已清空");
     }
@@ -3319,7 +3318,6 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.RetainedHistoryClearRequested.Should().BeFalse();
-        result.NewConversationRequested.Should().BeTrue();
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("新的会话");
     }
@@ -3342,7 +3340,6 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.RetainedHistoryClearRequested.Should().BeFalse();
-        result.NewConversationRequested.Should().BeFalse();
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("仅支持单聊");
     }

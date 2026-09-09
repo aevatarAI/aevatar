@@ -36,21 +36,15 @@ internal sealed class ConversationDispatchMiddleware : IChannelMiddleware
 
         var threadActorId = ChannelConversationThreadGAgent.BuildActorId(canonicalKey);
         var threadActor = await _actorRuntime.CreateAsync<ChannelConversationThreadGAgent>(threadActorId, ct);
-        var activeConversationCanonicalKey = threadActor.Agent is ChannelConversationThreadGAgent threadAgent
-            ? threadAgent.ResolveActiveConversationCanonicalKey(canonicalKey)
-            : canonicalKey;
-        var actorId = ConversationGAgent.BuildActorId(activeConversationCanonicalKey);
-        var actor = await _actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
-
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Payload = Any.Pack(context.Activity),
-            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, actor.Id),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, threadActor.Id),
         };
 
-        await _actorDispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await _actorDispatchPort.DispatchAsync(threadActor.Id, envelope, ct);
         await next();
     }
 }

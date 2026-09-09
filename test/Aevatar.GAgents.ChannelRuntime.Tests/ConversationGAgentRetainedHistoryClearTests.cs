@@ -64,32 +64,6 @@ public sealed class ConversationGAgentRetainedHistoryClearTests
     }
 
     [Fact]
-    public async Task HandleInboundActivityAsync_WhenRunnerRequestsNewConversation_DispatchesThreadRotation()
-    {
-        var actorId = ConversationGAgent.BuildActorId("lark:dm:ou_user_1");
-        var eventStore = new InMemoryEventStore();
-        var dispatchPort = new CapturingActorDispatchPort();
-        var actorRuntime = new CapturingActorRuntime();
-        var agent = await CreateAgentAsync(
-            actorId,
-            new NewConversationTurnRunner(),
-            eventStore,
-            actorDispatchPort: dispatchPort,
-            actorRuntime: actorRuntime);
-
-        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-new-1", "/new"));
-
-        actorRuntime.CreatedActorIds.Should().ContainSingle(
-            ChannelConversationThreadGAgent.BuildActorId("lark:dm:ou_user_1"));
-        var captured = dispatchPort.Envelopes.Should().ContainSingle().Which;
-        captured.ActorId.Should().Be(ChannelConversationThreadGAgent.BuildActorId("lark:dm:ou_user_1"));
-        captured.Envelope.Payload.Is(StartNewConversationCommand.Descriptor).Should().BeTrue();
-        var command = captured.Envelope.Payload.Unpack<StartNewConversationCommand>();
-        command.SourceConversationCanonicalKey.Should().Be("lark:dm:ou_user_1");
-        command.RequestedActivityId.Should().Be("msg-new-1");
-    }
-
-    [Fact]
     public async Task HandleInboundActivityAsync_WhenTurnDoesNotRequestClear_KeepsRetainedHistory()
     {
         var actorId = ConversationGAgent.BuildActorId("lark:dm:ou_user_1");
@@ -169,21 +143,17 @@ public sealed class ConversationGAgentRetainedHistoryClearTests
         string id,
         IConversationTurnRunner runner,
         InMemoryEventStore eventStore,
-        IChannelLlmReplyRunDispatcher? dispatcher = null,
-        IActorDispatchPort? actorDispatchPort = null,
-        IActorRuntime? actorRuntime = null)
+        IChannelLlmReplyRunDispatcher? dispatcher = null)
     {
-        var services = new ServiceCollection()
+        var serviceProvider = new ServiceCollection()
             .AddSingleton<IEventStore>(eventStore)
-            .AddSingleton(actorDispatchPort ?? new NoopActorDispatchPort())
+            .AddSingleton<IActorDispatchPort, NoopActorDispatchPort>()
             .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
             .AddSingleton(runner)
             .AddSingleton(dispatcher ?? new RecordingLlmReplyRunDispatcher())
             .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
-        if (actorRuntime is not null)
-            services.AddSingleton(actorRuntime);
-        var serviceProvider = services.BuildServiceProvider();
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .BuildServiceProvider();
 
         var agent = new ConversationGAgent
         {
@@ -365,98 +335,10 @@ public sealed class ConversationGAgentRetainedHistoryClearTests
             Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId));
     }
 
-    private sealed class NewConversationTurnRunner : IConversationTurnRunner
-    {
-        public Task<ConversationTurnResult> RunInboundAsync(
-            ChatActivity activity,
-            ConversationTurnRuntimeContext runtimeContext,
-            CancellationToken ct)
-        {
-            var sent = ConversationTurnResult.Sent(
-                $"sent:{activity.Id}",
-                new MessageContent { Text = "已开启新的会话" },
-                "bot");
-            return Task.FromResult(sent with { NewConversationRequested = true });
-        }
-
-        public Task<ConversationTurnResult> RunLlmReplyAsync(
-            LlmReplyReadyEvent reply,
-            ConversationTurnRuntimeContext runtimeContext,
-            CancellationToken ct) =>
-            Task.FromResult(ConversationTurnResult.Sent("sent", reply.Outbound?.Clone() ?? new MessageContent(), "bot"));
-
-        public Task<ConversationTurnResult> RunContinueAsync(
-            ConversationContinueRequestedEvent command,
-            CancellationToken ct) =>
-            Task.FromResult(ConversationTurnResult.Ignored("not-used", command.CommandId));
-
-        public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
-            LlmReplyStreamChunkEvent chunk,
-            string? currentPlatformMessageId,
-            NyxRelayTextOperationKind operation,
-            ConversationTurnRuntimeContext runtimeContext,
-            CancellationToken ct) =>
-            Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId));
-    }
-
-    private sealed class CapturingActorRuntime : IActorRuntime
-    {
-        public List<string?> CreatedActorIds { get; } = [];
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
-        {
-            CreatedActorIds.Add(id);
-            return Task.FromResult<IActor>(new NoopActor(id ?? string.Empty));
-        }
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) => throw new NotSupportedException();
-
-        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
-
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-    }
-
-    private sealed class CapturingActorDispatchPort : IActorDispatchPort
-    {
-        public List<(string ActorId, EventEnvelope Envelope)> Envelopes { get; } = [];
-
-        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
-        {
-            Envelopes.Add((actorId, envelope));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
-        }
-    }
-
     private sealed class NoopActorDispatchPort : IActorDispatchPort
     {
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
             Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
-    }
-
-    private sealed class NoopActor(string id) : IActor
-    {
-        public string Id { get; } = id;
-
-        public IAgent Agent => throw new NotSupportedException();
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
     private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler

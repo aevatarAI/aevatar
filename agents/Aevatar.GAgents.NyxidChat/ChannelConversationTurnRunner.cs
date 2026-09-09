@@ -505,14 +505,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 ct).ConfigureAwait(false);
         }
 
-        var sent = await SendReplyAsync(
+        return await SendReplyAsync(
             "已开启新的会话,后续对话将使用当前默认配置。",
             activity,
             inbound,
             registration,
             runtimeContext,
             ct).ConfigureAwait(false);
-        return sent with { NewConversationRequested = true };
     }
 
     private static bool TryParseSlashCommand(string? text, out string commandName, out string argumentText)

@@ -304,14 +304,13 @@ public sealed partial class ConversationGAgent :
                         ? "sent"
                         : "failed";
         Logger.LogInformation(
-            "Conversation inbound runner result: activity={ActivityId}, kind={ResultKind}, sent={SentId}, failureKind={FailureKind}, errorCode={ErrorCode}, retainedHistoryClear={RetainedHistoryClear}, newConversation={NewConversation}",
+            "Conversation inbound runner result: activity={ActivityId}, kind={ResultKind}, sent={SentId}, failureKind={FailureKind}, errorCode={ErrorCode}, retainedHistoryClear={RetainedHistoryClear}",
             activity.Id,
             runnerResultKind,
             result.SentActivityId,
             result.FailureKind,
             result.ErrorCode,
-            result.RetainedHistoryClearRequested,
-            result.NewConversationRequested);
+            result.RetainedHistoryClearRequested);
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (result.RetainedHistoryClearRequested)
@@ -422,8 +421,6 @@ public sealed partial class ConversationGAgent :
                 OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
             await PersistDomainEventAsync(completed);
-            if (result.NewConversationRequested)
-                await DispatchStartNewConversationAsync(activity, nowMs, CancellationToken.None);
             await ClearReplyLifecyclesAsync(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity, "turn_completed");
             Logger.LogInformation(
                 "Completed inbound turn: activity={ActivityId} sent={SentId} conversation={Key}",
@@ -2623,47 +2620,6 @@ public sealed partial class ConversationGAgent :
             RejectedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
         return PersistDomainEventAsync(rejected);
-    }
-
-    private async Task DispatchStartNewConversationAsync(
-        ChatActivity activity,
-        long requestedAtUnixMs,
-        CancellationToken ct)
-    {
-        var sourceConversationCanonicalKey = activity.Conversation?.CanonicalKey?.Trim();
-        if (string.IsNullOrWhiteSpace(sourceConversationCanonicalKey))
-            return;
-
-        var actorRuntime = Services.GetService<IActorRuntime>();
-        var dispatchPort = Services.GetService<IActorDispatchPort>();
-        if (actorRuntime is null || dispatchPort is null)
-        {
-            Logger.LogWarning(
-                "Cannot start new logical conversation because actor runtime dispatch is unavailable. activity={ActivityId} conversation={Key}",
-                activity.Id,
-                sourceConversationCanonicalKey);
-            return;
-        }
-
-        var threadActorId = ChannelConversationThreadGAgent.BuildActorId(sourceConversationCanonicalKey);
-        _ = await actorRuntime.CreateAsync<ChannelConversationThreadGAgent>(threadActorId, ct);
-        await dispatchPort.DispatchAsync(
-                threadActorId,
-                new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    Payload = Any.Pack(new StartNewConversationCommand
-                    {
-                        SourceConversationCanonicalKey = sourceConversationCanonicalKey,
-                        RequestedActivityId = activity.Id ?? string.Empty,
-                        RequestedAtUnixMs = requestedAtUnixMs,
-                    }),
-                    Route = EnvelopeRouteSemantics.CreateDirect(Id, threadActorId),
-                    Propagation = new EnvelopePropagation { CorrelationId = activity.Id ?? string.Empty },
-                },
-                ct)
-            .ConfigureAwait(false);
     }
 
     private IConversationTurnRunner ResolveRunner() =>

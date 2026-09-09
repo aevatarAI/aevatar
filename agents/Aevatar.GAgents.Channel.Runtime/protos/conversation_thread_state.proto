@@ -9,6 +9,7 @@ message ConversationThreadGAgentState {
   int64 generation = 2;
   string active_conversation_canonical_key = 3;
   int64 last_updated_unix_ms = 4;
+  string last_rotation_activity_id = 5;
 }
 
 message StartNewConversationCommand {
