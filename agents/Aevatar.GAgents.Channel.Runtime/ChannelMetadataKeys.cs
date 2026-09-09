@@ -26,6 +26,8 @@ public static class ChannelMetadataKeys
     /// channel-delivery route selected by the inbound adapter.
     /// </summary>
     public const string OutboundProviderSlug = "channel.outbound.provider_slug";
+    /// <summary>Exact NyxID UserService id for <see cref="OutboundProviderSlug"/> when known by the host.</summary>
+    public const string OutboundProviderUserServiceId = "channel.outbound.user_service_id";
     /// <summary>Provider-interpreted primary outbound address for the current channel turn.</summary>
     public const string DeliveryAddressId = "channel.delivery.address_id";
     /// <summary>Provider-interpreted type for <see cref="DeliveryAddressId"/>.</summary>

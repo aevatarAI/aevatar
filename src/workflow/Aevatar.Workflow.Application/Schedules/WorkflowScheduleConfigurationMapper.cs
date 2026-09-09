@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Google.Protobuf.WellKnownTypes;
@@ -23,7 +25,8 @@ internal static class WorkflowScheduleConfigurationMapper
                     "chat",
                     Any.Pack(BuildWorkflowChatRequest(configuration)),
                     configuration.RevisionId,
-                    Auth: BuildWorkflowServiceInvocationAuth(configuration))),
+                    Auth: BuildWorkflowServiceInvocationAuth(configuration),
+                    AuthorizationFact: BuildWorkflowAuthorizationFact(configuration))),
             configuration.CronExpression,
             configuration.Timezone,
             configuration.Enabled,
@@ -66,12 +69,30 @@ internal static class WorkflowScheduleConfigurationMapper
         var request = new ChatRequestEvent
         {
             Prompt = NormalizeOptional(configuration.Prompt, string.Empty),
+            LlmControl = BuildWorkflowLLMControl(configuration),
         };
 
         foreach (var (key, value) in BuildWorkflowScheduleHeaders(configuration))
             request.Metadata[key] = value;
 
         return request;
+    }
+
+    private static LLMControlContextPayload? BuildWorkflowLLMControl(
+        WorkflowScheduleConfiguration configuration)
+    {
+        var ownerLLMSelection = configuration.AuthorizationFact?.OwnerLLMSelection;
+        if (ownerLLMSelection == null)
+            return null;
+
+        return new LLMControlContext(
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: NormalizeOptional(ownerLLMSelection.Model, string.Empty),
+            NyxIdRoutePreference: NormalizeOptional(ownerLLMSelection.RouteValue, string.Empty),
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null).ToPayload();
     }
 
     private static ScheduledDispatchScheduleMode ToScheduledDispatchScheduleMode(WorkflowScheduleMode mode) =>
@@ -128,6 +149,76 @@ internal static class WorkflowScheduleConfigurationMapper
             NormalizeRequired(subject.Platform, nameof(subject.Platform)),
             NormalizeOptional(subject.Tenant, string.Empty),
             NormalizeRequired(subject.ExternalUserId, nameof(subject.ExternalUserId)));
+
+    private static ScheduledInvocationAuthorizationFact? BuildWorkflowAuthorizationFact(
+        WorkflowScheduleConfiguration configuration)
+    {
+        var fact = configuration.AuthorizationFact;
+        if (fact == null)
+            return null;
+
+        var grants = (fact.ServiceGrants ?? [])
+            .Select(static grant => new ScheduledInvocationAuthorizationServiceGrant(
+                NormalizeRequired(grant.ServiceId, nameof(grant.ServiceId)),
+                (grant.NodeIds ?? [])
+                    .Select(static nodeId => NormalizeRequired(nodeId, nameof(nodeId)))
+                    .Order(StringComparer.Ordinal)
+                    .ToArray(),
+                grant.NodeGrantsNotRequired))
+            .OrderBy(static grant => grant.ServiceId, StringComparer.Ordinal)
+            .ThenBy(static grant => grant.NodeGrantsNotRequired)
+            .ThenBy(static grant => string.Join('\n', grant.NodeIds), StringComparer.Ordinal)
+            .ToArray();
+
+        return new ScheduledInvocationAuthorizationFact(
+            NormalizeRequired(fact.PermissionDigest, nameof(fact.PermissionDigest)),
+            NormalizeRequired(fact.PolicyVersion, nameof(fact.PolicyVersion)),
+            new ScheduledInvocationAuthorizationOwner(
+                NormalizeRequired(fact.Owner.Authority, nameof(fact.Owner.Authority)),
+                NormalizeRequired(fact.Owner.OwnerKind, nameof(fact.Owner.OwnerKind)),
+                NormalizeRequired(fact.Owner.OwnerSubject, nameof(fact.Owner.OwnerSubject))),
+            grants,
+            NormalizeOptional(fact.Scopes, string.Empty),
+            fact.ExpiresAt.ToUniversalTime(),
+            fact.ServiceGrantsNotRequired,
+            new ScheduledInvocationAuthorizationDisclosure(
+                fact.Disclosure.DedicatedToSchedule,
+                fact.Disclosure.SecretManagedByAevatar,
+                fact.Disclosure.BrowserReceivesRawKey,
+                fact.Disclosure.DeleteRevokesCredential,
+                fact.Disclosure.PauseResumeRevokesCredential),
+            new ScheduledInvocationAuthorizationAuthority(
+                fact.Authority.MemberStateVersion,
+                fact.Authority.WorkflowStateVersion,
+                fact.Authority.ConnectorStateVersion,
+                fact.Authority.OwnerLLMStateVersion,
+                fact.Authority.CatalogStateVersion,
+                fact.Authority.CatalogObservedAt.ToUniversalTime(),
+                fact.Authority.CatalogFreshUntil.ToUniversalTime(),
+                NormalizeOptional(fact.Authority.CatalogContentDigest, string.Empty),
+                NormalizeOptional(fact.Authority.CatalogContractVersion, string.Empty),
+                NormalizeOptional(fact.Authority.CatalogPolicyVersion, string.Empty),
+                fact.Authority.CatalogEvaluatedAt.ToUniversalTime()),
+            MapOwnerLLMSelection(fact.OwnerLLMSelection));
+    }
+
+    private static ScheduledInvocationOwnerLLMSelection? MapOwnerLLMSelection(
+        WorkflowScheduleOwnerLLMSelection? selection) =>
+        selection is null
+            ? null
+            : new ScheduledInvocationOwnerLLMSelection
+            {
+                RouteKind = selection.RouteKind switch
+                {
+                    WorkflowScheduleOwnerLLMRouteKind.Gateway => LLMRouteKind.Gateway,
+                    WorkflowScheduleOwnerLLMRouteKind.NyxIdUserService => LLMRouteKind.NyxIdUserService,
+                    _ => LLMRouteKind.Unspecified,
+                },
+                RouteValue = NormalizeOptional(selection.RouteValue, string.Empty),
+                NyxIdUserServiceId = NormalizeOptional(selection.NyxIdUserServiceId, string.Empty),
+                ServiceSlugSnapshot = NormalizeOptional(selection.ServiceSlugSnapshot, string.Empty),
+                Model = NormalizeOptional(selection.Model, string.Empty),
+            };
 
     private static IReadOnlyDictionary<string, string> BuildWorkflowScheduleHeaders(
         WorkflowScheduleConfiguration configuration)

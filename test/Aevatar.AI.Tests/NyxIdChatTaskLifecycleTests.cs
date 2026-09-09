@@ -423,6 +423,51 @@ public sealed class NyxIdChatTaskLifecycleTests
     }
 
     [Fact]
+    public void MutationAcceptedByProviderReceipt_ShouldContinueWithoutAdmittedExternalReadBack()
+    {
+        var admission = ExactWriteAdmission();
+        admission.ReadBack = null;
+        var planSignal = LlmWithToolCall();
+        planSignal.Llm.ToolCalls.Single().OperationAdmission = admission;
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha"),
+            planSignal,
+            Now).State;
+        var tool = planned.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
+
+        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            planned,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = tool.Operation.Key.Clone(),
+                Tool = new NyxIdChatToolOperationResult
+                {
+                    Receipt = new AgentToolReceipt
+                    {
+                        CallId = "call-alpha",
+                        ToolName = "scheduled_agent_creator",
+                        Status = AgentToolReceiptStatus.Success,
+                        Effect = AgentToolReceiptEffect.Mutating,
+                        MutationStage = AgentToolReceiptMutationStage.Accepted,
+                    },
+                    ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged,
+                },
+            },
+            Now);
+
+        decision.NextCommand.Should().NotBeNull();
+        decision.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm);
+        decision.State.ActiveTask.Steps.Should().NotContain(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+        decision.State.ActiveTask.Steps.Single(step => step.StepId == tool.StepId)
+            .ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
+        decision.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.Llm && step.DependsOn.Contains(tool.StepId))
+            .Status.Should().Be(NyxIdChatStepStatus.Running);
+    }
+
+    [Fact]
     public void VerificationNotApplied_ShouldUnlockExplicitToolRetryWithoutChangingTaskIdentity()
     {
         var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(

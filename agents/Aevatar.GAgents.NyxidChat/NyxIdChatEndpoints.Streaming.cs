@@ -281,7 +281,11 @@ public static partial class NyxIdChatEndpoints
             }
             else
             {
-                var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+                var assistantActionsOptions = http.RequestServices.GetService<NyxIdAssistantActionsOptions>();
+                var metadata = ScheduledDeliveryMetadataBuilder.CreateNyxIdAssistantMetadata(
+                    actorId,
+                    assistantActionsOptions?.ScheduledDeliveryProviderSlug,
+                    assistantActionsOptions?.ScheduledDeliveryProviderUserServiceId);
                 var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
                 var rawInputParts = request.InputParts?.Select(static part => part.ToProto()).ToArray() ?? [];
                 var commandId = NyxIdChatPublicIdentity.CreateChatCommandId(

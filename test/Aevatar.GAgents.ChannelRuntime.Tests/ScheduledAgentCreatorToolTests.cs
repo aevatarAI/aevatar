@@ -65,6 +65,46 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
+    public void CreateResultReceipt_WhenCreateAccepted_ShouldReturnAcceptedDispatchReceipt()
+    {
+        var tool = CreateHarness().Tool;
+        const string resultJson = """
+            {
+              "status": "accepted",
+              "agent_id": "scheduled-agent-alpha",
+              "api_key_id": "api-key-alpha"
+            }
+            """;
+
+        var receipt = tool.CreateResultReceipt("call-alpha", tool.Name, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.CallId.Should().Be("call-alpha");
+        receipt.ToolName.Should().Be(tool.Name);
+        receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
+        receipt.SubjectKind.Should().Be("scheduled_agent");
+        receipt.SubjectId.Should().Be("scheduled-agent-alpha");
+        receipt.MutationStage.Should().Be(AgentToolReceiptMutationStage.Accepted);
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WhenCreateFails_ShouldReturnCalleeConfirmedErrorReceipt()
+    {
+        var tool = CreateHarness().Tool;
+        const string resultJson = """{"error":"validation_error","detail":"schedule_mode is invalid"}""";
+
+        var receipt = tool.CreateResultReceipt("call-alpha", tool.Name, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("validation_error");
+        receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.CalleeConfirmed);
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenNoToken_ShouldFailClosed()
     {
         var harness = CreateHarness();
@@ -984,6 +1024,67 @@ public sealed class ScheduledAgentCreatorToolTests
             capturedBlankRunAt.Schedule.OneShotFireAt.Should().NotBeNull();
             capturedBlankRunAt.Schedule.Prompt.Should().Be("Remind me to join the meeting");
             capturedBlankRunAt.Schedule.CronExpression.Should().BeEmpty();
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OneShotReminderWithTrustedOutboundServiceId_ShouldMintScopedKey()
+    {
+        var handler = CreateSuccessHandler();
+        var harness = CreateHarness(handler: handler);
+        ScheduledWorkflowAgentCreateRequest? captured = null;
+        harness.CreationPort.CreateAsync(
+                Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<ScheduledWorkflowAgentCreateRequest>();
+                return Task.FromResult(new ScheduledWorkflowAgentCreationReceipt(
+                    request.Schedule.ScheduleId,
+                    $"actor:{request.Schedule.ScheduleId}",
+                    true,
+                    "command-1",
+                    "correlation-1",
+                    DateTimeOffset.UtcNow,
+                    "accepted"));
+            });
+        var metadata = new Dictionary<string, string>(BaseExternalMetadata(), StringComparer.Ordinal)
+        {
+            [ChannelMetadataKeys.OutboundProviderUserServiceId] = "svc-lark",
+        };
+
+        await WithToolContext(CreateToolContext(externalMetadata: metadata), async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "schedule_mode": "one_shot",
+                  "delay_seconds": 120,
+                  "one_shot_message": "Submit the report",
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"}
+                  ]
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            captured.Should().NotBeNull();
+            captured!.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot");
+            captured.Schedule.AuthorizationFact.Should().NotBeNull();
+            captured.Schedule.AuthorizationFact!.Owner.OwnerSubject.Should().Be("nyx-user-1");
+            captured.Schedule.AuthorizationFact.ServiceGrants.Select(static grant => grant.ServiceId)
+                .Should().BeEquivalentTo("svc-lark", "svc-lark-failure", "svc-llm");
+            captured.Schedule.AuthorizationFact.PolicyVersion.Should()
+                .Be(ScheduledInvocationAuthorizationContractVersions.CredentialPolicy);
+            captured.Schedule.AuthorizationFact.OwnerLLMSelection.Should().BeEquivalentTo(
+                new WorkflowScheduleOwnerLLMSelection(
+                    WorkflowScheduleOwnerLLMRouteKind.NyxIdUserService,
+                    "/api/v1/proxy/s/chrono-llm-public",
+                    "svc-llm",
+                    "chrono-llm-public",
+                    "gpt-5.5"));
+            IssuedServiceIds(harness)
+                .Should().BeEquivalentTo("svc-lark", "svc-lark-failure", "svc-llm");
         });
     }
 

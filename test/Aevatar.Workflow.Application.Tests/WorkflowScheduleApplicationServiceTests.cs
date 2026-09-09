@@ -210,6 +210,41 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldMapWorkflowAuthorizationFactToServiceInvocationTarget()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(CreateConfiguration("authorization-fact-schedule") with
+        {
+            AuthorizationFact = CreateWorkflowAuthorizationFact(),
+        });
+
+        var fact = actorPort.Created.Single().Configuration.Target.ServiceInvocation!.AuthorizationFact;
+        fact.Should().NotBeNull();
+        fact!.PermissionDigest.Should().Be("digest-alpha");
+        fact.PolicyVersion.Should().Be("policy-alpha");
+        fact.Owner.OwnerSubject.Should().Be("owner-alpha");
+        fact.ServiceGrants.Should().ContainSingle()
+            .Which.ServiceId.Should().Be("svc-alpha");
+        fact.Authority.CatalogStateVersion.Should().Be(42);
+        fact.OwnerLLMSelection.Should().NotBeNull();
+        fact.OwnerLLMSelection!.RouteKind.Should().Be(LLMRouteKind.NyxIdUserService);
+        fact.OwnerLLMSelection.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
+        fact.OwnerLLMSelection.NyxIdUserServiceId.Should().Be("svc-chrono");
+        fact.OwnerLLMSelection.ServiceSlugSnapshot.Should().Be("chrono-llm");
+        fact.OwnerLLMSelection.Model.Should().Be("gpt-5.5");
+
+        var chatRequest = actorPort.Created.Single().Configuration.Target.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.LlmControl.Should().NotBeNull();
+        chatRequest.LlmControl!.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        chatRequest.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldRejectWorkflowScheduleWithoutCredentialSource()
     {
         var service = CreateService(new FakeWorkflowScheduleActorPort
@@ -1233,6 +1268,43 @@ public sealed class WorkflowScheduleApplicationServiceTests
         new(new WorkflowScheduleNyxIdCredentialSource(
             new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
             "proxy"));
+
+    private static WorkflowScheduleAuthorizationFact CreateWorkflowAuthorizationFact()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new WorkflowScheduleAuthorizationFact(
+            "digest-alpha",
+            "policy-alpha",
+            new WorkflowScheduleAuthorizationOwner("nyxid", "Personal", "owner-alpha"),
+            [new WorkflowScheduleAuthorizationServiceGrant("svc-alpha", [], true)],
+            "proxy read",
+            now.AddDays(30),
+            false,
+            new WorkflowScheduleAuthorizationDisclosure(
+                DedicatedToSchedule: true,
+                SecretManagedByAevatar: true,
+                BrowserReceivesRawKey: false,
+                DeleteRevokesCredential: true,
+                PauseResumeRevokesCredential: false),
+            new WorkflowScheduleAuthorizationAuthority(
+                MemberStateVersion: 0,
+                WorkflowStateVersion: 0,
+                ConnectorStateVersion: 0,
+                OwnerLLMStateVersion: 0,
+                CatalogStateVersion: 42,
+                CatalogObservedAt: now.AddMinutes(-5),
+                CatalogFreshUntil: now.AddMinutes(10),
+                CatalogContentDigest: "catalog-digest-alpha",
+                CatalogContractVersion: "catalog-contract-alpha",
+                CatalogPolicyVersion: "catalog-policy-alpha",
+                CatalogEvaluatedAt: now.AddMinutes(-6)),
+            new WorkflowScheduleOwnerLLMSelection(
+                WorkflowScheduleOwnerLLMRouteKind.NyxIdUserService,
+                "/api/v1/proxy/s/chrono-llm",
+                "svc-chrono",
+                "chrono-llm",
+                "gpt-5.5"));
+    }
 
     private static WorkflowScheduleConfiguration CreateScopeOwnerWorkflowConfiguration(string scheduleId) =>
         CreateConfiguration(scheduleId) with

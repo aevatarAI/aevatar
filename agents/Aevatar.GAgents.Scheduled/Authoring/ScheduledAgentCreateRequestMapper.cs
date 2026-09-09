@@ -1,11 +1,14 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -121,7 +124,12 @@ internal sealed class ScheduledAgentCreateRequestMapper
             return ScheduledAgentCreatePlanResult.Failed(requiredNyxServicesError);
 
         var requestedOutboundSlug = Normalize(args.Str("nyx_provider_slug"));
-        var primaryOutboundUserServiceId = Normalize(args.Str("nyx_user_service_id")) ?? string.Empty;
+        var requestedOutboundUserServiceId = Normalize(args.Str("nyx_user_service_id"));
+        var contextOutboundUserServiceId = Normalize(AgentToolRequestContext.TryGetExternalMetadata(
+            ChannelMetadataKeys.OutboundProviderUserServiceId));
+        var primaryOutboundUserServiceId = requestedOutboundSlug is null
+            ? requestedOutboundUserServiceId ?? contextOutboundUserServiceId ?? string.Empty
+            : requestedOutboundUserServiceId ?? string.Empty;
         if (requestedOutboundSlug is not null && scheduleMode != ScheduledAgentScheduleMode.OneShot)
             return ScheduledAgentCreatePlanResult.Failed("nyx_provider_slug is only supported for one_shot schedules");
 
@@ -183,11 +191,13 @@ internal sealed class ScheduledAgentCreateRequestMapper
     public ScheduledAgentCreateMapResult Map(
         ScheduledAgentCreatePlannedRequest request,
         ScheduledAgentApiKeyIssueResult issuedKey,
-        SecretReference secretReference)
+        SecretReference secretReference,
+        ValidatedScheduledInvocationAuthorizationPlan validatedPlan)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(issuedKey);
         ArgumentNullException.ThrowIfNull(secretReference);
+        ArgumentNullException.ThrowIfNull(validatedPlan);
 
         if (!issuedKey.Success || string.IsNullOrWhiteSpace(issuedKey.ApiKeyId))
             return ScheduledAgentCreateMapResult.Failed("api_key_unavailable");
@@ -208,7 +218,8 @@ internal sealed class ScheduledAgentCreateRequestMapper
             ScheduleMode: request.ScheduleMode == ScheduledAgentScheduleMode.OneShot
                 ? WorkflowScheduleMode.OneShotAtUtc
                 : WorkflowScheduleMode.RecurringCron,
-            OneShotFireAt: request.OneShotRunAtUtc);
+            OneShotFireAt: request.OneShotRunAtUtc,
+            AuthorizationFact: BuildWorkflowAuthorizationFact(validatedPlan.Plan));
 
         var catalog = BuildCatalogUpsertCommand(request, issuedKey, secretReference);
 
@@ -396,6 +407,83 @@ internal sealed class ScheduledAgentCreateRequestMapper
             issuedKey.ApiKeyId ?? string.Empty,
             issuedKey.KeyExpiresAtUnixMs,
             issuedKey.DurableOperationGrants));
+
+    private static WorkflowScheduleAuthorizationFact BuildWorkflowAuthorizationFact(
+        ScheduledInvocationAuthorizationPlan plan)
+    {
+        var policy = plan.CredentialPolicy
+            ?? throw new InvalidOperationException("scheduled_authorization_policy_missing");
+        var catalog = plan.CatalogAuthority;
+        if (catalog is null && policy.ServiceGrantRequirement != AuthorizationGrantRequirement.NotRequired)
+            throw new InvalidOperationException("scheduled_authorization_catalog_authority_missing");
+
+        var disclosure = plan.Disclosures.ToHashSet();
+        var grants = plan.NyxIdServiceGrants.Select(static grant =>
+            new WorkflowScheduleAuthorizationServiceGrant(
+                grant.UserServiceId,
+                grant.NodeIds.ToArray(),
+                grant.NodeGrantRequirement == AuthorizationGrantRequirement.NotRequired))
+            .ToArray();
+
+        return new WorkflowScheduleAuthorizationFact(
+            plan.PermissionDigest,
+            policy.PolicyVersion,
+            new WorkflowScheduleAuthorizationOwner(
+                plan.Owner.Authority,
+                plan.Owner.OwnerKind.ToString(),
+                plan.Owner.OwnerSubject),
+            grants,
+            string.Join(' ', policy.Scopes.Select(ToScopeName).Order(StringComparer.Ordinal)),
+            policy.ExpiresAt.ToDateTimeOffset(),
+            policy.ServiceGrantRequirement == AuthorizationGrantRequirement.NotRequired,
+            new WorkflowScheduleAuthorizationDisclosure(
+                disclosure.Contains(ScheduledInvocationDisclosure.DedicatedCredential),
+                disclosure.Contains(ScheduledInvocationDisclosure.AevatarSecretCustody),
+                !disclosure.Contains(ScheduledInvocationDisclosure.BrowserNeverReceivesSecret),
+                disclosure.Contains(ScheduledInvocationDisclosure.DeleteRevokesCredential),
+                !disclosure.Contains(ScheduledInvocationDisclosure.PauseResumePreservesCredential)),
+            new WorkflowScheduleAuthorizationAuthority(
+                SourceVersion(plan, AuthorizationSourceKind.StudioMember),
+                SourceVersion(plan, AuthorizationSourceKind.WorkflowRevision),
+                SourceVersion(plan, AuthorizationSourceKind.ConnectorCatalog),
+                SourceVersion(plan, AuthorizationSourceKind.OwnerLlmRoute),
+                catalog?.ActorStateVersion ?? 0,
+                catalog?.ObservedAt?.ToDateTimeOffset() ?? default,
+                catalog?.FreshUntil?.ToDateTimeOffset() ?? default,
+                catalog?.ContentDigest ?? string.Empty,
+                catalog?.ContractVersion ?? string.Empty,
+                catalog?.PolicyVersion ?? string.Empty,
+                catalog?.EvaluatedAt?.ToDateTimeOffset() ?? default),
+            MapOwnerLLMSelection(plan.OwnerLlmSelection));
+    }
+
+    private static WorkflowScheduleOwnerLLMSelection? MapOwnerLLMSelection(
+        ScheduledInvocationOwnerLLMSelection? selection) =>
+        selection is null
+            ? null
+            : new WorkflowScheduleOwnerLLMSelection(
+                selection.RouteKind switch
+                {
+                    LLMRouteKind.Gateway => WorkflowScheduleOwnerLLMRouteKind.Gateway,
+                    LLMRouteKind.NyxIdUserService => WorkflowScheduleOwnerLLMRouteKind.NyxIdUserService,
+                    _ => WorkflowScheduleOwnerLLMRouteKind.Unspecified,
+                },
+                selection.RouteValue,
+                selection.NyxIdUserServiceId,
+                selection.ServiceSlugSnapshot,
+                selection.Model);
+
+    private static string ToScopeName(NyxIdCredentialScope scope) => scope switch
+    {
+        NyxIdCredentialScope.Read => "read",
+        NyxIdCredentialScope.Proxy => "proxy",
+        _ => throw new InvalidOperationException("scheduled_authorization_scope_invalid"),
+    };
+
+    private static long SourceVersion(
+        ScheduledInvocationAuthorizationPlan plan,
+        AuthorizationSourceKind sourceKind) =>
+        plan.SourceStamps.FirstOrDefault(stamp => stamp.SourceKind == sourceKind)?.StateVersion ?? 0;
 
     private static IReadOnlyDictionary<string, string> BuildWorkflowHeaders(
         ScheduledAgentCreatePlannedRequest request,

@@ -914,7 +914,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
-    public async Task PrepareNyxIdChatAsync_EmptyMembersScheduleRequest_ShouldExposeScheduledAutomationTools()
+    public async Task PrepareNyxIdChatAsync_EmptyMembersRecurringReminderWithoutSkill_ShouldAskForClarification()
     {
         IAgentTool[] tools =
         [
@@ -984,21 +984,228 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             .Be(AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
             "ask_user",
+            "nyxid_services");
+        preparation.Authority.AuthorityCeilingToolNames.Should().NotContain([
             "use_skill",
             "ornn_search_skills",
             "ornn_publish_skill",
             "scheduled_agent_creator",
             "agent_builder",
-            "nyxid_services");
-        preparation.Authority.AuthorityCeilingToolNames.Should().NotContain([
             "aevatar_start_workflow",
             "aevatar_observe_run",
             "aevatar_read_workflow_run_artifact",
         ]);
         materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             preparation.Authority.AuthorityCeilingToolNames);
+    }
+
+    [Fact]
+    public async Task PrepareNyxIdChatAsync_EmptyMembersRecurringReminderWithoutDirectTools_ShouldExposeOrnnFallbackTools()
+    {
+        IAgentTool[] tools =
+        [
+            new TestTool("ask_user"),
+            new TestTool("ornn_search_skills"),
+            new TestTool("ornn_publish_skill"),
+            new TestTool("nyxid_services"),
+        ];
+        var profile = BuildProfile();
+        profile.Instructions = "Use direct scheduled tools first and Ornn skills only as fallback.";
+        profile.Members.Clear();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add([
+            "ask_user",
+            "ornn_search_skills",
+            "ornn_publish_skill",
+            "nyxid_services",
+        ]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Add([
+            "ask_user",
+            "ornn_search_skills",
+            "ornn_publish_skill",
+        ]);
+        var sealedProfile = SealProfile(profile);
+        var materializer = NewMaterializer(
+            RegistryWithRoute(tools),
+            new SequencedClassifier(
+                AgentProfileTurnClassificationResult.Matched(
+                    AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+                AgentProfileTurnClassificationResult.Failed("classifier_not_configured")),
+            fetcher: null);
+
+        var preparation = await materializer.PrepareNyxIdChatAsync(
+            sealedProfile,
+            "session-schedule-ornn-fallback-empty-members",
+            "Remind me every weekday at 9am to check the deployment dashboard.",
+            tools,
+            ToolContext(),
+            llmControl: null,
+            CancellationToken.None);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            sealedProfile,
+            preparation.Authority,
+            accessToken: null,
+            tools,
+            ToolContext(),
+            CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Selected);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
+            "ask_user",
+            "ornn_search_skills",
+            "ornn_publish_skill",
+            "nyxid_services");
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            preparation.Authority.AuthorityCeilingToolNames);
+    }
+
+    [Fact]
+    public async Task PrepareNyxIdChatAsync_EmptyMembersOneShotReminder_ShouldExposeScheduledAutomationTools()
+    {
+        IAgentTool[] tools =
+        [
+            new TestTool("ask_user"),
+            new TestTool("use_skill"),
+            new TestTool("ornn_search_skills"),
+            new TestTool("ornn_publish_skill"),
+            new TestTool("scheduled_agent_creator"),
+            new TestTool("agent_builder"),
+            new TestTool("nyxid_services"),
+        ];
+        var profile = BuildProfile();
+        profile.Instructions = "Use scheduled_agent_creator for one-shot reminders.";
+        profile.Members.Clear();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add([
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+            "nyxid_services",
+        ]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Add([
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+            "scheduled_agent_creator",
+            "agent_builder",
+        ]);
+        var sealedProfile = SealProfile(profile);
+        var materializer = NewMaterializer(
+            RegistryWithRoute(tools),
+            new SequencedClassifier(
+                AgentProfileTurnClassificationResult.Matched(
+                    AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+                AgentProfileTurnClassificationResult.Failed("classifier_not_configured")),
+            fetcher: null);
+
+        var preparation = await materializer.PrepareNyxIdChatAsync(
+            sealedProfile,
+            "session-one-shot-reminder-empty-members",
+            "Remind me in 30 minutes to check the deployment dashboard.",
+            tools,
+            ToolContext(),
+            llmControl: null,
+            CancellationToken.None);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            sealedProfile,
+            preparation.Authority,
+            accessToken: null,
+            tools,
+            ToolContext(),
+            CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Selected);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
+            "ask_user",
+            "use_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+            "nyxid_services");
+        preparation.Authority.AuthorityCeilingToolNames.Should().NotContain([
+            "ornn_search_skills",
+            "ornn_publish_skill",
+        ]);
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            preparation.Authority.AuthorityCeilingToolNames);
         materialization.Catalog.ExactTools.Keys.Should().Contain("scheduled_agent_creator");
-        materialization.Catalog.ExactTools.Keys.Should().Contain("agent_builder");
+    }
+
+    [Fact]
+    public async Task PrepareNyxIdChatAsync_ExplicitOrnnScheduleRequest_ShouldExposeOrnnAuthoringTools()
+    {
+        IAgentTool[] tools =
+        [
+            new TestTool("ask_user"),
+            new TestTool("use_skill"),
+            new TestTool("ornn_search_skills"),
+            new TestTool("ornn_publish_skill"),
+            new TestTool("scheduled_agent_creator"),
+            new TestTool("agent_builder"),
+            new TestTool("nyxid_services"),
+        ];
+        var profile = BuildProfile();
+        profile.Instructions = "Use scheduled_agent_creator for reminders. Use Ornn tools only for explicit skill publishing.";
+        profile.Members.Clear();
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add([
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+            "nyxid_services",
+        ]);
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Add([
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+        ]);
+        var sealedProfile = SealProfile(profile);
+        var materializer = NewMaterializer(
+            RegistryWithRoute(tools),
+            new SequencedClassifier(
+                AgentProfileTurnClassificationResult.Matched(
+                    AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
+                AgentProfileTurnClassificationResult.Failed("classifier_not_configured")),
+            fetcher: null);
+
+        var preparation = await materializer.PrepareNyxIdChatAsync(
+            sealedProfile,
+            "session-ornn-schedule-empty-members",
+            "Publish a reusable Ornn skill that reminds me every weekday at 9am.",
+            tools,
+            ToolContext(),
+            llmControl: null,
+            CancellationToken.None);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            sealedProfile,
+            preparation.Authority,
+            accessToken: null,
+            tools,
+            ToolContext(),
+            CancellationToken.None);
+
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Selected);
+        preparation.Authority.AuthorityCeilingToolNames.Should().BeEquivalentTo(
+            "ask_user",
+            "use_skill",
+            "ornn_search_skills",
+            "ornn_publish_skill",
+            "scheduled_agent_creator",
+            "agent_builder",
+            "nyxid_services");
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            preparation.Authority.AuthorityCeilingToolNames);
     }
 
     [Fact]

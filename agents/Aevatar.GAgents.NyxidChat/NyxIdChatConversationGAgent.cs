@@ -201,7 +201,7 @@ public sealed class NyxIdChatConversationGAgent
         ArgumentNullException.ThrowIfNull(command);
         var scopeId = NormalizeRequired(command.ScopeId, nameof(command.ScopeId));
         var ownerSubject = command.FirstTurn is null
-            ? null
+            ? NormalizeRequired(command.OwnerSubject, nameof(command.OwnerSubject))
             : NormalizeRequired(
                 command.FirstTurn.ToolContext?.Caller?.OwnerSubject,
                 "owner_subject");

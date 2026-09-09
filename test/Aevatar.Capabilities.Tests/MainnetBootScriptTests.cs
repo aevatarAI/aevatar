@@ -32,6 +32,23 @@ public sealed class MainnetBootScriptTests
     }
 
     [Fact]
+    public void AppSettings_ShouldRouteScheduledProfileRequestsToScheduledCreator()
+    {
+        var configuration = BuildMainnetConfiguration();
+        var instructions = configuration["AgentProfiles:SystemDefaultNyxIdChat:Instructions"];
+
+        instructions.Should().NotBeNullOrWhiteSpace();
+        instructions.Should().Contain("use scheduled_agent_creator directly");
+        instructions.Should().Contain("when a direct admitted scheduled automation tool can handle the request");
+        instructions.Should().Contain("Use Ornn skill search or publish only when no direct admitted scheduling or agent-management tool can handle the requested automation");
+        instructions.Should().Contain("Call ornn_search_skills only when the user explicitly asks to find, browse, load, reuse, or inspect Ornn skills");
+        configuration["Aevatar:NyxId:AssistantActions:ScheduledDeliveryProviderSlug"]
+            .Should().NotBeNullOrWhiteSpace();
+        configuration["Aevatar:NyxId:AssistantActions:ScheduledDeliveryProviderUserServiceId"]
+            .Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
     public async Task DistributedAppSettings_ShouldDisableGraphProvidersByDefault()
     {
         var appSettingsPath = Path.Combine(

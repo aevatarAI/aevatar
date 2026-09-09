@@ -3,17 +3,17 @@
   "nyxid": {
     "repository": "https://github.com/ChronoAIProject/NyxID.git",
     "tracked_ref": "main",
-    "reviewed_revision": "aab29289f1b7bf4a18530a5730cd45e1964f1784"
+    "reviewed_revision": "49ff362fed374b99e535980bb5f6c007de1c67b8"
   },
   "wire_contract": {
     "revision": "nyxid-code-execution-wire.v1",
     "files": {
-      "backend/src/handlers/api_keys.rs": "3a92ee111928d1f51f215a193cd0f77334a2e78ab6375bea35e1f6ca67186931",
+      "backend/src/handlers/api_keys.rs": "bcda08182e3186fa30d9f8a6be81181b96ea3310bf8bbb89804ecdb886052793",
       "backend/src/handlers/keys.rs": "d9a048dc03e33fa1795581474472e9428ee1fdb3ef3eed586c6931d3bb8eea7c",
-      "backend/src/handlers/proxy.rs": "a60213a8d4c813e38020b8c2ccfe967fd58dffd27f92180945a5bc36a7c2dc39",
+      "backend/src/handlers/proxy.rs": "31a4825242480b6b2c7d6d22bba10aa1dffcb6ec852f7da80551ec285531364a",
       "backend/src/handlers/user_services_handler.rs": "f0afeb1315b581d597e3f076bef35795f967fc014d950ebd56e6dfad20843309",
       "backend/src/services/catalog_identity_service.rs": "bf27e10c89a6d419910db20f39fe535d3f8b987e6e1f57fc306ee78a151e6979",
-      "backend/src/services/unified_key_service.rs": "d901bce776dc7f78f21423aaedb473dc3b7f356d90adac6359d49893bad02038"
+      "backend/src/services/unified_key_service.rs": "1ba467b765b56f82862847d8c3ee3ab04a2a6504e3d7ec5fd0c57abea5163ec7"
     },
     "required_markers": {
       "backend/src/handlers/api_keys.rs": [

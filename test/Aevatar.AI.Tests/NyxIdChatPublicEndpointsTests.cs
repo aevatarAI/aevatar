@@ -12,6 +12,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -79,6 +80,7 @@ public sealed class NyxIdChatPublicEndpointsTests
                 "correlation-alpha",
                 new Dictionary<string, string>()));
         var create = envelope.Payload.Unpack<NyxIdChatConversationCreateCommand>();
+        create.OwnerSubject.Should().Be("user-alpha");
         create.AgentProfileReference.Should().BeEquivalentTo(command.AgentProfileReference);
         var start = create.FirstTurn;
         start.ToolContext.Caller.ScopeId.Should().Be("scope-alpha");
@@ -99,6 +101,68 @@ public sealed class NyxIdChatPublicEndpointsTests
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain(command.ActorId).And.Contain(command.TurnId);
+    }
+
+    [Fact]
+    public async Task FirstText_WithScheduledDeliveryProvider_ShouldCarryNyxIdAssistantDeliveryMetadata()
+    {
+        var chat = new RecordingInteraction<NyxIdChatCommand>();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton(new NyxIdAssistantActionsOptions
+            {
+                Enabled = true,
+                ScheduledDeliveryProviderSlug = "aevatar-local-diag-catalog",
+                ScheduledDeliveryProviderUserServiceId = "service-local-diag-catalog",
+            })
+            .AddSingleton<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(chat)
+            .AddSingleton<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(new RecordingInteraction<NyxIdActionContinuationCommand>())
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort()));
+        context.Request.Headers.Authorization = "Bearer delegated-token";
+        context.Response.Body = new MemoryStream();
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
+            {
+              "type": "text",
+              "clientRequestId": "scheduled-request",
+              "prompt": "30秒后提醒我喝水"
+            }
+            """));
+
+        var command = chat.Commands.Should().ContainSingle().Which;
+        command.Metadata.Should().Contain(new KeyValuePair<string, string>(
+            ChannelMetadataKeys.Platform,
+            "nyxid-chat"));
+        command.Metadata.Should().Contain(new KeyValuePair<string, string>(
+            ChannelMetadataKeys.ConversationId,
+            command.ActorId));
+        command.Metadata.Should().Contain(new KeyValuePair<string, string>(
+            ChannelMetadataKeys.OutboundProviderSlug,
+            "aevatar-local-diag-catalog"));
+        command.Metadata.Should().Contain(new KeyValuePair<string, string>(
+            ChannelMetadataKeys.OutboundProviderUserServiceId,
+            "service-local-diag-catalog"));
+        command.Metadata.Should().Contain(new KeyValuePair<string, string>(
+            ChannelMetadataKeys.DeliveryAddressId,
+            command.ActorId));
+
+        var envelope = new NyxIdChatCommandEnvelopeFactory().CreateEnvelope(
+            command,
+            new CommandContext(
+                command.ActorId,
+                "command-alpha",
+                "correlation-alpha",
+                new Dictionary<string, string>()));
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(
+            envelope.Payload.Unpack<NyxIdChatConversationCreateCommand>().FirstTurn.ToolContext);
+        toolContext.ExternalMetadata.Should().Contain(new KeyValuePair<string, string>(
+            ChannelMetadataKeys.OutboundProviderSlug,
+            "aevatar-local-diag-catalog"));
+        toolContext.ExternalMetadata.Should().Contain(new KeyValuePair<string, string>(
+            ChannelMetadataKeys.OutboundProviderUserServiceId,
+            "service-local-diag-catalog"));
+        toolContext.ExternalMetadata.Should().Contain(new KeyValuePair<string, string>(
+            ChannelMetadataKeys.ConversationId,
+            command.ActorId));
     }
 
     [Fact]

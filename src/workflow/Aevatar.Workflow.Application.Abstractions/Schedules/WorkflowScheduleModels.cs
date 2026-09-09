@@ -26,7 +26,64 @@ public sealed record WorkflowScheduleConfiguration(
     WorkflowScheduleAuth? Auth = null,
     WorkflowScheduleMutationContext? MutationContext = null,
     WorkflowScheduleMode ScheduleMode = WorkflowScheduleMode.RecurringCron,
-    DateTimeOffset? OneShotFireAt = null);
+    DateTimeOffset? OneShotFireAt = null,
+    WorkflowScheduleAuthorizationFact? AuthorizationFact = null);
+
+public sealed record WorkflowScheduleAuthorizationFact(
+    string PermissionDigest,
+    string PolicyVersion,
+    WorkflowScheduleAuthorizationOwner Owner,
+    IReadOnlyList<WorkflowScheduleAuthorizationServiceGrant> ServiceGrants,
+    string Scopes,
+    DateTimeOffset ExpiresAt,
+    bool ServiceGrantsNotRequired,
+    WorkflowScheduleAuthorizationDisclosure Disclosure,
+    WorkflowScheduleAuthorizationAuthority Authority,
+    WorkflowScheduleOwnerLLMSelection? OwnerLLMSelection = null);
+
+public enum WorkflowScheduleOwnerLLMRouteKind
+{
+    Unspecified = 0,
+    Gateway = 1,
+    NyxIdUserService = 2,
+}
+
+public sealed record WorkflowScheduleOwnerLLMSelection(
+    WorkflowScheduleOwnerLLMRouteKind RouteKind,
+    string RouteValue,
+    string NyxIdUserServiceId,
+    string ServiceSlugSnapshot,
+    string Model);
+
+public sealed record WorkflowScheduleAuthorizationOwner(
+    string Authority,
+    string OwnerKind,
+    string OwnerSubject);
+
+public sealed record WorkflowScheduleAuthorizationServiceGrant(
+    string ServiceId,
+    IReadOnlyList<string> NodeIds,
+    bool NodeGrantsNotRequired);
+
+public sealed record WorkflowScheduleAuthorizationDisclosure(
+    bool DedicatedToSchedule,
+    bool SecretManagedByAevatar,
+    bool BrowserReceivesRawKey,
+    bool DeleteRevokesCredential,
+    bool PauseResumeRevokesCredential);
+
+public sealed record WorkflowScheduleAuthorizationAuthority(
+    long MemberStateVersion,
+    long WorkflowStateVersion,
+    long ConnectorStateVersion,
+    long OwnerLLMStateVersion,
+    long CatalogStateVersion,
+    DateTimeOffset CatalogObservedAt,
+    DateTimeOffset CatalogFreshUntil,
+    string CatalogContentDigest,
+    string CatalogContractVersion,
+    string CatalogPolicyVersion,
+    DateTimeOffset CatalogEvaluatedAt);
 
 public sealed record WorkflowScheduleMutationContext(
     string? AuthenticatedScopeId = null,
