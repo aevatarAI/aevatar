@@ -63,8 +63,11 @@ internal sealed class NyxIdRelayIngressPort : INyxIdRelayIngressPort
             throw new InvalidOperationException("Relay payload did not resolve to a canonical conversation key.");
         }
 
-        var actorId = BuildScopedRelayConversationActorId(request.ScopeId, activity.Conversation.CanonicalKey);
-        var actor = await _actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
+        var conversationActorScopeKey = BuildConversationActorScopeKey(request.ScopeId);
+        var actorId = BuildScopedRelayConversationThreadActorId(
+            activity.Conversation.CanonicalKey,
+            conversationActorScopeKey);
+        var actor = await _actorRuntime.CreateAsync<ChannelConversationThreadGAgent>(actorId, ct);
         var relayInbound = new NyxRelayInboundActivity
         {
             Activity = activity,
@@ -75,6 +78,7 @@ internal sealed class NyxIdRelayIngressPort : INyxIdRelayIngressPort
             CallbackJti = request.CallbackJti ?? string.Empty,
             CallbackObservedAtUnixMs = request.CallbackObservedAtUnixMs,
             CallbackReplayExpiresAtUnixMs = request.CallbackReplayExpiresAtUnixMs,
+            ConversationActorScopeKey = conversationActorScopeKey,
         };
         var command = new EventEnvelope
         {
@@ -87,7 +91,7 @@ internal sealed class NyxIdRelayIngressPort : INyxIdRelayIngressPort
         await _actorDispatchPort.DispatchAsync(actor.Id, command, ct);
 
         _logger.LogInformation(
-            "Accepted relay callback into channel conversation backbone: message={MessageId}, actor={ActorId}, platform={Platform}, activity={ActivityType}",
+            "Accepted relay callback into channel conversation thread: message={MessageId}, actor={ActorId}, platform={Platform}, activity={ActivityType}",
             activity.Id,
             actorId,
             activity.ChannelId?.Value,
@@ -96,13 +100,21 @@ internal sealed class NyxIdRelayIngressPort : INyxIdRelayIngressPort
         return new NyxIdRelayIngressAccepted(activity.Id, actorId);
     }
 
-    private static string BuildScopedRelayConversationActorId(string? scopeId, string canonicalKey)
+    private static string BuildConversationActorScopeKey(string? scopeId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalKey);
 
-        var scopeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
             .ToLowerInvariant();
-        return $"{ConversationGAgent.BuildActorId(canonicalKey)}:scope:{scopeHash}";
+    }
+
+    private static string BuildScopedRelayConversationThreadActorId(
+        string canonicalKey,
+        string conversationActorScopeKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationActorScopeKey);
+
+        return $"{ChannelConversationThreadGAgent.BuildActorId(canonicalKey)}:scope:{conversationActorScopeKey.Trim()}";
     }
 }

@@ -78,6 +78,60 @@ public sealed class ChannelConversationThreadGAgentTests
         events.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_WhenPrivateNewCommand_RotatesAndDispatchesScopedRelayToLogicalConversation()
+    {
+        var actorId = ChannelConversationThreadGAgent.BuildActorId("lark:dm:user-2")
+            + ":scope:scope-key-1";
+        var eventStore = new InMemoryEventStore();
+        var actorRuntime = new CapturingActorRuntime();
+        var dispatchPort = new CapturingActorDispatchPort();
+        var agent = await CreateAgentAsync(actorId, eventStore, actorRuntime, dispatchPort);
+
+        await agent.HandleNyxRelayInboundActivityAsync(BuildRelayInboundActivity("msg-new-1", "/new"));
+
+        agent.State.Generation.Should().Be(1);
+        agent.State.ActiveConversationCanonicalKey.Should().Be("lark:dm:user-2#session-00000001");
+        agent.State.LastRotationActivityId.Should().Be("msg-new-1");
+        actorRuntime.CreatedActorIds.Should()
+            .ContainSingle("channel-conversation:lark:dm:user-2#session-00000001:scope:scope-key-1");
+        var captured = dispatchPort.Envelopes.Should().ContainSingle().Which;
+        captured.ActorId.Should().Be("channel-conversation:lark:dm:user-2#session-00000001:scope:scope-key-1");
+        captured.Envelope.Payload.Is(NyxRelayInboundActivity.Descriptor).Should().BeTrue();
+        var relayActivity = captured.Envelope.Payload.Unpack<NyxRelayInboundActivity>();
+        relayActivity.Activity.Id.Should().Be("msg-new-1");
+        relayActivity.Activity.Conversation.CanonicalKey.Should().Be("lark:dm:user-2#session-00000001");
+        relayActivity.ConversationActorScopeKey.Should().Be("scope-key-1");
+
+        var events = await eventStore.GetEventsAsync(actorId);
+        events.Should().ContainSingle(
+            x => x.EventData.TypeUrl.EndsWith(ConversationThreadRotatedEvent.Descriptor.FullName, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_WhenPlainAfterRotation_DispatchesScopedRelayToActiveLogicalConversation()
+    {
+        var actorId = ChannelConversationThreadGAgent.BuildActorId("lark:dm:user-2")
+            + ":scope:scope-key-1";
+        var eventStore = new InMemoryEventStore();
+        var actorRuntime = new CapturingActorRuntime();
+        var dispatchPort = new CapturingActorDispatchPort();
+        var agent = await CreateAgentAsync(actorId, eventStore, actorRuntime, dispatchPort);
+
+        await agent.HandleNyxRelayInboundActivityAsync(BuildRelayInboundActivity("msg-new-1", "/new"));
+        await agent.HandleNyxRelayInboundActivityAsync(BuildRelayInboundActivity("msg-plain-1", "hello"));
+
+        agent.State.Generation.Should().Be(1);
+        actorRuntime.CreatedActorIds.Should().HaveCount(2);
+        actorRuntime.CreatedActorIds.Should()
+            .AllBeEquivalentTo("channel-conversation:lark:dm:user-2#session-00000001:scope:scope-key-1");
+        dispatchPort.Envelopes.Should().HaveCount(2);
+        var plainRelayActivity = dispatchPort.Envelopes[1].Envelope.Payload.Unpack<NyxRelayInboundActivity>();
+        plainRelayActivity.Activity.Id.Should().Be("msg-plain-1");
+        plainRelayActivity.Activity.Conversation.CanonicalKey.Should().Be("lark:dm:user-2#session-00000001");
+        plainRelayActivity.ConversationActorScopeKey.Should().Be("scope-key-1");
+    }
+
     private static async Task<ChannelConversationThreadGAgent> CreateAgentAsync(
         string id,
         InMemoryEventStore eventStore,
@@ -120,6 +174,20 @@ public sealed class ChannelConversationThreadGAgentTests
                 "user-2"),
             From = new ParticipantRef { CanonicalId = "user-2" },
             Content = new MessageContent { Text = text },
+        };
+
+    private static NyxRelayInboundActivity BuildRelayInboundActivity(string messageId, string text) =>
+        new()
+        {
+            Activity = BuildInboundActivity(messageId, text, ConversationScope.DirectMessage),
+            ReplyToken = "reply-token-1",
+            ReplyTokenExpiresAtUnixMs = 1,
+            CorrelationId = "correlation-1",
+            RelayApiKeyId = "api-key-1",
+            CallbackJti = "jti-1",
+            CallbackObservedAtUnixMs = 2,
+            CallbackReplayExpiresAtUnixMs = 3,
+            ConversationActorScopeKey = "scope-key-1",
         };
 
     private static void SetId(object agent, string id)

@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -26,11 +27,16 @@ public sealed class NyxIdRelayIngressPortTests
 
         first.ActorId.Should().NotBe(second.ActorId);
         first.ActorId.Should().Be(repeated.ActorId);
+        first.ActorId.Should().StartWith("channel-conversation-thread:lark:group:oc_group_1:scope:");
         first.ActorId.Should().MatchRegex(":scope:[0-9a-f]{64}$");
         second.ActorId.Should().MatchRegex(":scope:[0-9a-f]{64}$");
         runtime.CreatedActorIds.Should().Equal(first.ActorId, second.ActorId, repeated.ActorId);
         dispatchPort.Dispatches.Select(dispatch => dispatch.ActorId)
             .Should().Equal(first.ActorId, second.ActorId, repeated.ActorId);
+
+        var firstPayload = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<NyxRelayInboundActivity>();
+        firstPayload.ConversationActorScopeKey.Should().MatchRegex("^[0-9a-f]{64}$");
+        firstPayload.Activity.Conversation.CanonicalKey.Should().Be(canonicalKey);
     }
 
     private static NyxIdRelayIngressRequest BuildRequest(string scopeId, string canonicalKey, string messageId) =>
