@@ -129,7 +129,10 @@ public static partial class NyxIdChatEndpoints
         // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
         //   The create facade returns accepted/admission-visible command trace, not read-model-observed conversation state.
         //   Clients must poll the conversation list or observe the stream/status path instead of treating this body as committed.
-        var receipt = await lifecycleFacade.CreateConversationAsync(scopeId, ct);
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var ownerSubject))
+            return Results.Unauthorized();
+
+        var receipt = await lifecycleFacade.CreateConversationAsync(scopeId, ownerSubject, ct);
         return receipt.Status switch
         {
             NyxIdChatConversationCreateStatus.Accepted => Results.Accepted(

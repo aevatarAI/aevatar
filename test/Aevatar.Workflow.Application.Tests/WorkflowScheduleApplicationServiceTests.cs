@@ -210,6 +210,30 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldMapWorkflowAuthorizationFactToServiceInvocationTarget()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(CreateConfiguration("authorization-fact-schedule") with
+        {
+            AuthorizationFact = CreateWorkflowAuthorizationFact(),
+        });
+
+        var fact = actorPort.Created.Single().Configuration.Target.ServiceInvocation!.AuthorizationFact;
+        fact.Should().NotBeNull();
+        fact!.PermissionDigest.Should().Be("digest-alpha");
+        fact.PolicyVersion.Should().Be("policy-alpha");
+        fact.Owner.OwnerSubject.Should().Be("owner-alpha");
+        fact.ServiceGrants.Should().ContainSingle()
+            .Which.ServiceId.Should().Be("svc-alpha");
+        fact.Authority.CatalogStateVersion.Should().Be(42);
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldRejectWorkflowScheduleWithoutCredentialSource()
     {
         var service = CreateService(new FakeWorkflowScheduleActorPort
@@ -1233,6 +1257,37 @@ public sealed class WorkflowScheduleApplicationServiceTests
         new(new WorkflowScheduleNyxIdCredentialSource(
             new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
             "proxy"));
+
+    private static WorkflowScheduleAuthorizationFact CreateWorkflowAuthorizationFact()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new WorkflowScheduleAuthorizationFact(
+            "digest-alpha",
+            "policy-alpha",
+            new WorkflowScheduleAuthorizationOwner("nyxid", "Personal", "owner-alpha"),
+            [new WorkflowScheduleAuthorizationServiceGrant("svc-alpha", [], true)],
+            "proxy read",
+            now.AddDays(30),
+            false,
+            new WorkflowScheduleAuthorizationDisclosure(
+                DedicatedToSchedule: true,
+                SecretManagedByAevatar: true,
+                BrowserReceivesRawKey: false,
+                DeleteRevokesCredential: true,
+                PauseResumeRevokesCredential: false),
+            new WorkflowScheduleAuthorizationAuthority(
+                MemberStateVersion: 0,
+                WorkflowStateVersion: 0,
+                ConnectorStateVersion: 0,
+                OwnerLLMStateVersion: 0,
+                CatalogStateVersion: 42,
+                CatalogObservedAt: now.AddMinutes(-5),
+                CatalogFreshUntil: now.AddMinutes(10),
+                CatalogContentDigest: "catalog-digest-alpha",
+                CatalogContractVersion: "catalog-contract-alpha",
+                CatalogPolicyVersion: "catalog-policy-alpha",
+                CatalogEvaluatedAt: now.AddMinutes(-6)));
+    }
 
     private static WorkflowScheduleConfiguration CreateScopeOwnerWorkflowConfiguration(string scheduleId) =>
         CreateConfiguration(scheduleId) with

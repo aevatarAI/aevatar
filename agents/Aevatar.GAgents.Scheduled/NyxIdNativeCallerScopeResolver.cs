@@ -27,6 +27,13 @@ public sealed class NyxIdNativeCallerScopeResolver : ICallerScopeResolver
 
     public async Task<OwnerScope?> TryResolveAsync(CancellationToken ct = default)
     {
+        var verifiedCallerSubject = NormalizeOptional(AgentToolRequestContext.Current?.Caller.OwnerSubject);
+        if (AgentToolRequestContext.Current?.Chat.Surface == AgentChatInvocationSurface.NyxIdAssistant &&
+            verifiedCallerSubject is not null)
+        {
+            return OwnerScope.ForNyxIdNative(verifiedCallerSubject);
+        }
+
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
         {
@@ -44,5 +51,11 @@ public sealed class NyxIdNativeCallerScopeResolver : ICallerScopeResolver
         }
 
         return OwnerScope.ForNyxIdNative(nyxUserId.Trim());
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        return normalized.Length == 0 ? null : normalized;
     }
 }

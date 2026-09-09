@@ -2123,10 +2123,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // as the failure-notification provider so a failed outbound delivery
         // (e.g. cross-tenant Lark 99992364) can still notify the user via the bot they just
         // successfully messaged. See issue #423 §C and ChannelMetadataKeys.InboundChannelBotProxySlug.
+        ScheduledDeliveryMetadataBuilder.ApplyDefaultOutboundProvider(metadata, inboundEvent.NyxProviderSlug);
         if (!string.IsNullOrWhiteSpace(inboundEvent.NyxProviderSlug))
         {
-            metadata[ChannelMetadataKeys.InboundChannelBotProxySlug] = inboundEvent.NyxProviderSlug;
-            metadata[ChannelMetadataKeys.OutboundProviderSlug] = inboundEvent.NyxProviderSlug;
             // The inbound bot is also the default OUTBOUND delivery provider for a chat-triggered
             // scheduled task: the scheduled run replies via the same Lark bot that received the
             // message, so scheduled_agent_creator can resolve a provider without manual Studio/Web
@@ -2156,21 +2155,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             AddIdentityHint(identityHints, "conversation", "platform", larkChatId);
         }
 
-        var deliveryAddressId = NormalizeOptional(activity?.TransportExtras?.DeliveryAddressId);
-        if (!string.IsNullOrWhiteSpace(deliveryAddressId))
-            metadata[ChannelMetadataKeys.DeliveryAddressId] = deliveryAddressId;
-
-        var deliveryAddressType = NormalizeOptional(activity?.TransportExtras?.DeliveryAddressType);
-        if (!string.IsNullOrWhiteSpace(deliveryAddressType))
-            metadata[ChannelMetadataKeys.DeliveryAddressType] = deliveryAddressType;
-
-        var deliveryFallbackAddressId = NormalizeOptional(activity?.TransportExtras?.DeliveryFallbackAddressId);
-        if (!string.IsNullOrWhiteSpace(deliveryFallbackAddressId))
-            metadata[ChannelMetadataKeys.DeliveryFallbackAddressId] = deliveryFallbackAddressId;
-
-        var deliveryFallbackAddressType = NormalizeOptional(activity?.TransportExtras?.DeliveryFallbackAddressType);
-        if (!string.IsNullOrWhiteSpace(deliveryFallbackAddressType))
-            metadata[ChannelMetadataKeys.DeliveryFallbackAddressType] = deliveryFallbackAddressType;
+        ScheduledDeliveryMetadataBuilder.ApplyDeliveryAddress(
+            metadata,
+            activity?.TransportExtras?.DeliveryAddressId,
+            activity?.TransportExtras?.DeliveryAddressType,
+            activity?.TransportExtras?.DeliveryFallbackAddressId,
+            activity?.TransportExtras?.DeliveryFallbackAddressType);
 
         var larkOperatorUserId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUserId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUserId))

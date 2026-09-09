@@ -269,8 +269,7 @@ public static class NyxIdChatTaskLifecycle
                 next,
                 normalizedSignal.Key,
                 now,
-                normalizedSignal.Tool.Receipt.MutationStage ==
-                AgentToolReceiptMutationStage.ReadModelObserved);
+                HasProviderConfirmedMutationStage(normalizedSignal.Tool.Receipt.MutationStage));
         }
         else if (currentStep.Kind == NyxIdChatStepKind.Tool &&
                  FindCurrentStep(next, operationKey)?.Status is
@@ -1542,11 +1541,15 @@ public static class NyxIdChatTaskLifecycle
         return step;
     }
 
+    private static bool HasProviderConfirmedMutationStage(AgentToolReceiptMutationStage mutationStage) =>
+        mutationStage is AgentToolReceiptMutationStage.Accepted or
+            AgentToolReceiptMutationStage.ReadModelObserved;
+
     private static NyxIdChatOperationDispatchCommand? ActivatePlannedVerificationStep(
         NyxIdChatConversationGAgentState state,
         NyxIdChatOperationKey completedToolKey,
         Timestamp now,
-        bool mutationReadModelObserved = false)
+        bool providerConfirmedMutationStage = false)
     {
         var step = state.ActiveTask.Steps.SingleOrDefault(candidate =>
             candidate.Kind is (NyxIdChatStepKind.Llm or NyxIdChatStepKind.Postcondition) &&
@@ -1556,10 +1559,10 @@ public static class NyxIdChatTaskLifecycle
         if (step?.Operation?.Key is null)
             return null;
 
-        if (mutationReadModelObserved)
+        if (providerConfirmedMutationStage)
         {
             step.Kind = NyxIdChatStepKind.Llm;
-            step.Description = "Communicate the typed mutation result observed from its canonical read model.";
+            step.Description = "Communicate the provider-confirmed typed mutation result.";
             step.Source = new NyxIdChatStepSource { Llm = new NyxIdChatLLMStepSource() };
             step.Operation.Kind = NyxIdChatStepKind.Llm;
         }

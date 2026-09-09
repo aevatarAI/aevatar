@@ -77,6 +77,7 @@ public sealed class NyxIdChatLifecycleFacade
 
     public async Task<NyxIdChatConversationCreateReceipt> CreateConversationAsync(
         string scopeId,
+        string ownerSubject,
         CancellationToken ct = default)
     {
         // Refactor (iter77/cluster-077-cqrs-command-outcome-stream-rpc):
@@ -86,6 +87,7 @@ public sealed class NyxIdChatLifecycleFacade
             new NyxIdChatConversationCreateCommand
             {
                 ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
+                OwnerSubject = NormalizeRequired(ownerSubject, nameof(ownerSubject)),
             },
             ct);
 

@@ -381,6 +381,48 @@ public sealed class UnifyCallerScopeAcceptanceTests
     }
 
     [Fact]
+    public async Task NyxIdNativeCallerScopeResolver_NyxIdAssistantUsesVerifiedCallerSubject()
+    {
+        var inner = Substitute.For<INyxIdCurrentUserResolver>();
+        inner.ResolveCurrentUserIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<string?>(null));
+        var resolver = new NyxIdNativeCallerScopeResolver(inner);
+
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "proxy-delegation",
+                NyxIdCredentialKind = AgentToolNyxIdCredentialKind.ProxyDelegation,
+            },
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "user-alpha",
+                "turn-alpha",
+                OwnerScopeId: "scope-alpha"),
+            Chat = new AgentChatInvocationContext(
+                AgentChatInvocationSurface.NyxIdAssistant,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                null,
+                null),
+        };
+        try
+        {
+            var scope = await resolver.TryResolveAsync();
+
+            scope.Should().NotBeNull();
+            scope!.MatchesStrictly(OwnerScope.ForNyxIdNative("user-alpha")).Should().BeTrue();
+            await inner.DidNotReceiveWithAnyArgs().ResolveCurrentUserIdAsync(default!, default);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ChannelMetadataCallerScopeResolver_PlatformWithoutSenderId_ThrowsFailClosed()
     {
         var inner = Substitute.For<INyxIdCurrentUserResolver>();
@@ -417,6 +459,48 @@ public sealed class UnifyCallerScopeAcceptanceTests
         {
             (await resolver.TryResolveAsync()).Should().BeNull(
                 "no channel platform metadata → not a channel surface; let composite try next strategy");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ChannelMetadataCallerScopeResolver_NyxIdAssistantPlatformOnly_ReturnsNull_AllowsNativeFallthrough()
+    {
+        var inner = Substitute.For<INyxIdCurrentUserResolver>();
+        var resolver = new ChannelMetadataCallerScopeResolver(inner);
+
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "proxy-delegation",
+            },
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "user-alpha",
+                "turn-alpha",
+                OwnerScopeId: "scope-alpha"),
+            Channel = new AgentToolChannelContext(
+                "nyxid-chat",
+                null,
+                "scope-alpha",
+                null,
+                null),
+            Chat = new AgentChatInvocationContext(
+                AgentChatInvocationSurface.NyxIdAssistant,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                null,
+                null),
+        };
+        try
+        {
+            (await resolver.TryResolveAsync()).Should().BeNull(
+                "NyxID Assistant uses Channel.Platform to select its local tool source, not as external channel sender metadata");
         }
         finally
         {

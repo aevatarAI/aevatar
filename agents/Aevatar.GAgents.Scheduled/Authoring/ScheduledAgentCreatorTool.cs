@@ -1,7 +1,9 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Workflow.Abstractions;
@@ -240,7 +242,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             return provisioned.IssuedKey.ToErrorJson();
 
         var key = provisioned.IssuedKey;
-        var mapped = _mapper.Map(plan.Request!, key, provisioned.SecretReference!);
+        var mapped = _mapper.Map(plan.Request!, key, provisioned.SecretReference!, validation.ValidatedPlan!);
         if (!mapped.Success)
         {
             await _credentialLifecycle.RequestRevocationAsync(
@@ -268,6 +270,76 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             api_key_id = key.ApiKeyId,
             note = "Scheduled agent create accepted for dispatch. Use agent_builder agent_status to observe projection state.",
         });
+    }
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson ?? string.Empty);
+            var root = document.RootElement;
+            if (root.TryGetProperty("error", out var errorElement))
+            {
+                var error = ResolveErrorCode(root, errorElement);
+                return new AgentToolReceipt
+                {
+                    CallId = callId ?? string.Empty,
+                    ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+                    Status = AgentToolReceiptStatus.Error,
+                    ResultJson = resultJson ?? string.Empty,
+                    ErrorCode = error,
+                    ErrorMessage = error,
+                    FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed,
+                };
+            }
+
+            if (!root.TryGetProperty("status", out var statusElement) ||
+                statusElement.ValueKind != JsonValueKind.String ||
+                !string.Equals(statusElement.GetString()?.Trim(), "accepted", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var agentId = root.TryGetProperty("agent_id", out var agentElement) &&
+                          agentElement.ValueKind == JsonValueKind.String
+                ? agentElement.GetString()?.Trim()
+                : string.Empty;
+
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+                Status = AgentToolReceiptStatus.Success,
+                Effect = AgentToolReceiptEffect.Mutating,
+                ResultJson = resultJson ?? string.Empty,
+                SubjectKind = "scheduled_agent",
+                SubjectId = agentId ?? string.Empty,
+                MutationStage = AgentToolReceiptMutationStage.Accepted,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string ResolveErrorCode(JsonElement root, JsonElement errorElement)
+    {
+        if (errorElement.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(errorElement.GetString()))
+            return errorElement.GetString()!;
+
+        if (root.TryGetProperty("detail", out var detailElement) &&
+            detailElement.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(detailElement.GetString()))
+        {
+            return detailElement.GetString()!;
+        }
+
+        return "scheduled_agent_create_failed";
     }
 
     private ScheduledInvocationAuthorizationRequest? BuildAuthorizationRequest(

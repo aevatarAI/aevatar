@@ -415,6 +415,7 @@ internal sealed class NyxIdChatCommandTargetResolver
         {
             ScopeId = command.ScopeId,
             RequestedActorId = command.ActorId,
+            OwnerSubject = command.OwnerSubject?.Trim() ?? string.Empty,
             AgentProfileReference = command.AgentProfileReference?.Clone(),
             ContextAttachments = ConversationContextAttachmentAdmission.CloneOptionalSet(command.ContextAttachments),
             FirstTurn = new NyxIdChatStartTurnCommand
@@ -581,6 +582,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         return CreateDirectEnvelope(context, new NyxIdChatConversationCreateCommand
         {
             ScopeId = command.ScopeId,
+            OwnerSubject = command.OwnerSubject?.Trim() ?? string.Empty,
             CreatedLocally = command.CreatedLocally,
             AgentProfile = command.AgentProfile?.Clone(),
             AgentProfileReference = command.AgentProfileReference?.Clone(),

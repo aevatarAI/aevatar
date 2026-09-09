@@ -397,31 +397,24 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task StartTurn_OnOwnerlessConversation_ShouldRejectOwnerClaim()
+    public async Task CreateConversation_WithoutFirstTurn_ShouldBindOwnerBeforeFirstStreamTurn()
     {
-        const string actorId = "conversation-ownerless";
+        const string actorId = "conversation-create-only-owner";
         var eventStore = new InMemoryEventStoreForTests();
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
         using var services = BuildEventSourcingServices(eventStore);
         var agent = CreateController(services, actorId, dispatch);
         await agent.ActivateAsync();
+
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
             ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
             CreatedLocally = true,
             RequestedActorId = actorId,
         }));
-        var turn = CreateStartTurnCommand();
-        turn.ConversationActorId = actorId;
-        SetOwner(turn, "owner-alpha");
 
-        await agent.HandleEventAsync(CreateEnvelope(actorId, turn));
-
-        var rejection = (await eventStore.GetEventsAsync(actorId))[^1].EventData
-            .Unpack<NyxIdChatTurnAdmissionRejectedEvent>();
-        rejection.ReasonCode.Should().Be("NYXID_CHAT_OWNER_MISMATCH");
-        agent.State.OwnerSubject.Should().BeEmpty();
-        dispatch.OperationCalls.Should().BeEmpty();
+        agent.State.OwnerSubject.Should().Be("owner-alpha");
     }
 
     [Fact]

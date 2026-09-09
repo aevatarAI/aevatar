@@ -38,16 +38,20 @@ public sealed class ChannelMetadataCallerScopeResolver : ICallerScopeResolver
 
     public async Task<OwnerScope?> TryResolveAsync(CancellationToken ct = default)
     {
-        var platform = NormalizeOptional(AgentToolRequestContext.ChannelPlatform);
+        var context = AgentToolRequestContext.Current;
+        var platform = NormalizeOptional(context?.Channel.Platform);
         if (platform is null)
         {
             // Not a channel-surface request; let the composite try the next resolver.
             return null;
         }
 
-        var senderId = NormalizeOptional(AgentToolRequestContext.ChannelSenderId);
+        var senderId = NormalizeOptional(context?.Channel.SenderId);
         if (senderId is null)
         {
+            if (context?.Chat.Surface == AgentChatInvocationSurface.NyxIdAssistant)
+                return null;
+
             throw new CallerScopeUnavailableException(
                 $"Channel platform metadata is present (platform=\"{platform}\") but channel.sender_id is missing. Cannot scope agent operations safely.");
         }
