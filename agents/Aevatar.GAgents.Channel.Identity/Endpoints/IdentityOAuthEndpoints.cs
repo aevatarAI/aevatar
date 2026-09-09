@@ -123,7 +123,7 @@ public static class IdentityOAuthEndpoints
         if (!string.IsNullOrWhiteSpace(error))
         {
             logger.LogWarning("OAuth callback received error from NyxID: {Error}", error);
-            return Results.BadRequest(new { error, detail = "NyxID returned an error on the OAuth callback. Re-run /init from Lark to retry." });
+            return Results.BadRequest(new { error, detail = $"NyxID returned an error on the OAuth callback. {RetryInitInstruction(null)}。" });
         }
         if (string.IsNullOrWhiteSpace(code))
             return Results.BadRequest(new { error = "code_missing" });
@@ -139,8 +139,8 @@ public static class IdentityOAuthEndpoints
             // bootstrap actor isn't ready yet. Surface a specific message so
             // the user retries instead of suspecting a tampered link.
             var detail = decode.ErrorCode == "state_client_not_provisioned"
-                ? "Aevatar 集群正在初始化 NyxID 客户端,请 30 秒后回到 Lark 重新发送 /init。"
-                : "绑定链接已过期或无效,请回到 Lark 重新发送 /init";
+                ? $"Aevatar 集群正在初始化 NyxID 客户端,{RetryInitInstruction(null, "请 30 秒后")}。"
+                : $"绑定链接已过期或无效,{RetryInitInstruction(null)}。";
             return Results.BadRequest(new
             {
                 error = decode.ErrorCode,
@@ -172,7 +172,7 @@ public static class IdentityOAuthEndpoints
             return Results.BadRequest(new
             {
                 error = "client_not_provisioned",
-                detail = "Aevatar 集群正在初始化 NyxID 客户端,请 30 秒后回到 Lark 重新发送 /init。",
+                detail = $"Aevatar 集群正在初始化 NyxID 客户端,{RetryInitInstruction(subject.Platform, "请 30 秒后")}。",
             });
         }
         catch (NyxIdRequiredServiceAccessException ex)
@@ -184,7 +184,7 @@ public static class IdentityOAuthEndpoints
             return Results.Json(new
             {
                 error = "required_service_access_missing",
-                detail = "NyxID 授权未包含 Aevatar、默认 LLM、Ornn service 或 Sandbox service。请回到 Lark 重新发送 /init,并在授权页保留这些必需 services。",
+                detail = $"NyxID 授权未包含 Aevatar、默认 LLM、Ornn service 或 Sandbox service。{RetryInitInstruction(subject.Platform)},并在授权页保留这些必需 services。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
         // RFC 6749 §5.2: the token endpoint answers 400 for a bad grant
@@ -196,7 +196,7 @@ public static class IdentityOAuthEndpoints
             return OAuthCallbackProblem(
                 StatusCodes.Status400BadRequest,
                 "authorization_code_rejected",
-                "NyxID 拒绝了本次授权码,绑定链接可能已过期。请回到 Lark 重新发送 /init。");
+                $"NyxID 拒绝了本次授权码,绑定链接可能已过期。{RetryInitInstruction(subject.Platform)}。");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -229,7 +229,7 @@ public static class IdentityOAuthEndpoints
                 return Results.Json(new
                 {
                     error = "binding_changed_during_review",
-                    detail = "Lark 中的 NyxID 绑定在授权期间发生了变化。请回到 Lark 重新发送 /init。",
+                    detail = $"{ChannelDisplayName(subject.Platform)} 中的 NyxID 绑定在授权期间发生了变化。{RetryInitInstruction(subject.Platform)}。",
                 }, statusCode: StatusCodes.Status409Conflict);
             }
 
@@ -241,14 +241,14 @@ public static class IdentityOAuthEndpoints
                     ct)
                 .ConfigureAwait(false);
             if (updatedBindingProbe != IssuedBindingProbeResult.Usable)
-                return BuildIssuedBindingProbeError(updatedBindingProbe);
+                return BuildIssuedBindingProbeError(updatedBindingProbe, subject.Platform);
 
             logger.LogInformation(
                 "Updated NyxID service grant in place for {Platform}:{Tenant}:{User}; binding_id remained unchanged",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
-            return RenderBindingGrantUpdated(format);
+            return RenderBindingGrantUpdated(format, subject.Platform);
         }
 
         // Defensive: NyxID returned no binding_id even though authorization-code
@@ -295,7 +295,7 @@ public static class IdentityOAuthEndpoints
             return Results.Json(new
             {
                 error = "binding_changed_during_review",
-                detail = "Lark 中的 NyxID 绑定在授权期间发生了变化。请回到 Lark 重新发送 /init。",
+                detail = $"{ChannelDisplayName(subject.Platform)} 中的 NyxID 绑定在授权期间发生了变化。{RetryInitInstruction(subject.Platform)}。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
 
@@ -318,7 +318,7 @@ public static class IdentityOAuthEndpoints
                 return Results.Json(new
                 {
                     error = "binding_owner_lookup_failed",
-                    detail = "Aevatar 暂时无法核对当前 NyxID 账号。请稍后回到 Lark 重新发送 /init。",
+                    detail = $"Aevatar 暂时无法核对当前 NyxID 账号。{RetryInitInstruction(subject.Platform, "请稍后")}。",
                 }, statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
@@ -340,7 +340,7 @@ public static class IdentityOAuthEndpoints
                     return Results.Json(new
                     {
                         error = "binding_owner_lookup_failed",
-                        detail = "Aevatar 暂时无法核对当前 NyxID 账号。请稍后回到 Lark 重新发送 /init。",
+                        detail = $"Aevatar 暂时无法核对当前 NyxID 账号。{RetryInitInstruction(subject.Platform, "请稍后")}。",
                     }, statusCode: StatusCodes.Status503ServiceUnavailable);
                 }
             }
@@ -356,7 +356,7 @@ public static class IdentityOAuthEndpoints
                 return Results.Json(new
                 {
                     error = "binding_owner_missing",
-                    detail = "当前绑定缺少可验证的 NyxID 账号归属。请先在 Lark 发送 /unbind，再发送 /init 重新绑定。",
+                    detail = $"当前绑定缺少可验证的 NyxID 账号归属。请先在 {ChannelDisplayName(subject.Platform)} 发送 /unbind，再发送 /init 重新绑定。",
                 }, statusCode: StatusCodes.Status409Conflict);
             }
 
@@ -370,7 +370,7 @@ public static class IdentityOAuthEndpoints
                 return Results.Json(new
                 {
                     error = "binding_owner_mismatch",
-                    detail = "当前 Lark 身份已绑定另一个 NyxID 账号。如需切换账号，请先在 Lark 发送 /unbind，再发送 /init。",
+                    detail = $"当前 {ChannelDisplayName(subject.Platform)} 身份已绑定另一个 NyxID 账号。如需切换账号，请先在 {ChannelDisplayName(subject.Platform)} 发送 /unbind，再发送 /init。"
                 }, statusCode: StatusCodes.Status409Conflict);
             }
         }
@@ -385,7 +385,7 @@ public static class IdentityOAuthEndpoints
         if (issuedBindingProbe != IssuedBindingProbeResult.Usable)
         {
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return BuildIssuedBindingProbeError(issuedBindingProbe);
+            return BuildIssuedBindingProbeError(issuedBindingProbe, subject.Platform);
         }
 
         CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
@@ -463,7 +463,7 @@ public static class IdentityOAuthEndpoints
             subject.ExternalUserId,
             accepted.Receipt.CommandId);
 
-        return RenderBindingAccepted(displayName, accepted.Receipt, format);
+        return RenderBindingAccepted(displayName, accepted.Receipt, format, subject.Platform);
     }
 
     private enum IssuedBindingProbeResult
@@ -553,21 +553,37 @@ public static class IdentityOAuthEndpoints
     private static string BindingDigest(string bindingId) =>
         NyxIdRemoteCapabilityBroker.BindingDigest(bindingId);
 
-    private static IResult BuildIssuedBindingProbeError(IssuedBindingProbeResult probeResult) =>
+    private static string ChannelDisplayName(string? platform)
+    {
+        if (string.IsNullOrWhiteSpace(platform))
+            return "当前聊天应用";
+
+        return platform.Trim().ToLowerInvariant() switch
+        {
+            "lark" => "Lark",
+            "telegram" => "Telegram",
+            _ => platform.Trim(),
+        };
+    }
+
+    private static string RetryInitInstruction(string? platform, string prefix = "请") =>
+        $"{prefix}回到 {ChannelDisplayName(platform)} 重新发送 /init";
+
+    private static IResult BuildIssuedBindingProbeError(IssuedBindingProbeResult probeResult, string? platform) =>
         probeResult switch
         {
             IssuedBindingProbeResult.MissingRequiredAccess => OAuthCallbackProblem(
                 StatusCodes.Status409Conflict,
                 "required_service_access_missing",
-                "NyxID 授权没有覆盖 Aevatar 所需的 scope 或 services。请回到 Lark 重新发送 /init，并在授权页保留所有必需 services。"),
+                $"NyxID 授权没有覆盖 Aevatar 所需的 scope 或 services。{RetryInitInstruction(platform)},并在授权页保留所有必需 services。"),
             IssuedBindingProbeResult.Invalid => OAuthCallbackProblem(
                 StatusCodes.Status503ServiceUnavailable,
                 "issued_binding_invalid",
-                "NyxID 新授权在 Aevatar 接管前已失效。请回到 Lark 重新发送 /init。"),
+                $"NyxID 新授权在 Aevatar 接管前已失效。{RetryInitInstruction(platform)}。"),
             _ => OAuthCallbackProblem(
                 StatusCodes.Status503ServiceUnavailable,
                 "issued_binding_probe_failed",
-                "Aevatar 暂时无法验证新的 NyxID 服务授权。请稍后回到 Lark 重新发送 /init。"),
+                $"Aevatar 暂时无法验证新的 NyxID 服务授权。{RetryInitInstruction(platform, "请稍后")}。"),
         };
 
     // Callback failure branches must never answer with 502/504: Cloudflare
@@ -1315,13 +1331,14 @@ public static class IdentityOAuthEndpoints
     /// <summary>
     /// Render the user-facing success page returned in the OAuth-callback
     /// response. Issue #513 phase 1 asked for a "callback success → please pick
-    /// a model" prompt. The full version is a card update pushed back into
-    /// Lark, which requires capturing the /init card's adapter-owned message
-    /// id and passing it through the OAuth state token — substantial new
-    /// design surface left as a follow-up. This page is the browser-side
-    /// substitute the user sees immediately after the OAuth redirect, and it
-    /// names the next-step commands (<c>/model</c>, <c>/whoami</c>) explicitly
-    /// so the user is not left guessing what to type back in Lark.
+    /// a model" prompt. The full version is a card update pushed back into the
+    /// originating chat channel, which requires capturing the /init card's
+    /// adapter-owned message id and passing it through the OAuth state token —
+    /// substantial new design surface left as a follow-up. This page is the
+    /// browser-side substitute the user sees immediately after the OAuth
+    /// redirect, and it names the next-step commands (<c>/model</c>,
+    /// <c>/whoami</c>) explicitly so the user is not left guessing what to type
+    /// back in chat.
     /// </summary>
     /// <remarks>
     /// Display name comes from the id_token "name" / sub claim; HTML-encoded
@@ -1329,8 +1346,8 @@ public static class IdentityOAuthEndpoints
     /// Other error paths in the callback intentionally keep returning JSON for
     /// ops/programmatic consumers.
     /// </remarks>
-    internal static IResult RenderBoundSuccessHtml(string? displayName, bool alreadyBound) =>
-        RenderBoundSuccess(displayName, alreadyBound, format: null);
+    internal static IResult RenderBoundSuccessHtml(string? displayName, bool alreadyBound, string? platform = null) =>
+        RenderBoundSuccess(displayName, alreadyBound, format: null, platform);
 
     /// <summary>
     /// Render the post-binding success response. Default is the HTML browser page that
@@ -1339,7 +1356,11 @@ public static class IdentityOAuthEndpoints
     /// <c>?format=json</c> on the callback URL — the same shape the endpoint returned
     /// before the HTML render landed (PR #570 review #24).
     /// </summary>
-    internal static IResult RenderBoundSuccess(string? displayName, bool alreadyBound, string? format)
+    internal static IResult RenderBoundSuccess(
+        string? displayName,
+        bool alreadyBound,
+        string? format,
+        string? platform = null)
     {
         if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
         {
@@ -1351,13 +1372,14 @@ public static class IdentityOAuthEndpoints
             });
         }
 
-        return RenderBoundSuccessHtmlInternal(displayName, alreadyBound);
+        return RenderBoundSuccessHtmlInternal(displayName, alreadyBound, platform);
     }
 
     internal static IResult RenderBindingAccepted(
         string? displayName,
         ChannelIdentityOAuthAcceptedReceipt receipt,
-        string? format)
+        string? format,
+        string? platform = null)
     {
         // Refactor (iter27/cluster-028-identity-oauth-endpoint):
         //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
@@ -1372,14 +1394,14 @@ public static class IdentityOAuthEndpoints
                 correlation_id = receipt.CorrelationId,
                 display_name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
                 status_url = OAuthClientStatusUrl,
-                detail = "Binding command accepted for dispatch. Return to Lark and use /whoami to check once projection materializes.",
+                detail = $"Binding command accepted for dispatch. Return to {ChannelDisplayName(platform)} and use /whoami to check once projection materializes.",
             }, statusCode: StatusCodes.Status202Accepted);
         }
 
-        return RenderBindingAcceptedHtmlInternal(displayName, receipt);
+        return RenderBindingAcceptedHtmlInternal(displayName, receipt, platform);
     }
 
-    internal static IResult RenderBindingGrantUpdated(string? format)
+    internal static IResult RenderBindingGrantUpdated(string? format, string? platform = null)
     {
         if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
         {
@@ -1390,7 +1412,8 @@ public static class IdentityOAuthEndpoints
             });
         }
 
-        const string html = """
+        var channelName = System.Net.WebUtility.HtmlEncode(ChannelDisplayName(platform));
+        var html = """
             <!DOCTYPE html>
             <html lang="zh-CN">
             <head>
@@ -1408,24 +1431,25 @@ public static class IdentityOAuthEndpoints
             <body>
             <span class="badge">已更新</span>
             <h1>NyxID 服务授权已更新</h1>
-            <p>原有 Lark 绑定保持不变。可以关闭此页并回到 Lark 继续对话。</p>
+            <p>原有 {channelName} 绑定保持不变。可以关闭此页并回到 {channelName} 继续对话。</p>
             <div class="hint">发送 <code>/init</code> 可再次查看服务授权。</div>
             </body>
             </html>
-            """;
+            """.Replace("{channelName}", channelName, StringComparison.Ordinal);
         return Results.Content(html, "text/html; charset=utf-8");
     }
 
-    internal static IResult RenderBoundSuccessHtmlInternal(string? displayName, bool alreadyBound)
+    internal static IResult RenderBoundSuccessHtmlInternal(string? displayName, bool alreadyBound, string? platform = null)
     {
+        var channelName = System.Net.WebUtility.HtmlEncode(ChannelDisplayName(platform));
         var badge = alreadyBound ? "已绑定" : "绑定成功";
         var heading = alreadyBound ? "NyxID 账号已绑定" : "已绑定 NyxID 账号";
         var displayLine = string.IsNullOrWhiteSpace(displayName)
             ? string.Empty
             : $"<p>账号:{System.Net.WebUtility.HtmlEncode(displayName)}</p>";
         var body = alreadyBound
-            ? "<p>当前账号已经完成绑定,无需重复操作。可以关闭此页,回到 Lark 继续对话。</p>"
-            : "<p>可以关闭此页,回到 Lark 继续对话。</p>";
+            ? $"<p>当前账号已经完成绑定,无需重复操作。可以关闭此页,回到 {channelName} 继续对话。</p>"
+            : $"<p>可以关闭此页,回到 {channelName} 继续对话。</p>";
 
         var html = $@"<!DOCTYPE html>
 <html lang=""zh-CN"">
@@ -1448,7 +1472,7 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; }}
 {body}
 <div class=""hint"">
 <strong>下一步</strong><br>
-回到 Lark 后,发送 <code>/model</code> 选择想用的模型,或 <code>/whoami</code> 查看当前绑定状态。
+回到 {channelName} 后,发送 <code>/model</code> 选择想用的模型,或 <code>/whoami</code> 查看当前绑定状态。
 </div>
 </body>
 </html>";
@@ -1457,11 +1481,13 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; }}
 
     private static IResult RenderBindingAcceptedHtmlInternal(
         string? displayName,
-        ChannelIdentityOAuthAcceptedReceipt receipt)
+        ChannelIdentityOAuthAcceptedReceipt receipt,
+        string? platform)
     {
         // Refactor (iter27/cluster-028-identity-oauth-endpoint):
         //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
         //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
+        var channelName = System.Net.WebUtility.HtmlEncode(ChannelDisplayName(platform));
         var displayLine = string.IsNullOrWhiteSpace(displayName)
             ? string.Empty
             : $"<p>账号:{System.Net.WebUtility.HtmlEncode(displayName)}</p>";
@@ -1484,10 +1510,10 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; }}
 <span class=""badge"">已受理</span>
 <h1>NyxID 绑定请求已受理</h1>
 {displayLine}
-<p>可以关闭此页,回到 Lark 稍后继续对话。请求编号:<code>{commandId}</code></p>
+<p>可以关闭此页,回到 {channelName} 稍后继续对话。请求编号:<code>{commandId}</code></p>
 <div class=""hint"">
 <strong>下一步</strong><br>
-回到 Lark 后,发送 <code>/whoami</code> 查看绑定状态。状态可见后,发送 <code>/model</code> 选择想用的模型。
+回到 {channelName} 后,发送 <code>/whoami</code> 查看绑定状态。状态可见后,发送 <code>/model</code> 选择想用的模型。
 </div>
 </body>
 </html>";

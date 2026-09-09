@@ -392,6 +392,79 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildLlmStepContinuation_WhenTelegramTurnHasStreamingEnabled_ShouldWaitForFinalReply()
+    {
+        var provider = new RecordingProvider("telegram final text");
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var executor = CreateToolEnabledExecutor(
+            new CountingTool("submit_record"),
+            provider,
+            actorDispatchPort: dispatchPort,
+            relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingRepliesEnabled = true,
+                StreamingCardKitEnabled = true,
+            });
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.Request.Activity.ChannelId = ChannelId.From("telegram");
+        workItem.Request.Activity.TransportExtras = new TransportExtras
+        {
+            NyxPlatform = "telegram",
+        };
+        workItem.Request.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-message-1",
+            CorrelationId = "corr-1",
+        };
+        workItem.Request.ReplyToken = "relay-token";
+        workItem.Request.ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        envelopes.Should().BeEmpty();
+        execution.Continuation.LlmStepResult.AccumulatedText.Should().Be("telegram final text");
+        execution.Continuation.LlmStepResult.HasStreamedTextContent.Should().BeFalse();
+        execution.Continuation.LlmStepResult.Content.Should().Be("telegram final text");
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenLarkTurnHasCardKitEnabled_ShouldDispatchCardStreamChunk()
+    {
+        var provider = new RecordingProvider("lark streamed text");
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var executor = CreateToolEnabledExecutor(
+            new CountingTool("submit_record"),
+            provider,
+            actorDispatchPort: dispatchPort,
+            relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingRepliesEnabled = true,
+                StreamingCardKitEnabled = true,
+            });
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.Request.Activity.ChannelId = ChannelId.From("lark");
+        workItem.Request.Activity.TransportExtras = new TransportExtras
+        {
+            NyxPlatform = "lark",
+        };
+        workItem.Request.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-message-1",
+            CorrelationId = "corr-1",
+        };
+        workItem.Request.ReplyToken = "relay-token";
+        workItem.Request.ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds();
+
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        var envelope = envelopes.Should().ContainSingle().Subject;
+        envelope.Route.Direct.TargetActorId.Should().Be("channel-agent-run:run-1");
+        envelope.Payload.Is(LlmReplyCardStreamChunkEvent.Descriptor).Should().BeTrue();
+        envelope.Payload.Is(LlmReplyStreamChunkEvent.Descriptor).Should().BeFalse();
+        envelope.Payload.Unpack<LlmReplyCardStreamChunkEvent>().AccumulatedText.Should().Be("lark streamed text");
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenToolCallTextIsDeferred_ShouldStillReportModelLifecycle()
     {
         var tool = new CountingTool("scope_workflows_get");
@@ -2046,6 +2119,17 @@ public sealed class AgentRunReplyGenerationExecutorTests
         result.ResultMessages.Should().OnlyContain(static message =>
             message.Content.Contains("not authorized", StringComparison.Ordinal));
         registeredTool.ExecuteCount.Should().Be(0);
+    }
+
+    private static (IActorDispatchPort DispatchPort, List<EventEnvelope> Envelopes) BuildRecordingDispatchPort()
+    {
+        var envelopes = new List<EventEnvelope>();
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        dispatchPort.DispatchAsync(Arg.Any<string>(), Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
+        dispatchPort.When(x => x.DispatchAsync(Arg.Any<string>(), Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => envelopes.Add(call.Arg<EventEnvelope>()));
+        return (dispatchPort, envelopes);
     }
 
     private static AgentRunReplyGenerationExecutor CreateExecutor(

@@ -17,11 +17,34 @@ internal sealed record SkillRunOutcome(
     bool Succeeded,
     SkillRunReceipt? Receipt = null,
     string? ErrorCode = null,
-    string? ErrorMessage = null)
+    string? ErrorMessage = null,
+    SkillReadFailureKind? SkillReadFailureKind = null)
 {
     public static SkillRunOutcome Ok(SkillRunReceipt receipt) => new(true, receipt);
 
     public static SkillRunOutcome Failed(string code, string message) => new(false, null, code, message);
+
+    public static SkillRunOutcome FailedSkillRead(SkillReadFailureKind failureKind, string message) =>
+        new(false, ErrorMessage: message, SkillReadFailureKind: failureKind);
+}
+
+internal enum SkillReadFailureKind
+{
+    NotFound = 1,
+    AccessDenied = 2,
+    SourceUnavailable = 3,
+}
+
+internal sealed record SkillReadOutcome(
+    bool Succeeded,
+    SkillDefinition? Skill = null,
+    SkillReadFailureKind? FailureKind = null,
+    string? ErrorMessage = null)
+{
+    public static SkillReadOutcome Ok(SkillDefinition skill) => new(true, skill);
+
+    public static SkillReadOutcome Failed(SkillReadFailureKind failureKind, string message) =>
+        new(false, FailureKind: failureKind, ErrorMessage: message);
 }
 
 // Schedule request body for POST /api/workflow/skills/{guid}/schedule (read via ReadFromJsonAsync).
@@ -65,7 +88,8 @@ internal sealed record SkillScheduleOutcome(
     SkillScheduleConfirmationReceipt? Confirmation = null,
     string? ErrorCode = null,
     string? ErrorMessage = null,
-    IReadOnlyList<string>? RequiredUserServiceIds = null)
+    IReadOnlyList<string>? RequiredUserServiceIds = null,
+    SkillReadFailureKind? SkillReadFailureKind = null)
 {
     public static SkillScheduleOutcome Ok(SkillScheduleReceipt receipt) => new(true, receipt);
 
@@ -81,6 +105,9 @@ internal sealed record SkillScheduleOutcome(
             ErrorCode: code,
             ErrorMessage: message,
             RequiredUserServiceIds: requiredUserServiceIds);
+
+    public static SkillScheduleOutcome FailedSkillRead(SkillReadFailureKind failureKind, string message) =>
+        new(false, ErrorMessage: message, SkillReadFailureKind: failureKind);
 }
 
 // Invokes a visible ornn skill once as an observable workflow run, or provisions a recurring schedule for it.

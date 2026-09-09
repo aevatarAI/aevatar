@@ -88,7 +88,7 @@ public sealed class UserSkillRunServiceTests
     }
 
     [Fact]
-    public async Task ScheduleAsync_ShouldForwardAuthenticatedOwnerAndProvisioningBearer()
+    public async Task ScheduleAsync_ShouldLoadSkillWithSourceReadableBearerAndForwardAuthenticatedOwner()
     {
         var fetcher = new RecordingRemoteSkillFetcher(WorkflowSkill());
         var dispatch = new RecordingWorkflowChatDispatch();
@@ -126,7 +126,7 @@ public sealed class UserSkillRunServiceTests
         outcome.Receipt.BindingRunId.Should().Be("bind-alpha");
         outcome.Receipt.ScheduleProvisioningId.Should().Be("provision-alpha");
         outcome.Receipt.ScheduleProvisioningStatus.Should().Be("succeeded");
-        fetcher.AccessToken.Should().Be("delegation-token");
+        fetcher.AccessToken.Should().Be("caller-token");
         confirmation.Request.Should().NotBeNull();
         confirmation.Request!.SourceReadableNyxIdAccessToken.Should().Be("caller-token");
         confirmation.Request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
@@ -233,6 +233,73 @@ public sealed class UserSkillRunServiceTests
         outcome.ErrorCode.Should().Be("conflict");
         outcome.ErrorMessage.Should().Contain("still in progress");
         outcome.ErrorMessage.Should().NotContain("schedule-sensitive");
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_WhenSkillFetchIsDenied_ShouldReturnActionableFailureBeforeConfirmation()
+    {
+        var fetcher = new RecordingRemoteSkillFetcher(WorkflowSkill())
+        {
+            Exception = RemoteSkillFetchException.AccessDenied(
+                "skill-alpha",
+                "Upstream denied skill read.",
+                403),
+        };
+        var schedule = new RecordingScheduleProvisioningPort();
+        var confirmation = new RecordingWorkflowConfirmationPort(ConfirmedWorkflow());
+        var service = new UserSkillRunService(
+            fetcher,
+            new RecordingWorkflowChatDispatch(),
+            schedule,
+            confirmation);
+
+        var outcome = await service.ScheduleAsync(
+            "skill-alpha",
+            SourceReadableCallerCredential(),
+            "scope-alpha",
+            "run the check",
+            "*/15 * * * *",
+            "UTC",
+            "Codex Check",
+            "team-alpha",
+            "sha256:reviewed",
+            CancellationToken.None);
+
+        outcome.Succeeded.Should().BeFalse();
+        outcome.SkillReadFailureKind.Should().Be(SkillReadFailureKind.AccessDenied);
+        outcome.ErrorMessage.Should().Contain("Connect or request access");
+        confirmation.Request.Should().BeNull();
+        schedule.Request.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task InvokeOnceAsync_WhenSkillFetchIsDenied_ShouldReturnActionableFailureBeforeDispatch()
+    {
+        var fetcher = new RecordingRemoteSkillFetcher(WorkflowSkill())
+        {
+            Exception = RemoteSkillFetchException.AccessDenied(
+                "skill-alpha",
+                string.Empty,
+                403),
+        };
+        var dispatch = new RecordingWorkflowChatDispatch();
+        var service = new UserSkillRunService(
+            fetcher,
+            dispatch,
+            new UnusedScheduleProvisioningPort(),
+            new NoOpSkillWorkflowConfirmationPort());
+
+        var outcome = await service.InvokeOnceAsync(
+            "skill-alpha",
+            SourceReadableCallerCredential(),
+            "scope-alpha",
+            "run the check",
+            CancellationToken.None);
+
+        outcome.Succeeded.Should().BeFalse();
+        outcome.SkillReadFailureKind.Should().Be(SkillReadFailureKind.AccessDenied);
+        outcome.ErrorMessage.Should().Contain("Connect or request access");
+        dispatch.Request.Should().BeNull();
     }
 
     [Fact]
@@ -640,6 +707,8 @@ public sealed class UserSkillRunServiceTests
 
         public string? SkillGuid { get; private set; }
 
+        public Exception? Exception { get; init; }
+
         public Task<SkillDefinition?> FetchSkillAsync(
             string accessToken,
             string nameOrId,
@@ -648,6 +717,9 @@ public sealed class UserSkillRunServiceTests
             InvocationCount++;
             AccessToken = accessToken;
             SkillGuid = nameOrId;
+            if (Exception is not null)
+                throw Exception;
+
             return Task.FromResult<SkillDefinition?>(skill);
         }
     }

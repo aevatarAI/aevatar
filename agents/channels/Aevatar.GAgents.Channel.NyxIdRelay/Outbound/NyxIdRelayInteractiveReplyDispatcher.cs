@@ -151,7 +151,12 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
                 ? action.Label
                 : action.ActionId;
             if (!string.IsNullOrWhiteSpace(label))
-                parts.Add($"• {label}");
+            {
+                var trimmedLabel = label.Trim();
+                parts.Add(action.Kind == ActionElementKind.Link && !string.IsNullOrWhiteSpace(action.Value)
+                    ? $"• {trimmedLabel}: {action.Value.Trim()}"
+                    : $"• {trimmedLabel}");
+            }
 
             foreach (var option in action.Options)
             {

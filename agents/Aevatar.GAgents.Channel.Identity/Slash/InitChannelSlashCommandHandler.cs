@@ -8,11 +8,11 @@ namespace Aevatar.GAgents.Channel.Identity.Slash;
 
 /// <summary>
 /// /init — start a new NyxID OAuth Authorization Code + PKCE binding flow for
-/// the inbound sender. Renders the authorize URL as a Lark interactive card
-/// (button) when the channel supports cards, with a plain-text fallback for
-/// transports that don't. ADR-0018 §Decision: only emits the URL in private
-/// chats; group/channel inbound is refused so the sealed state token never
-/// reaches a third party.
+/// the inbound sender. Renders the authorize URL as an interactive card button
+/// when the channel supports cards, with a plain-text fallback for transports
+/// that don't. ADR-0018 §Decision: only emits the URL in private chats;
+/// group/channel inbound is refused so the sealed state token never reaches a
+/// third party.
 /// </summary>
 public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
 {
@@ -74,32 +74,31 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
             return PlainText("启动 NyxID 绑定时遇到内部错误,请稍后重试 /init。");
         }
 
-        return BuildBindingCard(challenge.AuthorizeUrl, challenge.RenewsExistingBinding);
+        return BuildBindingCard(challenge.AuthorizeUrl, context.Subject.Platform, challenge.RenewsExistingBinding);
     }
 
     private static MessageContent PlainText(string text) => new() { Text = text };
 
     /// <summary>
-    /// Build a Lark-friendly card (header + description + primary "open url"
+    /// Build a channel binding card (header + description + primary "open url"
     /// button). Channels without card support degrade to plain text via
     /// <see cref="MessageContent.Text"/> being set as the fallback.
     /// </summary>
     public static MessageContent BuildBindingCard(
         string authorizeUrl,
+        string? platform,
         bool renewsExistingBinding = false)
     {
         var content = new MessageContent
         {
-            Text = renewsExistingBinding
-                ? $"打开此链接重新确认并更新 Lark bot 的 NyxID 服务授权(5 分钟内有效):\n{authorizeUrl}"
-                : $"打开此链接完成 NyxID 登录并确认服务授权(5 分钟内有效):\n{authorizeUrl}",
+            Text = BuildTextFallback(authorizeUrl, platform, renewsExistingBinding),
         };
         content.Cards.Add(new CardBlock
         {
             Title = renewsExistingBinding ? "更新 NyxID 服务授权" : "完成 NyxID 绑定",
             Text = renewsExistingBinding
-                ? "重新确认服务授权；成功后会安全更新当前 Lark 绑定。链接 5 分钟内有效。"
-                : "登录并确认 Lark bot 可使用的 NyxID 服务。链接 5 分钟内有效。",
+                ? "重新确认服务授权；成功后会安全更新当前会话绑定。链接 5 分钟内有效。"
+                : "登录并确认当前 bot 可使用的 NyxID 服务。链接 5 分钟内有效。",
         });
         content.Actions.Add(new ActionElement
         {
@@ -110,5 +109,22 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
             IsPrimary = true,
         });
         return content;
+    }
+
+    private static string BuildTextFallback(
+        string authorizeUrl,
+        string? platform,
+        bool renewsExistingBinding)
+    {
+        if (string.Equals(platform, "telegram", StringComparison.OrdinalIgnoreCase))
+        {
+            return renewsExistingBinding
+                ? "打开下方按钮重新确认并更新当前 Telegram bot 的 NyxID 服务授权(5 分钟内有效)。"
+                : "打开下方按钮完成 NyxID 登录并确认当前 Telegram bot 的服务授权(5 分钟内有效)。";
+        }
+
+        return renewsExistingBinding
+            ? $"打开此链接重新确认并更新当前 bot 的 NyxID 服务授权(5 分钟内有效):\n{authorizeUrl}"
+            : $"打开此链接完成 NyxID 登录并确认当前 bot 的服务授权(5 分钟内有效):\n{authorizeUrl}";
     }
 }

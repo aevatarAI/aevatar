@@ -373,6 +373,26 @@ public sealed class NyxIdRelayOutboundPortTests
     }
 
     [Fact]
+    public async Task SendAsync_ShouldSurfaceUpstreamMessageIdAsPlatformMessageId()
+    {
+        var handler = new RecordingJsonHandler(
+            HttpStatusCode.OK,
+            """{"message_id":"reply-1","upstream_message_id":12345}""");
+        var port = CreatePort(handler, new StubComposer("telegram"));
+
+        var result = await port.SendAsync(
+            "telegram",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext { ReplyMessageId = "msg-1" },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.PlatformMessageId.Should().Be("12345");
+    }
+
+    [Fact]
     public async Task UpdateAsync_ShouldPostUpdateEndpointAndSurfaceSuccess()
     {
         var handler = new RecordingJsonHandler(

@@ -66,7 +66,39 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
             if (detail is null)
                 return;
 
-            await EnsureBindingAsync(owner, profileSlug, detail, options, cancellationToken).ConfigureAwait(false);
+            await EnsureBindingAsync(
+                owner,
+                profileSlug,
+                detail,
+                AgentProfilePolicies.NyxIdChatAgentKind,
+                "set-binding",
+                options,
+                cancellationToken).ConfigureAwait(false);
+
+            if (options.EnableChannelReplyDefaultBinding)
+            {
+                var channelReplyProfileSlug = Normalize(options.ChannelReplyProfileSlug);
+                var channelReplyDraft = NyxIdChatSystemAgentProfileDraftFactory.CreateChannelReply(options);
+                var channelReplyDraftSha256 = AgentProfileDeterminism.ComputeDraftDigest(channelReplyDraft);
+                var channelReplyDetail = await EnsureProfileAsync(
+                    owner,
+                    channelReplyProfileSlug,
+                    channelReplyDraft,
+                    channelReplyDraftSha256,
+                    options,
+                    cancellationToken).ConfigureAwait(false);
+                if (channelReplyDetail is null)
+                    return;
+
+                await EnsureBindingAsync(
+                    owner,
+                    channelReplyProfileSlug,
+                    channelReplyDetail,
+                    AgentProfilePolicies.ChannelReplyAgentKind,
+                    $"set-binding:{AgentProfilePolicies.ChannelReplyAgentKind}",
+                    options,
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -95,17 +127,26 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
         NyxIdChatSystemAgentProfileBootstrapOptions options,
         CancellationToken ct)
     {
-        var detail = await _profileService.GetAsync(owner, profileSlug, ct).ConfigureAwait(false);
-        if (detail is null)
+        var state = await GetProfileBootstrapStateAsync(owner, profileSlug, ct).ConfigureAwait(false);
+        var detail = state.Detail;
+        if (!state.Exists)
         {
-            await _profileService.CreateAsync(
+            var receipt = await _profileService.CreateAsync(
                 new AgentProfileCreateRequest(
                     owner,
                     profileSlug,
                     IdempotencyKey(options, profileSlug, "create"),
                     AuditSubject),
                 ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "System Agent Profile bootstrap create accepted: profileSlug={ProfileSlug}, operationId={OperationId}, commandId={CommandId}",
+                profileSlug,
+                receipt.OperationId,
+                receipt.CommandId);
+        }
 
+        if (detail is null)
+        {
             detail = await WaitForProfileAsync(
                 owner,
                 profileSlug,
@@ -115,7 +156,7 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
             if (detail is null)
             {
                 _logger.LogWarning(
-                    "System NyxID chat Agent Profile '{ProfileSlug}' was accepted for creation but did not materialize before timeout.",
+                    "System Agent Profile '{ProfileSlug}' did not materialize before timeout.",
                     profileSlug);
                 return null;
             }
@@ -124,7 +165,7 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
         var draftChanged = false;
         if (!detail.Snapshot.DraftSha256.Equals(desiredDraftSha256))
         {
-            await _profileService.UpdateDraftAsync(
+            var receipt = await _profileService.UpdateDraftAsync(
                 new AgentProfileDraftUpdateRequest(
                     owner,
                     profileSlug,
@@ -133,6 +174,11 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
                     IdempotencyKey(options, profileSlug, "update-draft"),
                     AuditSubject),
                 ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "System Agent Profile bootstrap draft update accepted: profileSlug={ProfileSlug}, operationId={OperationId}, commandId={CommandId}",
+                profileSlug,
+                receipt.OperationId,
+                receipt.CommandId);
 
             detail = await WaitForProfileAsync(
                 owner,
@@ -153,7 +199,7 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
 
         if (draftChanged || !PublishedExists(detail.Snapshot) || !detail.ExecutionAvailable)
         {
-            await _profileService.PublishAsync(
+            var receipt = await _profileService.PublishAsync(
                 new AgentProfilePublishRequest(
                     owner,
                     profileSlug,
@@ -162,6 +208,11 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
                     AuditSubject,
                     NyxIdAccessToken: null),
                 ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "System Agent Profile bootstrap publish accepted: profileSlug={ProfileSlug}, operationId={OperationId}, commandId={CommandId}",
+                profileSlug,
+                receipt.OperationId,
+                receipt.CommandId);
 
             detail = await WaitForProfileAsync(
                 owner,
@@ -185,31 +236,67 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
         AgentProfileOwner owner,
         string profileSlug,
         AgentProfileManagementDetail detail,
+        string agentKind,
+        string idempotencyOperation,
         NyxIdChatSystemAgentProfileBootstrapOptions options,
         CancellationToken ct)
     {
         var binding = await _profileService.GetBindingAsync(
             owner,
-            AgentProfilePolicies.NyxIdChatAgentKind,
+            agentKind,
             ct).ConfigureAwait(false);
         if (BindingTargetsPublishedSnapshot(binding.Binding, detail.Snapshot, options))
+        {
+            _logger.LogInformation(
+                "System Agent Profile bootstrap binding already current: agentKind={AgentKind}, profileSlug={ProfileSlug}, publishedRevision={PublishedRevision}",
+                agentKind,
+                profileSlug,
+                detail.Snapshot.PublishedRevision);
             return;
+        }
 
-        await _profileService.SetBindingAsync(
+        var receipt = await _profileService.SetBindingAsync(
             new AgentProfileBindingUpdateRequest(
                 owner,
-                AgentProfilePolicies.NyxIdChatAgentKind,
+                agentKind,
                 new AgentProfileReference
                 {
                     OwnerKind = AgentProfileReferenceOwnerKind.System,
                     ProfileSlug = profileSlug,
                 },
                 binding.AuthorityStateVersion,
-                IdempotencyKey(options, profileSlug, "set-binding"),
+                IdempotencyKey(options, profileSlug, BindingIdempotencyOperation(idempotencyOperation, detail.Snapshot)),
                 AuditSubject,
                 Enabled: true,
                 CohortBasisPoints: options.CohortBasisPoints),
             ct).ConfigureAwait(false);
+        _logger.LogInformation(
+            "System Agent Profile bootstrap binding set accepted: agentKind={AgentKind}, profileSlug={ProfileSlug}, publishedRevision={PublishedRevision}, operationId={OperationId}, commandId={CommandId}",
+            agentKind,
+            profileSlug,
+            detail.Snapshot.PublishedRevision,
+            receipt.OperationId,
+            receipt.CommandId);
+    }
+
+    private async Task<ProfileBootstrapState> GetProfileBootstrapStateAsync(
+        AgentProfileOwner owner,
+        string profileSlug,
+        CancellationToken ct)
+    {
+        try
+        {
+            var detail = await _profileService.GetAsync(owner, profileSlug, ct).ConfigureAwait(false);
+            return new ProfileBootstrapState(detail, detail is not null);
+        }
+        catch (AgentProfileUnavailableException exception)
+        {
+            _logger.LogInformation(
+                exception,
+                "System Agent Profile bootstrap is waiting for active authority: profileSlug={ProfileSlug}",
+                profileSlug);
+            return new ProfileBootstrapState(null, true);
+        }
     }
 
     private async Task<AgentProfileManagementDetail?> WaitForProfileAsync(
@@ -226,9 +313,9 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
 
         while (true)
         {
-            var detail = await _profileService.GetAsync(owner, profileSlug, ct).ConfigureAwait(false);
-            if (ready(detail))
-                return detail;
+            var state = await GetProfileBootstrapStateAsync(owner, profileSlug, ct).ConfigureAwait(false);
+            if (ready(state.Detail))
+                return state.Detail;
             if (_timeProvider.GetUtcNow() >= deadline)
                 return null;
             await Task.Delay(interval, _timeProvider, ct).ConfigureAwait(false);
@@ -268,5 +355,12 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
         string operation) =>
         $"system-nyxid-chat-default:{profileSlug}:{Normalize(options.PolicyRevision)}:{operation}";
 
+    private static string BindingIdempotencyOperation(
+        string operation,
+        AgentProfileManagementSnapshot snapshot) =>
+        $"{operation}:r{snapshot.PublishedRevision}:{snapshot.PublishedSnapshotSha256.ToBase64()}";
+
     private static string Normalize(string value) => value.Trim();
+
+    private sealed record ProfileBootstrapState(AgentProfileManagementDetail? Detail, bool Exists);
 }

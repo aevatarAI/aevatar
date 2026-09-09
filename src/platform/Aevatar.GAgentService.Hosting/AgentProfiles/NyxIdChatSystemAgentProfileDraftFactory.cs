@@ -10,16 +10,41 @@ public static class NyxIdChatSystemAgentProfileDraftFactory
     public static AgentProfileDraft Create(NyxIdChatSystemAgentProfileBootstrapOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        return Create(
+            options,
+            AgentProfilePolicies.NyxIdChatAgentKind,
+            AgentProfilePolicies.NyxIdChatRouteToolSet,
+            options.DisplayName,
+            options.Purpose);
+    }
 
+    public static AgentProfileDraft CreateChannelReply(NyxIdChatSystemAgentProfileBootstrapOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return Create(
+            options,
+            AgentProfilePolicies.ChannelReplyAgentKind,
+            AgentProfilePolicies.ChannelReplyRouteToolSet,
+            options.ChannelReplyDisplayName,
+            options.ChannelReplyPurpose);
+    }
+
+    private static AgentProfileDraft Create(
+        NyxIdChatSystemAgentProfileBootstrapOptions options,
+        string agentKind,
+        string routeToolSetRef,
+        string displayName,
+        string purpose)
+    {
         var draft = new AgentProfileDraft
         {
-            DisplayName = Required(options.DisplayName, nameof(options.DisplayName)),
-            Purpose = Normalize(options.Purpose),
+            DisplayName = Required(displayName, nameof(displayName)),
+            Purpose = Normalize(purpose),
             Instructions = Required(options.Instructions, nameof(options.Instructions)),
             RuntimeProfile = new AgentProfileSnapshot
             {
-                AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
-                RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
+                AgentKind = agentKind,
+                RouteToolSetRef = routeToolSetRef,
                 PolicyRevision = Required(options.PolicyRevision, nameof(options.PolicyRevision)),
                 ActivationMode = AgentProfileActivationMode.Enforced,
                 MaxPlanSteps = options.MaxPlanSteps,
@@ -40,7 +65,7 @@ public static class NyxIdChatSystemAgentProfileDraftFactory
         if (diagnostics.Count > 0)
         {
             throw new InvalidOperationException(
-                "System NyxID chat Agent Profile draft is invalid: " +
+                $"System {agentKind} Agent Profile draft is invalid: " +
                 string.Join(", ", diagnostics.Select(static x => $"{x.Code}:{x.Field}")));
         }
 

@@ -343,6 +343,28 @@ public sealed class IdentityOAuthCallbackEndpointTests
     }
 
     [Fact]
+    public async Task AcceptedPath_TelegramHtml_DoesNotMentionLark()
+    {
+        var subject = SampleSubject("telegram");
+        var broker = NewBroker(subject, "bnd_incoming");
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(null));
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            queryPort,
+            new RecordingCommandDispatch<CommitBindingCommand>(),
+            new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>());
+        var (text, contentType) = await ReadTextWithContentTypeAsync(result);
+
+        contentType.Should().StartWith("text/html");
+        text.Should().Contain("Telegram");
+        text.Should().NotContain("Lark");
+        text.Should().Contain("/whoami");
+    }
+
+    [Fact]
     public async Task MissingRequiredService_ReturnsConflictWithoutBindingDispatch()
     {
         var subject = SampleSubject();
@@ -761,9 +783,9 @@ public sealed class IdentityOAuthCallbackEndpointTests
             ct: CancellationToken.None);
     }
 
-    private static ExternalSubjectRef SampleSubject() => new()
+    private static ExternalSubjectRef SampleSubject(string platform = "lark") => new()
     {
-        Platform = "lark",
+        Platform = platform,
         Tenant = "ou_tenant_x",
         ExternalUserId = "ou_user_y",
     };
