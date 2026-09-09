@@ -66,7 +66,39 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
             if (detail is null)
                 return;
 
-            await EnsureBindingAsync(owner, profileSlug, detail, options, cancellationToken).ConfigureAwait(false);
+            await EnsureBindingAsync(
+                owner,
+                profileSlug,
+                detail,
+                AgentProfilePolicies.NyxIdChatAgentKind,
+                "set-binding",
+                options,
+                cancellationToken).ConfigureAwait(false);
+
+            if (options.EnableChannelReplyDefaultBinding)
+            {
+                var channelReplyProfileSlug = Normalize(options.ChannelReplyProfileSlug);
+                var channelReplyDraft = NyxIdChatSystemAgentProfileDraftFactory.CreateChannelReply(options);
+                var channelReplyDraftSha256 = AgentProfileDeterminism.ComputeDraftDigest(channelReplyDraft);
+                var channelReplyDetail = await EnsureProfileAsync(
+                    owner,
+                    channelReplyProfileSlug,
+                    channelReplyDraft,
+                    channelReplyDraftSha256,
+                    options,
+                    cancellationToken).ConfigureAwait(false);
+                if (channelReplyDetail is null)
+                    return;
+
+                await EnsureBindingAsync(
+                    owner,
+                    channelReplyProfileSlug,
+                    channelReplyDetail,
+                    AgentProfilePolicies.ChannelReplyAgentKind,
+                    $"set-binding:{AgentProfilePolicies.ChannelReplyAgentKind}",
+                    options,
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -185,12 +217,14 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
         AgentProfileOwner owner,
         string profileSlug,
         AgentProfileManagementDetail detail,
+        string agentKind,
+        string idempotencyOperation,
         NyxIdChatSystemAgentProfileBootstrapOptions options,
         CancellationToken ct)
     {
         var binding = await _profileService.GetBindingAsync(
             owner,
-            AgentProfilePolicies.NyxIdChatAgentKind,
+            agentKind,
             ct).ConfigureAwait(false);
         if (BindingTargetsPublishedSnapshot(binding.Binding, detail.Snapshot, options))
             return;
@@ -198,14 +232,14 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapHostedService : IHostedS
         await _profileService.SetBindingAsync(
             new AgentProfileBindingUpdateRequest(
                 owner,
-                AgentProfilePolicies.NyxIdChatAgentKind,
+                agentKind,
                 new AgentProfileReference
                 {
                     OwnerKind = AgentProfileReferenceOwnerKind.System,
                     ProfileSlug = profileSlug,
                 },
                 binding.AuthorityStateVersion,
-                IdempotencyKey(options, profileSlug, "set-binding"),
+                IdempotencyKey(options, profileSlug, idempotencyOperation),
                 AuditSubject,
                 Enabled: true,
                 CohortBasisPoints: options.CohortBasisPoints),

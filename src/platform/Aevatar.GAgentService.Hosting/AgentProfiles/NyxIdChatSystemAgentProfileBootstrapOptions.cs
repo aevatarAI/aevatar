@@ -12,6 +12,14 @@ public sealed class NyxIdChatSystemAgentProfileBootstrapOptions
 
     public string ProfileSlug { get; set; } = "nyxid-chat-default";
 
+    public bool EnableChannelReplyDefaultBinding { get; set; } = true;
+
+    public string ChannelReplyProfileSlug { get; set; } = "channel-reply-default";
+
+    public string ChannelReplyDisplayName { get; set; } = "Channel Reply Default";
+
+    public string ChannelReplyPurpose { get; set; } = "Default channel reply profile.";
+
     public string DisplayName { get; set; } = "NyxID Chat Default";
 
     public string Purpose { get; set; } = "Default NyxID chat profile.";

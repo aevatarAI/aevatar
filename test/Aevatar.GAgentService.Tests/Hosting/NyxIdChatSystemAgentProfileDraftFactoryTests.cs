@@ -42,6 +42,30 @@ public sealed class NyxIdChatSystemAgentProfileDraftFactoryTests
     }
 
     [Fact]
+    public void CreateChannelReply_ShouldBuildChannelReplyDraftWithWorkspaceToolSet()
+    {
+        var options = new NyxIdChatSystemAgentProfileBootstrapOptions
+        {
+            ChannelReplyDisplayName = "Channel Reply Default",
+            ChannelReplyPurpose = "Default public channel replies.",
+            Instructions = "Answer channel messages with the configured tools.",
+            PolicyRevision = "channel-reply-v1",
+            MaximumToolPolicy = new AgentProfileToolPolicyOptions
+            {
+                ToolNames = { "ask_user" },
+                ToolSetRefs = { AgentProfilePolicies.ChannelReplyRouteToolSet },
+            },
+        };
+
+        var draft = NyxIdChatSystemAgentProfileDraftFactory.CreateChannelReply(options);
+
+        draft.DisplayName.Should().Be("Channel Reply Default");
+        draft.RuntimeProfile.AgentKind.Should().Be(AgentProfilePolicies.ChannelReplyAgentKind);
+        draft.RuntimeProfile.RouteToolSetRef.Should().Be(AgentProfilePolicies.ChannelReplyRouteToolSet);
+        AgentProfilePolicies.ValidateDraft(draft).Should().BeEmpty();
+    }
+
+    [Fact]
     public void Create_ShouldBuildNyxIdChatDraftWithConfiguredWorkflowToolPolicy()
     {
         var options = new NyxIdChatSystemAgentProfileBootstrapOptions
