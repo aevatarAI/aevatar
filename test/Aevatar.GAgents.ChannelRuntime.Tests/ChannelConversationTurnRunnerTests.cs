@@ -3279,6 +3279,72 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldNotFlagRetainedHistoryClear_WhenResetCommandInPrivateChat()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("/reset", "msg-reset-dm", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.RetainedHistoryClearRequested.Should().BeFalse();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().NotContain("已清空");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRequestNewConversation_WhenNewCommandInPrivateChat()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("/new", "msg-new-dm", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.RetainedHistoryClearRequested.Should().BeFalse();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("新的会话");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRefuseNewConversation_WhenNewCommandInGroupChat()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("/new", "msg-new-group", ConversationScope.Group, "oc_group_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.RetainedHistoryClearRequested.Should().BeFalse();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("仅支持单聊");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldRefuseRetainedHistoryClear_WhenClearCommandInGroupChat()
     {
         var broker = new InMemoryCapabilityBroker();

@@ -145,7 +145,7 @@ public sealed class ConversationGAgentRetainedHistoryClearTests
         InMemoryEventStore eventStore,
         IChannelLlmReplyRunDispatcher? dispatcher = null)
     {
-        var services = new ServiceCollection()
+        var serviceProvider = new ServiceCollection()
             .AddSingleton<IEventStore>(eventStore)
             .AddSingleton<IActorDispatchPort, NoopActorDispatchPort>()
             .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
@@ -157,10 +157,10 @@ public sealed class ConversationGAgentRetainedHistoryClearTests
 
         var agent = new ConversationGAgent
         {
-            Services = services,
+            Services = serviceProvider,
             EventPublisher = new NoopEventPublisher(),
             EventSourcingBehaviorFactory =
-                services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
+                serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
         SetId(agent, id);
         await agent.ActivateAsync();

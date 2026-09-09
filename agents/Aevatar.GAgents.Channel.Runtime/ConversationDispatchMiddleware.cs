@@ -34,18 +34,17 @@ internal sealed class ConversationDispatchMiddleware : IChannelMiddleware
             return;
         }
 
-        var actorId = ConversationGAgent.BuildActorId(canonicalKey);
-        var actor = await _actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
-
+        var threadActorId = ChannelConversationThreadGAgent.BuildActorId(canonicalKey);
+        var threadActor = await _actorRuntime.CreateAsync<ChannelConversationThreadGAgent>(threadActorId, ct);
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Payload = Any.Pack(context.Activity),
-            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, actor.Id),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, threadActor.Id),
         };
 
-        await _actorDispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await _actorDispatchPort.DispatchAsync(threadActor.Id, envelope, ct);
         await next();
     }
 }
