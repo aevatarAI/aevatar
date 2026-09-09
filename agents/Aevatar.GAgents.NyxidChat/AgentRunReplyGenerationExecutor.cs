@@ -1374,6 +1374,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 return new AgentRunTurnCatalogPlan(AgentTurnToolCatalogFactory.RestrictedEmpty());
             if (!resolution.IsSelected || resolution.Profile is null)
             {
+                _logger.LogWarning(
+                    "Agent Profile turn snapshot resolution failed: runId={RunId}, correlation={CorrelationId}, scopeId={ScopeId}, profileKind={ProfileKind}, profileOwnerKind={ProfileOwnerKind}, profileSlug={ProfileSlug}, status={ResolutionStatus}",
+                    request.RunId,
+                    replyRequest.CorrelationId,
+                    scopeId,
+                    forward.ProfileKind,
+                    forward.ProfileRef?.OwnerKind,
+                    forward.ProfileRef?.ProfileSlug,
+                    resolution.Status);
                 throw new AgentProfileTurnSnapshotResolutionException(
                     resolution.Status,
                     "The reviewed agent profile could not be resolved for this channel turn.");
