@@ -29,17 +29,42 @@ public sealed class ChannelConversationThreadGAgent : GAgentBase<ConversationThr
         if (string.IsNullOrWhiteSpace(sourceConversationCanonicalKey))
             return;
 
-        var activeConversationCanonicalKey = ResolveActiveConversationCanonicalKey(sourceConversationCanonicalKey);
-        if (ShouldStartNewConversation(activity))
-        {
-            activeConversationCanonicalKey = await RotateAsync(
-                    sourceConversationCanonicalKey,
-                    activity.Id ?? string.Empty,
-                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-                .ConfigureAwait(false);
-        }
+        var activeConversationCanonicalKey = await ResolveTurnConversationCanonicalKeyAsync(
+                activity,
+                sourceConversationCanonicalKey,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            .ConfigureAwait(false);
 
-        await DispatchToConversationAsync(activity, activeConversationCanonicalKey, CancellationToken.None)
+        await DispatchToConversationAsync(
+                activity,
+                activeConversationCanonicalKey,
+                conversationActorScopeKey: string.Empty,
+                CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    [EventHandler]
+    public async Task HandleNyxRelayInboundActivityAsync(NyxRelayInboundActivity relayActivity)
+    {
+        ArgumentNullException.ThrowIfNull(relayActivity);
+        var activity = relayActivity.Activity?.Clone() ?? new ChatActivity();
+        var sourceConversationCanonicalKey = activity.Conversation?.CanonicalKey?.Trim();
+        if (string.IsNullOrWhiteSpace(sourceConversationCanonicalKey))
+            return;
+
+        var activeConversationCanonicalKey = await ResolveTurnConversationCanonicalKeyAsync(
+                activity,
+                sourceConversationCanonicalKey,
+                relayActivity.CallbackObservedAtUnixMs)
+            .ConfigureAwait(false);
+        var scopedRelayActivity = relayActivity.Clone();
+        scopedRelayActivity.Activity = BuildActivityForLogicalConversation(activity, activeConversationCanonicalKey);
+
+        await DispatchToConversationAsync(
+                scopedRelayActivity,
+                activeConversationCanonicalKey,
+                relayActivity.ConversationActorScopeKey,
+                CancellationToken.None)
             .ConfigureAwait(false);
     }
 
@@ -71,6 +96,22 @@ public sealed class ChannelConversationThreadGAgent : GAgentBase<ConversationThr
             ? sourceConversationCanonicalKey.Trim()
             : State.ActiveConversationCanonicalKey;
 
+    private async Task<string> ResolveTurnConversationCanonicalKeyAsync(
+        ChatActivity activity,
+        string sourceConversationCanonicalKey,
+        long requestedAtUnixMs)
+    {
+        var activeConversationCanonicalKey = ResolveActiveConversationCanonicalKey(sourceConversationCanonicalKey);
+        if (!ShouldStartNewConversation(activity))
+            return activeConversationCanonicalKey;
+
+        return await RotateAsync(
+                sourceConversationCanonicalKey,
+                activity.Id ?? string.Empty,
+                requestedAtUnixMs)
+            .ConfigureAwait(false);
+    }
+
     private async Task<string> RotateAsync(
         string sourceConversationCanonicalKey,
         string requestedActivityId,
@@ -101,11 +142,39 @@ public sealed class ChannelConversationThreadGAgent : GAgentBase<ConversationThr
     private async Task DispatchToConversationAsync(
         ChatActivity activity,
         string activeConversationCanonicalKey,
+        string conversationActorScopeKey,
+        CancellationToken ct) =>
+        await DispatchToConversationAsync(
+                BuildActivityForLogicalConversation(activity, activeConversationCanonicalKey),
+                activeConversationCanonicalKey,
+                conversationActorScopeKey,
+                activity.Id ?? string.Empty,
+                ct)
+            .ConfigureAwait(false);
+
+    private async Task DispatchToConversationAsync(
+        NyxRelayInboundActivity relayActivity,
+        string activeConversationCanonicalKey,
+        string conversationActorScopeKey,
+        CancellationToken ct) =>
+        await DispatchToConversationAsync(
+                relayActivity,
+                activeConversationCanonicalKey,
+                conversationActorScopeKey,
+                relayActivity.Activity?.Id ?? string.Empty,
+                ct)
+            .ConfigureAwait(false);
+
+    private async Task DispatchToConversationAsync(
+        IMessage payload,
+        string activeConversationCanonicalKey,
+        string conversationActorScopeKey,
+        string correlationId,
         CancellationToken ct)
     {
         var actorRuntime = Services.GetRequiredService<IActorRuntime>();
         var dispatchPort = Services.GetRequiredService<IActorDispatchPort>();
-        var actorId = ConversationGAgent.BuildActorId(activeConversationCanonicalKey);
+        var actorId = BuildConversationActorId(activeConversationCanonicalKey, conversationActorScopeKey);
         var actor = await actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct).ConfigureAwait(false);
         await dispatchPort.DispatchAsync(
                 actor.Id,
@@ -113,12 +182,32 @@ public sealed class ChannelConversationThreadGAgent : GAgentBase<ConversationThr
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    Payload = Any.Pack(activity),
+                    Payload = Any.Pack(payload),
                     Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, actor.Id),
-                    Propagation = new EnvelopePropagation { CorrelationId = activity.Id ?? string.Empty },
+                    Propagation = new EnvelopePropagation { CorrelationId = correlationId },
                 },
                 ct)
             .ConfigureAwait(false);
+    }
+
+    private static ChatActivity BuildActivityForLogicalConversation(
+        ChatActivity activity,
+        string activeConversationCanonicalKey)
+    {
+        var logicalActivity = activity.Clone();
+        if (logicalActivity.Conversation is not null)
+            logicalActivity.Conversation.CanonicalKey = activeConversationCanonicalKey;
+        return logicalActivity;
+    }
+
+    private static string BuildConversationActorId(
+        string activeConversationCanonicalKey,
+        string conversationActorScopeKey)
+    {
+        var actorId = ConversationGAgent.BuildActorId(activeConversationCanonicalKey);
+        return string.IsNullOrWhiteSpace(conversationActorScopeKey)
+            ? actorId
+            : $"{actorId}:scope:{conversationActorScopeKey.Trim()}";
     }
 
     private static bool ShouldStartNewConversation(ChatActivity activity) =>

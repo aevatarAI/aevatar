@@ -163,6 +163,9 @@ message NyxRelayInboundActivity {
   string callback_jti = 6;
   int64 callback_observed_at_unix_ms = 7;
   int64 callback_replay_expires_at_unix_ms = 8;
+  // Stable owner-scope discriminator for relay-backed conversation actors. This
+  // is routing state, not a credential; the raw scope id stays at the HTTP edge.
+  string conversation_actor_scope_key = 9;
 }
 
 // Refactor (iter17/cluster-038): Old pattern: callback_jti replay claims were process-local guard entries. New principle: admission is a persisted typed actor event before any business turn work.
