@@ -1178,6 +1178,13 @@ public sealed class MainnetHostCompositionTests
             .BeSameAs(channelInventorySource);
         var channelReply = registry.Resolve("channel.reply.default");
         channelReply.IsSuccess.Should().BeTrue(channelReply.Error?.Message);
+        channelReply.Sources.Select(static source => source.GetType()).Should().Equal(
+            workspace.Sources.Select(static source => source.GetType()).Concat(
+            [
+                typeof(OrnnAuthoringAgentToolSource),
+                typeof(NyxIdConnectedServiceToolSource),
+                typeof(ChannelNyxIdConnectedServiceInventoryToolSource),
+            ]));
         channelReply.Sources.Select(static source => source.GetType()).Should()
             .Equal(channelToolSources.Select(static source => source.GetType()));
         foreach (var platform in new[] { "telegram", "lark" })
