@@ -24,15 +24,18 @@ public sealed class ChannelRegistrationTool : IAgentTool
     private readonly IChannelBotRegistrationQueryPort _queryPort;
     private readonly ChannelRegistrationCommandFacade _commandFacade;
     private readonly ChannelRelayRegistrationFacade _registrationFacade;
+    private readonly INyxChannelBotDeprovisioningService _deprovisioningService;
 
     public ChannelRegistrationTool(
         IChannelBotRegistrationQueryPort queryPort,
         ChannelRegistrationCommandFacade commandFacade,
-        ChannelRelayRegistrationFacade registrationFacade)
+        ChannelRelayRegistrationFacade registrationFacade,
+        INyxChannelBotDeprovisioningService deprovisioningService)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
         _registrationFacade = registrationFacade ?? throw new ArgumentNullException(nameof(registrationFacade));
+        _deprovisioningService = deprovisioningService ?? throw new ArgumentNullException(nameof(deprovisioningService));
     }
 
     public string Name => "channel_registrations";
@@ -101,6 +104,11 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Optional Ornn skill to bind this bot's plain inbound messages to. When set, every non-command message deterministically runs this skill with the message text as its arguments. Explicit /<skill> triggers and local slash commands still take priority."
             },
+            "service_ids": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Optional exact NyxID UserService IDs allowed for registration-authorized calls. Omit for NyxID default authorization; an explicit empty array selects an empty business allowlist."
+            },
             "registration_id": {
               "type": "string",
               "description": "Registration ID for delete"
@@ -127,7 +135,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         {
             "list" => await ListAsync(root, ct),
             "register_channel_via_nyx" => await RegisterChannelViaNyxAsync(token, root, ct),
-            "delete" => await DeleteAsync(_queryPort, _commandFacade, root, ct),
+            "delete" => await DeleteAsync(token, root, ct),
             "register" => RetiredActionError("Direct callback registration is retired. Use action=register_channel_via_nyx."),
             "register_lark_via_nyx" => RetiredActionError("register_lark_via_nyx is retired. Use action=register_channel_via_nyx with platform=lark."),
             "update_token" => RetiredActionError("update_token is retired. ChannelRuntime no longer stores or refreshes channel credentials."),
@@ -170,6 +178,28 @@ public sealed class ChannelRegistrationTool : IAgentTool
             return new ToolScopeResolution(null, "scope_id is required from the current NyxID request context");
 
         return new ToolScopeResolution(resolved, null);
+    }
+
+    private static ToolScopeResolution ResolveRegistrationOwnerScopeId(JsonElement args)
+    {
+        var ownerScopeId = NormalizeOptional(AgentToolRequestContext.OwnerScopeId);
+        if (ownerScopeId is null)
+        {
+            return new ToolScopeResolution(
+                null,
+                "scope_id is required from the current NyxID registration owner context");
+        }
+
+        var explicitScopeId = NormalizeOptional(GetStr(args, "scope_id"));
+        if (explicitScopeId is not null &&
+            !string.Equals(explicitScopeId, ownerScopeId, StringComparison.Ordinal))
+        {
+            return new ToolScopeResolution(
+                null,
+                "scope_id does not match the current NyxID registration owner scope");
+        }
+
+        return new ToolScopeResolution(ownerScopeId, null);
     }
 
     private static string? NormalizeOptional(string? value)
@@ -226,27 +256,40 @@ public sealed class ChannelRegistrationTool : IAgentTool
         if (scopeResolution.Error is not null)
             return SerializeError(scopeResolution.Error);
 
-        var registrations = await _queryPort.QueryAllAsync(ct);
-        var result = registrations
-            .Where(entry => string.Equals(entry.ScopeId, scopeResolution.ScopeId, StringComparison.Ordinal))
-            .Select(entry => new
+        var snapshots = await _queryPort.QueryAllSnapshotsAsync(ct);
+        var visible = snapshots.Where(snapshot => string.Equals(
+            snapshot.Registration.ScopeId,
+            scopeResolution.ScopeId,
+            StringComparison.Ordinal));
+        var result = visible.Select(snapshot =>
         {
-            id = entry.Id,
-            platform = entry.Platform,
-            registration_mode = "nyx_relay_webhook",
-            nyx_provider_slug = entry.NyxProviderSlug,
-            scope_id = entry.ScopeId,
-            webhook_url = entry.WebhookUrl,
-            callback_url = string.Empty,
-            nyx_channel_bot_id = entry.NyxChannelBotId,
-            nyx_agent_api_key_id = entry.NyxAgentApiKeyId,
-            nyx_conversation_route_id = entry.NyxConversationRouteId,
-            default_skill_name = entry.DefaultSkillName,
-        }).ToList();
+            var entry = snapshot.Registration;
+            return new
+            {
+                id = entry.Id,
+                platform = entry.Platform,
+                registration_mode = "nyx_relay_webhook",
+                authorization_mode = MapAuthorizationMode(entry),
+                service_ids = MapRegistrationServiceIds(entry),
+                state_version = snapshot.StateVersion,
+                nyx_provider_slug = entry.NyxProviderSlug,
+                scope_id = entry.ScopeId,
+                webhook_url = entry.WebhookUrl,
+                callback_url = string.Empty,
+                nyx_channel_bot_id = entry.NyxChannelBotId,
+                nyx_agent_api_key_id = entry.NyxAgentApiKeyId,
+                nyx_conversation_route_id = entry.NyxConversationRouteId,
+                default_skill_name = entry.DefaultSkillName,
+            };
+        }).ToArray();
 
         return JsonSerializer.Serialize(
-            new { registrations = result, total = result.Count },
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
+            new { registrations = result, total = result.Length },
+            new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            });
     }
 
     private async Task<string> RegisterChannelViaNyxAsync(
@@ -254,7 +297,16 @@ public sealed class ChannelRegistrationTool : IAgentTool
         JsonElement args,
         CancellationToken ct)
     {
-        var scopeResolution = ResolveToolScopeId(args, required: true);
+        if (!ChannelRegistrationServiceIdsJsonParser.TryParse(args, out var serviceSelection))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error_code = "invalid_service_ids",
+                error = "service_ids must be an array of non-empty strings when present",
+            });
+        }
+
+        var scopeResolution = ResolveRegistrationOwnerScopeId(args);
         if (scopeResolution.Error is not null)
             return SerializeError(scopeResolution.Error);
 
@@ -278,7 +330,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
                     VerificationToken: ResolveCredential(args, credentials, platform, "verification_token"),
                     EncryptKey: ResolveCredential(args, credentials, platform, "encrypt_key")),
                 Credentials: credentials,
-                DefaultSkillName: GetStr(args, "default_skill_name")?.Trim() ?? string.Empty),
+                DefaultSkillName: GetStr(args, "default_skill_name")?.Trim() ?? string.Empty,
+                RequestedServiceSelection: serviceSelection),
             ct);
 
         return SerializeRegistrationPayload(
@@ -294,6 +347,23 @@ public sealed class ChannelRegistrationTool : IAgentTool
             error: result.Error ?? string.Empty,
             note: result.Note ?? string.Empty);
     }
+
+    private static string? MapAuthorizationMode(ChannelBotRegistrationEntry entry) =>
+        entry.AuthorizationMode switch
+        {
+            ChannelRegistrationAuthorizationMode.NyxidDefault => "nyxid_default",
+            ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist =>
+                "explicit_service_allowlist",
+            ChannelRegistrationAuthorizationMode.Unspecified => null,
+            _ => "unsupported",
+        };
+
+    private static IReadOnlyList<string>? MapRegistrationServiceIds(
+        ChannelBotRegistrationEntry entry) =>
+        entry.AuthorizationMode == ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist &&
+        entry.RegistrationServiceAllowlist is not null
+            ? entry.RegistrationServiceAllowlist.ServiceIds.ToArray()
+            : null;
 
     private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(JsonElement args, string platform)
     {
@@ -375,8 +445,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
     }
 
     private async Task<string> DeleteAsync(
-        IChannelBotRegistrationQueryPort queryPort,
-        ChannelRegistrationCommandFacade commandFacade,
+        string accessToken,
         JsonElement args,
         CancellationToken ct)
     {
@@ -394,7 +463,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         // Tenant isolation: a registration outside the caller's scope must be indistinguishable
         // from a nonexistent one (single branch => byte-identical payload), so foreign
         // registration ids cannot be probed or deleted through this tool.
-        var exists = await queryPort.GetAsync(registrationId, ct);
+        var exists = await _queryPort.GetAsync(registrationId, ct);
         if (exists is null ||
             !string.Equals(exists.ScopeId, scopeResolution.ScopeId, StringComparison.Ordinal))
         {
@@ -419,7 +488,23 @@ public sealed class ChannelRegistrationTool : IAgentTool
             });
         }
 
-        await commandFacade.UnregisterAsync(registrationId, ct);
+        var deprovisionResult = await _deprovisioningService.DeprovisionAsync(
+            accessToken,
+            NyxChannelBotDeprovisioningRequest.FromRegistration(exists),
+            ct);
+        if (!deprovisionResult.Succeeded)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = deprovisionResult.ChannelBotRemoved
+                    ? "nyx_agent_key_delete_failed"
+                    : "nyx_channel_bot_delete_failed",
+                registration_id = registrationId,
+                note = "A required NyxID resource could not be deleted; the local registration was kept so you can retry.",
+            });
+        }
+
+        await _commandFacade.UnregisterAsync(registrationId, ct);
 
         // Refactor (iter6/cluster-014):
         //   Old pattern: Delete slept and re-read the projection to upgrade accepted into deleted.
@@ -428,6 +513,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         {
             status = "accepted",
             registration_id = registrationId,
+            warnings = deprovisionResult.Warnings,
             note = "Unregister accepted. Projection is propagating; try 'list' in a few seconds to confirm the registration is gone.",
         });
     }

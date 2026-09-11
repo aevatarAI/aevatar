@@ -1,11 +1,34 @@
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public class NyxApiResponseHelperTests
 {
+    [Fact]
+    public async Task TryRollbackAsync_EmptyDeleteResponse_DoesNotReportFailure()
+    {
+        var logger = new RecordingLogger();
+
+        await NyxApiResponseHelper.TryRollbackAsync(
+            () => Task.FromResult(string.Empty),
+            "channel_bot",
+            "bot-1",
+            logger);
+
+        logger.Messages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void NormalizePublicFailureReason_DoesNotTreatNonBotConflictAsBotAlreadyExists()
+    {
+        NyxApiResponseHelper.NormalizePublicFailureReason(
+                "conversation_route_id_request_failed nyx_status=409 body=route conflict")
+            .Should().Be("provisioning_failed");
+    }
+
     [Fact]
     public void ExtractOptionalProxyUrlSlug_Prefers_Slug_Over_ProxyUrlSlug_Template()
     {
@@ -94,5 +117,22 @@ public class NyxApiResponseHelperTests
     public void ChannelBotDetailMatchesApp_Returns_False_When_Not_This_Lark_App(string detail, string appId)
     {
         NyxApiResponseHelper.ChannelBotDetailMatchesApp(detail, appId).Should().BeFalse();
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 }

@@ -18,6 +18,14 @@ public interface IChannelBotRegistrationQueryByNyxIdentityPort
         string nyxAgentApiKeyId,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Returns every active registration match together with the authoritative version from the
+    /// same projection document read.
+    /// </summary>
+    Task<IReadOnlyList<ChannelBotRegistrationSnapshot>> ListSnapshotsByNyxAgentApiKeyIdAsync(
+        string nyxAgentApiKeyId,
+        CancellationToken ct = default);
+
     Task<ChannelBotRegistrationEntry?> GetByNyxChannelBotIdAsync(
         string nyxChannelBotId,
         CancellationToken ct = default);

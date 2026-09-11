@@ -242,4 +242,7 @@ message AgentToolOperationAdmissionPayload {
   // service_instance_id/service_slug, this survives reconnects and is portable
   // across callers. It is observation evidence, never a proxy route selector.
   string catalog_service_slug = 17;
+  // Workflow-owned exact call-site identity. Business allowlist admission does
+  // not require it; configured dependency admission must match it exactly.
+  string call_site_id = 18;
 }

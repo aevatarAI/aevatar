@@ -101,9 +101,18 @@ public static class ChannelCallbackEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
 
         RegistrationRequest? request;
+        ChannelRegistrationServiceSelection serviceSelection;
         try
         {
-            request = await http.Request.ReadFromJsonAsync<RegistrationRequest>(RegistrationJsonOptions, ct);
+            using var document = await JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+            if (!ChannelRegistrationServiceIdsJsonParser.TryParse(
+                    document.RootElement,
+                    out serviceSelection))
+            {
+                return Results.BadRequest(new { error = "invalid_service_ids" });
+            }
+
+            request = document.RootElement.Deserialize<RegistrationRequest>(RegistrationJsonOptions);
         }
         catch (JsonException ex)
         {
@@ -119,14 +128,18 @@ public static class ChannelCallbackEndpoints
 
         var accessToken = ResolveBearerAccessToken(http);
         if (string.IsNullOrWhiteSpace(accessToken))
-            return Results.Unauthorized();
+        {
+            return Results.Json(
+                new { error = "missing_access_token" },
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
 
         if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
         {
             return Results.BadRequest(new { error = "webhook_base_url is required for Nyx-backed relay provisioning" });
         }
 
-        var scopeResolution = ResolveScopeId(http, request.ScopeId, required: true);
+        var scopeResolution = ResolveRegistrationOwnerScopeId(http, request.ScopeId);
         if (scopeResolution.Error is not null)
             return Results.BadRequest(new { error = scopeResolution.Error });
 
@@ -145,7 +158,8 @@ public static class ChannelCallbackEndpoints
                     VerificationToken: request.VerificationToken?.Trim() ?? string.Empty,
                     EncryptKey: request.EncryptKey?.Trim() ?? string.Empty),
                 Credentials: BuildCredentialsMap(platformNormalized, request),
-                DefaultSkillName: request.DefaultSkillName?.Trim() ?? string.Empty),
+                DefaultSkillName: request.DefaultSkillName?.Trim() ?? string.Empty,
+                RequestedServiceSelection: serviceSelection),
             ct);
 
         var payload = new
@@ -210,13 +224,16 @@ public static class ChannelCallbackEndpoints
             }
         }
 
-        var registrations = await queryPort.QueryAllAsync(ct);
-        var visible = wantsAll
-            ? registrations
-            : registrations.Where(e => string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal));
+        var snapshots = await queryPort.QueryAllSnapshotsAsync(ct);
+        var visible = snapshots.Where(snapshot =>
+            wantsAll || string.Equals(
+                snapshot.Registration.ScopeId,
+                callerScope,
+                StringComparison.Ordinal));
 
-        var result = visible.Select(e =>
+        var result = visible.Select(snapshot =>
         {
+            var e = snapshot.Registration;
             var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(e);
             var repairFailed = capabilityStatus ==
                 ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
@@ -225,6 +242,9 @@ public static class ChannelCallbackEndpoints
                 id = e.Id,
                 platform = e.Platform,
                 registration_mode = "nyx_relay_webhook",
+                authorization_mode = MapAuthorizationMode(e),
+                service_ids = MapRegistrationServiceIds(e),
+                state_version = snapshot.StateVersion,
                 nyx_provider_slug = e.NyxProviderSlug,
                 scope_id = e.ScopeId,
                 callback_url = string.Empty,
@@ -233,7 +253,7 @@ public static class ChannelCallbackEndpoints
                 nyx_agent_api_key_id = e.NyxAgentApiKeyId,
                 nyx_conversation_route_id = e.NyxConversationRouteId,
                 default_skill_name = e.DefaultSkillName,
-                workflow_result_delivery_status = MapCapabilityStatus(capabilityStatus),
+                workflow_result_delivery_status = MapCapabilityStatus(e, capabilityStatus),
                 workflow_result_delivery_failure_phase = repairFailed
                     ? MapRepairPhase(e.WorkflowResultDeliveryRepair?.FailurePhase ??
                         ChannelWorkflowResultDeliveryRepairPhase.Unspecified)
@@ -246,7 +266,7 @@ public static class ChannelCallbackEndpoints
                 // (admin all-view) cannot have their live status read from NyxID.
                 owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
             };
-        });
+        }).ToArray();
 
         return Results.Json(result, RegistrationJsonOptions);
     }
@@ -350,7 +370,7 @@ public static class ChannelCallbackEndpoints
         var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(registration);
         var repairFailed = capabilityStatus ==
             ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
-        var capabilityStatusValue = MapCapabilityStatus(capabilityStatus);
+        var capabilityStatusValue = MapCapabilityStatus(registration, capabilityStatus);
         var failurePhaseValue = repairFailed
             ? MapRepairPhase(registration.WorkflowResultDeliveryRepair?.FailurePhase ??
                 ChannelWorkflowResultDeliveryRepairPhase.Unspecified)
@@ -515,12 +535,12 @@ public static class ChannelCallbackEndpoints
         //   New principle: query remains readmodel existence check; write enters typed command facade.
         // Deprovision (06-25-channel-delete-nyxid-deprovision):
         //   Delete is the reverse of register — tear down the NyxID side (conversation route →
-        //   channel-bot → relay api-key) BEFORE tombstoning the local mirror, so deleting a bot
+        //   channel-bot → Agent Key → Vault secret) BEFORE tombstoning the local mirror, so deleting a bot
         //   leaves no orphaned NyxID resources and the same app re-registers cleanly. A NyxID 404
         //   is success (idempotent). A hard channel-bot delete failure returns a non-2xx and does
-        //   NOT tombstone the local mirror (row stays visible/retryable). Residual route/api-key
-        //   cleanup failures are surfaced as warnings but never block the tombstone. NyxID
-            //   channel-bot delete is owner-scoped, so an admin deleting another owner's
+        //   NOT tombstone the local mirror (row stays visible/retryable). Agent Key deletion is
+        //   also a hard gate; route and Vault cleanup failures are warnings. NyxID channel-bot
+        //   delete is owner-scoped, so an admin deleting another owner's
         //   foreign registration cannot delete that owner's NyxID bot — that hard-fails here and
         //   keeps the local mirror; a pure-local admin purge would be a separate explicit path.
         var registration = await queryPort.GetAsync(registrationId, ct);
@@ -533,21 +553,20 @@ public static class ChannelCallbackEndpoints
 
         var deprovisionResult = await deprovision.DeprovisionAsync(
             accessToken,
-            registration.NyxConversationRouteId,
-            registration.NyxChannelBotId,
-            registration.NyxAgentApiKeyId,
+            NyxChannelBotDeprovisioningRequest.FromRegistration(registration),
             ct);
 
         if (!deprovisionResult.Succeeded)
         {
-            // Hard channel-bot delete failure: leave the local mirror intact so the caller can
-            // retry and the registration row stays visible (no silent half-dead orphan).
+            var error = deprovisionResult.ChannelBotRemoved
+                ? "nyx_agent_key_delete_failed"
+                : "nyx_channel_bot_delete_failed";
             return Results.Json(
                 new
                 {
-                    error = "nyx_channel_bot_delete_failed",
+                    error,
                     registration_id = registrationId,
-                    note = "The NyxID channel-bot could not be deleted; the local registration was kept so you can retry.",
+                    note = "A required NyxID resource could not be deleted; the local registration was kept so you can retry.",
                 },
                 statusCode: StatusCodes.Status502BadGateway);
         }
@@ -595,6 +614,14 @@ public static class ChannelCallbackEndpoints
             "unsupported_platform" => StatusCodes.Status409Conflict,
             "missing_access_token" => StatusCodes.Status401Unauthorized,
             "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_bot_token" or "missing_webhook_base_url" or "missing_scope_id" or "insecure_webhook_base_url" => StatusCodes.Status400BadRequest,
+            "channel_authorization_contract_invalid" => StatusCodes.Status409Conflict,
+            "channel_bot_already_exists" => StatusCodes.Status409Conflict,
+            "channel_agent_key_write_gate_closed" => StatusCodes.Status503ServiceUnavailable,
+            "secret_vault_unavailable" => StatusCodes.Status503ServiceUnavailable,
+            "service_owner_forbidden" => StatusCodes.Status403Forbidden,
+            "user_service_not_found" => StatusCodes.Status404NotFound,
+            "scope_plan_changed" => StatusCodes.Status409Conflict,
+            "nyxid_scope_plan_unavailable" or "channel_service_connection_unavailable" => StatusCodes.Status502BadGateway,
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
             // A downstream NyxID channel-bot uniqueness conflict (NyxID allows one active bot per
             // app across all accounts) is a real Conflict, not a gateway failure. Surface 409 so the
@@ -606,6 +633,23 @@ public static class ChannelCallbackEndpoints
             _ => StatusCodes.Status502BadGateway,
         };
     }
+
+    private static string? MapAuthorizationMode(ChannelBotRegistrationEntry entry) =>
+        entry.AuthorizationMode switch
+        {
+            ChannelRegistrationAuthorizationMode.NyxidDefault => "nyxid_default",
+            ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist =>
+                "explicit_service_allowlist",
+            ChannelRegistrationAuthorizationMode.Unspecified => null,
+            _ => "unsupported",
+        };
+
+    private static IReadOnlyList<string>? MapRegistrationServiceIds(
+        ChannelBotRegistrationEntry entry) =>
+        entry.AuthorizationMode == ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist &&
+        entry.RegistrationServiceAllowlist is not null
+            ? entry.RegistrationServiceAllowlist.ServiceIds.ToArray()
+            : null;
 
     private static int MapRepairResultStatusCode(
         ChannelWorkflowResultDeliveryRepairResultStatus status) => status switch
@@ -669,7 +713,16 @@ public static class ChannelCallbackEndpoints
         };
 
     private static string MapCapabilityStatus(
-        ChannelWorkflowResultDeliveryCapabilityStatus status) => status switch
+        ChannelBotRegistrationEntry entry,
+        ChannelWorkflowResultDeliveryCapabilityStatus status)
+    {
+        if (ChannelRegistrationAuthorizationContract.Classify(entry) ==
+            ChannelRegistrationAuthorizationContractKind.Invalid)
+        {
+            return "contract_invalid";
+        }
+
+        return status switch
         {
             ChannelWorkflowResultDeliveryCapabilityStatus.Enabled => "enabled",
             ChannelWorkflowResultDeliveryCapabilityStatus.RepairRequired => "repair_required",
@@ -678,6 +731,7 @@ public static class ChannelCallbackEndpoints
             ChannelWorkflowResultDeliveryCapabilityStatus.Unspecified => "repair_required",
             _ => "repair_required",
         };
+    }
 
     private static string MapRepairPhase(
         ChannelWorkflowResultDeliveryRepairPhase phase) => phase switch
@@ -738,6 +792,24 @@ public static class ChannelCallbackEndpoints
             return new ScopeIdResolution(null, "scope_id is required");
 
         return new ScopeIdResolution(resolved, null);
+    }
+
+    private static ScopeIdResolution ResolveRegistrationOwnerScopeId(
+        HttpContext http,
+        string? explicitScopeId)
+    {
+        var claimNormalized = NormalizeOptional(http.User.FindFirst("scope_id")?.Value);
+        if (claimNormalized is null)
+            return new ScopeIdResolution(null, "scope_id is required");
+
+        var explicitNormalized = NormalizeOptional(explicitScopeId);
+        if (explicitNormalized is not null &&
+            !string.Equals(explicitNormalized, claimNormalized, StringComparison.Ordinal))
+        {
+            return new ScopeIdResolution(null, "scope_id does not match the authenticated scope");
+        }
+
+        return new ScopeIdResolution(claimNormalized, null);
     }
 
     private static string? NormalizeOptional(string? value)

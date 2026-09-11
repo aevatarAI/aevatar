@@ -89,9 +89,50 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return;
         }
 
+        if (!ChannelRegistrationAuthorizationContract.IsValidNewCommand(cmd))
+        {
+            Logger.LogError(
+                "Rejecting channel bot registration with an invalid authorization contract: platform={Platform}, requestedId={RequestedId}, apiKeyId={ApiKeyId}",
+                cmd.Platform,
+                cmd.RequestedId,
+                cmd.NyxAgentApiKeyId);
+            await PersistDomainEventAsync(new ChannelBotRegistrationRejectedEvent
+            {
+                Reason = "channel_authorization_contract_invalid",
+                Platform = cmd.Platform ?? string.Empty,
+                RequestedId = cmd.RequestedId ?? string.Empty,
+                NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
+                RejectedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+            return;
+        }
+
+        var registrationId = !string.IsNullOrWhiteSpace(cmd.RequestedId)
+            ? cmd.RequestedId
+            : Guid.NewGuid().ToString("N");
+        if (State.Registrations.Any(entry =>
+                !entry.Tombstoned &&
+                string.Equals(entry.Id, registrationId, StringComparison.Ordinal)))
+        {
+            Logger.LogError(
+                "Rejecting channel bot registration because the active registration id already exists: platform={Platform}, requestedId={RequestedId}, apiKeyId={ApiKeyId}",
+                cmd.Platform,
+                registrationId,
+                cmd.NyxAgentApiKeyId);
+            await PersistDomainEventAsync(new ChannelBotRegistrationRejectedEvent
+            {
+                Reason = "registration_id_conflict",
+                Platform = cmd.Platform ?? string.Empty,
+                RequestedId = registrationId,
+                NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
+                RejectedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+            return;
+        }
+
         var entry = new ChannelBotRegistrationEntry
         {
-            Id = !string.IsNullOrWhiteSpace(cmd.RequestedId) ? cmd.RequestedId : Guid.NewGuid().ToString("N"),
+            Id = registrationId,
             Platform = cmd.Platform,
             NyxProviderSlug = cmd.NyxProviderSlug,
             ScopeId = cmd.ScopeId.Trim(),
@@ -100,6 +141,9 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = cmd.NyxConversationRouteId ?? string.Empty,
             WorkflowResultDeliveryCredential = cmd.WorkflowResultDeliveryCredential?.Clone(),
+            RegistrationServiceAllowlist = cmd.RegistrationServiceAllowlist?.Clone(),
+            ChannelAgentKey = cmd.ChannelAgentKey?.Clone(),
+            AuthorizationMode = cmd.AuthorizationMode,
             // Canonical skill-name form matches SkillInvocationTriggerParser output
             // (lowercase, no leading trigger token) so inbound routing compares 1:1.
             DefaultSkillName = (cmd.DefaultSkillName ?? string.Empty).Trim().TrimStart('/').ToLowerInvariant(),
@@ -314,6 +358,8 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         var entry = FindActiveRegistration(registrationId);
 
         if (entry is not null &&
+            ChannelRegistrationAuthorizationContract.Classify(entry) ==
+            ChannelRegistrationAuthorizationContractKind.HistoricalLegacy &&
             entry.WorkflowResultDeliveryRepair is null &&
             string.Equals(entry.NyxAgentApiKeyId, Normalize(cmd.RotatedApiKeyId), StringComparison.Ordinal) &&
             Equals(entry.WorkflowResultDeliveryCredential, cmd.PreparedSecretReference) &&
@@ -526,8 +572,14 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         var next = current.Clone();
         var entry = next.Registrations.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, registrationId, StringComparison.Ordinal));
-        if (entry is null || entry.Tombstoned || repair is null)
+        if (entry is null ||
+            entry.Tombstoned ||
+            repair is null ||
+            ChannelRegistrationAuthorizationContract.Classify(entry) !=
+            ChannelRegistrationAuthorizationContractKind.HistoricalLegacy)
+        {
             return current;
+        }
 
         entry.WorkflowResultDeliveryRepair = repair.Clone();
         return next;
@@ -540,8 +592,14 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         var next = current.Clone();
         var entry = next.Registrations.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, evt.RegistrationId, StringComparison.Ordinal));
-        if (entry is null || entry.Tombstoned || evt.PreparedSecretReference is null)
+        if (entry is null ||
+            entry.Tombstoned ||
+            evt.PreparedSecretReference is null ||
+            ChannelRegistrationAuthorizationContract.Classify(entry) !=
+            ChannelRegistrationAuthorizationContractKind.HistoricalLegacy)
+        {
             return current;
+        }
 
         entry.NyxAgentApiKeyId = evt.RotatedApiKeyId;
         entry.WorkflowResultDeliveryCredential = evt.PreparedSecretReference.Clone();
@@ -571,6 +629,11 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return ChannelWorkflowResultDeliveryRepairFailureReason.RegistrationNotFound;
         if (!IsLark(entry))
             return ChannelWorkflowResultDeliveryRepairFailureReason.UnsupportedPlatform;
+        if (ChannelRegistrationAuthorizationContract.Classify(entry) !=
+            ChannelRegistrationAuthorizationContractKind.HistoricalLegacy)
+        {
+            return ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest;
+        }
         if (IsPreparedReferenceUsable(entry, entry.WorkflowResultDeliveryCredential))
             return ChannelWorkflowResultDeliveryRepairFailureReason.AlreadyEnabled;
         if (!string.Equals(entry.NyxAgentApiKeyId, Normalize(cmd.ExpectedApiKeyId), StringComparison.Ordinal) ||
@@ -599,6 +662,11 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return ChannelWorkflowResultDeliveryRepairFailureReason.RegistrationNotFound;
         if (!IsLark(entry))
             return ChannelWorkflowResultDeliveryRepairFailureReason.UnsupportedPlatform;
+        if (ChannelRegistrationAuthorizationContract.Classify(entry) !=
+            ChannelRegistrationAuthorizationContractKind.HistoricalLegacy)
+        {
+            return ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest;
+        }
         if (entry.WorkflowResultDeliveryRepair is null)
             return ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest;
         if (!string.Equals(entry.WorkflowResultDeliveryRepair.RequestId, requestId, StringComparison.Ordinal))

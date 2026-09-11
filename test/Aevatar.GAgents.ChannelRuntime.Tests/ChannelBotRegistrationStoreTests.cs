@@ -17,12 +17,17 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
 {
     private const long RepairRequestedAtUnixMs = 1784563200000;
 
-    private static Aevatar.Foundation.Abstractions.Credentials.SecretReference TestDeliverySecretReference(string registrationId) =>
+    private static Aevatar.Foundation.Abstractions.Credentials.SecretReference TestDeliverySecretReference(
+        string registrationId,
+        string scopeId = "scope-1") =>
         new()
         {
             Ref = $"sec_delivery_{registrationId}",
             Purpose = Aevatar.Foundation.Abstractions.Credentials.CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
-            OwnerScopeKey = "scope-x",
+            OwnerScopeKey = scopeId,
+            Version = 1,
+            Fingerprint = $"sha256:{registrationId}",
+            CreatedAtUnixMs = 1788912000000,
         };
 
     private ChannelBotRegistrationGAgent _agent = null!;
@@ -69,12 +74,24 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         return agent;
     }
 
-    private static ChannelBotRegisterCommand HistoricalRegistration(
+    private async Task SeedHistoricalRegistrationAsync(
+        string registrationId = "reg-alpha",
+        string platform = "lark")
+    {
+        await AppendCommittedEventAsync(new ChannelBotRegisteredEvent
+        {
+            Entry = HistoricalRegistration(registrationId, platform),
+        });
+        _agent = CreateAgent();
+        await _agent.ActivateAsync();
+    }
+
+    private static ChannelBotRegistrationEntry HistoricalRegistration(
         string registrationId = "reg-alpha",
         string platform = "lark") =>
         new()
         {
-            RequestedId = registrationId,
+            Id = registrationId,
             Platform = platform,
             ScopeId = "scope-alpha",
             NyxProviderSlug = platform == "lark" ? "api-lark-bot" : $"api-{platform}-bot",
@@ -83,7 +100,61 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             NyxAgentApiKeyId = "key-old-alpha",
             NyxConversationRouteId = "route-alpha",
             DefaultSkillName = "team-entry-alpha",
+            CreatedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 7, 20, 0, 0, 0, TimeSpan.Zero)),
         };
+
+    private static ChannelBotRegisterCommand NewRegistration(
+        string registrationId = "reg-1",
+        string platform = "lark",
+        string scopeId = "scope-1",
+        string apiKeyId = "key-1",
+        string defaultSkillName = "")
+    {
+        var secretReference = TestDeliverySecretReference(registrationId, scopeId);
+        return new ChannelBotRegisterCommand
+        {
+            RequestedId = registrationId,
+            Platform = platform,
+            ScopeId = scopeId,
+            NyxProviderSlug = platform == "lark" ? "api-lark-bot" : $"api-{platform}-bot",
+            WebhookUrl = $"https://nyx.example.com/api/v1/webhooks/channel/{platform}/bot-1",
+            NyxChannelBotId = "bot-1",
+            NyxAgentApiKeyId = apiKeyId,
+            NyxConversationRouteId = "route-1",
+            WorkflowResultDeliveryCredential = secretReference.Clone(),
+            ChannelAgentKey = new ChannelAgentKeyCredential
+            {
+                ApiKeyId = apiKeyId,
+                SecretReference = secretReference,
+                Grant = new ChannelAgentKeyGrantSnapshot
+                {
+                    AllowAllServices = true,
+                    AllowAllNodes = true,
+                },
+            },
+            AuthorizationMode = ChannelRegistrationAuthorizationMode.NyxidDefault,
+            DefaultSkillName = defaultSkillName,
+        };
+    }
+
+    private static ChannelBotRegisterCommand ExplicitRegistration(
+        string registrationId,
+        bool includeBusinessService)
+    {
+        var command = NewRegistration(registrationId, apiKeyId: $"key-{registrationId}");
+        command.AuthorizationMode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist;
+        command.RegistrationServiceAllowlist = new ChannelRegistrationServiceAllowlist();
+        if (includeBusinessService)
+            command.RegistrationServiceAllowlist.ServiceIds.Add("svc-business");
+        command.ChannelAgentKey.Grant.AllowAllServices = false;
+        command.ChannelAgentKey.Grant.AllowAllNodes = false;
+        command.ChannelAgentKey.Grant.AllowedServiceIds.Add("svc-business");
+        command.ChannelAgentKey.Grant.AllowedServiceIds.Add("svc-dependency");
+        command.ChannelAgentKey.Grant.AllowedNodeIds.Add("node-runtime");
+        command.ChannelAgentKey.Grant.ScopePlanDigest =
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        return command;
+    }
 
     private static Aevatar.Foundation.Abstractions.Credentials.SecretReference PreparedReference() =>
         new()
@@ -120,18 +191,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleRegister_PersistsLarkRelayRegistration()
     {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1",
-            RequestedId = "reg-1",
-            NyxChannelBotId = "bot-1",
-            NyxAgentApiKeyId = "key-1",
-            NyxConversationRouteId = "route-1",
-            WorkflowResultDeliveryCredential = TestDeliverySecretReference("reg-1"),
-        });
+        await _agent.HandleRegister(NewRegistration());
 
         _agent.State.Registrations.Should().ContainSingle();
         var entry = _agent.State.Registrations[0];
@@ -144,34 +204,175 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.NyxAgentApiKeyId.Should().Be("key-1");
         entry.NyxConversationRouteId.Should().Be("route-1");
         entry.WorkflowResultDeliveryCredential.Should().Be(TestDeliverySecretReference("reg-1"));
+        entry.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.NyxidDefault);
+        entry.ChannelAgentKey.Should().NotBeNull();
+        entry.ChannelAgentKey.ApiKeyId.Should().Be("key-1");
+        entry.ChannelAgentKey.SecretReference.Should().Be(entry.WorkflowResultDeliveryCredential);
+        entry.ChannelAgentKey.Grant.HasAllowAllServices.Should().BeTrue();
+        entry.ChannelAgentKey.Grant.HasAllowAllNodes.Should().BeTrue();
         entry.Tombstoned.Should().BeFalse();
         entry.DefaultSkillName.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HandleRegister_ExplicitAuthorizationContract_SurvivesCommitAndReactivation(
+        bool includeBusinessService)
+    {
+        var registrationId = includeBusinessService
+            ? "reg-explicit-nonempty"
+            : "reg-explicit-empty";
+        var command = ExplicitRegistration(registrationId, includeBusinessService);
+
+        await _agent.HandleRegister(command);
+
+        var committed = await LastCommittedPayloadAsync<ChannelBotRegisteredEvent>();
+        committed.Entry.AuthorizationMode.Should().Be(
+            ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
+        committed.Entry.RegistrationServiceAllowlist.Should().NotBeNull();
+        committed.Entry.RegistrationServiceAllowlist.ServiceIds.Should().Equal(
+            command.RegistrationServiceAllowlist.ServiceIds);
+        committed.Entry.ChannelAgentKey.Should().Be(command.ChannelAgentKey);
+        committed.Entry.ChannelAgentKey.Should().NotBeSameAs(command.ChannelAgentKey);
+        committed.Entry.ChannelAgentKey.Grant.ScopePlanDigest.Should().Be(
+            command.ChannelAgentKey.Grant.ScopePlanDigest);
+        committed.Entry.ChannelAgentKey.Grant.HasAllowAllServices.Should().BeTrue();
+        committed.Entry.ChannelAgentKey.Grant.AllowAllServices.Should().BeFalse();
+        committed.Entry.ChannelAgentKey.Grant.HasAllowAllNodes.Should().BeTrue();
+        committed.Entry.ChannelAgentKey.Grant.AllowAllNodes.Should().BeFalse();
+        committed.Entry.NyxAgentApiKeyId.Should().Be(committed.Entry.ChannelAgentKey.ApiKeyId);
+        committed.Entry.WorkflowResultDeliveryCredential.Should().Be(
+            committed.Entry.ChannelAgentKey.SecretReference);
+
+        await _agent.DeactivateAsync();
+        var reactivated = CreateAgent();
+        await reactivated.ActivateAsync();
+
+        reactivated.State.Registrations.Should().ContainSingle();
+        reactivated.State.Registrations.Single().Should().Be(committed.Entry);
+        reactivated.State.Registrations.Single().RegistrationServiceAllowlist.Should().NotBeSameAs(
+            command.RegistrationServiceAllowlist);
     }
 
     [Fact]
     public async Task HandleRegister_PersistsCanonicalDefaultSkillName()
     {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            RequestedId = "reg-bound",
-            NyxChannelBotId = "bot-1",
-            NyxAgentApiKeyId = "key-1",
-            // Leading trigger token and mixed case must normalize to the parser's
-            // canonical skill-name form so inbound routing compares 1:1.
-            DefaultSkillName = " /WhatsApp-Reply-Draft ",
-        });
+        await _agent.HandleRegister(NewRegistration(
+            registrationId: "reg-bound",
+            defaultSkillName: " /WhatsApp-Reply-Draft "));
 
         _agent.State.Registrations.Single(r => r.Id == "reg-bound")
             .DefaultSkillName.Should().Be("whatsapp-reply-draft");
     }
 
     [Fact]
+    public async Task HandleRegister_RejectsLegacyShapedNewCommand()
+    {
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            RequestedId = "reg-legacy-command",
+            Platform = "lark",
+            ScopeId = "scope-1",
+            NyxAgentApiKeyId = "key-legacy",
+            WorkflowResultDeliveryCredential = TestDeliverySecretReference("reg-legacy-command"),
+        });
+
+        _agent.State.Registrations.Should().BeEmpty();
+        _agent.EventSourcing.CurrentVersion.Should().Be(beforeVersion + 1);
+        var rejected = await LastCommittedPayloadAsync<ChannelBotRegistrationRejectedEvent>();
+        rejected.Reason.Should().Be("channel_authorization_contract_invalid");
+    }
+
+    [Fact]
+    public async Task HandleRegister_RejectsMalformedNewAuthorizationContract()
+    {
+        var command = NewRegistration("reg-malformed");
+        command.ChannelAgentKey.Grant.ClearAllowAllNodes();
+
+        await _agent.HandleRegister(command);
+
+        _agent.State.Registrations.Should().BeEmpty();
+        var rejected = await LastCommittedPayloadAsync<ChannelBotRegistrationRejectedEvent>();
+        rejected.Reason.Should().Be("channel_authorization_contract_invalid");
+    }
+
+    [Fact]
+    public async Task HandleRegister_DuplicateActiveIdPreservesOriginalAuthorizationFact()
+    {
+        await _agent.HandleRegister(NewRegistration("reg-duplicate", apiKeyId: "key-original"));
+        var original = _agent.State.Registrations.Single().Clone();
+
+        await _agent.HandleRegister(NewRegistration("reg-duplicate", apiKeyId: "key-replacement"));
+
+        _agent.State.Registrations.Should().ContainSingle();
+        _agent.State.Registrations.Single().Should().Be(original);
+        var rejected = await LastCommittedPayloadAsync<ChannelBotRegistrationRejectedEvent>();
+        rejected.Reason.Should().Be("registration_id_conflict");
+    }
+
+    [Fact]
+    public async Task ReplayHistoricalRegisteredEvent_PreservesLegacyShapeWithoutInventingMode()
+    {
+        await SeedHistoricalRegistrationAsync();
+
+        var entry = _agent.State.Registrations.Should().ContainSingle().Subject;
+        entry.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.Unspecified);
+        entry.ChannelAgentKey.Should().BeNull();
+        entry.NyxAgentApiKeyId.Should().Be("key-old-alpha");
+    }
+
+    [Fact]
+    public async Task ReplayRepairCompletedEvent_DoesNotMutateNewAuthorizationFact()
+    {
+        await _agent.HandleRegister(NewRegistration("reg-new", apiKeyId: "key-new"));
+        var original = _agent.State.Registrations.Single().Clone();
+        await AppendCommittedEventAsync(new ChannelBotWorkflowResultDeliveryRepairCompletedEvent
+        {
+            RegistrationId = "reg-new",
+            RequestId = "repair-invalid",
+            ExpectedApiKeyId = "key-new",
+            RotatedApiKeyId = "key-rotated",
+            PreparedSecretReference = PreparedReference(),
+            CompletedAtUnixMs = RepairRequestedAtUnixMs,
+        });
+
+        var replayed = CreateAgent();
+        await replayed.ActivateAsync();
+
+        replayed.State.Registrations.Should().ContainSingle();
+        replayed.State.Registrations.Single().Should().Be(original);
+    }
+
+    [Fact]
+    public async Task HandleWorkflowResultDeliveryRepairComplete_RejectsNewAuthorizationModelBeforeIdempotentLegacyShortcut()
+    {
+        var command = NewRegistration("reg-new-complete", apiKeyId: "key-new-complete");
+        await _agent.HandleRegister(command);
+        var entry = _agent.State.Registrations.Single();
+
+        await _agent.HandleWorkflowResultDeliveryRepairComplete(new()
+        {
+            RegistrationId = entry.Id,
+            RequestId = "repair-invalid-new",
+            ExpectedApiKeyId = entry.NyxAgentApiKeyId,
+            RotatedApiKeyId = entry.NyxAgentApiKeyId,
+            PreparedSecretReference = entry.WorkflowResultDeliveryCredential.Clone(),
+            UpdatedAtUnixMs = RepairRequestedAtUnixMs,
+        });
+
+        var rejected = await LastCommittedPayloadAsync<ChannelBotWorkflowResultDeliveryRepairRejectedEvent>();
+        rejected.RegistrationId.Should().Be(entry.Id);
+        rejected.Reason.Should().Be(ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest);
+        _agent.State.Registrations.Single().Should().Be(entry);
+    }
+
+    [Fact]
     public async Task HandleWorkflowResultDeliveryRepair_RequestPrepareComplete_PromotesCredentialAndPreservesRegistration()
     {
-        await _agent.HandleRegister(HistoricalRegistration());
+        await SeedHistoricalRegistrationAsync();
         await _agent.HandleRecordInbound(new ChannelBotRecordInboundCommand
         {
             RegistrationId = "reg-alpha",
@@ -232,7 +433,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleWorkflowResultDeliveryRepair_DuplicateCommandsRecommitSameBusinessFacts()
     {
-        await _agent.HandleRegister(HistoricalRegistration());
+        await SeedHistoricalRegistrationAsync();
         var request = RepairRequest();
         await _agent.HandleWorkflowResultDeliveryRepairRequest(request);
         var requested = _agent.State.Registrations.Single().WorkflowResultDeliveryRepair.Clone();
@@ -269,7 +470,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleWorkflowResultDeliveryRepair_RejectsStaleAndConflictingCommandsWithoutOverwritingState()
     {
-        await _agent.HandleRegister(HistoricalRegistration());
+        await SeedHistoricalRegistrationAsync();
 
         await _agent.HandleWorkflowResultDeliveryRepairRequest(RepairRequest(expectedApiKeyId: "key-stale-alpha"));
 
@@ -305,7 +506,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleWorkflowResultDeliveryRepair_FailureRetainsPreparedFactsForForwardOnlyRetry()
     {
-        await _agent.HandleRegister(HistoricalRegistration());
+        await SeedHistoricalRegistrationAsync();
         await _agent.HandleWorkflowResultDeliveryRepairRequest(RepairRequest());
         await _agent.HandleWorkflowResultDeliveryRepairPrepare(new()
         {
@@ -346,7 +547,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleWorkflowResultDeliveryRepair_RejectsNonLarkAndTombstonedRegistrations()
     {
-        await _agent.HandleRegister(HistoricalRegistration("reg-telegram", "telegram"));
+        await SeedHistoricalRegistrationAsync("reg-telegram", "telegram");
 
         await _agent.HandleWorkflowResultDeliveryRepairRequest(RepairRequest("reg-telegram"));
 
@@ -354,7 +555,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         (await LastCommittedPayloadAsync<ChannelBotWorkflowResultDeliveryRepairRejectedEvent>())
             .Reason.Should().Be(ChannelWorkflowResultDeliveryRepairFailureReason.UnsupportedPlatform);
 
-        await _agent.HandleRegister(HistoricalRegistration());
+        await SeedHistoricalRegistrationAsync();
         await _agent.HandleUnregister(new ChannelBotUnregisterCommand { RegistrationId = "reg-alpha" });
 
         await _agent.HandleWorkflowResultDeliveryRepairRequest(RepairRequest());
@@ -368,15 +569,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleRecordInbound_SetsActivationOnce_AndIsIdempotent()
     {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            RequestedId = "reg-1",
-            NyxChannelBotId = "bot-1",
-            NyxAgentApiKeyId = "key-1",
-        });
+        await _agent.HandleRegister(NewRegistration());
 
         var first = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero));
         await _agent.HandleRecordInbound(new ChannelBotRecordInboundCommand { RegistrationId = "reg-1", ObservedAtUtc = first });
@@ -404,17 +597,14 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleRegister_PersistsTelegramRelayRegistration()
     {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "telegram",
-            NyxProviderSlug = "api-telegram-bot",
-            ScopeId = "scope-1",
-            WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/telegram/bot-tg-1",
-            RequestedId = "reg-telegram",
-            NyxChannelBotId = "bot-tg-1",
-            NyxAgentApiKeyId = "key-tg-1",
-            NyxConversationRouteId = "route-tg-1",
-        });
+        var command = NewRegistration(
+            registrationId: "reg-telegram",
+            platform: "telegram",
+            apiKeyId: "key-tg-1");
+        command.NyxChannelBotId = "bot-tg-1";
+        command.NyxConversationRouteId = "route-tg-1";
+        command.WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/telegram/bot-tg-1";
+        await _agent.HandleRegister(command);
 
         _agent.State.Registrations.Should().ContainSingle();
         var entry = _agent.State.Registrations[0];
@@ -448,13 +638,9 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         var beforeVersion = _agent.EventSourcing!.CurrentVersion;
 
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            RequestedId = "reg-1",
-            NyxAgentApiKeyId = "key-1",
-        });
+        var command = NewRegistration();
+        command.ScopeId = string.Empty;
+        await _agent.HandleRegister(command);
 
         // Audit event recorded for the contract break (issue #391); the
         // registration set stays empty because the rejection is a no-op
@@ -466,13 +652,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleUnregister_TombstonesEntry()
     {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            RequestedId = "reg-1",
-        });
+        await _agent.HandleRegister(NewRegistration());
 
         await _agent.HandleUnregister(new ChannelBotUnregisterCommand
         {
@@ -487,13 +667,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleCompactTombstones_RemovesWatermarkPassedEntries()
     {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            RequestedId = "reg-1",
-        });
+        await _agent.HandleRegister(NewRegistration());
 
         await _agent.HandleUnregister(new ChannelBotUnregisterCommand
         {
@@ -512,14 +686,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task ReplayScopeIdRepairedEvent_PreservesCreatedAt_WhenRewritingScope()
     {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-original",
-            RequestedId = "reg-1",
-            NyxAgentApiKeyId = "key-1",
-        });
+        await _agent.HandleRegister(NewRegistration(scopeId: "scope-original"));
 
         var originalCreatedAt = _agent.State.Registrations[0].CreatedAt;
         originalCreatedAt.Should().NotBeNull();
@@ -537,13 +704,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task ReplayScopeIdRepairedEvent_IgnoresTombstonedRegistration()
     {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            RequestedId = "reg-1",
-        });
+        await _agent.HandleRegister(NewRegistration());
         await _agent.HandleUnregister(new ChannelBotUnregisterCommand
         {
             RegistrationId = "reg-1",
@@ -576,6 +737,27 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             .Select(static method => method.Name)
             .Should()
             .NotContain("HandleRepairScopeId");
+    }
+
+    private async Task AppendCommittedEventAsync(IMessage payload)
+    {
+        var eventStore = _serviceProvider.GetRequiredService<IEventStore>();
+        var currentVersion = _agent.EventSourcing?.CurrentVersion ?? 0;
+        await eventStore.AppendAsync(
+            ChannelBotRegistrationGAgent.WellKnownId,
+            [
+                new StateEvent
+                {
+                    AgentId = ChannelBotRegistrationGAgent.WellKnownId,
+                    EventId = Guid.NewGuid().ToString("N"),
+                    EventType = payload.Descriptor.FullName,
+                    EventData = Any.Pack(payload),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Version = currentVersion + 1,
+                },
+            ],
+            currentVersion,
+            CancellationToken.None);
     }
 
     private async Task AppendScopeIdRepairedEventAsync(

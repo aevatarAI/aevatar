@@ -1,10 +1,24 @@
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
+public enum ChannelAgentKeyWriteMode
+{
+    Disabled = 0,
+    NyxIdDefault = 1,
+}
+
 /// <summary>
 /// Configuration for the NyxID relay transport boundary.
 /// </summary>
 public class NyxIdRelayOptions
 {
+    /// <summary>
+    /// Controls creation of registrations using the unified Channel Agent Key contract.
+    /// Kept closed by default so rolling deployments cannot send new-contract commands to
+    /// Actor-capable instances that have not yet been upgraded.
+    /// </summary>
+    public ChannelAgentKeyWriteMode ChannelAgentKeyWriteMode { get; set; } =
+        ChannelAgentKeyWriteMode.Disabled;
+
     /// <summary>
     /// Deprecated compatibility setting. LLM reply generation no longer applies this value as
     /// a hard timeout; long Ornn skill workflows must keep running until they finish or return

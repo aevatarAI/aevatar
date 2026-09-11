@@ -45,81 +45,6 @@ internal static class NyxApiResponseHelper
     }
 
     /// <summary>
-    /// Returns the trimmed <c>id</c> field from a Nyx api-key creation response. Distinct from
-    /// <see cref="ExtractRequiredId"/> because the legacy error code surface uses the
-    /// <c>api_key_id_request_failed</c> prefix specifically.
-    /// </summary>
-    public static string ExtractRequiredApiKeyId(string response)
-    {
-        if (LooksLikeErrorEnvelope(response))
-            throw new InvalidOperationException($"api_key_id_request_failed {ExtractErrorDetail(response)}");
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-            if (!root.TryGetProperty("id", out var idElement) || idElement.ValueKind != JsonValueKind.String)
-                throw new InvalidOperationException("missing_id_in_api_key_id_response");
-
-            var id = idElement.GetString()?.Trim();
-            if (string.IsNullOrWhiteSpace(id))
-                throw new InvalidOperationException("empty_id_in_api_key_id_response");
-
-            return id;
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException($"invalid_json_in_api_key_id_response {ex.Message}", ex);
-        }
-    }
-
-    /// <summary>
-    /// Returns the one-time <c>full_key</c> from a Nyx create-api-key response, or <c>null</c>
-    /// when the response is an error envelope, unparseable, or carries no full_key. NyxID returns
-    /// the raw key material exactly once at creation; the caller must hand it straight to the
-    /// secret vault and never persist or log it.
-    /// </summary>
-    public static string? ExtractOptionalApiKeyFullKey(string response)
-    {
-        if (LooksLikeErrorEnvelope(response))
-            return null;
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            return ReadNonEmptyString(document.RootElement, "full_key");
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Whether a create-api-key response carries the only NyxID credential class that can back
-    /// the channel's asynchronous workflow lifecycle. A scheduled-invocation key cannot authorize
-    /// the later status/result reads, so an absent or incompatible class fails closed.
-    /// </summary>
-    public static bool HasGeneralProxyCredentialClass(string response)
-    {
-        if (LooksLikeErrorEnvelope(response))
-            return false;
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            return NyxIdApiAccessResponseParser.TryParseCreatedAgentApiKeySecurityClass(
-                       document.RootElement,
-                       out var securityClass) &&
-                   securityClass is { IsGeneralProxyCredential: true };
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
     /// Returns the trimmed per-connection proxy slug from a Nyx <c>POST /api/v1/keys</c>
     /// (connect-service) response — <c>slug</c> preferred, <c>proxy_url_slug</c> normalized as
     /// fallback — or <c>null</c> when the response is an error envelope, unparseable, or carries
@@ -404,9 +329,9 @@ internal static class NyxApiResponseHelper
     }
 
     /// <summary>
-    /// Best-effort delete of a Nyx resource during provisioning rollback. Logs both the
-    /// error-envelope and exception cases and never re-throws, so a failed rollback never
-    /// shadows the original provisioning failure that triggered it.
+    /// Best-effort delete of a Nyx resource during provisioning rollback. An empty response is
+    /// NyxID's successful 204 delete result. Error-envelope and exception cases are logged and
+    /// never re-thrown, so a failed rollback never shadows the original provisioning failure.
     /// </summary>
     public static async Task TryRollbackAsync(
         Func<Task<string>> rollback,
@@ -417,34 +342,89 @@ internal static class NyxApiResponseHelper
         try
         {
             var response = await rollback();
-            if (LooksLikeErrorEnvelope(response))
+            if (!string.IsNullOrWhiteSpace(response) && LooksLikeErrorEnvelope(response))
             {
                 logger.LogWarning(
-                    "Nyx rollback returned an error envelope: type={ResourceType}, id={ResourceId}, response={Response}",
+                    "Nyx rollback returned an error envelope: type={ResourceType}, id={ResourceId}, failureCode={FailureCode}",
                     resourceType,
                     resourceId,
-                    SecretScrubber.Scrub(response));
+                    "remote_delete_failed");
             }
         }
         catch (Exception ex)
         {
             logger.LogWarning(
-                ex,
-                "Nyx rollback failed: type={ResourceType}, id={ResourceId}",
+                "Nyx rollback failed: type={ResourceType}, id={ResourceId}, failureCode={FailureCode}, failureType={FailureType}",
                 resourceType,
-                resourceId);
+                resourceId,
+                "remote_delete_exception",
+                ex.GetType().Name);
         }
     }
 
     /// <summary>
-    /// Returns a client-safe failure reason. <see cref="InvalidOperationException"/> instances
-    /// thrown by the helpers in this class carry controlled, structured error codes (e.g.
-    /// <c>channel_bot_id_request_failed nyx_status=401 body=invalid app secret</c>) so they are
-    /// safe to surface verbatim. Anything else (HTTP transport errors, generic exceptions)
-    /// collapses to <c>provisioning_failed</c> so endpoint paths, internal state, and stack
-    /// fragments do not leak through the registration response. Callers should still log the
-    /// full exception out-of-band for operational triage.
+    /// Returns the stable public error code for a provisioning failure. Provider response bodies,
+    /// exception messages, secret references, and other diagnostic text are never returned.
     /// </summary>
     public static string SanitizeFailureReason(Exception ex) =>
-        ex is InvalidOperationException ? ex.Message : "provisioning_failed";
+        NormalizePublicFailureReason(ex is InvalidOperationException ? ex.Message : null);
+
+    /// <summary>
+    /// Defensively normalizes an adapter failure before it crosses an HTTP or tool boundary.
+    /// </summary>
+    public static string NormalizePublicFailureReason(string? reason)
+    {
+        var normalized = reason?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return "provisioning_failed";
+
+        if (normalized.StartsWith("channel_bot_id_request_failed ", StringComparison.Ordinal) &&
+            (normalized.Contains("nyx_status=409", StringComparison.Ordinal) ||
+             normalized.Contains("already registered", StringComparison.OrdinalIgnoreCase) ||
+             normalized.Contains("channel bot already exists", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "channel_bot_already_exists";
+        }
+
+        foreach (var publicCode in PublicProvisioningFailureCodes)
+        {
+            if (string.Equals(normalized, publicCode, StringComparison.Ordinal) ||
+                normalized.StartsWith($"{publicCode} ", StringComparison.Ordinal))
+            {
+                return publicCode;
+            }
+        }
+
+        return "provisioning_failed";
+    }
+
+    private static readonly string[] PublicProvisioningFailureCodes =
+    [
+        "unsupported_platform",
+        "missing_access_token",
+        "missing_app_id",
+        "missing_app_secret",
+        "missing_verification_token",
+        "missing_bot_token",
+        "missing_webhook_base_url",
+        "missing_scope_id",
+        "insecure_webhook_base_url",
+        "channel_authorization_contract_invalid",
+        "secret_vault_unavailable",
+        "service_owner_forbidden",
+        "user_service_not_found",
+        "scope_plan_changed",
+        "nyxid_scope_plan_unavailable",
+        "channel_service_connection_unavailable",
+        "nyx_base_url_not_configured",
+        "nyx_api_base_url_not_configured",
+        "channel_bot_id_request_failed",
+        "channel_bot_already_exists",
+        "local_mirror_dispatch_failed",
+        "local_mirror_accepted_remote_cleanup_skipped",
+        "local_mirror_acceptance_unknown_remote_cleanup_skipped",
+        "channel_agent_key_write_gate_closed",
+        "service_allowlist_not_supported",
+        "provisioning_failed",
+    ];
 }

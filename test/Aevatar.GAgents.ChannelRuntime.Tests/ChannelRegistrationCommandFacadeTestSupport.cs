@@ -16,7 +16,7 @@ internal static class ChannelRegistrationCommandFacadeTestSupport
         var receiptFactory = new ChannelRegistrationCommandReceiptFactory();
 
         return new ChannelRegistrationCommandFacade(
-            CreateDispatchService<ChannelBotRegisterCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory),
+            CreateDispatchPipeline<ChannelBotRegisterCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory),
             CreateDispatchService<ChannelBotUnregisterCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory));
     }
 
@@ -43,13 +43,28 @@ internal static class ChannelRegistrationCommandFacadeTestSupport
         ICommandTargetDispatcher<ChannelBotRegistrationCommandTarget> targetDispatcher,
         ICommandReceiptFactory<ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt> receiptFactory)
     {
-        var resolver = new ChannelBotRegistrationCommandTargetResolver<TCommand>(actorRuntime);
-        var pipeline = new DefaultCommandDispatchPipeline<TCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>(
-            resolver,
+        var pipeline = CreateDispatchPipeline(
+            actorRuntime,
             contextPolicy,
             envelopeFactory,
             targetDispatcher,
             receiptFactory);
         return new DefaultCommandDispatchService<TCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>(pipeline);
+    }
+
+    private static ICommandDispatchPipeline<TCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> CreateDispatchPipeline<TCommand>(
+        IActorRuntime actorRuntime,
+        ICommandContextPolicy contextPolicy,
+        ICommandEnvelopeFactory<TCommand> envelopeFactory,
+        ICommandTargetDispatcher<ChannelBotRegistrationCommandTarget> targetDispatcher,
+        ICommandReceiptFactory<ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt> receiptFactory)
+    {
+        var resolver = new ChannelBotRegistrationCommandTargetResolver<TCommand>(actorRuntime);
+        return new DefaultCommandDispatchPipeline<TCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>(
+            resolver,
+            contextPolicy,
+            envelopeFactory,
+            targetDispatcher,
+            receiptFactory);
     }
 }

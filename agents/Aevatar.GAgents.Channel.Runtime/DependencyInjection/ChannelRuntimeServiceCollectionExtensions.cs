@@ -1,5 +1,6 @@
 using Aevatar.Audit.Abstractions.CommittedFacts;
 using Aevatar.Audit.Core.DependencyInjection;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -133,6 +134,12 @@ public static class ChannelRuntimeServiceCollectionExtensions
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationQueryByNyxIdentityPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<
+            IChannelRegistrationCallSiteDependencyResolver,
+            DefaultChannelRegistrationCallSiteDependencyResolver>();
+        services.TryAddSingleton<
+            IChannelRegistrationAuthorityAdmissionPort,
+            ChannelRegistrationAuthorityAdmissionPort>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionBootstrapActivator>();
         services.AddHostedService<ChannelBotRegistrationStartupService>();

@@ -85,17 +85,24 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
 
         var provisioningHandler = new QueueHandler();
         provisioningHandler.Enqueue(
-            $$$"""{"id":"key-123","full_key":"{{{RawAgentKey}}}","purpose":"general","scheduled_write_enabled":false}""");
+            $$$"""{"id":"key-123","full_key":"{{{RawAgentKey}}}","purpose":"general","scheduled_write_enabled":false,"scopes":"read write proxy","allow_all_services":true,"allow_all_nodes":true,"allowed_service_ids":[],"allowed_node_ids":[]}""");
         provisioningHandler.Enqueue("""{"id":"bot-456","status":"pending_webhook"}""");
         provisioningHandler.Enqueue("""{"id":"route-789","default_agent":true}""");
         provisioningHandler.Enqueue("""{"id":"svc-1"}""");
+        var provisioningOptions = new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" };
+        var provisioningClient = new NyxIdApiClient(
+            provisioningOptions,
+            new HttpClient(provisioningHandler));
         var provisioningService = new NyxLarkProvisioningService(
-            new NyxIdApiClient(
-                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-                new HttpClient(provisioningHandler)),
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            provisioningClient,
+            provisioningOptions,
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorNetwork, actorNetwork),
-            secretVault,
+            new ChannelAgentKeyProvisioningService(
+                provisioningClient,
+                secretVault,
+                NullLogger<ChannelAgentKeyProvisioningService>.Instance,
+                ChannelAgentKeyWriteMode.NyxIdDefault),
+            CreatePersonalRegistrationOwnerResolver("scope-1"),
             NullLogger<NyxLarkProvisioningService>.Instance);
 
         var provisioningResult = await provisioningService.ProvisionAsync(
@@ -224,6 +231,35 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         var projectionHook = new RegistrationProjectionHook(projector);
         var registrationLogger = new RecordingLogger<ChannelBotRegistrationGAgent>();
         using var registrationServices = BuildEventSourcingServices(callbackScheduler, projectionHook);
+        await registrationServices.GetRequiredService<IEventStore>().AppendAsync(
+            ChannelBotRegistrationGAgent.WellKnownId,
+            [
+                new StateEvent
+                {
+                    AgentId = ChannelBotRegistrationGAgent.WellKnownId,
+                    EventId = Guid.NewGuid().ToString("N"),
+                    EventType = ChannelBotRegisteredEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new ChannelBotRegisteredEvent
+                    {
+                        Entry = new ChannelBotRegistrationEntry
+                        {
+                            Id = registrationId,
+                            Platform = "lark",
+                            ScopeId = "scope-alpha",
+                            NyxProviderSlug = "api-lark-bot-alpha",
+                            WebhookUrl = "https://nyx.example/api/v1/webhooks/channel/lark/bot-alpha",
+                            NyxChannelBotId = "bot-alpha",
+                            NyxAgentApiKeyId = "key-old-alpha",
+                            NyxConversationRouteId = "route-alpha",
+                            DefaultSkillName = "team-entry-alpha",
+                        },
+                    }),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Version = 1,
+                },
+            ],
+            0,
+            CancellationToken.None);
         var registrationAgent = new ChannelBotRegistrationGAgent
         {
             Services = registrationServices,
@@ -234,19 +270,6 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         SetId(registrationAgent, ChannelBotRegistrationGAgent.WellKnownId);
         await registrationAgent.ActivateAsync();
         actorNetwork.RegisterActivated(ChannelBotRegistrationGAgent.WellKnownId, registrationAgent);
-
-        await registrationAgent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            RequestedId = registrationId,
-            Platform = "lark",
-            ScopeId = "scope-alpha",
-            NyxProviderSlug = "api-lark-bot-alpha",
-            WebhookUrl = "https://nyx.example/api/v1/webhooks/channel/lark/bot-alpha",
-            NyxChannelBotId = "bot-alpha",
-            NyxAgentApiKeyId = "key-old-alpha",
-            NyxConversationRouteId = "route-alpha",
-            DefaultSkillName = "team-entry-alpha",
-        });
         var stored = await secretVault.PutAsync(new StoreSecretRequest(
             CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
             "scope-alpha",
@@ -393,6 +416,22 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         registrationLogger.Messages.Concat(invocationLogger.Messages).Should().OnlyContain(message =>
             !message.Contains(rawRepairedAgentKey, StringComparison.Ordinal) &&
             !message.Contains(stored.Reference.Ref, StringComparison.Ordinal));
+    }
+
+    private static IChannelRegistrationOwnerResolver CreatePersonalRegistrationOwnerResolver(
+        string scopeId)
+    {
+        var resolver = Substitute.For<IChannelRegistrationOwnerResolver>();
+        resolver.ResolveAsync(Arg.Any<string>(), scopeId, Arg.Any<CancellationToken>())
+            .Returns(new ChannelRegistrationOwnerResolution(
+                new VerifiedChannelRegistrationOwner(
+                    scopeId,
+                    new ChannelRegistrationKeyOwner(
+                        ChannelRegistrationKeyOwnerKind.Personal,
+                        scopeId),
+                    null),
+                string.Empty));
+        return resolver;
     }
 
     private static ServiceProvider BuildEventSourcingServices(

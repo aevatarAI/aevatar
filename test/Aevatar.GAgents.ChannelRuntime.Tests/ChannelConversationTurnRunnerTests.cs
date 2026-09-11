@@ -456,6 +456,53 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldUseUnifiedCredential_ForValidNewRegistration()
+    {
+        var registration = BuildNewRegistrationEntry();
+        var runner = CreateRunner(
+            BuildRegistrationQueryPort(registration),
+            new RecordingPlatformAdapter());
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-new-credential-1",
+                ConversationScope.DirectMessage,
+                "ou_user_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.Channel.WorkflowResultDeliveryCredential.Should().NotBeNull();
+        toolContext.Channel.WorkflowResultDeliveryCredential!.SubjectId.Should().Be("key-new-1");
+        toolContext.Channel.WorkflowResultDeliveryCredential.SecretReference
+            .Should().Be(registration.ChannelAgentKey.SecretReference);
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRejectInvalidNewAuthorizationContractWithoutLegacyFallback()
+    {
+        var registration = BuildNewRegistrationEntry();
+        registration.ChannelAgentKey = null;
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(registration), adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-invalid-new-1",
+                ConversationScope.DirectMessage,
+                "ou_user_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("channel_authorization_contract_invalid");
+        result.LlmReplyRequest.Should().BeNull();
+        result.WorkflowDraftRunRequest.Should().BeNull();
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldIncludePlatformMessageIdInLlmMetadata_WhenAvailable()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -5479,6 +5526,34 @@ public sealed class ChannelConversationTurnRunnerTests
             ScopeId = "scope-1",
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
+
+    private static ChannelBotRegistrationEntry BuildNewRegistrationEntry()
+    {
+        var registration = BuildRegistrationEntry();
+        var reference = new SecretReference
+        {
+            Ref = "sec-new-1",
+            Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            OwnerScopeKey = registration.ScopeId,
+            Version = 1,
+            Fingerprint = "sha256:new-1",
+            CreatedAtUnixMs = 1788825600000,
+        };
+        registration.NyxAgentApiKeyId = "key-new-1";
+        registration.WorkflowResultDeliveryCredential = reference.Clone();
+        registration.AuthorizationMode = ChannelRegistrationAuthorizationMode.NyxidDefault;
+        registration.ChannelAgentKey = new ChannelAgentKeyCredential
+        {
+            ApiKeyId = "key-new-1",
+            SecretReference = reference.Clone(),
+            Grant = new ChannelAgentKeyGrantSnapshot
+            {
+                AllowAllServices = true,
+                AllowAllNodes = true,
+            },
+        };
+        return registration;
+    }
 
     private static ScopeWorkflowSummary BuildWorkflowSummary(
         string scopeId,

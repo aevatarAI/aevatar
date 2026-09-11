@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
+using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationExplicitAuthorization;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
@@ -12,7 +13,8 @@ public sealed record NyxTelegramProvisioningRequest(
     string ScopeId,
     string Label,
     string NyxProviderSlug,
-    string DefaultSkillName = "");
+    string DefaultSkillName = "",
+    ChannelRegistrationServiceSelection? RequestedServiceSelection = null);
 
 public sealed record NyxTelegramProvisioningResult(
     bool Succeeded,
@@ -21,6 +23,7 @@ public sealed record NyxTelegramProvisioningResult(
     string? NyxChannelBotId = null,
     string? NyxAgentApiKeyId = null,
     string? NyxConversationRouteId = null,
+    bool WorkflowResultDeliveryEnabled = false,
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
     string? Error = null,
@@ -39,26 +42,34 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
     //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
     //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
     private const string DefaultNyxProviderSlug = "api-telegram-bot";
-    private const string NyxRelayApiKeyPlatform = "generic";
+    private static readonly TimeSpan CleanupTimeout = TimeSpan.FromSeconds(10);
     public const string PlatformId = "telegram";
 
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdToolOptions _nyxOptions;
     private readonly ChannelRegistrationCommandFacade _commandFacade;
+    private readonly ChannelAgentKeyProvisioningService _channelAgentKeyProvisioning;
+    private readonly IChannelRegistrationOwnerResolver _ownerResolver;
     private readonly ILogger<NyxTelegramProvisioningService> _logger;
-
-    private sealed record RelayApiKeyCredentials(string Id);
+    private readonly ChannelRegistrationExplicitAuthorizationPreparation? _authorizationPreparation;
 
     public NyxTelegramProvisioningService(
         NyxIdApiClient nyxClient,
         NyxIdToolOptions nyxOptions,
         ChannelRegistrationCommandFacade commandFacade,
-        ILogger<NyxTelegramProvisioningService> logger)
+        ChannelAgentKeyProvisioningService channelAgentKeyProvisioning,
+        IChannelRegistrationOwnerResolver ownerResolver,
+        ILogger<NyxTelegramProvisioningService> logger,
+        ChannelRegistrationExplicitAuthorizationPreparation? authorizationPreparation = null)
     {
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
         _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
+        _channelAgentKeyProvisioning = channelAgentKeyProvisioning ??
+            throw new ArgumentNullException(nameof(channelAgentKeyProvisioning));
+        _ownerResolver = ownerResolver ?? throw new ArgumentNullException(nameof(ownerResolver));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _authorizationPreparation = authorizationPreparation;
     }
 
     public string Platform => PlatformId;
@@ -102,12 +113,41 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
         string? apiKeyId = null;
         string? channelBotId = null;
         string? routeId = null;
+        ChannelAgentKeyCredential? channelAgentKey = null;
+        VerifiedChannelRegistrationExplicitAuthorization? explicitAuthorization = null;
         var localMirrorAccepted = false;
 
         try
         {
-            var relayApiKey = await CreateRelayApiKeyAsync(request.AccessToken, relayCallbackUrl, registrationId, ct);
-            apiKeyId = relayApiKey.Id;
+            var ownerResolution = await _ownerResolver.ResolveAsync(
+                request.AccessToken,
+                request.ScopeId,
+                ct);
+            if (!ownerResolution.Succeeded)
+                return Failure(ownerResolution.ErrorCode);
+            var owner = ownerResolution.Owner!;
+
+            if (request.RequestedServiceSelection?.AuthorizationMode == ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist)
+            {
+                if (_authorizationPreparation is null)
+                    return Failure("nyxid_scope_plan_unavailable");
+                var prepared = await _authorizationPreparation.PrepareAsync(new NyxChannelBotProvisioningRequest(
+                    PlatformId, request.AccessToken, request.WebhookBaseUrl, request.ScopeId, label, nyxProviderSlug,
+                    DefaultSkillName: request.DefaultSkillName,
+                    RequestedServiceSelection: request.RequestedServiceSelection), registrationId, owner, ct);
+                if (!prepared.Succeeded)
+                    return Failure(prepared.ErrorCode);
+                explicitAuthorization = prepared.Preparation;
+            }
+
+            channelAgentKey = explicitAuthorization is not null
+                ? await _channelAgentKeyProvisioning.ProvisionAsync(
+                    PlatformId, request.AccessToken, relayCallbackUrl, request.ScopeId.Trim(),
+                    registrationId, explicitAuthorization, ct)
+                : await _channelAgentKeyProvisioning.ProvisionAsync(
+                    PlatformId, request.AccessToken, relayCallbackUrl, request.ScopeId.Trim(),
+                    registrationId, owner, ct);
+            apiKeyId = channelAgentKey.ApiKeyId;
 
             channelBotId = await RegisterChannelBotAsync(
                 request.AccessToken,
@@ -122,10 +162,11 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 nyxProviderSlug,
                 webhookUrl,
                 request.ScopeId?.Trim() ?? string.Empty,
-                apiKeyId,
+                channelAgentKey,
                 channelBotId,
                 routeId,
                 request.DefaultSkillName,
+                explicitAuthorization,
                 ct);
             localMirrorAccepted = true;
 
@@ -136,30 +177,45 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 NyxChannelBotId: channelBotId,
                 NyxAgentApiKeyId: apiKeyId,
                 NyxConversationRouteId: routeId,
+                WorkflowResultDeliveryEnabled: true,
                 RelayCallbackUrl: relayCallbackUrl,
                 WebhookUrl: webhookUrl,
                 Note: "Provisioning completed in Nyx and the local mirror command was accepted. NyxID has already registered the Telegram webhook and secret_token with the Bot API; do not call setWebhook manually or you will overwrite NyxID's secret_token and break inbound verification. Local read model visibility is asynchronous.");
         }
         catch (Exception ex)
         {
+            var acceptanceUnknown = ex is ChannelRegistrationCommandDispatchException
+            {
+                AcceptanceUnknown: true,
+            };
+            var failureReason = localMirrorAccepted
+                ? "local_mirror_accepted_remote_cleanup_skipped"
+                : acceptanceUnknown
+                    ? "local_mirror_acceptance_unknown_remote_cleanup_skipped"
+                    : NyxApiResponseHelper.SanitizeFailureReason(ex);
             _logger.LogWarning(
-                ex,
-                "Nyx-backed Telegram provisioning failed: registration={RegistrationId}, botId={ChannelBotId}, apiKeyId={ApiKeyId}, routeId={RouteId}",
+                "Nyx-backed Telegram provisioning failed: registration={RegistrationId}, botId={ChannelBotId}, apiKeyId={ApiKeyId}, routeId={RouteId}, failureCode={FailureCode}, failureType={FailureType}",
                 registrationId,
                 channelBotId,
                 apiKeyId,
-                routeId);
+                routeId,
+                failureReason,
+                ex.GetType().Name);
 
-            if (!localMirrorAccepted && routeId is not null)
-                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteConversationRouteAsync(request.AccessToken, routeId, ct), "channel_route", routeId, _logger);
-            if (!localMirrorAccepted && channelBotId is not null)
-                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, ct), "channel_bot", channelBotId, _logger);
-            if (!localMirrorAccepted && apiKeyId is not null)
-                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteApiKeyAsync(request.AccessToken, apiKeyId, ct), "api_key", apiKeyId, _logger);
+            if (!localMirrorAccepted && !acceptanceUnknown)
+            {
+                using var cleanupCts = new CancellationTokenSource(CleanupTimeout);
+                if (routeId is not null)
+                    await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteConversationRouteAsync(request.AccessToken, routeId, cleanupCts.Token), "channel_route", routeId, _logger);
+                if (channelBotId is not null)
+                    await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, cleanupCts.Token), "channel_bot", channelBotId, _logger);
+                if (channelAgentKey is not null)
+                    await _channelAgentKeyProvisioning.CleanupAsync(request.AccessToken, channelAgentKey, registrationId, cleanupCts.Token);
+                if (explicitAuthorization?.Connection is { } connection)
+                    await _authorizationPreparation!.CleanupConnectionAsync(request.AccessToken, connection);
+            }
 
-            return Failure(localMirrorAccepted
-                ? "local_mirror_accepted_remote_cleanup_skipped"
-                : NyxApiResponseHelper.SanitizeFailureReason(ex));
+            return Failure(failureReason);
         }
     }
 
@@ -185,7 +241,8 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 ScopeId: request.ScopeId,
                 Label: request.Label,
                 NyxProviderSlug: request.NyxProviderSlug,
-                DefaultSkillName: request.DefaultSkillName),
+                DefaultSkillName: request.DefaultSkillName,
+                RequestedServiceSelection: request.ServiceSelection),
             ct);
 
         return ToGenericResult(result);
@@ -201,26 +258,6 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
         }
 
         return string.Empty;
-    }
-
-    private async Task<RelayApiKeyCredentials> CreateRelayApiKeyAsync(
-        string accessToken,
-        string relayCallbackUrl,
-        string registrationId,
-        CancellationToken ct)
-    {
-        var response = await _nyxClient.CreateApiKeyAsync(
-            accessToken,
-            JsonSerializer.Serialize(new
-            {
-                name = $"aevatar-telegram-relay-{registrationId[..12]}",
-                scopes = "read write",
-                platform = NyxRelayApiKeyPlatform,
-                callback_url = relayCallbackUrl,
-            }),
-            ct);
-
-        return new RelayApiKeyCredentials(NyxApiResponseHelper.ExtractRequiredApiKeyId(response));
     }
 
     private async Task<string> RegisterChannelBotAsync(
@@ -268,10 +305,11 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
         string nyxProviderSlug,
         string webhookUrl,
         string scopeId,
-        string apiKeyId,
+        ChannelAgentKeyCredential channelAgentKey,
         string channelBotId,
         string routeId,
         string defaultSkillName,
+        VerifiedChannelRegistrationExplicitAuthorization? authorization,
         CancellationToken ct)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
@@ -284,12 +322,24 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
             NyxProviderSlug = nyxProviderSlug,
             ScopeId = scopeId,
             WebhookUrl = webhookUrl,
-            NyxAgentApiKeyId = apiKeyId,
+            NyxAgentApiKeyId = channelAgentKey.ApiKeyId,
             NyxChannelBotId = channelBotId,
             NyxConversationRouteId = routeId,
+            WorkflowResultDeliveryCredential = channelAgentKey.SecretReference.Clone(),
+            ChannelAgentKey = channelAgentKey.Clone(),
+            AuthorizationMode = authorization is null
+                ? ChannelRegistrationAuthorizationMode.NyxidDefault
+                : ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
             DefaultSkillName = defaultSkillName ?? string.Empty,
         };
 
+        if (authorization is not null)
+        {
+            cmd.RegistrationServiceAllowlist = new ChannelRegistrationServiceAllowlist();
+            cmd.RegistrationServiceAllowlist.ServiceIds.Add(authorization.Plan.RegistrationServiceIds);
+        }
+        if (!ChannelRegistrationAuthorizationContract.IsValidNewCommand(cmd))
+            throw new InvalidOperationException("channel_authorization_contract_invalid");
         await _commandFacade.RegisterLocalMirrorAsync(cmd, ct);
     }
 
@@ -308,6 +358,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
             NyxChannelBotId: result.NyxChannelBotId,
             NyxAgentApiKeyId: result.NyxAgentApiKeyId,
             NyxConversationRouteId: result.NyxConversationRouteId,
+            WorkflowResultDeliveryEnabled: result.WorkflowResultDeliveryEnabled,
             RelayCallbackUrl: result.RelayCallbackUrl,
             WebhookUrl: result.WebhookUrl,
             Error: result.Error,
