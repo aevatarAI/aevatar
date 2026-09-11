@@ -851,7 +851,7 @@ public static class ChannelCallbackEndpoints
         // Optional Ornn skill this bot's plain inbound messages are routed to
         // (deterministic channel→skill binding; message text becomes the skill args).
         string? DefaultSkillName,
-        ChannelBotRuntimeConfig? RuntimeConfig = null);
+        [property: JsonIgnore] ChannelBotRuntimeConfig? RuntimeConfig = null);
 
     private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(
         string platform,

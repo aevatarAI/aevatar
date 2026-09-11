@@ -801,6 +801,70 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRegisterAsync_ParsesRuntimeConfigBeforeTelegramCredentialValidation()
+    {
+        NyxChannelBotProvisioningRequest? capturedRequest = null;
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("telegram");
+        provisioningService.ProvisionAsync(
+                Arg.Do<NyxChannelBotProvisioningRequest>(request => capturedRequest = request),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: false,
+                Status: "error",
+                Platform: "telegram",
+                Error: "missing_bot_token")));
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "platform": "telegram",
+              "webhook_base_url": "https://aevatar.example.com",
+              "runtime_config": {
+                "instructions": "Book dinner only after explicit confirmation.",
+                "default_skill": {
+                  "name": "booking-capacity",
+                  "version": "1.0.0"
+                },
+                "tool_set_refs": ["channel.reply.booking"],
+                "nyxid_service_selectors": [
+                  {
+                    "service_slug": "api-google-workspace",
+                    "endpoint_names": ["calendar_create_event"]
+                  }
+                ],
+                "credential_source_mode": "registration_agent_key",
+                "agent_key_service_requirements": {
+                  "allowed_service_slugs": ["api-google-workspace"]
+                }
+              }
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRegisterAsync",
+            http,
+            CreateRegistrationFacade(provisioningService),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("missing_bot_token");
+        capturedRequest.Should().NotBeNull();
+        capturedRequest!.RuntimeConfig.Should().NotBeNull();
+        capturedRequest.RuntimeConfig!.Instructions.Should().Be("Book dinner only after explicit confirmation.");
+        capturedRequest.RuntimeConfig.DefaultSkill.Name.Should().Be("booking-capacity");
+        capturedRequest.RuntimeConfig.ToolSetRefs.Should().BeEquivalentTo("channel.reply.booking");
+        capturedRequest.RuntimeConfig.NyxidServiceSelectors.Single().ServiceSlug.Should().Be("api-google-workspace");
+        capturedRequest.RuntimeConfig.NyxidServiceSelectors.Single().EndpointNames.Should().BeEquivalentTo("calendar_create_event");
+        capturedRequest.RuntimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);
+        capturedRequest.RuntimeConfig.AgentKeyServiceRequirements.AllowedServiceSlugs.Should().BeEquivalentTo("api-google-workspace");
+    }
+
+    [Fact]
     public async Task HandleRegisterAsync_ReturnsConflict_WhenChannelBotAlreadyRegistered()
     {
         // NyxID enforces one active channel-bot per app across all accounts. When the app is already
