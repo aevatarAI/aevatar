@@ -7,6 +7,7 @@ using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
@@ -50,6 +51,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private readonly IAgentProfileTurnSnapshotResolver? _profileSnapshotResolver;
     private readonly IAgentProfileTurnToolCatalogPlanner? _profileCatalogPlanner;
     private readonly IChannelRuntimeToolCatalogMaterializer? _channelRuntimeCatalogMaterializer;
+    private readonly ISecretVault? _secretVault;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunReplyGenerationExecutor> _logger;
 
@@ -67,7 +69,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IFileArtifactReadPort? fileArtifactReadPort = null,
         IAgentProfileTurnSnapshotResolver? profileSnapshotResolver = null,
         IAgentProfileTurnToolCatalogPlanner? profileCatalogPlanner = null,
-        IChannelRuntimeToolCatalogMaterializer? channelRuntimeCatalogMaterializer = null)
+        IChannelRuntimeToolCatalogMaterializer? channelRuntimeCatalogMaterializer = null,
+        ISecretVault? secretVault = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -81,6 +84,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _profileSnapshotResolver = profileSnapshotResolver;
         _profileCatalogPlanner = profileCatalogPlanner;
         _channelRuntimeCatalogMaterializer = channelRuntimeCatalogMaterializer;
+        _secretVault = secretVault;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -1662,6 +1666,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         // derived below with the sender token cleared, so a failed/empty re-mint still
         // leaves the bot-owner LLM path intact.
         control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
+        control = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(request, toolContext, control, ct)
+            .ConfigureAwait(false);
 
         var ownerFallbackControl = control with { SenderNyxIdAccessToken = null };
         var ownerFallbackToolContext = ClearSenderBinding(toolContext);
@@ -1818,6 +1824,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
         var requestControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
+        requestControl = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(request, planToolContext, requestControl, ct)
+            .ConfigureAwait(false);
         requestControl = OverlayActivityUserToken(request, requestControl);
 
         var control = stepControl with
@@ -1896,6 +1904,61 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             ExternalUserId = senderId,
         };
         return true;
+    }
+
+    private async Task<LLMControlContext> ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
+        NeedsLlmReplyEvent request,
+        AgentToolExecutionContext toolContext,
+        LLMControlContext control,
+        CancellationToken ct)
+    {
+        if (request.ChannelRuntimeConfig?.CredentialSourceMode !=
+            ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey)
+        {
+            return control;
+        }
+
+        if (NormalizeOptional(control.SenderNyxIdAccessToken) is not null ||
+            NormalizeOptional(control.NyxIdAccessToken) is not null ||
+            NormalizeOptional(control.NyxIdOrgToken) is not null)
+        {
+            return control;
+        }
+
+        var agentKey = await ResolveChannelRegistrationAgentKeyAsync(request, toolContext, ct)
+            .ConfigureAwait(false);
+        if (agentKey is null)
+            return control;
+
+        _logger.LogInformation(
+            "Applied channel registration Agent Key as NyxID LLM credential: correlation={CorrelationId} registration={RegistrationId}",
+            request.CorrelationId,
+            toolContext.Channel.BotRegistrationId ?? string.Empty);
+        return control with { NyxIdAccessToken = agentKey };
+    }
+
+    private async Task<string?> ResolveChannelRegistrationAgentKeyAsync(
+        NeedsLlmReplyEvent request,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        var registrationId = NormalizeOptional(toolContext.Channel.BotRegistrationId);
+        var agentKey = await ChannelRegistrationAgentKeySecretResolver.ResolveAsync(
+                toolContext,
+                _secretVault,
+                "channel-llm",
+                ct)
+            .ConfigureAwait(false);
+        if (agentKey is null)
+        {
+            _logger.LogWarning(
+                "Channel registration Agent Key LLM credential unavailable: correlation={CorrelationId} registration={RegistrationId} hasVault={HasVault}",
+                request.CorrelationId,
+                registrationId ?? string.Empty,
+                _secretVault is not null);
+        }
+
+        return agentKey;
     }
 
     private void TriggerBindingReconcile(
