@@ -39,9 +39,8 @@ message ConversationGAgentState {
   repeated string bot_sent_platform_message_ids = 15;
   repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 16;
   aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 17;
-  // Immutable profile pinned by the first completed profiled run. Later runs reuse this exact
-  // snapshot; route/profile binding changes apply only to new conversations.
-  aevatar.ai.AgentProfileSnapshot agent_profile = 18;
+  reserved 18;
+  reserved "agent_profile";
   aevatar.ai.ConversationContextAttachmentSet context_attachments = 19;
 }
 

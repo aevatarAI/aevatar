@@ -399,14 +399,6 @@ message LarkCardDeliveryCompletedEvent {
   aevatar.ai.AgentProfileSnapshot agent_profile = 10;
 }
 
-// Committed exactly once for a profiled conversation. A changed scope/system binding affects new
-// conversations only; an active conversation never hot-replaces this immutable snapshot.
-message ConversationAgentProfilePinnedEvent {
-  aevatar.ai.AgentProfileSnapshot profile = 1;
-  string source_run_id = 2;
-  int64 pinned_at_unix_ms = 3;
-}
-
 // Refactor (iter57/cluster-065-lark-card-signal-only):
 //   Old pattern: Lark CardKit Task.Run helpers built rich create/stream/finalize continuation
 //   payloads outside the actor turn, including timestamps, error codes, and lifecycle field
