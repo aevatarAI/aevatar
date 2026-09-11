@@ -17,6 +17,7 @@ public sealed record NyxLarkProvisioningRequest(
     string NyxProviderSlug,
     string DefaultSkillName = "",
     string EncryptKey = "",
+    ChannelBotRuntimeConfig? RuntimeConfig = null,
     ChannelRegistrationServiceSelection? RequestedServiceSelection = null);
 
 public sealed record NyxLarkProvisioningResult(
@@ -48,10 +49,13 @@ public sealed record NyxChannelBotProvisioningRequest(
     NyxChannelLarkCredentials? Lark = null,
     IReadOnlyDictionary<string, string>? Credentials = null,
     string DefaultSkillName = "",
+    ChannelBotRuntimeConfig? RuntimeConfig = null,
     ChannelRegistrationServiceSelection? RequestedServiceSelection = null)
 {
     public ChannelRegistrationServiceSelection ServiceSelection =>
         RequestedServiceSelection ?? ChannelRegistrationServiceSelection.NyxIdDefault;
+
+    public ChannelBotRuntimeConfig? RuntimeConfigCopy => RuntimeConfig?.Clone();
 }
 
 public sealed record NyxChannelBotProvisioningResult(
@@ -184,6 +188,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                     label, requestedProviderSlug,
                     Lark: new NyxChannelLarkCredentials(request.AppId, request.AppSecret, request.VerificationToken, request.EncryptKey),
                     DefaultSkillName: request.DefaultSkillName,
+                    RuntimeConfig: request.RuntimeConfig?.Clone(),
                     RequestedServiceSelection: request.RequestedServiceSelection), registrationId, owner, ct);
                 if (!prepared.Succeeded)
                     return Failure(prepared.ErrorCode);
@@ -255,6 +260,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 channelBotId,
                 routeId,
                 request.DefaultSkillName,
+                request.RuntimeConfig,
                 explicitAuthorization,
                 ct);
             localMirrorAccepted = true;
@@ -329,6 +335,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 NyxProviderSlug: request.NyxProviderSlug,
                 DefaultSkillName: request.DefaultSkillName,
                 EncryptKey: request.Lark?.EncryptKey ?? string.Empty,
+                RuntimeConfig: request.RuntimeConfigCopy,
                 RequestedServiceSelection: request.ServiceSelection),
             ct);
 
@@ -497,6 +504,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string channelBotId,
         string routeId,
         string defaultSkillName,
+        ChannelBotRuntimeConfig? runtimeConfig,
         VerifiedChannelRegistrationExplicitAuthorization? authorization,
         CancellationToken ct)
     {
@@ -519,6 +527,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 ? ChannelRegistrationAuthorizationMode.NyxidDefault
                 : ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
             DefaultSkillName = defaultSkillName ?? string.Empty,
+            RuntimeConfig = runtimeConfig?.Clone(),
         };
 
         if (authorization is not null)

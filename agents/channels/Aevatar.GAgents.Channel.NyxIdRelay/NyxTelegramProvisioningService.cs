@@ -14,6 +14,7 @@ public sealed record NyxTelegramProvisioningRequest(
     string Label,
     string NyxProviderSlug,
     string DefaultSkillName = "",
+    ChannelBotRuntimeConfig? RuntimeConfig = null,
     ChannelRegistrationServiceSelection? RequestedServiceSelection = null);
 
 public sealed record NyxTelegramProvisioningResult(
@@ -134,6 +135,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 var prepared = await _authorizationPreparation.PrepareAsync(new NyxChannelBotProvisioningRequest(
                     PlatformId, request.AccessToken, request.WebhookBaseUrl, request.ScopeId, label, nyxProviderSlug,
                     DefaultSkillName: request.DefaultSkillName,
+                    RuntimeConfig: request.RuntimeConfig?.Clone(),
                     RequestedServiceSelection: request.RequestedServiceSelection), registrationId, owner, ct);
                 if (!prepared.Succeeded)
                     return Failure(prepared.ErrorCode);
@@ -166,6 +168,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 channelBotId,
                 routeId,
                 request.DefaultSkillName,
+                request.RuntimeConfig,
                 explicitAuthorization,
                 ct);
             localMirrorAccepted = true;
@@ -242,6 +245,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 Label: request.Label,
                 NyxProviderSlug: request.NyxProviderSlug,
                 DefaultSkillName: request.DefaultSkillName,
+                RuntimeConfig: request.RuntimeConfigCopy,
                 RequestedServiceSelection: request.ServiceSelection),
             ct);
 
@@ -309,6 +313,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
         string channelBotId,
         string routeId,
         string defaultSkillName,
+        ChannelBotRuntimeConfig? runtimeConfig,
         VerifiedChannelRegistrationExplicitAuthorization? authorization,
         CancellationToken ct)
     {
@@ -331,6 +336,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 ? ChannelRegistrationAuthorizationMode.NyxidDefault
                 : ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
             DefaultSkillName = defaultSkillName ?? string.Empty,
+            RuntimeConfig = runtimeConfig?.Clone(),
         };
 
         if (authorization is not null)

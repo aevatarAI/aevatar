@@ -207,10 +207,13 @@ public sealed record ChannelRelayRegistrationRequest(
     NyxChannelLarkCredentials? Lark = null,
     IReadOnlyDictionary<string, string>? Credentials = null,
     string DefaultSkillName = "",
+    ChannelBotRuntimeConfig? RuntimeConfig = null,
     ChannelRegistrationServiceSelection? RequestedServiceSelection = null)
 {
     public ChannelRegistrationServiceSelection ServiceSelection =>
         RequestedServiceSelection ?? ChannelRegistrationServiceSelection.NyxIdDefault;
+
+    public ChannelBotRuntimeConfig? RuntimeConfigCopy => RuntimeConfig?.Clone();
 
     public NyxChannelBotProvisioningRequest ToProvisioningRequest(string platform)
     {
@@ -227,6 +230,7 @@ public sealed record ChannelRelayRegistrationRequest(
             Lark: Lark,
             Credentials: Credentials,
             DefaultSkillName: DefaultSkillName,
+            RuntimeConfig: RuntimeConfigCopy,
             RequestedServiceSelection: ServiceSelection);
     }
 }

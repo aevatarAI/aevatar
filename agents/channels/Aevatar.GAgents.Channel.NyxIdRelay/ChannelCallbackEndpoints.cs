@@ -112,7 +112,17 @@ public static class ChannelCallbackEndpoints
                 return Results.BadRequest(new { error = "invalid_service_ids" });
             }
 
-            request = document.RootElement.Deserialize<RegistrationRequest>(RegistrationJsonOptions);
+            if (!ChannelBotRuntimeConfigJsonParser.TryParse(
+                    document.RootElement,
+                    out var runtimeConfig))
+            {
+                return Results.BadRequest(new { error = "invalid_runtime_config" });
+            }
+
+            var parsedRequest = document.RootElement.Deserialize<RegistrationRequest>(RegistrationJsonOptions);
+            request = parsedRequest is null
+                ? null
+                : parsedRequest with { RuntimeConfig = runtimeConfig };
         }
         catch (JsonException ex)
         {
@@ -159,6 +169,7 @@ public static class ChannelCallbackEndpoints
                     EncryptKey: request.EncryptKey?.Trim() ?? string.Empty),
                 Credentials: BuildCredentialsMap(platformNormalized, request),
                 DefaultSkillName: request.DefaultSkillName?.Trim() ?? string.Empty,
+                RuntimeConfig: request.RuntimeConfig?.Clone(),
                 RequestedServiceSelection: serviceSelection),
             ct);
 
@@ -839,7 +850,8 @@ public static class ChannelCallbackEndpoints
         string? Label,
         // Optional Ornn skill this bot's plain inbound messages are routed to
         // (deterministic channel→skill binding; message text becomes the skill args).
-        string? DefaultSkillName);
+        string? DefaultSkillName,
+        ChannelBotRuntimeConfig? RuntimeConfig = null);
 
     private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(
         string platform,

@@ -443,6 +443,71 @@ public class NyxTelegramProvisioningServiceTests
     }
 
     [Fact]
+    public async Task INyxChannelBotProvisioningService_dispatches_runtime_config_to_local_mirror()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", AgentKeyResponse("key-tg-3", "full-key-3"));
+        handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-tg-3"}""");
+        handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-tg-3"}""");
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(
+            actorRuntime,
+            (IActorDispatchPort)actorRuntime);
+        var runtimeConfig = new ChannelBotRuntimeConfig
+        {
+            Instructions = "Book dinner only after explicit confirmation.",
+            DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+            {
+                Name = "booking-capacity",
+                Version = "1.0.0",
+            },
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+        };
+        runtimeConfig.ToolSetRefs.Add("channel.reply.booking");
+        runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "calendar_create_event" },
+        });
+        INyxChannelBotProvisioningService service = CreateService(handler, commandFacade: commandFacade);
+
+        var result = await service.ProvisionAsync(
+            new NyxChannelBotProvisioningRequest(
+                Platform: "telegram",
+                AccessToken: "user-token",
+                WebhookBaseUrl: "https://aevatar.example.com",
+                ScopeId: "scope-1",
+                Label: "Ops Bot",
+                NyxProviderSlug: "api-telegram-bot",
+                Credentials: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["bot_token"] = "tok-from-map",
+                },
+                RuntimeConfig: runtimeConfig),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        capturedEnvelope.Should().NotBeNull();
+        var command = capturedEnvelope!.Payload.Unpack<ChannelBotRegisterCommand>();
+        command.RuntimeConfig.Should().NotBeNull();
+        command.RuntimeConfig.Should().NotBeSameAs(runtimeConfig);
+        command.RuntimeConfig.Instructions.Should().Be("Book dinner only after explicit confirmation.");
+        command.RuntimeConfig.DefaultSkill.Name.Should().Be("booking-capacity");
+        command.RuntimeConfig.ToolSetRefs.Should().BeEquivalentTo("channel.reply.booking");
+        command.RuntimeConfig.NyxidServiceSelectors.Single().ServiceSlug.Should().Be("api-google-workspace");
+        command.RuntimeConfig.NyxidServiceSelectors.Single().EndpointNames.Should().BeEquivalentTo("calendar_create_event");
+        command.RuntimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);
+    }
+
+    [Fact]
     public async Task ExplicitSelection_NeverFallsThroughToDefaultKeyProvisioning()
     {
         var handler = new RecordingHandler();
